@@ -23,6 +23,7 @@ pub mod credentials;
 pub mod eventstream;
 pub mod protocol;
 
+use bravebot_aichat::call::{Pace, Spent};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{Completion, CutOff, OpenCall, Progress, read_in_background, reply_bound};
 use bravebot_config::bedrock::Bedrock;
@@ -287,15 +288,12 @@ impl From<credentials::CredentialError> for BedrockError {
 }
 
 pub struct BedrockClient<'a> {
-    attempts: u32,
-    completed_usage: Option<Usage>,
-    retried_usage: Option<Usage>,
+    spent: Spent,
     // Tests replace signing and credentials while exercising the real HTTP and retry paths.
     #[cfg(test)]
     test_request: Option<Request>,
     config: &'a Bedrock,
     egress: &'a Egress,
-    cancel: Option<Cancel>,
     /// Whether requests still carry cache breakpoints.
     ///
     /// True until a model refuses one, which is the only way to find out that it does not do
@@ -334,45 +332,35 @@ pub struct BedrockClient<'a> {
     /// What that model was known to refuse before this request, which a probe that settled nothing
     /// puts back.
     recalled: Refusals,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    ///
-    /// [`BACKOFF`] unless a test shortens it.
-    backoff: Duration,
+    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
+    /// unless a test shortens it.
+    pace: Pace,
 }
 
 impl<'a> BedrockClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     pub fn new(config: &'a Bedrock, egress: &'a Egress) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             #[cfg(test)]
             test_request: None,
             config,
             egress,
-            cancel: None,
             breakpoints: true,
             cache_ttl: true,
             effort: true,
@@ -381,7 +369,7 @@ impl<'a> BedrockClient<'a> {
             thinking_shown: true,
             learned_for: String::new(),
             recalled: Refusals::default(),
-            backoff: BACKOFF,
+            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -396,13 +384,13 @@ impl<'a> BedrockClient<'a> {
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     #[cfg(test)]
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -412,9 +400,7 @@ impl<'a> BedrockClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         self.recall(&self.model_for(request)?);
         let mut attempt = 1;
         let mut probed = false;
@@ -439,8 +425,8 @@ impl<'a> BedrockClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
-                    log_retry(attempt + 1, backoff(self.backoff, attempt));
-                    if !self.wait(backoff(self.backoff, attempt)) {
+                    log_retry(attempt + 1, backoff(self.pace.backoff, attempt));
+                    if !self.pace.wait(backoff(self.pace.backoff, attempt)) {
                         return Err(BedrockError::Cancelled);
                     }
                     attempt += 1;
@@ -448,9 +434,7 @@ impl<'a> BedrockClient<'a> {
                 result => {
                     self.probe_settled(probed, result.is_err());
                     return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
+                        self.spent.bill(&mut completion);
                         completion
                     });
                 }
@@ -628,13 +612,12 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, BedrockError> {
         // Move the last completed bill into the call total before clearing attempt state.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        if self.cancelled() {
+        self.spent.begin_attempt();
+        if self.pace.cancelled() {
             return Err(BedrockError::Cancelled);
         }
         let (http, model) = self.build(request, false)?;
-        self.attempts += 1;
+        self.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backend: the bytes come out
@@ -650,7 +633,8 @@ impl<'a> BedrockClient<'a> {
             serde_json::from_slice(&bytes).map_err(|e| BedrockError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
-        self.completed_usage = reported_usage(&envelope).map(Usage::from);
+        self.spent
+            .record(reported_usage(&envelope).map(Usage::from));
 
         let parsed: protocol::ConverseResponse =
             serde_json::from_slice(&bytes).map_err(|e| BedrockError::Decode {
@@ -769,9 +753,7 @@ impl<'a> BedrockClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         self.recall(&self.model_for(request)?);
         let mut attempt = 1;
         let mut probed = false;
@@ -803,7 +785,7 @@ impl<'a> BedrockClient<'a> {
                 }
                 Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
-                    log_retry(attempt, backoff(self.backoff, attempt - 1));
+                    log_retry(attempt, backoff(self.pace.backoff, attempt - 1));
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply progress resets; completed costs remain charged.
                     progress(Progress {
@@ -814,16 +796,14 @@ impl<'a> BedrockClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(backoff(self.backoff, attempt - 1)) {
+                    if !self.pace.wait(backoff(self.pace.backoff, attempt - 1)) {
                         return Err(BedrockError::Cancelled);
                     }
                 }
                 result => {
                     self.probe_settled(probed, result.is_err());
                     return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
+                        self.spent.bill(&mut completion);
                         completion
                     });
                 }
@@ -839,21 +819,20 @@ impl<'a> BedrockClient<'a> {
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, BedrockError> {
         // Move the last completed bill into the call total before clearing attempt state.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
+        self.spent.begin_attempt();
         // Before the request is built, let alone sent. A stop that landed while the last attempt was
         // failing is still a stop.
-        if self.cancelled() {
+        if self.pace.cancelled() {
             return Err(BedrockError::Cancelled);
         }
 
         let (http, model) = self.build(request, true)?;
-        self.attempts += 1;
+        self.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
+            self.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
@@ -879,7 +858,7 @@ impl<'a> BedrockClient<'a> {
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancelled() {
+                    if self.pace.cancelled() {
                         return Err(BedrockError::Cancelled);
                     }
                     continue;
@@ -890,7 +869,7 @@ impl<'a> BedrockClient<'a> {
             };
             began = true;
 
-            if self.cancelled() {
+            if self.pace.cancelled() {
                 return Err(BedrockError::Cancelled);
             }
 
@@ -922,7 +901,7 @@ impl<'a> BedrockClient<'a> {
                     }
                 }
                 if reply.ended && reply.counted {
-                    self.completed_usage = Some(reply.usage);
+                    self.spent.record(Some(reply.usage));
                 }
             }
 
@@ -1101,30 +1080,6 @@ impl<'a> BedrockClient<'a> {
             .default_model()
             .map(str::to_string)
             .ok_or(BedrockError::NoModel)
-    }
-
-    fn cancelled(&self) -> bool {
-        self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
-    }
-
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices, because a stop landing in the middle of a seconds-long pause would otherwise
-    /// wait the rest of it out with nothing to stop but a sleep.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
-
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancelled() {
-                return false;
-            }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
-        }
     }
 }
 

@@ -24,6 +24,7 @@
 
 pub mod protocol;
 
+use crate::call::{Pace, Spent};
 use crate::protocol::{ChatRequest, SseDecoder, Usage};
 use crate::{
     ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals, WAKE,
@@ -68,9 +69,7 @@ fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
 
 /// One client for one request, to the service an `anthropic` entry names.
 pub struct AnthropicClient<'a> {
-    attempts: u32,
-    completed_usage: Option<Usage>,
-    retried_usage: Option<Usage>,
+    spent: Spent,
     config: &'a Config,
     egress: &'a Egress,
     provider: &'a Provider,
@@ -83,7 +82,6 @@ pub struct AnthropicClient<'a> {
     token: Option<Secret>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    cancel: Option<Cancel>,
     /// Whether requests still carry cache breakpoints.
     ///
     /// True until a model refuses one, which is the only way to find out that it does not do
@@ -109,8 +107,9 @@ pub struct AnthropicClient<'a> {
     /// What that model was known to refuse before this request, which a probe that settled nothing
     /// puts back.
     recalled: Refusals,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    backoff: Duration,
+    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
+    /// unless a test shortens it.
+    pace: Pace,
 }
 
 impl<'a> AnthropicClient<'a> {
@@ -128,51 +127,42 @@ impl<'a> AnthropicClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             config,
             egress,
             provider,
             model: model.into(),
             token,
             headers: Vec::new(),
-            cancel: None,
             breakpoints: true,
             cache_ttl: true,
             effort: true,
             arguments_as_written: true,
             ceiling: true,
             recalled: Refusals::default(),
-            backoff: BACKOFF,
+            pace: Pace::new(BACKOFF),
         }
     }
 
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -191,7 +181,7 @@ impl<'a> AnthropicClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
@@ -418,39 +408,13 @@ impl<'a> AnthropicClient<'a> {
         Ok(http)
     }
 
-    fn cancelled(&self) -> bool {
-        self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
-    }
-
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices, because a stop landing in the middle of a seconds-long pause would otherwise
-    /// wait the rest of it out with nothing to stop but a sleep.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
-
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancelled() {
-                return false;
-            }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
-        }
-    }
-
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         self.recall();
         let mut attempt = 1;
         let mut probed = false;
@@ -475,9 +439,9 @@ impl<'a> AnthropicClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
-                    let pause = pause_before_retry(self.backoff, attempt, &error);
+                    let pause = pause_before_retry(self.pace.backoff, attempt, &error);
                     log_retry(attempt + 1, pause);
-                    if !self.wait(pause) {
+                    if !self.pace.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                     attempt += 1;
@@ -485,9 +449,7 @@ impl<'a> AnthropicClient<'a> {
                 result => {
                     self.probe_settled(probed, result.is_err());
                     return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
+                        self.spent.bill(&mut completion);
                         completion
                     });
                 }
@@ -502,13 +464,12 @@ impl<'a> AnthropicClient<'a> {
     ) -> Result<Completion, ChatError> {
         // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
         // what the call has been billed so far is kept apart from it.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        if self.cancelled() {
+        self.spent.begin_attempt();
+        if self.pace.cancelled() {
             return Err(ChatError::Cancelled);
         }
         let http = self.build(request, false)?;
-        self.attempts += 1;
+        self.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backends: the bytes come
@@ -524,7 +485,8 @@ impl<'a> AnthropicClient<'a> {
             serde_json::from_slice(&bytes).map_err(|error| ChatError::Decode {
                 detail: format!("{error} (received {} bytes)", bytes.len()),
             })?;
-        self.completed_usage = reported_usage(&envelope).map(Usage::from);
+        self.spent
+            .record(reported_usage(&envelope).map(Usage::from));
 
         let parsed: MessageResponse =
             serde_json::from_value(envelope).map_err(|error| ChatError::Decode {
@@ -598,9 +560,7 @@ impl<'a> AnthropicClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         self.recall();
         let mut attempt = 1;
         let mut probed = false;
@@ -628,7 +588,7 @@ impl<'a> AnthropicClient<'a> {
                 }
                 Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
-                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
+                    let pause = pause_before_retry(self.pace.backoff, attempt - 1, &error);
                     log_retry(attempt, pause);
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply progress resets; completed costs remain charged.
@@ -640,16 +600,14 @@ impl<'a> AnthropicClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(pause) {
+                    if !self.pace.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                 }
                 result => {
                     self.probe_settled(probed, result.is_err());
                     return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
+                        self.spent.bill(&mut completion);
                         completion
                     });
                 }
@@ -666,23 +624,22 @@ impl<'a> AnthropicClient<'a> {
     ) -> Result<Completion, ChatError> {
         // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
         // what the call has been billed so far is kept apart from it.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
+        self.spent.begin_attempt();
         // Before the request is built, let alone sent. A stop that landed while the last attempt was
         // failing is still a stop.
-        if self.cancelled() {
+        if self.pace.cancelled() {
             return Err(ChatError::Cancelled);
         }
 
         let http = self
             .build(request, true)?
             .header("accept", "text/event-stream");
-        self.attempts += 1;
+        self.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
+            self.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
@@ -708,7 +665,7 @@ impl<'a> AnthropicClient<'a> {
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancelled() {
+                    if self.pace.cancelled() {
                         return Err(ChatError::Cancelled);
                     }
                     continue;
@@ -719,7 +676,7 @@ impl<'a> AnthropicClient<'a> {
             };
             began = true;
 
-            if self.cancelled() {
+            if self.pace.cancelled() {
                 return Err(ChatError::Cancelled);
             }
 
@@ -748,7 +705,7 @@ impl<'a> AnthropicClient<'a> {
                     Decoded::Ignored => {}
                 }
                 if reply.ended && reply.counted {
-                    self.completed_usage = Some(reply.usage());
+                    self.spent.record(Some(reply.usage()));
                 }
             }
 

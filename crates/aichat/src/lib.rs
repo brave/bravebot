@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 pub mod anthropic;
+pub mod call;
 pub mod conversation;
 pub mod generate_content;
 pub mod llama_server;
@@ -38,6 +39,7 @@ use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
 use bravebot_net::{Egress, EgressError, Request};
+use call::{Pace, Spent};
 use protocol::{ChatChunk, ChatRequest, ChatResponse, STREAM_DONE, SseDecoder, StreamAccumulator};
 use std::fmt;
 use std::time::Duration;
@@ -415,13 +417,10 @@ impl fmt::Debug for SubscriptionCredential {
 }
 
 pub struct AichatClient<'a> {
-    attempts: u32,
-    completed_usage: Option<protocol::Usage>,
-    retried_usage: Option<protocol::Usage>,
+    spent: Spent,
     config: &'a Config,
     egress: &'a Egress,
     subscription: Option<&'a mut dyn Subscription>,
-    cancel: Option<Cancel>,
     gateway: Option<Gateway<'a>>,
     /// Whether to ask the service to cache the prefix it will be sent again.
     ///
@@ -442,10 +441,9 @@ pub struct AichatClient<'a> {
     /// sent and it goes out to be judged. Leaving it out costs the level on a service that would
     /// have read it; sending it to a service that refuses the field costs every turn.
     effort: bool,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    ///
-    /// [`BACKOFF`] unless overridden by [`Self::with_backoff`].
-    backoff: Duration,
+    /// The stop to watch for and how long to wait between attempts, which is [`BACKOFF`] unless
+    /// overridden by [`Self::with_backoff`].
+    pace: Pace,
 }
 
 /// Where a request goes when a configured gateway serves the model, rather than Brave's endpoint.
@@ -476,40 +474,31 @@ struct Gateway<'a> {
 impl<'a> AichatClient<'a> {
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<protocol::Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             config,
             egress,
             subscription: None,
-            cancel: None,
             gateway: None,
             breakpoints: true,
             cache_ttl: true,
             effort: true,
-            backoff: BACKOFF,
+            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -566,7 +555,7 @@ impl<'a> AichatClient<'a> {
     /// watches the rest of the answer arrive first, which is the whole of what they asked to
     /// stop. A caller that offers no way to say so is never stopped.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -583,7 +572,7 @@ impl<'a> AichatClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
@@ -808,9 +797,7 @@ impl<'a> AichatClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         let refusal_key = self.refusal_key(request);
         self.recall(&refusal_key);
         let mut probed = false;
@@ -833,9 +820,9 @@ impl<'a> AichatClient<'a> {
                     probed = true;
                 }
                 Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
-                    let pause = pause_before_retry(self.backoff, attempt, &error);
+                    let pause = pause_before_retry(self.pace.backoff, attempt, &error);
                     log_retry(attempt + 1, pause);
-                    if !self.wait(pause) {
+                    if !self.pace.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                     attempt += 1;
@@ -843,9 +830,7 @@ impl<'a> AichatClient<'a> {
                 result => {
                     self.probe_settled(&refusal_key, probed, result.is_err());
                     return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
+                        self.spent.bill(&mut completion);
                         completion
                     });
                 }
@@ -860,14 +845,13 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
         // Move the last completed bill into the call total before clearing attempt state.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+        self.spent.begin_attempt();
+        if self.pace.cancelled() {
             return Err(ChatError::Cancelled);
         }
         let http = self.prepare(request)?;
 
-        self.attempts += 1;
+        self.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // Decoding the transport envelope needs the raw bytes, so the kernel releases them
@@ -882,7 +866,7 @@ impl<'a> AichatClient<'a> {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
             })?;
         // Usage belongs to the completed transport response, even if its tool calls are invalid.
-        self.completed_usage = reported_usage(&envelope);
+        self.spent.record(reported_usage(&envelope));
         let parsed: ChatResponse =
             serde_json::from_slice(&bytes).map_err(|e| ChatError::Decode {
                 detail: format!("{e} (received {} bytes)", bytes.len()),
@@ -925,9 +909,7 @@ impl<'a> AichatClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         let request = request.clone().streamed();
         let refusal_key = self.refusal_key(&request);
         self.recall(&refusal_key);
@@ -952,7 +934,7 @@ impl<'a> AichatClient<'a> {
                 }
                 Err(error) if worth_another_attempt(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
-                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
+                    let pause = pause_before_retry(self.pace.backoff, attempt - 1, &error);
                     log_retry(attempt, pause);
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply content and progress start again from nothing;
@@ -965,43 +947,18 @@ impl<'a> AichatClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(pause) {
+                    if !self.pace.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                 }
                 result => {
                     self.probe_settled(&refusal_key, probed, result.is_err());
                     return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
+                        self.spent.bill(&mut completion);
                         completion
                     });
                 }
             }
-        }
-    }
-
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices rather than in one go, because the pause between attempts is seconds long
-    /// and a stop landing in the middle of one would otherwise wait the rest of it out, having
-    /// nothing to stop but a sleep.
-    ///
-    /// Returns whether the wait finished, so a stop is answered rather than swallowed.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
-
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
-                return false;
-            }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
         }
     }
 
@@ -1018,12 +975,11 @@ impl<'a> AichatClient<'a> {
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
         // Move the last completed bill into the call total before clearing attempt state.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
+        self.spent.begin_attempt();
         // Before the request is built, let alone sent. A stop that landed while the last attempt
         // was failing is a stop, and spending a credential on a reply nobody wants is worse than
         // slow.
-        if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+        if self.pace.cancelled() {
             return Err(ChatError::Cancelled);
         }
 
@@ -1034,12 +990,12 @@ impl<'a> AichatClient<'a> {
             .header("accept", "text/event-stream")
             .patient_on_this_machine();
 
-        self.attempts += 1;
+        self.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
+            self.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
@@ -1068,7 +1024,7 @@ impl<'a> AichatClient<'a> {
                 // Nothing has arrived yet, which is the whole point of waiting with a limit: it
                 // is the only chance to look at anything while a reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+                    if self.pace.cancelled() {
                         return Err(ChatError::Cancelled);
                     }
                     continue;
@@ -1081,7 +1037,7 @@ impl<'a> AichatClient<'a> {
 
             // A stream is read and nothing else, so there is nothing part written to leave behind
             // by stopping here, and the caller is throwing the reply away regardless.
-            if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
+            if self.pace.cancelled() {
                 return Err(ChatError::Cancelled);
             }
 
@@ -1131,7 +1087,7 @@ impl<'a> AichatClient<'a> {
 
             // Protocol completion establishes usage even if the server keeps the socket open.
             if accumulated.ended() {
-                self.completed_usage = reported;
+                self.spent.record(reported);
             }
 
             let thinking = accumulated.take_thinking();
@@ -1159,7 +1115,7 @@ impl<'a> AichatClient<'a> {
 
         let (content, model, calls, usage) = accumulated.finish();
         let usage = reported.unwrap_or(usage);
-        self.completed_usage = reported;
+        self.spent.record(reported);
         if malformed {
             return Err(ChatError::Decode {
                 detail: "the completed stream contained a malformed response frame".to_string(),

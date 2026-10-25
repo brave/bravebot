@@ -23,6 +23,7 @@ guards:
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
+      - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 7
       - crates/aichat/src/responses.rs: 6
       - crates/aichat/src/lib.rs: 7

@@ -18,11 +18,12 @@ pub mod protocol;
 
 use crate::anthropic::protocol::Failure;
 use crate::anthropic::what_was_written;
+use crate::call::{EffortRefused, Pace, Spent};
 use crate::protocol::{ChatRequest, Effort, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, AccountAccess, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
-    WAKE, learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body,
-    remember, remembered, reply_bound, worth_another_attempt,
+    ATTEMPTS, AccountAccess, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, WAKE,
+    learned_key, log_retry, pause_before_retry, read_in_background, reply_bound,
+    worth_another_attempt,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -78,9 +79,7 @@ struct AccountRequests<'a> {
 
 /// One client for one request, to a service that takes the Responses protocol.
 pub struct ResponsesClient<'a> {
-    attempts: u32,
-    completed_usage: Option<Usage>,
-    retried_usage: Option<Usage>,
+    spent: Spent,
     egress: &'a Egress,
     provider: &'a Provider,
     /// What the service calls the model, which is the name the body carries.
@@ -94,17 +93,12 @@ pub struct ResponsesClient<'a> {
     account: Option<AccountRequests<'a>>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    cancel: Option<Cancel>,
-    /// Whether requests still carry the level a turn asks for.
-    ///
-    /// True until a model refuses it, which is the only way to find out that it reads none:
-    /// nothing in a roster says which models do.
-    effort: bool,
-    /// What that model was known to refuse before this request, which a probe that settled nothing
-    /// puts back.
-    recalled: Refusals,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    backoff: Duration,
+    /// Whether requests still carry the level a turn asks for, and what the model was known to
+    /// refuse before this request.
+    refused: EffortRefused,
+    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
+    /// unless a test shortens it.
+    pace: Pace,
 }
 
 impl<'a> ResponsesClient<'a> {
@@ -117,19 +111,15 @@ impl<'a> ResponsesClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             egress,
             provider,
             model: model.into(),
             token,
             account: None,
             headers: Vec::new(),
-            cancel: None,
-            effort: true,
-            recalled: Refusals::default(),
-            backoff: BACKOFF,
+            refused: EffortRefused::default(),
+            pace: Pace::new(BACKOFF),
         }
     }
 
@@ -190,29 +180,23 @@ impl<'a> ResponsesClient<'a> {
 
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -231,7 +215,7 @@ impl<'a> ResponsesClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
@@ -248,32 +232,14 @@ impl<'a> ResponsesClient<'a> {
 
     /// Start a request from what this model has already been found to refuse.
     fn recall(&mut self) {
-        let refusals = remembered(&self.refusal_key());
-        self.effort = !refusals.effort;
-        self.recalled = refusals;
+        let key = self.refusal_key();
+        self.refused.recall(&key);
     }
 
     /// Settle what a probe found, once the request it was part of has finished one way or the other.
-    ///
-    /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
-    /// read it. A probe that failed as well says the level was not what the service refused, so it
-    /// goes back to what was known before the request: a request can be refused on its contents
-    /// for reasons that have nothing to do with it.
     fn probe_settled(&mut self, probed: bool, failed: bool) {
-        if !probed {
-            return;
-        }
-        if failed {
-            self.effort = !self.recalled.effort;
-            return;
-        }
-        remember(
-            &self.refusal_key(),
-            Refusals {
-                effort: !self.effort,
-                ..Refusals::default()
-            },
-        );
+        let key = self.refusal_key();
+        self.refused.probe_settled(&key, probed, failed);
     }
 
     /// Whether this failure is worth sending the same request again without its level.
@@ -281,7 +247,9 @@ impl<'a> ResponsesClient<'a> {
     /// Only where the request carried one: a request without a level was not refused for it, and
     /// giving it up there would record a refusal nobody saw.
     fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && self.level_for(request).is_some() && refuses_the_body(error)
+        // A request held to the level its session began with is dropped a level only if it still
+        // carries one, which `level_for` says, and the rest is the bookkeeping's.
+        self.level_for(request).is_some() && self.refused.worth_dropping(request, error)
     }
 
     /// The ceiling somebody stated for this model, exported or in its block.
@@ -298,7 +266,7 @@ impl<'a> ResponsesClient<'a> {
             &self.model,
             &request.messages,
             request.tools.as_deref(),
-            self.level_for(request).filter(|_| self.effort),
+            self.level_for(request).filter(|_| self.refused.effort),
             self.stated_ceiling(),
         )
     }
@@ -430,30 +398,6 @@ impl<'a> ResponsesClient<'a> {
         }
     }
 
-    fn cancelled(&self) -> bool {
-        self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
-    }
-
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices, because a stop landing in the middle of a seconds-long pause would otherwise
-    /// wait the rest of it out with nothing to stop but a sleep.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
-
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancelled() {
-                return false;
-            }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
-        }
-    }
-
     /// Send a request and wait for the reply.
     ///
     /// Read as events like [`ResponsesClient::complete_streaming`], which this is: the service may
@@ -499,9 +443,7 @@ impl<'a> ResponsesClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
+        self.spent.begin_call();
         self.recall();
         if let Some(account) = self.account.as_mut() {
             account.sent = None;
@@ -519,12 +461,12 @@ impl<'a> ResponsesClient<'a> {
                 // Sent again immediately rather than after a wait: nothing is busy, the request was
                 // simply carrying something this model does not take.
                 Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
+                    self.refused.effort = false;
                     probed = true;
                 }
                 Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
                     attempt += 1;
-                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
+                    let pause = pause_before_retry(self.pace.backoff, attempt - 1, &error);
                     log_retry(attempt, pause);
                     // Announced before the wait rather than after it, so the pause is explained
                     // while it is happening. Reply progress resets; completed costs remain charged.
@@ -536,7 +478,7 @@ impl<'a> ResponsesClient<'a> {
                         counted_by_server: false,
                         attempt,
                     });
-                    if !self.wait(pause) {
+                    if !self.pace.wait(pause) {
                         return Err(ChatError::Cancelled);
                     }
                 }
@@ -548,9 +490,7 @@ impl<'a> ResponsesClient<'a> {
                     }
                     return result
                         .map(|mut completion| {
-                            if let Some(usage) = self.retried_usage {
-                                completion.usage.add(usage);
-                            }
+                            self.spent.bill(&mut completion);
                             completion
                         })
                         .map_err(|error| self.as_the_accounts(error));
@@ -568,11 +508,10 @@ impl<'a> ResponsesClient<'a> {
     ) -> Result<Completion, ChatError> {
         // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
         // what the call has been billed so far is kept apart from it.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
+        self.spent.begin_attempt();
         // Before the request is built, let alone sent. A stop that landed while the last attempt was
         // failing is still a stop.
-        if self.cancelled() {
+        if self.pace.cancelled() {
             return Err(ChatError::Cancelled);
         }
 
@@ -588,12 +527,12 @@ impl<'a> ResponsesClient<'a> {
             None => self.token.clone(),
         };
         let http = self.build(body, token.as_ref());
-        self.attempts += 1;
+        self.spent.sent();
         let stream = match self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
+            self.pace.cancel.as_ref(),
         ) {
             Ok(stream) => stream,
             Err(error) => return Err(crate::failure_of_refusal(policy, error)),
@@ -622,7 +561,7 @@ impl<'a> ResponsesClient<'a> {
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancelled() {
+                    if self.pace.cancelled() {
                         return Err(ChatError::Cancelled);
                     }
                     continue;
@@ -633,7 +572,7 @@ impl<'a> ResponsesClient<'a> {
             };
             began = true;
 
-            if self.cancelled() {
+            if self.pace.cancelled() {
                 return Err(ChatError::Cancelled);
             }
 
@@ -681,7 +620,7 @@ impl<'a> ResponsesClient<'a> {
                     Decoded::Ignored => {}
                 }
                 if reply.ending.is_some() && reply.reported.is_some() {
-                    self.completed_usage = Some(reply.usage());
+                    self.spent.record(Some(reply.usage()));
                 }
             }
 
