@@ -149,12 +149,14 @@ border.
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it
 
-The panel's last row is `{chord} hide panel`, naming the chord in force. While the panel is closed
+The panel's last row is `{chord} hide panel`, naming the chord in force, and in the files state the
+keys of that state instead ([FILES-4](files-mode.md#FILES-4)). While the panel is closed
 on a terminal wide enough for it, the hint line has a `{chord} info` part, and that part is the
 first the line drops when the row is short ([INPUT-13](terminal-input.md#INPUT-13)). With the panel
 open, or on a terminal too narrow for it, the line has no such part.
 
 `verified-by: bravebot_tui::panel::the_last_row_names_the_chord_in_force`
+`verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
 `verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_only_while_it_is_closed_and_would_fit`
 `verified-by: bravebot_tui::panel::the_info_part_is_the_first_the_hint_line_gives_up`
 
@@ -220,10 +222,10 @@ narrow for it.
    they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
-8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote,
-   and a row naming `/files`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
-   It is left out until a file has been written. The Plan takes the rows it leaves, as PANEL-13
-   says of the server sections.
+8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
+   A click on its heading or on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as
+   `/diff` does ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The
+   Plan takes the rows it leaves, as PANEL-13 says of the server sections.
 9. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
@@ -249,7 +251,7 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
-`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows`
+`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it

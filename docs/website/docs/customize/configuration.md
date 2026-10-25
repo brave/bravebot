@@ -939,9 +939,10 @@ Shift on most, Option on macOS iTerm2 and Terminal.app.
 { "tui": { "wheelRows": 5 } }
 ```
 
-How many rows of the transcript one mouse wheel notch scrolls, in the session view and in
-[the scroller](../using/transcript.md) alike. Without this key it is 3, which is what a terminal's
-own scrollback moves.
+How many rows one mouse wheel notch scrolls, in the transcript of the session view, in
+[the scroller](../using/transcript.md) and in the list and the edits of
+[the files view](../using/sessions.md#the-files-the-session-wrote) alike. Without this key it is 3,
+which is what a terminal's own scrollback moves.
 
 Terminals disagree about how many events a notch sends, and a trackpad swipe sends a stream of them,
 so the same figure crawls on one and jumps a screen on another. Raise it where the transcript barely

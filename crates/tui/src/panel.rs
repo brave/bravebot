@@ -236,14 +236,9 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
 
 /// The rows of the panel, where the links are, which rows continue on the row below, and which rows
 /// a click acts on.
-type Body = (
-    Vec<Line<'static>>,
-    Vec<Link>,
-    Vec<usize>,
-    Vec<(usize, Target)>,
-);
+type Body = (Vec<Line<'static>>, Vec<Link>, Vec<usize>, Vec<Place>);
 
-/// What a click on a row of the panel asks for (MOUSE-11).
+/// What a click on a row of the panel acts on (MOUSE-11, MOUSE-18, MOUSE-20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Target {
     /// The model row: the same question `/model` asks.
@@ -254,9 +249,49 @@ pub enum Target {
     Context,
     /// A started MCP server's row: the same question a bare `/mcp` asks.
     Servers,
+    /// A file's row in the list of the files state: the highlight the keys move (MOUSE-18).
+    File(usize),
+    /// The `x` in the heading row of the files state: the end of the state, as `q` is (MOUSE-18).
+    CloseFiles,
+    /// The control for the previous edit in the bar of the files state: the key that goes to it.
+    PreviousEdit,
+    /// The control for the next edit in the bar of the files state.
+    NextEdit,
+    /// The heading of the Files section and the row under it: the same question `/diff` asks
+    /// (MOUSE-20).
+    Files,
 }
 
-/// The target a press on screen row `row` of a panel drawn over `area` lands on, if any.
+/// Where a click acts on the panel: a row, and the cells of it that count, or all of them where
+/// `columns` is `None`. Columns are counted from the first one inside the border.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub row: usize,
+    pub columns: Option<std::ops::Range<usize>>,
+    pub target: Target,
+}
+
+impl Place {
+    /// A target that every cell of the row belongs to.
+    pub fn on_row(row: usize, target: Target) -> Self {
+        Place {
+            row,
+            columns: None,
+            target,
+        }
+    }
+
+    /// A target that the cells `columns` of the row belong to.
+    pub fn on_cells(row: usize, columns: std::ops::Range<usize>, target: Target) -> Self {
+        Place {
+            row,
+            columns: Some(columns),
+            target,
+        }
+    }
+}
+
+/// The target a press on screen cell (`row`, `column`) of a panel drawn over `area` lands on, if any.
 ///
 /// Read from the rows [`draw`] draws, so a row that is not drawn, or is cut for want of room, is
 /// not a target. The border column is the panel's handle and is never one (PANEL-6).
@@ -265,10 +300,19 @@ pub fn target_at(session: &Session, area: Rect, row: u16, column: u16) -> Option
         return None;
     }
     let at = usize::from(row - area.y);
+    // The border is the first column of the area.
+    let cell = usize::from(column - area.x - 1);
     laid_out(session, area.width, area.height)
         .3
         .into_iter()
-        .find_map(|(drawn, target)| (drawn == at).then_some(target))
+        .find_map(|place| {
+            let on_it = place.row == at
+                && place
+                    .columns
+                    .as_ref()
+                    .is_none_or(|columns| columns.contains(&cell));
+            on_it.then_some(place.target)
+        })
 }
 
 /// The rows [`lines`] gives, where among them the links are, which of them continue on the row
@@ -281,14 +325,14 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     // None of the ordinary sections is drawn beside the files state (FILES-4).
     if let Some(state) = session.files_state() {
         let files = session.written_files();
-        let rows = crate::files_mode::rows(
+        let (rows, targets) = crate::files_mode::rows(
             &files,
             state,
             session.has_earlier_calls(),
             width,
             height as u16,
         );
-        return (rows, Vec::new(), Vec::new(), Vec::new());
+        return (rows, Vec::new(), Vec::new(), targets);
     }
     let text = text_width(width);
     let (mut body, mut links, mut continued, mut targets) = head(session, text);
@@ -316,7 +360,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
         let count = rows.len();
         section(&mut body, t!(panel_mcp_servers).to_string(), rows);
         let first = body.len() - count;
-        targets.extend((first..first + count).map(|row| (row, Target::Servers)));
+        targets.extend((first..first + count).map(|row| Place::on_row(row, Target::Servers)));
     }
 
     // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
@@ -335,11 +379,14 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
                 ));
             }
         }
-        let rows = vec![
-            Line::from(total),
-            row(crate::command_table::FILES_COMMAND.to_string(), dim()),
-        ];
-        section(&mut body, t!(panel_files).to_string(), rows);
+        section(
+            &mut body,
+            t!(panel_files).to_string(),
+            vec![Line::from(total)],
+        );
+        // The heading and the row under it, which are the last two rows so far.
+        let totals = body.len() - 1;
+        targets.extend([totals - 1, totals].map(|row| Place::on_row(row, Target::Files)));
     }
 
     let plan = session.plan();
@@ -361,7 +408,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     ));
     links.retain(|link| link.row < height - 1);
     continued.retain(|row| *row < height - 1);
-    targets.retain(|(row, _)| *row < height - 1);
+    targets.retain(|place| place.row < height - 1);
     (body, links, continued, targets)
 }
 
@@ -473,7 +520,7 @@ fn head(session: &Session, text: usize) -> Body {
         targets.extend(
             model_targets
                 .into_iter()
-                .map(|(row, target)| (first + row, target)),
+                .map(|(row, target)| Place::on_row(first + row, target)),
         );
     }
 
@@ -552,7 +599,7 @@ fn head(session: &Session, text: usize) -> Body {
     }
     let count = context.len();
     section(&mut body, t!(panel_context).to_string(), context);
-    targets.push((body.len() - count, Target::Context));
+    targets.push(Place::on_row(body.len() - count, Target::Context));
     (body, links, continued, targets)
 }
 
@@ -2046,22 +2093,9 @@ mod tests {
         );
     }
 
-    /// FILES-1: the Files section is left out until a file has been written, and then has the totals
-    /// and the command that opens the state. It comes out of the plan's room, as a server section
-    /// does.
-    #[test]
-    fn the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows() {
-        let tasks: Vec<(String, Status)> = (0..20)
-            .map(|n| (format!("task {n}"), Status::Pending))
-            .collect();
-        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
-        let mut session = working_on(plan(&rows));
-        let without = texts(&lines(&session, WIDTH, 20));
-        assert!(
-            !without.iter().any(|row| *row == *t!(panel_files)),
-            "a Files section was drawn before anything was written: {without:#?}"
-        );
-
+    /// A session with the plan `rows` and two files written, one of which lost a line.
+    fn with_two_files_written(rows: &[(&str, Status)]) -> Session {
+        let mut session = working_on(plan(rows));
         for (path, before, after) in [("a.rs", "x\n", "x\ny\nz\n"), ("b.rs", "p\nq\n", "p\n")] {
             let diff = bravebot_agent::diff::Diff::compute(before, after);
             session.transcript.push(crate::state::Entry::tool(
@@ -2077,25 +2111,112 @@ mod tests {
                     .done("done"),
             ));
         }
+        session
+    }
+
+    /// FILES-1, PANEL-9: the Files section is left out until a file has been written, and then has
+    /// the totals and no row of its own beyond them. It comes out of the plan's room, as a server
+    /// section does.
+    #[test]
+    fn the_files_section_has_the_totals_and_leaves_the_plan_its_rows() {
+        let tasks: Vec<(String, Status)> = (0..20)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let without_files = working_on(plan(&rows));
+        let without = texts(&lines(&without_files, WIDTH, 20));
+        assert!(
+            !without.iter().any(|row| *row == *t!(panel_files)),
+            "a Files section was drawn before anything was written: {without:#?}"
+        );
+
+        let session = with_two_files_written(&rows);
         let with = texts(&lines(&session, WIDTH, 20));
         let heading = with
             .iter()
             .position(|row| *row == *t!(panel_files))
             .unwrap_or_else(|| panic!("no Files heading: {with:#?}"));
         assert_eq!(with[heading + 1].trim(), "2 files +2 -1", "{with:#?}");
-        assert_eq!(with[heading + 2].trim(), "/files", "{with:#?}");
+        assert_eq!(
+            with[heading + 2].trim(),
+            "",
+            "a row follows the totals: {with:#?}"
+        );
+        assert!(
+            !with.iter().any(|row| row.contains("/diff")),
+            "the section names the command: {with:#?}"
+        );
         let plan_heading = with
             .iter()
             .position(|row| *row == *t!(panel_plan))
             .unwrap_or_else(|| panic!("the plan was dropped: {with:#?}"));
-        assert!(heading < plan_heading, "the section is not before the plan");
+        assert_eq!(
+            plan_heading,
+            heading + 3,
+            "the plan does not follow the section"
+        );
         let shown = |drawn: &[String]| drawn.iter().filter(|row| row.contains("task ")).count();
         assert_eq!(with.len(), 20, "the panel is not the height it was given");
         assert_eq!(
             shown(&without) - shown(&with),
-            4,
-            "a blank row, a heading and two rows came out of the plan's room: {with:#?}"
+            3,
+            "a blank row, a heading and a row came out of the plan's room: {with:#?}"
         );
+    }
+
+    /// MOUSE-20. Rejects: a target on the rows under the section, on the plan, or on the border
+    /// column, and a section whose heading or totals row is not one.
+    #[test]
+    fn only_the_files_heading_and_its_totals_row_are_click_targets() {
+        let tasks: Vec<(String, Status)> = (0..6)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let session = with_two_files_written(&rows);
+        let area = Rect::new(84, 0, WIDTH, 30);
+        let drawn = texts(&lines(&session, area.width, area.height));
+        let heading = drawn
+            .iter()
+            .position(|row| *row == *t!(panel_files))
+            .expect("the Files heading") as u16;
+        let inside = area.x + 3;
+        let at = |row: u16, column: u16| target_at(&session, area, area.y + row, column);
+
+        assert_eq!(at(heading, inside), Some(Target::Files));
+        assert_eq!(at(heading + 1, inside), Some(Target::Files));
+        assert_eq!(at(heading - 1, inside), None, "{drawn:#?}");
+        assert_eq!(at(heading + 2, inside), None, "{drawn:#?}");
+        assert_eq!(at(heading + 3, inside), None, "the plan's heading");
+        assert_eq!(at(heading + 4, inside), None, "a row of the plan");
+        assert_eq!(
+            at(heading, area.x),
+            None,
+            "the border column is the resize handle"
+        );
+
+        // A heading or a totals row that the height of the panel cuts is not a target. The last row
+        // of the panel names the key that hides it, so a panel `n` rows tall draws `n - 1`.
+        let target = |height: u16, row: u16| {
+            let area = Rect::new(84, 0, WIDTH, height);
+            target_at(&session, area, row, inside)
+        };
+        assert_eq!(target(heading + 2, heading), Some(Target::Files));
+        assert_eq!(
+            target(heading + 2, heading + 1),
+            None,
+            "the totals row is cut"
+        );
+        assert_eq!(target(heading + 1, heading), None, "the heading is cut");
+
+        // A session that has written nothing has no section to click.
+        let bare = working_on(plan(&rows));
+        for row in 0..area.height {
+            assert_ne!(
+                target_at(&bare, area, area.y + row, inside),
+                Some(Target::Files),
+                "row {row}"
+            );
+        }
     }
 
     /// An MCP server's alias is whatever the settings file called it, so it is drawn as every other
