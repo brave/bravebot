@@ -1826,6 +1826,37 @@ fn a_refused_command_line_asking_for_a_result_object_gets_one_instead_of_the_usa
     }
 }
 
+/// CLI-12: a flag that takes the word after it takes `--json` too, and the refusal of `--tools`
+/// that follows is still answered with the object the command line as typed asked for.
+#[test]
+fn a_refused_tools_list_after_a_flag_that_took_json_as_its_value_gets_a_result_object() {
+    let scratch = Scratch::new("cli-running-refused-tools-json");
+    let arguments = [
+        "--sandbox-allow-read",
+        "--json",
+        "--tools",
+        "nonesuch",
+        "-p",
+        "task",
+    ];
+    let output = bravebot(&scratch.path, &[], &arguments);
+    let (stdout, stderr) = said(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "no single result object on stdout: {stdout}"
+    );
+    for field in [r#""ok":false"#, r#""reason":"argument""#] {
+        assert!(stdout.contains(field), "{field} is missing: {stdout}");
+    }
+    assert!(
+        stderr.contains("nonesuch"),
+        "the refusal is not on stderr: {stderr}"
+    );
+}
+
 /// The third failure the clause names, and the one the status matters most for: a turn that could
 /// not run produces no reply, so a script reading stdout sees an empty answer rather than an
 /// error.

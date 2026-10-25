@@ -394,19 +394,14 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
     // Taken out after every flag that takes a value, so the first argument left is the command, and
     // settled before a session is assembled so that the list a turn is offered is written once under
     // one answer. A refused list stops here, ahead of any turn.
-    let tool_limit = take_tool_limit(args).map_err(|complaint| {
-        stopped_before_the_turn(wants_json(args), Ending::Argument, complaint)
-    })?;
+    let tool_limit = take_tool_limit(args)
+        .map_err(|complaint| stopped_before_the_turn(as_json, Ending::Argument, complaint))?;
     if !tool_limit.is_none() {
         if let Some(refused) = args
             .first()
             .and_then(|first| without_a_tool_set_to_limit(first))
         {
-            return Err(stopped_before_the_turn(
-                wants_json(args),
-                Ending::Argument,
-                refused,
-            ));
+            return Err(stopped_before_the_turn(as_json, Ending::Argument, refused));
         }
         bravebot_core::tool_set::settle(tool_limit);
     }
