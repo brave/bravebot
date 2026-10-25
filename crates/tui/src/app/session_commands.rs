@@ -126,7 +126,7 @@ pub(super) fn set_language(session: &mut Session, word: &str) {
     let available = bravebot_i18n::tags().join(", ");
     let kept = |session: &mut Session, tag: Option<&str>| match tag {
         Some(tag) if session.choose_language(Some(tag)) => {
-            t!(session_language_set, language = tag).to_string()
+            t!(session_language_set, language = tag)
         }
         None if session.choose_language(None) => t!(session_language_auto).to_string(),
         _ => t!(session_language_not_saved).to_string(),
@@ -323,7 +323,7 @@ pub(super) fn set_style_in(
                 style = style.name.as_ref(),
                 styles = styles
             ),
-            None => t!(session_style_none, styles = styles).to_string(),
+            None => t!(session_style_none, styles = styles),
         };
         session.note(note);
     } else if word == STYLE_OFF {
@@ -400,7 +400,7 @@ pub(super) fn set_mode(
             Some(skill) => t!(session_mode_in_force, skill = skill, skills = available),
             None => t!(session_mode_none, skills = available),
         };
-        session.note(note.to_string());
+        session.note(note);
     } else if word == MODE_OFF {
         session.choose_skill_mode(None);
         stored.set_skill_mode(None);

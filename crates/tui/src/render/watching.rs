@@ -340,8 +340,7 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
                     watching_footer,
                     kind = delegate.kind.clone(),
                     number = delegate.id.to_string()
-                )
-                .to_string(),
+                ),
                 standing.to_string(),
                 colour,
             )

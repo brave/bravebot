@@ -166,8 +166,7 @@ impl JobView {
                 ran_for = crate::loops::spell(
                     self.since.elapsed() + self.moved_after.unwrap_or_default()
                 )
-            )
-            .to_string(),
+            ),
             JobState::Stopping => t!(job_stopping).to_string(),
             JobState::Ended => outcome.summary(),
             JobState::EndedWithTurn => t!(job_ended_with_turn).to_string(),
@@ -181,8 +180,7 @@ impl JobView {
                 job_of_delegate,
                 name = self.name.clone(),
                 number = delegate.to_string()
-            )
-            .to_string(),
+            ),
             None => self.name.clone(),
         }
     }

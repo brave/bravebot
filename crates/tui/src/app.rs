@@ -957,14 +957,11 @@ pub fn definition_named(
     name: &str,
 ) -> Result<crate::state::Addressed, Unusable> {
     let Some(definition) = definitions.get(name) else {
-        return Err(Unusable::Missing(
-            t!(
-                agent_no_such_definition,
-                name = name,
-                names = definitions.names().join(", ")
-            )
-            .to_string(),
-        ));
+        return Err(Unusable::Missing(t!(
+            agent_no_such_definition,
+            name = name,
+            names = definitions.names().join(", ")
+        )));
     };
     // The machine-level layer first: a model this machine does not request is refused whatever the
     // credentials for it are, and asking about a sign-in would send somebody to fix the wrong thing
@@ -972,27 +969,21 @@ pub fn definition_named(
     if let Some(written) = definition.model()
         && let Some((file, why)) = config.model_refused(written)
     {
-        return Err(Unusable::Refused(
-            t!(
-                delegate_model_refused,
-                definition = name,
-                model = written,
-                reason = bravebot_agent::backend::refusal_reason(file, why)
-            )
-            .to_string(),
-        ));
+        return Err(Unusable::Refused(t!(
+            delegate_model_refused,
+            definition = name,
+            model = written,
+            reason = bravebot_agent::backend::refusal_reason(file, why)
+        )));
     }
     if let Some(written) = definition.model()
         && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
     {
-        return Err(Unusable::Refused(
-            t!(
-                delegate_model_needs_sign_in,
-                definition = name,
-                model = written
-            )
-            .to_string(),
-        ));
+        return Err(Unusable::Refused(t!(
+            delegate_model_needs_sign_in,
+            definition = name,
+            model = written
+        )));
     }
     Ok(crate::state::Addressed {
         name: name.to_string(),
@@ -1701,15 +1692,14 @@ fn handed_to_the_background(
         return Err(t!(session_bg_bypass).to_string());
     };
     if let Some(flag) = lost {
-        return Err(t!(session_bg_option_lost, flag = flag).to_string());
+        return Err(t!(session_bg_option_lost, flag = flag));
     }
     if session.sandbox_mode() != settled {
         return Err(t!(
             session_bg_sandbox_moved,
             mode = session.sandbox_mode().name(),
             settled = settled.name()
-        )
-        .to_string());
+        ));
     }
     if session.looping().is_some() || session.goal().is_some() || !session.watches().is_empty() {
         return Err(t!(session_bg_keeps_nothing_running).to_string());

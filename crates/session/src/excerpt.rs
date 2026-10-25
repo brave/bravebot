@@ -65,7 +65,6 @@ impl Refused {
             Self::Private => t!(session_mention_private, id = id),
             Self::Empty => t!(session_mention_empty, id = id),
         }
-        .to_string()
     }
 }
 

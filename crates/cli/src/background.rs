@@ -386,7 +386,7 @@ pub(crate) fn mode_line(mode: Mode) -> String {
         Mode::AcceptEdits => t!(mode_accept_edits),
         Mode::Plan => t!(mode_plan),
     };
-    t!(bg_mode, mode = words).to_string()
+    t!(bg_mode, mode = words)
 }
 
 /// Whether a background session is running under `id`, the id of a session record (BG-9).
@@ -753,8 +753,7 @@ fn state_in_words(seen: &Seen) -> String {
                 Held::Question => t!(sessions_held_question),
                 Held::Message => t!(sessions_held_message),
             }
-        )
-        .to_string(),
+        ),
         (State::NeedsInput, None) => t!(sessions_state_needs_input_unnamed).to_string(),
         (State::Idle, _) => t!(sessions_state_idle).to_string(),
         (State::Stopped, _) => t!(sessions_state_stopped).to_string(),

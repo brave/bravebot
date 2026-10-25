@@ -53,7 +53,7 @@ pub fn find(directory: &Path, asked: &Resume) -> Result<Continuing, String> {
             .ok_or_else(|| t!(cli_nothing_to_continue).to_string())?,
     };
     let record = bravebot_session::sessions::load(directory, &id)
-        .ok_or_else(|| t!(cli_no_such_session, id = id.as_str()).to_string())?;
+        .ok_or_else(|| t!(cli_no_such_session, id = id.as_str()))?;
     if record.manifest.is_some() {
         return Err(bravebot_tui::resume::manifest_note().to_string());
     }

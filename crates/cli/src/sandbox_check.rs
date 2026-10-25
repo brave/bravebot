@@ -74,8 +74,7 @@ mod unix {
                 passed = report.passed(),
                 failed = report.failed().len(),
                 skipped = report.skipped().len()
-            )
-            .to_string(),
+            ),
         ));
         let ending = if report.is_green() {
             Ending::Done

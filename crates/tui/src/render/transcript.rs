@@ -116,8 +116,7 @@ fn request_lines(
                                 request_instruction_file,
                                 path = *path,
                                 bytes = *bytes
-                            )
-                            .to_string())
+                            ))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )

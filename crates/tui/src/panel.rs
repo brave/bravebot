@@ -356,7 +356,7 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     body.truncate(height - 1);
     body.resize(height - 1, Line::raw(""));
     body.push(row(
-        t!(panel_hide, chord = session.bindings().panel_name()).to_string(),
+        t!(panel_hide, chord = session.bindings().panel_name()),
         dim(),
     ));
     links.retain(|link| link.row < height - 1);
@@ -464,10 +464,7 @@ fn head(session: &Session, text: usize) -> Body {
     }
     if let Some(level) = session.effort_in_force() {
         model_targets.push((model.len(), Target::Effort));
-        model.push(row(
-            t!(panel_effort, level = level.as_str()).to_string(),
-            dim(),
-        ));
+        model.push(row(t!(panel_effort, level = level.as_str()), dim()));
     }
     if !model.is_empty() {
         let count = model.len();
@@ -525,7 +522,7 @@ fn head(session: &Session, text: usize) -> Body {
     let spent = session.spent_tokens();
     if spent > 0 {
         context.push(row(
-            t!(panel_spent, tokens = crate::status::tokens(spent)).to_string(),
+            t!(panel_spent, tokens = crate::status::tokens(spent)),
             dim(),
         ));
     }
@@ -539,8 +536,7 @@ fn head(session: &Session, text: usize) -> Body {
                 t!(
                     panel_cache_read,
                     tokens = crate::status::tokens(cached.read_tokens)
-                )
-                .to_string(),
+                ),
                 dim(),
             ));
         }
@@ -549,8 +545,7 @@ fn head(session: &Session, text: usize) -> Body {
                 t!(
                     panel_cache_written,
                     tokens = crate::status::tokens(cached.written_tokens)
-                )
-                .to_string(),
+                ),
                 dim(),
             ));
         }
@@ -639,7 +634,7 @@ fn plan_rows(
         (earlier, later) => Some(t!(panel_earlier_and_more, earlier = earlier, later = later)),
     };
     if let Some(count) = count {
-        lines.push(row(count.to_string(), dim()));
+        lines.push(row(count, dim()));
     }
     lines
 }

@@ -64,12 +64,12 @@ impl Unmet {
             }
             Self::Stalled { last: reason } => format!("{}{}", t!(cli_goal_stalled), last(reason)),
             Self::Impossible { reason } => {
-                t!(cli_goal_impossible, reason = drawn(reason)).to_string()
+                t!(cli_goal_impossible, reason = drawn(reason))
             }
             Self::Unreadable => t!(cli_goal_unreadable).to_string(),
             Self::Quarantined => t!(cli_goal_quarantined).to_string(),
             Self::Unchecked { problem, .. } => {
-                t!(cli_goal_failed, problem = drawn(problem)).to_string()
+                t!(cli_goal_failed, problem = drawn(problem))
             }
         }
     }

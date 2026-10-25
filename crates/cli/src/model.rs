@@ -155,7 +155,6 @@ pub(crate) fn managed_refusal(
         model = model,
         reason = bravebot_agent::backend::refusal_reason(file, why)
     )
-    .to_string()
 }
 
 /// The model a run asks for: the one the command line named, else the one a session would read.
