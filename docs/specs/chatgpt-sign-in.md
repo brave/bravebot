@@ -10,7 +10,11 @@ governs:
   - crates/aichat/src/lib.rs
   - crates/aichat/src/responses.rs
   - crates/aichat/src/models.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/models.rs
+  - crates/tui/src/app/session_commands.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/account_words.rs
