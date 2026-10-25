@@ -58,7 +58,12 @@ use keys::*;
 pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
 
 mod directories;
-use directories::*;
+#[cfg(test)]
+use directories::{
+    Changed, add_directory, against_workspace, change_directory, close_directory, expand_home,
+    removal_trail, remove_checkout,
+};
+use directories::{Named, named_directories, named_to_open, open_named};
 
 mod models;
 use models::*;
@@ -66,10 +71,21 @@ use models::*;
 pub use models::{adopt_listing_for_model, reads_structured_output};
 
 mod opening;
-use opening::*;
+use opening::{
+    Answers, RuleSources, Rules, beginning_of, bypass_is_unreachable, forget_trust, honoured,
+    opening_trust, rules_from, settle_under,
+};
+#[cfg(test)]
+use opening::{
+    Beginning, Granting, Opening, Whence, clear_session, granting_proposed_rules,
+    handle_after_clear, keep_the_answer, opening_for, proposed_rules, switch_session,
+};
 
 mod records;
-use records::*;
+use records::with_standing;
+#[cfg(test)]
+use records::{carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted};
+
 // Public to the crate for `hunks_command`, which names it as `crate::app::coverage_causes`.
 pub(crate) use records::coverage_causes;
 
@@ -77,13 +93,29 @@ mod session_commands;
 use session_commands::*;
 
 mod side_requests;
-use side_requests::*;
+#[cfg(test)]
+use side_requests::{
+    Unanswered, aside_answered, aside_reported, aside_unanswered, check_the_goal_on_a_worker,
+    commit_message_answered, compact_ended, compact_reported, enhance_answered, goal_check_key,
+    goal_checked, handoff_answered, handoff_refusal, one_request_key, room_won_back,
+    summarise_on_a_worker,
+};
 
 mod terminal;
 use terminal::*;
 
 mod turns;
-use turns::*;
+#[cfg(test)]
+use turns::{
+    Asked, Carried, Continued, FinishedTurn, Line, Occupied, RetainedTurn, Wrote, complete_turn,
+    files_named_in, finish_cancelled_turn, finish_turn, fold_outcome, next_after_a_turn,
+    record_the_model_that_answered, record_what_the_turn_ran_on, refusal_note,
+    say_how_a_manifest_run_ended, was_stopped, watch_to_start, will_look_again, with_firing_watch,
+    with_mcp_prompt, with_named_sessions, with_session_advisor, with_session_limit,
+    with_session_skill_mode, with_session_style,
+};
+use turns::{past_sessions_offered, remembered_record};
+
 // Public for `tests/sessions.rs`, which names it as `bravebot_tui::app::with_submitted_attachments`.
 pub use turns::with_submitted_attachments;
 // Public to the crate for `from_worker`, which names it as `crate::app::progress_of_a_turn`.

@@ -1,7 +1,10 @@
 //! What begins a session: the trust question, the rules a session opens with, and the `/resume` and
 //! `/clear` that start another.
 
-use super::*;
+use super::{
+    Config, Conversation, CrosstermBackend, Permissions, Session, Settled, Start, Switch, Terminal,
+    TrustStore, Workspace, io, settle_definition, t, work_under,
+};
 
 /// Where a session's opening trust map came from, which is what it says about it.
 #[derive(Debug, Clone, Copy)]

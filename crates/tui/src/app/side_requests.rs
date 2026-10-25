@@ -1,7 +1,12 @@
 //! The requests a session makes outside a turn, each on a worker with one reply to wait for:
 //! `/compact`, an aside, `/commit`, a handoff, `/enhance` and the goal check.
 
-use super::*;
+use super::{
+    Action, Cancel, Config, Conversation, CrosstermBackend, Duration, Egress, KeyEvent,
+    KeyEventKind, PastedImage, Path, RECAP_LABEL, Session, Stamped, Terminal, Trail, TrustStore,
+    Workspace, act_while_working, drain_worker, handle_key_while_working, io, mpsc, pump_terminal,
+    redraw, sign_in_if_needed, stop_what_is_running, stops_the_turn, t, thread, turn,
+};
 
 /// Interpret a key press while a summary or an aside is out.
 ///

@@ -1,7 +1,10 @@
 //! Reading a session back from its record: the points `/rewind` offers, the rewind itself, the
 //! hunks a record carries out, and saving the record a turn or a compaction leaves.
 
-use super::*;
+use super::{
+    Conversation, LanguageServers, Session, Stamped, Trail, TrustStore, TrustedPrograms, Workspace,
+    t,
+};
 
 /// The session as it stood before the turn now in flight, for `/undo` to rewind to.
 ///

@@ -1,7 +1,8 @@
 //! The directories a session works in: adding, closing and changing one, removing a checkout, and
 //! the directories a settings file names, which a session opens at its start.
 
-use super::*;
+use super::opening::{Answers, Whence};
+use super::{Session, Trail, TrustStore, Workspace, t};
 
 /// The trail of `/checkouts remove`: one event where `named`, the checkout asked for as the list
 /// had it, is no longer in `now`, and nothing where it was kept or never listed (CHECKOUT-19).

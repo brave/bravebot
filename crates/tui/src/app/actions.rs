@@ -310,7 +310,7 @@ impl Held<'_> {
     pub(super) fn forget_trust_command(&mut self) {
         // This session's map is left as it is: the answer it began with was given, and
         // what is withdrawn is the next session's. /clear begins one now, and it asks.
-        self.session.note(super::forget_trust(
+        self.session.note(super::opening::forget_trust(
             bravebot_agent::home::directory().as_deref(),
             self.workspace.root(),
         ));
@@ -521,7 +521,7 @@ impl Held<'_> {
         // and an aside is charged to that turn: rewinding to it would un-charge a
         // request that really went out. The same reason `/compact` closes it.
         self.session.rewind.close();
-        let events = super::aside_animated(
+        let events = super::side_requests::aside_animated(
             terminal,
             self.session,
             config,
@@ -565,7 +565,7 @@ impl Held<'_> {
             // it would un-charge requests that really went out, and steps that really
             // wrote to the tree are not something the rewind window covers.
             self.session.rewind.close();
-            let events = super::manifest_animated(
+            let events = super::turns::manifest_animated(
                 terminal,
                 self.session,
                 config,
@@ -666,7 +666,7 @@ impl Held<'_> {
         // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
         // predates.
         self.session.rewind.close();
-        let (done, events) = super::commit_message_animated(
+        let (done, events) = super::side_requests::commit_message_animated(
             terminal,
             self.session,
             config,
@@ -677,7 +677,7 @@ impl Held<'_> {
         if self.session.turns > 0 {
             self.stored.append_audit(self.session.turns, &events);
         }
-        super::commit_message_answered(self.session, done);
+        super::side_requests::commit_message_answered(self.session, done);
         Ok(())
     }
 
@@ -695,7 +695,7 @@ impl Held<'_> {
             // Closed for the reason an aside closes it: the request is charged to a turn
             // the snapshot predates.
             self.session.rewind.close();
-            let (done, events) = super::ask_animated(
+            let (done, events) = super::side_requests::ask_animated(
                 terminal,
                 self.session,
                 config,
@@ -703,7 +703,7 @@ impl Held<'_> {
                 &mut self.answers.trust,
                 "",
                 false,
-                Some(super::Writing::Brief(goal)),
+                Some(super::side_requests::Writing::Brief(goal)),
                 &[],
                 &[],
                 self.workspace,
@@ -729,7 +729,7 @@ impl Held<'_> {
         // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
         // predates.
         self.session.rewind.close();
-        let (done, events) = super::ask_animated(
+        let (done, events) = super::side_requests::ask_animated(
             terminal,
             self.session,
             config,
@@ -737,7 +737,7 @@ impl Held<'_> {
             &mut self.answers.trust,
             "",
             false,
-            Some(super::Writing::Enhancement(draft)),
+            Some(super::side_requests::Writing::Enhancement(draft)),
             &[],
             &[],
             self.workspace,
@@ -747,7 +747,7 @@ impl Held<'_> {
         if self.session.turns > 0 {
             self.stored.append_audit(self.session.turns, &events);
         }
-        super::enhance_answered(self.session, line, done);
+        super::side_requests::enhance_answered(self.session, line, done);
         Ok(())
     }
 
