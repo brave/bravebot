@@ -131,6 +131,9 @@ fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
     for file in [
         "model",
         "theme",
+        "effort",
+        "history",
+        "language",
         "editor-mode",
         "vetting",
         "panel",
@@ -142,6 +145,9 @@ fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
 
     store::save_model("claude-sonnet-4-5");
     store::save_theme("nord");
+    store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+    store::save_history(&[Entry::sent("one", None)]);
+    assert!(!store::save_language(Some("fr")));
     store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
     store::save_vetting(true);
     store::save_panel(true);
@@ -164,6 +170,10 @@ fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
         [
             "caffeinate",
             "editor-mode",
+            "effort",
+            "history",
+            "history.lock",
+            "language",
             "model",
             "panel",
             "panel-width",
