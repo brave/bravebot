@@ -4597,31 +4597,15 @@ fn compact_animated(
         )
     });
 
-    loop {
-        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
-        // turned off then, not at the next pass of the outer loop (CMD-12).
-        session.keep_awake();
-        redraw(terminal, session)?;
-
-        // Input is still read, so a long summary does not leave the interface deaf, and the
-        // frame's waiting is done here for the reason the turn loop does it here: a key press
-        // has to wake the loop rather than queue behind it.
-        pump_terminal(terminal, session, |session, key| {
-            // Which of a mode standing over the session and the request a stop key is asking
-            // about is that function's to say.
-            one_request_key(session, key, &cancel)
-        })?;
-
-        // Drained for the same reason the turn's own loop drains, and waiting on the terminal
-        // for the same reason it does: a person may be typing their next prompt while this runs.
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
-            compact_reported(session, message)
-        });
-
-        if !carrying_on {
-            break;
-        }
-    }
+    drive_worker(
+        terminal,
+        session,
+        &from_worker,
+        // Which of a mode standing over the session and the request a stop key is asking about is
+        // that function's to say.
+        |session, key| one_request_key(session, key, &cancel),
+        compact_reported,
+    )?;
 
     let (done, conversation, sink) = worker.join().unwrap_or_else(|_| {
         (
@@ -4937,28 +4921,14 @@ fn ask_animated(
         (done, sink, Some(worker_trust))
     });
 
-    loop {
-        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
-        // turned off then, not at the next pass of the outer loop (CMD-12).
-        session.keep_awake();
-        redraw(terminal, session)?;
-
-        // Input is still read for the reason a summary reads it: a long answer must not leave the
-        // interface deaf, and the frame's waiting is done here so a key press wakes the loop
-        // rather than queueing behind the worker.
-        pump_terminal(terminal, session, |session, key| {
-            // The same shape as a summary's keys, and the same function reads them.
-            one_request_key(session, key, &cancel)
-        })?;
-
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
-            aside_reported(session, message);
-        });
-
-        if !carrying_on {
-            break;
-        }
-    }
+    drive_worker(
+        terminal,
+        session,
+        &from_worker,
+        // The same shape as a summary's keys, and the same function reads them.
+        |session, key| one_request_key(session, key, &cancel),
+        aside_reported,
+    )?;
 
     let (done, sink, vouched) = worker.join().unwrap_or_else(|_| {
         (
@@ -5046,19 +5016,13 @@ fn commit_message_animated(
         (done, sink)
     });
 
-    loop {
-        session.keep_awake();
-        redraw(terminal, session)?;
-        pump_terminal(terminal, session, |session, key| {
-            one_request_key(session, key, &cancel)
-        })?;
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
-            aside_reported(session, message);
-        });
-        if !carrying_on {
-            break;
-        }
-    }
+    drive_worker(
+        terminal,
+        session,
+        &from_worker,
+        |session, key| one_request_key(session, key, &cancel),
+        aside_reported,
+    )?;
 
     let (done, sink) = worker
         .join()
@@ -5669,31 +5633,19 @@ fn goal_check_animated(
         )
     });
 
-    loop {
-        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
-        // turned off then, not at the next pass of the outer loop (CMD-12).
-        session.keep_awake();
-        redraw(terminal, session)?;
-
-        // Input is still read for the reason an aside reads it: a slow answer must not leave the
-        // interface deaf, and the frame's waiting is done here so a key press wakes the loop
-        // rather than queueing behind the worker.
-        pump_terminal(terminal, session, |session, key| {
-            // Which of the goal, a mode over the session, and the request a stop key is asking
-            // about is that function's to say.
-            goal_check_key(session, key, &cancel)
-        })?;
-
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| match message {
+    drive_worker(
+        terminal,
+        session,
+        &from_worker,
+        // Which of the goal, a mode over the session, and the request a stop key is asking about
+        // is that function's to say.
+        |session, key| goal_check_key(session, key, &cancel),
+        |session, message| match message {
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
             _ => {}
-        });
-
-        if !carrying_on {
-            break;
-        }
-    }
+        },
+    )?;
 
     let (done, sink) = worker
         .join()
@@ -6618,6 +6570,42 @@ fn drain_worker(
             mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
             mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
         });
+    }
+}
+
+/// Draw frames until the worker has dropped its senders, for a worker that asks the person nothing.
+///
+/// Each pass keeps the session awake, redraws, reads the terminal and drains what the worker has
+/// said. A key goes to `on_key` and a message to `on_message`, which are the two parts that differ
+/// between the loops. The loop reads no message: what a message does with the text it carries is
+/// `on_message`'s.
+fn drive_worker(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    from_worker: &mpsc::Receiver<crate::remote_confirm::ToMain>,
+    mut on_key: impl FnMut(&mut Session, KeyEvent) -> Action,
+    mut on_message: impl FnMut(&mut Session, crate::remote_confirm::ToMain),
+) -> io::Result<()> {
+    loop {
+        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
+        // turned off then, not at the next pass of the outer loop (CMD-12).
+        session.keep_awake();
+        redraw(terminal, session)?;
+
+        // Input is still read, so a long request does not leave the interface deaf, and the
+        // frame's waiting is done here for the reason the turn loop does it here: a key press
+        // has to wake the loop rather than queue behind the worker.
+        pump_terminal(terminal, session, &mut on_key)?;
+
+        // Drained for the same reason the turn's own loop drains, and waiting on the terminal
+        // for the same reason it does: a person may be typing their next prompt while this runs.
+        let carrying_on = drain_worker(from_worker, Duration::ZERO, |message| {
+            on_message(session, message)
+        });
+
+        if !carrying_on {
+            return Ok(());
+        }
     }
 }
 
