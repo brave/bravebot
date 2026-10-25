@@ -1584,10 +1584,10 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         let shown_path = bravebot_agent::confirm::shown_path(&request.path);
         let lines = [
             match request.write {
-                true => t!(path_writes, path = shown_path.as_str()).to_string(),
-                false => t!(path_reads, path = shown_path.as_str()).to_string(),
+                true => t!(path_writes, path = shown_path.as_str()),
+                false => t!(path_reads, path = shown_path.as_str()),
             },
-            t!(path_why, why = shown(&request.why).as_str()).to_string(),
+            t!(path_why, why = shown(&request.why).as_str()),
             t!(path_explained).to_string(),
             t!(path_not_trusted).to_string(),
         ];
@@ -1620,7 +1620,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             text: &request.text,
             label: &label,
         });
-        lines.push(t!(message_explained_turn, key = t!(message_answer_turn)).to_string());
+        lines.push(t!(message_explained_turn, key = t!(message_answer_turn)));
         self.say_question(&lines);
         let _ = write!(self.output, "{} {} ", t!(message_title), t!(message_answer));
         let _ = self.output.flush();

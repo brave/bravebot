@@ -369,7 +369,7 @@ pub fn held_refusal(id: &str, name_shown: usize) -> String {
         .map(|seen| crate::search::clean(&seen.job.name, name_shown))
         .unwrap_or_default();
     let id: String = id.chars().take(HELD_ID_SHOWN).collect();
-    t!(resume_held_by_background, name = name, id = id).to_string()
+    t!(resume_held_by_background, name = name, id = id)
 }
 
 /// How much of a session id the refusal quotes, the same eight characters `attach` is given.

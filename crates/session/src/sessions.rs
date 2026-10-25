@@ -1947,8 +1947,8 @@ impl Held {
     /// What to say to the person who tried to resume the record: why it was not, and what to do.
     pub fn refusal(&self) -> String {
         match self {
-            Self::Open { id } => t!(resume_held_by_another_process, id = id.as_str()).to_string(),
-            Self::Changed { id } => t!(resume_changed_while_opening, id = id.as_str()).to_string(),
+            Self::Open { id } => t!(resume_held_by_another_process, id = id.as_str()),
+            Self::Changed { id } => t!(resume_changed_while_opening, id = id.as_str()),
         }
     }
 }

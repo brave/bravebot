@@ -174,12 +174,14 @@ impl WriteRequest {
         match (before, after) {
             (_, None) | (Some(Lf), Some(Lf)) | (None, Some(Lf)) => None,
             (Some(kept), Some(now)) if kept == now => {
-                Some(t!(write_line_endings_kept, ending = name(now)).to_string())
+                Some(t!(write_line_endings_kept, ending = name(now)))
             }
-            (Some(was), Some(now)) => {
-                Some(t!(write_line_endings_changed, from = name(was), to = name(now)).to_string())
-            }
-            (None, Some(now)) => Some(t!(write_line_endings_new, ending = name(now)).to_string()),
+            (Some(was), Some(now)) => Some(t!(
+                write_line_endings_changed,
+                from = name(was),
+                to = name(now)
+            )),
+            (None, Some(now)) => Some(t!(write_line_endings_new, ending = name(now))),
         }
     }
 
@@ -336,7 +338,6 @@ pub fn authority_sentence(authority: bravebot_core::ambient::Authority, named: &
         Authority::AgentSocket => t!(run_authority_agent, named = named),
         Authority::MetadataService => t!(run_authority_metadata, named = named),
     }
-    .to_string()
 }
 
 /// What one stage of a confined plan carries beyond the session's directories.
@@ -424,7 +425,6 @@ impl Confined {
             Scope::Docker => t!(run_carries_docker, program = program),
             Scope::Signing => t!(run_carries_signing, program = program),
         }
-        .to_string()
     }
 
     /// The sentence that introduces the directories, for a front end to draw above them.
@@ -445,16 +445,13 @@ impl Confined {
             sentences.push(t!(run_network_closed).to_string());
         }
         if !self.filesystem.is_empty() {
-            sentences.push(
-                t!(
-                    run_filesystem_rules,
-                    allow_read = self.filesystem.allow_read,
-                    deny_read = self.filesystem.deny_read,
-                    allow_write = self.filesystem.allow_write,
-                    deny_write = self.filesystem.deny_write
-                )
-                .to_string(),
-            );
+            sentences.push(t!(
+                run_filesystem_rules,
+                allow_read = self.filesystem.allow_read,
+                deny_read = self.filesystem.deny_read,
+                allow_write = self.filesystem.allow_write,
+                deny_write = self.filesystem.deny_write
+            ));
         }
         for (program, request) in &self.requested {
             let sentence = match request {

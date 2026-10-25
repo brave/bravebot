@@ -207,8 +207,7 @@ pub(crate) fn definition_for_a_run(
                     names = names,
                     count = count
                 ),
-            }
-            .to_string(),
+            },
         ));
     }
     // Nothing asks for the definition's model when the command line named one, so its sign-in

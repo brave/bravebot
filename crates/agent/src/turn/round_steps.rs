@@ -234,7 +234,7 @@ pub(super) fn stop_at_token_budget<R: Reporter>(
         return false;
     };
     *may_call_tools = false;
-    reporter.narration(t!(delegate_budget_narration, budget = budget).to_string());
+    reporter.narration(t!(delegate_budget_narration, budget = budget));
     conversation.push_composed_from(
         Message::user(format!(
             "{TOOL_BUDGET_SPENT} You have spent your budget of {budget} tokens and have no more \

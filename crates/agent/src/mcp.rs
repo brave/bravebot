@@ -936,14 +936,11 @@ pub fn record_a_move(
     to: &Declaration,
 ) -> Result<(), Unmoved> {
     let mut declarations = Declarations::read(directory).map_err(|why| {
-        Unmoved::NotWritten(
-            t!(
-                mcp_unreadable,
-                path = shown(&records::declarations_file(directory).display().to_string()),
-                reason = unreadable(&why)
-            )
-            .to_string(),
-        )
+        Unmoved::NotWritten(t!(
+            mcp_unreadable,
+            path = shown(&records::declarations_file(directory).display().to_string()),
+            reason = unreadable(&why)
+        ))
     })?;
     let Some(current) = declarations
         .get(alias)
@@ -955,14 +952,11 @@ pub fn record_a_move(
     // Where it is reached is what moved: the bounds the person gave it are still theirs.
     let to = &to.clone().timing(current.timeouts());
     let mut approvals = Approvals::to_change(directory).map_err(|why| {
-        Unmoved::NotWritten(
-            t!(
-                mcp_unreadable,
-                path = shown(&records::approvals_file(directory).display().to_string()),
-                reason = unreadable_record(&why)
-            )
-            .to_string(),
-        )
+        Unmoved::NotWritten(t!(
+            mcp_unreadable,
+            path = shown(&records::approvals_file(directory).display().to_string()),
+            reason = unreadable_record(&why)
+        ))
     })?;
     declarations.insert(alias, to);
     approvals.keep_only(&declarations);
@@ -981,9 +975,9 @@ pub fn managed_refusal(managed: &Managed, server: bravebot_config::Server<'_>) -
     let (path, refusal) = managed.refuses(server)?;
     let path = path.display().to_string();
     Some(match refusal {
-        Refusal::NotAllowed => t!(managed_not_allowed, path = path).to_string(),
-        Refusal::Denied(rule) => t!(managed_denied, path = path, entry = entry(rule)).to_string(),
-        Refusal::HostUnread => t!(managed_host_unread, path = path).to_string(),
+        Refusal::NotAllowed => t!(managed_not_allowed, path = path),
+        Refusal::Denied(rule) => t!(managed_denied, path = path, entry = entry(rule)),
+        Refusal::HostUnread => t!(managed_host_unread, path = path),
     })
 }
 
@@ -1020,7 +1014,7 @@ pub fn unreadable(why: &records::Unreadable) -> String {
         records::Unreadable::NotJson => t!(mcp_unreadable_not_json).to_string(),
         records::Unreadable::NotAnObject => t!(mcp_unreadable_not_an_object).to_string(),
         records::Unreadable::Servers => t!(mcp_unreadable_servers).to_string(),
-        records::Unreadable::Key(key) => t!(mcp_unreadable_key, key = shown(key)).to_string(),
+        records::Unreadable::Key(key) => t!(mcp_unreadable_key, key = shown(key)),
     }
 }
 
@@ -1231,15 +1225,12 @@ pub(crate) fn fetch_prompt<S: Sink, C: Confirmer, R: Reporter>(
     );
     match answered {
         Ok(text) => Fetched::Text(text),
-        Err(error) => Fetched::Problem(
-            t!(
-                mcp_prompt_failed,
-                alias = alias.as_str(),
-                name = name.as_str(),
-                reason = error.to_string()
-            )
-            .to_string(),
-        ),
+        Err(error) => Fetched::Problem(t!(
+            mcp_prompt_failed,
+            alias = alias.as_str(),
+            name = name.as_str(),
+            reason = error.to_string()
+        )),
     }
 }
 

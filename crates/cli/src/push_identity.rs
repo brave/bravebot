@@ -121,7 +121,7 @@ pub fn facts(host: &str, owner: Option<&str>, rows: &[Row]) -> Vec<(String, Stri
         )),
         None => lines.push((
             t!(doctor_push_remote).to_string(),
-            t!(doctor_push_no_remote, host = host).to_string(),
+            t!(doctor_push_no_remote, host = host),
         )),
     }
     for row in rows {

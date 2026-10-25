@@ -34,17 +34,16 @@ pub(crate) fn sandbox_mode_line(
         Ok(choice) => {
             let detail = match choice.source {
                 Source::Default => {
-                    t!(doctor_sandbox_default, mode = choice.mode.name()).to_string()
+                    t!(doctor_sandbox_default, mode = choice.mode.name())
                 }
                 Source::Flag => {
-                    t!(session_sandbox_from_flag, mode = choice.mode.name()).to_string()
+                    t!(session_sandbox_from_flag, mode = choice.mode.name())
                 }
                 Source::File(path) | Source::Managed(path) => t!(
                     doctor_sandbox_from,
                     mode = choice.mode.name(),
                     path = path.display().to_string()
-                )
-                .to_string(),
+                ),
             };
             Ok(aligned(label, detail, DETAIL))
         }
@@ -180,16 +179,14 @@ pub(crate) fn sandbox_filesystem_lines(
                 key = item.list.key(),
                 path = progress::printable(&item.entry.path),
                 source = source(&item.entry)
-            )
-            .to_string(),
+            ),
             Some(reason) => t!(
                 doctor_sandbox_filesystem_refused,
                 key = item.list.key(),
                 path = progress::printable(&item.entry.path),
                 reason = reason,
                 source = source(&item.entry)
-            )
-            .to_string(),
+            ),
         })
         .collect()
 }
@@ -219,14 +216,13 @@ fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)
             t!(
                 doctor_settings_retention_ignored,
                 path = path.display().to_string()
-            )
-            .to_string(),
+            ),
         )
     });
     let paused = settings.retention_unreadable().map(|path| {
         (
             t!(doctor_retention).to_string(),
-            t!(doctor_retention_paused, path = path.display().to_string()).to_string(),
+            t!(doctor_retention_paused, path = path.display().to_string()),
         )
     });
     not_obeyed.chain(paused).collect()
@@ -267,7 +263,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 path = progress::printable(&entry.path),
                 managed = managed_file.clone()
             )
-            .to_string()
         },
     );
     each(
@@ -279,7 +274,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -291,7 +285,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -303,7 +296,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -315,11 +307,10 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     ignored(settings.git_identities_ignored(), |path| {
-        t!(doctor_settings_git_identities_ignored, path = path).to_string()
+        t!(doctor_settings_git_identities_ignored, path = path)
     });
     each(
         t!(doctor_settings_ignored),
@@ -330,7 +321,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     // Judged as a stage judges it, so a key a push would not be given is named before the push.
@@ -367,7 +357,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = list.key(),
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
     each(
@@ -379,7 +368,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
 }
@@ -414,7 +402,6 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
                 pattern = pattern,
                 variable = name
             )
-            .to_string()
         },
     );
 
@@ -433,7 +420,6 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
                 name = progress::printable(name),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
 }
@@ -447,37 +433,37 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     // asked, and somebody who wrote it into one has to be told rather than left wondering why the
     // prompt still appears.
     ignored(settings.vetting_ignored(), |path| {
-        t!(doctor_settings_vetting_ignored, path = path).to_string()
+        t!(doctor_settings_vetting_ignored, path = path)
     });
     ignored(settings.providers_ignored(), |path| {
-        t!(doctor_settings_provider_ignored, path = path).to_string()
+        t!(doctor_settings_provider_ignored, path = path)
     });
     ignored(settings.model_ignored(), |path| {
-        t!(doctor_settings_model_ignored, path = path).to_string()
+        t!(doctor_settings_model_ignored, path = path)
     });
     ignored(settings.advisor_ignored(), |path| {
-        t!(doctor_settings_advisor_ignored, path = path).to_string()
+        t!(doctor_settings_advisor_ignored, path = path)
     });
     ignored(settings.fallback_ignored(), |path| {
-        t!(doctor_settings_fallback_ignored, path = path).to_string()
+        t!(doctor_settings_fallback_ignored, path = path)
     });
     ignored(settings.summary_ignored(), |path| {
-        t!(doctor_settings_summary_ignored, path = path).to_string()
+        t!(doctor_settings_summary_ignored, path = path)
     });
     ignored(settings.plan_ignored(), |path| {
-        t!(doctor_settings_plan_ignored, path = path).to_string()
+        t!(doctor_settings_plan_ignored, path = path)
     });
     ignored(settings.processor_ignored(), |path| {
-        t!(doctor_settings_processor_ignored, path = path).to_string()
+        t!(doctor_settings_processor_ignored, path = path)
     });
     ignored(settings.agent_ignored(), |path| {
-        t!(doctor_settings_agent_ignored, path = path).to_string()
+        t!(doctor_settings_agent_ignored, path = path)
     });
     ignored(settings.style_ignored(), |path| {
-        t!(doctor_settings_style_ignored, path = path).to_string()
+        t!(doctor_settings_style_ignored, path = path)
     });
     ignored(settings.language_ignored(), |path| {
-        t!(doctor_settings_language_ignored, path = path).to_string()
+        t!(doctor_settings_language_ignored, path = path)
     });
     // A tag no catalog answers is read as the reference, as it is from the environment, so a typo
     // would otherwise show English and say nothing.
@@ -494,17 +480,16 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 reference = bravebot_i18n::DEFAULT.tag(),
                 available = bravebot_i18n::tags().join(", ")
             )
-            .to_string()
         },
     );
     ignored(settings.ask_idle_ignored(), |path| {
-        t!(doctor_settings_ask_idle_ignored, path = path).to_string()
+        t!(doctor_settings_ask_idle_ignored, path = path)
     });
     ignored(settings.references_ignored(), |path| {
-        t!(doctor_settings_references_ignored, path = path).to_string()
+        t!(doctor_settings_references_ignored, path = path)
     });
     ignored(settings.attribution_ignored(), |path| {
-        t!(doctor_settings_attribution_ignored, path = path).to_string()
+        t!(doctor_settings_attribution_ignored, path = path)
     });
     for (label, line) in retention_facts(settings) {
         fact(label, line);
@@ -519,7 +504,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 mode = mode.name(),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -532,11 +516,10 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 mode = mode.name(),
                 held = held.display().to_string()
             )
-            .to_string()
         },
     );
     ignored(settings.sandbox_unreadable(), |path| {
-        t!(doctor_settings_sandbox_unreadable, path = path).to_string()
+        t!(doctor_settings_sandbox_unreadable, path = path)
     });
     each(
         t!(doctor_settings_ignored),
@@ -546,7 +529,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 doctor_settings_sandbox_unreadable,
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
 
@@ -565,7 +547,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 key = progress::printable(key),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
 
@@ -583,7 +564,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 key = format!("permissions.{key}"),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -595,7 +575,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 key = format!("permissions.{key}"),
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
 }
@@ -618,10 +597,10 @@ fn report_run_network(
         );
     }
     ignored(settings.run_network_ignored(), |path| {
-        t!(doctor_settings_network_ignored, path = path).to_string()
+        t!(doctor_settings_network_ignored, path = path)
     });
     ignored(settings.run_network_unreadable(), |path| {
-        t!(doctor_settings_network_unreadable, path = path).to_string()
+        t!(doctor_settings_network_unreadable, path = path)
     });
     each(
         t!(doctor_settings_ignored),
@@ -631,7 +610,6 @@ fn report_run_network(
                 doctor_managed_network_unreadable,
                 path = bravebot_config::managed_file().display().to_string()
             )
-            .to_string()
         },
     );
 }
@@ -1345,7 +1323,7 @@ pub(crate) fn gateway_models(provider: &bravebot_config::provider::Provider) -> 
                 .map(|id| format!("{}/{id}", provider.id))
                 .collect::<Vec<_>>()
                 .join(", ");
-            t!(doctor_gateway_models_compiled, models = models).to_string()
+            t!(doctor_gateway_models_compiled, models = models)
         }
         None => t!(doctor_gateway_models_absent).to_string(),
     }
@@ -1729,13 +1707,12 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
     vec![aligned(
         t!(doctor_managed),
         match pinned.is_empty() {
-            true => t!(doctor_managed_nothing, path = &path).to_string(),
+            true => t!(doctor_managed_nothing, path = &path),
             false => t!(
                 doctor_managed_pinned,
                 names = pinned.join(", "),
                 path = &path
-            )
-            .to_string(),
+            ),
         },
         FACT,
     )]
@@ -1804,7 +1781,7 @@ pub(crate) fn state_directory(
     let Some((variable, path)) = found else {
         let variables = variables.join(" or ");
         return vec![
-            t!(doctor_state_directory_absent, variables = &variables).to_string(),
+            t!(doctor_state_directory_absent, variables = &variables),
             aligned(
                 t!(doctor_state_directory_not_kept),
                 t!(doctor_state_directory_forgotten),
@@ -1822,21 +1799,15 @@ pub(crate) fn state_directory(
             ),
         ];
     };
-    let mut lines = vec![
-        t!(
-            doctor_state_directory,
-            path = path.display().to_string(),
-            variable = variable
-        )
-        .to_string(),
-    ];
-    lines.push(
-        t!(
-            doctor_state_directory_logs,
-            path = path.join(bravebot_diag::DIRECTORY).display().to_string()
-        )
-        .to_string(),
-    );
+    let mut lines = vec![t!(
+        doctor_state_directory,
+        path = path.display().to_string(),
+        variable = variable
+    )];
+    lines.push(t!(
+        doctor_state_directory_logs,
+        path = path.join(bravebot_diag::DIRECTORY).display().to_string()
+    ));
     if !restricted {
         lines.push(aligned(
             t!(doctor_state_directory_unprotected),
@@ -1879,8 +1850,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         (TrustRoots::Bundled, _) => t!(
             doctor_trust_roots_bundled,
             variables = listed(&[CERTIFICATE_FILE, CERTIFICATE_DIRECTORY])
-        )
-        .to_string(),
+        ),
         (_, true) => t!(doctor_trust_roots_none).to_string(),
         (named, false) => t!(
             doctor_trust_roots_named,
@@ -1890,8 +1860,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        )
-        .to_string(),
+        ),
     };
 
     let mut lines = vec![
@@ -1912,12 +1881,12 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
     }
 
     let proxy = match (transport.proxy_summary(), transport.unusable_proxy()) {
-        (_, Some(protocol)) => t!(doctor_proxy_unsupported, protocol = protocol).to_string(),
-        (None, None) => t!(doctor_proxy_absent, variables = listed(PROXY_VARIABLES)).to_string(),
+        (_, Some(protocol)) => t!(doctor_proxy_unsupported, protocol = protocol),
+        (None, None) => t!(doctor_proxy_absent, variables = listed(PROXY_VARIABLES)),
         (Some(proxy), None) if transport.proxy_is_authenticated() => {
-            t!(doctor_proxy_authenticated, proxy = proxy).to_string()
+            t!(doctor_proxy_authenticated, proxy = proxy)
         }
-        (Some(proxy), None) => t!(doctor_proxy_in_force, proxy = proxy).to_string(),
+        (Some(proxy), None) => t!(doctor_proxy_in_force, proxy = proxy),
     };
     lines.push(aligned(t!(doctor_proxy), proxy, DETAIL));
 
@@ -2059,7 +2028,7 @@ pub(crate) fn confinement(found: Result<Capabilities, SandboxError>) -> Confinem
     match found {
         Ok(caps) => Confinement {
             lines: [
-                t!(doctor_confinement, level = confinement_name(caps.level)).to_string(),
+                t!(doctor_confinement, level = confinement_name(caps.level)),
                 aligned(t!(doctor_mechanisms), caps.mechanisms.join(", "), DETAIL),
                 aligned(
                     t!(doctor_network_denial),
@@ -2094,7 +2063,7 @@ pub(crate) fn confinement(found: Result<Capabilities, SandboxError>) -> Confinem
 /// where it can.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn network_namespace_note(unavailable: Option<&str>) -> Option<String> {
-    unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason).to_string())
+    unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason))
 }
 
 #[cfg(test)]

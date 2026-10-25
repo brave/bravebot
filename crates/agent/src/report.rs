@@ -18,13 +18,13 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     use crate::compact::SideModelRefusal;
     match refusal {
         SideModelRefusal::NeedsSignIn(model) => {
-            bravebot_i18n::t!(summary_model_needs_sign_in, model = model).to_string()
+            bravebot_i18n::t!(summary_model_needs_sign_in, model = model)
         }
         SideModelRefusal::Refused(model) => {
-            bravebot_i18n::t!(summary_model_refused, model = model).to_string()
+            bravebot_i18n::t!(summary_model_refused, model = model)
         }
         SideModelRefusal::NotServed(model) => {
-            bravebot_i18n::t!(summary_model_not_served, model = model).to_string()
+            bravebot_i18n::t!(summary_model_not_served, model = model)
         }
     }
 }
@@ -38,13 +38,13 @@ pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> St
     use crate::compact::SideModelRefusal;
     match refusal {
         SideModelRefusal::NeedsSignIn(model) => {
-            bravebot_i18n::t!(processor_model_needs_sign_in, model = model).to_string()
+            bravebot_i18n::t!(processor_model_needs_sign_in, model = model)
         }
         SideModelRefusal::Refused(model) => {
-            bravebot_i18n::t!(processor_model_refused, model = model).to_string()
+            bravebot_i18n::t!(processor_model_refused, model = model)
         }
         SideModelRefusal::NotServed(model) => {
-            bravebot_i18n::t!(processor_model_not_served, model = model).to_string()
+            bravebot_i18n::t!(processor_model_not_served, model = model)
         }
     }
 }

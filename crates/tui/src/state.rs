@@ -1643,7 +1643,7 @@ impl Session {
             return Some(if running == 0 {
                 t!(indicator_stopping).to_string()
             } else {
-                t!(indicator_stopping_delegates, count = running).to_string()
+                t!(indicator_stopping_delegates, count = running)
             });
         }
 
@@ -1653,9 +1653,11 @@ impl Session {
         // the driver's literal and the program is the person's own file, so no byte read out of
         // anything untrusted is drawn.
         if let Some((moment, program)) = &self.hook {
-            return Some(
-                t!(indicator_hook, moment = *moment, program = program.as_str()).to_string(),
-            );
+            return Some(t!(
+                indicator_hook,
+                moment = *moment,
+                program = program.as_str()
+            ));
         }
 
         // A check next, and ahead of every phase: it is a whole model call inside the tool call
@@ -1666,7 +1668,7 @@ impl Session {
         if let Some(checking) = self.checking {
             use bravebot_core::vetting::Checking;
             return Some(match checking {
-                Checking::Lines(lines) => t!(indicator_checking, lines = lines).to_string(),
+                Checking::Lines(lines) => t!(indicator_checking, lines = lines),
                 Checking::Picture => t!(indicator_checking_picture).to_string(),
                 Checking::Pdf => t!(indicator_checking_pdf).to_string(),
             });
@@ -1677,14 +1679,14 @@ impl Session {
         // would leave a person looking at a count that stands still and nothing else. Named by the
         // word its line will carry once it starts, which the turn chose from the same table.
         if let Some(call) = self.composing {
-            return Some(t!(indicator_composing, call = call).to_string());
+            return Some(t!(indicator_composing, call = call));
         }
 
         // The turn has asked for everything it needs from the model and is waiting for a delegate
         // to finish. Nothing else on this row says so, and a screen that names nothing while a
         // delegate works reads as a turn that has stopped (DELEGATE-17).
         if let Some(id) = self.waiting_on {
-            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()).to_string());
+            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()));
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the

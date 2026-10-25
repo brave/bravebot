@@ -41,7 +41,7 @@ impl Refused {
     pub(crate) fn said(&self) -> String {
         match self {
             Refused::NotALink => t!(deep_link_not_a_link).to_string(),
-            Refused::TooLong => t!(deep_link_too_long, limit = MAX_BYTES).to_string(),
+            Refused::TooLong => t!(deep_link_too_long, limit = MAX_BYTES),
             Refused::Parameter => t!(deep_link_parameter).to_string(),
             Refused::Encoding => t!(deep_link_encoding).to_string(),
             Refused::Directory => t!(deep_link_directory).to_string(),
@@ -159,7 +159,7 @@ pub(crate) fn place(
     Placement {
         start_in: home.map(Path::to_path_buf),
         // Debug-escaped, since the path is the link's own text and may hold a control character.
-        note: Some(t!(deep_link_started_in_home, dir = format!("{asked:?}")).to_string()),
+        note: Some(t!(deep_link_started_in_home, dir = format!("{asked:?}"))),
     }
 }
 

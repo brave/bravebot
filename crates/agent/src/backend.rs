@@ -732,8 +732,8 @@ pub fn answering(
 pub fn refusal_reason(file: &Path, why: ModelRefusal) -> String {
     let path = file.display().to_string();
     match why {
-        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path).to_string(),
-        ModelRefusal::Denied => t!(managed_model_denied, path = path).to_string(),
+        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path),
+        ModelRefusal::Denied => t!(managed_model_denied, path = path),
     }
 }
 

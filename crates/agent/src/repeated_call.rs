@@ -81,7 +81,7 @@ fn asking(tool: &str, count: usize) -> Asking {
     static ASKED: AtomicU64 = AtomicU64::new(0);
     let mut asking = bravebot_core::ask::asking(&Series::new(vec![Question::new(
         t!(repeated_call_header),
-        t!(repeated_call_reached, tool = tool, count = count).to_string(),
+        t!(repeated_call_reached, tool = tool, count = count),
         vec![
             Choice::new(t!(repeated_call_refuse), None),
             Choice::new(t!(repeated_call_run_it), None),

@@ -280,9 +280,8 @@ pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxM
             confinement_with_mode,
             level = confinement,
             mode = mode.name()
-        )
-        .to_string(),
-        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement).to_string(),
+        ),
+        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement),
     }
 }
 
@@ -421,15 +420,14 @@ fn hosts_line(
         status_hosts_counts,
         allowed = allowed.len(),
         denied = hosts.denied.len()
-    )
-    .to_string();
+    );
     let asks = hosts.on_unlisted == Some(bravebot_config::sandbox_network::OnUnlisted::Ask);
     Some(
         Line::new(t!(status_hosts), counts).with_note(match (sources.is_empty(), asks) {
             (true, false) => t!(status_hosts_refused).to_string(),
             (true, true) => t!(status_hosts_asked).to_string(),
-            (false, false) => t!(status_hosts_files, files = sources.join(", ")).to_string(),
-            (false, true) => t!(status_hosts_files_ask, files = sources.join(", ")).to_string(),
+            (false, false) => t!(status_hosts_files, files = sources.join(", ")),
+            (false, true) => t!(status_hosts_files_ask, files = sources.join(", ")),
         }),
     )
 }
@@ -448,11 +446,10 @@ pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
         Decided::Settings(Some(path)) => t!(
             status_network_by_settings,
             path = path.display().to_string()
-        )
-        .to_string(),
+        ),
         Decided::Settings(None) => t!(status_network_by_a_setting).to_string(),
         Decided::Managed(Some(path)) => {
-            t!(status_network_pinned, path = path.display().to_string()).to_string()
+            t!(status_network_pinned, path = path.display().to_string())
         }
         Decided::Managed(None) => t!(status_network_pinned_by_policy).to_string(),
     }
@@ -488,7 +485,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
         lines.push(
             Line::new("", t!(status_directory_kept, when = kept.when)).with_note(match kept.root {
                 Some(root) => {
-                    t!(status_directory_kept_root_note, root = root.display()).to_string()
+                    t!(status_directory_kept_root_note, root = root.display())
                 }
                 None => t!(status_directory_kept_note).to_string(),
             }),

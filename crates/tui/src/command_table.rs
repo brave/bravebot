@@ -1184,11 +1184,10 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
             command = word,
             line = named(goes, ahead)
         )
-        .to_string()
     } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
-        t!(command_waits_to_ask, command = word).to_string()
+        t!(command_waits_to_ask, command = word)
     } else {
-        t!(command_waits_for_the_turn, command = word).to_string()
+        t!(command_waits_for_the_turn, command = word)
     })
 }
 

@@ -114,7 +114,7 @@ pub(crate) fn cache_hit_rate(session: &Session) -> Option<String> {
         t!(number_decimal_separator),
         tenths % 10
     );
-    Some(t!(hint_cache_hit_rate, rate = rate).to_string())
+    Some(t!(hint_cache_hit_rate, rate = rate))
 }
 
 /// How the context currently stands: unmeasured, compacted, or measured as a percentage.
@@ -240,7 +240,6 @@ fn hint_facts(session: &Session) -> HintFacts {
             background_hint,
             chord = session.bindings().background_name()
         )
-        .to_string()
     } else {
         String::new()
     };
@@ -317,7 +316,7 @@ fn ordinary_parts(
         context_reading(session)
     };
     let info = if !session.panel_open() && crate::panel::fits(area.width) {
-        t!(panel_hint, chord = session.bindings().panel_name()).to_string()
+        t!(panel_hint, chord = session.bindings().panel_name())
     } else {
         String::new()
     };

@@ -1304,32 +1304,30 @@ fn adopt(
         let resolved = config.model_named(written);
         if let Some(definition) = pinned_by {
             if turn_model.as_deref() != Some(resolved.as_str()) {
-                said.push(
-                    t!(
-                        skill_model_kept_for_definition,
-                        skill = skill,
-                        model = written,
-                        definition = definition
-                    )
-                    .to_string(),
-                );
+                said.push(t!(
+                    skill_model_kept_for_definition,
+                    skill = skill,
+                    model = written,
+                    definition = definition
+                ));
             }
         } else if let Some((file, why)) = config.model_refused(written) {
             // Before the sign-in question, which would send somebody to fix the wrong thing
             // (BACKEND-48).
-            said.push(
-                t!(
-                    skill_model_refused,
-                    skill = skill,
-                    model = written,
-                    reason = crate::backend::refusal_reason(file, why)
-                )
-                .to_string(),
-            );
+            said.push(t!(
+                skill_model_refused,
+                skill = skill,
+                model = written,
+                reason = crate::backend::refusal_reason(file, why)
+            ));
         } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
-            said.push(t!(skill_model_needs_sign_in, skill = skill, model = written).to_string());
+            said.push(t!(
+                skill_model_needs_sign_in,
+                skill = skill,
+                model = written
+            ));
         } else if turn_model.as_deref().unwrap_or(&config.default_model) != resolved {
-            said.push(t!(skill_asks_a_model, skill = skill, model = written).to_string());
+            said.push(t!(skill_asks_a_model, skill = skill, model = written));
             *turn_model = Some(resolved);
         }
     }
@@ -1337,7 +1335,11 @@ fn adopt(
     if let Some(level) = runs_as.effort
         && *effort != Some(level)
     {
-        said.push(t!(skill_asks_an_effort, skill = skill, effort = level.as_str()).to_string());
+        said.push(t!(
+            skill_asks_an_effort,
+            skill = skill,
+            effort = level.as_str()
+        ));
         *effort = Some(level);
     }
 
@@ -1537,9 +1539,10 @@ fn admit_named_skill<S: Sink>(
         // A skill reaches the catalogue only through the trusted-content gate, so the gate showing it
         // is the one answer there is. Another would be a skill the person named that quietly did
         // nothing, so the turn stops rather than goes on without it.
-        Presentation::Quarantined(_) => Err(TurnError::Precommit(
-            t!(turn_named_skill_not_shown, skill = skill.name.as_str()).to_string(),
-        )),
+        Presentation::Quarantined(_) => Err(TurnError::Precommit(t!(
+            turn_named_skill_not_shown,
+            skill = skill.name.as_str()
+        ))),
     }
 }
 
@@ -1569,7 +1572,7 @@ fn admit_mode_skill<S: Sink>(
     Ok(match presented {
         Presentation::Visible(text) => {
             policy.admit_skill_mode(&skill.name, text.chars().count());
-            Some((skill.name.clone(), text.to_string()))
+            Some((skill.name.clone(), text))
         }
         Presentation::Quarantined(_) => None,
     })
@@ -2960,7 +2963,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let name = picked.name.to_string();
         style = styles::resolve_project(&mut policy, sources, &name);
         if style.is_none() {
-            style_notice = Some(t!(agent_style_not_used, style = name).to_string());
+            style_notice = Some(t!(agent_style_not_used, style = name));
         }
     }
     if let (None, None, Some(style)) = (
@@ -3141,9 +3144,10 @@ where
             skill_mode = admit_mode_skill(policy, conversation, &skill)?;
         }
         if skill_mode.is_none() {
-            notices.push(crate::skills::Notice::from_message(
-                t!(agent_skill_mode_not_used, skill = name).to_string(),
-            ));
+            notices.push(crate::skills::Notice::from_message(t!(
+                agent_skill_mode_not_used,
+                skill = name
+            )));
         }
     }
     let catalogue = match named {

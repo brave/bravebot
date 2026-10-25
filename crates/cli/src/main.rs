@@ -197,7 +197,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         return Err(stopped_before_the_turn(
             wants_json(args),
             Ending::Argument,
-            t!(cli_locked_refuses_bypass, flag = bypass_flag).to_string(),
+            t!(cli_locked_refuses_bypass, flag = bypass_flag),
         ));
     }
 
@@ -209,7 +209,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
         return Err(stopped_before_the_turn(
             wants_json(args),
             Ending::Argument,
-            t!(cli_accept_edits_not_with_bypass, flag = bypass_flag).to_string(),
+            t!(cli_accept_edits_not_with_bypass, flag = bypass_flag),
         ));
     }
 
@@ -409,7 +409,7 @@ fn settle_flags(args: &mut Vec<String>) -> Result<Settled, ExitCode> {
             return Err(stopped_before_the_turn(
                 as_json,
                 Ending::Argument,
-                t!(cli_bypass_and_sandbox_disagree, mode = mode.name()).to_string(),
+                t!(cli_bypass_and_sandbox_disagree, mode = mode.name()),
             ));
         }
         _ if bypass_and_unconfine => Some(SandboxMode::Off),
@@ -949,7 +949,7 @@ fn continues_with_a_task(args: &[String]) -> bool {
 /// refused instead of ignored, for the reason CLI-13 gives about a settings file.
 fn without_a_definition(first: Option<&str>) -> Option<String> {
     starts_neither_a_session_nor_a_task(first?)
-        .map(|command| t!(cli_agent_not_for_a_command, command = command).to_string())
+        .map(|command| t!(cli_agent_not_for_a_command, command = command))
 }
 
 /// Take `--system-prompt <prompt>` and `--append-system-prompt <prompt>` out of the arguments.
@@ -966,7 +966,7 @@ fn take_system_prompts(args: &mut Vec<String>) -> Result<SystemPrompts, String> 
         &["--system-prompt", "--append-system-prompt"],
         |flag, word| match word.map(str::trim) {
             Some(text) if is_a_value(text) => Ok((flag == "--system-prompt", text.to_string())),
-            _ => Err(t!(cli_system_prompt_needs_text, flag = flag).to_string()),
+            _ => Err(t!(cli_system_prompt_needs_text, flag = flag)),
         },
     )?;
     let mut prompts = SystemPrompts::default();
@@ -1002,7 +1002,6 @@ fn without_a_prompt_to_give(flag: &str, first: Option<&str>) -> Option<String> {
             flag = flag,
             command = command
         )
-        .to_string()
     })
 }
 
@@ -1071,7 +1070,7 @@ fn take_run_network(
             return Err(t!(cli_run_network_needs_a_word).to_string());
         };
         bravebot_sandbox::network::Network::parse(word)
-            .ok_or_else(|| t!(cli_run_network_unknown, word = word).to_string())
+            .ok_or_else(|| t!(cli_run_network_unknown, word = word))
     })?;
     Ok(named.into_iter().last())
 }
@@ -1086,8 +1085,7 @@ fn take_log_level(args: &mut Vec<String>) -> Result<Option<bravebot_diag::Level>
         let Some(word) = word else {
             return Err(t!(cli_log_level_needs_a_word).to_string());
         };
-        bravebot_diag::Level::parse(word)
-            .ok_or_else(|| t!(cli_log_level_unknown, word = word).to_string())
+        bravebot_diag::Level::parse(word).ok_or_else(|| t!(cli_log_level_unknown, word = word))
     })?;
     Ok(named.into_iter().last())
 }
@@ -1106,7 +1104,6 @@ fn take_sandbox(args: &mut Vec<String>) -> Result<Option<SandboxMode>, String> {
                 cli_sandbox_needs_a_mode,
                 names = SandboxMode::ALL.map(SandboxMode::name).join(", ")
             )
-            .to_string()
         })
     })?;
     Ok(named.into_iter().last())
@@ -1150,29 +1147,25 @@ fn sandbox_refusal(refused: &bravebot_config::sandbox::Refused) -> String {
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
             looser = bravebot_agent::sandbox_reason::looser(refused)
-        )
-        .to_string(),
+        ),
         (None, Floor::Mode) => t!(
             cli_sandbox_refused_flag,
             asked = refused.asked.name(),
             pinned = refused.pinned.name(),
             pinned_in = pinned_in,
             looser = bravebot_agent::sandbox_reason::looser(refused)
-        )
-        .to_string(),
+        ),
         (Some(file), Floor::Network) => t!(
             cli_sandbox_refused_network_file,
             asked = refused.asked.name(),
             asked_in = file.display().to_string(),
             pinned_in = pinned_in
-        )
-        .to_string(),
+        ),
         (None, Floor::Network) => t!(
             cli_sandbox_refused_network_flag,
             asked = refused.asked.name(),
             pinned_in = pinned_in
-        )
-        .to_string(),
+        ),
     }
 }
 
@@ -1196,7 +1189,7 @@ fn take_sandbox_filesystem(
     let names = FLAGS.map(|(flag, _)| flag);
     let taken = take_valued(args, &names, |flag, word| {
         let Some(path) = word.filter(|path| !path.trim().is_empty()) else {
-            return Err(t!(cli_sandbox_flag_needs_a_path, flag = flag).to_string());
+            return Err(t!(cli_sandbox_flag_needs_a_path, flag = flag));
         };
         let list = FLAGS
             .iter()
@@ -1263,9 +1256,7 @@ fn take_tool_limit(args: &mut Vec<String>) -> Result<bravebot_core::tool_set::Li
         let mut named = Vec::new();
         for name in list.split(',').map(str::trim) {
             if !known.iter().any(|tool| tool == name) {
-                return Err(
-                    t!(cli_tools_unknown, name = name, known = known.join(", ")).to_string()
-                );
+                return Err(t!(cli_tools_unknown, name = name, known = known.join(", ")));
             }
             named.push(name.to_string());
         }
@@ -1288,7 +1279,7 @@ fn without_a_tool_set_to_limit(first: &str) -> Option<String> {
     // CLI-26 lists the commands without `bug-report`, where CLI-19 names it, so it is left out here.
     starts_neither_a_session_nor_a_task(first)
         .filter(|command| *command != "bug-report")
-        .map(|command| t!(cli_tools_not_for_a_command, command = command).to_string())
+        .map(|command| t!(cli_tools_not_for_a_command, command = command))
 }
 
 /// What a one-shot invocation asked for, before anything runs.
@@ -1524,9 +1515,10 @@ fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
                 let rounds = limit_count(args.get(index + 1))
                     .and_then(|count| usize::try_from(count).ok())
                     .filter(|count| *count < MAX_TOOL_ROUNDS);
-                limits.rounds = Some(rounds.ok_or_else(|| {
-                    t!(cli_max_rounds_needs_a_count, most = MAX_TOOL_ROUNDS - 1).to_string()
-                })?);
+                limits.rounds =
+                    Some(rounds.ok_or_else(|| {
+                        t!(cli_max_rounds_needs_a_count, most = MAX_TOOL_ROUNDS - 1)
+                    })?);
                 index += 2;
             }
             "--max-tokens" => {
@@ -2668,7 +2660,7 @@ fn run_the_lines(mut prepared: Prepared) -> ExitCode {
                 &continued::Resume::Id(id.to_string()),
             )
             .map(Some)
-            .map_err(|problem| t!(cli_input_lines_session_lost, problem = problem).to_string()),
+            .map_err(|problem| t!(cli_input_lines_session_lost, problem = problem)),
         };
         turns += 1;
         let record = match record {
@@ -2924,28 +2916,24 @@ fn load_output_schema(path: &str) -> Result<bravebot_agent::output_schema::Outpu
             path = path,
             problem = err.to_string()
         )
-        .to_string()
     })?;
-    OutputSchema::parse(&text).map_err(|err| {
-        match err {
-            SchemaError::NotJson => t!(cli_output_schema_not_json, path = path),
-            SchemaError::NotAnObject { at } => {
-                t!(cli_output_schema_not_an_object, path = path, at = at)
-            }
-            SchemaError::Unsupported { at, keyword } => t!(
-                cli_output_schema_unsupported,
-                path = path,
-                at = at,
-                keyword = keyword
-            ),
-            SchemaError::Malformed { at, keyword } => t!(
-                cli_output_schema_malformed,
-                path = path,
-                at = at,
-                keyword = keyword
-            ),
+    OutputSchema::parse(&text).map_err(|err| match err {
+        SchemaError::NotJson => t!(cli_output_schema_not_json, path = path),
+        SchemaError::NotAnObject { at } => {
+            t!(cli_output_schema_not_an_object, path = path, at = at)
         }
-        .to_string()
+        SchemaError::Unsupported { at, keyword } => t!(
+            cli_output_schema_unsupported,
+            path = path,
+            at = at,
+            keyword = keyword
+        ),
+        SchemaError::Malformed { at, keyword } => t!(
+            cli_output_schema_malformed,
+            path = path,
+            at = at,
+            keyword = keyword
+        ),
     })
 }
 
@@ -2970,7 +2958,6 @@ fn off_schema_message(broke: &bravebot_agent::output_schema::Mismatch) -> String
         at = broke.at.as_str(),
         problem = problem
     )
-    .to_string()
 }
 
 /// Whether a result object was asked for, read straight off the command line.
@@ -3065,10 +3052,7 @@ fn resume_named(
         Some(record) if bravebot_session::sessions::is_open_elsewhere(&directory, &record.id) => {
             fail(
                 Ending::Failed,
-                bravebot_session::sessions::Held::Open {
-                    id: record.id.clone(),
-                }
-                .refusal(),
+                bravebot_session::sessions::Held::Open { id: record.id }.refusal(),
             )
         }
         Some(record) => interactive(
