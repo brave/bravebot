@@ -738,21 +738,28 @@ pub(super) mod scripted_account {
 
 /// Ask the Brave endpoint what it offers.
 pub(super) fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+    let mut sink = Trail::new();
     let egress = Egress::new();
 
+    // A policy exists because `bravebot-net` is the only way out to the network and its gate takes one.
     // Routing is the listing itself: this is not a turn, nothing is read from the workspace, and no
     // model is involved, so there is no prompt to anchor it to.
     let mut routing = bravebot_core::policy::Routing::new();
     routing.insert_trusted("models", config.models_url());
 
-    with_listing_policy(
+    bravebot_core::policy::Policy::begin(
         routing,
-        |denial| denial,
-        |policy| {
-            bravebot_aichat::models::list(policy, config, &egress)
-                .map_err(|error| error.to_string())
-        },
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::WebFetch,
+        ]),
+        &mut sink,
     )
+    .map_err(|denial| denial.to_string())
+    .and_then(|mut policy| {
+        bravebot_aichat::models::list(&mut policy, config, &egress)
+            .map_err(|error| error.to_string())
+    })
 }
 
 /// Ask one gateway what it offers, for a block that named no models.
@@ -785,6 +792,7 @@ pub(super) fn fetch_gateway_models(
         bravebot_config::provider::Credential::Absent => return Err(Unlisted::NoCredential),
     };
 
+    let mut sink = Trail::new();
     let egress = Egress::new();
     // Resolved beside the token, from the same environment, for the same reason: a value may name a
     // variable, and one read at startup is stale once somebody exports another.
@@ -796,15 +804,20 @@ pub(super) fn fetch_gateway_models(
     routing.insert_trusted("models", provider.models_url());
     routing.insert_trusted("account-models", provider.account_models_url());
 
-    with_listing_policy(
+    bravebot_core::policy::Policy::begin(
         routing,
-        |_| Unlisted::Unreadable,
-        |policy| {
-            let token = token.as_ref().map(bravebot_config::Secret::expose);
-            bravebot_aichat::models::list_from_gateway(policy, provider, token, &headers, &egress)
-                .map_err(|_| Unlisted::Unreadable)
-        },
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::WebFetch,
+        ]),
+        &mut sink,
     )
+    .map_err(|_| Unlisted::Unreadable)
+    .and_then(|mut policy| {
+        let token = token.as_ref().map(bravebot_config::Secret::expose);
+        bravebot_aichat::models::list_from_gateway(&mut policy, provider, token, &headers, &egress)
+            .map_err(|_| Unlisted::Unreadable)
+    })
 }
 
 /// Why a gateway that names no models has none among the rows.
@@ -815,26 +828,4 @@ pub(super) enum Unlisted {
     /// The gateway was asked and its listing could not be read: the request failed, or what answered
     /// was not a listing.
     Unreadable,
-}
-
-/// Run `ask` under a policy that can only fetch, for the routing a listing names.
-///
-/// A policy exists because `bravebot-net` is the only way out to the network and its gate takes one.
-/// `denied` says what a refusal to begin one becomes, since the two listings report it differently.
-fn with_listing_policy<T, E>(
-    routing: bravebot_core::policy::Routing,
-    denied: impl FnOnce(String) -> E,
-    ask: impl FnOnce(&mut bravebot_core::policy::Policy<'_, Trail>) -> Result<T, E>,
-) -> Result<T, E> {
-    let mut sink = Trail::new();
-    bravebot_core::policy::Policy::begin(
-        routing,
-        bravebot_core::policy::ReleasePlan::new(),
-        bravebot_core::capability::CapabilitySet::from_iter([
-            bravebot_core::capability::Capability::WebFetch,
-        ]),
-        &mut sink,
-    )
-    .map_err(|denial| denied(denial.to_string()))
-    .and_then(|mut policy| ask(&mut policy))
 }
