@@ -4604,7 +4604,7 @@ fn compact_animated(
         // Which of a mode standing over the session and the request a stop key is asking about is
         // that function's to say.
         |session, key| one_request_key(session, key, &cancel),
-        compact_reported,
+        |_, session, message| compact_reported(session, message),
     )?;
 
     let (done, conversation, sink) = worker.join().unwrap_or_else(|_| {
@@ -4927,7 +4927,7 @@ fn ask_animated(
         &from_worker,
         // The same shape as a summary's keys, and the same function reads them.
         |session, key| one_request_key(session, key, &cancel),
-        aside_reported,
+        |_, session, message| aside_reported(session, message),
     )?;
 
     let (done, sink, vouched) = worker.join().unwrap_or_else(|_| {
@@ -5021,7 +5021,7 @@ fn commit_message_animated(
         session,
         &from_worker,
         |session, key| one_request_key(session, key, &cancel),
-        aside_reported,
+        |_, session, message| aside_reported(session, message),
     )?;
 
     let (done, sink) = worker
@@ -5344,16 +5344,11 @@ fn manifest_animated(
     });
 
     let mut run = crate::manifest_run::Run::default();
-    loop {
-        // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
-        // turned off then, not at the next pass of the outer loop (CMD-12).
-        session.keep_awake();
-        redraw(terminal, session)?;
-
-        // Read here rather than in the outer loop, which is blocked for the duration, and for the
-        // reason a turn reads it here: a run that walks for ten minutes must not leave the
-        // interface deaf, and the frame's waiting is done here so a key press wakes the loop.
-        pump_terminal(terminal, session, |session, key| {
+    drive_worker(
+        terminal,
+        session,
+        &from_worker,
+        |session, key| {
             if key.kind == KeyEventKind::Release {
                 return Action::None;
             }
@@ -5367,9 +5362,8 @@ fn manifest_animated(
                 let action = handle_key_while_working(session, key);
                 act_while_working(session, action, crate::clipboard::paste)
             }
-        })?;
-
-        let carrying_on = drain_worker(&from_worker, Duration::ZERO, |message| {
+        },
+        |terminal, session, message| {
             // Progress, with no reply to give. The goal as the planner understood it and the frozen
             // plan both arrive as narration, and each step as an activity, so the transcript of a
             // run reads the way the transcript of a turn does.
@@ -5466,12 +5460,8 @@ fn manifest_animated(
                 }
             }
             end_manifest_step(asks, |state| mark_title(terminal, state));
-        });
-
-        if !carrying_on {
-            break;
-        }
-    }
+        },
+    )?;
 
     // What the run decided about the tree is the session's, the way a turn's is. A file dropped on
     // the line was vouched for by the gesture that put it there, and `dropping.md` DROP-2 has that
@@ -5658,7 +5648,7 @@ fn goal_check_animated(
         // Which of the goal, a mode over the session, and the request a stop key is asking about
         // is that function's to say.
         |session, key| goal_check_key(session, key, &cancel),
-        |session, message| match message {
+        |_, session, message| match message {
             crate::remote_confirm::ToMain::Phase(phase) => session.set_phase(phase),
             crate::remote_confirm::ToMain::Notice(text) => session.note_once(text),
             _ => {}
@@ -6632,18 +6622,23 @@ fn drain_worker(
     }
 }
 
-/// Draw frames until the worker has dropped its senders, for a worker that asks the person nothing.
+/// Draw frames until the worker has dropped its senders.
 ///
 /// Each pass keeps the session awake, redraws, reads the terminal and drains what the worker has
 /// said. A key goes to `on_key` and a message to `on_message`, which are the two parts that differ
-/// between the loops. The loop reads no message: what a message does with the text it carries is
-/// `on_message`'s.
+/// between the loops. `on_message` is given the terminal as well, for a loop whose worker asks the
+/// person something and so has a prompt to draw. The loop reads no message: what a message does with
+/// the text it carries is `on_message`'s.
 fn drive_worker(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
     from_worker: &mpsc::Receiver<crate::remote_confirm::ToMain>,
     mut on_key: impl FnMut(&mut Session, KeyEvent) -> Action,
-    mut on_message: impl FnMut(&mut Session, crate::remote_confirm::ToMain),
+    mut on_message: impl FnMut(
+        &mut Terminal<CrosstermBackend<io::Stdout>>,
+        &mut Session,
+        crate::remote_confirm::ToMain,
+    ),
 ) -> io::Result<()> {
     loop {
         // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
@@ -6659,7 +6654,7 @@ fn drive_worker(
         // Drained for the same reason the turn's own loop drains, and waiting on the terminal
         // for the same reason it does: a person may be typing their next prompt while this runs.
         let carrying_on = drain_worker(from_worker, Duration::ZERO, |message| {
-            on_message(session, message)
+            on_message(terminal, session, message)
         });
 
         if !carrying_on {
