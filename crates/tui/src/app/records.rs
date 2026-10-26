@@ -173,8 +173,10 @@ pub(super) fn rewind(
         }
         return;
     };
-    // The turns a list described are gone, and a turn run again in their place numbers the same.
+    // The turns a list described are gone, and a turn run again in their place numbers the same. The
+    // replies a list of links was read from are gone with them.
     session.hunks_listed = None;
+    session.links_listed = None;
     stored.retain_rewind_coverage(&point.coverage);
     let gaps = point.coverage.gaps();
     // Read off the point before anything is removed. The display prompts of the rewound turns go

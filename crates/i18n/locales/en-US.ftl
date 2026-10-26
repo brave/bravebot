@@ -2796,6 +2796,9 @@ editor-named-but-missing =
     '{ $command }' was not found, and $VISUAL or $EDITOR names it, so nothing else was tried
 editor-exited-badly = { $editor } exited with status { $code }, so what you had is unchanged
 editor-was-stopped = { $editor } was stopped before it finished, so what you had is unchanged
+# The editor a file was opened in, which the file is the person's own and may have been saved.
+editor-file-exited-badly = { $editor } exited with status { $code }
+editor-file-was-stopped = { $editor } was stopped before it finished
 editor-would-not-start = { $editor } would not start: { $problem }
 
 
@@ -2841,6 +2844,7 @@ scroller-key-count = a count first goes that many times as far
 scroller-key-search-run = run it / delete, then abandon
 scroller-key-expand = expand or collapse a call's result
 scroller-key-editor = open the transcript in $EDITOR
+scroller-key-delegates = open the delegates' views
 scroller-key-this-list = this list
 scroller-key-close = close the scroller   (also ctrl-c)
 scroller-key-close-list = close this list
@@ -2872,6 +2876,7 @@ watching-keys = q closes  ·  n / p another delegate
 watching-keys-one = q closes
 watching-keys-back = q goes back  ·  n / p another delegate
 watching-keys-stop = x stops it
+watching-back = ‹ back
 watching-nothing-yet = nothing yet
 # The list of every delegate this turn has spawned, with the session above them.
 watching-list-title = delegates
@@ -2919,11 +2924,61 @@ thinking-on = the model's thinking is shown as it arrives, for this session only
 thinking-off = the model's thinking is hidden
 # The heading over the model's thinking while it arrives.
 transcript-thinking = thinking
+transcript-copy-block = copy
 # Left in the transcript when the program that holds off sleep would not start, which turns
 # /caffeinate off.
 caffeinate-unavailable = /caffeinate is unavailable: `{ $program }` could not be started ({ $reason })
 # Left in the transcript when that program exited by itself, which turns /caffeinate off.
 caffeinate-ended = /caffeinate is off: `{ $program }` stopped holding the computer awake
+# What /lsp says where no language server has started, and where some have: a line, then one
+# line for each.
+lsp-none-started = No language server has started in this session. One starts the first time the model asks about a file it has a server for, after you approve it.
+lsp-started = { $count ->
+    [one] 1 language server has started in this session:
+   *[other] { $count } language servers have started in this session:
+    }
+lsp-server-running = { $program }: runs with your own access until this session ends
+# What /open says: a line, then a line for each link of the latest reply that has any, numbered as a
+# number given back to /open names it. A link is as it was drawn, which is text the assistant wrote.
+open-listed = { $count ->
+    [one] 1 link in the latest reply that has one:
+   *[other] { $count } links in the latest reply that has any:
+    }
+open-item = { $number }. { $link }
+# Said after the last link /open lists, where the reply has more than it lists.
+open-more = { $count ->
+    [one] and 1 more, which no number opens: type it after /open
+   *[other] and { $count } more, which no number opens: type one after /open
+    }
+open-none = No reply has a web address or a file path in it
+# What /open <number> says where it has no list to read the number against, which is no list made
+# since the session began, since /clear, or since another turn began, and where the number is not
+# one of the list's.
+open-list-first = list the links with /open first, then open one by its number
+open-no-such =
+    { $links ->
+        [0] there is no link { $number }; the last list had none
+        [one] there is no link { $number }; the last list had 1 link
+       *[other] there is no link { $number }; the last list had { $links } links
+    }
+# A file is shown at the end of the transcript, which a running turn or command is writing.
+open-not-while-working =
+    a file is shown when nothing is running, since its lines go at the end of the transcript, where
+    the work is writing; type it again then
+# What /open edit <number> says where the number names an address, and where an editor would take
+# the terminal that work is drawing on.
+open-edit-an-address = an address opens in the browser, not in an editor: use /open <number>
+open-edit-not-while-working =
+    an editor takes the terminal, which the work that is running is drawing on; type it again when
+    nothing is running
+# What /open says where it was given text with :// in it that is not an address it opens.
+open-not-an-address =
+    that is not an address to open: only a web address with a host, as http or https and in plain
+    ASCII, opens
+# What /open says it takes, for `edit` with nothing after it.
+open-takes =
+    /open lists the links in the latest reply, /open <number>, /open <address> or /open <path>
+    opens one, and /open edit <number> or /open edit <path> opens a file in your editor
 # The info panel's section headings.
 panel-session = Session
 panel-model = Model
@@ -2932,13 +2987,14 @@ panel-goal-paused = paused
 panel-context = Context
 panel-language-servers = Language servers
 panel-mcp-servers = MCP servers
-# What a click on a language server row of the info panel says. The names are the programs the session started.
-panel-language-servers-started = Language servers started this session: { $programs }.
 panel-plan = Plan
 panel-links = Links
 # The rows of the info panel's Links section, each followed by the link.
 panel-pull-request = Pull request
 panel-issue = Issue
+# Left in the transcript when a click on the session's name in the info panel finds the line in
+# use, so /rename was not put in it.
+panel-rename-line-in-use = The line is in use, so the session's name was not put in it. Clear the line and click the name again, or type /rename.
 # The reasoning effort and the session's token total in the info panel, one to a row.
 panel-effort = effort { $level }
 panel-spent = { $tokens } this session
@@ -3063,6 +3119,8 @@ jobs-command-takes =
 command-status = Report this session, what it may touch, and what it has spent
 command-cost = Show what each turn of this session has spent
 command-context = Show what fills the context window, by category
+command-lsp = Say which language servers this session has started
+command-open = List the links in the latest reply, and open one by its number
 command-limit = Show the session's spend limit, set it in tokens or credits, or remove it
 command-request = Show the last request sent to the model, and where each part of it came from
 command-model = Choose which model to think with
@@ -3119,7 +3177,7 @@ command-review = Have the planner review local changes or a pull request
 command-help = Ask a question about bravebot, answered from its own documentation
 command-changelog = Show what changed in this version
 command-export = Export the session transcript to a markdown file
-command-copy = Put the last reply on the clipboard, or the one that many replies back
+command-copy = Put a reply on the clipboard; block copies a code block, text the drawn words
 command-undo = Rewind one turn and put back the files it wrote
 command-rewind = List the turns a rewind could go back to, or go back that many
 command-hunks = List the hunks the last turn wrote, or put one back as it stood before the turn
@@ -3144,6 +3202,8 @@ command-waits-for-the-turn = { $command } waits for the turn to end: it acts on 
 command-waits-behind = { $command } waits for the turn to end, behind { $line }.
 # `/sandbox off`, which asks before it changes anything.
 command-waits-to-ask = { $command } waits for the turn to end: moving to off asks first, and the turn has the screen.
+# Said under the box when a click on a row of the info panel that stands for a command is made while a command the person typed is running, which reads no line typed after it.
+command-waits-for-the-command = { $command } waits for the command that is running to end.
 
 ## Where a skill offered after a slash was found
 
@@ -3305,7 +3365,52 @@ session-copy-goes-no-further =
         [one] this session has one reply, so /copy goes no further back than it
        *[other] this session has { $replies } replies, so /copy goes no further back than { $replies }
     }
+session-copy-block-needs-a-number = /copy block takes how many blocks back to copy, as in /copy block 2
+session-copy-no-block = there is no code block in this session's replies to copy
+session-copy-block-goes-no-further =
+    { $blocks ->
+        [one] this session's replies have one code block, so /copy block goes no further back than it
+       *[other] this session's replies have { $blocks } code blocks, so /copy block goes no further back than { $blocks }
+    }
 session-copy-failed = could not put the reply on the clipboard
+# What a copy took, drawn at the right of the footer. The ones that name where it came from are for
+# a selection of something other than the transcript, which is where a drag is expected to be.
+copied-to-clipboard = { $count ->
+    [one] { $count } char to clipboard
+   *[other] { $count } chars to clipboard
+    }
+copied-from-panel = { $count ->
+    [one] { $count } char to clipboard, from the panel
+   *[other] { $count } chars to clipboard, from the panel
+    }
+copied-from-box = { $count ->
+    [one] { $count } char to clipboard, from the box
+   *[other] { $count } chars to clipboard, from the box
+    }
+copied-from-status = { $count ->
+    [one] { $count } char to clipboard, from the status line
+   *[other] { $count } chars to clipboard, from the status line
+    }
+copied-from-offered = { $count ->
+    [one] { $count } char to clipboard, from the list under the box
+   *[other] { $count } chars to clipboard, from the list under the box
+    }
+copied-from-footer = { $count ->
+    [one] { $count } char to clipboard, from the footer
+   *[other] { $count } chars to clipboard, from the footer
+    }
+# A click on a web address in the transcript, when no browser could be started for it. The address is not repeated: it is text the assistant wrote.
+session-link-not-opened = no browser could be started for that address, which can be selected and copied instead
+# A click on a file path in the transcript shows the file's lines under a call. None of these repeats the path, which is text the assistant wrote.
+session-preview-lines =
+    { $count ->
+        [one] { $count } line
+       *[other] { $count } lines
+    }
+session-path-not-a-file = that path does not name a file in the directories this session works in
+session-preview-denied = a permission rule says this session does not read that file
+session-preview-too-large = that file is { $bytes } bytes, and a preview reads files of up to { $limit }
+session-preview-unavailable = a preview could not begin: { $problem }
 session-add-dir-needs-a-path = /add-dir needs a directory, as in /add-dir ~/notes
 session-directory-added = added { $directory }, and trusting it for this session
 session-directory-ends-checkouts = { $directory } holds the working directory, so no delegate is given a checkout while it is open; /add-dir close { $directory } ends that
@@ -4609,3 +4714,52 @@ configured-start-heading = A model service is configured, and offers these model
 # quotes the service, and neither sends the person to sign in again: the refusal is of the model.
 failure-account-model-not-offered = OpenAI does not offer that model to this ChatGPT account. Choose another model
 desktop-chatgpt-model-not-offered = OpenAI does not offer that model to this ChatGPT account, so choose another model.
+
+# What the pointer over a target says a click on it does, drawn on the row of hints in the room the
+# hints leave. Each is one line in the interface's own voice, and none holds a word of the text the
+# target is drawn over. The address or path of a link follows it on the same line where there is
+# room.
+hover-back = click to leave this view
+hover-reply = click to copy this reply
+hover-block = click to copy this block
+hover-queued = click to take this prompt back into the box
+hover-call-toggle = click to expand or collapse this call
+hover-call-open = click to open the scroller on this call
+hover-delegate = click to open this delegate's view
+hover-address = ctrl-click to open this address in the browser
+hover-path = click to show this file, ctrl-click to open it in the editor
+hover-path-edit = ctrl-click to open this file in the editor
+hover-panel-model = click to choose the model
+hover-panel-effort = click to choose the effort
+hover-panel-context = click to see how full the context is
+hover-panel-servers = click to list the MCP servers
+hover-panel-languages = click to list the language servers
+hover-panel-hide = click to hide the panel
+hover-panel-files = click to see the files this session changed
+hover-panel-file = click to show the edits to this file
+hover-panel-close-files = click to go back to the panel
+hover-panel-edit-previous = click to go to the previous edit
+hover-panel-edit-next = click to go to the next edit
+hover-panel-name = click to rename this session
+hover-panel-task = click to go to the turn that wrote this task
+hover-panel-detail = click to open or close the words of this task
+hover-panel-link = click to open this address in the browser
+hover-footer-mode = click to change the permission mode
+hover-footer-trail = click to show or hide the trail
+hover-footer-shortcuts = click to show or hide the keys
+hover-footer-info = click to show the info panel
+hover-footer-watch = click to open the view of what the turn did
+hover-footer-outputs = click to open what the commands printed
+hover-footer-background = click to move the command to the background
+hover-footer-held = click to return to the end
+hover-footer-cancel-shell = click to leave shell mode
+hover-footer-paste = click to paste the picture
+hover-item = click to choose this one, click again to take it
+hover-scrollbar = click to move the view here, drag the thumb to scroll
+
+# The small menu a right click opens over a reply, a delegate's block or a held selection. One word
+# or short phrase to an item, and each item does what the command or the click it stands for does.
+menu-copy = copy
+menu-copy-text = copy as text
+menu-branch = branch this session
+menu-open-delegate = open this delegate

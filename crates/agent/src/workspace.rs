@@ -1064,6 +1064,37 @@ impl Workspace {
             .is_some_and(|meta| meta.is_file())
     }
 
+    /// The file `named` names, as the absolute path the file tools reach it at, where it is a regular
+    /// file inside the working directory or a directory opened for the session.
+    ///
+    /// For a name a person pointed at, as a click on a path does: resolved by [`Workspace::resolve`],
+    /// so a `..`, an absolute path outside every open directory and a link that leads out are refused as
+    /// they are for a typed `@path` (NAME-5). An absolute name that lands inside the working directory
+    /// is taken as the name relative to it, which is the same file. Answered from the path and from
+    /// `stat` and never from a byte of what the file holds, as [`Workspace::names_a_file`] is.
+    pub fn file_named(&self, named: &str) -> Option<PathBuf> {
+        let resolved = self.resolve(self.name_inside(named)).ok()?;
+        std::fs::metadata(&resolved)
+            .ok()?
+            .is_file()
+            .then_some(resolved)
+    }
+
+    /// The name [`Workspace::file_named`] resolves for `named`: `named` itself, or where it is an
+    /// absolute name that lands inside the working directory, the name relative to it.
+    ///
+    /// Still the text the name was given as. A caller that goes on to read the file or to ask a rule
+    /// about it uses this and not a spelling of the resolved path, which is for display and gives two
+    /// files that differ in bytes that are not text one name.
+    pub(crate) fn name_inside<'a>(&self, named: &'a str) -> &'a str {
+        Path::new(named)
+            .strip_prefix(&self.root)
+            .ok()
+            .and_then(Path::to_str)
+            .filter(|inside| !inside.is_empty())
+            .unwrap_or(named)
+    }
+
     /// Whether `relative` resolves to something that is there and is not a file.
     ///
     /// The other half of [`Workspace::names_a_file`] for a caller that accepts a path with nothing
@@ -1100,6 +1131,39 @@ impl Workspace {
             self.peek_for_review(relative).unwrap_or_default(),
             read_label(),
         )
+    }
+
+    /// The text of the file at `resolved`, for a screen a person asked for, read as
+    /// [`Workspace::peek_labelled_for_review`] reads a file and under the same label, from one open
+    /// file.
+    ///
+    /// `resolved` is what [`Workspace::file_named`] returned. The file is opened without waiting
+    /// for a writer and asked what it is and how large it is once it is open, and at most `most`
+    /// bytes of it are read, so a pipe or a larger file put in the place since the name was
+    /// resolved is refused and not waited on or read whole. The size and the kind are the file
+    /// system's answer about the open file. A file that cannot be read, or whose bytes are not valid
+    /// UTF-8, has an empty text, as it has for a write's review.
+    pub(crate) fn peek_labelled_for_a_preview(
+        resolved: &Path,
+        most: u64,
+    ) -> Result<Labelled<String>, Unpreviewable> {
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+        }
+        let text = match options.open(resolved) {
+            Err(_) => Ok(String::new()),
+            Ok(file) => match file.metadata() {
+                Ok(found) if !found.is_file() => Err(Unpreviewable::NotAFile),
+                Ok(found) if found.len() > most => Err(Unpreviewable::TooLarge(found.len())),
+                Ok(_) => text_up_to(file, most),
+                Err(_) => Ok(String::new()),
+            },
+        };
+        text.map(|text| Labelled::new(text, read_label()))
     }
 
     /// The same bytes as [`Workspace::peek_labelled_for_review`], and again labelled as the trust
@@ -1647,6 +1711,36 @@ pub(crate) fn left_at(resolved: &Path, room: usize) -> Option<String> {
 /// it without performing a read.
 pub fn read_label() -> Label {
     Label::untrusted_private()
+}
+
+/// Why [`Workspace::peek_labelled_for_a_preview`] read nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unpreviewable {
+    /// What is open is not a regular file: a pipe or a directory.
+    NotAFile,
+    /// The file is longer than the most a preview reads, by the size the file system gave or by
+    /// what was read, which says only that it is longer.
+    TooLarge(u64),
+}
+
+/// The text `source` holds, reading no more than `most` bytes of it. A source that holds more is
+/// [`Unpreviewable::TooLarge`], however large it said it was. One that cannot be read or is not
+/// valid UTF-8 has no text. That is the one thing asked of the bytes, as [`Workspace::peek_for_review`]
+/// asks it, and the answer is text or none for a screen.
+fn text_up_to(source: impl std::io::Read, most: u64) -> Result<String, Unpreviewable> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    if source
+        .take(most.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        return Ok(String::new());
+    }
+    if bytes.len() as u64 > most {
+        return Err(Unpreviewable::TooLarge(bytes.len() as u64));
+    }
+    Ok(String::from_utf8(bytes).unwrap_or_default())
 }
 
 /// What a write is compared against: the peek it already took, where there is a file to replace.
@@ -4759,6 +4853,45 @@ mod tests {
         std::os::unix::fs::symlink(".github", path.join("docs")).unwrap();
         let workspace = Workspace::new(&path).expect("workspace");
         (path, workspace)
+    }
+
+    /// A source that holds more than a preview reads is refused whatever size it gave, and what is
+    /// read of it is bounded: a file that grows after its size was asked is not read whole.
+    #[test]
+    fn a_source_longer_than_the_most_is_refused_after_reading_one_byte_past_it() {
+        /// A source with no end, which counts what it was asked for.
+        struct Endless {
+            served: usize,
+        }
+        impl std::io::Read for Endless {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                buffer.fill(b'a');
+                self.served += buffer.len();
+                Ok(buffer.len())
+            }
+        }
+
+        let mut endless = Endless { served: 0 };
+        assert_eq!(
+            text_up_to(&mut endless, 10),
+            Err(Unpreviewable::TooLarge(11))
+        );
+        assert!(
+            endless.served <= 11,
+            "{} bytes were read of a source with a most of 10",
+            endless.served
+        );
+
+        assert_eq!(
+            text_up_to(&b"abcdefghij"[..], 10),
+            Ok("abcdefghij".to_string())
+        );
+        assert_eq!(text_up_to(&b""[..], 10), Ok(String::new()));
+        assert_eq!(
+            text_up_to(&[0xff_u8, 0xfe][..], 10),
+            Ok(String::new()),
+            "bytes that are not text have no text"
+        );
     }
 
     /// A rule about `.env` is about the file, and `alias.txt` is a second name for it.

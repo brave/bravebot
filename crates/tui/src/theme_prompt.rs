@@ -15,8 +15,9 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyModifiers, MouseEvent};
-use ratatui::layout::Rect;
+use ratatui::crossterm::event::{
+    self, Event as TermEvent, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 
 use crate::input;
 use crate::select;
@@ -89,6 +90,36 @@ pub fn opened(themes: Vec<Theme>, current: &str) -> Picker {
 /// picker opened on, and taking a row keeps it.
 pub fn press(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Outcome {
     let outcome = list_picker::handle_key(picker, code, modifiers);
+    settle(picker, outcome)
+}
+
+/// Interpret one mouse event, with the theme under the cursor in force as it is for a key
+/// ([`list_picker::handle_mouse`] says what each does).
+pub fn click(
+    picker: &mut Picker,
+    placed: list_picker::Placed,
+    mouse: MouseEvent,
+    last: &mut Option<select::Click>,
+    now: std::time::Instant,
+    wheel: u16,
+) -> Outcome {
+    // Only what can move the cursor or leave puts a theme in force: the pointer moving over the
+    // panel does not.
+    if !matches!(
+        mouse.kind,
+        MouseEventKind::Down(MouseButton::Left)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+    ) {
+        return Outcome::Continue;
+    }
+    let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
+    settle(picker, outcome)
+}
+
+/// Put in force what the outcome leaves in force: the row under the cursor while choosing, the
+/// theme the picker opened on after a cancel, and the row taken.
+fn settle(picker: &mut Picker, outcome: Outcome) -> Outcome {
     match outcome {
         Outcome::Continue => picker.preview(),
         Outcome::Cancel => picker.restore(),
@@ -100,27 +131,9 @@ pub fn press(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -> Out
     outcome
 }
 
-/// Interpret one mouse event, with the theme under the cursor in force as it is for a key.
-///
-/// A press on a row moves the cursor there, so the row is previewed, and a second press on it takes
-/// the theme. Nothing else the mouse does leaves the picker (MOUSE-17).
-pub fn click(
-    picker: &mut Picker,
-    list: Rect,
-    mouse: MouseEvent,
-    last: &mut Option<select::Click>,
-    now: std::time::Instant,
-) -> Outcome {
-    let outcome = list_picker::handle_mouse(picker, list, mouse, last, now);
-    match outcome {
-        Outcome::Continue => picker.preview(),
-        Outcome::Select => match picker.chosen() {
-            Some(theme) => theme::apply(theme),
-            None => picker.restore(),
-        },
-        Outcome::Cancel => picker.restore(),
-    }
-    outcome
+/// Where [`draw`] draws the panel in a frame of `frame`.
+pub fn placed(frame: ratatui::layout::Rect, picker: &Picker) -> list_picker::Placed {
+    list_picker::placed(frame, picker, &panel())
 }
 
 /// Draw the panel over whatever is already in the frame.
@@ -138,9 +151,10 @@ pub fn choose<B: Backend>(
     terminal: &mut Terminal<B>,
     themes: Vec<Theme>,
     current: &str,
+    wheel: u16,
     behind: impl FnMut(&mut Frame),
 ) -> Option<Theme> {
-    run(terminal, themes, current, behind, || {
+    run(terminal, themes, current, wheel, behind, || {
         input::read().map(|event| (event, std::time::Instant::now()))
     })
 }
@@ -151,35 +165,46 @@ fn run<B: Backend>(
     terminal: &mut Terminal<B>,
     themes: Vec<Theme>,
     current: &str,
+    wheel: u16,
     mut behind: impl FnMut(&mut Frame),
     mut next: impl FnMut() -> std::io::Result<(TermEvent, std::time::Instant)>,
 ) -> Option<Theme> {
     let mut picker = opened(themes, current);
     let panel = panel();
-    let mut list = Rect::default();
+    let mut shown = list_picker::Placed::default();
     let mut last = None;
+    let mut ignored = false;
 
     loop {
-        if terminal
-            .draw(|frame| {
-                behind(frame);
-                list_picker::draw(frame, &picker, &panel);
-                list = list_picker::regions(frame.area(), picker.rows().len(), panel.width)[0];
-            })
-            .is_err()
+        // Not again for a position of the pointer, which says nothing to a list: the session behind
+        // it is drawn with it, and a pointer crossing the window sends one for each cell.
+        if !ignored
+            && terminal
+                .draw(|frame| {
+                    behind(frame);
+                    list_picker::draw(frame, &picker, &panel);
+                    shown = list_picker::placed(frame.area(), &picker, &panel);
+                })
+                .is_err()
         {
             picker.restore();
             return None;
         }
+        ignored = false;
 
         let Ok((event, now)) = next() else {
             picker.restore();
             return None;
         };
+        if input::is_a_move(&event) {
+            ignored = true;
+            continue;
+        }
         if let TermEvent::Mouse(mouse) = event {
-            match click(&mut picker, list, mouse, &mut last, now) {
+            match click(&mut picker, shown, mouse, &mut last, now, wheel) {
+                Outcome::Continue => continue,
+                Outcome::Cancel => return None,
                 Outcome::Select => return picker.chosen().cloned(),
-                Outcome::Continue | Outcome::Cancel => continue,
             }
         }
         let Some(key) = input::key_of(&event) else {
@@ -213,7 +238,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    use ratatui::layout::Rect;
 
     fn offered() -> Vec<Theme> {
         theme::builtins()
@@ -271,6 +296,64 @@ mod tests {
             Outcome::Select
         );
         assert_eq!(theme::name(), previewed, "taking the row dropped it");
+        theme::apply_brave();
+    }
+
+    /// MOUSE-15, MOUSE-46, MOUSE-47. Rejects: a wheel turn or a press that moves the cursor and
+    /// puts no theme in force, a press outside the panel that leaves the preview in force, and a
+    /// second press that takes the row but drops its theme.
+    #[test]
+    fn the_pointer_previews_the_row_and_an_outside_press_puts_the_old_theme_back() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let mut picker = opened(offered(), theme::BRAVE);
+        let shown = list_picker::placed(Rect::new(0, 0, 80, 24), &picker, &panel());
+        let at = |kind, row, column| MouseEvent {
+            kind,
+            row,
+            column,
+            modifiers: KeyModifiers::NONE,
+        };
+        let (mut last, now) = (None, std::time::Instant::now());
+
+        let outcome = click(
+            &mut picker,
+            shown,
+            at(MouseEventKind::ScrollDown, 0, 0),
+            &mut last,
+            now,
+            1,
+        );
+        assert_eq!(outcome, Outcome::Continue);
+        assert_ne!(theme::name(), theme::BRAVE, "the wheel previewed nothing");
+
+        let down = MouseEventKind::Down(MouseButton::Left);
+        let outside = click(&mut picker, shown, at(down, 0, 0), &mut last, now, 1);
+        assert_eq!(outside, Outcome::Cancel);
+        assert_eq!(
+            theme::name(),
+            theme::BRAVE,
+            "the press outside kept the preview"
+        );
+
+        let row = at(down, shown.list.y + 2, shown.list.x + 1);
+        assert_eq!(
+            click(&mut picker, shown, row, &mut last, now, 1),
+            Outcome::Continue
+        );
+        let previewed = theme::name();
+        assert_ne!(previewed, theme::BRAVE, "the press previewed nothing");
+        assert_eq!(
+            click(&mut picker, shown, row, &mut last, now, 1),
+            Outcome::Select
+        );
+        assert_eq!(theme::name(), previewed, "taking the row dropped its theme");
+
+        // The pointer moving over the panel puts nothing in force.
+        theme::apply_brave();
+        let moved = at(MouseEventKind::Moved, shown.list.y, shown.list.x);
+        click(&mut picker, shown, moved, &mut last, now, 1);
+        assert_eq!(theme::name(), theme::BRAVE);
         theme::apply_brave();
     }
 
@@ -398,6 +481,14 @@ mod tests {
         }
     }
 
+    /// Where a panel drawn around a list at `list` is, for a test that holds the list fixed.
+    fn around(list: Rect) -> list_picker::Placed {
+        list_picker::Placed {
+            area: Rect::new(list.x - 1, list.y - 1, list.width + 2, list.height + 4),
+            list,
+        }
+    }
+
     /// MOUSE-17. Rejects: a click that moves the cursor without putting the theme under it in
     /// force, and a second click that takes nothing or loses the preview: the first press previews
     /// the row it landed on and the second takes it.
@@ -411,10 +502,11 @@ mod tests {
 
         let outcome = click(
             &mut picker,
-            list,
+            around(list),
             left_press(list.y + 2, list.x),
             &mut last,
             now,
+            3,
         );
         assert_eq!(outcome, Outcome::Continue);
         let named = offered()[2].name.clone();
@@ -423,10 +515,11 @@ mod tests {
 
         let outcome = click(
             &mut picker,
-            list,
+            around(list),
             left_press(list.y + 2, list.x),
             &mut last,
             now,
+            3,
         );
         assert_eq!(outcome, Outcome::Select);
         assert_eq!(theme::name(), named, "taking the row dropped the preview");
@@ -473,6 +566,7 @@ mod tests {
             &mut terminal,
             offered(),
             theme::BRAVE,
+            3,
             |_| {},
             || {
                 presses
@@ -487,26 +581,85 @@ mod tests {
         theme::apply_brave();
     }
 
-    /// MOUSE-17. Rejects: a press outside the list or a wheel turn moving the preview or leaving.
+    /// MOUSE-46. A position of the pointer says nothing to the list, and the picker draws the session
+    /// behind it, in the theme under the cursor, with each frame. Rejects: the picker drawn again for
+    /// each position of a pointer crossing the window.
     #[test]
-    fn a_press_outside_the_list_leaves_the_theme_alone() {
+    fn a_position_of_the_pointer_asks_for_no_frame_of_the_picker_opened_at_rest() {
+        let _held = theme::exclusive();
+        theme::apply_brave();
+        let now = std::time::Instant::now();
+        let mut events: Vec<TermEvent> = (0..24)
+            .flat_map(|row| (0..80).map(move |column| (row, column)))
+            .map(|(row, column)| {
+                TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column,
+                    row,
+                    modifiers: KeyModifiers::NONE,
+                })
+            })
+            .collect();
+        events.push(TermEvent::Key(ratatui::crossterm::event::KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )));
+        let mut events = events.into_iter();
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut frames = 0;
+
+        let taken = run(
+            &mut terminal,
+            offered(),
+            theme::BRAVE,
+            3,
+            |_| frames += 1,
+            || {
+                events
+                    .next()
+                    .map(|event| (event, now))
+                    .ok_or_else(|| std::io::ErrorKind::UnexpectedEof.into())
+            },
+        );
+
+        assert!(taken.is_none());
+        assert_eq!(events.len(), 0, "a position was left unread");
+        assert_eq!(
+            frames,
+            1,
+            "the pointer asked for {} frames more",
+            frames - 1
+        );
+        theme::apply_brave();
+    }
+
+    /// MOUSE-17. Rejects: a press on the panel's border, or on the lines under the list, moving the
+    /// preview or leaving: only a press outside the panel does, which is MOUSE-47.
+    #[test]
+    fn a_press_on_the_panel_off_the_list_leaves_the_theme_alone() {
         let _held = theme::exclusive();
         theme::apply_brave();
         let mut picker = opened(offered(), theme::BRAVE);
         let list = Rect::new(10, 5, 30, 8);
+        let shown = around(list);
         let (mut last, now) = (None, std::time::Instant::now());
-        for _ in 0..2 {
-            let outcome = click(&mut picker, list, left_press(0, 0), &mut last, now);
-            assert_eq!(outcome, Outcome::Continue);
+        for (row, column) in [
+            (shown.area.y, shown.area.x + 3),
+            (list.y + 2, shown.area.x),
+            (list.bottom() + 1, list.x),
+        ] {
+            for _ in 0..2 {
+                let outcome = click(
+                    &mut picker,
+                    shown,
+                    left_press(row, column),
+                    &mut last,
+                    now,
+                    3,
+                );
+                assert_eq!(outcome, Outcome::Continue, "({row}, {column})");
+            }
         }
-        let wheel = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            ..left_press(list.y + 1, list.x)
-        };
-        assert_eq!(
-            click(&mut picker, list, wheel, &mut last, now),
-            Outcome::Continue
-        );
         assert_eq!(theme::name(), theme::BRAVE);
     }
 }

@@ -11,6 +11,7 @@
 //! starts an ordinary session: nothing here can strand a user who opened it by mistake.
 
 use crate::input;
+use crate::select::{self, Click};
 use crate::theme;
 use bravebot_i18n::t;
 use bravebot_session::search::{Corpus, Query};
@@ -18,7 +19,9 @@ use bravebot_session::sessions::{self, Summary};
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event as TermEvent, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -37,6 +40,11 @@ pub struct Picker {
     note: Option<String>,
     /// Which of the matching sessions is under the cursor.
     selected: usize,
+    /// The first session drawn, held where a press left it: a press moves the cursor to a session
+    /// that is already drawn and the list stays where it is, so a second press on the same cell is
+    /// on the same session. A key, a turn of the wheel, a letter typed or a record deleted lets go of
+    /// it, and the list moves as it always did.
+    held_from: Option<usize>,
     /// The project these sessions belong to, for the heading.
     project: String,
     /// A pull request number or address the list was opened for, which keeps only the sessions
@@ -66,6 +74,7 @@ impl Picker {
             search: String::new(),
             note: None,
             selected: 0,
+            held_from: None,
             project: project.into(),
             from_pr: None,
             within_a_session: false,
@@ -214,28 +223,33 @@ impl Picker {
     fn forget(&mut self, id: &str) {
         self.sessions.retain(|session| session.id != id);
         self.said.remove(id);
+        self.held_from = None;
         self.clamp();
     }
 
     fn down(&mut self) {
         let last = self.matching().len().saturating_sub(1);
         self.selected = (self.selected + 1).min(last);
+        self.held_from = None;
     }
 
     fn up(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+        self.held_from = None;
     }
 
     /// Narrow the list, keeping the cursor inside it.
     fn typed(&mut self, c: char) {
         self.search.push(c);
         self.search_words();
+        self.held_from = None;
         self.clamp();
     }
 
     fn backspace(&mut self) {
         self.search.pop();
         self.search_words();
+        self.held_from = None;
         self.clamp();
     }
 
@@ -260,6 +274,20 @@ fn is_pull_request(session: &Summary, wanted: &str) -> bool {
         return link.rsplit('/').next() == Some(number);
     }
     link == wanted
+}
+
+/// What taking the session under the cursor does: resume it, or say why it cannot be.
+fn take(picker: &Picker) -> Outcome {
+    match picker.chosen() {
+        Some(session) if session.manifest => Outcome::Refused(manifest_note().to_string()),
+        Some(session) => {
+            match held_note(&session.id, picker.held).or_else(|| open_note(picker, &session.id)) {
+                Some(note) => Outcome::Refused(note),
+                None => Outcome::Resume,
+            }
+        }
+        _ => Outcome::Resume,
+    }
 }
 
 /// What a key press did to the picker.
@@ -349,16 +377,7 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
             }
             None => Outcome::Continue,
         },
-        KeyCode::Enter => match picker.chosen() {
-            Some(session) if session.manifest => Outcome::Refused(manifest_note().to_string()),
-            Some(session) => match held_note(&session.id, picker.held)
-                .or_else(|| open_note(picker, &session.id))
-            {
-                Some(note) => Outcome::Refused(note),
-                None => Outcome::Resume,
-            },
-            _ => Outcome::Resume,
-        },
+        KeyCode::Enter => take(picker),
         KeyCode::Up => {
             picker.up();
             Outcome::Continue
@@ -377,6 +396,77 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
         }
         _ => Outcome::Continue,
     }
+}
+
+/// What a mouse event did to the picker.
+///
+/// A left press on a session puts the cursor on it, and a second on the same session within
+/// [`select::MULTI_CLICK`] takes it as Enter does, which resumes it or says why it cannot be
+/// (MOUSE-15). A turn of the wheel moves the cursor `wheel` sessions (MOUSE-46). Everything else,
+/// a press on the heading, the search box, the project or the keys, a press below the last session,
+/// another button, a drag and a release, does nothing. The question of deleting a record is
+/// answered by the next key and by nothing else, so while it stands no mouse event does anything
+/// (MOUSE-44). `list` is where [`draw`] drew the list, and `last` the press answered before this
+/// one.
+pub fn handle_mouse(
+    picker: &mut Picker,
+    list: Rect,
+    mouse: MouseEvent,
+    last: &mut Option<Click>,
+    now: std::time::Instant,
+    wheel: u16,
+) -> Outcome {
+    if picker.deleting.is_some() {
+        *last = None;
+        return Outcome::Continue;
+    }
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            for _ in 0..wheel {
+                picker.down();
+            }
+            return Outcome::Continue;
+        }
+        MouseEventKind::ScrollUp => {
+            for _ in 0..wheel {
+                picker.up();
+            }
+            return Outcome::Continue;
+        }
+        MouseEventKind::Down(MouseButton::Left) => {}
+        _ => return Outcome::Continue,
+    }
+    let Some(index) = entry_at(picker, list, mouse.row, mouse.column) else {
+        *last = None;
+        return Outcome::Continue;
+    };
+    let session = picker
+        .matching()
+        .get(index)
+        .map(|session| session.id.clone());
+    // The list stays where it was: the cursor moves to a session already on the screen.
+    picker.held_from = Some(window(picker, list.height).0);
+    picker.selected = index;
+    let (click, count) = select::count_press_on(*last, now, (mouse.row, mouse.column), &session);
+    *last = Some(click);
+    if count == 2 {
+        *last = None;
+        take(picker)
+    } else {
+        Outcome::Continue
+    }
+}
+
+/// Which of the matching sessions is drawn at a cell, as [`list_lines`] draws them in `list`.
+fn entry_at(picker: &Picker, list: Rect, row: u16, column: u16) -> Option<usize> {
+    if !list.contains(ratatui::layout::Position::new(column, row)) {
+        return None;
+    }
+    let (first, visible) = window(picker, list.height);
+    let drawn = usize::from(row - list.y) / ENTRY_ROWS;
+    (drawn < visible)
+        .then_some(first + drawn)
+        .filter(|index| *index < picker.matching().len())
 }
 
 /// What the picker settled on.
@@ -399,8 +489,9 @@ pub fn choose<B: Backend>(
     terminal: &mut Terminal<B>,
     project: &Path,
     from_pr: Option<&str>,
+    wheel: u16,
 ) -> Choice {
-    pick(terminal, project, None, from_pr)
+    pick(terminal, project, None, from_pr, wheel)
 }
 
 /// Why `/resume` carried on from no record.
@@ -486,8 +577,9 @@ pub fn choose_other<B: Backend>(
     terminal: &mut Terminal<B>,
     project: &Path,
     current: &str,
+    wheel: u16,
 ) -> Choice {
-    pick(terminal, project, Some(current), None)
+    pick(terminal, project, Some(current), None, wheel)
 }
 
 fn pick<B: Backend>(
@@ -495,33 +587,84 @@ fn pick<B: Backend>(
     project: &Path,
     current: Option<&str>,
     from_pr: Option<&str>,
+    wheel: u16,
 ) -> Choice {
-    let Some(mut picker) = opened(project, current, from_pr) else {
-        return Choice::Fresh;
-    };
+    match opened(project, current, from_pr) {
+        Some(picker) => converse(terminal, project, picker, wheel, sessions::delete),
+        None => Choice::Fresh,
+    }
+}
 
+/// Draw `picker` and take keys until one settles it. `delete` removes a record the person
+/// confirmed deleting.
+pub(crate) fn converse<B: Backend>(
+    terminal: &mut Terminal<B>,
+    project: &Path,
+    mut picker: Picker,
+    wheel: u16,
+    delete: impl Fn(&Path, &str) -> Result<(), sessions::Deletion>,
+) -> Choice {
+    let mut list = Rect::default();
+    let mut last = None;
+    let mut ignored = false;
     loop {
-        if terminal.draw(|frame| draw(frame, &picker)).is_err() {
+        // Not again for a position of the pointer, which says nothing to a list, and a pointer
+        // crossing the window sends one for each cell.
+        if !ignored
+            && terminal
+                .draw(|frame| {
+                    draw(frame, &picker);
+                    list = list_area(frame.area());
+                })
+                .is_err()
+        {
             return Choice::Fresh;
         }
+        ignored = false;
 
         let Ok(event) = input::read() else {
             return Choice::Fresh;
         };
-        let Some(key) = input::key_of(&event) else {
-            continue;
-        };
-        // A key event arrives twice on Windows, once pressed and once released, and the release
-        // would otherwise choose whatever the press had just moved to.
-        if key.kind != event::KeyEventKind::Press {
+        if input::is_a_move(&event) {
+            ignored = true;
             continue;
         }
+        let outcome = match event {
+            TermEvent::Mouse(mouse) => {
+                // Cleared by what moves the cursor or takes a session, as a key clears it, and not
+                // while the question of deleting is up, which a refusal is not part of.
+                if picker.deleting.is_none()
+                    && matches!(
+                        mouse.kind,
+                        MouseEventKind::Down(MouseButton::Left)
+                            | MouseEventKind::ScrollUp
+                            | MouseEventKind::ScrollDown
+                    )
+                {
+                    picker.note = None;
+                }
+                let now = std::time::Instant::now();
+                handle_mouse(&mut picker, list, mouse, &mut last, now, wheel)
+            }
+            other => {
+                let Some(key) = input::key_of(&other) else {
+                    continue;
+                };
+                // A key event arrives twice on Windows, once pressed and once released, and the
+                // release would otherwise choose whatever the press had just moved to.
+                if key.kind != event::KeyEventKind::Press {
+                    continue;
+                }
 
-        // Cleared on every key, so a refusal stays up until the user does something and no
-        // longer than that.
-        picker.note = None;
+                // Cleared on every key, so a refusal stays up until the user does something and no
+                // longer than that.
+                picker.note = None;
 
-        match handle_key(&mut picker, key.code, key.modifiers) {
+                handle_key(&mut picker, key.code, key.modifiers)
+            }
+        };
+
+        match outcome {
             Outcome::Continue => continue,
             Outcome::Cancel => return Choice::Fresh,
             Outcome::Quit => return Choice::Quit,
@@ -530,7 +673,7 @@ fn pick<B: Backend>(
                 continue;
             }
             Outcome::Delete(id) => {
-                picker.note = Some(delete_record(&mut picker, project, &id, sessions::delete));
+                picker.note = Some(delete_record(&mut picker, project, &id, &delete));
                 continue;
             }
             Outcome::Resume => {
@@ -580,12 +723,9 @@ fn opened(project: &Path, current: Option<&str>, from_pr: Option<&str>) -> Optio
     (!picker.is_empty() || picker.from_pr.is_some()).then_some(picker)
 }
 
-/// Draw the list.
-fn draw(frame: &mut Frame, picker: &Picker) {
-    let area = frame.area();
-    frame.render_widget(Clear, area);
-
-    let layout = Layout::default()
+/// The heading, the search box, the project, the list and the keys, in a frame of `area`.
+fn layout(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // heading
@@ -594,7 +734,20 @@ fn draw(frame: &mut Frame, picker: &Picker) {
             Constraint::Min(1),    // list
             Constraint::Length(1), // keys
         ])
-        .split(area);
+        .split(area)
+}
+
+/// Where [`draw`] draws the list in a frame of `frame`.
+pub fn list_area(frame: Rect) -> Rect {
+    layout(frame)[3]
+}
+
+/// Draw the list.
+fn draw(frame: &mut Frame, picker: &Picker) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+
+    let layout = layout(area);
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -672,6 +825,21 @@ fn draw(frame: &mut Frame, picker: &Picker) {
     );
 }
 
+/// How many rows an entry takes in the list: its title, when and where, and the line of what was
+/// said that holds the search.
+const ENTRY_ROWS: usize = 3;
+
+/// The first session drawn in a list `height` rows tall, and how many are: the window is what fits
+/// rather than what exists, and keeps the cursor on the last row of it once it moves past the end.
+/// Where a press has held the list it stays, while the cursor is among the sessions drawn.
+fn window(picker: &Picker, height: u16) -> (usize, usize) {
+    let visible = (usize::from(height) / ENTRY_ROWS).max(1);
+    match picker.held_from {
+        Some(first) if (first..first + visible).contains(&picker.selected) => (first, visible),
+        _ => (picker.selected.saturating_sub(visible - 1), visible),
+    }
+}
+
 /// The list itself: two lines per session, and a word when nothing matches.
 fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
     let matching = picker.matching();
@@ -682,9 +850,7 @@ fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
         ))];
     }
 
-    // Three rows per entry, so the window is what fits rather than what exists.
-    let visible = (area.height as usize / 3).max(1);
-    let first = picker.selected.saturating_sub(visible.saturating_sub(1));
+    let (first, visible) = window(picker, area.height);
 
     let mut lines = Vec::new();
     for (index, session) in matching.iter().enumerate().skip(first).take(visible) {
@@ -1377,5 +1543,501 @@ mod tests {
             screen.contains(&t!(resume_from_pr, pull_request = "42")),
             "{screen}"
         );
+    }
+
+    fn mouse(kind: MouseEventKind, row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn pressed(row: u16, column: u16) -> MouseEvent {
+        mouse(MouseEventKind::Down(MouseButton::Left), row, column)
+    }
+
+    /// Five sessions, newest first, as a list 24 rows tall draws them.
+    fn five() -> Picker {
+        Picker::new(
+            (1..=5)
+                .map(|n| summary(&format!("s{n}"), &format!("session {n}"), 600 - n))
+                .collect(),
+            "/work",
+        )
+    }
+
+    fn chosen_title(picker: &Picker) -> Option<&str> {
+        picker.chosen().map(|session| session.title.as_str())
+    }
+
+    /// The row a title is drawn on in a frame 24 rows tall.
+    fn row_of_title(picker: &Picker, title: &str) -> u16 {
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(100, 24)).expect("a terminal");
+        terminal.draw(|frame| draw(frame, picker)).expect("a frame");
+        let screen = terminal.backend().to_string();
+        screen
+            .lines()
+            .position(|line| line.contains(title))
+            .unwrap_or_else(|| panic!("{title} is not on the screen: {screen}")) as u16
+    }
+
+    /// MOUSE-15. Rejects: a press that moves nothing or takes at once, a second press that does not
+    /// resume, and a session found from a row of another: any of the three rows of an entry picks
+    /// that entry, and the one after it starts on the next row.
+    #[test]
+    fn a_press_on_a_session_moves_the_cursor_and_a_second_takes_it() {
+        let mut picker = five();
+        let list = list_area(Rect::new(0, 0, 100, 24));
+        let (mut last, now) = (None, std::time::Instant::now());
+        let third = row_of_title(&picker, "session 3");
+
+        // The title, the line of when and where, and the line of what was said are one entry.
+        for offset in 0..3 {
+            let mut fresh = five();
+            let mut first_press = None;
+            let outcome = handle_mouse(
+                &mut fresh,
+                list,
+                pressed(third + offset, 6),
+                &mut first_press,
+                now,
+                3,
+            );
+            assert_eq!(outcome, Outcome::Continue, "row {offset}");
+            assert_eq!(chosen_title(&fresh), Some("session 3"), "row {offset}");
+        }
+        let outcome = handle_mouse(&mut picker, list, pressed(third + 3, 6), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(chosen_title(&picker), Some("session 4"));
+
+        let outcome = handle_mouse(&mut picker, list, pressed(third + 3, 6), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Resume);
+        assert_eq!(chosen_title(&picker), Some("session 4"));
+    }
+
+    /// The title of the session whose entry is drawn over `row` of a frame `height` rows tall: an
+    /// entry takes three rows and its title is the first.
+    fn session_drawn_at(picker: &Picker, row: u16, height: u16) -> Option<String> {
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(100, height)).expect("a terminal");
+        terminal.draw(|frame| draw(frame, picker)).expect("a frame");
+        let screen = terminal.backend().to_string();
+        let lines: Vec<&str> = screen.lines().collect();
+        (0..ENTRY_ROWS as u16).find_map(|up| {
+            let line = lines.get(usize::from(row.checked_sub(up)?))?;
+            let rest = line.split("session ").nth(1)?;
+            Some(format!("session {}", rest.split_whitespace().next()?))
+        })
+    }
+
+    /// The rows of a frame `height` tall that draw the title of an entry, with the session each
+    /// names, top to bottom.
+    fn titles_drawn(picker: &Picker, height: u16) -> Vec<(u16, String)> {
+        let list = list_area(Rect::new(0, 0, 100, height));
+        (list.y..list.bottom())
+            .filter_map(|row| {
+                let title = session_drawn_at(picker, row, height)?;
+                let own =
+                    (row.checked_sub(1)).and_then(|above| session_drawn_at(picker, above, height));
+                (own.as_deref() != Some(title.as_str()) || row == list.y).then_some((row, title))
+            })
+            .collect()
+    }
+
+    /// A press and a release on a cell, as a terminal sends them. The release takes nothing.
+    fn click(
+        picker: &mut Picker,
+        list: Rect,
+        last: &mut Option<Click>,
+        now: std::time::Instant,
+        (row, column): (u16, u16),
+    ) -> Outcome {
+        let outcome = handle_mouse(picker, list, pressed(row, column), last, now, 3);
+        let released = mouse(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(
+            handle_mouse(picker, list, released, last, now, 3),
+            Outcome::Continue
+        );
+        outcome
+    }
+
+    /// Nine sessions with the cursor on the seventh, or five with it on the first.
+    fn nine_or_five(scrolled: bool) -> Picker {
+        let count = if scrolled { 9 } else { 5 };
+        let mut picker = Picker::new(
+            (1..=count)
+                .map(|n| summary(&format!("s{n}"), &format!("session {n}"), 600 - n))
+                .collect(),
+            "/work",
+        );
+        if scrolled {
+            for _ in 0..6 {
+                picker.down();
+            }
+        }
+        picker
+    }
+
+    /// MOUSE-15. Rejects: a double click in place that does not resume the session pointed at, because
+    /// a press that moved the cursor to an entry already drawn slid the list, so the second press
+    /// landed on another session. On every entry of a list that has not scrolled, and of one that has,
+    /// a press and a release, a frame, and a press and a release on the same cell put the cursor on the
+    /// session drawn there, leave the entries where they were, and take it.
+    #[test]
+    fn a_double_click_in_place_takes_the_session_pointed_at_on_every_entry_of_a_list_scrolled_or_not()
+     {
+        for (scrolled, height) in [(false, 24), (true, 16)] {
+            let list = list_area(Rect::new(0, 0, 100, height));
+            let before = titles_drawn(&nine_or_five(scrolled), height);
+            assert!(before.len() >= 3, "{before:?}");
+            assert_eq!(
+                nine_or_five(scrolled).matching().len() > before.len(),
+                scrolled,
+                "{before:?}"
+            );
+            for (row, title) in &before {
+                let mut picker = nine_or_five(scrolled);
+                let (mut last, now) = (None, std::time::Instant::now());
+                let cell = (*row, 6);
+
+                let first = click(&mut picker, list, &mut last, now, cell);
+                assert_eq!(first, Outcome::Continue, "scrolled {scrolled}, {title}");
+                assert_eq!(chosen_title(&picker), Some(title.as_str()));
+                let after_the_press = titles_drawn(&picker, height);
+                let second = click(&mut picker, list, &mut last, now, cell);
+                assert_eq!(second, Outcome::Resume, "scrolled {scrolled}, {title}");
+                assert_eq!(chosen_title(&picker), Some(title.as_str()));
+                assert_eq!(
+                    after_the_press, before,
+                    "scrolled {scrolled}, {title}: the press slid the list"
+                );
+            }
+        }
+    }
+
+    /// MOUSE-15. Rejects: a second press counted with the first when the list moved between them,
+    /// which takes a session the first press did not name: the wheel moves the cursor and the list
+    /// with it, so the cell holds another session, and a press there is a first press on that one. A
+    /// press where the session first named is drawn now is the second press on it, and takes it.
+    #[test]
+    fn a_press_where_the_wheel_has_since_drawn_another_session_is_a_first_press_on_it() {
+        let height = 12;
+        let list = list_area(Rect::new(0, 0, 100, height));
+        let (mut last, now) = (None, std::time::Instant::now());
+        let mut picker = nine_or_five(true);
+        let (row, named) = titles_drawn(&picker, height)[0].clone();
+
+        click(&mut picker, list, &mut last, now, (row, 6));
+        assert_eq!(chosen_title(&picker), Some(named.as_str()));
+        let wheel = |kind| mouse(kind, row, 6);
+        handle_mouse(
+            &mut picker,
+            list,
+            wheel(MouseEventKind::ScrollUp),
+            &mut last,
+            now,
+            3,
+        );
+        let drawn_there_now = session_drawn_at(&picker, row, height).expect("a session");
+        assert_ne!(drawn_there_now, named, "the wheel did not move the list");
+        let outcome = click(&mut picker, list, &mut last, now, (row, 6));
+        assert_eq!(
+            outcome,
+            Outcome::Continue,
+            "a session nobody pressed first was resumed"
+        );
+        assert_eq!(chosen_title(&picker), Some(drawn_there_now.as_str()));
+
+        let mut picker = nine_or_five(true);
+        let mut last = None;
+        click(&mut picker, list, &mut last, now, (row, 6));
+        handle_mouse(
+            &mut picker,
+            list,
+            wheel(MouseEventKind::ScrollDown),
+            &mut last,
+            now,
+            1,
+        );
+        let moved_to = titles_drawn(&picker, height)
+            .into_iter()
+            .find(|(_, title)| *title == named)
+            .map(|(at, _)| at)
+            .expect("the session first named is still drawn");
+        let outcome = click(&mut picker, list, &mut last, now, (moved_to, 6));
+        assert_eq!(
+            outcome,
+            Outcome::Resume,
+            "the session first named was not resumed"
+        );
+        assert_eq!(chosen_title(&picker), Some(named.as_str()));
+    }
+
+    /// MOUSE-15. Rejects: a window that stays where a press left it once a key moves the cursor: the
+    /// keys and the wheel move it as they always did, so the list a press and a key left draws what
+    /// the list the keys alone reach the same session in draws.
+    #[test]
+    fn a_key_after_a_press_moves_the_list_as_the_keys_alone_do() {
+        // Three entries are drawn, so the key moves the cursor to an entry the held list draws
+        // and the list the keys alone leave draws another run of them.
+        let height = 16;
+        let list = list_area(Rect::new(0, 0, 100, height));
+        let mut pressed_on = nine_or_five(true);
+        let (mut last, now) = (None, std::time::Instant::now());
+        let (row, named) = titles_drawn(&pressed_on, height)[0].clone();
+        click(&mut pressed_on, list, &mut last, now, (row, 6));
+        pressed_on.down();
+
+        let mut by_keys = nine_or_five(true);
+        while chosen_title(&by_keys) != Some(named.as_str()) {
+            by_keys.up();
+        }
+        by_keys.down();
+
+        assert_eq!(chosen_title(&pressed_on), chosen_title(&by_keys));
+        assert_eq!(
+            titles_drawn(&pressed_on, height),
+            titles_drawn(&by_keys, height)
+        );
+    }
+
+    /// MOUSE-15. Rejects: a second press that skips what Enter checks. A manifest run and a record
+    /// a running background session or another process holds are refused with the sentence Enter
+    /// gives, whichever way the row is taken.
+    #[test]
+    fn a_second_press_on_a_session_that_cannot_be_resumed_says_why() {
+        fn holds_the_second(id: &str) -> bool {
+            id == "2222222222"
+        }
+        let mut picker = Picker::new(
+            vec![
+                summary("1111111111", "free", 300),
+                summary("2222222222", "held", 200),
+                manifest_summary("3333333333", "a plan", 100),
+            ],
+            "/work",
+        )
+        .with_held(holds_the_second);
+        let list = list_area(Rect::new(0, 0, 100, 24));
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let held = row_of_title(&picker, "held");
+        let plan = row_of_title(&picker, "a plan");
+
+        for (row, expected) in [
+            (
+                held,
+                bravebot_session::jobs::held_refusal("2222222222", NAME_SHOWN),
+            ),
+            (plan, manifest_note().to_string()),
+        ] {
+            handle_mouse(&mut picker, list, pressed(row, 5), &mut last, now, 3);
+            let outcome = handle_mouse(&mut picker, list, pressed(row, 5), &mut last, now, 3);
+            assert_eq!(outcome, Outcome::Refused(expected), "row {row}");
+        }
+    }
+
+    /// MOUSE-15. Rejects: a press on the heading, the search box, the project, the line of keys or
+    /// below the last session choosing or moving the cursor, even twice, and another button, a drag
+    /// or a release acting.
+    #[test]
+    fn a_press_off_the_sessions_and_any_other_mouse_event_leave_the_list_alone() {
+        let mut picker = five();
+        for _ in 0..2 {
+            picker.down();
+        }
+        let list = list_area(Rect::new(0, 0, 100, 24));
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let last_row = row_of_title(&picker, "session 5") + 3;
+        for row in [0, 1, 3, 4, last_row, 23] {
+            for _ in 0..2 {
+                let outcome = handle_mouse(&mut picker, list, pressed(row, 4), &mut last, now, 3);
+                assert_eq!(outcome, Outcome::Continue, "row {row}");
+            }
+        }
+        for kind in [
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Down(MouseButton::Middle),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Moved,
+        ] {
+            let outcome = handle_mouse(
+                &mut picker,
+                list,
+                mouse(kind, list.y + 1, 4),
+                &mut last,
+                now,
+                3,
+            );
+            assert_eq!(outcome, Outcome::Continue, "{kind:?}");
+        }
+        assert_eq!(chosen_title(&picker), Some("session 3"));
+    }
+
+    /// MOUSE-15. Rejects: counting entries from the top of the list when it has scrolled to keep the
+    /// cursor in view: with the cursor on the fifth of nine sessions and room for two, each title
+    /// drawn is the session a press on it picks.
+    #[test]
+    fn each_session_drawn_is_the_one_a_press_on_it_picks_in_a_list_that_has_scrolled() {
+        let nine = || {
+            Picker::new(
+                (1..=9)
+                    .map(|n| summary(&format!("s{n}"), &format!("session {n}"), 600 - n))
+                    .collect(),
+                "/work",
+            )
+        };
+        let mut scrolled = nine();
+        for _ in 0..4 {
+            scrolled.down();
+        }
+        let mut terminal =
+            Terminal::new(ratatui::backend::TestBackend::new(100, 12)).expect("a terminal");
+        terminal
+            .draw(|frame| draw(frame, &scrolled))
+            .expect("a frame");
+        let screen = terminal.backend().to_string();
+        let list = list_area(Rect::new(0, 0, 100, 12));
+        let mut drawn = 0;
+        for (row, line) in screen.lines().enumerate() {
+            let entry = line.trim_start_matches(['"', ' ', '❯']);
+            if !entry.starts_with("session ")
+                || !entry["session ".len()..].starts_with(|c: char| c.is_ascii_digit())
+            {
+                continue;
+            }
+            let title: String = entry
+                .split_whitespace()
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ");
+            let mut picker = scrolled_like(&nine, 4);
+            let (now, mut last) = (std::time::Instant::now(), None);
+            handle_mouse(&mut picker, list, pressed(row as u16, 4), &mut last, now, 3);
+            assert_eq!(
+                chosen_title(&picker),
+                Some(title.as_str()),
+                "row {row}: {line}"
+            );
+            drawn += 1;
+        }
+        assert!(drawn >= 2, "the list drew {drawn} sessions: {screen}");
+    }
+
+    fn scrolled_like(make: &dyn Fn() -> Picker, down: usize) -> Picker {
+        let mut picker = make();
+        for _ in 0..down {
+            picker.down();
+        }
+        picker
+    }
+
+    /// MOUSE-46. Rejects: a wheel turn that moves the cursor the wrong way, by another step than the
+    /// one asked, past either end, or that resumes or leaves.
+    #[test]
+    fn the_wheel_moves_the_cursor_by_the_sessions_asked_and_stops_at_both_ends() {
+        let mut picker = five();
+        let list = list_area(Rect::new(0, 0, 100, 24));
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let mut turn = |picker: &mut Picker, kind, wheel| {
+            let outcome = handle_mouse(picker, list, mouse(kind, 0, 0), &mut last, now, wheel);
+            assert_eq!(outcome, Outcome::Continue, "{kind:?}");
+            chosen_title(picker).map(str::to_string)
+        };
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 2).as_deref(),
+            Some("session 3")
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollUp, 1).as_deref(),
+            Some("session 2")
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 50).as_deref(),
+            Some("session 5")
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollUp, 50).as_deref(),
+            Some("session 1")
+        );
+    }
+
+    /// MOUSE-44. Rejects: the question of deleting a record answered or put away by a press, a
+    /// double press that resumes the session behind it, or the wheel moving the cursor off the
+    /// record the question is about. The question is answered by the next key and by nothing else.
+    #[test]
+    fn while_the_question_of_deleting_stands_the_pointer_does_nothing() {
+        let mut picker = five();
+        picker.down();
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Delete, KeyModifiers::NONE),
+            Outcome::Continue
+        );
+        assert_eq!(picker.deleting.as_deref(), Some("s2"));
+        let list = list_area(Rect::new(0, 0, 100, 24));
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let first = row_of_title(&picker, "session 1");
+
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::ScrollDown,
+            MouseEventKind::ScrollUp,
+        ] {
+            let outcome = handle_mouse(&mut picker, list, mouse(kind, first, 5), &mut last, now, 3);
+            assert_eq!(outcome, Outcome::Continue, "{kind:?}");
+            assert_eq!(picker.deleting.as_deref(), Some("s2"), "{kind:?}");
+        }
+        assert_eq!(chosen_title(&picker), Some("session 2"));
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Char('y'), KeyModifiers::NONE),
+            Outcome::Delete("s2".to_string())
+        );
+    }
+
+    /// MOUSE-15, MOUSE-46, through the loop the list runs. Rejects: a loop that reads only keys. A
+    /// press and the wheel move the cursor, and the record the question of deleting names is the one
+    /// the cursor was on when the question was asked.
+    #[test]
+    fn the_list_reads_the_pointer_before_the_question_of_deleting_is_asked() {
+        let (width, height) = (100, 24);
+        let list = list_area(Rect::new(0, 0, width, height));
+        let down = MouseEventKind::Down(MouseButton::Left);
+        let key = |code| {
+            TermEvent::Key(ratatui::crossterm::event::KeyEvent::new(
+                code,
+                KeyModifiers::NONE,
+            ))
+        };
+        let third = list.y + 6;
+        let run = |events: Vec<TermEvent>| {
+            let _held = crate::input::script::hold(events);
+            let mut terminal = Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                .expect("a terminal");
+            let deleted = std::cell::RefCell::new(Vec::new());
+            converse(&mut terminal, Path::new("/work"), five(), 2, |_, id| {
+                deleted.borrow_mut().push(id.to_string());
+                Ok(())
+            });
+            deleted.into_inner()
+        };
+        let by_press = vec![
+            TermEvent::Mouse(mouse(down, third, 5)),
+            key(KeyCode::Delete),
+            key(KeyCode::Char('y')),
+            key(KeyCode::Esc),
+        ];
+        assert_eq!(run(by_press), ["s3"]);
+        let by_wheel = vec![
+            TermEvent::Mouse(mouse(MouseEventKind::ScrollDown, 0, 0)),
+            key(KeyCode::Delete),
+            key(KeyCode::Char('y')),
+            key(KeyCode::Esc),
+        ];
+        assert_eq!(run(by_wheel), ["s3"]);
     }
 }

@@ -623,6 +623,7 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_cli::running::doctor_push_identity_hands_none_of_this_agents_credentials_to_the_programs_it_starts`
 `verified-by: bravebot_agent::usability::a_program_the_suite_starts_is_not_handed_this_agents_signing_key`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_this_agents_signing_key`
+`verified-by: bravebot_tui::editor::an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is`
 `verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
@@ -631,7 +632,7 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
 `verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
-`verified-by: bravebot_cli::chatgpt::the_opener_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 
 <a id="CRED-15"></a>

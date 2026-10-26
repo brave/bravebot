@@ -34,16 +34,31 @@ pub(super) fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
         ])
         .split(frame.area());
 
-    let laid = draw_transcript(frame, areas[0], session);
+    let mut laid = draw_transcript(frame, areas[0], session);
     draw_scroller_hint(frame, areas[1], session, laid.matches.len());
+    // A search being typed owns the line, and nothing is drawn beside it (MOUSE-51).
+    laid.hint_row = Some(crate::state::HintRow {
+        area: areas[1],
+        taken: session.typing_a_search(),
+    });
+    // Before the key list, which is drawn over it: a selection held when the list is opened is marked
+    // on the transcript and not over the list, whose cells are not text of it (MOUSE-1).
+    highlight_selection(frame, session, &laid);
 
     // Over the transcript rather than beside it, because a key list is read instead of the
-    // transcript and never at the same time.
+    // transcript and never at the same time. Recorded, so a press that lands on it is the list's
+    // and not the transcript's (MOUSE-45).
     if session.scroller().is_some_and(|scroller| scroller.help) {
-        draw_scroller_help(frame, frame.area(), session);
+        let area = draw_scroller_help(frame, frame.area(), session);
+        laid.targets.extend(
+            crate::state::Popup {
+                panel: crate::state::Panel::KeyList,
+                area,
+                list: None,
+            }
+            .recorded(),
+        );
     }
-
-    highlight_selection(frame, session);
 
     laid
 }
@@ -52,8 +67,8 @@ pub(super) fn draw_scroller(frame: &mut Frame, session: &Session) -> Laid {
 ///
 /// The way out is last and is never the row that did not fit: a list that scrolled its own exit
 /// off the screen would be a mode nobody could leave.
-fn scroller_keys() -> [(&'static str, &'static str); 14] {
-    [
+fn scroller_keys(bindings: &Keybindings) -> Vec<(String, &'static str)> {
+    let keys = [
         // vi's two pairs of line chords take rows of their own: the key column of the first row
         // is full, and a parenthesis on its meaning would not hold them either.
         ("up/down, j/k, y/e", t!(scroller_key_line)),
@@ -72,9 +87,16 @@ fn scroller_keys() -> [(&'static str, &'static str); 14] {
         ("enter / backspace", t!(scroller_key_search_run)),
         ("x", t!(scroller_key_expand)),
         ("v", t!(scroller_key_editor)),
-        ("?", t!(scroller_key_this_list)),
-        ("any key", t!(scroller_key_close_list)),
-    ]
+    ];
+    // The watch chord is the person's to move, so it is named as it is bound.
+    keys.into_iter()
+        .map(|(key, what)| (key.to_string(), what))
+        .chain([
+            (bindings.watch_name(), t!(scroller_key_delegates)),
+            ("?".to_string(), t!(scroller_key_this_list)),
+            ("any key".to_string(), t!(scroller_key_close_list)),
+        ])
+        .collect()
 }
 
 /// What closes the scroller, which is the one row of the key list that is never dropped.
@@ -92,7 +114,7 @@ fn scroller_exit(bindings: &Keybindings) -> (String, &'static str) {
 ///
 /// Short terminals lose rows from the middle of the list rather than the end of it. Every row here
 /// is a convenience except the last, and the last is the only one somebody is stuck without.
-fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
+fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) -> Rect {
     let row = |(key, what): (&str, &str)| {
         Line::from(vec![
             Span::styled(
@@ -114,10 +136,10 @@ fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
     }
     .max(1);
 
-    let mut rows: Vec<Line> = scroller_keys()
+    let mut rows: Vec<Line> = scroller_keys(session.bindings())
         .into_iter()
         .take(room.saturating_sub(1))
-        .map(row)
+        .map(|(key, what)| row((&key, what)))
         .collect();
     let (exit_chord, exit_desc) = scroller_exit(session.bindings());
     rows.push(row((&exit_chord, exit_desc)));
@@ -144,6 +166,7 @@ fn draw_scroller_help(frame: &mut Frame, area: Rect, session: &Session) {
         list
     };
     frame.render_widget(list, box_area);
+    box_area
 }
 
 /// The tail of `needle` that fits in `room` columns, with an ellipsis where the head went.

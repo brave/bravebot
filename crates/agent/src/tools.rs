@@ -3696,6 +3696,17 @@ fn refuse_denied_path<S: Sink>(
     refuse_denied_path_as(policy, workspace, purpose, path, path)
 }
 
+/// Whether a `deny` rule refuses a read of `path`, asked exactly as a read tool asks it, for a
+/// caller that has no planner to word a refusal for: a file a person asked to see is refused for
+/// the same names as a file a call asked to read.
+pub(crate) fn read_is_refused_by_a_rule<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+) -> bool {
+    refuse_denied_path(policy, workspace, Purpose::Read, path).is_err()
+}
+
 /// [`refuse_denied_path`], naming `shown` in the refusal where the path itself is not to be said.
 fn refuse_denied_path_as<S: Sink>(
     policy: &mut Policy<'_, S>,

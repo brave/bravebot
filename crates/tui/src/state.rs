@@ -18,10 +18,13 @@ mod completion;
 mod editing;
 mod entry;
 mod files;
+mod hover;
+mod menu;
 mod queue;
 mod scroller;
 mod settings;
 mod standing;
+mod targets;
 mod vi;
 mod watching;
 
@@ -48,8 +51,12 @@ pub use entry::{
     DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Tone,
     Watched,
 };
+pub use hover::Hovered;
+pub use menu::{Choice, Menu};
 pub use queue::{Bound, Queued};
-pub use scroller::{Laid, Scroller};
+pub use scroller::{Bar, Footer, HintRow, Laid, Panel, Popup, Scroller, TopOfView};
+pub use settings::wheel_rows_named;
+pub use targets::{Hit, Scrolled, Space, Target};
 pub use vi::Spelled;
 pub use watching::{WatchScope, Watching};
 
@@ -369,6 +376,14 @@ pub struct Session {
     wheel_rows: u16,
     /// Whether the mouse is captured, from `tui.mouse`. On unless the settings turned it off.
     mouse: bool,
+    /// Whether a right click opens the small menu, from `tui.contextMenu`. On unless the settings
+    /// turned it off (MOUSE-52).
+    context_menu: bool,
+    /// The menu a right click opened, while it is open (MOUSE-52).
+    menu: Option<menu::Menu>,
+    /// What an item of the menu that a press took asks for, held for the handler of the press to
+    /// carry out, which is what a key does in place of this.
+    menu_taken: Option<menu::Choice>,
     /// How long a question the planner puts waits with no key pressed before it is closed without
     /// an answer, from `askIdleSeconds` (ASK-9). `None` waits for as long as it takes.
     ask_idle: Option<Duration>,
@@ -482,8 +497,32 @@ pub struct Session {
     panel_width: u16,
     /// Whether a drag that began on the panel's border is still held (PANEL-6).
     panel_drag: bool,
+    /// Where on the thumb the scrollbar was taken hold of, while a drag that began on it is held.
+    bar_drag: Option<u16>,
+    /// The words that were at the top of the view when the scroller closed, until the next frame has
+    /// placed them (SCROLL-1).
+    words_held: Option<TopOfView>,
+    /// Whether the button went down on a panel drawn over the frame and has not come up, so the
+    /// drag and the release that follow are that panel's and not the frame's (MOUSE-45).
+    pressed_on_a_popup: bool,
+    /// The last press a picker answered, which says whether the next one is a double click on its
+    /// rows (MOUSE-15).
+    pub(crate) pick_click: Option<crate::select::Click>,
     /// Where the last mouse report put the pointer, as a row and a column.
     pointer: Option<(u16, u16)>,
+    /// Whether the pointer's last report was a position with no button held and nothing since has
+    /// ended that: a key, the terminal being left or resized, or a button going down (MOUSE-51).
+    hovering: bool,
+    /// The target the pointer is over while it is hovering, as the last frame drew it.
+    hover: Option<hover::Hovered>,
+    /// Whether a target that was marked has stopped being, which no key or report of the pointer
+    /// asked a frame for.
+    hover_ended: bool,
+    /// Whether the left button is held and has moved a selection, which is what a drag out of the
+    /// transcript has to be for the view to scroll toward it (MOUSE-37).
+    sweeping: bool,
+    /// When the view last scrolled toward a drag held outside the transcript.
+    edge_clock: Option<Instant>,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
     /// When a recap is owed to a person who has been away (CMD-20).
@@ -699,8 +738,21 @@ pub struct Session {
     pub selection: Option<crate::select::Selection>,
     /// The last press of the left button, which says whether the next one is a double click.
     pub last_click: Option<crate::select::Click>,
+    /// Whether the click that began the run [`Session::last_click`] belongs to acted on a target, so
+    /// that the presses that follow it on the same cell begin nothing (MOUSE-50).
+    pub(crate) click_acted: bool,
+    /// What the last press of the left button stood on, which the release must find under it for the
+    /// two to be one click (MOUSE-50).
+    pub(crate) pressed_on: Option<targets::Pressed>,
+    /// How many times the plan has been replaced or dropped, which a press on a row of it is held to.
+    plan_generation: u64,
+    /// A click on a path that waits to see whether it is the first of a double click, with when it
+    /// was made (MOUSE-42).
+    pub(crate) pending_click: Option<(std::time::Instant, crate::text_links::PathRef)>,
     /// How much the last copy took, until the next click or the next prompt.
     pub copied: Option<usize>,
+    /// The pane the last copy was taken from, where the notice names it (MOUSE-39).
+    copied_from: Option<crate::select::Pane>,
     /// What the turn that just finished cost, until the next one starts.
     ///
     /// The spinner going out is how the end of a turn used to be announced, and an announcement
@@ -765,6 +817,9 @@ pub struct Session {
     /// The last list the turn in flight reported that had rows, which an empty report leaves
     /// standing. Cleared with `todos`.
     reported: Vec<bravebot_core::todo::Row>,
+    /// The tasks of the plan, by place in it, that a click on their mark opened to the whole of their
+    /// words (MOUSE-32). Cleared when a report replaces the plan and when it is dropped.
+    plan_detail: std::collections::BTreeSet<usize>,
     /// What the turn in flight is waiting on, when it is waiting on the model.
     ///
     /// Cleared between turns. `None` before the first request goes out, which is the only
@@ -795,6 +850,12 @@ pub struct Session {
     pub rewind: bravebot_session::rewind::RewindStack,
     /// What the last `/hunks` listed, so a number typed after it names the hunk it was read beside.
     pub hunks_listed: Option<crate::hunks_command::Listed>,
+    /// The links the last `/open` listed, in the order it numbered them, so a number typed after it
+    /// names the link it was read beside (CMD-30).
+    pub(crate) links_listed: Option<Vec<crate::text_links::Target>>,
+    /// What starts the browser for an address a click or `/open` named, which says whether it was
+    /// started. A test names one that starts nothing.
+    pub(crate) opens_an_address: fn(&str) -> bool,
     /// Where the turn in flight began, for the snapshot that rewinds to it.
     ///
     /// Private, because it records what [`Session::begin_turn`] found rather than a figure anybody
@@ -1173,6 +1234,9 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
+            context_menu: true,
+            menu: None,
+            menu_taken: None,
             ask_idle: None,
             mode: crate::vim::Mode::default(),
             half_typed: None,
@@ -1197,7 +1261,16 @@ impl Session {
             files: None,
             panel_width: crate::panel::WIDTH,
             panel_drag: false,
+            bar_drag: None,
+            words_held: None,
+            pressed_on_a_popup: false,
+            pick_click: None,
             pointer: None,
+            hovering: false,
+            hover: None,
+            hover_ended: false,
+            sweeping: false,
+            edge_clock: None,
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,
@@ -1252,7 +1325,12 @@ impl Session {
             history: crate::history::History::new(),
             selection: None,
             last_click: None,
+            click_acted: false,
+            pressed_on: None,
+            plan_generation: 0,
+            pending_click: None,
             copied: None,
+            copied_from: None,
             finished: None,
             cleared_by_interrupt: false,
             expandable_lines: 0,
@@ -1263,6 +1341,7 @@ impl Session {
             written: 0,
             progress: Default::default(),
             todos: Vec::new(),
+            plan_detail: Default::default(),
             reported: Vec::new(),
             phase: None,
             checking: None,
@@ -1285,6 +1364,8 @@ impl Session {
             standing_by_setting: false,
             rewind: Default::default(),
             hunks_listed: None,
+            links_listed: None,
+            opens_an_address: crate::opener::open_address,
             turn_start: TurnStart::default(),
             pending: crate::remote_confirm::Interjections::new(),
             streaming: String::new(),
@@ -1352,6 +1433,9 @@ impl Session {
     pub fn now_in_workspace(&mut self, root: impl Into<std::path::PathBuf>) {
         self.workspace = root.into();
         self.history.set_project(self.project());
+        // A path of the list `/open` printed names a file of the directory it was listed in, and a
+        // number typed here would show the file of that name in this one.
+        self.links_listed = None;
     }
 
     /// How long the turn in flight has been running, or zero when idle.
@@ -1471,20 +1555,49 @@ impl Session {
     pub fn set_todos(&mut self, rows: Vec<bravebot_core::todo::Row>) {
         if !rows.is_empty() {
             self.reported = rows.clone();
+            // The places are those of the list before, and are the places of other tasks in this one.
+            self.plan_detail.clear();
+            self.plan_generation += 1;
         }
         self.todos = rows;
     }
 
     /// Hand over the plan the turn ended with, for the entry that closes it.
     fn take_todos(&mut self) -> Vec<bravebot_core::todo::Row> {
+        self.plan_generation += 1;
         self.todos.clear();
         std::mem::take(&mut self.reported)
     }
 
     /// Drop the live list and the plan kept beside it.
     fn forget_todos(&mut self) {
+        self.plan_generation += 1;
         self.todos.clear();
         self.reported.clear();
+        self.plan_detail.clear();
+    }
+
+    /// The tasks of the plan a click opened to the whole of their words, by place in it (MOUSE-32).
+    pub fn plan_detail(&self) -> &std::collections::BTreeSet<usize> {
+        &self.plan_detail
+    }
+
+    /// Whether the task at `task` in the plan is opened to the whole of its words (MOUSE-32).
+    pub fn plan_detail_open(&self, task: usize) -> bool {
+        self.plan_detail.contains(&task)
+    }
+
+    /// Open the task at `task` in the plan to the whole of its words, or close it again.
+    ///
+    /// A place beyond the plan opens nothing. The places are those of the plan as it stands and are
+    /// dropped when it is replaced, so one never names a task the person did not click.
+    pub fn toggle_plan_detail(&mut self, task: usize) {
+        if task >= self.plan().len() {
+            return;
+        }
+        if !self.plan_detail.remove(&task) {
+            self.plan_detail.insert(task);
+        }
     }
 
     /// Restore checkpoint history and warnings that remain after every checkpoint is consumed.
@@ -1588,6 +1701,8 @@ impl Session {
         self.turn_places.clear();
         self.unplaced_todos.clear();
         self.hunks_listed = None;
+        // The replies it listed were in the transcript that is gone.
+        self.links_listed = None;
         // Counts of a transcript that is gone: kept, they would rewind a later turn to a length the
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
@@ -1608,7 +1723,7 @@ impl Session {
         self.started = None;
         self.scroll = 0;
         self.selection = None;
-        self.copied = None;
+        self.forget_the_copy();
         self.finished = None;
         self.rewind.close();
         // A standing condition is worth saying once per session, and this is now a new one: the
@@ -2321,10 +2436,27 @@ impl Session {
     /// Allowed while a turn runs: reading and copying what is already on the screen changes
     /// nothing about the turn, and a long turn is exactly when someone wants to.
     pub fn begin_selection(&mut self, row: u16, column: u16) {
-        // A press between regions belongs to none and starts nothing.
-        self.selection = crate::select::pane_at(&self.laid.panes, row, column)
-            .map(|(pane, bounds)| crate::select::Selection::in_pane(row, column, pane, bounds));
-        self.copied = None;
+        use crate::select::{Pane, Selection};
+        // A press on the transcript counts the transcript's rows, wherever the view draws it, so
+        // scrolling does not move the selection off its text (MOUSE-34). A press between regions
+        // belongs to none and starts nothing.
+        // Not in a transcript of more rows than the layout counts: its rows and the first one on the
+        // screen stop at the largest a row number holds, so its rows cannot be told apart, and the
+        // press counts the screen's rows as it does in a pane that does not scroll.
+        let window = self.laid.window.filter(|window| {
+            window.area.contains((column, row).into()) && self.laid.rows < u16::MAX
+        });
+        // Nor does a press on the info panel's border column, whatever state the panel is in
+        // (MOUSE-2).
+        let pane = crate::select::pane_at(&self.laid.panes, row, column)
+            .filter(|_| !self.on_the_panel_border_column(row, column));
+        self.selection = match (window, pane) {
+            (Some(window), Some((Pane::Transcript | Pane::Screen, _))) => {
+                Some(Selection::in_transcript(row, column, window))
+            }
+            (_, pane) => pane.map(|(pane, bounds)| Selection::in_pane(row, column, pane, bounds)),
+        };
+        self.forget_the_copy();
     }
 
     /// Begin a selection that takes in the whole word or row under the press, as a double or
@@ -2342,20 +2474,60 @@ impl Session {
 
     /// Follow the pointer with the loose end of the selection.
     pub fn extend_selection(&mut self, row: u16, column: u16) {
+        let text_rows = self.laid.text_rows();
         if let Some(selection) = &mut self.selection {
-            selection.extend_to(row, column);
+            selection.extend_within(row, column, text_rows);
         }
+    }
+
+    /// Follow the pointer of a drag with the button held. Until the button is let go, a pointer
+    /// outside the transcript scrolls it toward the pointer (MOUSE-37).
+    pub fn sweep_to(&mut self, row: u16, column: u16) {
+        self.extend_selection(row, column);
+        self.sweeping = self.selection.is_some();
+    }
+
+    /// The button is no longer held, or something else has taken the drag.
+    pub fn stop_sweeping(&mut self) {
+        self.sweeping = false;
+        self.edge_clock = None;
+    }
+
+    /// Whether a selection that has taken something in is on the screen, which Escape puts away
+    /// before it does anything else (MOUSE-38). A press that swept nothing is not one.
+    pub fn holds_a_selection(&self) -> bool {
+        self.selection
+            .is_some_and(|selection| !selection.is_empty())
     }
 
     /// Forget the selection, after a click that swept over nothing.
     pub fn clear_selection(&mut self) {
         self.selection = None;
-        self.copied = None;
+        self.forget_the_copy();
     }
 
     /// Record what a copy took, for the line that reports it.
     pub fn note_copied(&mut self, characters: usize) {
         self.copied = Some(characters);
+        self.copied_from = None;
+    }
+
+    /// Record what a selection of `pane` took. The line that reports it names the pane where the
+    /// pane is not the one a drag is expected to be in (MOUSE-39).
+    pub fn note_copied_from(&mut self, characters: usize, pane: crate::select::Pane) {
+        self.copied = Some(characters);
+        self.copied_from = Some(pane);
+    }
+
+    /// The pane the last copy was taken from, while the line reporting it is up.
+    pub fn copied_from(&self) -> Option<crate::select::Pane> {
+        self.copied.and(self.copied_from)
+    }
+
+    /// Take down the line that reports what the last copy took.
+    fn forget_the_copy(&mut self) {
+        self.copied = None;
+        self.copied_from = None;
     }
 
     /// The replies in this session's transcript, the latest first, as the transcript holds them.
@@ -2368,6 +2540,16 @@ impl Session {
             .filter(|entry| entry.speaker == Speaker::Assistant)
             .map(|entry| entry.text.as_str())
             .filter(|text| !text.trim().is_empty())
+    }
+
+    /// The fenced blocks of this session's replies, the latest first, as the replies wrote them
+    /// (MOUSE-27).
+    ///
+    /// A reply's blocks come last to first, so the first is the last block of the latest reply that
+    /// has one. A block with nothing in it is passed over, as it has no word to click.
+    pub fn blocks_newest_first(&self) -> impl Iterator<Item = String> + '_ {
+        self.replies_newest_first()
+            .flat_map(|reply| crate::markdown::copyable_blocks(reply).into_iter().rev())
     }
 
     /// Settle a turn that was stopped: either un-sent whole, or recorded as having stopped.
@@ -2773,6 +2955,9 @@ impl Session {
     /// one that waited in the queue is run as the turn ends, and nothing closes a view when a turn
     /// ends.
     pub fn begin_command(&mut self) {
+        // The menu a right click opened while a turn ran holds the input, and the loop that runs a
+        // command reads only the keys that stop it, so one left up would shut those out (MOUSE-52).
+        self.close_the_menu();
         self.status = Status::Running;
         self.started = Some(Instant::now());
         self.command_output.clear();
@@ -3565,8 +3750,10 @@ impl Session {
             transcript_len: self.transcript.len(),
         };
         // A list of hunks describes the turn before this one, and a number typed after this turn
-        // must be read beside a list of its own.
+        // must be read beside a list of its own. So must the links of the latest reply, which this
+        // turn is about to replace.
         self.hunks_listed = None;
+        self.links_listed = None;
         self.prompt_at = None;
         self.said_while_working.clear();
         // Set again by the call that took a line from the box, after this returns. A tick, a watch,
@@ -3589,7 +3776,7 @@ impl Session {
         self.finished = None;
         // Left up past the next prompt, a copy's count would hide the hint that a picture is on
         // the clipboard, and no key would take it down.
-        self.copied = None;
+        self.forget_the_copy();
         // The previous turn's plan is not this turn's. Leaving it would show finished work as
         // though the new turn had it outstanding.
         self.forget_todos();
@@ -4011,6 +4198,19 @@ impl Session {
             .map_or(&[], |entry| entry.todos.as_slice())
     }
 
+    /// Where in the transcript the plan [`Session::plan`] gives is drawn, where it is read off the
+    /// transcript: the entry the turn that wrote it ended with. `None` while the plan is the list
+    /// the turn in flight reported, which is drawn above the box and not in the transcript, and
+    /// where there is no plan.
+    pub fn plan_entry(&self) -> Option<usize> {
+        if !self.todos.is_empty() || !self.reported.is_empty() {
+            return None;
+        }
+        self.transcript
+            .iter()
+            .rposition(|entry| !entry.todos.is_empty())
+    }
+
     /// Whether any turn has left a trail, meaning the toggle has something to reveal.
     ///
     /// A trail lands on an entry when the turn it belongs to ends, so a session that has not
@@ -4261,6 +4461,77 @@ mod tests {
             assert_eq!(session.expandable_lines, 0);
         }
 
+        /// MOUSE-25: opening the scroller on a call keeps its heading on the screen row it was drawn
+        /// on where the expanded call still fits, moves the view on to show the whole of it where it
+        /// would not, and puts its heading at the top where it is taller than the screen. The layout
+        /// it is expanded in is the scroller's: the whole screen but the footer.
+        #[test]
+        fn opening_the_scroller_on_a_call_shows_it_where_it_was_or_whole() {
+            use crate::select::Pane;
+            use ratatui::layout::Rect;
+            let at_rest = |session: &Session, first: u16, last: u16| Laid {
+                width: 80,
+                columns: 100,
+                lines: 30,
+                height: 20,
+                rows: 100,
+                window: Some(crate::select::Window {
+                    area: Rect::new(0, 0, 80, 20),
+                    top: 0,
+                    view: crate::select::View::of(session),
+                }),
+                panes: vec![
+                    (Pane::Transcript, Rect::new(0, 0, 80, 20)),
+                    (Pane::Hint, Rect::new(0, 29, 100, 1)),
+                ],
+                targets: vec![Target::in_transcript(
+                    Rect::new(0, first, 80, last - first + 1),
+                    Hit::Call(0),
+                    0,
+                )],
+                ..Laid::default()
+            };
+            // (first and last row at rest, first and last once expanded, the row it opens with at the
+            // top of the view)
+            let cases = [
+                ("fits where it is", (82, 85), (82, 100), 80),
+                ("is cut by the bottom", (95, 98), (95, 110), 82),
+                ("is taller than the screen", (82, 85), (82, 125), 82),
+            ];
+            for (name, rest, expanded, top) in cases {
+                let mut session = Session::new("none");
+                session.finish_activity(Activity::running("Read", "f").done("30 lines"));
+                session.returned(thirty_lines_returned());
+                session.laid = at_rest(&session, rest.0, rest.1);
+                let asked = std::cell::Cell::new((0, 0));
+                let opened =
+                    session.open_the_scroller_on_the_call(0, rest.0, |session, width, height| {
+                        asked.set((width, height));
+                        Laid {
+                            width,
+                            height,
+                            rows: 130,
+                            window: Some(crate::select::Window {
+                                area: Rect::new(0, 0, width, height),
+                                top: 0,
+                                view: crate::select::View::of(session),
+                            }),
+                            targets: vec![Target::in_transcript(
+                                Rect::new(0, expanded.0, width, expanded.1 - expanded.0 + 1),
+                                Hit::Call(0),
+                                0,
+                            )],
+                            ..Laid::default()
+                        }
+                    });
+                assert!(opened, "{name}: nothing opened");
+                assert_eq!(asked.get(), (100, 29), "{name}: laid out at the wrong size");
+                assert!(session.scrolling(), "{name}");
+                assert!(session.transcript[0].expanded, "{name}");
+                assert_eq!(session.top_row(), top, "{name}");
+            }
+        }
+
         /// SCROLL-10: the key expands nothing while a delegate is the row the view is on, even
         /// when the last frame had a call in the rows on the screen that would otherwise expand.
         #[test]
@@ -4275,8 +4546,11 @@ mod tests {
                 width: 80,
                 height: 10,
                 rows: 40,
-                expandable: vec![(32, 38, 0)],
-                delegates: Vec::new(),
+                targets: vec![Target::in_transcript(
+                    ratatui::layout::Rect::new(0, 32, 80, 7),
+                    Hit::Call(0),
+                    0,
+                )],
                 ..Laid::default()
             };
 
@@ -12096,6 +12370,123 @@ mod tests {
         assert!(
             s.send_queued().is_none(),
             "a prompt taken back was sent anyway"
+        );
+    }
+
+    /// MOUSE-28: taking back from a place in the queue gives back that prompt and the ones typed after
+    /// it, in the order they were typed, and leaves the ones before it waiting and within the turn's
+    /// reach. A place past the end, and one the turn has already taken the newest line from, give
+    /// back nothing and leave the box as it was.
+    #[test]
+    fn taking_back_from_a_place_in_the_queue_gives_back_that_prompt_and_the_ones_after() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for line in ["second", "third", "fourth"] {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            s.queue();
+        }
+
+        assert!(
+            !s.unqueue_from(3),
+            "a place past the end gave something back"
+        );
+        assert!(s.input.is_empty());
+
+        assert!(s.unqueue_from(1), "nothing came back");
+        assert_eq!(s.input, "third\nfourth");
+        assert_eq!(s.queued.len(), 1);
+        assert_eq!(s.queued[0].prompt, "second");
+        // What stayed is still on its way to the planner, and what came back is not.
+        assert_eq!(reaching.take().as_deref(), Some("second"));
+        assert_eq!(reaching.take(), None);
+    }
+
+    /// MOUSE-28: a prompt the turn took after the press that was meant for it is not given back, and
+    /// the ones typed before it are not either, since the queue gives up its lines newest first.
+    #[test]
+    fn a_click_cannot_take_back_what_the_turn_has_already_been_given() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for line in ["second", "third"] {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            s.queue();
+        }
+        // The turn takes the oldest and then the newest, as two rounds would.
+        assert_eq!(reaching.take().as_deref(), Some("second"));
+        assert_eq!(reaching.take().as_deref(), Some("third"));
+
+        assert!(!s.unqueue_from(0));
+        assert!(s.input.is_empty(), "{:?}", s.input);
+    }
+
+    /// MOUSE-28: a command line a click queued was never typed, so taking the queue back does not put
+    /// it in the box, where Enter would send it to the planner as words. It stays waiting and is
+    /// carried out in its place among what is left, and the prompts around it come back in the order
+    /// they were typed. The regression it rejects is the line given back as text with the prompts, and
+    /// one dropped from the queue, which loses a click.
+    #[test]
+    fn a_command_line_a_click_queued_is_not_given_back_to_the_box() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for line in ["second", "third"] {
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            s.queue();
+            if line == "second" {
+                assert!(s.queue_command_line("/mcp"), "the click was not queued");
+            }
+        }
+        assert_eq!(s.queued.len(), 3);
+
+        assert!(s.unqueue_from(0), "nothing came back");
+
+        assert_eq!(s.input, "second\nthird", "the line a click made came back");
+        assert_eq!(
+            s.queued
+                .iter()
+                .map(|line| line.prompt.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/mcp"],
+            "the click did not stay waiting"
+        );
+        assert_eq!(
+            reaching.take(),
+            None,
+            "what came back is still in the turn's reach"
+        );
+
+        // A click on a place that holds only the line a click made has nothing to give back.
+        assert!(!s.unqueue_from(0));
+        assert_eq!(s.input, "second\nthird");
+        assert_eq!(s.queued.len(), 1);
+
+        // And one a turn has reached behind it still stops the take-back where the turn is.
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for c in "second".chars() {
+            s.type_char(c);
+        }
+        s.queue();
+        assert!(s.queue_command_line("/mcp"));
+        assert_eq!(reaching.take().as_deref(), Some("second"));
+        assert!(!s.unqueue_from(0));
+        assert_eq!(
+            s.queued.len(),
+            2,
+            "a line was lost behind the one the turn took"
         );
     }
 

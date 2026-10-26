@@ -114,7 +114,9 @@ the marker out worked: left drawn, it says a file is going that is not.
 
 Escape discards a half-typed prompt, and does nothing at all on a line with nothing on it. It
 never ends the session. What it discards is kept as a draft for Up ([INPUT-39](#INPUT-39)), as is
-the line the first Ctrl-C rung takes.
+the line the first Ctrl-C rung takes. With a selection made by the mouse held, whether or not its
+words are in view, the first Escape puts it away and does nothing else
+([MOUSE-38](mouse.md#MOUSE-38)).
 
 **Ctrl-C stops the nearest thing there is to stop, and leaves when there is nothing left.** It is
 read against what is happening, in this order:
@@ -973,6 +975,9 @@ leave the person editing a line that had gone, and sending it again would say it
 back that the turn has *not* reached puts it out of the turn's reach as well, or the key would read
 as having done nothing: the line in the box, and the copy arriving at the planner a moment later.
 Where the turn has taken every waiting prompt, the press leaves the box exactly as it was.
+
+A click on a waiting prompt takes it back with the ones typed after it, so a click on the oldest
+does what the key does ([MOUSE-28](mouse.md#MOUSE-28)).
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top
@@ -2330,24 +2335,30 @@ Starting a session in the interface that draws puts the terminal in raw mode and
 screen of its own, so what was in the terminal beforehand is untouched and is back on the screen
 afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
 clause is about the one that draws. With that screen the
-session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
-held, except in a terminal that draws the pointer shape it is asked for
-([PANEL-6](info-panel.md#PANEL-6)), which is told of motion with no button held as well; bracketed
-paste; focus reporting; and, only where the terminal says it understands the request,
-disambiguated keys.
+session asks for mouse reporting of the buttons, the wheel and motion with a button held and with
+none, in every terminal; bracketed paste; focus reporting; and, only where the terminal says it
+understands the request, disambiguated keys. A terminal that sends no motion with no button held shows
+no target under the pointer and loses nothing else. The mouse modes are written in one run: the three
+tracking modes, 1000, 1002 and 1003 in that order, then the forms of coordinates, 1015 and 1006, of
+which 1006 names a column or a row past 223 ([MOUSE-53](mouse.md#MOUSE-53)). They are given back in
+the reverse order before the screen is left.
 
 Every one of those is given back when the session ends, including when it ends by failing rather
 than by being left, and again around each handover of the terminal to another program: the editor
 a prompt is written in, the viewer a transcript is read in and the shell a stop leaves the terminal
 to (INPUT-47) all get the terminal as it was found, and the same set is taken again on the way
-back.
+back. The modes are given back before raw mode is left, and raw mode is left whether or not they
+could be written, so a report of the pointer that arrives in between is not left for the shell to
+echo.
 
 **Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
-the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
-a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
-nothing here reads. The exception is a terminal that draws the pointer shape on request: where the
-pointer is over the info panel's border is what the shape follows, so that terminal is not narrowed
-and no other is. Bracketed paste is what stops a pasted prompt sending itself, since without it
+the transcript only while the mouse is reported, and the position of the pointer with no button held
+is what the target under it, and the shape the pointer is given over the info panel's border
+([PANEL-6](info-panel.md#PANEL-6)), follow. A pointer crossing the window sends a position for each
+cell. A burst of them is read as the last ([INPUT-49](#INPUT-49)) and a frame is asked for only when
+the target under the pointer changes, so a pointer crossing the window costs one frame for each target
+it crosses. The coordinates are asked for in the form that has no limit of 223, so a click at a column
+past it is read as the cell it names. Bracketed paste is what stops a pasted prompt sending itself, since without it
 the newline most clipboards carry arrives as Enter; it is also the only thing that says a paste came
 off a clipboard at all, so where a terminal does not send those markers a paste arrives as bare keys
 and nothing downstream can tell it from what a program wrote. Focus reporting is what makes the
@@ -2366,21 +2377,31 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::a_session_draws_on_a_screen_of_its_own`
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
-`verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
-`verified-by: bravebot_tui::app::a_terminal_that_draws_the_pointer_shape_reports_every_movement`
+`verified-by: bravebot_tui::app::every_terminal_is_asked_to_report_the_pointer_and_ends_in_the_mode_that_reports_all_of_it`
+`verified-by: bravebot_tui::app::the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order`
+`verified-by: bravebot_tui::app::what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for`
+`verified-by: bravebot_tui::app::the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses
 
 A terminal delivers one byte stream and says nothing about who wrote it, so a person at a keyboard and
 a program holding the other end of the pty arrive identically and no reader can ask which it has.
-**Nothing here tries.** Every event is delivered exactly as the terminal reported it, and what is added
-is one fact beside each: whether it was the whole of what was waiting, or arrived together with others.
+**Nothing here tries.** Every event is delivered exactly as the terminal reported it, but for a pointer
+position that another one waiting behind it supersedes ([INPUT-49](#INPUT-49)), and what is added is one
+fact beside each: whether it was the whole of what was waiting, or arrived together with others.
 
 One event waiting is what a person pressing a key looks like, since nothing fills the buffer between
 one read and the next. Two or more were available at the same instant, so **no one of them is evidence
 separate from the rest**, whatever they are: a key beside a resize is no more a separate press than two
 keys are.
+
+**A report of the mouse is not counted either.** The session is told where the pointer is with no
+button held ([INPUT-33](#INPUT-33)), so a person moving the mouse as they press a key shares the read
+with a position. Counted, it would refuse that key. A position, a click or a turn of the wheel is not a
+key, and a run of keys, which is what the guards below ask about, is still a run with one among them:
+two presses in a read are two whatever else the read holds. A report of the mouse is delivered exactly as
+the terminal reported it.
 
 **A key release is the tail of a press and not a second arrival.** A terminal may report one, and
 Windows reports one for every keystroke, so there a press and the release of the same key land in one
@@ -2422,6 +2443,8 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
 `verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
 `verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
+`verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
+`verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
@@ -3051,3 +3074,27 @@ reaches for it with the line half written, where a command word would have to be
 `verified-by: bravebot_tui::app::an_enhancements_cost_is_charged_to_the_session`
 `verified-by: bravebot_tui::app::characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_enhance_chord_in_force`
+
+<a id="INPUT-49"></a>
+### INPUT-49: a burst of pointer positions is read as the last of it
+
+A terminal told to report the pointer with no button held sends a position for each cell the pointer
+crosses. The reader hands out such a position only when no other is waiting directly behind it, so a
+burst of them is one event, the last, which says where the pointer is. A report with a button held, a
+press, a release, a turn of the wheel, a key and every other event are handed out as the terminal
+reported them, and a position is not dropped across any of them: a press that follows a position is
+read at the place the pointer was then. The one handed out keeps the fact whether it arrived alone that
+the terminal's read gave it, since that is a fact about the read ([INPUT-34](#INPUT-34)).
+
+This is the one exception to every event being delivered as the terminal reported it. It withholds
+nothing a person or a program decides with, since a position decides nothing and the next one says it
+again.
+
+**Why.** A position is asked what is under the pointer ([MOUSE-50](mouse.md#MOUSE-50)), and a
+pointer crossing the window sends hundreds of them in the time it takes to draw one frame. The
+earlier ones are answered with where the pointer was and are out of date before the screen could show
+the answer, so handling each is work for nothing, while handling the last is all the screen needs.
+
+`verified-by: bravebot_tui::input::a_burst_of_pointer_positions_is_read_as_the_last_of_it`
+`verified-by: bravebot_tui::input::only_a_position_directly_behind_another_is_not_handed_out`
+`verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`

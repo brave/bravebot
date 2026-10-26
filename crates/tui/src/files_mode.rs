@@ -1476,7 +1476,7 @@ mod tests {
         press(&mut session, KeyCode::Down);
         assert_eq!(highlighted(&session), Some(1));
         let second = click(&mut session, a_row, a_column);
-        assert_eq!(second, Action::Copy);
+        assert_eq!(second, Action::None);
         assert_eq!(
             highlighted(&session),
             Some(1),
@@ -1601,7 +1601,7 @@ mod tests {
         click(&mut session, row, column);
         assert!(session.files_open());
         press(&mut session, KeyCode::Char('q'));
-        assert_eq!(click(&mut session, row, column), Action::Copy);
+        assert_eq!(click(&mut session, row, column), Action::None);
         assert!(!session.files_open(), "a double click opened the state");
 
         let mut scrolling = ordinary_panel_with_two_files();
@@ -2844,12 +2844,12 @@ mod tests {
             }
         }
 
-        // The second press of a double click is a selection, so two quick clicks take one step.
+        // The press that follows a click that acted begins nothing, so two quick clicks take one step.
         let (row, column) = cell_of(&mut session, 120, 30, "next");
         session.last_click = None;
         click(&mut session, row, column);
         assert_eq!(scroll_of(&session), 21);
-        assert_eq!(click(&mut session, row, column), Action::Copy);
+        assert_eq!(click(&mut session, row, column), Action::None);
         assert_eq!(scroll_of(&session), 21, "a double click took two steps");
         session.files_scroll(-21);
 

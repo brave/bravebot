@@ -22,6 +22,7 @@ governs:
   - crates/tui/src/review_command.rs
   - crates/tui/src/commit_message_command.rs
   - crates/tui/src/help_command.rs
+  - crates/tui/src/open_command.rs
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
@@ -49,7 +50,8 @@ it may not do are CMD-18. `/help` is the same kind of turn, given a question and
 the name of the skill that carries the documentation, which is CMD-24, and `/changelog` shows text
 this program carries and starts no turn, which is CMD-25. `/todos` prints the plan the session holds
 and starts no turn, which is CMD-28. `/request` shows the request a turn built, which is
-[TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
+[TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19. `/open` is
+the keyboard's way to what a click on a link in a reply does, and what it lists is CMD-30.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
 starting now would advertise to the planner, beneath the commands at the start of a line and alone
@@ -342,7 +344,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -435,7 +437,9 @@ turn.
 Neither kind is offered to the turn in flight. Which lines are commands is CMD-2's rule and nothing
 narrower, so a sentence mentioning a command is a prompt mid-turn as it is at rest, and a word the
 table gives no argument is a prompt with anything after it. A compaction, an aside and the other
-loops that share the working status are not a turn, and every command typed during one waits.
+loops that share the working status are not a turn, and every command typed during one waits. A
+click on a row of the info panel that stands for one of these commands is carried out by the same
+rule ([MOUSE-29](mouse.md#MOUSE-29)).
 
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
 `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
@@ -524,6 +528,12 @@ does not read:
 - **`/copy`.** It reads the transcript and writes to the clipboard, which a sweep with the mouse
   may do at any time. Mid-turn the latest reply may be what the running turn said on its way to a
   tool call, since that is in the transcript once it is drawn.
+
+- **`/open`.** It reads the transcript and the list it printed last, and hands an address to the
+  browser, none of which the turn holds ([CMD-30](#CMD-30)). A number that names a file, with or without
+  `edit`, is refused while a turn runs, with a note, and not queued: a click on a path is not answered
+  there either, since the file's lines go at the end of the transcript, where the turn is writing, and
+  an editor takes the terminal the turn is drawing on.
 
 - **`/export`.** It reads the transcript, which the session keeps, and writes a file under the
   working directory by the rules it has at rest ([SESSION-17](sessions.md#SESSION-17)): a path that
@@ -638,6 +648,12 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_queued_command_is_not_what_the_turn_took`
 `verified-by: bravebot_tui::app::a_queued_command_comes_back_to_the_box`
 `verified-by: bravebot_tui::app::copy_typed_mid_turn_takes_the_reply_without_waiting`
+`verified-by: bravebot_tui::app::a_typed_text_command_copies_a_reply_as_the_screen_shows_it_and_counts_back_as_copy_does`
+`verified-by: bravebot_tui::app::a_typed_text_command_copies_what_the_menu_item_copies`
+`verified-by: bravebot_tui::app::a_typed_text_command_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::a_typed_text_command_takes_the_reply_without_waiting_while_a_turn_runs`
+`verified-by: bravebot_tui::app::tab_finishes_text_after_the_copy_command`
+`verified-by: bravebot_tui::app::tests::menu::copy_as_text_and_the_typed_command_put_the_same_words_on_the_clipboard`
 `verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
 `verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
 `verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`
@@ -738,7 +754,7 @@ is not drawn as recognised then, while a command is.
 ## Copying a reply
 
 <a id="CMD-11"></a>
-### CMD-11: `/copy` puts a reply on the clipboard as the transcript holds it
+### CMD-11: `/copy` puts a reply, a fenced block of one or its words as drawn, on the clipboard
 
 `/copy` puts the latest reply on the clipboard, and `/copy <n>` the reply `n` back, so `/copy 1` is
 the latest. A reply is what the planner said to the person: the answer a turn or a manifest run ends
@@ -748,10 +764,33 @@ replies, and a blank reply is not counted. What is copied is the markdown the pl
 none of the marker, indent or wrapping the screen draws it with. Every control character but a line
 break and a tab is left out, as the screen leaves it out of a reply, so a Windows line ending is
 copied as one break. How many characters went is drawn at the right of the hint row, where a
-sweep's copy is reported, until the next prompt is sent. A sweep's highlight is taken down.
+sweep's copy is reported, until the next prompt is sent. A sweep's highlight is taken down. A click on the marker that leads a reply copies it the same way ([MOUSE-26](mouse.md#MOUSE-26)).
+
+`/copy block` puts the last fenced block ([VIEW-38](terminal-transcript.md#VIEW-38)) of the latest
+reply that has one on the clipboard, and `/copy block <n>` the one `n` back, so `/copy block 1` is
+`/copy block`. Blocks are counted through every reply from the latest, the last block of a reply
+first, and a reply with none is passed over. A block is counted when it has a line inside it, which
+is what draws the word that copies it ([MOUSE-27](mouse.md#MOUSE-27)), so the number a block has here
+is the number of its word counted from the end of the transcript. What is copied is the lines between
+the fences as the reply wrote them, with the indent of the fence taken off, with the same control
+characters left out and the count reported in the same place. `block` is a word of its own, so
+`/copy blocks` is read as a number of replies and refused as one. Tab after `/copy b` finishes the
+word. It is the keyboard route to the click on a block's word, and what it copies is the same.
+
+`/copy text` puts the latest reply on the clipboard as the screen shows it, and `/copy text <n>` the one
+`n` back, counted as `/copy <n>` counts: none of the marks of the markdown it was written in (`**`,
+backticks, the `#` of a heading), none of the marker and margin the screen draws before it and no
+wrapping, so a paragraph is one line. It is the reply drawn by the widget that draws the transcript at a
+width no line reaches, with the same control characters left out and the count reported in the same
+place, and it is what the `copy as text` item of the menu a right click opens copies
+([MOUSE-52](mouse.md#MOUSE-52)): both ask one function for the words. It is refused as `/copy` is, with
+the notes `/copy` gives. `text` is a word of its own, so `/copy texts` is read as a number of replies back
+and refused as one. Tab after `/copy t` finishes the word. It is the keyboard route to that item.
 
 Anything but digits after the word, zero, a session with no reply, and a number past the oldest
-reply are each refused with a note, and nothing reaches the clipboard. The note for a number past
+reply are each refused with a note, and nothing reaches the clipboard. For `/copy block` the same
+three are refused with a note of their own: a word after `block` that is not a number or is zero, a
+session whose replies hold no block, and a number past the oldest block, which says how many there are. The note for a number past
 the oldest says how many replies there are. A copy that no clipboard tool took and that could not be
 written to the terminal says so. A terminal that ignores the request gives no answer, so that case
 is reported as a copy, as it is after a sweep.
@@ -778,6 +817,13 @@ screen and `/export` already writes to a file.
 `verified-by: bravebot_tui::app::copy_refuses_what_it_cannot_take_and_copies_nothing`
 `verified-by: bravebot_tui::app::a_copied_reply_carries_no_control_character_but_its_breaks_and_tabs`
 `verified-by: bravebot_tui::app::a_copy_says_how_much_it_took_and_a_failed_one_says_so`
+`verified-by: bravebot_tui::app::a_typed_block_command_copies_the_words_the_click_on_that_block_copies`
+`verified-by: bravebot_tui::app::a_typed_block_command_counts_blocks_back_through_the_replies`
+`verified-by: bravebot_tui::app::a_typed_block_command_refuses_what_it_cannot_take_and_copies_nothing`
+`verified-by: bravebot_tui::app::a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word`
+`verified-by: bravebot_tui::app::tab_finishes_block_after_the_copy_command_and_leaves_a_number_alone`
+`verified-by: bravebot_tui::app::the_copy_command_names_block_and_keeps_the_words_after_it`
+`verified-by: bravebot_tui::markdown::a_block_with_nothing_between_its_fences_is_not_one_to_copy`
 `verified-by: bravebot_tui::app::a_copy_takes_down_what_an_earlier_sweep_left_up`
 `verified-by: bravebot_tui::app::a_copys_count_is_taken_down_by_the_next_prompt`
 `verified-by: bravebot_tui::app::copy_reaches_the_replies_a_resumed_session_brought_back`
@@ -1497,3 +1543,137 @@ model is needed to read it out.
   are typed, and a line typed out by hand names its arguments. Once a name is written the line
   holds more than the word, so the box draws no hint for the optional arguments; the row showed
   them.
+
+<a id="CMD-29"></a>
+### CMD-29: `/lsp` says which language servers the session has started
+
+`/lsp` takes no argument, so `/lsp` followed by words is a prompt (CMD-2). It says how many language
+servers the session has started and names each by the program the person approved
+([LSP-5](tools/lsp.md#LSP-5)), in name order, with what approving one meant and how long it lasts:
+it runs with the person's own access until the session ends ([LSP-8](tools/lsp.md#LSP-8)). Where
+none has started it says so, and when one starts. The names are the ones the info panel draws
+([PANEL-13](info-panel.md#PANEL-13)): programs from the fixed table or from the person's own
+declaration, and nothing a server said about itself. It reads what the session keeps beside the
+servers and starts or stops none, so it is carried out as it is typed while a turn runs (CMD-8).
+
+**Why.** The panel lists the servers, and a person who cannot see it, because it is closed or the
+terminal is too narrow for it, has no other way to ask which programs running with their own access
+the session has started. Every word it says is a fixed sentence or a program the person approved, so
+nothing branches on untrusted content.
+
+`verified-by: bravebot_tui::app::the_lsp_command_says_which_language_servers_the_session_has_started`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_lsp_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_lsp_command_answers_at_once_while_a_turn_runs`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+
+<a id="CMD-30"></a>
+### CMD-30: `/open` lists the web addresses and file paths in the latest reply that has any, and opens one
+
+`/open` lists the links of the latest reply that holds any: the reply still arriving where it holds one,
+and otherwise the newest reply of the transcript that does. A line says how many there are, and a line
+after it for each is numbered from 1 in the order they are drawn, with the text as it is drawn: a path
+with the place after the name as it was written (`src/main.rs:9-12`), and an address without the
+punctuation of the sentence around it. Where no reply holds one it says so. A person's prompt, a note, a
+failure, a program's output, a quarantined block, a call and a table cell hold none, as they hold none
+for a click ([MOUSE-40](mouse.md#MOUSE-40), [MOUSE-42](mouse.md#MOUSE-42)).
+
+The links are found as a click finds them. The words of each reply are drawn by the widget that draws the
+transcript, at the width the last frame drew it at, and the marks the matcher left in the cells are read
+off by the scan the frame reads them with, so which characters are an address or a path, how one wrapped
+over rows is joined and which runs are no link are the click's rules and no second set. Where a reply is
+longer than the screen a click reaches the links in view and `/open` lists the links of the whole reply,
+so every link a click reaches is in the list, up to fifty. The list is the same whatever the screen is: it
+is drawn at the width of the last frame, and a link that ends in the last column of a row is not taken
+for one that goes on below it. A reply with more than fifty links is listed up to the fiftieth, and a line
+after them says how many are left out. A number names only a link that was printed, so one past the
+fiftieth is opened by typing it after the command.
+
+Five forms open a link, each the keyboard's way to a click:
+
+| Typed | What it asks for | The click it stands for |
+|---|---|---|
+| `/open <number>` | for an address, the browser, and for a path, the file shown at the end of the transcript | a click with ctrl held on the address ([MOUSE-40](mouse.md#MOUSE-40)), a click with no modifier on the path ([MOUSE-42](mouse.md#MOUSE-42)) |
+| `/open edit <number>` | the file of a path in the person's editor, at the line and column the path gave | a click with ctrl held on the path ([MOUSE-43](mouse.md#MOUSE-43)) |
+| `/open <address>` | that address in the browser | a click with ctrl held on an address |
+| `/open <path>` | that file, shown | a click with no modifier on a path |
+| `/open edit <path>` | that file, in the editor | a click with ctrl held on a path |
+
+A number is read against the list `/open` last printed, which is kept as it was said, and not against the
+transcript as it is when the number is typed, so a reply that has arrived since does not change which link
+a number names. `/clear`, the start of another turn and a rewind drop the list, as they drop the list of
+`/hunks`, and so does `/cd`, since a path in it names a file of the directory it was listed in. A number
+typed with no list, after the list was dropped or past the last number of the list says so in the interface's own words, without repeating a link, and opens nothing. A number is digits and
+nothing else, and an address given to `edit` by number or typed is refused with a note and opened nowhere,
+since the browser is what opens it. Tab after `/open e` finishes `edit`.
+
+Text typed after `/open` that is not a number or `edit` is the address or the path to open, as it was
+typed with the blanks around it left out. The person typing the exact field is the endorsement, as typing
+`@path` is ([NAME-1](naming-files.md#NAME-1)), so it is not found in a reply and nothing decides which link
+it is. Text with `://` in it is an address and passes the check a click's address passes
+([MOUSE-40](mouse.md#MOUSE-40)), which a user in front of the host, a character outside printable ASCII, a
+backslash, a blank, a scheme that is not a page and no host fail, and says so where it does. Any other text is a path.
+It is read as a click reads the place after a name (`:12`, `:12:5`, `:9-12`) where it has one and whole
+otherwise, so a name with no extension or with a blank in it, which could not be clicked, can be typed. It
+is resolved by the file tools' rules and reach by the action a click's path is carried out by, which
+refuses it in the same words. Digits alone are a number, so a file named by digits is typed with its
+directory. `edit` with nothing after it says what the command takes.
+
+An address is handed on as the click on it hands it, a path as the click on it asks for the file to be
+shown and a path with `edit` as the click with ctrl held asks for the editor, so the function that starts
+the browser, the one that reads the file and the one that starts the editor are the click's, with the
+same resolution of the name, the same refusals and the same notes ([MOUSE-40](mouse.md#MOUSE-40),
+[MOUSE-42](mouse.md#MOUSE-42), [MOUSE-43](mouse.md#MOUSE-43)). An address opens whatever is running,
+since opening it changes nothing the work holds. A file is shown and an editor is started where a click
+on a path acts, which is where no turn or command runs and no delegate's view is open, since the lines
+go at the end of the transcript and the editor takes the terminal, and `/open` asks that question of the
+same function: elsewhere it says why not and does nothing.
+
+**What decides.** The person's typed command, naming a number of a list they read or the exact address or
+path, and nothing in the bytes of a link: the number does not move with the transcript, and no address or
+path chooses an effect. The command is the endorsement of the exact address or path, as the click is of
+the cells it is on ([ROUTE-8](routing.md#ROUTE-8)). What the driver reads of a reply is its text already
+released for the screen, by the scan that finds the click's targets, and what it writes is its own
+sentence and that text as it was drawn with every control character made visible.
+
+It reads what the transcript holds and starts nothing itself, so the list is carried out as it is typed
+while a turn runs, what it says going under the turn as any command's answer does (CMD-8), and so is a
+form that names an address. While a compaction, an aside or another wait that is no turn is running a
+line waits as every command does, and is carried out against the list it was typed beside once the work
+is over.
+
+`verified-by: bravebot_tui::link_clicks::the_open_command_lists_the_links_of_the_latest_reply_that_has_any_numbered_from_one`
+`verified-by: bravebot_tui::link_clicks::the_open_command_says_one_link_in_the_singular`
+`verified-by: bravebot_tui::link_clicks::the_open_command_says_so_where_no_reply_holds_a_link`
+`verified-by: bravebot_tui::link_clicks::the_open_command_lists_the_reply_still_arriving_first`
+`verified-by: bravebot_tui::link_clicks::what_the_open_command_lists_is_what_a_click_reaches_in_every_shape_the_link_tests_use`
+`verified-by: bravebot_tui::link_clicks::a_link_ending_in_the_last_column_of_a_row_is_listed_as_a_click_reaches_it`
+`verified-by: bravebot_tui::link_clicks::a_reply_longer_than_the_screen_is_listed_whole_and_holds_every_link_a_click_reaches`
+`verified-by: bravebot_tui::link_clicks::a_number_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
+`verified-by: bravebot_tui::link_clicks::a_number_names_the_link_the_list_printed_beside_it_and_not_the_latest_reply_now`
+`verified-by: bravebot_tui::link_clicks::a_number_that_names_no_listed_link_opens_nothing_and_says_why`
+`verified-by: bravebot_tui::link_clicks::a_number_after_a_list_that_held_no_link_says_the_list_had_none`
+`verified-by: bravebot_tui::link_clicks::a_clear_drops_the_list`
+`verified-by: bravebot_tui::link_clicks::a_reply_with_more_links_than_the_most_is_listed_to_the_most_and_says_how_many_are_left`
+`verified-by: bravebot_tui::link_clicks::a_file_is_shown_where_a_click_on_a_path_acts_and_nowhere_else`
+`verified-by: bravebot_tui::link_clicks::edit_and_a_number_ask_for_what_a_ctrl_click_on_that_path_asks_for_in_every_shape`
+`verified-by: bravebot_tui::link_clicks::edit_asks_for_no_editor_while_a_turn_is_drawing_on_the_terminal`
+`verified-by: bravebot_tui::link_clicks::edit_with_no_listed_link_or_nothing_to_open_opens_nothing_and_says_why`
+`verified-by: bravebot_tui::link_clicks::what_is_typed_asks_for_what_a_click_on_that_link_asks_for_in_every_shape_the_link_tests_use`
+`verified-by: bravebot_tui::link_clicks::what_is_typed_is_opened_as_it_was_typed`
+`verified-by: bravebot_tui::link_clicks::a_typed_address_the_opener_would_refuse_opens_nothing_and_says_so`
+`verified-by: bravebot_tui::link_clicks::a_typed_name_is_shown_or_refused_in_the_words_the_click_on_a_path_gets`
+`verified-by: bravebot_tui::link_clicks::a_typed_address_opens_while_a_turn_runs_and_a_typed_name_is_refused`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_open_command_is_still_a_prompt`
+`verified-by: bravebot_tui::app::tab_finishes_edit_after_the_open_command_and_leaves_a_number_alone`
+`verified-by: bravebot_tui::app::edit_typed_while_a_summary_runs_waits_and_asks_for_the_editor_when_it_is_over`
+`verified-by: bravebot_tui::app::edit_with_nothing_to_open_says_what_the_open_command_takes`
+`verified-by: bravebot_tui::app::a_typed_link_waits_behind_a_summary_and_is_opened_when_it_is_over`
+`verified-by: bravebot_tui::app::the_open_command_answers_at_once_while_a_turn_runs`
+`verified-by: bravebot_tui::app::a_number_typed_while_a_turn_runs_starts_the_browser_for_an_address`
+`verified-by: bravebot_tui::app::a_number_typed_while_a_summary_runs_waits_and_shows_the_file_when_it_is_over`
+`verified-by: bravebot_tui::app::another_turn_ends_the_list_a_number_was_read_beside`
+`verified-by: bravebot_tui::app::a_rewind_ends_the_list_a_number_was_read_beside`
+`verified-by: bravebot_tui::app::moving_to_another_directory_ends_the_list_a_number_was_read_beside`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
