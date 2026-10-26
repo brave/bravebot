@@ -69114,7 +69114,8 @@ fn under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request() {
         for (at, (tool, _)) in calls.iter().enumerate() {
             let said = newest_tool_result(turn.results[at].clone());
             assert!(
-                !said.contains("outside the workspace") && !said.contains("refusing to touch"),
+                !said.contains("resolves outside the workspace")
+                    && !said.contains("refusing to touch"),
                 "{label}, {tool} (call {at}): {said}"
             );
         }
