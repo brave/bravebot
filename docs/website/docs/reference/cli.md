@@ -972,14 +972,16 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `leo [channel]` | what `import-leo-creds [channel]` runs |
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
-| `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
+| `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic` or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of the three that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json` |
 | `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
-argument. With one gateway configured it asks for no id.
+argument. With one service offered it asks for no id. Where the machine-level file names the
+gateways, only those are offered, and the list and the refusal of any other id name that file.
 
 `auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
-and the id can be left off when only one is stored. `auth logout chatgpt` forgets the stored ChatGPT
+and the id can be left off when only one is stored. It names the host the key still works at, and
+leaves the settings as they are. `auth logout chatgpt` forgets the stored ChatGPT
 sign-in and ends nothing at OpenAI. In an incognito session the `leo`, `import`, `gateway` and `chatgpt`
 ways are refused, and `bedrock`, `auth status` and every form of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
@@ -1004,7 +1006,11 @@ credential. What the AWS CLI itself printed is never copied, because it can name
 With no way named it
 exits 0 if any sign-in is usable. With a way named it exits 0 only if every sign-in under it is
 usable. Otherwise it prints a `BB1001` line and exits 1, or exits 3 when the configuration could not
-be read. `auth status import` is refused, since an import keeps no sign-in.
+be read. `auth status import` is refused, since an import keeps no sign-in. `auth status gateway`
+asks about each gateway a provider block names and about a service whose key is stored with no block
+naming it, and `auth status gateway openai` asks about that id whether or not a block names it. A
+key stored for `openai`, `openrouter` or `anthropic` with no block naming it is reported as not
+signed in, since no session sends it, and `auth login gateway <id>` records the block.
 
 ## `import-leo-creds`
 

@@ -395,6 +395,19 @@ pub struct Gateway {
 }
 
 impl Gateway {
+    /// An entry that holds no field, which names `id` and nothing else.
+    ///
+    /// All a known id needs to be configured: the endpoint compiled in for it is `endpoint`, and
+    /// the entry names no variable and no key.
+    pub fn bare(id: &str, endpoint: &str) -> Self {
+        Self {
+            id: id.to_string(),
+            endpoint: endpoint.to_string(),
+            entry: Map::new(),
+            key: Key::Named,
+        }
+    }
+
     /// The variable opencode itself reads this id's token from, where one is known.
     pub fn fallback(&self) -> Option<&'static str> {
         provider::known_variable(&self.id)
@@ -2715,6 +2728,24 @@ mod tests {
         assert_eq!(Destination::open(&path).err(), Some(Unwritable::TooLarge));
         home.write("settings.json", "  \n");
         assert!(Destination::open(&path).is_ok(), "an empty file is refused");
+    }
+
+    /// CLI-18: the entry a sign-in records for a known id is `{}` under its id, and states the
+    /// endpoint it was given.
+    #[test]
+    fn a_bare_entry_is_empty_and_names_the_endpoint_it_was_given() {
+        let gateway = Gateway::bare("openai", "https://api.openai.com/v1");
+        assert_eq!(gateway.id, "openai");
+        assert_eq!(gateway.endpoint, "https://api.openai.com/v1");
+        assert!(gateway.entry.is_empty(), "the entry holds a field");
+        assert!(matches!(gateway.key, Key::Named), "the entry names a key");
+
+        let home = Scratch::new("import-destination-bare");
+        let mut absent = Destination::open(&home.path.join("absent.json")).expect("empty");
+        absent.add_gateway(gateway);
+        let text = absent.text().expect("small");
+        let written: Value = serde_json::from_str(text.expose()).expect("json");
+        assert_eq!(written, serde_json::json!({"provider": {"openai": {}}}));
     }
 
     /// SERVERS-2: a request goes in once, beside what the file already requests, and comes out

@@ -18,7 +18,7 @@ Ways to sign in to a model service:
   1. leo      Brave Leo Premium, from a Brave install that subscribes
   2. bedrock  An AWS account, for Amazon Bedrock
   3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-  4. gateway  A key for a gateway a provider block in settings names, typed here and kept by bravebot
+  4. gateway  A key for openrouter, openai, anthropic or a gateway a provider block in settings names, typed here and kept by bravebot
   5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
 Which one? Type its number or its name, or nothing to stop:
 ```
@@ -67,32 +67,63 @@ OpenAI. See [ChatGPT](providers/chatgpt.md).
 
 ## Gateway
 
-An [OpenAI-compatible gateway](providers/openai-compatible.md) such as OpenRouter is a provider
-block in settings, and the block says where requests go. `gateway` stores the key it is sent:
+`gateway` stores an API key for `openrouter`, `openai` or `anthropic`, which bravebot knows the
+endpoints of, or for a gateway a provider block names, such as an
+[OpenAI-compatible gateway](providers/openai-compatible.md). A key for one of the three needs no
+block written first:
 
 ```
 $ bravebot auth login gateway
-Gateways configured:
-  1. openrouter  openrouter.ai
-  2. work        gateway.work.example (a key stored)
-Which one? Type its number or its id, or nothing to stop: 1
+Services a key can be stored for:
+  1. work        gateway.work.example (a key stored)
+  2. openrouter  openrouter.ai
+  3. openai      api.openai.com
+  4. anthropic   api.anthropic.com
+Which one? Type its number or its id, or nothing to stop: 3
 
-Key for openrouter, sent to openrouter.ai (not shown as you type):
-the key for openrouter is stored in /home/you/.bravebot/gateway-keys.json, and sessions started from now on send it to openrouter.ai
+Key for openai, sent to api.openai.com (not shown as you type):
+the key for openai is stored in /home/you/.bravebot/gateway-keys.json, and /home/you/.bravebot/settings.json names openai under provider now, so sessions started from now on send it to api.openai.com
 ```
 
-With one gateway configured, or one named as in `bravebot auth login gateway openrouter`, it asks
-for the key straight away. Nothing appears as the key is typed or pasted. Ctrl-U starts it again,
-and Escape, Ctrl-C, Ctrl-D or Enter on nothing stops without storing anything. A gateway that
-already has a key stored asks before replacing it.
+The list is the gateways your settings name, then each of the three that no block names, each with
+the host its key is sent to. A block with the id of one of the three is listed once, with its own
+host. Where the machine-level file names the gateways, only those are offered, since an entry
+written in your settings would not be read there, and the list and the refusal of any other id name
+that file.
+
+With one service offered, or one named as in `bravebot auth login gateway openai`, it asks for the
+key straight away. Nothing appears as the key is typed or pasted. Ctrl-U starts it again, and
+Escape, Ctrl-C, Ctrl-D or Enter on nothing stops without storing anything. A service that already
+has a key stored asks before replacing it.
 
 The key is kept in `~/.bravebot/gateway-keys.json`, readable only by your account, under the
-block's id. It holds no host, so a key goes only where the block with that id sends requests. A
-variable the block's `env` names wins over a stored key while it is set, and the sign-in says so
-when one is set. A session reads the file when it starts, so one already open keeps the key it had.
+service's id. It holds no host, so a key goes only where the provider block with that id sends
+requests. For one of the three that no block names, the sign-in adds `"provider": {"openai": {}}`
+to `~/.bravebot/settings.json` once the key is stored, so sessions send the key to the host built
+into bravebot. The file is rewritten whole, so its keys come out in order of name and its spacing is
+replaced. A file with a comment in it is refused before the key is asked for, and is never
+rewritten. The entry names no variable, so `OPENAI_API_KEY` in your shell is not read for it: name
+it in the block's `env` to have it used. Nothing is written where a block or the file already names
+the id. A settings file that cannot take the entry, because it is not a settings document, is past
+the size bravebot reads, or names the id as something that is not a provider block, is said before
+the key is asked for, and nothing is stored. A variable the block's `env` names wins over a stored
+key while it is set, and the sign-in says so when one is set. A session reads the files when it
+starts, so one already open keeps what it had.
 
-`bravebot auth logout gateway openrouter` forgets the key. With only one stored the id can be left
-off. Forgetting it here does not revoke it: it works at the gateway until you revoke it there.
+A key stored with no block naming its id is sent by no session. Running the sign-in for that id
+again records the block, whether you replace the key or keep it.
+
+Storing the key does not choose a model. Until one of the service's is named, `bravebot` refuses to
+start with `no model service is configured yet` and a line naming the
+[`model` key](configuration.md#model), because the model in force is still the one the build came
+with. The next step is to name one, as `openai/<model id>` in the `model` key or after `--model`.
+[OpenAI](providers/openai.md) shows the block and the `model` key, and the pages for
+[Anthropic](providers/anthropic.md) and [OpenRouter](providers/openrouter.md) show theirs.
+
+`bravebot auth logout gateway openai` forgets the key. With only one stored the id can be left off.
+Forgetting it here does not revoke it: it works at the service until you revoke it there, and the
+line names the host. Logging out leaves the provider entry in your settings, and `auth status` and
+`doctor` then say that none is needed, until the entry is removed or a key is stored again.
 
 ## Checking a sign-in
 
@@ -101,8 +132,10 @@ bravebot auth status leo
 ```
 
 prints whether Leo is signed in and usable, and exits 0 only if it is, so a script can test it.
-`bedrock`, `gateway [id]` and `chatgpt` ask about the others. With no way named it asks about all of them
-and exits 0 if any is usable. See [the reference](../reference/cli.md#auth).
+`bedrock`, `gateway [id]` and `chatgpt` ask about the others. `gateway openai` says whether a
+session would send a key for `openai`, and a key stored for it with no block naming it is reported
+as not signed in. With no way named it asks about all of them and exits 0 if any is usable. See [the
+reference](../reference/cli.md#auth).
 
 ## In an incognito session
 

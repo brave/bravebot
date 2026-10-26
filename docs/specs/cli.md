@@ -961,13 +961,14 @@ each by a number and by the word that names it:
 - `leo` imports a Brave Leo Premium subscription, as `import-leo-creds` does.
 - `bedrock` signs in to every AWS account the configuration names for Amazon Bedrock.
 - `import` reads model services out of other tools, as `import-providers` does.
-- `gateway` stores a key for a gateway a provider block names.
+- `gateway` stores a key for a service this program knows an endpoint for, or for a gateway a
+  provider block names.
 - `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 
-A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints
-for the stored subscription. For Bedrock it is shown where every account named has a usable
-session. For a gateway it is the ids keys are stored for. For ChatGPT it is that a sign-in is stored. The credential
-itself is never printed.
+A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints for
+the stored subscription. For Bedrock it is shown where every account named has a usable session. For
+a gateway it is the ids keys are stored for, whether or not a block names them. For ChatGPT it is
+that a sign-in is stored. The credential itself is never printed.
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
@@ -1003,21 +1004,39 @@ configuration names no account, it exits with the configuration status and names
 the tier variables. Where the name is set to something other than 1, it says that turns Bedrock off
 instead, and names the machine-level file where that file is what sets it.
 
-`bravebot auth login gateway [id]` stores a key for the gateway whose provider block has that id.
-Bedrock blocks are not gateways here. With no id, one configured gateway is used, and several are
-listed with the host each sends to, to be picked by number or id. Everything that needs no answer is
-checked before the key is asked for, and each refusal writes nothing:
+`bravebot auth login gateway [id]` stores a key for a service this program knows an endpoint for,
+which are `openrouter`, `openai` and `anthropic`, or for the gateway whose provider block has that
+id, so a person holding a key for a known service writes no block first. Bedrock blocks are not
+gateways here. What is offered is the gateways the configuration names, then each known service no
+block names, each with the host its key is sent to: the one its block states, and for a known
+service no block names the one compiled in. A block with the id of a known service is listed once,
+with its own host. Where the machine-level layer names the gateways only those are offered, since it
+replaces the blocks a person wrote and an entry recorded in the person's file would not be read. The
+heading of the list and the refusal of an id not offered then say that the machine-level file names
+the gateways for every user of the machine, and name that file. Where that file says nothing about
+gateways they read as they do without it, and where it names none nothing is offered and the refusal
+is the configuration status naming the file. A configuration that lacks only the Brave credentials
+names no gateway, and the known services are offered under it as under any other, but `auth status`
+reads what a session reads, so in that build it reports the configuration failure [CLI-23](#CLI-23)
+describes. With no id, one service offered is used, and several are listed to be picked by number or
+id. Everything that needs no answer is checked before the key is asked for, and each refusal writes
+nothing:
 
 - an incognito session, with the failure status;
-- no gateway configured, with the configuration status;
-- an id no block has, naming the ids that are configured and not the word given, with the argument
+- no gateway offered, which is where the machine-level layer names none, with the configuration
   status;
+- an id not offered, naming the ids that are and not the word given, with the argument status;
 - no terminal on stdin and on stderr, with the argument status;
-- a file of keys that cannot be read, which is left as it is, with the failure status.
+- a file of keys that cannot be read, which is left as it is, with the failure status;
+- for a known service no block names, a settings file the entry below cannot be added to, with the
+  failure status: the file does not hold a settings document, it would be past the size bravebot
+  reads with the entry in it, or it has a `provider` that is not a block of entries or an entry for
+  the id that configures no service. This is checked once the id is known, before the question about
+  replacing a key.
 
 A word after the id is refused with the argument status and is not repeated, and an option is named
 without what follows its `=`, since either is most likely the key
-([CRED-24](credential-protection.md#CRED-24)). A key already stored for the gateway is replaced only
+([CRED-24](credential-protection.md#CRED-24)). A key already stored for the service is replaced only
 on a yes. Before the key is asked for, the command names a variable in the block's `env` that is
 set, since that is sent instead ([BACKEND-16](backends.md#BACKEND-16)). The key is typed with
 nothing drawn: Enter takes it, and Escape, Ctrl-C, Ctrl-D or Enter on nothing stores nothing and
@@ -1025,6 +1044,22 @@ exits successfully. The file is read again once the key is typed, so a key anoth
 while this one waited is not written back. It is written to `gateway-keys.json` in the state
 directory, created 0600 on Unix and granted to this account alone on Windows, beside the file,
 flushed to disk and renamed over it. The command names the host the key is sent to.
+
+**The entry.** A key stored for an id no block names configures nothing, so once the key for a known
+service no block names is stored the command adds `"provider": {"<id>": {}}` to the person's own
+`settings.json`, rewriting the file as Known costs says, and says it did. The entry holds no field:
+the service is reached at the host compiled in, and the entry names no variable, so the variable the
+service's own tools read, such as `OPENAI_API_KEY`, is not read for it. Nothing is written where a
+block names the id or the file does. The entry is recorded once the key typed is stored, and for a
+key already stored when the question about replacing it is answered no, or yes and then nothing is
+typed. No session sends such a key until the entry is there, which is also the state of one stored
+for an id whose block was taken out. Nothing is recorded for an id no key is stored for, and a
+command that ends before it gets that far records none: a key that cannot be read from the terminal,
+and a file of keys that cannot be read or written, each end with the failure status and no entry.
+Where the entry cannot be recorded once the key is stored, because the file changed while the key
+was typed or now names the id as something that configures no service, the key stays stored, the
+command names the entry to add and the file, and exits with the failure status. A key is never
+repeated, in that message or any other.
 
 In an incognito session the Leo and import ways are refused by the checks `import-leo-creds` and
 `import-providers` make, with their words. The Bedrock way is not refused. It records nothing, and
@@ -1035,8 +1070,11 @@ is allowed in an incognito session. `bravebot auth logout chatgpt` forgets the s
 that id, or the only one stored where none is named, and is allowed in an incognito session too.
 With several stored and none named, or an id with none stored, it is refused with the argument
 status and names the ids that hold one. A word after the id is refused with the argument status and
-is not repeated, as `login` does not repeat it ([CRED-24](credential-protection.md#CRED-24)). The file is removed with its last key. It says the key still
-works at the host its block names until it is revoked there. `auth logout bedrock` and
+is not repeated, as `login` does not repeat it ([CRED-24](credential-protection.md#CRED-24)). The
+file is removed with its last key. It says the key still works at the host its block names, or for a
+known service no block names the host compiled in for it, until it is revoked there. The entry the
+sign-in recorded stays in settings, since forgetting a key changes no setting. `auth logout bedrock`
+and
 `auth logout import` are refused and say what to run instead, since neither way keeps a credential
 of its own.
 
@@ -1055,12 +1093,22 @@ machine with Brave as one more device. A repeated Bedrock sign-in leaves a good 
 a repeated import says when it has nothing new, so neither is asked about. A stored gateway key is
 confirmed before it is replaced, because the file is rewritten and nothing else holds the old one.
 
-A gateway key is kept out of `settings.json` because a settings file is one people paste into issues
-and copy between machines, and the program rewrites it for reasons that have nothing to do with a
-credential. It is typed rather than passed as an argument because an argument is readable by other
-programs on the machine and kept in the shell's history. The file holds an id and a key and no host,
-so the block decides where the key goes, and a file of keys that will not parse is refused rather
-than read as empty, because the next write would make it empty.
+A known service needs no block written first because the endpoint is compiled in
+([BACKEND-17](backends.md#BACKEND-17)), so the block would say nothing the program does not already
+know. The entry is recorded in the person's own file, as the Bedrock switch is, because a key alone
+configures nothing: the services that exist are in a file the person edits, and the machine-level
+layer's list of gateways is the whole list where there is one, which is why no known service is
+offered under it. The entry holds no field because a variable it named would be removed from the
+environment of every program a session starts, and storing a key asks for no change to the variables
+a person exported for other tools. It is checked before the key is typed because a key stored and
+sent by no session is a sign-in that did nothing, and it is recorded for a key already stored for
+the same reason: otherwise the key stays stored and no session sends it. A gateway key is kept out
+of `settings.json` because a settings file is one people paste into issues and copy between
+machines, and the program rewrites it for reasons that have nothing to do with a credential. It is
+typed rather than passed as an argument because an argument is readable by other programs on the
+machine and kept in the shell's history. The file holds an id and a key and no host, so the block
+decides where the key goes, and a file of keys that will not parse is refused rather than read as
+empty, because the next write would make it empty.
 
 Leo, the import and the gateway key are refused in an incognito session for the reason in
 [INCOG-7](incognito.md#INCOG-7): each writes to the directory this program owns. The AWS session is
@@ -1093,6 +1141,20 @@ can lose one, since each rewrites the file. The Bedrock way records the switch a
 or `AWS_PROFILE`, so a region exported only for the sign-in has to be exported for a session too.
 The list asks the AWS CLI about each account before it is shown, which takes most of a second per
 account whose session has not been checked yet.
+Recording the entry rewrites the settings file whole, as the JSON library prints it. Strings,
+booleans, nulls, the order of an array and integers that fit in 64 bits are kept. A number written
+as a fraction, with an exponent or past 64 bits is rewritten as the nearest 64-bit float (`1e3` as
+`1000.0`, `1.50` as `1.5`, `-0` as `-0.0`), the keys of every object are put in order of name, a key
+written twice keeps its last value, and the spacing becomes two-space indentation. The file's mode
+becomes the private one every file in the state directory has, 0600 on Unix, whatever it was. A file
+with a comment or a trailing comma is not a settings document here, so it is refused before the key
+is asked for and never rewritten. A key is stored before the entry is recorded, so a failure to
+record leaves a key that no session sends until the entry is added by hand. Forgetting a key leaves
+the entry the sign-in recorded, and an entry that names no variable, with no key stored, reads as
+the person saying the service wants no credential: `auth status` and `doctor` say none is needed,
+and a session sends no key until one is stored again. The Known costs of
+[backends.md](backends.md#known-costs) record that reading, under a gateway that wants a credential
+and was told of none.
 
 `verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
 `verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`
@@ -1105,9 +1167,29 @@ account whose session has not been checked yet.
 `verified-by: bravebot_cli::auth::one_gateway_or_a_named_one_is_not_asked_about`
 `verified-by: bravebot_cli::auth::a_stored_key_is_replaced_only_when_asked_to`
 `verified-by: bravebot_cli::auth::the_key_forgotten_is_the_one_named_or_the_only_one`
+`verified-by: bravebot_cli::auth::a_forgotten_key_names_the_host_it_still_works_at`
+`verified-by: bravebot_cli::running::auth_logout_gateway_forgets_a_key_stored_for_a_known_service_no_block_names`
 `verified-by: bravebot_cli::auth::a_set_variable_is_named_as_the_one_sent_instead`
 `verified-by: bravebot_cli::auth::stored_keys_are_written_private_and_read_back`
 `verified-by: bravebot_cli::auth::the_padding_counts_an_id_in_characters`
+`verified-by: bravebot_cli::auth::the_gateway_line_names_every_service_bravebot_knows`
+`verified-by: bravebot_cli::auth::the_gateway_line_shows_a_key_stored_for_a_service_no_block_names`
+`verified-by: bravebot_cli::auth::the_configured_gateways_are_listed_first_and_a_known_id_is_listed_once_with_its_blocks_host`
+`verified-by: bravebot_cli::auth::a_known_service_no_block_names_is_listed_and_its_key_is_stored_and_its_block_recorded`
+`verified-by: bravebot_cli::auth::a_block_with_the_same_id_keeps_its_host_and_nothing_is_recorded`
+`verified-by: bravebot_cli::auth::a_file_that_names_the_id_as_no_service_is_refused_before_the_key_is_asked_for`
+`verified-by: bravebot_cli::auth::an_unwritable_settings_file_is_refused_before_the_key_is_asked_for`
+`verified-by: bravebot_cli::auth::no_known_service_is_offered_where_the_machine_level_layer_names_the_gateways`
+`verified-by: bravebot_cli::auth::a_stored_key_no_block_names_gets_its_block_whichever_way_replacing_it_is_answered`
+`verified-by: bravebot_cli::auth::a_block_that_cannot_be_recorded_after_the_key_leaves_it_stored_and_names_the_entry`
+`verified-by: bravebot_cli::auth::a_word_naming_no_offered_service_is_not_repeated_and_no_terminal_writes_nothing`
+`verified-by: bravebot_cli::auth::a_configuration_lacking_only_credentials_names_no_gateway_and_another_fault_is_refused`
+`verified-by: bravebot_cli::auth::a_file_that_cannot_take_the_entry_is_refused_before_replacing_a_key_is_asked_about`
+`verified-by: bravebot_cli::auth::a_block_that_cannot_be_recorded_for_a_key_already_stored_fails_and_names_the_entry`
+`verified-by: bravebot_cli::auth::a_configured_gateway_with_a_kept_key_ends_well_and_records_nothing`
+`verified-by: bravebot_cli::auth::a_variable_the_block_names_is_said_to_win_before_the_key_is_typed`
+`verified-by: bravebot_cli::auth::the_list_names_the_machine_level_file_where_it_names_the_gateways`
+`verified-by: bravebot_config::import::a_bare_entry_is_empty_and_names_the_endpoint_it_was_given`
 `verified-by: bravebot_config::keys::a_stored_key_is_read_back_under_its_id`
 `verified-by: bravebot_config::keys::a_file_that_is_not_one_of_keys_is_refused`
 `verified-by: bravebot_config::keys::no_file_is_no_keys`
@@ -1303,7 +1385,12 @@ prints one line per sign-in: `leo`, `bedrock` for the default AWS profile or `be
   ([PREM-8](premium-credentials.md#PREM-8)); the AWS CLI missing or the profile unknown; a file of
   gateway keys that cannot be read; a ChatGPT sign-in file that cannot be read or is another version's.
 
-A gateway whose block names nowhere for a key to live needs none and is signed in. Leo needs the
+A gateway whose block names nowhere for a key to live needs none and is signed in. A known service
+no block names is asked about where it is named, and where no id is named, where a key is stored for
+it. It is not signed in, since a session sends it nothing: the line says that no key is stored for
+it, or that a key is stored and no block names it, and names the command that signs in, which
+records the block ([CLI-18](#CLI-18)). With no id and nothing to ask about, the one line says that
+no gateway key is stored. Leo needs the
 configuration only to know the endpoint, so nothing imported is reported without it. A configuration
 that cannot be read is reported as unusable on the lines it blocks.
 
@@ -1314,9 +1401,11 @@ configuration status where a configuration could not be read, and the failure st
 ([CLI-6](#CLI-6)) where not, after the lines, saying which. `import` is refused with the argument
 status, since it keeps no sign-in. So are an unknown way, an option, and a word after the way, or
 after the id; a word after a gateway's id is not repeated, as `login` does not repeat it, since it
-is most likely the key ([CRED-24](credential-protection.md#CRED-24)). An id no block has is refused naming the ids configured and not the word given
-([CRED-24](credential-protection.md#CRED-24)); with no gateway configured it is the configuration
-status.
+is most likely the key ([CRED-24](credential-protection.md#CRED-24)). An id the sign-in does not
+offer ([CLI-18](#CLI-18)) is refused naming the ids it does and not the word given
+([CRED-24](credential-protection.md#CRED-24)), and where the machine-level layer names the gateways
+the refusal names that file as what decides them; where that layer names none it is the
+configuration status.
 
 It is allowed in an incognito session, since it writes nothing.
 
@@ -1338,6 +1427,10 @@ start and one that wants to know whether a particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
+`verified-by: bravebot_cli::running::auth_status_gateway_asks_about_a_known_service_no_block_names`
+`verified-by: bravebot_cli::auth::a_known_service_no_block_names_is_not_signed_in_whether_or_not_a_key_is_stored`
+`verified-by: bravebot_cli::auth::without_a_name_a_known_service_is_asked_about_only_where_a_key_is_stored_for_it`
+`verified-by: bravebot_cli::auth::status_refuses_an_id_the_sign_in_does_not_offer_and_names_the_ids_it_does`
 `verified-by: bravebot_cli::running::auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it`
 `verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable`

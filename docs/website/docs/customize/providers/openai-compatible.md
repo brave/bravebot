@@ -125,10 +125,12 @@ bravebot auth login gateway openrouter
 ```
 
 asks for the key with nothing shown as you type it, and keeps it in `~/.bravebot/gateway-keys.json`,
-readable only by your account, under the block's id. [Signing in](../signing-in.md#gateway) has
-the details. `options.apiKey` is read too, because it is opencode's field. Where more than one is
-present a variable wins, then the stored key, then `options.apiKey`. A long-lived token in a
-settings file is a token in a file people paste into issues.
+readable only by your account, under the block's id. `openrouter`, `openai` and `anthropic` need no
+block first: for one that no block names, the sign-in adds an entry that holds no field. [Signing
+in](../signing-in.md#gateway) has the details. `options.apiKey` is read too, because it is
+opencode's field. Where more than one is present a variable wins, then the stored key, then
+`options.apiKey`. A long-lived token in a settings file is a token in a file people paste into
+issues.
 
 A variable is read at the point a request needs it rather than once at startup, so exporting a new
 one takes effect in a session already open. A stored key is read when a session starts, so one

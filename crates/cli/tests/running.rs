@@ -8532,23 +8532,39 @@ fn gateway_keys(scratch: &Scratch) -> PathBuf {
     scratch.path.join(".bravebot").join("gateway-keys.json")
 }
 
+/// The ids `auth login gateway` offers where `TWO_GATEWAYS` are configured: those, then each known
+/// service no block of them names, read from the table a session reaches them by.
+fn the_ids_offered_beside_two_gateways() -> String {
+    let known: Vec<&str> = bravebot_config::provider::known_ids()
+        .filter(|id| *id != "openrouter")
+        .collect();
+    format!("openrouter, work, {}", known.join(", "))
+}
+
 /// CLI-18 and INCOG-7: every refusal the gateway way can make without asking anything is made
-/// before the key is asked for, and none of them writes a file of keys. A word that names no
-/// gateway, a word after the id and what follows `--key=` are not repeated, since each is most
-/// likely the key, typed where somebody took it for the argument.
+/// before the key is asked for, and none of them writes a file of keys or a settings file. A word
+/// that names no gateway, a word after the id, which may be of a known service no block names, and
+/// what follows `--key=` are not repeated, since each is most likely the key, typed where somebody
+/// took it for the argument.
 #[test]
 fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
     let scratch = Scratch::new("cli-running-auth-gateway-refused").with_settings(TWO_GATEWAYS);
     let key_as_a_flag = format!("--key={A_STORED_KEY}");
+    let offered = the_ids_offered_beside_two_gateways();
 
     for (arguments, code, said_this) in [
         (
             &["auth", "login", "gateway", A_STORED_KEY][..],
             2,
-            "openrouter, work",
+            offered.as_str(),
         ),
         (
             &["auth", "login", "gateway", "work", A_STORED_KEY][..],
+            2,
+            "never a command-line argument",
+        ),
+        (
+            &["auth", "login", "gateway", "openai", A_STORED_KEY][..],
             2,
             "never a command-line argument",
         ),
@@ -8565,7 +8581,17 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
             "needs a terminal",
         ),
         (
+            &["auth", "login", "gateway", "openai"][..],
+            2,
+            "needs a terminal",
+        ),
+        (
             &["--incognito", "auth", "login", "gateway", "work"][..],
+            1,
+            "incognito",
+        ),
+        (
+            &["--incognito", "auth", "login", "gateway", "openai"][..],
             1,
             "incognito",
         ),
@@ -8585,16 +8611,44 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
         !gateway_keys(&scratch).exists(),
         "a refused sign-in stored a key"
     );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings"),
+        TWO_GATEWAYS,
+        "a refused sign-in recorded a block"
+    );
 
+    // A known service needs no block, so with none written the refusal is the missing terminal and
+    // not a missing gateway.
     let unconfigured = Scratch::new("cli-running-auth-gateway-none");
+    for arguments in [
+        &["auth", "login", "gateway"][..],
+        &["auth", "login", "gateway", "openai"][..],
+    ] {
+        let output = bravebot(&unconfigured.path, NOTHING_CONFIGURED, arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(
+            stderr.contains("needs a terminal"),
+            "{arguments:?}: {stderr}"
+        );
+    }
+    // A build with no Brave credentials is no reason to turn it away either: a person who holds a key
+    // and nothing else is the one it is for.
     let output = bravebot(
         &unconfigured.path,
-        NOTHING_CONFIGURED,
-        &["auth", "login", "gateway"],
+        &[],
+        &["auth", "login", "gateway", "openai"],
     );
-    let (_, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert!(stderr.contains("provider block"), "{stderr}");
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("needs a terminal"), "{stderr}");
+    assert!(!gateway_keys(&unconfigured).exists());
+    assert!(
+        !unconfigured.settings().exists(),
+        "a refused sign-in wrote settings"
+    );
 }
 
 /// CLI-18 and INCOG-7: logout forgets the key named and leaves the rest, says the key is still
@@ -8646,6 +8700,52 @@ fn auth_logout_gateway_forgets_the_key_named_in_an_incognito_session() {
 
     let (code, _, stderr) = logout(&[]);
     assert_eq!(code, Some(2), "{stderr}");
+}
+
+/// CLI-18: a key stored for a known service no block names is forgotten, by name or as the only one
+/// stored, and the line names the host compiled in for it, which it still works at until it is
+/// revoked there. The one left where several are stored is the one not named, and the entry the
+/// sign-in recorded stays in settings.
+#[test]
+fn auth_logout_gateway_forgets_a_key_stored_for_a_known_service_no_block_names() {
+    let recorded = r#"{"provider": {"anthropic": {}}}"#;
+    let scratch = Scratch::new("cli-running-auth-gateway-logout-known")
+        .with_settings(recorded)
+        .with_state("gateway-keys.json", &stored_keys(&["openai", "anthropic"]));
+    let keys = gateway_keys(&scratch);
+    let logout = |more: &[&str]| {
+        let mut arguments = vec!["auth", "logout", "gateway"];
+        arguments.extend(more);
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{more:?} printed the key: {stdout}{stderr}"
+        );
+        (output.status.code(), stdout, stderr)
+    };
+
+    let (code, stdout, stderr) = logout(&["openai"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stdout.contains("api.openai.com") && !stdout.contains("api.anthropic.com"),
+        "{stdout}"
+    );
+    let left = std::fs::read_to_string(&keys).expect("the key left");
+    assert!(
+        left.contains("anthropic") && !left.contains("openai"),
+        "{left}"
+    );
+
+    let (code, stdout, stderr) = logout(&[]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("api.anthropic.com"), "{stdout}");
+    assert!(!keys.exists(), "the last key forgotten left a file");
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings"),
+        recorded,
+        "forgetting a key changed the settings"
+    );
 }
 
 /// A batch imported for `environment`, holding one spent and one unspent credential. The tokens are
@@ -8862,8 +8962,9 @@ fn auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable() {
     );
 }
 
-/// CLI-23: a word naming no gateway is refused without being repeated, since it may be a key, and
-/// so is an id where none is configured.
+/// CLI-23: a word naming no gateway and no known service is refused without being repeated, since
+/// it may be a key, and names the ids that can be asked about. With no key stored and no block
+/// written there is nothing signed in, and the one line says how to sign in.
 #[test]
 fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     let scratch =
@@ -8872,16 +8973,22 @@ fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     let (code, stdout, stderr) =
         status_of(&scratch, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
     assert_eq!(code, Some(2), "{stdout}{stderr}");
-    assert!(stderr.contains("openrouter, work"), "{stderr}");
+    assert!(
+        stderr.contains(&the_ids_offered_beside_two_gateways()),
+        "{stderr}"
+    );
     assert_eq!(stdout, "");
 
     let bare = Scratch::new("cli-running-auth-status-no-gateways");
-    let (code, _, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", "work"]);
-    assert_eq!(code, Some(3), "{stderr}");
+    let known: Vec<&str> = bravebot_config::provider::known_ids().collect();
+    let (code, stdout, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains(&known.join(", ")), "{stderr}");
+    assert_eq!(stdout, "");
     let (code, stdout, _) = status_of(&bare, NOTHING_CONFIGURED, &["gateway"]);
     assert_eq!(code, Some(1), "{stdout}");
     assert!(
-        stdout.contains("gateway: not signed in: no gateway is configured"),
+        stdout.contains("gateway: not signed in: no gateway key is stored"),
         "{stdout}"
     );
 }
@@ -8912,6 +9019,43 @@ fn auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id() {
         std::fs::read_to_string(gateway_keys(&scratch)).expect("the keys"),
         stored_keys(&["work"]),
         "a refused logout rewrote the keys"
+    );
+}
+
+/// CLI-23: a known service no block names is asked about by name. With no key it is not signed in
+/// and the line says how to sign in. With a key stored and no block it is not signed in either,
+/// since a turn sends none, and the line says the block is what is missing. Once a block names it,
+/// as the sign-in records one, the same key is found and the service is signed in.
+#[test]
+fn auth_status_gateway_asks_about_a_known_service_no_block_names() {
+    let scratch = Scratch::new("cli-running-auth-status-known");
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openai"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openai: not signed in: no key is stored for openai")
+            && stdout.contains("bravebot auth login gateway openai"),
+        "{stdout}"
+    );
+
+    let scratch = scratch.with_state("gateway-keys.json", &stored_keys(&["openai"]));
+    for arguments in [&["gateway", "openai"][..], &["gateway"][..]] {
+        let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, arguments);
+        assert_eq!(code, Some(1), "{arguments:?}: {stdout}{stderr}");
+        assert!(
+            stdout.contains("gateway openai: not signed in: a key is stored for openai")
+                && stdout.contains("no provider block names it"),
+            "{arguments:?}: {stdout}"
+        );
+        assert_eq!(stdout.lines().count(), 1, "{arguments:?}: {stdout}");
+    }
+
+    let scratch = scratch.with_settings(r#"{"provider": {"openai": {}}}"#);
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openai"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "gateway openai: signed in: stored by bravebot auth login gateway (never printed)\n"
     );
 }
 

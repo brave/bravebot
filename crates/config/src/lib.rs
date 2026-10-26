@@ -3835,6 +3835,118 @@ mod tests {
         );
     }
 
+    /// BACKEND-16 and BACKEND-17: an entry that holds no field under a known id, which is what the
+    /// sign-in records, reaches the host compiled in for the id and is sent the key stored for it,
+    /// and a key stored for a known id that no entry names configures nothing. The variable the id's
+    /// own service reads is not consulted, since the entry names none, so an exported one does not
+    /// stand in for the key.
+    #[test]
+    fn an_entry_that_names_nothing_under_a_known_id_is_sent_the_stored_key_and_no_variable() {
+        let mut stored = keys::Keys::default();
+        stored.insert("openai", Secret::new("placeholder-stored-key"));
+        let exported =
+            |name: &str| (name == "OPENAI_API_KEY").then(|| "placeholder-exported".to_string());
+
+        let recorded = Settings::parse(r#"{"provider": {"openai": {}}}"#);
+        let config = Config::from_sources(
+            &recorded,
+            &Managed::default(),
+            &stored,
+            exported,
+            complete_env,
+        )
+        .expect("configured");
+        let [openai] = config.providers.as_slice() else {
+            panic!("expected one provider: {:?}", config.providers);
+        };
+        assert_eq!(openai.base_url, "https://api.openai.com/v1");
+        assert_eq!(openai.host(), "api.openai.com");
+        let (credential, source) = openai.credential_and_source(exported);
+        match credential {
+            provider::Credential::Token(token) => {
+                assert_eq!(token.expose(), "placeholder-stored-key");
+            }
+            provider::Credential::Absent | provider::Credential::NotNeeded => {
+                panic!("the stored key was not the credential")
+            }
+        }
+        assert_eq!(source, Some(provider::Source::Stored));
+
+        // No entry names the id: nothing is configured, and the stored key goes nowhere.
+        let unnamed = Settings::parse("{}");
+        let config = Config::from_sources(
+            &unnamed,
+            &Managed::default(),
+            &stored,
+            exported,
+            complete_env,
+        )
+        .expect("configured");
+        assert!(config.providers.is_empty(), "{:?}", config.providers);
+    }
+
+    /// BACKEND-16 and BACKEND-17: the key stored for a known id reaches the host compiled in for it
+    /// in the header its protocol uses, which is a bearer for the services that speak chat
+    /// completions and `x-api-key` for Anthropic's Messages API, and the credential found is the
+    /// stored one for each.
+    #[test]
+    fn a_known_id_recorded_as_an_empty_entry_is_sent_its_key_in_the_header_its_protocol_uses() {
+        let headers = [
+            (
+                "openrouter",
+                "authorization",
+                "Bearer placeholder-stored-key",
+            ),
+            ("openai", "authorization", "Bearer placeholder-stored-key"),
+            ("anthropic", "x-api-key", "placeholder-stored-key"),
+        ];
+        let ids: Vec<&str> = provider::known_ids().collect();
+        assert_eq!(
+            ids,
+            headers.map(|(id, _, _)| id),
+            "a known id has no row here, or one here is not known"
+        );
+        let mut stored = keys::Keys::default();
+        let mut entries = Vec::new();
+        for (id, _, _) in headers {
+            stored.insert(id, Secret::new("placeholder-stored-key"));
+            entries.push(format!(r#""{id}": {{}}"#));
+        }
+        let settings = Settings::parse(&format!(r#"{{"provider": {{{}}}}}"#, entries.join(", ")));
+        let config = Config::from_sources(
+            &settings,
+            &Managed::default(),
+            &stored,
+            |_| None,
+            complete_env,
+        )
+        .expect("configured");
+
+        for (id, header, value) in headers {
+            let found = config
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .unwrap_or_else(|| panic!("{id} is not configured"));
+            assert_eq!(
+                Some(found.base_url.as_str()),
+                provider::known_endpoint(id),
+                "{id}"
+            );
+            let (credential, source) = found.credential_and_source(|_| None);
+            let token = match credential {
+                provider::Credential::Token(token) => token,
+                _ => panic!("{id}: the stored key is not the credential"),
+            };
+            assert_eq!(source, Some(provider::Source::Stored), "{id}");
+            assert_eq!(
+                found.credential_header(token.expose()),
+                (header, value.to_string()),
+                "{id}"
+            );
+        }
+    }
+
     /// BACKEND-54: a block naming no `env` and no `apiKey` still names a credential once a key is
     /// stored for its id, and the header that credential goes in is refused the same way it would
     /// be had the block named a variable. `Provider::one` cannot know this on its own, since

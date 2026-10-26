@@ -1093,7 +1093,8 @@ auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+# The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
+auth-way-gateway = A key for { $services } or a gateway a provider block in settings names, typed here and kept by bravebot
 auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
@@ -1152,20 +1153,35 @@ auth-gateway-extra-word =
     { $command } takes an id and nothing after it: a word there is not repeated, since it may be a key
 auth-gateway-not-while-incognito =
     an incognito session writes nothing to disk, and storing a key is a write: run bravebot auth login gateway without --incognito
+# The path is the machine-level settings file an administrator writes, which names no gateway.
 auth-gateway-none-configured =
-    no gateway is configured: add a provider block to settings.json, or run bravebot auth login import, then store its key here
-auth-gateway-not-configured = that is not the id of a provider block; the gateways configured are { $ids }
+    { $path } names the gateways for every user of this machine and names none, so there is no gateway to store a key for
+# The ids are the ones a key can be stored for: the gateways configured, then the services bravebot
+# knows that no provider block names.
+auth-gateway-not-configured = that is not the id of a gateway a key can be stored for; they are { $ids }
+# As auth-gateway-not-configured, where the machine-level settings file names the gateways, so the
+# services bravebot knows are not offered. The path is that file.
+auth-gateway-not-configured-managed =
+    that is not the id of one of the gateways { $path } names for every user of this machine, which are the only ones a key can be stored for; they are { $ids }
 auth-gateway-needs-a-terminal =
     a gateway key is typed at a terminal with nothing drawn, so bravebot auth login gateway needs a terminal
 auth-gateway-no-home = there is no home directory to store the key in
 auth-gateway-keys-unreadable =
     { $path } is not a file of keys bravebot wrote, so it was left as it is and nothing was changed
-auth-gateways-heading = Gateways configured:
+auth-gateways-heading = Services a key can be stored for:
+# As auth-gateways-heading, where the machine-level settings file names the gateways. The path is
+# that file.
+auth-gateways-heading-managed =
+    The gateways { $path } names for every user of this machine, which are the only ones a key can be stored for:
 # Beside a gateway in the list under auth-gateways-heading.
 auth-gateway-key-stored = a key stored
 auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
 auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
 auth-gateway-key-held = A key is already stored for { $id }.
+# Said where no provider block names the id, so no session sends the key. Answering no keeps the
+# key and has the block recorded.
+auth-gateway-key-held-unrecorded =
+    A key is already stored for { $id }, and no provider block names it, so no session sends it. Answering no keeps it and records the block in settings.
 auth-gateway-replace = Replace it?
 # Asked with echo off, so nothing appears as the key is typed or pasted.
 auth-gateway-key-question = Key for { $id }, sent to { $host } (not shown as you type):
@@ -1174,6 +1190,25 @@ auth-gateway-not-read = the key could not be read from the terminal: { $error }
 auth-gateway-not-stored = the key was not stored: { $path }: { $error }
 auth-gateway-stored =
     the key for { $id } is stored in { $path }, and sessions started from now on send it to { $host }
+# Said where no provider block named the id, once the block is recorded for a key already stored.
+# The file is the person's own settings file, and the host is the one compiled in for the id.
+auth-gateway-recorded =
+    { $file } names { $id } under provider now, so sessions started from now on send the key stored for it to { $host }
+# Said where no provider block named the id, once its key is stored and the block recorded.
+auth-gateway-stored-and-recorded =
+    the key for { $id } is stored in { $path }, and { $file } names { $id } under provider now, so sessions started from now on send it to { $host }
+# Said before the key is asked for, where a block naming the id would have to be recorded and the
+# settings file cannot take one. The problem is one sentence about that file.
+auth-gateway-cannot-record =
+    a key for { $id } is sent only once a provider block names { $id }, and none can be recorded, so no key was asked for: { $problem }
+# Said once the key is stored and the block naming its id could not be recorded. The entry is the
+# text to add under provider by hand, and the problem is one sentence about the file.
+auth-gateway-not-recorded =
+    the key for { $id } is stored, and no session sends it until a provider block names { $id }: add { $entry } to { $file } ({ $problem })
+# Where provider holds something that is not a block of entries, or an entry for the id that
+# configures no service.
+auth-gateway-entry-not-a-service =
+    { $file } has a provider that is not a block of entries, or an entry for { $id } that configures no service
 # The variable is one the provider block's env names.
 auth-gateway-variable-wins =
     { $variable } is set, and while it is, a session sends its value instead of the stored key
@@ -1197,6 +1232,12 @@ auth-status-not-all-usable = a sign-in asked about is not usable
 auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway or chatgpt
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+# Said of a gateway when no key is stored for any service and no provider block names a gateway.
+auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
+# The id is a service bravebot knows that no provider block names, so no session sends a key to it.
+auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
+auth-status-gateway-unrecorded =
+    a key is stored for { $id } and no provider block names it, so no session sends it; run bravebot auth login gateway { $id } to record the block
 # The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is
 # replaced when it is next used, so a past instant is still signed in.
 auth-status-chatgpt-expires = the access token expires { $expires }
