@@ -512,7 +512,7 @@ mod tests {
         allowed: u32,
         /// The pause the driver asked this client for, per wait.
         paused: std::cell::RefCell<Vec<Duration>>,
-        /// How many failures have been repaired.
+        /// `mend` repairs only the first rejection, so a second repair is told from the first.
         mended: u32,
     }
 
