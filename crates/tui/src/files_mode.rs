@@ -602,19 +602,19 @@ pub fn rows(
     body.push(Line::from(Span::styled("─".repeat(width), dim())));
     let selected = state.selected.min(files.len().saturating_sub(1));
     if let Some(file) = files.get(selected) {
+        let count = format!("  {}", t!(files_edit_count, count = file.edits.len()));
+        // The row begins with a space, and the count is drawn whole in every language: the path
+        // is cut to what it leaves.
         let name = crate::panel::ending(
             &bravebot_agent::confirm::shown_name(&file.path),
-            width.saturating_sub(2 + 12),
+            width.saturating_sub(1 + crate::wrap::display_width(&count)),
         );
         body.push(Line::from(vec![
             Span::styled(
                 format!(" {name}"),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("  {}", t!(files_edit_count, count = file.edits.len())),
-                dim(),
-            ),
+            Span::styled(count, dim()),
         ]));
         let (edits, headers) = edit_rows(file, width);
         let first = state
