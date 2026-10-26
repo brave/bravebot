@@ -1034,7 +1034,8 @@ is allowed in an incognito session. `bravebot auth logout chatgpt` forgets the s
 ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)) and is allowed in one too. `bravebot auth logout gateway [id]` forgets the key stored for
 that id, or the only one stored where none is named, and is allowed in an incognito session too.
 With several stored and none named, or an id with none stored, it is refused with the argument
-status and names the ids that hold one. The file is removed with its last key. It says the key still
+status and names the ids that hold one. A word after the id is refused with the argument status and
+is not repeated, as `login` does not repeat it ([CRED-24](credential-protection.md#CRED-24)). The file is removed with its last key. It says the key still
 works at the host its block names until it is revoked there. `auth logout bedrock` and
 `auth logout import` are refused and say what to run instead, since neither way keeps a credential
 of its own.
@@ -1132,6 +1133,7 @@ account whose session has not been checked yet.
 `verified-by: bravebot_cli::running::auth_login_import_is_the_import_and_refuses_where_it_does`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
+`verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
 
@@ -1311,7 +1313,8 @@ way named, it exits 0 only if every sign-in under it is usable. Otherwise it exi
 configuration status where a configuration could not be read, and the failure status
 ([CLI-6](#CLI-6)) where not, after the lines, saying which. `import` is refused with the argument
 status, since it keeps no sign-in. So are an unknown way, an option, and a word after the way, or
-after the id. An id no block has is refused naming the ids configured and not the word given
+after the id; a word after a gateway's id is not repeated, as `login` does not repeat it, since it
+is most likely the key ([CRED-24](credential-protection.md#CRED-24)). An id no block has is refused naming the ids configured and not the word given
 ([CRED-24](credential-protection.md#CRED-24)); with no gateway configured it is the configuration
 status.
 
@@ -1336,6 +1339,7 @@ start and one that wants to know whether a particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
 `verified-by: bravebot_cli::running::auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it`
+`verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable`
 `verified-by: bravebot_cli::running::auth_status_in_an_unconfigured_build_is_a_configuration_failure`
 `verified-by: bravebot_cli::running::auth_status_refuses_what_asks_about_no_sign_in`

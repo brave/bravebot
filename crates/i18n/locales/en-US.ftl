@@ -1148,6 +1148,8 @@ auth-logout-import =
 # likely the key.
 auth-gateway-key-argument =
     a key is never a command-line argument, where other programs can read it and the shell keeps it: run bravebot auth login gateway { $id } and type the key when asked
+auth-gateway-extra-word =
+    { $command } takes an id and nothing after it: a word there is not repeated, since it may be a key
 auth-gateway-not-while-incognito =
     an incognito session writes nothing to disk, and storing a key is a write: run bravebot auth login gateway without --incognito
 auth-gateway-none-configured =

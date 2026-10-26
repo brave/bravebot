@@ -8886,6 +8886,35 @@ fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     );
 }
 
+/// CLI-18, CLI-23 and CRED-24: `status` and `logout` refuse a word after a gateway's id as `login`
+/// does, without repeating it, since it is most likely the key. A key stored for the id is left.
+#[test]
+fn auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id() {
+    let scratch = Scratch::new("cli-running-auth-gateway-extra-word")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+
+    for verb in ["status", "logout"] {
+        let output = bravebot(
+            &scratch.path,
+            NOTHING_CONFIGURED,
+            &["auth", verb, "gateway", "work", A_STORED_KEY],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{verb}: {stdout}{stderr}");
+        assert!(stderr.contains("not repeated"), "{verb}: {stderr}");
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{verb} repeated the word: {stdout}{stderr}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(gateway_keys(&scratch)).expect("the keys"),
+        stored_keys(&["work"]),
+        "a refused logout rewrote the keys"
+    );
+}
+
 /// CLI-23: naming no way asks about all of them and succeeds if any one is usable, since nobody
 /// holds every way; naming a way asks about that way, whatever else is usable.
 #[test]
