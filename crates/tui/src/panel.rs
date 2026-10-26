@@ -249,6 +249,8 @@ pub enum Target {
     Context,
     /// A started MCP server's row: the same question a bare `/mcp` asks.
     Servers,
+    /// A started language server's row: a note naming the servers the session started (MOUSE-22).
+    Languages,
     /// A file's row in the list of the files state: the highlight the keys move (MOUSE-18).
     File(usize),
     /// The `x` in the heading row of the files state: the end of the state, as `q` is (MOUSE-18).
@@ -341,11 +343,14 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
-        let rows = languages
+        let rows: Vec<_> = languages
             .iter()
             .map(|program| row((*program).to_string(), Style::default()))
             .collect();
+        let count = rows.len();
         section(&mut body, t!(panel_language_servers).to_string(), rows);
+        let first = body.len() - count;
+        targets.extend((first..first + count).map(|row| Place::on_row(row, Target::Languages)));
     }
     if !session.servers.started.is_empty() {
         let rows: Vec<_> = session
@@ -936,6 +941,27 @@ mod tests {
             target_at(&session, short, short.y + at("notes"), inside),
             None
         );
+    }
+
+    /// MOUSE-22. Rejects: a target on the language servers' heading or the rows around them.
+    #[test]
+    fn only_a_started_language_servers_rows_are_click_targets() {
+        let mut session = Session::new("none");
+        session.report_language_servers(Roster::of([Language::Rust]));
+        let program = session.language_servers().programs().remove(0);
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let at = |needle: &str| {
+            rows.iter()
+                .position(|line| line.to_string().contains(needle))
+                .expect(needle) as u16
+        };
+        let inside = area.x + 3;
+        let target = |row: u16| target_at(&session, area, area.y + row, inside);
+        let heading = at(t!(panel_language_servers).as_ref());
+        assert_eq!(target(heading), None);
+        assert_eq!(target(at(&program)), Some(Target::Languages));
+        assert_eq!(target(at(&program) + 1), None);
     }
 
     /// MOUSE-21. Rejects: a target on any row but the last, which names the key, and one on the

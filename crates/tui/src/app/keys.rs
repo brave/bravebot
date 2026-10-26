@@ -1910,6 +1910,11 @@ fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
+        Some(crate::panel::Target::Languages) => {
+            let programs = session.language_servers().programs().join(", ");
+            session.note(t!(panel_language_servers_started, programs = programs));
+            Action::Redraw
+        }
         Some(crate::panel::Target::File(index)) => {
             session.files_select(index);
             Action::Redraw
