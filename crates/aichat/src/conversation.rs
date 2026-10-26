@@ -77,23 +77,34 @@ pub fn walk<W: Spelling>(
 
     let mut system: Vec<String> = Vec::new();
     let mut turns: Vec<Turn<W::Block>> = Vec::new();
+    // Whether the turn being built ends in text a person or the agent wrote. A user message that
+    // follows it joins the same turn, and a reader that lays the blocks of a turn end to end would
+    // run the two together: a count at the start of a note read as the last digits of a number at
+    // the end of the line before it.
+    let mut ends_in_text = false;
 
     for message in messages {
         match message.role {
             // Hoisted rather than sent as a turn. Several may accumulate over a session, and they
             // are joined in order, which is the order they would have been read in.
             Role::System => system.push(message.content.text()),
-            Role::User => push(&mut turns, "user", user_blocks(spelling, message)),
-            Role::Tool => push(
-                &mut turns,
-                "user",
-                result_blocks(spelling, message, calls_as_text),
-            ),
-            Role::Assistant => push(
-                &mut turns,
-                "assistant",
-                assistant_blocks(spelling, message, calls_as_text),
-            ),
+            Role::User => {
+                let blocks = user_blocks(spelling, message, ends_in_text);
+                if !blocks.is_empty() {
+                    ends_in_text = last_text_is_a_word(message);
+                }
+                push(&mut turns, "user", blocks);
+            }
+            Role::Tool => {
+                let blocks = result_blocks(spelling, message, calls_as_text);
+                ends_in_text &= blocks.is_empty();
+                push(&mut turns, "user", blocks);
+            }
+            Role::Assistant => {
+                let blocks = assistant_blocks(spelling, message, calls_as_text);
+                ends_in_text &= blocks.is_empty();
+                push(&mut turns, "assistant", blocks);
+            }
         }
     }
 
@@ -117,9 +128,38 @@ fn push<B>(turns: &mut Vec<Turn<B>>, role: &'static str, blocks: Vec<B>) {
     }
 }
 
-fn user_blocks<W: Spelling>(spelling: &W, message: &Message) -> Vec<W::Block> {
+/// Whether the last thing in a user message is text with a word in it, which is what a block
+/// written after it would be read straight on from.
+fn last_text_is_a_word(message: &Message) -> bool {
     match &message.content {
-        Content::Text(text) => text_block(spelling, text),
+        Content::Text(text) => !text.trim().is_empty(),
+        Content::Parts(parts) => parts
+            .iter()
+            .rev()
+            .find_map(|part| match part {
+                Part::Text { text } if !text.trim().is_empty() => Some(true),
+                Part::Text { .. } => None,
+                Part::ImageUrl { .. } => Some(false),
+            })
+            .unwrap_or(false),
+    }
+}
+
+/// The blocks of a user message. `after_text` is whether the turn it joins already ends in text,
+/// in which case the first text block starts on a new paragraph.
+fn user_blocks<W: Spelling>(spelling: &W, message: &Message, after_text: bool) -> Vec<W::Block> {
+    let mut separate = after_text;
+    let mut paragraph = |text: &str| -> Vec<W::Block> {
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        match std::mem::take(&mut separate) {
+            true => text_block(spelling, &format!("\n\n{text}")),
+            false => text_block(spelling, text),
+        }
+    };
+    match &message.content {
+        Content::Text(text) => paragraph(text),
         Content::Parts(parts) => {
             let mut blocks = Vec::new();
             let mut attachments = 0;
@@ -127,7 +167,7 @@ fn user_blocks<W: Spelling>(spelling: &W, message: &Message) -> Vec<W::Block> {
                 match part {
                     // Through the same guard a whole turn's text goes through: a part carrying no
                     // text is an empty block, which neither service takes.
-                    Part::Text { text } => blocks.extend(text_block(spelling, text)),
+                    Part::Text { text } => blocks.extend(paragraph(text)),
                     // A data URI, which is the only form attachments take here:
                     // `data:<media>;base64,<data>`. Anything else is dropped rather than sent as a
                     // link, because asking the service to fetch a URL is an effect nobody endorsed.
@@ -278,6 +318,25 @@ mod tests {
         assert_eq!(walk(&Plain, &[Message::user("hi")], true).system, None);
     }
 
+    /// A note written after the line a person typed shares its turn on the wire, and starts on a
+    /// paragraph of its own. Laid end to end with nothing between, "issues/1106" followed by "16
+    /// skills are not listed" read as the issue number 110616.
+    #[test]
+    fn a_user_message_after_user_text_starts_a_new_paragraph() {
+        let walked = walked(
+            &[
+                Message::user("see issues/1106"),
+                Message::user("16 skills are not listed"),
+            ],
+            true,
+        );
+        assert_eq!(walked.turns.len(), 1);
+        assert_eq!(
+            walked.turns[0].blocks,
+            ["text:see issues/1106", "text:\n\n16 skills are not listed"]
+        );
+    }
+
     /// Both services refuse two turns of one role in a row, and the conversion is what makes them:
     /// a result is a user turn, so the two results of two parallel calls are one turn of two
     /// blocks, and so is a result followed by the next thing the user typed.
@@ -389,7 +448,7 @@ mod tests {
             true,
         );
         assert_eq!(walked.turns.len(), 1);
-        assert_eq!(walked.turns[0].blocks, ["text:hello", "text:again"]);
+        assert_eq!(walked.turns[0].blocks, ["text:hello", "text:\n\nagain"]);
     }
 
     /// Both services take nothing but an object as a call's arguments. A call recorded with `null`,
