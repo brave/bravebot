@@ -8,8 +8,9 @@ description: Which language server answers, what starting one costs, how a file 
 
 Asks a language server about a symbol: where it is defined, what refers to it, what implements it,
 what calls it. It also asks what the server makes of a file. **Starting a server is put to you.**
-That holds in every permission mode, bypass included, and a start is refused where nobody can be
-asked, as in a one-shot run.
+That holds in every permission mode except [bypass](../security/permission-modes.md) with the sandbox
+mode `off`, which `--dangerously-bypass-approvals-and-sandbox` sets and which answers it for you. A
+start is refused where nobody can be asked, as in a one-shot run, unless that answers it.
 
 | Parameter | |
 |---|---|

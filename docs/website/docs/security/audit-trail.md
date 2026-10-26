@@ -114,8 +114,9 @@ Each turn and each manifest run begins with a `permission_mode` line naming the 
 `ask`, `accept-edits`, `plan` or `bypass`. A manifest run writes it before planning. A command or write that was put to you gets an `approval`
 line after it that says either `no mode answered, left to the confirmer` or
 `answered by <mode> mode, nobody was asked`, so an entry ending in "asking" is never the only thing
-the trail says about who answered. A fetch or a server start that a mode answers carries no such
-line. A `run` that asks to start with no sandbox is put to you in every mode, so its line says no mode
+the trail says about who answered. A fetch that a mode answers carries no such line. A language
+server's start that a mode answers has one `approval` line of its own, `start a language server:
+answered by <mode> mode, nobody was asked`, written before the server starts. A `run` that asks to start with no sandbox is put to you in every mode, so its line says no mode
 answered.
 
 A turn whose prompt opens with a [`/style`](../reference/commands.md#style-name--off) output style adds an

@@ -1679,12 +1679,14 @@ impl Servers {
     /// `approve` is asked once per server, and only when a server is not already running. It is a
     /// callback rather than a decision passed in because whether to ask depends on what is running,
     /// which is this type's business, while how to ask is the caller's: the prompt belongs where the
-    /// person is, and this crate has no way to reach them.
+    /// person is, and this crate has no way to reach them. It is handed the policy so that whatever
+    /// the answer is to be recorded as is recorded before the server starts, as a gate is recorded
+    /// when it decides (TRACE-5).
     pub fn ask<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         question: &Question<'_>,
-        approve: &mut dyn FnMut(&Starting<'_>) -> bool,
+        approve: &mut dyn FnMut(&mut Policy<'_, S>, &Starting<'_>) -> bool,
     ) -> LspResult<Answer> {
         policy
             .before_capability(Capability::LanguageServer)
@@ -1733,7 +1735,7 @@ impl Servers {
                 build_tooling,
                 declared: matches!(target, Target::Declared(_)),
             };
-            if !approve(&starting) {
+            if !approve(policy, &starting) {
                 return Err(LspError::Refused { language: served });
             }
 
@@ -2053,7 +2055,7 @@ done
                 character: 1,
                 query: None,
             },
-            &mut |_| {
+            &mut |_, _| {
                 asked += 1;
                 true
             },
@@ -2582,7 +2584,7 @@ done
                     character: 1,
                     query: Some("Capability"),
                 },
-                &mut |_| true,
+                &mut |_, _| true,
             )
             .expect_err("nothing is running, so there is nothing to search");
 
@@ -2645,7 +2647,7 @@ done
                     character: 1,
                     query: None,
                 },
-                &mut |starting| {
+                &mut |_, starting| {
                     told.push((starting.language.to_string(), starting.build_tooling));
                     false
                 },
@@ -2773,7 +2775,7 @@ done
                     character: 12,
                     query: None,
                 },
-                &mut |_| {
+                &mut |_, _| {
                     started_asking.set(true);
                     true
                 },
@@ -2864,7 +2866,7 @@ done
             let file = scratch.join("a.zz");
             let file = file.to_str().expect("a utf-8 path");
             servers
-                .ask(&mut policy, &definition_in(file), &mut |_| true)
+                .ask(&mut policy, &definition_in(file), &mut |_, _| true)
                 .expect("the declared server answers");
         });
     }
@@ -3014,10 +3016,14 @@ done
         let mut policy = a_policy_holding(&mut sink, [Capability::FileRead]);
 
         let mut asked = false;
-        let refused = servers.ask(&mut policy, &definition_in("/workspace/a.rs"), &mut |_| {
-            asked = true;
-            true
-        });
+        let refused = servers.ask(
+            &mut policy,
+            &definition_in("/workspace/a.rs"),
+            &mut |_, _| {
+                asked = true;
+                true
+            },
+        );
 
         assert!(matches!(refused, Err(LspError::Denied(_))), "{refused:?}");
         assert!(
@@ -3186,7 +3192,7 @@ done
         )
         .expect("policy");
 
-        servers.ask(&mut policy, question, &mut |_| true)
+        servers.ask(&mut policy, question, &mut |_, _| true)
     }
 
     /// LSP-2: a file changes under an agent, so a line number that was right when a search
@@ -4046,7 +4052,7 @@ done
         let file = file.to_str().expect("a utf-8 path");
 
         // Declined: nothing started, so the script has written nothing.
-        let refused = servers.ask(&mut policy, &definition_in(file), &mut |_| false);
+        let refused = servers.ask(&mut policy, &definition_in(file), &mut |_, _| false);
         assert!(
             matches!(refused, Err(LspError::Refused { .. })),
             "{refused:?}"
@@ -4055,7 +4061,7 @@ done
 
         let mut told = Vec::new();
         let answer = servers
-            .ask(&mut policy, &definition_in(file), &mut |starting| {
+            .ask(&mut policy, &definition_in(file), &mut |_, starting| {
                 told.push((
                     starting.language.to_string(),
                     starting.args.to_vec(),
@@ -4114,7 +4120,7 @@ done
         let answer = servers.ask(
             &mut policy,
             &definition_in(file.to_str().expect("a utf-8 path")),
-            &mut |_| panic!("nobody is asked about a server no declaration names"),
+            &mut |_, _| panic!("nobody is asked about a server no declaration names"),
         );
 
         let error = answer.expect_err("no server is configured for a .txt file");
@@ -4146,7 +4152,7 @@ done
         let mut asked = 0;
         for _ in 0..2 {
             servers
-                .ask(&mut policy, &definition_in(file), &mut |_| {
+                .ask(&mut policy, &definition_in(file), &mut |_, _| {
                     asked += 1;
                     true
                 })
@@ -4164,7 +4170,7 @@ done
             "the server that was approved is stopped"
         );
         servers
-            .ask(&mut policy, &definition_in(file), &mut |_| {
+            .ask(&mut policy, &definition_in(file), &mut |_, _| {
                 asked += 1;
                 true
             })

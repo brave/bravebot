@@ -29,6 +29,7 @@ kept_in:
   - Confirmer::confirm_vetted_read: one effect; auto-vetting
   - Confirmer::confirm_fetch: one effect
   - Confirmer::confirm_server: language servers started
+  - Confirmer::confirm_server_noting_the_mode: language servers started
   - Confirmer::confirm_manifest: one effect
   - Confirmer::confirm_vouch: the trust map
   - Confirmer::confirm_exposing_read: files sent despite a credential

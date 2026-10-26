@@ -1964,6 +1964,20 @@ pub trait Confirmer {
     /// it.
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision;
 
+    /// [`Confirmer::confirm_server`], and with the answer the name of the mode that gave it where a
+    /// mode approved the start without asking anybody (LSP-5, TRACE-7).
+    ///
+    /// One call rather than a question and then a query about it, so the name is the mode in force
+    /// when the question was answered and not at a later read (MODE-8), and no other question can
+    /// come between the two. A confirmer that is not a mode, and a wrapper that does not forward
+    /// this, answers `None`, which the trail reads as an answer nobody's mode gave.
+    fn confirm_server_noting_the_mode(
+        &mut self,
+        request: &ServerRequest,
+    ) -> (Decision, Option<&'static str>) {
+        (self.confirm_server(request), None)
+    }
+
     /// Ask whether a frozen plan may run at all. Implementations must default to refusal when they
     /// cannot ask.
     ///
@@ -3014,6 +3028,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_server(&mut self, request: &ServerRequest) -> Decision {
         self.timing(|inner| inner.confirm_server(request))
+    }
+
+    fn confirm_server_noting_the_mode(
+        &mut self,
+        request: &ServerRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.timing(|inner| inner.confirm_server_noting_the_mode(request))
     }
 
     fn confirm_manifest(&mut self, request: &ManifestRequest) -> Decision {

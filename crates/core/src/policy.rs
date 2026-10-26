@@ -7100,6 +7100,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("approval", detail);
     }
 
+    /// Record that a mode that answers in the person's place approved the start of a language
+    /// server, so nobody was asked (LSP-5, TRACE-7).
+    ///
+    /// The policy decides nothing about a server start, so no entry before this one says it was
+    /// being asked about, and this one says what it is about. The text is fixed and names neither
+    /// the language nor the program.
+    pub fn record_server_start_answer(&mut self, mode: &'static str) {
+        self.allow(
+            "approval",
+            format!("start a language server: answered by {mode} mode, nobody was asked"),
+        );
+    }
+
     /// Record that a `run` line was put to the confirmer and not approved, so it did not start
     /// (TRACE-1, SANDBOX-29).
     ///

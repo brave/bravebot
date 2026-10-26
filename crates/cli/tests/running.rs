@@ -11840,6 +11840,131 @@ fn the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off() {
     }
 }
 
+/// A language server that answers a definition and records each start in `$STARTS`, the least a
+/// session needs of one. The index is reported settled at once, so nothing waits out LSP-7's bound.
+#[cfg(unix)]
+const A_SERVER_THAT_COUNTS_ITS_STARTS: &str = r#"#!/bin/sh
+echo started >> "$STARTS"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{\"uri\":\"file://$DEFINED_AT\",\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}}}]}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#;
+
+/// A gateway whose model asks where the symbol at `src/a.rs:1:12` is defined and, once that call
+/// has an answer in the conversation, says it is done.
+#[cfg(unix)]
+fn a_gateway_asking_about_a_symbol() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"lsp",
+                        "arguments":"{\"operation\":\"goToDefinition\",\"path\":\"src/a.rs\",\"line\":1,\"character\":12}"}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// LSP-5, MODE-4, MODE-13: in a one-shot run nobody is there to be asked about starting a language
+/// server, so the server starts only where the command line answered for the person and nothing is
+/// confined: bypassing with the sandbox mode `off`, however the two were asked for. Bypassing under
+/// the default sandbox mode and accepting edits under `off` each leave the question unanswered, so
+/// the server is refused and never starts. The failure this rejects is a front end that builds its
+/// confirmer without the task's sandbox mode, which refuses the server under both flags.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_off() {
+    use std::os::unix::fs::PermissionsExt;
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping the language server start test: confinement is unavailable");
+        return;
+    }
+    let both = ["--dangerously-bypass-approvals-and-sandbox"];
+    let skipping_with_off = ["--dangerously-skip-permissions", "--sandbox", "off"];
+    let skipping = ["--dangerously-skip-permissions"];
+    let accepting_with_off = ["--accept-edits", "--trust-workspace", "--sandbox", "off"];
+    for (name, flags, started) in [
+        ("both-flags", &both[..], true),
+        ("skip-and-off", &skipping_with_off[..], true),
+        ("skip-alone", &skipping[..], false),
+        ("accept-edits-and-off", &accepting_with_off[..], false),
+    ] {
+        let gateway = a_gateway_asking_about_a_symbol();
+        let scratch = Scratch::new(&format!("cli-running-lsp-start-{name}"))
+            .with_settings(&settings_for(&gateway))
+            .with_file("src/a.rs", "pub struct Held;\n");
+        // Outside the home and the working directory, which a confined stage may write: a program
+        // found only in a directory like that is not installed (SANDBOX-30).
+        let installed = Scratch::new(&format!("cli-running-lsp-installed-{name}"));
+        let program = installed.path.join("rust-analyzer");
+        std::fs::write(&program, A_SERVER_THAT_COUNTS_ITS_STARTS).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let starts = installed.path.join("starts");
+        let defined_at = scratch.path.join("src/a.rs");
+        let path = format!("{}:/usr/bin:/bin", installed.path.display());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.extend([
+            ("PATH", path.as_str()),
+            ("STARTS", starts.to_str().expect("a utf-8 path")),
+            ("DEFINED_AT", defined_at.to_str().expect("a utf-8 path")),
+        ]);
+        let mut arguments = flags.to_vec();
+        arguments.extend(["-p", "where is Held declared"]);
+        bravebot_started_in(&scratch.path, &scratch.path, &environment, &arguments);
+        let _asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        let answered = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the planner was sent the result of its question");
+        let starts =
+            std::fs::read_to_string(&starts).map_or(0, |recorded| recorded.lines().count());
+        let result = answered
+            .find("Result of lsp")
+            .map_or("no result of lsp", |at| {
+                answered[at..].split('"').next().unwrap_or_default()
+            });
+        assert_eq!(starts, usize::from(started), "{name}: {result}");
+        assert_eq!(
+            result.contains("refused"),
+            !started,
+            "{name}: the planner was told the wrong thing about the start: {result}"
+        );
+    }
+}
+
 /// MODE-13: the flag is refused where `--dangerously-skip-permissions` is, by its own name, and
 /// beside a `--sandbox` that asks for a confining mode. A run that read the flag as only the
 /// permission half would carry on in `strict` here with nothing asked.

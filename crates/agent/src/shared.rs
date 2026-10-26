@@ -490,6 +490,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_server_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ServerRequest,
+    ) -> (Decision, Option<&'static str>) {
+        self.asked(
+            |held| held.confirm_server_noting_the_mode(request),
+            |refuse| refuse.confirm_server_noting_the_mode(request),
+        )
+    }
+
     fn confirm_manifest(&mut self, request: &crate::confirm::ManifestRequest) -> Decision {
         self.asked(
             |held| held.confirm_manifest(request),
