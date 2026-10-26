@@ -1039,7 +1039,8 @@ without what follows its `=`, since either is most likely the key
 ([CRED-24](credential-protection.md#CRED-24)). A key already stored for the service is replaced only
 on a yes. Before the key is asked for, the command names a variable in the block's `env` that is
 set, since that is sent instead ([BACKEND-16](backends.md#BACKEND-16)). The key is typed with
-nothing drawn: Enter takes it, and Escape, Ctrl-C, Ctrl-D or Enter on nothing stores nothing and
+nothing drawn, and echo is off before the question is written, so a key pasted as the question appears is not drawn
+either, and where it cannot be turned off nothing is asked: Enter takes it, and Escape, Ctrl-C, Ctrl-D or Enter on nothing stores nothing and
 exits successfully. The file is read again once the key is typed, so a key another command forgot
 while this one waited is not written back. It is written to `gateway-keys.json` in the state
 directory, created 0600 on Unix and granted to this account alone on Windows, beside the file,
@@ -1200,6 +1201,8 @@ and was told of none.
 `verified-by: bravebot_tui::hidden::control_u_starts_the_key_again`
 `verified-by: bravebot_tui::hidden::a_character_typed_with_altgr_is_part_of_the_key`
 `verified-by: bravebot_tui::hidden::a_key_longer_than_the_room_made_for_it_is_kept_whole`
+`verified-by: bravebot_tui::hidden::echo_is_off_before_the_question_is_written`
+`verified-by: bravebot_tui::hidden::nothing_is_asked_where_echo_cannot_be_turned_off`
 `verified-by: bravebot_cli::main::a_definition_is_refused_where_nothing_would_work_under_it`
 `verified-by: bravebot_cli::running::auth_login_naming_no_way_is_refused_where_nobody_can_pick_one`
 `verified-by: bravebot_cli::running::auth_refuses_what_names_no_way_to_sign_in`
