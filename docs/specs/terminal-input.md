@@ -4,10 +4,14 @@ title: The input box
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/terminal.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/input.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/vi.rs
   - crates/tui/src/state/completion.rs
   - crates/tui/src/state/editing.rs
@@ -23,6 +27,7 @@ governs:
   - crates/config/src/settings.rs
   - crates/tui/src/command_table.rs
   - crates/ui-bridge/src/running.rs
+  - crates/agent/src/interjections.rs
   - ui/src/renderer/interjecting.ts
 documented-by:
   - docs/website/docs/using/interactive-mode.md
@@ -109,7 +114,9 @@ the marker out worked: left drawn, it says a file is going that is not.
 
 Escape discards a half-typed prompt, and does nothing at all on a line with nothing on it. It
 never ends the session. What it discards is kept as a draft for Up ([INPUT-39](#INPUT-39)), as is
-the line the first Ctrl-C rung takes.
+the line the first Ctrl-C rung takes. With a selection made by the mouse held, whether or not its
+words are in view, the first Escape puts it away and does nothing else
+([MOUSE-38](mouse.md#MOUSE-38)).
 
 **Ctrl-C stops the nearest thing there is to stop, and leaves when there is nothing left.** It is
 read against what is happening, in this order:
@@ -556,6 +563,32 @@ sent, and lifting the interjection out to make room would take back a line the p
 Shift-Enter still starts a line rather than sending it, so a paragraph can be written mid-turn and
 is not sent half-finished.
 
+**The queue and the shared buffer are two containers, and the buffer holds only what the turn may
+read.** The terminal keeps `Session::queued` for everything waiting and gives the shared
+`Interjections` buffer ([interjections.rs](../../crates/agent/src/interjections.rs)) a copy of each
+prompt. A prompt is therefore in both, and the buffer is the one place that says whether the turn
+has taken it, which the session reads by asking the buffer (`forget_last`, `held`) and never by
+counting its own. The queue stays because the buffer cannot express four things:
+
+- **Commands and command lines.** They wait in order among the prompts but are never offered to the
+  turn, so they cannot be in the buffer, which is the one thing that reaches the planner from the
+  terminal. The queue is what keeps their place among the prompts.
+- **The line as typed.** The buffer holds the line resolved to words (INPUT-10, "What it carries is
+  text"), which is what the planner reads. The screen, the history and Up show what the person
+  typed, with its markers.
+- **What each prompt named.** The files and pictures settled when it was queued, the history ticket
+  and the hurried flag (INPUT-36) are kept for the turn a prompt becomes when it is not taken, and
+  for Up. The buffer carries lines and no side data.
+- **Which prompt the turn took.** The buffer hands a line to the turn without saying which queued
+  prompt it was. `Session::interjected` removes the oldest prompt from the queue because the buffer
+  is first in, first out and holds a copy of the prompts in the same order.
+
+What is held back from the turn in flight is kept by the buffer and not by the queue: the session
+reads the count with `held()` and the buffer keeps those lines out of `take` and `drain`, so the
+two cannot disagree about it. Moving the queue into the buffer would need commands in a buffer the
+planner reads, or a second kind of line the buffer carries and never hands out, and either leaves
+the buffer holding what a person typed alongside what the planner is given.
+
 **Why.** Enter mid-turn used to reach nothing at all. The line stayed in the box until the person
 noticed the turn had ended and pressed it again, which is indistinguishable from a key press that
 was ignored. This does not weaken what a running turn refuses: a second turn still cannot begin
@@ -599,6 +632,17 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_tui::render::the_offer_to_send_now_is_kept_over_where_the_last_line_goes`
 `verified-by: bravebot_tui::app::a_stop_is_recorded_at_the_press_that_asks_for_it`
 `verified-by: bravebot_agent::turn::a_prompt_typed_before_a_stop_is_left_for_the_next_turn`
+`verified-by: bravebot_agent::interjections::lines_are_taken_in_the_order_they_were_pushed`
+`verified-by: bravebot_agent::interjections::a_clone_shares_the_buffer`
+`verified-by: bravebot_agent::interjections::drain_returns_every_line_oldest_first_and_empties_the_buffer`
+`verified-by: bravebot_agent::interjections::forget_last_drops_the_newest_and_says_whether_it_did`
+`verified-by: bravebot_agent::interjections::a_poisoned_lock_reads_as_empty_and_drops_additions`
+`verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
+`verified-by: bravebot_agent::interjections::a_held_line_is_not_taken_or_drained_and_keeps_its_place`
+`verified-by: bravebot_agent::interjections::a_line_pushed_behind_a_held_line_is_held`
+`verified-by: bravebot_agent::interjections::forget_last_drops_a_held_line_before_a_readable_one`
+`verified-by: bravebot_agent::interjections::beginning_a_turn_removes_the_oldest_lines_and_keeps_the_rest_in_order`
+`verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
 
 <a id="INPUT-42"></a>
 ### INPUT-42: a prompt waiting on a long command moves the command to the background
@@ -777,6 +821,7 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`
 `verified-by: bravebot_tui::shell_mode::the_shortcuts_offer_shell_mode`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_suspend_chord`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_todos_chord`
 
 <a id="INPUT-14"></a>
 ### INPUT-14: Ctrl-G edits the line in the user's own editor, and only what was saved comes back
@@ -930,6 +975,9 @@ leave the person editing a line that had gone, and sending it again would say it
 back that the turn has *not* reached puts it out of the turn's reach as well, or the key would read
 as having done nothing: the line in the box, and the copy arriving at the planner a moment later.
 Where the turn has taken every waiting prompt, the press leaves the box exactly as it was.
+
+A click on a waiting prompt takes it back with the ones typed after it, so a click on the oldest
+does what the key does ([MOUSE-28](mouse.md#MOUSE-28)).
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top
@@ -2137,24 +2185,33 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move thirteen chords, and nothing else
+### INPUT-32: a settings file can move fifteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Thirteen actions can be moved on a platform that can
-suspend the session, twelve on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Fifteen actions can be moved on a platform that can
+suspend the session, fourteen on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
 - `editor` (default: `ctrl-g`): open external editor for the current prompt.
-- `watch` (default: `ctrl-l`): watch background delegate or inspect running actions.
+- `watch` (default: `ctrl-l`): open the list of delegates and asides ([WATCH-7](watching.md#WATCH-7)).
+- `outputs` (default: `alt-l`): open what commands printed, background jobs included, by the path
+  `/outputs` takes ([WATCH-7](watching.md#WATCH-7)). Alt and not Ctrl because every Ctrl letter is
+  taken.
 - `scroller` (default: `ctrl-o`): open the transcript scroller.
 - `history` (default: `ctrl-r`): open prompt history search.
 - `stash` (default: `ctrl-s`): stash the current input line or bring it back.
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
+- `todos` (default: `alt-a`): print the whole plan, as `/todos` does ([CMD-28](commands.md#CMD-28)). It
+  works at the box, and while a turn runs. In the files state ([FILES-4](files-mode.md#FILES-4)), the
+  watch view, the transcript scroller outside a search and the pickers that take no letters it does
+  nothing. Where the prompt search, a search typed in the transcript scroller or the model picker
+  takes letters, it is read as the letter it carries, as is any chord a mode did not ask the
+  bindings about. Alt and not Ctrl because every Ctrl letter is taken.
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
 - `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
@@ -2188,7 +2245,8 @@ them in, which is nothing a person could predict from what they wrote, so neithe
 
 **A mode reads the chord that opened it.** Inside the search over prompts, the chord that puts a line
 away narrows the scope and the one that opened the search closes it (INPUT-19, INPUT-31); inside the
-view of what a delegate is doing, the chord that opened the view leaves it. Ctrl-C keeps its own
+view of what a delegate is doing, the chord that opened the view leaves it, and the `outputs` chord
+leaves the view over the commands and switches to them from the agents ([watching.md](watching.md)). Ctrl-C keeps its own
 meaning in both, and the chord an action was moved off of does nothing. In the view so does every
 other key held with a modifier but Shift, the chord an action was moved onto among them, save the
 scroller's Ctrl-U, Ctrl-D and Ctrl-B ([SCROLL-3](scroller.md#SCROLL-3)), which the view borrows.
@@ -2208,7 +2266,7 @@ editing arm. In vi's normal mode, `/` translates to the chord configured for his
 down (INPUT-13), and the rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
-search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
+search (INPUT-19), the last row of the info panel's plan ([PANEL-10](info-panel.md#PANEL-10)), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
@@ -2237,12 +2295,20 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::the_suspend_chord_is_ctrl_z_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
 `verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
+`verified-by: bravebot_tui::keybindings::the_todos_chord_is_alt_a_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another`
+`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::app::the_todos_key_prints_nothing_in_the_files_state`
+`verified-by: bravebot_tui::app::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`
+`verified-by: bravebot_tui::model_prompt::an_alt_chord_narrows_the_list_as_the_letter_it_carries`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
 `verified-by: bravebot_config::settings::a_local_layer_overrides_project_and_global_keybindings`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_scope_chord`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_todos_chord`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
 `verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`
@@ -2269,24 +2335,30 @@ Starting a session in the interface that draws puts the terminal in raw mode and
 screen of its own, so what was in the terminal beforehand is untouched and is back on the screen
 afterwards. A session in lines ([cli.md](cli.md)) takes none of what follows, and this
 clause is about the one that draws. With that screen the
-session asks for mouse reporting, narrowed to the buttons, the wheel and motion while a button is
-held, except in a terminal that draws the pointer shape it is asked for
-([PANEL-6](info-panel.md#PANEL-6)), which is told of motion with no button held as well; bracketed
-paste; focus reporting; and, only where the terminal says it understands the request,
-disambiguated keys.
+session asks for mouse reporting of the buttons, the wheel and motion with a button held and with
+none, in every terminal; bracketed paste; focus reporting; and, only where the terminal says it
+understands the request, disambiguated keys. A terminal that sends no motion with no button held shows
+no target under the pointer and loses nothing else. The mouse modes are written in one run: the three
+tracking modes, 1000, 1002 and 1003 in that order, then the forms of coordinates, 1015 and 1006, of
+which 1006 names a column or a row past 223 ([MOUSE-53](mouse.md#MOUSE-53)). They are given back in
+the reverse order before the screen is left.
 
 Every one of those is given back when the session ends, including when it ends by failing rather
 than by being left, and again around each handover of the terminal to another program: the editor
 a prompt is written in, the viewer a transcript is read in and the shell a stop leaves the terminal
 to (INPUT-47) all get the terminal as it was found, and the same set is taken again on the way
-back.
+back. The modes are given back before raw mode is left, and raw mode is left whether or not they
+could be written, so a report of the pointer that arrives in between is not left for the shell to
+echo.
 
 **Why.** Each mode is asked for because something here cannot work without it. The wheel scrolls
-the transcript only while the mouse is reported, and all-motion reporting is narrowed away because
-a pointer merely crossing the window is an event and a redraw per pixel of travel, for a gesture
-nothing here reads. The exception is a terminal that draws the pointer shape on request: where the
-pointer is over the info panel's border is what the shape follows, so that terminal is not narrowed
-and no other is. Bracketed paste is what stops a pasted prompt sending itself, since without it
+the transcript only while the mouse is reported, and the position of the pointer with no button held
+is what the target under it, and the shape the pointer is given over the info panel's border
+([PANEL-6](info-panel.md#PANEL-6)), follow. A pointer crossing the window sends a position for each
+cell. A burst of them is read as the last ([INPUT-49](#INPUT-49)) and a frame is asked for only when
+the target under the pointer changes, so a pointer crossing the window costs one frame for each target
+it crosses. The coordinates are asked for in the form that has no limit of 223, so a click at a column
+past it is read as the cell it names. Bracketed paste is what stops a pasted prompt sending itself, since without it
 the newline most clipboards carry arrives as Enter; it is also the only thing that says a paste came
 off a clipboard at all, so where a terminal does not send those markers a paste arrives as bare keys
 and nothing downstream can tell it from what a program wrote. Focus reporting is what makes the
@@ -2305,21 +2377,31 @@ person than whatever error put it there.
 `verified-by: bravebot_tui::app::a_session_draws_on_a_screen_of_its_own`
 `verified-by: bravebot_tui::app::every_mode_a_session_asks_for_is_given_back`
 `verified-by: bravebot_tui::app::a_pushed_keyboard_mode_is_popped_and_an_unpushed_one_is_not`
-`verified-by: bravebot_tui::app::the_session_reads_a_drag_and_not_every_pointer_movement`
-`verified-by: bravebot_tui::app::a_terminal_that_draws_the_pointer_shape_reports_every_movement`
+`verified-by: bravebot_tui::app::every_terminal_is_asked_to_report_the_pointer_and_ends_in_the_mode_that_reports_all_of_it`
+`verified-by: bravebot_tui::app::the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order`
+`verified-by: bravebot_tui::app::what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for`
+`verified-by: bravebot_tui::app::the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do`
 
 <a id="INPUT-34"></a>
 ### INPUT-34: what arrived together is not two presses
 
 A terminal delivers one byte stream and says nothing about who wrote it, so a person at a keyboard and
 a program holding the other end of the pty arrive identically and no reader can ask which it has.
-**Nothing here tries.** Every event is delivered exactly as the terminal reported it, and what is added
-is one fact beside each: whether it was the whole of what was waiting, or arrived together with others.
+**Nothing here tries.** Every event is delivered exactly as the terminal reported it, but for a pointer
+position that another one waiting behind it supersedes ([INPUT-49](#INPUT-49)), and what is added is one
+fact beside each: whether it was the whole of what was waiting, or arrived together with others.
 
 One event waiting is what a person pressing a key looks like, since nothing fills the buffer between
 one read and the next. Two or more were available at the same instant, so **no one of them is evidence
 separate from the rest**, whatever they are: a key beside a resize is no more a separate press than two
 keys are.
+
+**A report of the mouse is not counted either.** The session is told where the pointer is with no
+button held ([INPUT-33](#INPUT-33)), so a person moving the mouse as they press a key shares the read
+with a position. Counted, it would refuse that key. A position, a click or a turn of the wheel is not a
+key, and a run of keys, which is what the guards below ask about, is still a run with one among them:
+two presses in a read are two whatever else the read holds. A report of the mouse is delivered exactly as
+the terminal reported it.
 
 **A key release is the tail of a press and not a second arrival.** A terminal may report one, and
 Windows reports one for every keystroke, so there a press and the release of the same key land in one
@@ -2361,6 +2443,8 @@ available, spent in the one place where a second press is the whole of what is b
 `verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`
 `verified-by: bravebot_tui::input::a_press_and_its_own_release_are_one_keystroke`
 `verified-by: bravebot_tui::input::two_keystrokes_in_one_read_arrived_together`
+`verified-by: bravebot_tui::input::a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival`
+`verified-by: bravebot_tui::input::keys_with_reports_of_the_mouse_among_them_are_still_a_run`
 `verified-by: bravebot_tui::app::two_interrupts_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::two_end_of_transmissions_that_arrived_together_do_not_end_the_session`
 `verified-by: bravebot_tui::app::a_press_on_its_own_after_a_run_still_leaves`
@@ -2832,6 +2916,7 @@ this meaning.
 `verified-by: bravebot_filetype::markers::a_dropped_file_becomes_its_name_and_text_around_it_is_kept`
 `verified-by: bravebot_ui_bridge::interjection_tests::work_that_asks_nothing_between_rounds_takes_no_line`
 `verified-by: bravebot_ui_bridge::interjection_tests::lines_are_read_in_the_order_they_were_typed`
+`verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
 `verified-by: by-construction (the renderer and the main process are not crates this workspace compiles, so ui/scripts/interjecting.test.mjs drives the window's own event reducer with the bridge's events: a line is in the transcript only after turn.interjected and in the order it was sent, a line unread when the turn is done or stopped goes on past a paused queue, one left by a failed turn waits, a refused line returns to the head of the queue, the window names its markers and writes no words, a paperclip file or the memory update queues the line, and turn.interject forwards only its line and the names of its markers; make check-ui runs the test)`
 
 <a id="INPUT-47"></a>
@@ -2989,3 +3074,27 @@ reaches for it with the line half written, where a command word would have to be
 `verified-by: bravebot_tui::app::an_enhancements_cost_is_charged_to_the_session`
 `verified-by: bravebot_tui::app::characters_that_draw_as_nothing_are_taken_out_of_an_enhancement_and_counted`
 `verified-by: bravebot_tui::render::the_shortcuts_name_the_enhance_chord_in_force`
+
+<a id="INPUT-49"></a>
+### INPUT-49: a burst of pointer positions is read as the last of it
+
+A terminal told to report the pointer with no button held sends a position for each cell the pointer
+crosses. The reader hands out such a position only when no other is waiting directly behind it, so a
+burst of them is one event, the last, which says where the pointer is. A report with a button held, a
+press, a release, a turn of the wheel, a key and every other event are handed out as the terminal
+reported them, and a position is not dropped across any of them: a press that follows a position is
+read at the place the pointer was then. The one handed out keeps the fact whether it arrived alone that
+the terminal's read gave it, since that is a fact about the read ([INPUT-34](#INPUT-34)).
+
+This is the one exception to every event being delivered as the terminal reported it. It withholds
+nothing a person or a program decides with, since a position decides nothing and the next one says it
+again.
+
+**Why.** A position is asked what is under the pointer ([MOUSE-50](mouse.md#MOUSE-50)), and a
+pointer crossing the window sends hundreds of them in the time it takes to draw one frame. The
+earlier ones are answered with where the pointer was and are out of date before the screen could show
+the answer, so handling each is work for nothing, while handling the last is all the screen needs.
+
+`verified-by: bravebot_tui::input::a_burst_of_pointer_positions_is_read_as_the_last_of_it`
+`verified-by: bravebot_tui::input::only_a_position_directly_behind_another_is_not_handed_out`
+`verified-by: bravebot_tui::input::the_queue_is_answered_before_the_terminal_and_in_arrival_order`

@@ -10,9 +10,12 @@ pub(super) fn choose_theme(
 ) {
     let current = crate::theme::name();
     let themes = crate::theme::listed(&current);
-    if let Some(chosen) = crate::theme_prompt::choose(terminal, themes, &current, |frame| {
+    let wheel = session.wheel_rows();
+    let chosen = crate::theme_prompt::choose(terminal, themes, &current, wheel, |frame| {
         render::draw(frame, session);
-    }) {
+    });
+    session.end_a_pickers_press();
+    if let Some(chosen) = chosen {
         theme_picked(session, &chosen.name);
     }
 }
@@ -37,9 +40,12 @@ pub(super) fn choose_effort(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) {
-    if let Some(row) = crate::effort_prompt::choose(terminal, session.effort(), |frame| {
+    let wheel = session.wheel_rows();
+    let chosen = crate::effort_prompt::choose(terminal, session.effort(), wheel, |frame| {
         render::draw(frame, session);
-    }) {
+    });
+    session.end_a_pickers_press();
+    if let Some(row) = chosen {
         effort_picked(session, row.0);
     }
 }
@@ -52,6 +58,7 @@ pub(super) fn effort_picked(
     session.choose_effort(level);
     session.note(said_of(level));
     say_if_unread(session);
+    say_if_kept_for_account(session);
 }
 
 /// Open the effort picker as a mode of the session, for a turn that is running.
@@ -66,9 +73,12 @@ pub(super) fn choose_editing(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) {
-    if let Some(row) = crate::config_prompt::choose(terminal, session.editing(), |frame| {
+    let wheel = session.wheel_rows();
+    let chosen = crate::config_prompt::choose(terminal, session.editing(), wheel, |frame| {
         render::draw(frame, session);
-    }) {
+    });
+    session.end_a_pickers_press();
+    if let Some(row) = chosen {
         editing_picked(session, row.0);
     }
 }
@@ -102,6 +112,30 @@ pub(super) fn say_if_unread(session: &mut Session) {
     }
 }
 
+/// Say that the model in force is the ChatGPT account's and is sent the level the session began
+/// with, where the level chosen is another.
+///
+/// The choice is kept either way: it is the level of the next session, and of every model but the
+/// account's. Said when the level is chosen and when a model of the account is picked, the two moves
+/// that can leave the choice and the level sent apart, so that what was asked for is not reported as
+/// what is sent (CHATGPT-10). Not said where the model reads no level, since nothing is sent then and
+/// [`say_if_unread`] has said so.
+pub(super) fn say_if_kept_for_account(session: &mut Session) {
+    let began = session.account_session().effort();
+    if !session.model_is_account() || !session.model_reads_effort() || session.effort() == began {
+        return;
+    }
+    let word = |level: Option<bravebot_aichat::protocol::Effort>| match level {
+        Some(level) => level.as_str().to_string(),
+        None => t!(effort_unset).to_string(),
+    };
+    session.note(t!(
+        session_effort_kept_for_account,
+        began = word(began),
+        chosen = word(session.effort())
+    ));
+}
+
 /// Take a level by name without opening the picker.
 ///
 /// A word this program does not know changes nothing and says so. It must not reach a request
@@ -126,7 +160,7 @@ pub(super) fn set_language(session: &mut Session, word: &str) {
     let available = bravebot_i18n::tags().join(", ");
     let kept = |session: &mut Session, tag: Option<&str>| match tag {
         Some(tag) if session.choose_language(Some(tag)) => {
-            t!(session_language_set, language = tag).to_string()
+            t!(session_language_set, language = tag)
         }
         None if session.choose_language(None) => t!(session_language_auto).to_string(),
         _ => t!(session_language_not_saved).to_string(),
@@ -323,7 +357,7 @@ pub(super) fn set_style_in(
                 style = style.name.as_ref(),
                 styles = styles
             ),
-            None => t!(session_style_none, styles = styles).to_string(),
+            None => t!(session_style_none, styles = styles),
         };
         session.note(note);
     } else if word == STYLE_OFF {
@@ -400,7 +434,7 @@ pub(super) fn set_mode(
             Some(skill) => t!(session_mode_in_force, skill = skill, skills = available),
             None => t!(session_mode_none, skills = available),
         };
-        session.note(note.to_string());
+        session.note(note);
     } else if word == MODE_OFF {
         session.choose_skill_mode(None);
         stored.set_skill_mode(None);
@@ -488,9 +522,10 @@ pub(super) fn record_to_resume(
             session.note(t!(session_resume_nothing_else));
             return None;
         }
-        let chosen = crate::resume::choose_other(terminal, root, current);
+        let chosen = crate::resume::choose_other(terminal, root, current, session.wheel_rows());
+        session.end_a_pickers_press();
         match chosen {
-            crate::resume::Choice::Resume(record) => crate::resume::continuable(record),
+            crate::resume::Choice::Resume(record) => crate::resume::continuable(root, record),
             // Leaving the picker, by Escape or by Ctrl-C, stays where the person is.
             crate::resume::Choice::Fresh | crate::resume::Choice::Quit => return None,
         }

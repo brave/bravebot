@@ -32,13 +32,14 @@ DEB_IMAGE = debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed
 RPM_IMAGE = fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814
 # Every file that states the version, which is what a bump rewrites and commits. The two under
 # ui/ are the desktop application's: it is packaged from its own manifest, so a version left
-# behind there is an app bundle naming a release that does not exist.
-VERSION_FILES = Cargo.toml Cargo.lock package.json ui/package.json
+# behind there is an app bundle naming a release that does not exist. The lock under fuzz/ records
+# the version of every bravebot crate the fuzz targets build, so `check-fuzz` fails on a stale one.
+VERSION_FILES = Cargo.toml Cargo.lock fuzz/Cargo.lock package.json ui/package.json
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
             BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVEBOT_DEFAULT_MODEL \
-            BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
+            BACKTRACE_SUBMIT_URL BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
 
 .PHONY: help
 help:
@@ -70,6 +71,10 @@ help:
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             The npm package tests, the pnpm lockfiles in sync with their manifests, and their lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
+	@echo "  make check-fuzz            Lint, build, replay and briefly run every fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; needs the nightly toolchain and cargo-fuzz"
+	@echo "  make fuzz TARGET=<name>    Run one fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; the targets are $(FUZZ_TARGETS)"
+	@echo "  make fuzz-cmin TARGET=<name>  Reduce fuzz/corpus/<name> to the inputs that each reach something new"
+	@echo "  make fuzz-install          Install cargo-fuzz $(CARGO_FUZZ_VERSION), the version CI runs"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
@@ -335,6 +340,13 @@ check-npm:
 # matches is a recorded reason for a duplicate that is no longer there. --locked for the same
 # reason every other cargo command here takes it: the answer is about the versions Cargo.lock
 # pins, not the ones a resolve on the spot would pick.
+#
+# The fuzz package is a workspace of its own, so the first run does not read its graph, and the
+# second reads it with the same policy. The skip entries describe the root graph: the first run
+# fails on one that matches nothing, and the second does not report them. The one licence exception
+# is for a crate only the fuzz graph has, so the second run fails on an exception that matches
+# nothing and the first does not report it. An exception for a crate only the root graph has would
+# need the flags the other way round.
 CARGO_DENY_VERSION = 0.20.2
 CARGO_DENY_ROOT = $(HOME)/.cache/bravebot-deny
 .PHONY: check-deps
@@ -345,7 +357,111 @@ check-deps:
 		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
 	}
-	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip --allow license-exception-not-encountered
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+		--allow unmatched-skip --allow unnecessary-skip --deny license-exception-not-encountered
+
+# The fuzz targets in fuzz/, which is a package of its own with its own workspace and lockfile, so
+# nothing above compiles libFuzzer's C++.
+#
+# libFuzzer needs a nightly toolchain, and the date of the one the targets are built with is
+# written here and nowhere else. Moving to a newer one is an edit to this line, which
+# `make check-fuzz` then checks the targets still build with.
+#
+# Targets are built with debug assertions and overflow checks, which `-a` asks for by name so that
+# it does not depend on cargo-fuzz's default, and with AddressSanitizer. A release build of
+# bravebot sets no `overflow-checks`, so a sum that overflows there wraps and the function goes on
+# with a wrong number: built this way, an input that reaches one is reported instead.
+#
+# `-max_len` is the longest input the fuzzer makes. `diff` reads two texts, so it is given room
+# for both. bravebot-config's build script refuses to build without credentials unless told that a
+# binary configured at run time is acceptable, which is all a fuzz target needs.
+FUZZ_TOOLCHAIN = nightly-2026-10-01
+# The cargo-fuzz CI installs, and the one `make fuzz-install` installs for a person.
+CARGO_FUZZ_VERSION = 0.13.2
+FUZZ_TARGETS = regex diff event_stream sse
+FUZZ_SECONDS = 20
+FUZZ_FLAGS = -timeout=10 -rss_limit_mb=2048
+FUZZ_ENV = BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
+fuzz_max_len = $$([ "$(1)" = diff ] && echo 65536 || echo 4096)
+# cargo-fuzz does not read a dictionary by itself, so each target that has one is handed it.
+fuzz_dict = $$([ -f fuzz/dictionaries/$(1).dict ] && echo -dict=fuzz/dictionaries/$(1).dict)
+
+# The toolchain, for the commands in docs/development/fuzzing.md to name without writing its date.
+.PHONY: fuzz-toolchain
+fuzz-toolchain:
+	@echo $(FUZZ_TOOLCHAIN)
+
+# Built from source into cargo's own bin directory. taiki-e/install-action has no manifest for
+# cargo-fuzz, and its fallback fetches whichever cargo-binstall is current.
+.PHONY: fuzz-install
+fuzz-install:
+	cargo install --locked cargo-fuzz@$(CARGO_FUZZ_VERSION)
+
+.PHONY: fuzz-prerequisites
+fuzz-prerequisites:
+	@command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^$(FUZZ_TOOLCHAIN)' || { \
+		echo "fuzz: the $(FUZZ_TOOLCHAIN) toolchain is not installed: rustup toolchain install $(FUZZ_TOOLCHAIN) --profile minimal -c rustfmt -c clippy -c rust-src" >&2; \
+		exit 1; \
+	}
+	@cargo fuzz --version >/dev/null 2>&1 || { \
+		echo "fuzz: cargo-fuzz is not installed: make fuzz-install" >&2; \
+		exit 1; \
+	}
+	@[ "$$(cargo fuzz list | sort | tr '\n' ' ')" = "$$(printf '%s\n' $(FUZZ_TARGETS) | sort | tr '\n' ' ')" ] || { \
+		echo "fuzz: FUZZ_TARGETS in the Makefile ($(FUZZ_TARGETS)) differs from the [[bin]] entries in fuzz/Cargo.toml ($$(cargo fuzz list | tr '\n' ' '))" >&2; \
+		exit 1; \
+	}
+
+# The targets one to a line, which .github/workflows/fuzz.yml makes a leg of each from.
+.PHONY: fuzz-targets
+fuzz-targets:
+	@printf '%s\n' $(FUZZ_TARGETS)
+
+# What `fuzz` and `fuzz-cmin` need of TARGET.
+.PHONY: fuzz-named-target
+fuzz-named-target:
+	@echo "$(FUZZ_TARGETS)" | tr ' ' '\n' | grep -qxF -- '$(TARGET)' || { \
+		echo "fuzz: name a target, as in make fuzz TARGET=regex. They are: $(FUZZ_TARGETS)" >&2; \
+		exit 1; \
+	}
+
+# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
+# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
+# read from their own directories.
+.PHONY: fuzz
+fuzz: fuzz-prerequisites fuzz-named-target
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $(TARGET) fuzz/corpus/$(TARGET) fuzz/seeds/$(TARGET) fuzz/regressions/$(TARGET) -- \
+		-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$(TARGET)) $(call fuzz_dict,$(TARGET))
+
+# Replaces fuzz/corpus/<target> with the inputs of it that each reach something new, which is what
+# the weekly run saves. cargo-fuzz leaves the corpus as it was and exits 0 where the merge fails.
+.PHONY: fuzz-cmin
+fuzz-cmin: fuzz-prerequisites fuzz-named-target
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz cmin -a $(TARGET) fuzz/corpus/$(TARGET) -- -max_len=$(call fuzz_max_len,$(TARGET))
+
+# Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
+# replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
+# FUZZ_SECONDS. Stops at the first failure.
+.PHONY: check-fuzz
+check-fuzz: fuzz-prerequisites
+	cargo +$(FUZZ_TOOLCHAIN) fmt --manifest-path fuzz/Cargo.toml -- --check
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) test --manifest-path fuzz/Cargo.toml --lib --locked
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz build -a
+	@set -e; for target in $(FUZZ_TARGETS); do \
+		echo "replay $$target"; \
+		$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $$target fuzz/seeds/$$target fuzz/regressions/$$target -- \
+			-runs=0 $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target); \
+	done
+	@set -e; for target in $(FUZZ_TARGETS); do \
+		echo "run $$target for $(FUZZ_SECONDS)s"; \
+		mkdir -p fuzz/corpus/$$target; \
+		$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $$target fuzz/corpus/$$target fuzz/seeds/$$target fuzz/regressions/$$target -- \
+			-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target) $(call fuzz_dict,$$target); \
+	done
 
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
@@ -914,11 +1030,15 @@ app-installers-windows:
 # descriptions are written here from one architecture list, so neither format can be built for
 # an architecture the other is not.
 #
-# The packers are the app packages' two, for the reasons `app-packages-linux` gives: each builds
-# in its own /tmp from a tree staged on the host rather than in the mounted stage, since Docker
-# Desktop's file sharing does not preserve every mode a package records; each runs as root,
-# since installing rpmbuild needs it; and each hands its output back to whoever is packaging.
-# rpmbuild is given its target from the spec's `ExclusiveArch`, as `app-packages-linux` reads it.
+# One target per format, and each runs where its own tool is: `cli-packages-linux-deb` where
+# dpkg-deb is, `cli-packages-linux-rpm` where rpmbuild is. Neither starts a container of its own,
+# so each can run inside one; `cli-packages-linux` runs each in the digest-pinned container the
+# app's packages use, one per format, with the tree mounted read-only beside dist/.
+#
+# Each container stages its tree in its own /tmp rather than in the mounted stage, for the
+# reason `app-packages-linux` gives; runs as root, since installing its tool needs that; and
+# hands its output back to whoever is packing. rpmbuild is given its target from the spec's
+# `ExclusiveArch`, as `app-packages-linux` reads it.
 #
 # The dependencies are the binary's own, from its dynamic section: libm, libc, libpthread and
 # libdl, all four libc6 on Debian and glibc on Fedora, required at 2.30 or newer, the newest
@@ -935,6 +1055,55 @@ CLI_ARCHES = amd64:x86_64 arm64:aarch64
 
 .PHONY: cli-packages-linux
 cli-packages-linux:
+	@docker run --rm -e OWNER="$$(id -u):$$(id -g)" \
+		-v "$(CURDIR):/work:ro" -v "$(CURDIR)/dist:/work/dist:rw" -w /work $(DEB_IMAGE) sh -c '\
+		apt-get update >/dev/null && \
+		apt-get install -y --no-install-recommends make >/dev/null && \
+		make cli-packages-linux-deb && \
+		chown "$$OWNER" dist/bravebot-linux-*.deb'
+	@docker run --rm -e OWNER="$$(id -u):$$(id -g)" \
+		-v "$(CURDIR):/work:ro" -v "$(CURDIR)/dist:/work/dist:rw" -w /work $(RPM_IMAGE) sh -c '\
+		dnf -y --setopt=install_weak_deps=False install make rpm-build >/dev/null && \
+		make cli-packages-linux-rpm && \
+		chown "$$OWNER" dist/bravebot-linux-*.rpm'
+
+.PHONY: cli-packages-linux-deb
+cli-packages-linux-deb:
+	@set -e; missing=; builds=; for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; \
+		test -f dist/bravebot-linux-$$arch || { missing="$$missing bravebot-linux-$$arch"; builds="$$builds linux-$$arch"; }; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "missing from dist/:$$missing" >&2; \
+		echo "run \`make$$builds strip\` first" >&2; exit 1; \
+	fi
+	@set -e; mkdir -p dist; stage=$$(mktemp -d); trap 'rm -rf "$$stage"' EXIT; \
+	for pair in $(CLI_ARCHES); do \
+		arch=$${pair%%:*}; \
+		dir="$$stage/$$arch"; \
+		install -d -m 0755 "$$dir/usr/bin" "$$dir/DEBIAN"; \
+		install -m 0755 dist/bravebot-linux-$$arch "$$dir/usr/bin/bravebot"; \
+		size=$$(( ($$(wc -c < dist/bravebot-linux-$$arch) + 1023) / 1024 )); \
+		{ printf '%s\n' \
+			'Package: bravebot' \
+			'Version: $(VERSION)' \
+			"Architecture: $$arch" \
+			'Maintainer: Brave Software, Inc. <support@brave.com>' \
+			"Installed-Size: $$size" \
+			'Depends: libc6 (>= 2.30)' \
+			'Section: devel' \
+			'Priority: optional' \
+			'Homepage: https://github.com/brave/bravebot' \
+			'Description: A general-purpose agent with structural resistance to indirect prompt injection' \
+			' bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
+			' carried and written, and it never decides what happens.'; } > "$$dir/DEBIAN/control"; \
+		dpkg-deb --build --root-owner-group "$$dir" "$$stage/out-$$arch.deb"; \
+		mv -f "$$stage/out-$$arch.deb" dist/bravebot-linux-$$arch.deb; \
+		echo "wrote dist/bravebot-linux-$$arch.deb"; \
+	done
+
+.PHONY: cli-packages-linux-rpm
+cli-packages-linux-rpm:
 	@set -e; missing=; builds=; for pair in $(CLI_ARCHES); do \
 		arch=$${pair%%:*}; \
 		test -f dist/bravebot-linux-$$arch || { missing="$$missing bravebot-linux-$$arch"; builds="$$builds linux-$$arch"; }; \
@@ -949,20 +1118,6 @@ cli-packages-linux:
 		dir="$$stage/$$arch"; \
 		install -d -m 0755 "$$dir/payload/usr/bin"; \
 		install -m 0755 dist/bravebot-linux-$$arch "$$dir/payload/usr/bin/bravebot"; \
-		size=$$(( ($$(wc -c < dist/bravebot-linux-$$arch) + 1023) / 1024 )); \
-		{ printf '%s\n' \
-			'Package: bravebot' \
-			'Version: $(VERSION)' \
-			"Architecture: $$arch" \
-			'Maintainer: Brave Software, Inc. <support@brave.com>' \
-			"Installed-Size: $$size" \
-			'Depends: libc6 (>= 2.30)' \
-			'Section: devel' \
-			'Priority: optional' \
-			'Homepage: https://github.com/brave/bravebot' \
-			'Description: A general-purpose agent with structural resistance to indirect prompt injection' \
-			' bravebot is a general-purpose agent that runs in a terminal. Untrusted content can be' \
-			' carried and written, and it never decides what happens.'; } > "$$dir/control"; \
 		{ printf '%s\n' \
 			'%global __os_install_post %{nil}' \
 			'%global debug_package %{nil}' \
@@ -989,20 +1144,12 @@ cli-packages-linux:
 			'%files' \
 			'%defattr(-,root,root,-)' \
 			'/usr/bin/bravebot'; } > "$$dir/bravebot.spec"; \
-		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(DEB_IMAGE) sh -c '\
-			cp -a payload /tmp/deb && mkdir /tmp/deb/DEBIAN && cp control /tmp/deb/DEBIAN/control && \
-			dpkg-deb --build --root-owner-group /tmp/deb out.deb && \
-			chown "$$OWNER" out.deb'; \
-		docker run --rm -e OWNER="$$(id -u):$$(id -g)" -v "$$dir:/stage" -w /stage $(RPM_IMAGE) sh -c '\
-			dnf -y --setopt=install_weak_deps=False install rpm-build >/dev/null && \
-			target=$$(sed -n "s/^ExclusiveArch: //p" bravebot.spec) && \
-			rpmbuild -bb --target "$${target:?bravebot.spec states no ExclusiveArch}" \
-				--define "_sourcedir /stage" --define "_topdir /tmp/rpm" \
-				--define "_rpmdir /stage" --define "_rpmfilename out.rpm" bravebot.spec && \
-			chown "$$OWNER" out.rpm'; \
-		mv "$$dir/out.deb" dist/bravebot-linux-$$arch.deb; \
-		mv "$$dir/out.rpm" dist/bravebot-linux-$$arch.rpm; \
-		echo "wrote dist/bravebot-linux-$$arch.deb dist/bravebot-linux-$$arch.rpm"; \
+		target="$$(sed -n 's/^ExclusiveArch: //p' "$$dir/bravebot.spec")"; \
+		rpmbuild -bb --target "$${target:?bravebot.spec states no ExclusiveArch}" \
+			--define "_sourcedir $$dir" --define "_topdir $$dir/rpmbuild" \
+			--define "_rpmdir $$stage" --define "_rpmfilename out-$$arch.rpm" "$$dir/bravebot.spec"; \
+		mv -f "$$stage/out-$$arch.rpm" dist/bravebot-linux-$$arch.rpm; \
+		echo "wrote dist/bravebot-linux-$$arch.rpm"; \
 	done
 
 # Symbols are kept during the build because Rust's own strip can corrupt some targets
@@ -1100,6 +1247,8 @@ bump-version:
 		exit 1; \
 	fi; \
 	cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null; \
+	cargo update --workspace --manifest-path fuzz/Cargo.toml --offline >/dev/null 2>&1 \
+		|| cargo update --workspace --manifest-path fuzz/Cargo.toml >/dev/null; \
 	python3 contrib/check-versions.py --set "$$next"; \
 	python3 contrib/check-versions.py; \
 	git commit -q -m "Bump version to $$next" -- $(VERSION_FILES); \

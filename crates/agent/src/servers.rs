@@ -347,7 +347,7 @@ pub fn reach<A: Asker + ?Sized>(
         notes.extend(
             again
                 .iter()
-                .map(|hop| t!(mcp_move_again, alias = hop.alias.as_str()).to_string()),
+                .map(|hop| t!(mcp_move_again, alias = hop.alias.as_str())),
         );
         for server in reached {
             let Some(moving) = moving.iter().find(|moving| moving.alias == server.alias()) else {
@@ -484,20 +484,20 @@ fn moves<A: Asker + ?Sized>(
 fn moved(home: &Home, moving: &Moving, notes: &mut Vec<String>) -> bool {
     let alias = moving.alias.as_str();
     let (Some(directory), true) = (&home.directory, home.writable) else {
-        notes.push(t!(mcp_move_moved, alias = alias).to_string());
+        notes.push(t!(mcp_move_moved, alias = alias));
         return true;
     };
     match crate::mcp::record_a_move(directory, alias, &moving.from, &moving.declaration) {
         Ok(()) => {
-            notes.push(t!(mcp_move_moved, alias = alias).to_string());
+            notes.push(t!(mcp_move_moved, alias = alias));
             true
         }
         Err(Unmoved::Edited) => {
-            notes.push(t!(mcp_move_edited, alias = alias).to_string());
+            notes.push(t!(mcp_move_edited, alias = alias));
             false
         }
         Err(Unmoved::NotWritten(error)) => {
-            notes.push(t!(mcp_move_not_recorded, alias = alias, error = error).to_string());
+            notes.push(t!(mcp_move_not_recorded, alias = alias, error = error));
             true
         }
     }
@@ -555,14 +555,11 @@ fn settle<A: Asker + ?Sized>(
         return Vec::new();
     }
     let Some(directory) = &home.directory else {
-        notes.push(
-            t!(
-                servers_none_reached,
-                aliases = aliases(requested),
-                reason = no_state_directory()
-            )
-            .to_string(),
-        );
+        notes.push(t!(
+            servers_none_reached,
+            aliases = aliases(requested),
+            reason = no_state_directory()
+        ));
         return Vec::new();
     };
     let declarations = match Declarations::read(directory) {
@@ -573,14 +570,11 @@ fn settle<A: Asker + ?Sized>(
                 path = mcp::declarations_file(directory).display().to_string(),
                 reason = unreadable(&why)
             );
-            notes.push(
-                t!(
-                    servers_none_reached,
-                    aliases = aliases(requested),
-                    reason = reason
-                )
-                .to_string(),
-            );
+            notes.push(t!(
+                servers_none_reached,
+                aliases = aliases(requested),
+                reason = reason
+            ));
             return Vec::new();
         }
     };
@@ -802,7 +796,6 @@ pub fn in_a_repository(directory: &Path, repository: &Path) -> String {
         path = shown(&directory.display().to_string()),
         repository = shown(&repository.display().to_string())
     )
-    .to_string()
 }
 
 /// What a session started in `project` holds for a server its settings request, before anybody
@@ -1058,9 +1051,7 @@ pub fn foreseen(
     } = (match planned(declaration, environment) {
         Ok(plan) => plan,
         Err(reason) => {
-            return Foreseen::Unstarted(
-                t!(servers_not_reached, alias = alias, reason = reason).to_string(),
-            );
+            return Foreseen::Unstarted(t!(servers_not_reached, alias = alias, reason = reason));
         }
     })
     else {
@@ -1069,28 +1060,22 @@ pub fn foreseen(
     if let Some(directory) = &directory
         && let Some(repository) = repository_holding(directory)
     {
-        return Foreseen::Unstarted(
-            t!(
-                servers_not_reached,
-                alias = alias,
-                reason = in_a_repository(directory, &repository)
-            )
-            .to_string(),
-        );
+        return Foreseen::Unstarted(t!(
+            servers_not_reached,
+            alias = alias,
+            reason = in_a_repository(directory, &repository)
+        ));
     }
     let state = state_directory(home);
     reads.retain(|file| state.as_ref().is_none_or(|state| !file.starts_with(state)));
     let sandbox = match bravebot_sandbox::for_current_platform() {
         Ok(sandbox) => sandbox,
         Err(error) => {
-            return Foreseen::Unstarted(
-                t!(
-                    servers_not_confined,
-                    alias = alias,
-                    reason = error.to_string()
-                )
-                .to_string(),
-            );
+            return Foreseen::Unstarted(t!(
+                servers_not_confined,
+                alias = alias,
+                reason = error.to_string()
+            ));
         }
     };
     let (own, kept) = match state.as_deref().filter(|_| home.writable) {
@@ -1107,7 +1092,7 @@ pub fn foreseen(
     let Some(mut policy) =
         confinement_here(&program, &searched, &reads, directory.as_deref(), &own)
     else {
-        return Foreseen::Unstarted(t!(servers_no_confinement_here, alias = alias).to_string());
+        return Foreseen::Unstarted(t!(servers_no_confinement_here, alias = alias));
     };
     policy.readable.retain(|row| *row != own);
     policy.writable.retain(|row| row.path != own);
@@ -1117,9 +1102,7 @@ pub fn foreseen(
     ) {
         Ok(held) => held,
         Err(reason) => {
-            return Foreseen::Unstarted(
-                t!(servers_not_confined, alias = alias, reason = reason).to_string(),
-            );
+            return Foreseen::Unstarted(t!(servers_not_confined, alias = alias, reason = reason));
         }
     };
     let (policy, view, _) = nameable(alias, policy, &granted);
@@ -1247,10 +1230,10 @@ fn resolve(
         return Ok(given.to_path_buf());
     }
     if given.components().count() != 1 {
-        return Err(t!(servers_program_relative, program = shown(program)).to_string());
+        return Err(t!(servers_program_relative, program = shown(program)));
     }
     if path.is_none() {
-        return Err(t!(servers_program_without_path, program = shown(program)).to_string());
+        return Err(t!(servers_program_without_path, program = shown(program)));
     }
     let added = extensions
         .iter()
@@ -1265,7 +1248,7 @@ fn resolve(
                 && candidate.to_str().is_some()
                 && outside_stage_writable(candidate)
         })
-        .ok_or_else(|| t!(servers_program_not_found, program = shown(program)).to_string())
+        .ok_or_else(|| t!(servers_program_not_found, program = shown(program)))
 }
 
 /// Whether a program found in a `PATH` entry lies outside every directory a stage may write.
@@ -1505,7 +1488,7 @@ pub fn drawn(alias: &str, declaration: &Declaration, digest: &str) -> Vec<String
     )];
     let names: Vec<String> = declaration
         .stored()
-        .map(|name| t!(mcp_variable_stored, name = name).to_string())
+        .map(|name| t!(mcp_variable_stored, name = name))
         .chain(declaration.variables().iter().cloned())
         .collect();
     if !names.is_empty() {
@@ -1584,26 +1567,25 @@ pub fn problem(found: &Problem) -> String {
         Problem::Alias => t!(mcp_problem_alias).to_string(),
         Problem::NotAnObject => t!(mcp_problem_not_an_object).to_string(),
         Problem::Transport => t!(mcp_problem_transport).to_string(),
-        Problem::Key(key) => t!(mcp_problem_key, key = shown(key)).to_string(),
+        Problem::Key(key) => t!(mcp_problem_key, key = shown(key)),
         Problem::Program => t!(mcp_problem_program).to_string(),
         Problem::Name => t!(mcp_problem_name).to_string(),
         Problem::Env => t!(mcp_problem_env).to_string(),
-        Problem::Value(name) => t!(mcp_problem_value, name = name).to_string(),
-        Problem::Twice(name) => t!(mcp_problem_twice, name = name).to_string(),
+        Problem::Value(name) => t!(mcp_problem_value, name = name),
+        Problem::Twice(name) => t!(mcp_problem_twice, name = name),
         Problem::Reads => t!(mcp_problem_reads).to_string(),
         Problem::Directory => t!(mcp_problem_directory).to_string(),
         Problem::Url => t!(mcp_problem_url).to_string(),
         Problem::Credentials => t!(mcp_problem_credentials).to_string(),
-        Problem::Header(name) => t!(mcp_problem_header, name = name).to_string(),
-        Problem::Remote(key) => t!(mcp_problem_remote, key = *key).to_string(),
+        Problem::Header(name) => t!(mcp_problem_header, name = name),
+        Problem::Remote(key) => t!(mcp_problem_remote, key = *key),
         Problem::Timeout(key) => t!(
             mcp_problem_timeout,
             key = *key,
             most = mcp::MAX_TIMEOUT_SECS
-        )
-        .to_string(),
-        Problem::Tool(name) => t!(mcp_problem_tool, name = name).to_string(),
-        Problem::Tools(key) => t!(mcp_problem_tools, key = *key).to_string(),
+        ),
+        Problem::Tool(name) => t!(mcp_problem_tool, name = name),
+        Problem::Tools(key) => t!(mcp_problem_tools, key = *key),
     }
 }
 
@@ -1613,7 +1595,6 @@ pub fn no_state_directory() -> String {
         mcp_no_state_directory,
         variables = crate::home::PROFILE_VARIABLES.join(" or ")
     )
-    .to_string()
 }
 
 /// Record the approval of `declaration`'s digest, and of nothing else: the alias is kept beside it
@@ -1629,13 +1610,12 @@ pub fn record(
     approvals.approve(alias, declaration.digest());
     approvals.keep_only(declarations);
     let path = mcp::approvals_file(directory);
-    crate::mcp::replace(&path, approvals.to_text()).map_err(|error| {
+    crate::home::replace(&path, approvals.to_text()).map_err(|error| {
         t!(
             mcp_not_written,
             path = path.display().to_string(),
             error = error.to_string()
         )
-        .to_string()
     })
 }
 
@@ -1658,23 +1638,20 @@ fn keep(
     declaration: &Declaration,
 ) -> Vec<String> {
     if !home.writable {
-        return vec![t!(servers_for_this_session_only, alias = alias).to_string()];
+        return vec![t!(servers_for_this_session_only, alias = alias)];
     }
     let mut unkept = Vec::new();
     if let Err(reason) = record(directory, declarations, approvals, alias, declaration) {
-        unkept.push(t!(servers_not_kept, alias = alias, reason = reason).to_string());
+        unkept.push(t!(servers_not_kept, alias = alias, reason = reason));
     }
     if let Some(project) = project {
         let recorded = projects.add(project)
-            && crate::mcp::replace(&mcp::projects_file(directory), projects.to_text()).is_ok();
+            && crate::home::replace(&mcp::projects_file(directory), projects.to_text()).is_ok();
         if !recorded {
-            unkept.push(
-                t!(
-                    servers_project_not_kept,
-                    path = shown(&project.display().to_string())
-                )
-                .to_string(),
-            );
+            unkept.push(t!(
+                servers_project_not_kept,
+                path = shown(&project.display().to_string())
+            ));
         }
     }
     unkept
@@ -2255,21 +2232,18 @@ fn prompts_or_none(
             let notes = match listing.refused() {
                 0 => Vec::new(),
                 count => {
-                    vec![t!(servers_prompts_refused, alias = alias, count = count).to_string()]
+                    vec![t!(servers_prompts_refused, alias = alias, count = count)]
                 }
             };
             Ok((listing, notes))
         }
         Err(error @ McpError::Server { .. }) => Ok((
             PromptListing::none(alias),
-            vec![
-                t!(
-                    servers_prompts_not_listed,
-                    alias = alias,
-                    reason = error.to_string()
-                )
-                .to_string(),
-            ],
+            vec![t!(
+                servers_prompts_not_listed,
+                alias = alias,
+                reason = error.to_string()
+            )],
         )),
         Err(other) => Err(other),
     }
@@ -2505,7 +2479,6 @@ fn nameable(
             alias = alias,
             paths = paths.join(", ")
         )
-        .to_string()
     });
     let view = EffectivePolicy::of(&resolved.policy, resolved.omitted);
     (resolved.policy, view, note)

@@ -20,10 +20,17 @@ guards:
 reads_a_step_without_keying:
   - crates/core/src/policy.rs::plan_words
   - crates/core/src/policy.rs::read_proven
+  - crates/agent/src/confine.rs::scope_of
+  - crates/agent/src/confine.rs::holds
+  - crates/agent/src/confine.rs::hands_over_a_file_the_plan_could_write
+  - crates/agent/src/confine.rs::identified
 documented-by:
   - docs/website/docs/reference/tools.md
   - docs/website/docs/reference/run-tool.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
+  - docs/website/docs/security/permission-rules.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope
@@ -492,13 +499,19 @@ A compiler reports the field added to the step, and `make check-security` report
 written to read one field at a time, which is the half a compiler cannot see. Neither is a habit
 somebody has to hold, and the second fails the same pull request that introduces the function.
 
-A function may read a step field by field for something that is not a key, and the two that do are
+A function may read a step field by field for something that is not a key, and the six that do are
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
 the words a rule is matched against, which are the program and its arguments and deliberately not the
 whole step. `read_proven` first refuses a step that carries an assignment or
 a route, is started from inside the project, or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
+The four in `confine.rs` each answer a question about one step and build nothing that is stored,
+compared or approved. `scope_of` names the scope the program and its arguments ask for, `identified`
+whether a git stage names a remote an identity was chosen for, `hands_over_a_file_the_plan_could_write`
+whether an argument names a file the plan could have written, and `holds` whether every stage of a
+line is held by the sandbox. Each reads only the fields its question is about, and a field added to
+the step changes what a person approved for none of them.
 
 **A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
 asked about every time, in this session and in the next. The answer is the spelling that puts the

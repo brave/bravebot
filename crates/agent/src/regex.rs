@@ -486,6 +486,16 @@ impl Regex {
         self.simulate(text)
     }
 
+    /// Whether `text` holds a match, from the NFA alone.
+    ///
+    /// [`Regex::matches`] answers from the literal text a pattern requires where it can, so the NFA
+    /// is the answer only for what is left. Both have to give one answer, and the `regex` fuzz
+    /// target holds them to it on generated input, which needs a way in that skips the shortcuts.
+    #[doc(hidden)]
+    pub fn matches_by_automaton(&self, text: &str) -> bool {
+        self.simulate(text)
+    }
+
     /// Run the NFA over `text`, with no regard to the literals.
     ///
     /// Unanchored, so a thread starts at every position unless `^` says otherwise. The state set
@@ -1423,6 +1433,20 @@ mod tests {
             "matching took {:?}, which is the backtracking blowup this engine rules out",
             started.elapsed()
         );
+    }
+
+    /// The fuzz target compares `matches` with this, so it has to run the NFA for a pattern whose
+    /// answer `matches` takes from a literal, or the comparison would hold a shortcut to itself.
+    #[test]
+    fn the_automaton_is_asked_even_where_a_literal_would_answer() {
+        let regex = Regex::compile("needle").expect("compiles");
+        let before = simulations();
+        assert!(regex.matches("a needle in a haystack"));
+        assert_eq!(simulations(), before, "the literal answers this pattern");
+
+        assert!(regex.matches_by_automaton("a needle in a haystack"));
+        assert!(!regex.matches_by_automaton("a haystack"));
+        assert_eq!(simulations() - before, 2);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Write-once quarantined storage.
 //!
 //! Untrusted content lands in a slot and stays there. Slots are written exactly
-//! once, so content cannot be laundered by overwriting, and reads go through
-//! capability-scoped handles that carry a label ceiling.
+//! once, so content cannot be laundered by overwriting, and the content leaves a slot only
+//! still labelled, through [`SlotStore::take_for_effect`], to be handed to an effect.
 //!
 //! Two structural guarantees, both enforced by the type system rather than by
 //! runtime checks:
@@ -16,9 +16,9 @@
 //! something finally needs them. What is deferred is only the reading. The slot is spoken for
 //! from the moment it is deferred, its label is decided then rather than by whatever turns up,
 //! and the reading is a single filling that cannot be repeated. Nothing may read a deferred
-//! slot in the meantime: [`SlotStore::take_for_effect`] and [`SlotReader::read`] refuse it by
-//! name rather than returning nothing, so a consumer that forgot to ask for the file is an
-//! error and never an empty document.
+//! slot in the meantime: [`SlotStore::take_for_effect`] refuses it by name rather than
+//! returning nothing, so a consumer that forgot to ask for the file is an error and never an
+//! empty document.
 
 use crate::label::Label;
 use crate::policy::PathAuthority;
@@ -56,14 +56,6 @@ pub enum SlotError {
     AlreadyWritten(SlotId),
     /// Read of a slot that has not been written yet.
     NotWritten(SlotId),
-    /// Read of a slot outside the reader's declared scope.
-    OutOfScope(SlotId),
-    /// A slot's label exceeds the reader's ceiling.
-    CeilingExceeded {
-        slot: SlotId,
-        slot_label: Label,
-        ceiling: Label,
-    },
 }
 
 impl fmt::Display for SlotError {
@@ -75,15 +67,6 @@ impl fmt::Display for SlotError {
             ),
             Self::AlreadyWritten(s) => write!(f, "slot '{s}' has already been written"),
             Self::NotWritten(s) => write!(f, "slot '{s}' has not been written yet"),
-            Self::OutOfScope(s) => write!(f, "slot '{s}' is not in this reader's scope"),
-            Self::CeilingExceeded {
-                slot,
-                slot_label,
-                ceiling,
-            } => write!(
-                f,
-                "label ceiling exceeded: slot '{slot}' is {slot_label} but the ceiling is {ceiling}"
-            ),
         }
     }
 }
@@ -168,7 +151,13 @@ enum Entry {
         /// document should not change. It is what lets a write that would put a file back exactly
         /// as it is be recognised as changing nothing, from bookkeeping rather than by comparing
         /// bytes: the driver never reads either side.
-        verbatim: Option<String>,
+        ///
+        /// With the file authority's [`Stamp`](crate::file_authority::Stamp) for that path as it
+        /// stood when the file was read: the path's revision and the number of `run` lines started.
+        /// The file is a copy of the slot only while both are still what they were: a write to the
+        /// file moves the revision, a program started since may have rewritten it without anybody
+        /// being told, and then the slot says nothing of what the file holds.
+        verbatim: Option<Box<(String, crate::file_authority::Stamp)>>,
         /// Where an answer produced by a processor may be written.
         home: Home,
         /// What produced this, where it was a program: the command as the user approved it.
@@ -226,9 +215,11 @@ impl Entry {
         }
     }
 
-    fn verbatim(&self) -> Option<&str> {
+    fn verbatim(&self) -> Option<(&str, crate::file_authority::Stamp)> {
         match self {
-            Self::Read { verbatim, .. } => verbatim.as_deref(),
+            Self::Read { verbatim, .. } => {
+                verbatim.as_deref().map(|(path, at)| (path.as_str(), *at))
+            }
             // Nothing has been read, so nothing is a copy of anything.
             Self::Unread(_) => None,
         }
@@ -315,8 +306,13 @@ impl SlotStore {
     ///
     /// Only the policy layer may ask, held by the witness [`SlotStore::path_of`] takes and for
     /// the same reason: what it is for is recognising a write that would put a file back exactly
-    /// as it is, and that is a decision.
-    pub(crate) fn verbatim_of(&self, id: &SlotId, _authority: &PathAuthority) -> Option<&str> {
+    /// as it is, and that is a decision. Returned with the revision of the path when the bytes
+    /// were read, which the caller compares with the path's revision now.
+    pub(crate) fn verbatim_of(
+        &self,
+        id: &SlotId,
+        _authority: &PathAuthority,
+    ) -> Option<(&str, crate::file_authority::Stamp)> {
         self.slots.get(id).and_then(Entry::verbatim)
     }
 
@@ -449,10 +445,9 @@ impl SlotStore {
     /// For the case where the planner named a reference and the kernel is carrying out what it
     /// asked. The value stays wrapped, so a caller can pass it to a write but not read it.
     ///
-    /// Bypasses the reader ceiling deliberately: a ceiling limits what a *reader* may see, and
-    /// this is not a read. Nobody sees these bytes; they travel from the slot to the effect.
-    /// A slot still waiting on its file refuses by name. Returning nothing would read as an
-    /// empty document, and an effect would carry out the emptiness.
+    /// Nobody sees these bytes; they travel from the slot to the effect, and the label travels
+    /// with them. A slot still waiting on its file refuses by name. Returning nothing would read
+    /// as an empty document, and an effect would carry out the emptiness.
     pub fn take_for_effect(&self, id: &SlotId) -> Result<Labelled<String>, SlotError> {
         match self.slots.get(id) {
             Some(Entry::Read { value, .. }) => Ok(value.clone()),
@@ -528,6 +523,7 @@ impl SlotStore {
         &mut self,
         id: &SlotId,
         content: Labelled<String>,
+        revision: crate::file_authority::Stamp,
     ) -> Result<Measured, SlotError> {
         let deferred = match self.slots.get(id) {
             Some(Entry::Unread(deferred)) => deferred.clone(),
@@ -555,7 +551,7 @@ impl SlotStore {
             id.clone(),
             Entry::Read {
                 value: taint(content, label),
-                verbatim: Some(deferred.path.clone()),
+                verbatim: Some(Box::new((deferred.path.clone(), revision))),
                 origin: Some(deferred.path.clone()),
                 path: Some(deferred.path),
                 home: Home::Anywhere,
@@ -579,38 +575,6 @@ impl SlotStore {
             store: self,
             id,
             label,
-        })
-    }
-
-    /// Mint a read capability scoped to exactly `ids`, with a label ceiling.
-    ///
-    /// The ceiling is checked here, at mint time, for every slot already written,
-    /// so an over-privileged read fails when the capability is created rather than
-    /// at some later read.
-    pub fn reader_for(
-        &self,
-        ids: impl IntoIterator<Item = SlotId>,
-        ceiling: Label,
-    ) -> Result<SlotReader<'_>, SlotError> {
-        let scope: Vec<SlotId> = ids.into_iter().collect();
-        for id in &scope {
-            // A slot with no label yet cannot be checked; the read itself will fail.
-            // Written without a let-chain so older toolchains can build this.
-            match self.label_of(id) {
-                Some(slot_label) if !slot_label.flows_to(ceiling) => {
-                    return Err(SlotError::CeilingExceeded {
-                        slot: id.clone(),
-                        slot_label,
-                        ceiling,
-                    });
-                }
-                _ => {}
-            }
-        }
-        Ok(SlotReader {
-            store: self,
-            scope,
-            ceiling,
         })
     }
 }
@@ -720,49 +684,6 @@ fn taint(content: Labelled<String>, label: Label) -> Labelled<String> {
         .expect("a label degrades to its taint with any other")
 }
 
-/// A read capability scoped to a fixed set of slots, with a label ceiling.
-#[derive(Debug)]
-pub struct SlotReader<'a> {
-    store: &'a SlotStore,
-    scope: Vec<SlotId>,
-    ceiling: Label,
-}
-
-impl SlotReader<'_> {
-    pub fn ceiling(&self) -> Label {
-        self.ceiling
-    }
-
-    pub fn scope(&self) -> &[SlotId] {
-        &self.scope
-    }
-
-    /// Read a slot. Still labelled on the way out, so the caller gains no ability to
-    /// inspect the content, only to carry it.
-    ///
-    /// The ceiling is re-checked here because a slot may have been written after this
-    /// reader was minted, and that write could carry a higher label than the mint-time
-    /// check saw.
-    pub fn read(&self, id: &SlotId) -> Result<Labelled<String>, SlotError> {
-        if !self.scope.contains(id) {
-            return Err(SlotError::OutOfScope(id.clone()));
-        }
-        let value = match self.store.slots.get(id) {
-            Some(Entry::Read { value, .. }) => value,
-            Some(Entry::Unread(_)) => return Err(SlotError::Unread(id.clone())),
-            None => return Err(SlotError::NotWritten(id.clone())),
-        };
-        if !value.label().flows_to(self.ceiling) {
-            return Err(SlotError::CeilingExceeded {
-                slot: id.clone(),
-                slot_label: value.label(),
-                ceiling: self.ceiling,
-            });
-        }
-        Ok(value.clone())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -783,14 +704,6 @@ mod tests {
 
         assert_eq!(
             store.take_for_effect(&sid("ref:0")).unwrap_err(),
-            SlotError::Unread(sid("ref:0"))
-        );
-
-        let reader = store
-            .reader_for([sid("ref:0")], Label::untrusted_private())
-            .unwrap();
-        assert_eq!(
-            reader.read(&sid("ref:0")).unwrap_err(),
             SlotError::Unread(sid("ref:0"))
         );
     }
@@ -833,9 +746,31 @@ mod tests {
             .fill(
                 &sid("ref:0"),
                 Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
+                Default::default(),
             )
             .expect("the first reading fills it");
         assert!(!store.is_unread(&sid("ref:0")));
+    }
+
+    /// A slot nothing reserved holds no bytes. An effect given one would carry out the
+    /// emptiness, and a fill would invent a slot that no reservation, and so no label ceiling,
+    /// stands behind.
+    #[test]
+    fn a_slot_nothing_reserved_has_no_bytes_to_give_and_none_to_fill() {
+        let mut store = SlotStore::new();
+
+        assert_eq!(
+            store.take_for_effect(&sid("ghost")).unwrap_err(),
+            SlotError::NotWritten(sid("ghost"))
+        );
+        assert_eq!(
+            store.fill(
+                &sid("ghost"),
+                Labelled::new("x".to_string(), Label::untrusted_private()),
+                Default::default()
+            ),
+            Err(SlotError::NotWritten(sid("ghost")))
+        );
     }
 
     /// Reading the file is the slot's single write, so a second reading has nowhere to go.
@@ -850,6 +785,7 @@ mod tests {
             .fill(
                 &sid("ref:0"),
                 Labelled::new("one\ntwo".to_string(), Label::untrusted_private()),
+                Default::default(),
             )
             .expect("the first reading fills it");
         assert_eq!(measured.lines, 2);
@@ -857,7 +793,8 @@ mod tests {
         assert_eq!(
             store.fill(
                 &sid("ref:0"),
-                Labelled::new("something else".to_string(), Label::untrusted_private())
+                Labelled::new("something else".to_string(), Label::untrusted_private()),
+                Default::default()
             ),
             Err(SlotError::AlreadyWritten(sid("ref:0")))
         );
@@ -875,6 +812,7 @@ mod tests {
             .fill(
                 &sid("ref:0"),
                 Labelled::new("payload".to_string(), Label::trusted_public()),
+                Default::default(),
             )
             .unwrap();
 
@@ -894,10 +832,7 @@ mod tests {
             .write("hello")
             .unwrap();
 
-        let reader = store
-            .reader_for([sid("page")], Label::untrusted_public())
-            .unwrap();
-        let value = reader.read(&sid("page")).unwrap();
+        let value = store.take_for_effect(&sid("page")).unwrap();
         assert_eq!(value.label(), Label::untrusted_public());
     }
 
@@ -937,100 +872,6 @@ mod tests {
         assert_eq!(
             store.label_of(&sid("page")),
             Some(Label::untrusted_public())
-        );
-    }
-
-    #[test]
-    fn reading_outside_scope_is_refused() {
-        let mut store = SlotStore::new();
-        store
-            .writer_for(sid("a"), Label::untrusted_public())
-            .unwrap()
-            .write("a")
-            .unwrap();
-        store
-            .writer_for(sid("b"), Label::untrusted_public())
-            .unwrap()
-            .write("b")
-            .unwrap();
-
-        let reader = store
-            .reader_for([sid("a")], Label::untrusted_public())
-            .unwrap();
-        assert_eq!(
-            reader.read(&sid("b")).unwrap_err(),
-            SlotError::OutOfScope(sid("b"))
-        );
-    }
-
-    #[test]
-    fn reading_an_unwritten_slot_is_refused() {
-        let store = SlotStore::new();
-        let reader = store
-            .reader_for([sid("ghost")], Label::untrusted_public())
-            .unwrap();
-        assert_eq!(
-            reader.read(&sid("ghost")).unwrap_err(),
-            SlotError::NotWritten(sid("ghost"))
-        );
-    }
-
-    /// A private slot cannot be pulled into a reader whose ceiling is public. This
-    /// fails at mint time, not read time.
-    #[test]
-    fn ceiling_is_enforced_when_the_reader_is_minted() {
-        let mut store = SlotStore::new();
-        store
-            .writer_for(sid("email"), Label::untrusted_private())
-            .unwrap()
-            .write("private body")
-            .unwrap();
-
-        let err = store
-            .reader_for([sid("email")], Label::untrusted_public())
-            .expect_err("private slot must not enter a public-ceiling reader");
-        assert!(matches!(err, SlotError::CeilingExceeded { .. }));
-    }
-
-    /// A reader minted while a slot is still empty passes the mint-time ceiling check
-    /// vacuously, so [`SlotReader::read`] re-checks. The write-after-mint sequence that
-    /// would exploit the gap cannot be expressed in safe code: `SlotReader` holds an
-    /// immutable borrow of the store and `writer_for` needs a mutable one, so this
-    /// test drives `read`'s check directly rather than through that impossible
-    /// interleaving. The runtime check stays as a backstop for any future interior
-    /// mutability.
-    #[test]
-    fn read_refuses_a_slot_above_the_ceiling() {
-        let mut store = SlotStore::new();
-        store
-            .writer_for(sid("email"), Label::untrusted_private())
-            .unwrap()
-            .write("private")
-            .unwrap();
-
-        // Ceiling high enough to mint, then read a slot that sits above a lower one.
-        let reader = store
-            .reader_for([sid("email")], Label::untrusted_private())
-            .unwrap();
-        assert!(reader.read(&sid("email")).is_ok());
-
-        let public_reader = store.reader_for([sid("email")], Label::untrusted_public());
-        assert!(matches!(
-            public_reader.unwrap_err(),
-            SlotError::CeilingExceeded { .. }
-        ));
-    }
-
-    /// Minting a reader for a not-yet-written slot is allowed; the read fails instead.
-    #[test]
-    fn minting_for_an_unwritten_slot_defers_the_check() {
-        let store = SlotStore::new();
-        let reader = store
-            .reader_for([sid("future")], Label::untrusted_public())
-            .expect("unwritten slots cannot be ceiling-checked yet");
-        assert_eq!(
-            reader.read(&sid("future")).unwrap_err(),
-            SlotError::NotWritten(sid("future"))
         );
     }
 

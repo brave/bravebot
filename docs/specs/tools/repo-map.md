@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/repo_map.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/results.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 

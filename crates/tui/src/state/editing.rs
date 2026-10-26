@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// The byte offset `column` characters into `line`, or its end where it is shorter.
+///
+/// What keeps the caret roughly where it looked while moving between lines of unequal length.
+pub(super) fn along(line: &str, column: usize) -> usize {
+    line.char_indices()
+        .nth(column)
+        .map_or(line.len(), |(index, _)| index)
+}
+
 /// A readline kill, as it left the line.
 #[derive(Debug, Clone)]
 pub(super) struct Kill {
@@ -15,6 +24,17 @@ pub(super) struct Kill {
 }
 
 impl Session {
+    /// Whether `?` is the key that puts the list of keys up or takes it down, rather than a
+    /// character or a vi instruction: on an empty line, outside shell mode and vi's NORMAL mode.
+    pub fn can_ask_for_shortcuts(&self) -> bool {
+        !self.vi_normal() && self.input.is_empty() && !self.shell
+    }
+
+    /// Put the list of keys up, or take it down.
+    pub fn toggle_shortcuts(&mut self) {
+        self.shortcuts = !self.shortcuts;
+    }
+
     /// Accept a typed character.
     ///
     /// Allowed while a turn runs as well as between turns. What it cannot do then is send: a
@@ -37,8 +57,8 @@ impl Session {
         // for the shell to expand.
         //
         // First, so the press that closes the list is not also the press that clears it below.
-        if c == '?' && self.input.is_empty() && !self.shell {
-            self.shortcuts = !self.shortcuts;
+        if c == '?' && self.can_ask_for_shortcuts() {
+            self.toggle_shortcuts();
             return;
         }
         // Any other key takes it down. The question has been asked and moved on from, and somebody
@@ -178,6 +198,18 @@ impl Session {
         self.ordinary_run_open = false;
     }
 
+    /// Put a line that arrived whole in the box: leave the history cursor, replace the line as
+    /// [`Session::set_input`] does and drop shell mode, which is for a command and not for what
+    /// arrives. With `keep_draft`, a line already in the box is kept as the draft Up brings back.
+    pub(super) fn replace_the_box(&mut self, line: impl Into<String>, keep_draft: bool) {
+        if keep_draft && !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(line);
+        self.shell = false;
+    }
+
     /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
     ///
     /// For a completion, which finishes the line being typed rather than bringing another.
@@ -232,6 +264,94 @@ impl Session {
         if let Some(c) = self.input[self.caret..].chars().next() {
             self.caret += c.len_utf8();
         }
+    }
+
+    /// The offset in the line that a press on screen cell (`row`, `column`) lands on, in the box as
+    /// the last frame drew it (MOUSE-16).
+    ///
+    /// None where the cell is not one of the box's text, and where the box is not the one in use: a
+    /// picker is painted over the frame and takes every key, the files state owns every key, and the
+    /// vi box has modes a click would have to know the meaning of. The cell is measured against the
+    /// row of the line it was drawn with, so a character drawn two cells wide is taken from either
+    /// of them, and a cell on the lead or past the end of the text lands at the start or the end of
+    /// the row.
+    pub fn offset_in_the_box(&self, row: u16, column: u16) -> Option<usize> {
+        let Hit::Text {
+            text_at,
+            start,
+            end,
+        } = self.target_at(row, column)?.hit
+        else {
+            return None;
+        };
+        // A row the line no longer has, as when it was edited after the frame, is not one to land in.
+        let text = self.input.get(start..end)?;
+        let target = usize::from(column.saturating_sub(text_at));
+        // A cell past the end of the text is the end of it. A character the box draws as nothing, as
+        // it draws a tab, is no cell, and the byte it takes is still a byte of the line.
+        let mut offset = text.len();
+        let mut width = 0;
+        for (at, _, columns) in crate::wrap::clusters_at(text) {
+            if target < width + columns {
+                offset = at;
+                break;
+            }
+            width += columns;
+        }
+        Some(start + offset)
+    }
+
+    /// Put the caret where a press on screen cell (`row`, `column`) lands in the box, and say
+    /// whether it was a cell of the box's text.
+    ///
+    /// A cell on a marker puts the caret at the marker's start, since the places the caret can rest
+    /// are the ones the arrows reach.
+    pub fn click_in_the_box(&mut self, row: u16, column: u16) -> bool {
+        let Some(at) = self.offset_in_the_box(row, column) else {
+            return false;
+        };
+        let at = at.min(self.input.len());
+        self.caret = self.marker_at(at).map_or(at, |(start, _)| start);
+        self.ordinary_run_open = false;
+        true
+    }
+
+    /// Put `/rename` and the session's name in the box with the caret after them, for the person to
+    /// edit and send with Enter, as a click on the name in the panel asks (MOUSE-30).
+    ///
+    /// Only into an empty box in the ordinary style and out of shell mode, which is where typing the
+    /// command would put it too: over a line somebody has begun it would take their words away, in
+    /// shell mode it would be a command line, and the vi box has modes a click would have to know the
+    /// meaning of. Where it is not put there the person is told why, since a click that did nothing
+    /// reads as a broken one.
+    ///
+    /// The name is what the session was called, which came from a prompt or a `/rename` and so from
+    /// what the person wrote (PANEL-11). Control characters are left out, as no key types one, and a
+    /// tab is a space, as the panel draws it.
+    pub fn offer_to_rename(&mut self) {
+        if !self.input.is_empty() || self.shell || self.editing() != crate::vim::Editing::Ordinary {
+            // Said as a command's answer is where the session works, so that a stop does not count
+            // the note as something the turn did and leave its prompt sent.
+            let said = t!(panel_rename_line_in_use);
+            match self.status == super::Status::Working {
+                true => self.answer_while_working(|session| session.note(said)),
+                false => self.note(said),
+            }
+            return;
+        }
+        let name: String = self
+            .identity
+            .name
+            .chars()
+            .filter_map(|c| match c {
+                // The panel draws a tab as a space, and the words are the ones it shows.
+                '\t' => Some(' '),
+                c if c.is_control() => None,
+                c => Some(c),
+            })
+            .collect();
+        self.history.leave();
+        self.set_input(format!("{} {name}", crate::command_table::RENAME_COMMAND));
     }
 
     /// Move the caret to the start of the word before it.
@@ -597,15 +717,9 @@ impl Session {
     /// mid-turn would mean the field the user returns to is not the one they left.
     pub fn clear_input(&mut self) {
         if self.status == Status::Idle {
-            if !self.history.on_a_sent_prompt() && !self.input.trim().is_empty() {
-                self.history.keep_draft(self.input.clone());
-            }
-            self.history.leave();
-            self.set_input(String::new());
             // The mode goes with the line. Escape means "never mind this", and leaving the marker
-            // behind would arm the next thing typed as a command. The list of keys goes with the
-            // line too, which is settled where the line is written.
-            self.shell = false;
+            // behind would arm the next thing typed as a command.
+            self.replace_the_box(String::new(), !self.history.on_a_sent_prompt());
         }
     }
 

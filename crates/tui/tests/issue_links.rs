@@ -10,11 +10,12 @@ use bravebot_session::sessions::Aside;
 use bravebot_tui::hyperlink;
 use bravebot_tui::issue_link::{MARK, Repository};
 use bravebot_tui::render;
-use bravebot_tui::select::{self, Selection};
+use bravebot_tui::select::{self, Pane, Selection};
 use bravebot_tui::state::{Entry, Session};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 
 const ISSUES: &str = "https://github.com/brave/bravebot/issues";
 
@@ -324,9 +325,9 @@ fn a_selection_over_a_linked_number_copies_the_text() {
     let (row, ..) = links(&buffer).remove(0);
     let line = rows(&buffer)[row as usize].clone();
 
-    let mut selection = Selection::started_at(row, 0);
+    let mut selection = Selection::in_pane(row, 0, Pane::Screen, Rect::new(0, 0, 80, 24));
     selection.extend_to(row, 79);
-    let copied = select::text(&buffer, &selection);
+    let copied = select::text_without_chrome(&buffer, &selection, &[], &[], &[]);
     assert_eq!(copied, line.trim_end());
     assert!(copied.contains("fixed in #2879"), "{copied:?}");
     assert!(!copied.contains('\u{1b}'), "{copied:?}");

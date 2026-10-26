@@ -66,7 +66,7 @@ pub fn quarantined(content: &str) -> Vec<String> {
     }
     let left_out = counted.count();
     if left_out > 0 {
-        rows.push(t!(transcript_more_lines, count = left_out).to_string());
+        rows.push(t!(transcript_more_lines, count = left_out));
     }
     rows
 }
@@ -157,7 +157,7 @@ pub fn write_lines(write: &Write<'_>) -> Vec<String> {
         });
     }
     if left_out > 0 {
-        lines.push(t!(transcript_more_lines, count = left_out).to_string());
+        lines.push(t!(transcript_more_lines, count = left_out));
     }
     lines
 }
@@ -339,7 +339,7 @@ pub fn output_lines(summary: &str, check: Check, output: &str, hidden: usize) ->
 /// The sentence over text in which `hidden` characters draw as nothing, or none where none do, in
 /// the catalog's words so a front end that draws it carries no copy of its own (SHARE-001).
 pub fn hidden_note(hidden: usize) -> Option<String> {
-    (hidden > 0).then(|| t!(hidden_characters, count = hidden).to_string())
+    (hidden > 0).then(|| t!(hidden_characters, count = hidden))
 }
 
 /// A picture or a PDF in place of the text of a vetted read.
@@ -408,8 +408,7 @@ pub fn vouch_lines(path: &str, rule: &str, check: Check, preview: &str) -> Vec<S
         t!(
             vouch_rule,
             rule = bravebot_agent::confirm::shown_name(rule).as_str()
-        )
-        .to_string(),
+        ),
         t!(vouch_explained).to_string(),
         checked(check),
     ];
@@ -445,11 +444,11 @@ pub fn exposure_lines(path: &str, findings: &[String]) -> Vec<String> {
 ///
 /// The names are the program's bytes, so each goes through `printable`.
 pub fn host_lines(hosts: &[String]) -> Vec<String> {
-    let mut lines = vec![t!(host_asked, count = hosts.len()).to_string()];
+    let mut lines = vec![t!(host_asked, count = hosts.len())];
     lines.extend(
         hosts
             .iter()
-            .map(|host| t!(host_row, host = printable(host).as_str()).to_string()),
+            .map(|host| t!(host_row, host = printable(host).as_str())),
     );
     lines.push(t!(host_explained).to_string());
     lines
@@ -475,17 +474,14 @@ pub struct Message<'a> {
 /// Nothing of the text is left out. A yes sends every byte of it into another planner's context, so
 /// a line counted instead of shown would be approved unread.
 pub fn message_lines(message: &Message<'_>) -> Vec<String> {
-    let mut lines = vec![
-        t!(
-            message_to,
-            name = printable(message.name),
-            state = printable(message.state),
-            directory = printable(message.directory)
-        )
-        .to_string(),
-    ];
+    let mut lines = vec![t!(
+        message_to,
+        name = printable(message.name),
+        state = printable(message.state),
+        directory = printable(message.directory)
+    )];
     lines.extend(quarantined_in_full(message.text));
-    lines.push(t!(message_label, label = printable(message.label)).to_string());
+    lines.push(t!(message_label, label = printable(message.label)));
     lines.push(t!(message_explained).to_string());
     lines
 }

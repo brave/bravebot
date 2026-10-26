@@ -18,14 +18,21 @@ use bravebot_session::sessions::Handle;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use super::directories::{
+    Changed, add_directory, change_directory, close_directory, removal_trail, remove_checkout,
+};
+use super::opening::{Answers, Beginning, clear_session, opening_trust, switch_session};
+use super::records::{
+    carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted, with_standing,
+};
+use super::side_requests::{
+    compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
+};
+use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
 use super::{
-    Answers, BACKGROUND_LOSES, Beginning, Changed, Continued, Ended, RunSettings, Suggesting,
-    Switch, Wrote, add_directory, branch_session, carry_out_hunks, change_directory, clear_session,
-    close_directory, compact_animated, goal_check_animated, handed_to_the_background,
-    handoff_answered, handoff_refusal, left_behind, list_rewind_points, next_after_a_turn,
-    opened_scratch, opening_trust, record_to_resume, removal_trail, remove_checkout, rewind,
-    rewind_point, run_command, run_turn_animated, save_compacted, status_report, suggest_next,
-    switch_session, with_standing,
+    BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session,
+    handed_to_the_background, left_behind, opened_scratch, record_to_resume, run_command,
+    status_report, suggest_next,
 };
 use crate::state::{Attached, AttachedImage, Servers, Session};
 
@@ -76,6 +83,51 @@ impl Held<'_> {
             asked_about: std::mem::take(&mut self.answers.asked_about),
             exposed: std::mem::take(&mut self.answers.exposed),
         }
+    }
+
+    /// Carry out a click on a file path: show the lines of the file under a call, or say that the
+    /// name is not one the session reads (MOUSE-42).
+    pub(super) fn preview_file(&mut self, path: &crate::text_links::PathRef) {
+        let trail = crate::file_preview::show(
+            self.session,
+            self.workspace,
+            &self.answers.trust,
+            &self.answers.rules.permissions,
+            path,
+        );
+        if !trail.events().is_empty() {
+            self.stored.append_audit(self.session.turns, trail.events());
+        }
+    }
+
+    /// Carry out a click with ctrl held on a file path: open the file in the person's editor at the
+    /// line the path gave, or say that the name is not a file the session reads (MOUSE-43).
+    ///
+    /// Resolved as a preview is, so a name that climbs out or leads out is refused, and not by the
+    /// person's `deny` rules: bravebot reads nothing here, and the editor is the person's own.
+    pub(super) fn edit_file(
+        &mut self,
+        terminal: &mut Tty,
+        path: &crate::text_links::PathRef,
+    ) -> io::Result<()> {
+        let Some(file) = self.file_to_edit(path) else {
+            return Ok(());
+        };
+        super::terminal::open_file_in_editor(terminal, self.session, &file, path.line, path.column)
+    }
+
+    /// The file a click with ctrl held on `path` opens, as the absolute path the file tools reach it
+    /// at, or `None` after saying that the name is not a file the session reads, without repeating
+    /// it. No `deny` rule is asked: the editor is the person's own program.
+    pub(super) fn file_to_edit(
+        &mut self,
+        path: &crate::text_links::PathRef,
+    ) -> Option<std::path::PathBuf> {
+        let file = self.workspace.file_named(&path.path);
+        if file.is_none() {
+            self.session.note(t!(session_path_not_a_file));
+        }
+        file
     }
 
     /// Put back what a turn returned, and hand on the events it recorded.
@@ -404,6 +456,9 @@ impl Held<'_> {
             .with_home(bravebot_agent::home::directory())
             .with_profile(bravebot_agent::home::profile())
             .with_cache(bravebot_agent::home::cache())
+            // No request is made here, and a task is in the session of the person that typed it all
+            // the same, so one that came to make a request would not be a session of its own.
+            .in_account_session(self.session.account_session().clone())
             .remembering(Some(self.stored.id().to_string()))
             .with_permissions(self.answers.rules.permissions.clone())
             .with_permission_mode(permission_mode.clone())

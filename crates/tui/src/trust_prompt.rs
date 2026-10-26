@@ -252,68 +252,61 @@ fn ask_one_from<B: Backend>(
 ) -> Answer {
     let mut offered_to_leave = false;
     let mut scroll = 0u16;
+    let mut drawn = Drawn {
+        furthest: 0,
+        page: 1,
+        answerable: false,
+    };
+    let mut ignored = false;
 
     loop {
-        let mut drawn = Drawn {
-            furthest: 0,
-            page: 1,
-            answerable: false,
-        };
         // Drawn inside the loop rather than once before it, because the offer to leave is part of
         // what the question says: a panel drawn once would take the first interrupt and then look as
-        // though nothing had happened.
+        // though nothing had happened. Not again for a report of the mouse that changed nothing, which
+        // is every position of a pointer crossing the window while the offer is not standing
+        // (MOUSE-44).
         //
         // A terminal that cannot be drawn to cannot carry the question.
-        if terminal
-            .draw(|frame| drawn = draw_it(frame, offered_to_leave, scroll))
-            .is_err()
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw_it(frame, offered_to_leave, scroll))
+                .is_err()
         {
             return Answer::Decline;
         }
 
-        match read() {
-            // A paste answers nothing, and neither do words another program typed: both arrive as
-            // one event whatever they carry, and nothing in either is a key somebody pressed.
-            Ok((taken, arrived_alone)) => {
-                if withdraws_the_offer(&taken) {
-                    offered_to_leave = false;
-                }
-                match input::key_of(&taken) {
-                    // Presses only: the interface asks for disambiguated keys, so a release arrives
-                    // too, and answering twice grants standing permission on one keystroke.
-                    Some(key) if key.kind != event::KeyEventKind::Press => continue,
-                    Some(key) => {
-                        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
-                            Response::Answer(answer) => return answer,
-                            Response::Scroll(by) => {
-                                scroll = drawn.moved(scroll, by);
-                                continue;
-                            }
-                            Response::Page(by) => {
-                                scroll =
-                                    drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
-                                continue;
-                            }
-                            // Kept rather than dropped. What this refused to answer on was a run of keys
-                            // another program wrote, and words that vanish leave a person with no account
-                            // of what just happened: the question stayed up and their virtualenv
-                            // activated, with nothing on the screen joining the two. Carried to the box,
-                            // where they can read it and decide (#403).
-                            Response::Nothing if !arrived_alone => {
-                                carried.extend(input::text_of(&key));
-                                continue;
-                            }
-                            Response::Offer => {
-                                offered_to_leave = true;
-                                continue;
-                            }
-                            Response::Nothing => continue,
-                        }
-                    }
-                    None => continue,
-                }
+        // A paste answers nothing, and neither do words another program typed: both arrive as one
+        // event whatever they carry, and nothing in either is a key somebody pressed.
+        let Ok((taken, arrived_alone)) = read() else {
+            return Answer::Decline;
+        };
+        let was_offered = offered_to_leave;
+        if withdraws_the_offer(&taken) {
+            offered_to_leave = false;
+        }
+        ignored = matches!(taken, event::Event::Mouse(_)) && !was_offered;
+        let Some(key) = input::key_of(&taken) else {
+            continue;
+        };
+        // Presses only: the interface asks for disambiguated keys, so a release arrives too, and
+        // answering twice grants standing permission on one keystroke.
+        if key.kind != event::KeyEventKind::Press {
+            continue;
+        }
+        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
+            Response::Answer(answer) => return answer,
+            Response::Scroll(by) => scroll = drawn.moved(scroll, by),
+            Response::Page(by) => {
+                scroll = drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
             }
-            Err(_) => return Answer::Decline,
+            // Kept rather than dropped. What this refused to answer on was a run of keys
+            // another program wrote, and words that vanish leave a person with no account
+            // of what just happened: the question stayed up and their virtualenv
+            // activated, with nothing on the screen joining the two. Carried to the box,
+            // where they can read it and decide (#403).
+            Response::Nothing if !arrived_alone => carried.extend(input::text_of(&key)),
+            Response::Offer => offered_to_leave = true,
+            Response::Nothing => {}
         }
     }
 }

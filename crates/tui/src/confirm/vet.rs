@@ -317,18 +317,22 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
     let mut scroll = 0u16;
     let mut seen = Seen::default();
     let mut picture = vetting_preview(terminal, request);
+    let mut drawn = Drawn::default();
+    let mut ignored = false;
     loop {
         picture.settle();
-        let mut drawn = Drawn::default();
         // A terminal that cannot be drawn to cannot show the content, and approving content
         // nobody was shown is the one thing this question cannot mean. The verdict does not
-        // rescue it: a word from a model is not a person having read something.
-        if terminal
-            .draw(|frame| drawn = draw_vet(frame, request, scroll, picture.thumb(), &mut seen))
-            .is_err()
+        // rescue it: a word from a model is not a person having read something. Not again for a
+        // report that changed nothing (MOUSE-44).
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw_vet(frame, request, scroll, picture.thumb(), &mut seen))
+                .is_err()
         {
             return VetAnswer::Reject;
         }
+        ignored = false;
 
         // While the picture is still being made, wait a moment rather than for a key, so it is
         // drawn when it arrives and not at the next press.
@@ -341,8 +345,10 @@ pub fn ask_vet<B: Backend>(terminal: &mut Terminal<B>, request: &VetRequest) -> 
         }
 
         match next_press() {
+            Next::Ignored => ignored = true,
             Next::Skip => continue,
             Next::Lost => return VetAnswer::Reject,
+            Next::Wheel(by) => scroll = drawn.moved(scroll, by),
             Next::Press(key) => match vet_answer_for(key, request, &drawn) {
                 Some(Response::Answer(answer)) => return answer,
                 Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
@@ -656,8 +662,7 @@ pub(super) fn draw_vouch(
             t!(
                 vouch_rule,
                 rule = bravebot_agent::confirm::shown_name(&request.rule).as_str()
-            )
-            .to_string(),
+            ),
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),

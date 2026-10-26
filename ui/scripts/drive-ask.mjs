@@ -8,7 +8,7 @@
 // Note that a planner shown untrusted content may not ask at all — that gate is upstream
 // and deliberate — so this drives a session with nothing quarantined in it.
 import { mkdirSync } from 'node:fs'
-import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT } from './drive-support.mjs'
+import { checker, launchLive, COMPOSER_IDLE, COMPOSER_INPUT, TRUST_APPROVE } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -26,7 +26,7 @@ if ((await page.locator('.session').count()) === 0) {
 await page.locator('.session').first().click()
 await page.waitForTimeout(1500)
 if (await page.locator('.trust').isVisible().catch(() => false)) {
-  await page.locator('[data-test="trust-approve"]').click()
+  await page.locator(TRUST_APPROVE).click()
   await page.waitForTimeout(600)
 }
 

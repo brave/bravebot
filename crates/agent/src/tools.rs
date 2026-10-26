@@ -3696,6 +3696,17 @@ fn refuse_denied_path<S: Sink>(
     refuse_denied_path_as(policy, workspace, purpose, path, path)
 }
 
+/// Whether a `deny` rule refuses a read of `path`, asked exactly as a read tool asks it, for a
+/// caller that has no planner to word a refusal for: a file a person asked to see is refused for
+/// the same names as a file a call asked to read.
+pub(crate) fn read_is_refused_by_a_rule<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    path: &str,
+) -> bool {
+    refuse_denied_path(policy, workspace, Purpose::Read, path).is_err()
+}
+
 /// [`refuse_denied_path`], naming `shown` in the refusal where the path itself is not to be said.
 fn refuse_denied_path_as<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -7883,6 +7894,292 @@ fn requests_refusals(
     causes
 }
 
+/// The checks a compiled `run` plan meets before the person is asked about it, in the order a
+/// refusal is owed: a name Windows reads as another file, a redirection leaving the workspace, a
+/// write the sandbox mode forbids, the rules written in advance, and then those rules again under
+/// the names a redirection's files are held by (PERM-7).
+///
+/// Hands back whether a redirection may leave the workspace on this line, which the run checks
+/// again at each open. A refusal comes back as the result of the call. Everything checked is the
+/// plan's own structure and the session's settings; no output of a program is read.
+fn check_the_plan_before_asking<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    unconfined: bool,
+) -> Result<bool, Box<Produced>> {
+    // A read as well as a write. The rules below are matched against the spelling, and a name
+    // Windows reads as another file would have them judge one file while the run opens the other.
+    // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
+    // output is discarded on Windows, so a refused write names the one spelling a line may use for
+    // that; a read has none, since `/dev/null` discards only output.
+    let discard = ". If this was meant to discard output, redirect it to /dev/null instead";
+    for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
+        for path in paths {
+            if let Err(misleading) = tools.workspace.refuse_misleading(path) {
+                let target = path.display().to_string();
+                return Err(Box::new(Produced::problem(format!(
+                    "refused: {}{hint}",
+                    workspace_failure(policy, "run", "command", &misleading, &target)
+                ))));
+            }
+        }
+    }
+
+    // A redirection names a file the run opens itself, so the confinement every other write goes
+    // through is applied here to the path, and again immediately before the run opens it. Not for a
+    // line whose programs start with no profile: there is nothing for the target to get past, and
+    // the person is shown the file before the line runs (CMDLINE-5).
+    let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
+    for path in &plan.writes {
+        if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
+            let target = path.display().to_string();
+            let way_out = match escape {
+                crate::workspace::WorkspaceError::Escapes { .. } => {
+                    unconfined_way_out(policy, tools)
+                }
+                _ => "",
+            };
+            return Err(Box::new(Produced::problem(format!(
+                "refused: {}{way_out}",
+                workspace_failure(policy, "run", "command", &escape, &target)
+            ))));
+        }
+    }
+    // Every path the loop above lets through is in a directory the session was opened on, and this
+    // process opens it rather than the confined stage, so the profile `read-only` starts the stage
+    // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
+    // tool's write is. The null device is not in the write set.
+    if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
+        policy.refuse_write_in_sandbox("run", tools.sandbox.name());
+        return Err(Box::new(Produced::problem(
+            "refused: the sandbox mode is read-only, and this line redirects output into a file, \
+             which would write the session's files; nothing ran and nothing was asked. Leave the \
+             redirection out, redirect to /dev/null to discard the output, or have a program open \
+             the file itself, where the sandbox profile decides whether it may.",
+        )));
+    }
+
+    // Before the person is asked. A rule refusing something is a statement that it does not run,
+    // and there is nothing to show or approve once it has been made.
+    if let Err(denial) = policy.before_plan_rules(plan) {
+        return Err(Box::new(refused_by_a_rule(&denial)));
+    }
+
+    // The plan holds a redirection's target as an absolute path, and a project-relative rule such
+    // as `Edit(.env)` does not cover one. Asked again under the name the file tools hold the file
+    // by, and under the name it lands on, so the rule refuses the redirection as it refuses the
+    // same file named in a call (PERM-7).
+    for (paths, purpose) in [
+        (&plan.writes, Purpose::Effect),
+        (&plan.reads, Purpose::Read),
+    ] {
+        for path in paths {
+            let named = tools.workspace.relative_display(path);
+            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
+                return Err(Box::new(Produced::problem(refusal)));
+            }
+            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
+            // from a `directory`), which no rule's segments match across and which the landing
+            // asked about above does not resolve, so the file's other names are asked about too.
+            for reached in tools.workspace.names_reached(path) {
+                if reached != named
+                    && let Err(refusal) =
+                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
+                {
+                    return Err(Box::new(Produced::problem(refusal)));
+                }
+            }
+        }
+    }
+
+    Ok(reaches_anywhere)
+}
+
+/// What `run` decides about how a line is held before the person is asked: the confinement it
+/// starts under, whether it spends a request for no profile, the sandbox mode and unasked writes
+/// to record once it starts, whether a prompt is owed, and whether the remembered record is what
+/// stopped it.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate answer the run line's decision hands to a different effect"
+)]
+struct Settled {
+    /// None for a line run with no profile. Replaced by the network-closed one where the person's
+    /// trust of the directory is what let the line through.
+    confinement: Option<crate::confine::Confinement>,
+    spends_a_request: bool,
+    sandbox_mode: Option<&'static str>,
+    unasked_writes: bool,
+    asking: bool,
+    covered_by_record: bool,
+}
+
+/// Work out the confinement a `run` line starts under and whether the person is to be asked,
+/// refusing a request for a scope or for no profile that this session cannot honour.
+///
+/// Decided from the compiled plan, the exit codes of earlier lines and the session's settings,
+/// never from what a program printed. A refusal comes back as the result of the call.
+fn settle_the_confinement<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    tools: &Tools<'_>,
+    plan: &bravebot_core::command::Plan,
+    requested: &[bravebot_sandbox::scope::Requested],
+    unconfined: bool,
+    recalled: Option<&bravebot_core::remembered::Remembered>,
+) -> Result<Settled, Box<Produced>> {
+    // No confinement at all for a line the planner asked to run with none: its stages start as
+    // they do under the mode `off`, for this line only, and the next line is built from the
+    // session's mode again.
+    let mut confinement = tools
+        .confinement(workspace_is_trusted(policy, tools.workspace))
+        .filter(|_| !unconfined)
+        .map(|confinement| {
+            confinement
+                .with_requested(requested)
+                .with_requests_offered(requests_accepted(policy, tools).is_ok())
+        });
+    if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
+        let cause = match confinement {
+            Some(_) => RunRequestCause::NoProfileDirectory,
+            None => RunRequestCause::NoPlatformSandbox,
+        };
+        policy.refuse_run_request("scopes", &[cause]);
+        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
+    }
+    // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
+    // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
+    // and the compiled plan, never from what a program printed. The request is spent once the
+    // person has approved it and the policy has passed the plan, so a refusal on the way leaves it.
+    let mut spends_a_request = false;
+    if unconfined {
+        let leaves_the_workspace = plan
+            .writes
+            .iter()
+            .any(|path| tools.workspace.confines(path).is_err());
+        if !leaves_the_workspace && !tools.confined_failures.has_one() {
+            policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
+            return Err(Box::new(Produced::problem(UNCONFINED_BEFORE_A_FAILURE)));
+        }
+        spends_a_request = !leaves_the_workspace;
+    }
+    // Written once the line is about to start rather than here, so a line the person does not
+    // approve is not recorded as having run in a mode. The writes are read from the confinement as
+    // it stands now, before a directory's trust replaces it below.
+    let sandbox_mode = match (unconfined, tools.confine_runs) {
+        (true, _) => Some("unconfined"),
+        (false, true) => Some(tools.sandbox.name()),
+        (false, false) => None,
+    };
+    let unasked_writes = !unconfined
+        && tools.confine_runs
+        && confinement
+            .as_ref()
+            .is_some_and(|confinement| confinement.writes_without_a_request());
+
+    let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
+    // How the sandbox holds the line, said from the compiled steps and the session's own settings:
+    // the person's trust of the directory answers only for a line it holds (RUN-5).
+    //
+    // Under an open network no stage is held as the session stands, so the line is judged as it
+    // would run with the network closed for this line only. It runs that way only if the person's
+    // trust of the directory is what lets it through, below.
+    let closed_for_the_line = confinement
+        .as_ref()
+        .filter(|confinement| !confinement.network_is_closed())
+        .map(crate::confine::Confinement::closed_for_the_line);
+    let containment = closed_for_the_line
+        .as_ref()
+        .or(confinement.as_ref())
+        .map_or(Containment::Unknown, |confinement| {
+            confinement.holds(&plan.steps(), &plan.directory)
+        });
+    let asking = match unconfined {
+        true => policy.plan_needs_approval_unconfined(),
+        false => policy.plan_needs_approval_held(plan, &names, containment),
+    };
+    // A line the person's trust of the directory let through runs as it was judged: with the
+    // network closed for this line, where the session's is open. A line any other road answered
+    // keeps the network it was approved with.
+    if !asking
+        && !unconfined
+        && policy.answered_by_directory_trust()
+        && let Some(closed) = closed_for_the_line
+    {
+        confinement = Some(closed);
+    }
+    // Whether the record is what stopped the question. Read where the result is quarantined: the
+    // advice about vouching is advice about a prompt, and no prompt will return here for this line
+    // until somebody deletes the entry.
+    let covered_by_record = !asking && recalled.is_some_and(|lines| lines.covers(plan));
+
+    Ok(Settled {
+        confinement,
+        spends_a_request,
+        sandbox_mode,
+        unasked_writes,
+        asking,
+        covered_by_record,
+    })
+}
+
+/// What a `run` line that stops being waited for is kept as: the plan and the words it is shown
+/// and told under, the label the kernel fixed before anything started, and the file authority's
+/// revision from the same moment.
+struct JobStart<'a> {
+    spends: &'a [bravebot_core::ambient::Spent],
+    plan: &'a bravebot_core::command::Plan,
+    displayed: &'a str,
+    said: &'a str,
+    label: Label,
+    authority: &'a bravebot_core::file_authority::FileAuthority,
+    started_revision: u64,
+    covered_by_record: bool,
+    confinement: Option<&'a crate::confine::Confinement>,
+    /// How long the line was waited for first, for a line that was moved to the background.
+    moved_after: Option<std::time::Duration>,
+}
+
+/// Everything `run` does at the point a line becomes a job, whether it was started in the
+/// background or moved there: spend what the line reaches, carry the directory over, keep the
+/// job under a name, record what it was confined to, and tell the reporter it started. Hands back
+/// the name and the token that stops it.
+fn start_the_job<S: Sink, R: Reporter>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    reporter: &mut R,
+    running: crate::exec::Background,
+    job: &JobStart<'_>,
+) -> (String, bravebot_core::cancel::JobStop) {
+    policy.record_ambient(job.spends);
+    // The directory is carried over only once pre-flight checks and launch succeed.
+    *tools.run_directory = job.plan.directory.clone();
+    let (name, stop) = tools.jobs.keep(
+        running,
+        JobLines::new(job.displayed, job.said),
+        job.label,
+        job.authority.clone(),
+        job.started_revision,
+        job.covered_by_record,
+    );
+    tools.jobs.confined_as(
+        &name,
+        job.confinement.map(|confinement| {
+            confinement.profile_offering(&job.plan.steps(), unconfined_is_offered(policy, tools))
+        }),
+    );
+    if let Some(after) = job.moved_after {
+        policy.record_handoff(&name, after);
+    }
+    reporter.job(crate::report::JobEvent::Started {
+        name: name.clone(),
+        line: job.displayed.to_string(),
+        moved_after: job.moved_after,
+        stop: stop.clone(),
+    });
+    (name, stop)
+}
+
 /// What a `run` call asks for beyond the command line, read from its arguments.
 struct RunCall {
     /// The deadline, clamped to the bounds the turn holds.
@@ -8373,90 +8670,10 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         Err(crate::cmdline::Stopped::Rule(denial)) => return refused_by_a_rule(&denial),
     };
 
-    // A read as well as a write. The rules below are matched against the spelling, and a name
-    // Windows reads as another file would have them judge one file while the run opens the other.
-    // Before the confinement, which cannot say where a stream or a device lands. `> NUL` is how
-    // output is discarded on Windows, so a refused write names the one spelling a line may use for
-    // that; a read has none, since `/dev/null` discards only output.
-    let discard = ". If this was meant to discard output, redirect it to /dev/null instead";
-    for (paths, hint) in [(&plan.writes, discard), (&plan.reads, "")] {
-        for path in paths {
-            if let Err(misleading) = tools.workspace.refuse_misleading(path) {
-                let target = path.display().to_string();
-                return Produced::problem(format!(
-                    "refused: {}{hint}",
-                    workspace_failure(policy, "run", "command", &misleading, &target)
-                ));
-            }
-        }
-    }
-
-    // A redirection names a file the run opens itself, so the confinement every other write goes
-    // through is applied here to the path, and again immediately before the run opens it. Not for a
-    // line whose programs start with no profile: there is nothing for the target to get past, and
-    // the person is shown the file before the line runs (CMDLINE-5).
-    let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
-    for path in &plan.writes {
-        if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
-            let target = path.display().to_string();
-            let way_out = match escape {
-                crate::workspace::WorkspaceError::Escapes { .. } => {
-                    unconfined_way_out(policy, tools)
-                }
-                _ => "",
-            };
-            return Produced::problem(format!(
-                "refused: {}{way_out}",
-                workspace_failure(policy, "run", "command", &escape, &target)
-            ));
-        }
-    }
-    // Every path the loop above lets through is in a directory the session was opened on, and this
-    // process opens it rather than the confined stage, so the profile `read-only` starts the stage
-    // under does not hold it back (SANDBOX-22). Refused here, before anybody is asked, as a file
-    // tool's write is. The null device is not in the write set.
-    if !plan.writes.is_empty() && sandbox_refuses_writes(tools.confine_runs, tools.sandbox) {
-        policy.refuse_write_in_sandbox("run", tools.sandbox.name());
-        return Produced::problem(
-            "refused: the sandbox mode is read-only, and this line redirects output into a file, \
-             which would write the session's files; nothing ran and nothing was asked. Leave the \
-             redirection out, redirect to /dev/null to discard the output, or have a program open \
-             the file itself, where the sandbox profile decides whether it may.",
-        );
-    }
-
-    // Before the person is asked. A rule refusing something is a statement that it does not run,
-    // and there is nothing to show or approve once it has been made.
-    if let Err(denial) = policy.before_plan_rules(&plan) {
-        return refused_by_a_rule(&denial);
-    }
-
-    // The plan holds a redirection's target as an absolute path, and a project-relative rule such
-    // as `Edit(.env)` does not cover one. Asked again under the name the file tools hold the file
-    // by, and under the name it lands on, so the rule refuses the redirection as it refuses the
-    // same file named in a call (PERM-7).
-    for (paths, purpose) in [
-        (&plan.writes, Purpose::Effect),
-        (&plan.reads, Purpose::Read),
-    ] {
-        for path in paths {
-            let named = tools.workspace.relative_display(path);
-            if let Err(refusal) = refuse_denied_path(policy, tools.workspace, purpose, &named) {
-                return Produced::problem(refusal);
-            }
-            // The name keeps a `..` the line spelled (`config/sub/../app.env`, or `../app.env`
-            // from a `directory`), which no rule's segments match across and which the landing
-            // asked about above does not resolve, so the file's other names are asked about too.
-            for reached in tools.workspace.names_reached(path) {
-                if reached != named
-                    && let Err(refusal) =
-                        refuse_denied_path_as(policy, tools.workspace, purpose, &reached, &named)
-                {
-                    return Produced::problem(refusal);
-                }
-            }
-        }
-    }
+    let reaches_anywhere = match check_the_plan_before_asking(policy, tools, &plan, unconfined) {
+        Ok(reaches_anywhere) => reaches_anywhere,
+        Err(produced) => return *produced,
+    };
 
     // What the planner named for standard input, turned into bytes and a label before anybody is
     // asked. Three gates, as a write's `contents_ref` has: the name is accepted as a reference
@@ -8523,90 +8740,24 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
         policy.recall(lines.clone());
     }
 
-    // No confinement at all for a line the planner asked to run with none: its stages start as
-    // they do under the mode `off`, for this line only, and the next line is built from the
-    // session's mode again.
-    let mut confinement = tools
-        .confinement(workspace_is_trusted(policy, tools.workspace))
-        .filter(|_| !unconfined)
-        .map(|confinement| {
-            confinement
-                .with_requested(&requested)
-                .with_requests_offered(requests_accepted(policy, tools).is_ok())
-        });
-    if !requested.is_empty() && !confinement.as_ref().is_some_and(|c| c.accepts_requests()) {
-        let cause = match confinement {
-            Some(_) => RunRequestCause::NoProfileDirectory,
-            None => RunRequestCause::NoPlatformSandbox,
-        };
-        policy.refuse_run_request("scopes", &[cause]);
-        return Produced::problem(NOT_ACCEPTING_REQUESTS);
-    }
-    // Accepted after a line has failed with the sandbox on, or for a line whose own redirection
-    // the sandbox refuses before anything runs, which no run can fail at. Decided from exit codes
-    // and the compiled plan, never from what a program printed. The request is spent once the
-    // person has approved it and the policy has passed the plan, so a refusal on the way leaves it.
-    let mut spends_a_request = false;
-    if unconfined {
-        let leaves_the_workspace = plan
-            .writes
-            .iter()
-            .any(|path| tools.workspace.confines(path).is_err());
-        if !leaves_the_workspace && !tools.confined_failures.has_one() {
-            policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
-            return Produced::problem(UNCONFINED_BEFORE_A_FAILURE);
-        }
-        spends_a_request = !leaves_the_workspace;
-    }
-    // Written once the line is about to start rather than here, so a line the person does not
-    // approve is not recorded as having run in a mode. The writes are read from the confinement as
-    // it stands now, before a directory's trust replaces it below.
-    let sandbox_mode = match (unconfined, tools.confine_runs) {
-        (true, _) => Some("unconfined"),
-        (false, true) => Some(tools.sandbox.name()),
-        (false, false) => None,
+    let Settled {
+        mut confinement,
+        spends_a_request,
+        sandbox_mode,
+        unasked_writes,
+        asking,
+        covered_by_record,
+    } = match settle_the_confinement(
+        policy,
+        tools,
+        &plan,
+        &requested,
+        unconfined,
+        recalled.as_ref(),
+    ) {
+        Ok(settled) => settled,
+        Err(produced) => return *produced,
     };
-    let unasked_writes = !unconfined
-        && tools.confine_runs
-        && confinement
-            .as_ref()
-            .is_some_and(|confinement| confinement.writes_without_a_request());
-
-    let names: Vec<&'static str> = requested.iter().map(|request| request.name()).collect();
-    // How the sandbox holds the line, said from the compiled steps and the session's own settings:
-    // the person's trust of the directory answers only for a line it holds (RUN-5).
-    //
-    // Under an open network no stage is held as the session stands, so the line is judged as it
-    // would run with the network closed for this line only. It runs that way only if the person's
-    // trust of the directory is what lets it through, below.
-    let closed_for_the_line = confinement
-        .as_ref()
-        .filter(|confinement| !confinement.network_is_closed())
-        .map(crate::confine::Confinement::closed_for_the_line);
-    let containment = closed_for_the_line
-        .as_ref()
-        .or(confinement.as_ref())
-        .map_or(Containment::Unknown, |confinement| {
-            confinement.holds(&plan.steps(), &plan.directory)
-        });
-    let asking = match unconfined {
-        true => policy.plan_needs_approval_unconfined(),
-        false => policy.plan_needs_approval_held(&plan, &names, containment),
-    };
-    // A line the person's trust of the directory let through runs as it was judged: with the
-    // network closed for this line, where the session's is open. A line any other road answered
-    // keeps the network it was approved with.
-    if !asking
-        && !unconfined
-        && policy.answered_by_directory_trust()
-        && let Some(closed) = closed_for_the_line
-    {
-        confinement = Some(closed);
-    }
-    // Whether the record is what stopped the question. Read where the result is quarantined: the
-    // advice about vouching is advice about a prompt, and no prompt will return here for this line
-    // until somebody deletes the entry.
-    let covered_by_record = !asking && recalled.as_ref().is_some_and(|lines| lines.covers(&plan));
 
     if asking
         && let Err(produced) = ask_about_the_run(
@@ -8676,6 +8827,18 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     // cannot name different things, and recorded below at each point the line actually starts: a
     // grant is a sentence somebody answered and a use is a thing that happened.
     let spends = bravebot_core::ambient::spent_by(&plan);
+    let started = JobStart {
+        spends: &spends,
+        plan: &plan,
+        displayed: &displayed,
+        said: &said,
+        label,
+        authority: &authority,
+        started_revision,
+        covered_by_record,
+        confinement: confinement.as_ref(),
+        moved_after: None,
+    };
 
     // Recorded per line, before anything starts, so a line a stage of which was refused still says
     // what the network was for it. Nothing for an open network, which is what every line had.
@@ -8691,6 +8854,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
     {
         policy.record_requested_scopes(detail);
     }
+
+    // A program opens files the line never names, so nothing tells the authority which it rewrites.
+    // Counted for every line that gets this far, started or not, so a slot read before it is no
+    // longer taken for a copy of whatever file it was read from. A number, never what ran.
+    authority.note_program_started();
 
     if in_the_background {
         // What has to be refused is what start_steps cannot honour, and it honours no route at
@@ -8715,30 +8883,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             Ok(running) => {
                 // Spent at the moment the programs start, which for a background line is here:
                 // it outlives this call, and nothing later in the turn knows what it reached.
-                policy.record_ambient(&spends);
-                // The directory is carried over only once pre-flight checks and launch succeed.
-                *tools.run_directory = plan.directory.clone();
-                let (name, stop) = tools.jobs.keep(
-                    running,
-                    JobLines::new(&displayed, &said),
-                    label,
-                    authority.clone(),
-                    started_revision,
-                    covered_by_record,
-                );
-                tools.jobs.confined_as(
-                    &name,
-                    confinement.as_ref().map(|confinement| {
-                        confinement
-                            .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
-                    }),
-                );
-                reporter.job(crate::report::JobEvent::Started {
-                    name: name.clone(),
-                    line: displayed.clone(),
-                    moved_after: None,
-                    stop,
-                });
+                let (name, _stop) = start_the_job(policy, tools, reporter, running, &started);
                 Produced::new(
                     // Nothing has been printed yet, and the label is the one the kernel fixed
                     // before anything started: leaving it running does not make it trustworthier.
@@ -8801,30 +8946,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 // Everything the background branch above does once its line has started, at the
                 // moment this one stopped being waited for. The label goes with it unchanged: a
                 // person pressing a key says nothing about what the line printed.
-                policy.record_ambient(&spends);
-                *tools.run_directory = plan.directory.clone();
-                let (name, stop) = tools.jobs.keep(
-                    moved.running,
-                    JobLines::new(&displayed, &said),
-                    label,
-                    authority.clone(),
-                    started_revision,
-                    covered_by_record,
-                );
-                tools.jobs.confined_as(
-                    &name,
-                    confinement.as_ref().map(|confinement| {
-                        confinement
-                            .profile_offering(&plan.steps(), unconfined_is_offered(policy, tools))
-                    }),
-                );
-                policy.record_handoff(&name, moved.after);
-                reporter.job(crate::report::JobEvent::Started {
-                    name: name.clone(),
-                    line: displayed.clone(),
+                let started = JobStart {
                     moved_after: Some(moved.after),
-                    stop,
-                });
+                    ..started
+                };
+                let (name, _stop) = start_the_job(policy, tools, reporter, moved.running, &started);
                 return Produced::new(
                     Labelled::new(String::new(), label),
                     format!("`{said}` moved to the background"),
@@ -9981,32 +10107,52 @@ fn advise<S: Sink>(
             .of_content()
         }
         Err(crate::advisor::AdviceError::Chat(error)) => {
-            let cancelled = error.is_cancelled();
-            let diagnosis = error.diagnosis();
-            let reason = if cancelled {
-                "cancelled"
-            } else {
-                diagnosis.category.name()
-            };
-            let mut produced = Produced::problem(format!("error: advisor request {reason}"))
-                .costing(error.completed_usage().unwrap_or_default())
-                .waiting(waited);
-            if cancelled {
-                produced.cancelled = Some(crate::outcome::Cancellation {
-                    attempts: diagnosis.attempts,
-                });
-            }
-            produced
+            model_request_failed("advisor", &error, waited)
         }
         Err(crate::advisor::AdviceError::Refused) => Produced::problem(
             "refused: the settings on this machine do not allow the advisor model. Carry on \
              without it.",
         )
         .waiting(waited),
-        Err(crate::advisor::AdviceError::Denied(error)) => {
-            Produced::problem(format!("error: {error}")).waiting(waited)
-        }
+        Err(crate::advisor::AdviceError::Denied(error)) => request_denied(&error, waited),
     }
+}
+
+/// What the planner is told when a request to a model the driver chose (`what` is `advisor` or
+/// `processor`) failed, with the cost of the attempts and the wait.
+///
+/// Tool problems are trusted driver text. Backend display strings can contain secrets, so the
+/// planner is told the category only, or that the request was cancelled, and a cancelled request
+/// is carried separately so the turn ends as stopped rather than failed (TOOL-4).
+fn model_request_failed(
+    what: &str,
+    error: &crate::backend::BackendError,
+    waited: Option<crate::timing::Interval>,
+) -> Produced {
+    let cancelled = error.is_cancelled();
+    let diagnosis = error.diagnosis();
+    let reason = if cancelled {
+        "cancelled"
+    } else {
+        diagnosis.category.name()
+    };
+    let mut produced = Produced::problem(format!("error: {what} request {reason}"))
+        .costing(error.completed_usage().unwrap_or_default())
+        .waiting(waited);
+    if cancelled {
+        produced.cancelled = Some(crate::outcome::Cancellation {
+            attempts: diagnosis.attempts,
+        });
+    }
+    produced
+}
+
+/// What the planner is told when the policy denied a request to a model.
+fn request_denied(
+    error: &impl std::fmt::Display,
+    waited: Option<crate::timing::Interval>,
+) -> Produced {
+    Produced::problem(format!("error: {error}")).waiting(waited)
 }
 
 /// Hand quarantined content to an isolated model and quarantine what comes back.
@@ -10187,27 +10333,9 @@ fn spawn_processor<S: Sink>(
             produced
         }
         Err(crate::processor::ProcessorError::Chat(error)) => {
-            // Tool problems are trusted driver text. Backend display strings can contain secrets.
-            let cancelled = error.is_cancelled();
-            let diagnosis = error.diagnosis();
-            let reason = if cancelled {
-                "cancelled"
-            } else {
-                diagnosis.category.name()
-            };
-            let mut produced = Produced::problem(format!("error: processor request {reason}"))
-                .costing(error.completed_usage().unwrap_or_default())
-                .waiting(waited);
-            if cancelled {
-                produced.cancelled = Some(crate::outcome::Cancellation {
-                    attempts: diagnosis.attempts,
-                });
-            }
-            produced
+            model_request_failed("processor", &error, waited)
         }
-        Err(crate::processor::ProcessorError::Denied(error)) => {
-            Produced::problem(format!("error: {error}")).waiting(waited)
-        }
+        Err(crate::processor::ProcessorError::Denied(error)) => request_denied(&error, waited),
     }
 }
 
@@ -17427,6 +17555,94 @@ mod tests {
         }
     }
 
+    /// TOOL-4, ADVISOR-7, SPAWN-5: a failed or cancelled request to the advisor or a processor is
+    /// worded by the driver, carries the cost of the attempts that completed and the wait, and
+    /// marks a cancelled one separately so the turn ends as a stop.
+    mod model_requests {
+        use super::*;
+        use crate::backend::BackendError;
+        use bravebot_aichat::ChatError;
+        use bravebot_core::capability::{Capability, CapabilitySet};
+        use bravebot_core::event::RecordingSink;
+        use bravebot_core::policy::{ReleasePlan, Routing};
+
+        fn released(text: &Labelled<String>) -> String {
+            let mut sink = RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask a model");
+            let mut policy = Policy::begin(
+                routing,
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::FileRead]),
+                &mut sink,
+            )
+            .expect("policy");
+            super::arguments::told(&mut policy, text)
+        }
+
+        fn spent() -> Usage {
+            Usage {
+                prompt_tokens: 120,
+                completion_tokens: 7,
+                ..Usage::default()
+            }
+        }
+
+        /// The cancelled branch for both models. The stop tests in `turn.rs` end the turn but do
+        /// not assert the sentence or that the cancellation travels in `Produced::cancelled`, which
+        /// is what lets the turn end as a stop and not as a failure.
+        #[test]
+        fn a_cancelled_request_is_worded_as_cancelled_and_carried_as_a_cancellation() {
+            for what in ["advisor", "processor"] {
+                let error =
+                    BackendError::from(ChatError::Cancelled).counted(2, Some(spent()), None);
+                let produced = model_request_failed(
+                    what,
+                    &error,
+                    Some(crate::timing::Interval::since(std::time::Instant::now())),
+                );
+
+                assert!(
+                    produced.failed,
+                    "{what}: a cancelled request is not a success"
+                );
+                assert_eq!(
+                    released(&produced.text),
+                    format!("error: {what} request cancelled")
+                );
+                let cancellation = produced
+                    .cancelled
+                    .unwrap_or_else(|| panic!("{what}: the cancellation was not carried"));
+                assert_eq!(cancellation.attempts, Some(2), "{what}");
+                assert_eq!(produced.usage, spent(), "{what}: the cost of the attempts");
+                assert!(
+                    produced.inference_interval.is_some(),
+                    "{what}: the wait was dropped"
+                );
+            }
+        }
+
+        /// The control for the test above: a failure that is not a cancellation is worded by its
+        /// category, and nothing the service said, and does not mark the call cancelled.
+        #[test]
+        fn a_failed_request_is_worded_by_its_category_and_is_not_marked_cancelled() {
+            for what in ["advisor", "processor"] {
+                let error =
+                    BackendError::from(ChatError::Incomplete).counted(3, Some(spent()), None);
+                let produced = model_request_failed(what, &error, None);
+
+                assert!(produced.failed, "{what}");
+                assert_eq!(
+                    released(&produced.text),
+                    format!("error: {what} request incomplete")
+                );
+                assert!(produced.cancelled.is_none(), "{what}");
+                assert_eq!(produced.usage, spent(), "{what}");
+                assert!(produced.inference_interval.is_none(), "{what}");
+            }
+        }
+    }
+
     mod todos {
         use super::*;
         use crate::report::RecordingReporter;
@@ -20739,7 +20955,7 @@ mod tests {
                 skills: &skills,
                 slots: &mut slots,
                 reads: &mut reads,
-                chat: Chat::new(&config, &egress),
+                chat: Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin()),
                 cancel: &cancel,
                 scheduling: Scheduling::ArrangingALook,
                 arming: Arming::Allowed { free: 1 },

@@ -19,11 +19,12 @@
 pub mod protocol;
 
 use crate::anthropic::what_was_written;
+use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, CHUNKS_AHEAD, ChatError, Completion, CutOff, Progress, Refusals, WAKE,
-    learned_key, log_retry, pause_before_retry, refuses_the_body, remember, remembered,
-    reply_bound, worth_another_attempt,
+    ATTEMPTS, BACKOFF, ChatError, Completion, CutOff, Progress, Refusals, WAKE, learned_key,
+    log_retry, pause_before_retry, read_in_background, refuses_the_body, remember, remembered,
+    reply_bound, worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -41,21 +42,9 @@ use std::time::Duration;
 /// API serves writes. It bounds how long a reply is waited for and is never sent.
 const ASSUMED_CEILING: u64 = 65_536;
 
-/// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
-///
-/// What the other clients ask, and a failure the service reports part way through a reply that a
-/// second attempt could get past.
-fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
-    worth_another_attempt(allowed, attempt, error)
-        || (attempt < allowed
-            && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
-}
-
 /// One client for one request, to the service a `google-vertex` entry naming no project reaches.
 pub struct GenerateContentClient<'a> {
-    attempts: u32,
-    completed_usage: Option<Usage>,
-    retried_usage: Option<Usage>,
+    spent: Spent,
     egress: &'a Egress,
     provider: &'a Provider,
     /// What the service calls the model, which is the name the request's path carries.
@@ -67,17 +56,72 @@ pub struct GenerateContentClient<'a> {
     token: Option<Secret>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    cancel: Option<Cancel>,
-    /// Whether requests still carry the thinking budget a turn's level asks for.
-    ///
-    /// True until a model refuses it, which is the only way to find out that it reads none:
-    /// nothing in a roster says which models do.
-    effort: bool,
-    /// What that model was known to refuse before this request, which a probe that settled nothing
-    /// puts back.
-    recalled: Refusals,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    backoff: Duration,
+    /// What this model has refused so far in the call in progress, loaded and settled by
+    /// [`call::drive`](crate::call::drive). Requests carry the thinking budget a turn's level asks
+    /// for until the model refuses it, which is the only way to find out that it reads none.
+    refusals: Refusals,
+    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
+    /// unless a test shortens it.
+    pace: Pace,
+}
+
+impl Driven for GenerateContentClient<'_> {
+    type Error = ChatError;
+
+    fn cancelled() -> ChatError {
+        ChatError::Cancelled
+    }
+
+    fn spent_mut(&mut self) -> &mut Spent {
+        &mut self.spent
+    }
+
+    fn pace(&self) -> &Pace {
+        &self.pace
+    }
+
+    fn refusals(&self) -> &Refusals {
+        &self.refusals
+    }
+
+    fn refusals_mut(&mut self) -> &mut Refusals {
+        &mut self.refusals
+    }
+
+    fn recall(&self, key: &str) -> Refusals {
+        remembered(key)
+    }
+
+    fn remember(&self, key: &str, found: Refusals) {
+        remember(key, found);
+    }
+
+    /// Only a refusal of the body is answered by giving something up, and only the thinking budget,
+    /// and only where the request carried one: a request without a level was not refused for it,
+    /// and giving it up there would record a refusal nobody saw.
+    fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
+        refuses_the_body(error)
+            && match concession {
+                Concession::Effort => request.effort.is_some(),
+                Concession::CacheTtl
+                | Concession::Breakpoints
+                | Concession::Ceiling
+                | Concession::ArgumentsAsWritten
+                | Concession::ThinkingShown => false,
+            }
+    }
+
+    fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
+        worth_another_attempt_or_report(self.attempts_allowed(), attempt, error)
+    }
+
+    fn pause(&self, failures: u32, error: &ChatError) -> Duration {
+        pause_before_retry(self.pace.backoff, failures, error)
+    }
+
+    fn log_retry(&self, attempt: u32, pause: Duration) {
+        log_retry(attempt, pause);
+    }
 }
 
 impl<'a> GenerateContentClient<'a> {
@@ -93,46 +137,36 @@ impl<'a> GenerateContentClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             egress,
             provider,
             model: model.into(),
             token,
             headers: Vec::new(),
-            cancel: None,
-            effort: true,
-            recalled: Refusals::default(),
-            backoff: BACKOFF,
+            refusals: Refusals::default(),
+            pace: Pace::new(BACKOFF),
         }
     }
 
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -151,7 +185,7 @@ impl<'a> GenerateContentClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
@@ -166,44 +200,6 @@ impl<'a> GenerateContentClient<'a> {
         learned_key(&self.provider.completion_url(), &self.model)
     }
 
-    /// Start a request from what this model has already been found to refuse.
-    fn recall(&mut self) {
-        let refusals = remembered(&self.refusal_key());
-        self.effort = !refusals.effort;
-        self.recalled = refusals;
-    }
-
-    /// Settle what a probe found, once the request it was part of has finished one way or the other.
-    ///
-    /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
-    /// read it. A probe that failed as well says the level was not what the service refused, so it
-    /// goes back to what was known before the request: a request can be refused on its contents
-    /// for reasons that have nothing to do with it.
-    fn probe_settled(&mut self, probed: bool, failed: bool) {
-        if !probed {
-            return;
-        }
-        if failed {
-            self.effort = !self.recalled.effort;
-            return;
-        }
-        remember(
-            &self.refusal_key(),
-            Refusals {
-                effort: !self.effort,
-                ..Refusals::default()
-            },
-        );
-    }
-
-    /// Whether this failure is worth sending the same request again without its thinking budget.
-    ///
-    /// Only where the request carried one: a request without a level was not refused for it, and
-    /// giving it up there would record a refusal nobody saw.
-    fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && request.effort.is_some() && refuses_the_body(error)
-    }
-
     /// The ceiling somebody stated for this model, exported or in its block.
     fn stated_ceiling(&self) -> Option<u64> {
         self.provider.stated_output_limit(&self.model)
@@ -216,7 +212,7 @@ impl<'a> GenerateContentClient<'a> {
     fn contents_for(&self, request: &ChatRequest) -> protocol::GenerateContentRequest {
         protocol::request_from(&request.messages, request.tools.as_deref())
             .with_ceiling(self.stated_ceiling())
-            .with_effort(request.effort.filter(|_| self.effort))
+            .with_effort(request.effort.filter(|_| !self.refusals.effort))
             .with_schema(
                 request
                     .response_format
@@ -302,69 +298,26 @@ impl<'a> GenerateContentClient<'a> {
         Ok(http)
     }
 
-    fn cancelled(&self) -> bool {
-        self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
-    }
-
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices, because a stop landing in the middle of a seconds-long pause would otherwise
-    /// wait the rest of it out with nothing to stop but a sleep.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
-
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancelled() {
-                return false;
-            }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
-        }
-    }
-
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
-        self.recall();
-        let mut attempt = 1;
-        let mut probed = false;
-        loop {
-            match self.complete_once(policy, request) {
-                // Sent again immediately rather than after a wait: nothing is busy, the request was
-                // simply carrying something this model does not take.
-                Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
-                    let pause = pause_before_retry(self.backoff, attempt, &error);
-                    log_retry(attempt + 1, pause);
-                    if !self.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                    attempt += 1;
-                }
-                result => {
-                    self.probe_settled(probed, result.is_err());
-                    return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
-                        completion
-                    });
-                }
-            }
-        }
+        self.spent.begin_call();
+        let key = self.refusal_key();
+        let plan = Plan {
+            key: &key,
+            order: &[Concession::Effort],
+        };
+        drive(
+            self,
+            request,
+            plan,
+            policy,
+            |client, policy, _| client.complete_once(policy, request),
+            |_, _| {},
+        )
     }
 
     fn complete_once<S: Sink>(
@@ -372,15 +325,8 @@ impl<'a> GenerateContentClient<'a> {
         policy: &mut Policy<'_, S>,
         request: &ChatRequest,
     ) -> Result<Completion, ChatError> {
-        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
-        // what the call has been billed so far is kept apart from it.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        if self.cancelled() {
-            return Err(ChatError::Cancelled);
-        }
         let http = self.build(request, false)?;
-        self.attempts += 1;
+        self.spent.sent();
         let response = self.egress.fetch(policy, http, Label::untrusted_public())?;
 
         // The envelope is protocol, like the JSON envelope in the other backends: the bytes come
@@ -396,7 +342,8 @@ impl<'a> GenerateContentClient<'a> {
             serde_json::from_slice(&bytes).map_err(|error| ChatError::Decode {
                 detail: format!("{error} (received {} bytes)", bytes.len()),
             })?;
-        self.completed_usage = reported_usage(&envelope).map(Usage::from);
+        self.spent
+            .record(reported_usage(&envelope).map(Usage::from));
 
         let parsed: Response =
             serde_json::from_value(envelope).map_err(|error| ChatError::Decode {
@@ -452,47 +399,31 @@ impl<'a> GenerateContentClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
-        self.recall();
-        let mut attempt = 1;
-        let mut probed = false;
-        loop {
-            match self.stream_once(policy, request, attempt, &mut progress) {
-                Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
-                    attempt += 1;
-                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
-                    log_retry(attempt, pause);
-                    // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Reply progress resets; completed costs remain charged.
-                    progress(Progress {
-                        written: Labelled::new("", Label::untrusted_public()),
-                        output_tokens: 0,
-                        calling: None,
-                        thinking: Labelled::new("", Label::untrusted_public()),
-                        counted_by_server: false,
-                        attempt,
-                    });
-                    if !self.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                }
-                result => {
-                    self.probe_settled(probed, result.is_err());
-                    return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
-                        completion
-                    });
-                }
-            }
-        }
+        self.spent.begin_call();
+        let key = self.refusal_key();
+        let plan = Plan {
+            key: &key,
+            order: &[Concession::Effort],
+        };
+        drive(
+            self,
+            request,
+            plan,
+            &mut progress,
+            |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
+            |progress, attempt| {
+                // Announced before the wait rather than after it, so the pause is explained
+                // while it is happening. Reply progress resets; completed costs remain charged.
+                progress(Progress {
+                    written: Labelled::new("", Label::untrusted_public()),
+                    output_tokens: 0,
+                    calling: None,
+                    thinking: Labelled::new("", Label::untrusted_public()),
+                    counted_by_server: false,
+                    attempt,
+                });
+            },
+        )
     }
 
     fn stream_once<S: Sink>(
@@ -502,49 +433,19 @@ impl<'a> GenerateContentClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
-        // what the call has been billed so far is kept apart from it.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        // Before the request is built, let alone sent. A stop that landed while the last attempt was
-        // failing is still a stop.
-        if self.cancelled() {
-            return Err(ChatError::Cancelled);
-        }
-
         let http = self
             .build(request, true)?
             .header("accept", "text/event-stream");
-        self.attempts += 1;
+        self.spent.sent();
         let stream = self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
+            self.pace.cancel.as_ref(),
         )?;
         let label = stream.label();
 
-        // Read on a thread this one can walk away from, for the same reason the other backends do:
-        // a read blocks for as long as the service is quiet, and the longest quiet in a turn is the
-        // one before the model's first word. Nothing on this thread holds a policy, a workspace or
-        // a tool, so a request walked away from leaves only a socket to be dropped.
-        let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
-        std::thread::spawn(move || {
-            let mut stream = stream;
-            loop {
-                match stream.next_chunk() {
-                    Ok(Some(piece)) => {
-                        if chunks.send(Ok(Some(piece))).is_err() {
-                            return;
-                        }
-                    }
-                    end => {
-                        let _ = chunks.send(end);
-                        return;
-                    }
-                }
-            }
-        });
+        let arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut reply = Reply::default();
@@ -566,7 +467,7 @@ impl<'a> GenerateContentClient<'a> {
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancelled() {
+                    if self.pace.cancelled() {
                         return Err(ChatError::Cancelled);
                     }
                     continue;
@@ -577,7 +478,7 @@ impl<'a> GenerateContentClient<'a> {
             };
             began = true;
 
-            if self.cancelled() {
+            if self.pace.cancelled() {
                 return Err(ChatError::Cancelled);
             }
 
@@ -604,7 +505,7 @@ impl<'a> GenerateContentClient<'a> {
                     Decoded::Ignored => {}
                 }
                 if reply.reported_in_full() {
-                    self.completed_usage = Some(reply.usage());
+                    self.spent.record(Some(reply.usage()));
                 }
             }
 

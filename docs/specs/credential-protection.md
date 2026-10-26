@@ -25,6 +25,7 @@ guards:
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/security/security.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope
@@ -121,7 +122,7 @@ features anything here implements.
 
 | Group | Where it lives |
 | --- | --- |
-| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
+| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
 | What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown until nothing has written the record for the retention period, 30 days where none is stated ([state-directory.md](state-directory.md#STATE-4)); `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix (values for an HTTP server's headers are read from the environment at launch and never stored); `/export`, which writes a transcript as markdown inside the working directory |
 | Its own project settings | `.bravebot/settings.json` and `.bravebot/settings.local.json` in a checkout, a layer over the one at home, which on some machines carries credentials |
 | Minted access, by a turn | `~/.ssh/`, then deploy key or `authorized_keys`; `gh auth login`, `~/.config/gh/hosts.yml`; `aws iam create-access-key` → `~/.aws/credentials`; `gcloud iam service-accounts keys create`; `az ad sp create-for-rbac`; `npm token create`, `docker login`, `helm registry login` |
@@ -596,6 +597,14 @@ about the profile this agent resolved for itself, which it knows, rather than ab
 that resolves them is a program this agent started all the same, so it is handed what the person's
 own environment holds and none of what this agent authenticates with.
 
+**The stored ChatGPT sign-in.** `~/.bravebot/chatgpt-account.json` holds an access token and a refresh
+token ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)), and this clause holds them as it holds the gateway
+keys. They are in the secret type, so a print of one is a redaction. The file is one of the locations a
+program a turn runs is refused ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and the browser opener the
+sign-in command starts is handed none of the variables this clause removes. A run that signs in, renews
+and fails leaves none of the values of the sign-in in the streams of each command, the debug log, the files
+left in the home or the environment of a program a turn starts ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)).
+
 **The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
 the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
 program the gateway keys and `settings.json` and a Windows container cannot be refused a path
@@ -614,11 +623,18 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_cli::running::doctor_push_identity_hands_none_of_this_agents_credentials_to_the_programs_it_starts`
 `verified-by: bravebot_agent::usability::a_program_the_suite_starts_is_not_handed_this_agents_signing_key`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_this_agents_signing_key`
+`verified-by: bravebot_tui::editor::an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is`
+`verified-by: bravebot_tui::editor::the_editor_a_click_opens_is_started_without_this_agents_own_credentials`
 `verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
+`verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
+`verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
+`verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
+`verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 
 <a id="CRED-15"></a>
 ### CRED-15: what a turn reads is scanned before the planner receives it
@@ -1322,7 +1338,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   this agent starts. That what it holds reaches no session record rests on
   [TRACE-2](trace.md#TRACE-2) admitting no field one could sit in, and that it is shown only as a
   redaction rests on the type it is held in; neither is pinned by a test that scans a record or a
-  screen for every secret the process holds, which is what the clause says is owed.
+  screen for every secret the process holds, which is what the clause says is owed. The ChatGPT
+  sign-in is the one credential a test does scan for, in the outputs of one run.
 
 - **Most of this is not implemented.** What runs is the scan of what a turn writes, at the three
   write tools and at the two places a `run` line writes, and one performer: a credential a vault

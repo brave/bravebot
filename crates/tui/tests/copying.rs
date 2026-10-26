@@ -1,8 +1,9 @@
 //! Proves the copy path reads what was drawn rather than a reset buffer.
-use bravebot_tui::select::Selection;
+use bravebot_tui::select::{Pane, Selection};
 use bravebot_tui::{Session, render};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::layout::Rect;
 
 #[test]
 fn copying_reads_what_the_screen_shows() {
@@ -24,9 +25,9 @@ fn copying_reads_what_the_screen_shows() {
                 render::draw(frame, &session);
             })
             .expect("second draw");
-        let mut selection = Selection::started_at(0, 0);
+        let mut selection = Selection::in_pane(0, 0, Pane::Screen, Rect::new(0, 0, 60, 12));
         selection.extend_to(11, 60);
-        bravebot_tui::select::text(completed.buffer, &selection)
+        bravebot_tui::select::text_without_chrome(completed.buffer, &selection, &[], &[], &[])
     };
 
     assert!(

@@ -266,10 +266,10 @@ about a directory the other surfaces share.
 ### STATE-4: a record, an index and a findings file that nothing has written for the retention period are removed when a session starts
 
 Once per process, as a session starts, three kinds of file are removed from the state directory when
-nothing has written them for the retention period: a session record, with the trail, the search index
-and the temporary file beside it ([sessions.md](sessions.md)); the index a language server keeps of a
-workspace ([tools/lsp.md](tools/lsp.md)); and the file recording what a scan found in a workspace
-([credential-protection.md](credential-protection.md)).
+nothing has written them for the retention period: a session record, with the trail, the search
+index, the temporary file and the lock beside it ([sessions.md](sessions.md)); the index a language
+server keeps of a workspace ([tools/lsp.md](tools/lsp.md)); and the file recording what a scan found
+in a workspace ([credential-protection.md](credential-protection.md)).
 
 The period is `retentionDays` in the person's own `settings.json`: a whole number of days, one or
 more, and 30 where none is stated. One day is the least it can be, so nothing written in the last day
@@ -282,7 +282,8 @@ time later than now is not old. A language server's index is aged by a file insi
 of a server on it touches, because the directory's own time does not move while a server writes
 deeper inside. An index with no such file was written before it existed: it is given one when first
 seen and removed once a whole period has passed from then. A trail or a temporary file whose record
-is gone goes by its own age.
+is gone goes by its own age, and so does a lock with no record, except one a process holds
+([SESSION-38](sessions.md#SESSION-38)).
 
 The record of the session that is starting, new or resumed, the record of any session a background
 process is running, and the index of the workspace the starting session is in are kept at any age.
@@ -342,6 +343,7 @@ age does not end them.
 `verified-by: bravebot_session::retention::the_shortest_period_still_keeps_what_was_written_today`
 `verified-by: bravebot_session::retention::a_file_stamped_in_the_future_is_kept`
 `verified-by: bravebot_session::retention::a_trail_or_temporary_file_with_no_record_goes_by_its_own_age`
+`verified-by: bravebot_session::retention::a_lock_with_no_record_goes_by_its_own_age_and_a_held_one_stays`
 `verified-by: bravebot_session::retention::a_name_that_is_not_text_is_left_and_the_file_its_lossy_rendering_names_is_not_removed`
 `verified-by: bravebot_session::retention::the_sweep_does_not_follow_a_link_out_of_the_state_directory`
 `verified-by: bravebot_session::retention::what_a_person_asked_to_keep_is_left_whatever_its_age`
@@ -382,9 +384,10 @@ age does not end them.
 - **A session left open past the period is swept by another process.** The exemption names the
   session and workspace of the process that sweeps and the sessions a background process is running,
   so a session open in a second terminal for longer than the period has its record removed by the
-  first, and its next save writes the record back. A record that process saves between the sweep
-  reading its age and removing it goes with the rest. A language server running when its index goes
-  writes it again, at the cost of the indexing.
+  first, and its next save writes the record back. The lock beside the record is left while that
+  process holds it, so the record it writes back is still held. A record that process saves between
+  the sweep reading its age and removing it goes with the rest. A language server running when its
+  index goes writes it again, at the cost of the indexing.
 - **A desktop or editor front end exempts no session.** It sweeps before any session is open, so a
   record it is asked to load afterwards has been judged by its age alone.
 - **Records in a root a process was told to keep them in are never swept.** A host started with a

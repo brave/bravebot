@@ -202,7 +202,7 @@ impl LanguageServers {
         if servers.running() != 0 {
             workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);
         }
-        servers.ask(policy, question, &mut |starting| {
+        servers.ask(policy, question, &mut |policy, starting| {
             let request = ServerRequest {
                 language: starting.language.to_string(),
                 program: starting.resolved.display().to_string(),
@@ -211,8 +211,14 @@ impl LanguageServers {
                 runs_build_tooling: starting.build_tooling == BuildTooling::Runs,
                 declared: starting.declared,
             };
-            if confirmer.confirm_server(&request) != Decision::Approve {
+            let (decision, answered_by) = confirmer.confirm_server_noting_the_mode(&request);
+            if decision != Decision::Approve {
                 return false;
+            }
+            // Before the launch, as the gap below is, so a start that hangs while the index builds
+            // is already in the trail (TRACE-5).
+            if let Some(mode) = answered_by {
+                policy.record_server_start_answer(mode);
             }
             // Servers and their build-tool children can write beyond this turn's lifetime.
             workspace.mark_rewind_gap(crate::rewind::CoverageGap::LanguageServer);

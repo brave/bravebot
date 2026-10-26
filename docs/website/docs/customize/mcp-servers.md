@@ -691,7 +691,7 @@ nobody declared: `bravebot mcp disable docs` takes that out.
 
 ## Refused by an administrator
 
-The machine's [administrator file](configuration.md#pinned-by-an-administrator) can keep a server
+The machine's [administrator file](managed-settings.md) can keep a server
 from starting in every session on the machine, and cannot give one. It names servers by the host a
 url reaches or the command a program runs, never by the name you gave it:
 
@@ -748,7 +748,7 @@ to be rid of a server yourself, [remove it](#removing-one).
 
 ## Where nothing is written
 
-An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) writes nothing
+An [incognito session](../using/incognito.md) writes nothing
 under `~/.bravebot`, so `add`, `approve`, `enable`, `disable` and `remove` are refused in one. A server started in one is
 given a home directory in the temporary directory instead, removed once it stops, so a runner
 fetches its package again each session. On a machine that names no

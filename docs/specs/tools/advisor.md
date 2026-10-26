@@ -103,6 +103,7 @@ refuse is not asked, whichever route named it, and the planner is told to carry 
 `verified-by: bravebot_agent::turn::a_failed_advisor_call_tells_the_planner_only_the_category`
 `verified-by: bravebot_agent::turn::an_advisor_model_the_machine_refuses_is_not_asked`
 `verified-by: bravebot_agent::turn::a_stop_while_the_advisor_is_asked_ends_the_turn_as_a_stop_with_what_it_sent`
+`verified-by: bravebot_agent::tools::a_cancelled_request_is_worded_as_cancelled_and_carried_as_a_cancellation`
 
 <a id="ADVISOR-8"></a>
 ### ADVISOR-8: the `advisorModel` setting names the advisor when the command line does not

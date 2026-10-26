@@ -365,6 +365,9 @@
    design draws both the sidebar's and the settings' items at 20px. */
 .sidebar-foot leo-navigationitem,
 .settings-navigation leo-navigationitem { display: block; --leo-icon-size: var(--icon-hero); }
+/* The number of agents started, and how many are working, ride after the label. */
+.agents-count { margin-inline-start: var(--leo-spacing-m); color: var(--ink-secondary); }
+.agents-working { margin-inline-start: var(--leo-spacing-s); color: var(--ink-accent); }
 
 /* ------------------------------------------------------------------ menus opened from here
 

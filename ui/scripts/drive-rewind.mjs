@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
+import { COMPOSER_NAME, TRUST_APPROVE } from './drive-support.mjs'
 
 const shots = process.env.REWIND_SHOTS ?? join(tmpdir(), 'bravebot-rewind')
 mkdirSync(shots, { recursive: true })
@@ -67,7 +68,7 @@ try {
     window.bravebot.onEvent(event => window.rewindEvents.push(event))
   })
   const ended = async () => (await page.evaluate(() => window.rewindEvents)).filter(e => e.event === 'turn.done' || e.event === 'turn.error')
-  const composer = page.getByRole('textbox', { name: 'Message the agent' })
+  const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const menuItem = id => app.evaluate(({ Menu }, id) => {
     const item = Menu.getApplicationMenu().getMenuItemById(id)
     return item && { label: item.label, enabled: item.enabled, accelerator: item.accelerator ?? null }
@@ -76,7 +77,7 @@ try {
   const prompt = 'Change blue to green in notes.txt.'
 
   await page.getByRole('button', { name: 'Open project', exact: true }).click()
-  await page.locator('[data-test="trust-approve"]').click()
+  await page.locator(TRUST_APPROVE).click()
   await page.getByRole('dialog', { name: 'Project trust', exact: true }).waitFor({ state: 'hidden' })
 
   /** One turn that writes `colour` into notes.txt, after `first` if given, approving whatever it asks. */

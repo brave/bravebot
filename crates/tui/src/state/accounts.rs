@@ -435,6 +435,27 @@ impl Session {
         self.report(crate::status::Report { lines });
     }
 
+    /// Say which language servers the session has started, as `/lsp` does (CMD-29).
+    ///
+    /// Read from the list the panel reads, which holds the programs the person approved and not
+    /// anything a server said, so what is said has no word of a server's in it. What each is said to
+    /// do is what approving one meant (LSP-5) and how long it lasts (LSP-8), which is true of all of
+    /// them.
+    pub fn report_started_language_servers(&mut self) {
+        let programs = self.language_servers.programs();
+        if programs.is_empty() {
+            self.note(t!(lsp_none_started));
+            return;
+        }
+        self.note(t!(lsp_started, count = programs.len()));
+        for program in programs {
+            self.note(t!(
+                lsp_server_running,
+                program = crate::render::printable(&program)
+            ));
+        }
+    }
+
     /// Put what the last request was made of in the transcript, by category (`/context`).
     ///
     /// Read from the view of the request the driver built and the count the server reported for

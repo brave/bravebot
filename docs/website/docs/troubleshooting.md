@@ -37,7 +37,11 @@ issued it. Import from the Brave channel matching the environment the binary is 
 
 **`no model service is configured yet`**. Nothing is set up to send the request, so the run stops
 instead of starting work that has no service to do it. It lists the ways to configure one, each
-naming what to type or write. `doctor` says the same and fails. See
+naming what to type or write. `doctor` says the same and fails. With a ChatGPT sign-in stored and no
+other service configured, it says so instead of listing the ways, and names the commands that use the
+account: `bravebot -i "<prompt>" --model chatgpt/<model>` and `bravebot "<task>" --model
+chatgpt/<model>`. Started in a terminal outside an incognito session with no `--model`, `bravebot` first
+asks which of the account's models to use, where the account lists them. See
 [Configuration](customize/configuration.md).
 
 ## When a turn fails
@@ -52,7 +56,12 @@ how long a rate limit asked you to wait: bravebot reads it as a number, waits it
 is two minutes or less, and when it is longer says `the service asked for fewer requests, and for a wait of
 about N minutes` so you know when to ask again. Where the status is known it is appended as
 `(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
-capability probes.
+capability probes. A failure of a ChatGPT account is said in a sentence of its own that names the step
+and what to run, and no count of attempts follows it. A refusal that names the account says in that
+sentence how long the service asked you to wait, where it asked for one at a 429. The line a failed turn
+leaves in the terminal and the error a one-shot run prints put the status after it, as `(HTTP 429)`, and
+the line `/compact` leaves, the line a turn says when it could not summarise the conversation, the window
+and an editor say the sentence alone.
 
 | What it says | What it means |
 |---|---|

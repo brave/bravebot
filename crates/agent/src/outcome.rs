@@ -1,6 +1,7 @@
 //! Safe failure details and distinct turn endings.
 
 use crate::timing::Timing;
+use bravebot_aichat::AccountFailure;
 use bravebot_aichat::protocol::{Cached, Usage};
 
 /// Fixed failure categories, distinguished by what the user can do about them.
@@ -79,6 +80,20 @@ pub struct Diagnosis {
     /// anything the service wrote. Absent where no header parsed or the status was not a
     /// rate limit.
     pub retry_after: Option<std::time::Duration>,
+    /// Which failure of a ChatGPT account this was, where it was one of them
+    /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+    ///
+    /// One of a closed set: a step of the sign-in, or a code the client that sent the request
+    /// compared with a closed list. No text from a reply is in it, so a front end may word it as it
+    /// words a category, and the category beside it stays the class the failure belongs to. Absent
+    /// for every failure that did not come from the account, and never given to the planner.
+    pub account: Option<AccountFailure>,
+}
+
+/// A wait a service asked for, in the minutes a person is told, rounded up so a limit that lifts in
+/// seconds is not read as one that has already lifted.
+pub fn minutes_to_wait(wait: std::time::Duration) -> u64 {
+    wait.as_secs().div_ceil(60).max(1)
 }
 
 impl Diagnosis {
@@ -90,6 +105,7 @@ impl Diagnosis {
             attempts: None,
             ceiling: None,
             retry_after: None,
+            account: None,
         }
     }
 
@@ -108,6 +124,12 @@ impl Diagnosis {
     /// The same, with the wait the service asked for.
     pub fn asking_for_a_wait_of(mut self, wait: std::time::Duration) -> Self {
         self.retry_after = Some(wait);
+        self
+    }
+
+    /// The same, with which failure of a ChatGPT account it was.
+    pub fn with_account(mut self, account: AccountFailure) -> Self {
+        self.account = Some(account);
         self
     }
 

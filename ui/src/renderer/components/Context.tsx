@@ -105,15 +105,18 @@ export const Context = memo(function Context({ live, audit, details }: {
           <Empty icon="list-checks">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</Empty>
         ) : (
           <ul className="todos">
-            {live.todos.map((row, index) => (
-              <li key={index} className={row.status}>
-                <span className="marker" aria-hidden="true">
-                  {row.status === 'done' ? <Icon name="check-circle-filled" /> : row.status === 'cancelled' ? <Icon name="close" /> : row.status === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
-                </span>
-                <span className="todo-text">{row.content}</span>
-                <span className="visually-hidden">{row.status === 'done' ? ', done' : row.status === 'cancelled' ? ', cancelled' : row.status === 'active' ? ', in progress' : ''}</span>
-              </li>
-            ))}
+            {live.todos.map((row, index) => {
+              const { rowClass, marker, hiddenSuffix } = todoRowLook(row, live.running)
+              return (
+                <li key={index} className={rowClass}>
+                  <span className="marker" aria-hidden="true">
+                    {marker === 'done' ? <Icon name="check-circle-filled" /> : marker === 'cancelled' ? <Icon name="close" /> : marker === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
+                  </span>
+                  <span className="todo-text">{row.content}</span>
+                  <span className="visually-hidden">{hiddenSuffix}</span>
+                </li>
+              )
+            })}
           </ul>
         )}
       </Section>
@@ -237,6 +240,26 @@ export const Context = memo(function Context({ live, audit, details }: {
     </aside>
   )
 })
+
+/**
+ * How a plan row draws, given whether a turn is running.
+ *
+ * `done` and `cancelled` are settled and draw the same whether or not a turn is running. `active`
+ * only means "the model is working on this right now" while a turn is running: once the turn ends
+ * with the row still `active` or `pending`, nothing is working on it, so both draw as left open —
+ * the row the planner has not settled, shown with the same hollow mark and dimmed ink as a row
+ * that was never started, and no ring that would read as work still going.
+ */
+export function todoRowLook(
+  row: TodoRow,
+  running: boolean,
+): { rowClass: string; marker: 'done' | 'cancelled' | 'active' | 'open'; hiddenSuffix: string } {
+  if (row.status === 'done') return { rowClass: 'done', marker: 'done', hiddenSuffix: ', done' }
+  if (row.status === 'cancelled') return { rowClass: 'cancelled', marker: 'cancelled', hiddenSuffix: ', cancelled' }
+  if (row.status === 'active' && running) return { rowClass: 'active', marker: 'active', hiddenSuffix: ', in progress' }
+  if (running) return { rowClass: 'pending', marker: 'open', hiddenSuffix: '' }
+  return { rowClass: 'left-open', marker: 'open', hiddenSuffix: ', left open' }
+}
 
 /** What a write's state means at a glance: done, refused or failed, or still moving. */
 function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {

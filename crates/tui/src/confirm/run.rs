@@ -316,21 +316,26 @@ pub(super) fn ask_run_reading<B: Backend>(
 ) -> Noted<RunAnswer> {
     let mut scroll = 0u16;
     let mut shown = RowsShown::default();
+    let mut drawn = RunDrawn::default();
+    let mut ignored = false;
     loop {
-        let mut drawn = RunDrawn::default();
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather than run
-        // something unseen.
-        if terminal
-            .draw(|frame| drawn = draw_run(frame, request, scroll, &mut shown))
-            .is_err()
+        // something unseen. Not again for a report that changed nothing (MOUSE-44).
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw_run(frame, request, scroll, &mut shown))
+                .is_err()
         {
             return Noted::plain(RunAnswer::Reject);
         }
+        ignored = false;
 
         match next() {
+            Next::Ignored => ignored = true,
             Next::Skip => continue,
             // Losing the event stream must not run anything.
             Next::Lost => return Noted::plain(RunAnswer::Reject),
+            Next::Wheel(by) => scroll = drawn.moved(scroll, i32::from(by)),
             Next::Press(key) if note::opens(key, alone()) => {
                 // A yes from the line is a yes only where this draw takes the question's own.
                 let may_yes = matches!(
@@ -379,7 +384,6 @@ pub(super) fn authority(spent: &bravebot_core::ambient::Spent) -> String {
             t!(run_authority_metadata, named = named)
         }
     }
-    .to_string()
 }
 
 /// Draw the run confirmation, marking in `shown` the rows of the body this draw put on the screen.

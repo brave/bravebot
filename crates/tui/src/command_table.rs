@@ -3,7 +3,7 @@
 
 use bravebot_i18n::t;
 
-use crate::state::{Bound, Session};
+use crate::state::{Bound, Session, Status};
 
 /// The line that opens the model picker instead of starting a turn.
 pub(crate) const MODEL_COMMAND: &str = "/model";
@@ -64,6 +64,15 @@ pub(crate) const REACH_COMMAND: &str = "/reach";
 /// The line that lists the MCP servers, starts one that is not running, or turns one off for the
 /// session (SERVERS-19).
 pub(crate) const MCP_COMMAND: &str = "/mcp";
+
+/// The line that says which language servers the session has started (CMD-29).
+pub(crate) const LSP_COMMAND: &str = "/lsp";
+
+/// The line that lists the web addresses and file paths of the latest reply that has any, which is
+/// the keyboard's way to what a click on one does (CMD-30).
+pub(crate) const OPEN_COMMAND: &str = "/open";
+/// The word after `/open` that opens a path in the person's editor in place of showing the file.
+pub(crate) const OPEN_EDIT: &str = crate::open_command::EDIT;
 
 /// The word after `/mcp` that lists the servers, as the bare command does.
 pub(crate) const MCP_LIST: &str = "list";
@@ -156,11 +165,22 @@ pub(crate) const WATCH_COMMAND: &str = "/watch";
 /// job while the turn goes on with everything else.
 pub(crate) const JOBS_COMMAND: &str = "/jobs";
 
+/// The line that opens the view over what commands printed, background jobs included.
+///
+/// The agents have a key of their own, and what a program printed is a different thing to look at,
+/// so it is opened from here rather than from that key (WATCH-7).
+pub(crate) const OUTPUTS_COMMAND: &str = "/outputs";
+
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
 /// The line that puts the info panel in its files state, or ends it.
-pub(crate) const FILES_COMMAND: &str = "/files";
+pub(crate) const DIFF_COMMAND: &str = "/diff";
+
+/// The line that prints the whole plan in the transcript, as its key does.
+///
+/// Carried out by the driver from the plan the session holds and starts no turn (CMD-28).
+pub(crate) const TODOS_COMMAND: &str = "/todos";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
@@ -201,6 +221,11 @@ pub(crate) const EXPORT_COMMAND: &str = "/export";
 /// A sweep with the mouse copies what was drawn, so it carries the marker and indent beside every
 /// row and breaks a paragraph where the terminal wrapped it (CMD-11).
 pub(crate) const COPY_COMMAND: &str = "/copy";
+/// The word after `/copy` that asks for a fenced block of a reply and not the reply (MOUSE-27).
+pub(crate) const COPY_BLOCK: &str = "block";
+/// The word after `/copy` that asks for a reply as the screen shows it, with none of the marks of the
+/// markdown it was written in (MOUSE-52).
+pub(crate) const COPY_TEXT: &str = "text";
 
 /// The line that rewinds the conversation and restores files changed in the last turn.
 pub(crate) const UNDO_COMMAND: &str = "/undo";
@@ -370,7 +395,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 56] {
+pub fn commands() -> [Command; 60] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -577,15 +602,27 @@ pub fn commands() -> [Command; 56] {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: OUTPUTS_COMMAND,
+            argument: "",
+            description: t!(command_outputs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: PANEL_COMMAND,
             argument: "",
             description: t!(command_panel),
             mid_turn: MidTurn::Runs,
         },
         Command {
-            name: FILES_COMMAND,
+            name: DIFF_COMMAND,
             argument: "",
-            description: t!(command_files),
+            description: t!(command_diff),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: TODOS_COMMAND,
+            argument: "",
+            description: t!(command_todos),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -668,7 +705,7 @@ pub fn commands() -> [Command; 56] {
         },
         Command {
             name: COPY_COMMAND,
-            argument: "[n]",
+            argument: "[n | block [n] | text [n]]",
             description: t!(command_copy),
             mid_turn: MidTurn::Runs,
         },
@@ -708,6 +745,18 @@ pub fn commands() -> [Command; 56] {
             description: t!(command_mcp),
             mid_turn: MidTurn::Waits,
         },
+        Command {
+            name: LSP_COMMAND,
+            argument: "",
+            description: t!(command_lsp),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: OPEN_COMMAND,
+            argument: "[edit] [n | address | path]",
+            description: t!(command_open),
+            mid_turn: MidTurn::Runs,
+        },
     ]
 }
 
@@ -746,6 +795,12 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
     if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
         return complete_exact_word(MODE_COMMAND, typed, skills);
+    }
+    if let Some(typed) = line.strip_prefix(COPY_COMMAND) {
+        return complete_word(COPY_COMMAND, typed, &[COPY_BLOCK, COPY_TEXT]);
+    }
+    if let Some(typed) = line.strip_prefix(OPEN_COMMAND) {
+        return complete_word(OPEN_COMMAND, typed, &[OPEN_EDIT]);
     }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
@@ -1156,6 +1211,17 @@ pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
     held_back_by(session, session.queued.len(), line).is_some()
 }
 
+/// Whether the command a line is, typed or clicked for while the session works, is carried out at
+/// once and not queued: a turn is running, the table says the command runs mid-turn, and no line
+/// waiting ahead of it could change what it acts on (CMD-8).
+///
+/// The one decision the typed line and the click on a row of the info panel share (MOUSE-29).
+pub(crate) fn is_carried_out_at_once(session: &Session, line: &str) -> bool {
+    session.a_turn_is_running()
+        && runs_while_working(line)
+        && !waits_behind_the_queue(session, line)
+}
+
 /// A waiting line as the words that say a command waits behind it name it.
 ///
 /// A command by the line that was typed, so a person can find it in the queue. A prompt and a shell
@@ -1177,6 +1243,10 @@ pub(crate) fn named(goes: Bound, line: &str) -> String {
 pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     let command = row_typed(line)?;
     let word = command.name;
+    // A command the person typed is running and no turn is, so the line waits for that.
+    if session.status == Status::Running {
+        return Some(t!(command_waits_for_the_command, command = word).to_string());
+    }
     Some(if runs_while_working(line) {
         let (goes, ahead) = held_back_by(session, session.queued.len(), line)?;
         t!(
@@ -1184,11 +1254,10 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
             command = word,
             line = named(goes, ahead)
         )
-        .to_string()
     } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
-        t!(command_waits_to_ask, command = word).to_string()
+        t!(command_waits_to_ask, command = word)
     } else {
-        t!(command_waits_for_the_turn, command = word).to_string()
+        t!(command_waits_for_the_turn, command = word)
     })
 }
 

@@ -18,7 +18,10 @@ governs:
   - ui/src/renderer/shown.ts
   - ui/src/renderer/components/Transcript.tsx
   - ui/src/renderer/components/Diff.tsx
-documented-by: docs/website/docs/security/permissions.md
+documented-by:
+  - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
+  - docs/website/docs/security/permission-rules.md
 kept_in:
   - Confirmer::confirm_write: one effect; credential writes agreed to for the session; credential writes remembered past the session
   - Confirmer::confirm_run: one effect; programs vouched for; lines remembered past the session; run prompts drawn; reach kept from a run
@@ -26,6 +29,7 @@ kept_in:
   - Confirmer::confirm_vetted_read: one effect; auto-vetting
   - Confirmer::confirm_fetch: one effect
   - Confirmer::confirm_server: language servers started
+  - Confirmer::confirm_server_noting_the_mode: language servers started
   - Confirmer::confirm_manifest: one effect
   - Confirmer::confirm_vouch: the trust map
   - Confirmer::confirm_exposing_read: files sent despite a credential

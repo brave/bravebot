@@ -680,6 +680,8 @@ fn a_resume_takes_its_own_map_before_a_kept_answer() {
     assert_eq!(done["event"], "turn.done", "{done}");
     let id = done["data"]["id"].as_str().expect("a record").to_string();
     let keeping = remember(&mut front, &scratch.project());
+    // The session that wrote the record is closed, since one process holds a record at a time.
+    front.call("session.close", json!({"session": declined}));
 
     let (answered, heard) =
         front.hearing("session.open", json!({"directory": directory, "id": id}));
@@ -694,6 +696,7 @@ fn a_resume_takes_its_own_map_before_a_kept_answer() {
         "a kept answer overrode the no this session's own user gave"
     );
 
+    front.call("session.close", json!({"session": reopened["session"]}));
     forget_the_map(&scratch, &id);
     let (answered, heard) =
         front.hearing("session.open", json!({"directory": directory, "id": id}));

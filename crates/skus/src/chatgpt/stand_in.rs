@@ -1,10 +1,11 @@
 //! A server a test runs in place of OpenAI's, and the browser a test is.
 
 use super::encoding::percent_decode;
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// What one request to the stand-in said.
@@ -68,10 +69,17 @@ impl Reply {
 pub(crate) struct Server {
     pub(crate) base: String,
     stop: Arc<AtomicBool>,
+    replies: Arc<Mutex<VecDeque<Reply>>>,
     thread: std::thread::JoinHandle<Vec<Received>>,
 }
 
 impl Server {
+    /// Add replies after the ones it was started with, for a reply that holds a value the sign-in
+    /// made after the server started, such as a token naming its nonce.
+    pub(crate) fn then(&self, replies: Vec<Reply>) {
+        self.replies.lock().expect("the replies").extend(replies);
+    }
+
     /// Stop serving and return every request received.
     pub(crate) fn finish(self) -> Vec<Received> {
         self.stop.store(true, Ordering::SeqCst);
@@ -86,15 +94,20 @@ pub(crate) fn serve(replies: Vec<Reply>) -> Server {
         .expect("a non-blocking listener");
     let base = format!("http://{}", listener.local_addr().expect("an address"));
     let stop = Arc::new(AtomicBool::new(false));
+    let replies = Arc::new(Mutex::new(VecDeque::from(replies)));
     let thread = std::thread::spawn({
         let stop = Arc::clone(&stop);
+        let replies = Arc::clone(&replies);
         move || {
             let mut received = Vec::new();
-            let mut replies = replies.into_iter();
             while !stop.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        let reply = replies.next().expect("a reply for this request");
+                        let reply = replies
+                            .lock()
+                            .expect("the replies")
+                            .pop_front()
+                            .expect("a reply for this request");
                         received.push(answer(stream, &reply));
                     }
                     Err(_) => std::thread::sleep(Duration::from_millis(5)),
@@ -103,7 +116,12 @@ pub(crate) fn serve(replies: Vec<Reply>) -> Server {
             received
         }
     });
-    Server { base, stop, thread }
+    Server {
+        base,
+        stop,
+        replies,
+        thread,
+    }
 }
 
 fn answer(stream: TcpStream, reply: &Reply) -> Received {

@@ -555,7 +555,7 @@ impl Record {
         if left.is_empty() {
             return std::fs::remove_file(&self.path);
         }
-        crate::mcp::replace(&self.path, left)
+        crate::home::replace(&self.path, left)
     }
 
     /// The path one line names under this directory, where it names one.

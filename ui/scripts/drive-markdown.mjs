@@ -8,7 +8,7 @@
 // Asserts on DOM shape rather than exact text: the model is asked to produce a document,
 // and it will not echo one byte for byte.
 import { mkdirSync } from 'node:fs'
-import { launchLive, COMPOSER_INPUT } from './drive-support.mjs'
+import { launchLive, COMPOSER_INPUT, ASSISTANT_BUBBLE } from './drive-support.mjs'
 
 mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
@@ -64,7 +64,7 @@ if (failed > 0) {
   process.exit(1)
 }
 
-const bubble = page.locator('.bubble.assistant').last()
+const bubble = page.locator(ASSISTANT_BUBBLE).last()
 
 // Rendered structure. The model may drop an element or two, so these are reported rather
 // than asserted individually — the screenshot is the real review.

@@ -1408,6 +1408,190 @@ fn a_declined_language_server_preserves_rewind_coverage() {
     assert!(workspace.rewind_coverage().is_complete());
 }
 
+/// What a turn that asks about one symbol left behind, for the permission mode and the sandbox mode
+/// it ran under.
+struct SymbolTurn {
+    /// How many times a person was put the question about starting a server.
+    asked: usize,
+    /// How many server processes came up.
+    started: usize,
+    /// What the planner read as the result of its question, in the last request it was sent.
+    result: String,
+    /// The `approval` entries in the trail that are about a language server.
+    answers: Vec<String>,
+    /// Whether the turn left undo able to restore everything, which a started server does not.
+    undo_complete: bool,
+}
+
+/// Runs a turn whose planner asks where `Held` is defined, with the confirmer a front end builds
+/// for a task: the permission mode and the sandbox mode are the task's, and a person is behind
+/// `AskedAboutServers`, who says yes.
+///
+/// `delegated` has a `checker` ask instead, so the question reaches the server through a delegate's
+/// own tools and the confirmer it was lent.
+fn a_symbol_turn(
+    name: &str,
+    mode: bravebot_agent::PermissionMode,
+    sandbox: bravebot_sandbox::SandboxMode,
+    delegated: bool,
+) -> SymbolTurn {
+    let _path = PATH_LOCK.lock().unwrap_or_else(|held| held.into_inner());
+    let scratch = Scratch::new(name);
+    let (workspace, recorded) = a_workspace_with_a_server(&scratch);
+    let (endpoint, received) = serve_by_marker(if delegated {
+        vec![
+            (
+                "HAVE-A-DELEGATE-ASK",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        r#"{"kind":"checker","task":"ASK-ABOUT-THE-SYMBOL"}"#,
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "ASK-ABOUT-THE-SYMBOL",
+                vec![a_question_about_a_symbol(), reply_with("it is in src/a.rs")],
+            ),
+        ]
+    } else {
+        vec![(
+            "WHERE-IS-HELD-DECLARED",
+            vec![a_question_about_a_symbol(), reply_with("it is in src/a.rs")],
+        )]
+    });
+    let mut asking = AskedAboutServers {
+        asked: 0,
+        reject: false,
+        approve_writes: false,
+    };
+    let mut sink = RecordingSink::new();
+    let point = workspace.rewind_coverage();
+    turn::resume(
+        &config_for(&endpoint),
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new(if delegated {
+            "HAVE-A-DELEGATE-ASK"
+        } else {
+            "WHERE-IS-HELD-DECLARED"
+        })
+        .with_permission_mode(mode)
+        .with_sandbox_mode(sandbox),
+        &mut Conversation::new(),
+        &mut bravebot_agent::Confining::new(&mut asking, mode, false).with_sandbox_mode(sandbox),
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(&workspace),
+        TrustedPrograms::new(),
+        None,
+        &Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let result = received
+        .try_iter()
+        .filter(|body| body.contains("Result of lsp"))
+        .last()
+        .map(|body| result_of("lsp", &body))
+        .expect("the planner was sent the result of its question");
+    let answers = sink
+        .events()
+        .iter()
+        .filter_map(|event| match event {
+            bravebot_core::event::Event::GatePassed {
+                gate: "approval",
+                detail,
+            } if detail.contains("language server") => Some(detail.clone()),
+            _ => None,
+        })
+        .collect();
+    SymbolTurn {
+        asked: asking.asked,
+        started: starts(&recorded),
+        result,
+        answers,
+        undo_complete: point.is_complete(),
+    }
+}
+
+/// LSP-5, MODE-4, MODE-13, TRACE-7: where the permission mode is bypass and the sandbox mode is
+/// `off`, starting a server is answered without a question, and the trail says the mode answered.
+/// The server runs, answers, and leaves undo unable to restore everything. The regression it
+/// rejects is bypassing still putting the question where nothing is confined, which stops a run
+/// nobody is there to answer, and a start that is answered but credited to nobody.
+#[test]
+fn bypass_with_the_sandbox_off_starts_a_language_server_and_the_trail_names_the_mode() {
+    use bravebot_agent::PermissionMode::Bypass;
+    use bravebot_sandbox::SandboxMode::Off;
+    for delegated in [false, true] {
+        let turn = a_symbol_turn(
+            &format!("agent-lsp-bypass-off-unasked-{delegated}"),
+            Bypass,
+            Off,
+            delegated,
+        );
+        assert_eq!(turn.asked, 0, "delegated {delegated}: a person was asked");
+        assert_eq!(turn.started, 1, "delegated {delegated}: no server started");
+        assert!(
+            turn.result.contains("src/a.rs:1:11"),
+            "delegated {delegated}: the server did not answer: {}",
+            turn.result
+        );
+        assert_eq!(
+            turn.answers,
+            ["start a language server: answered by bypass mode, nobody was asked"],
+            "delegated {delegated}"
+        );
+        assert!(
+            !turn.undo_complete,
+            "delegated {delegated}: a started server left undo complete"
+        );
+    }
+}
+
+/// LSP-5, MODE-4, SANDBOX-22: the question is still put under bypass where the sandbox mode confines,
+/// since the server runs with no profile and would be given what no stage of the session has, and
+/// under every other permission mode where it is `off`. The trail credits no mode for those starts,
+/// because a person answered. The regression it rejects is either half of the pair answering alone:
+/// bypassing under `workspace-write`, or `off` under a mode that is not bypassing.
+#[test]
+fn a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off() {
+    use bravebot_agent::PermissionMode::{AcceptEdits, Ask, Bypass, Plan};
+    use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+    for (mode, sandbox) in [
+        (Bypass, WorkspaceWrite),
+        (Bypass, Strict),
+        (Bypass, ReadOnly),
+        (Ask, Off),
+        (AcceptEdits, Off),
+        (Plan, Off),
+    ] {
+        let turn = a_symbol_turn(
+            &format!("agent-lsp-asked-{mode:?}-{sandbox:?}"),
+            mode,
+            sandbox,
+            false,
+        );
+        assert_eq!(turn.asked, 1, "{mode:?} under {sandbox:?}");
+        assert_eq!(turn.started, 1, "{mode:?} under {sandbox:?}");
+        assert!(
+            turn.result.contains("src/a.rs:1:11"),
+            "{mode:?} under {sandbox:?}: {}",
+            turn.result
+        );
+        assert!(
+            turn.answers.is_empty(),
+            "{mode:?} under {sandbox:?}: the trail credits a mode with a person's answer: {:?}",
+            turn.answers
+        );
+        assert!(!turn.undo_complete, "{mode:?} under {sandbox:?}");
+    }
+}
+
 /// The tool-result message for `tool` in a request body, as the model would read it.
 fn result_of(tool: &str, request: &str) -> String {
     let parsed: serde_json::Value = serde_json::from_str(request).expect("a request body");

@@ -207,14 +207,13 @@ fn by_model(totals: &Totals) -> Vec<(String, Spent)> {
 fn scope(days: Option<u64>, project: Option<&Path>) -> String {
     match (days, project) {
         (None, None) => t!(stats_scope_everything).to_string(),
-        (Some(days), None) => t!(stats_scope_days, days = days).to_string(),
-        (None, Some(project)) => t!(stats_scope_project, project = shown(project)).to_string(),
+        (Some(days), None) => t!(stats_scope_days, days = days),
+        (None, Some(project)) => t!(stats_scope_project, project = shown(project)),
         (Some(days), Some(project)) => t!(
             stats_scope_days_project,
             days = days,
             project = shown(project)
-        )
-        .to_string(),
+        ),
     }
 }
 

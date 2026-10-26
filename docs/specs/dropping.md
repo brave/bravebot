@@ -6,6 +6,8 @@ governs:
   - crates/filetype/src/by_name.rs
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/agent/src/attached.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/attached.rs
