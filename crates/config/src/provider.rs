@@ -383,6 +383,14 @@ pub struct Provider {
     /// Never read out of the block: the store is a file of its own ([`crate::keys`]), and
     /// configuration fills this in by id once the blocks are read.
     pub stored_key: Option<Secret>,
+    /// Whether the block states no endpoint and is reached at the host compiled in for its id, in
+    /// [`KNOWN_ENDPOINTS`].
+    ///
+    /// That service refuses every request without a key, so a block of such an id naming no
+    /// credential is not the person saying none is wanted ([BACKEND-16]).
+    ///
+    /// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+    pub(crate) endpoint_compiled_in: bool,
     /// The models this provider offers, in the order the file listed them.
     ///
     /// Possibly empty, because opencode does not require `models`. A provider offering nothing is
@@ -554,6 +562,10 @@ impl Provider {
             names_a_credential,
             Provider::fixed_header_names(protocol),
         );
+        let endpoint_compiled_in = stated.is_none()
+            && id != GOOGLE_VERTEX_ID
+            && id != AWS_PROVIDER_ID
+            && known_endpoint(id).is_some();
         let base_url = match stated {
             Some(url) => url.to_string(),
             None if id == GOOGLE_VERTEX_ID && project.is_none() => {
@@ -578,6 +590,7 @@ impl Provider {
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
             stored_key: None,
+            endpoint_compiled_in,
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
@@ -621,6 +634,7 @@ impl Provider {
             env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
             api_key: Some(token),
             stored_key: None,
+            endpoint_compiled_in: false,
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
@@ -664,6 +678,7 @@ impl Provider {
             env: Vec::new(),
             api_key: None,
             stored_key: None,
+            endpoint_compiled_in: false,
             models,
             context_window: None,
             patience: Patience::default(),
@@ -944,7 +959,18 @@ impl Provider {
         lookup: impl Fn(&str) -> Option<String>,
     ) -> (Credential, Option<Source>) {
         if !self.names_a_credential() {
-            return (Credential::NotNeeded, None);
+            // A service at the host compiled in for a known id refuses a request with no key, so a
+            // block naming none is a credential missing, not one that is not wanted.
+            // A header named for the credential is how such a block authenticates, so it is one.
+            let authenticates_by_header = self
+                .headers
+                .iter()
+                .any(|held| held.name == self.credential_header("").0);
+            return if self.endpoint_compiled_in && !authenticates_by_header {
+                (Credential::Absent, None)
+            } else {
+                (Credential::NotNeeded, None)
+            };
         }
         let exported = self
             .env
@@ -989,13 +1015,7 @@ impl Provider {
         if self.stored_key.is_none() {
             return;
         }
-        let credential_name = if self.id == GOOGLE_VERTEX_ID {
-            VERTEX_KEY_HEADER
-        } else if self.protocol == Protocol::Messages {
-            ANTHROPIC_KEY_HEADER
-        } else {
-            "authorization"
-        };
+        let credential_name = self.credential_header("").0;
         if let Some(position) = self
             .headers
             .iter()
@@ -2503,17 +2523,14 @@ mod tests {
         assert_eq!(vertex.protocol(), Protocol::ChatCompletions);
     }
 
-    /// The table supplies an address and nothing else. A block naming no credential is somebody saying
-    /// none is needed, so an exported `ANTHROPIC_API_KEY` meant for another tool is not picked up on
-    /// the strength of the id.
+    /// The table supplies an address and nothing else. A block naming no credential does not have an
+    /// exported `ANTHROPIC_API_KEY` meant for another tool picked up on the strength of the id: its
+    /// key is missing, as BACKEND-16 says of a known id at the host compiled in for it.
     #[test]
     fn an_anthropic_block_naming_no_key_names_no_credential() {
         let provider = one(r#"{"provider": {"anthropic": {}}}"#);
         let exported = |name: &str| (name == "ANTHROPIC_API_KEY").then(|| "a-key".to_string());
-        assert!(matches!(
-            provider.credential(exported),
-            Credential::NotNeeded
-        ));
+        assert!(matches!(provider.credential(exported), Credential::Absent));
     }
 
     /// An exported budget outranks a model's own, which outranks the figure a request assumes. The
@@ -2696,6 +2713,44 @@ mod tests {
             provider.credential(|_| Some("in-the-environment".to_string())),
             Credential::NotNeeded
         ));
+    }
+
+    /// BACKEND-16: a block of a known id that states no endpoint is reached at the host compiled in
+    /// for it, which refuses a request with no key, so naming no credential there is one missing. A
+    /// block stating its own endpoint under the same id keeps the rule, and a stored key is a key.
+    #[test]
+    fn a_known_id_at_its_compiled_in_host_naming_no_credential_is_missing_one() {
+        for id in ["openai", "openrouter", "anthropic"] {
+            let bare = one(&format!(r#"{{"provider": {{"{id}": {{}}}}}}"#));
+            assert!(
+                matches!(bare.credential(|_| None), Credential::Absent),
+                "{id}: a block naming no credential at the compiled-in host was read as needing none"
+            );
+            let mut stored = bare;
+            stored.stored_key = Some(Secret::new("stored-placeholder"));
+            assert_eq!(
+                token(&stored.credential(|_| None)),
+                Some("stored-placeholder"),
+                "{id}"
+            );
+        }
+        // A header carrying the credential is how that block authenticates.
+        let by_header = one(r#"{"provider": {"openai": {
+                "options": {"headers": {"Authorization": "Bearer a-placeholder"}}
+            }}}"#);
+        assert!(matches!(
+            by_header.credential(|_| None),
+            Credential::NotNeeded
+        ));
+        let local = one(r#"{"provider": {"openai": {
+                "options": {"baseURL": "http://localhost:8080/v1"}
+            }}}"#);
+        assert!(matches!(local.credential(|_| None), Credential::NotNeeded));
+        // Another id at the same host is not a known id.
+        let other = one(r#"{"provider": {"mine": {
+                "options": {"baseURL": "https://api.openai.com/v1"}
+            }}}"#);
+        assert!(matches!(other.credential(|_| None), Credential::NotNeeded));
     }
 
     /// Two gateways are ordinary. The block being a map is what makes a duplicate id

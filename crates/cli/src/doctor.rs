@@ -3206,6 +3206,17 @@ mod tests {
         );
     }
 
+    /// BACKEND-16: a block of a known id naming no credential and no endpoint is reported as missing
+    /// one, since the host it reaches refuses a request without a key.
+    #[test]
+    fn a_known_gateway_naming_no_credential_is_reported_as_missing_one() {
+        let bare = configured_gateway(r#"{"provider": {"openai": {}}}"#);
+        assert_eq!(
+            gateway_credential(&bare, |_| None),
+            t!(doctor_gateway_token_absent, id = "openai")
+        );
+    }
+
     /// BACKEND-60: a header the block named and this build will not send is reported by the name the
     /// file wrote, which is the name there is to go and edit, and by which reason refused it. The
     /// value is withheld, because the header a gateway routes on is often a second credential. A
