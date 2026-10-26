@@ -9285,6 +9285,42 @@ mod tests {
         assert_ne!(click(&mut session, row, column), Action::Mcp(String::new()));
     }
 
+    /// The cell of the first letter of the panel's hide row. `find_on` counts bytes, and the border
+    /// drawn before the text is more than one.
+    fn on_the_hide_row(buffer: &ratatui::buffer::Buffer) -> (u16, u16) {
+        let (row, _) = find_on(buffer, "hide panel");
+        let column = (0..buffer.area.width)
+            .find(|column| buffer[(*column, row)].symbol() == "h")
+            .expect("the hide row's text");
+        (row, column)
+    }
+
+    /// MOUSE-21: a click on the panel's hide row closes the panel, as the key does.
+    #[test]
+    fn a_click_on_the_panels_hide_row_hides_the_panel() {
+        let (mut session, buffer) = panel_with_a_context();
+        assert!(session.panel_open());
+        let (row, column) = on_the_hide_row(&buffer);
+        click(&mut session, row, column);
+        assert!(!session.panel_open());
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-21: a drag over the row and a click over the scroller leave the panel open.
+    #[test]
+    fn a_drag_over_the_hide_row_or_a_click_in_the_scroller_leaves_the_panel_open() {
+        let (mut session, buffer) = panel_with_a_context();
+        let (row, column) = on_the_hide_row(&buffer);
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.panel_open());
+
+        session.open_scroller();
+        click(&mut session, row, column);
+        assert!(session.panel_open());
+    }
+
     /// The buffer of the session's frame, with its layout recorded.
     fn drawn(session: &mut Session) -> ratatui::buffer::Buffer {
         use ratatui::Terminal;
