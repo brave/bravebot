@@ -1239,10 +1239,10 @@ draws a block as the finished reply does, closed or not, but for the word `copy`
 end of the round and takes the room at the right of the header, so no row of the screen moves when the
 round ends and the name the fence gave is cut to what the word leaves.
 
-**Why.** A reply is drawn from its lines one at a time. A fence was drawn as the stray backtick
-inline code leaves of it, and every line of code was read as prose: `*` and `_` in a command made
-words italic and vanished, a `#` made a comment a heading, and a pipe made a row of code a table.
-The code a reply asks a person to run has to read as it will be run.
+**Why.** A reply is drawn from its lines one at a time, and a line read as prose changes what it
+says. Read as prose, a `*` or `_` in a command makes words italic and vanishes, a `#` makes a comment
+a heading, and a pipe makes a row of code a table. The code a reply asks a person to run has to read
+as it will be run.
 
 The words are a reply's, released for the screen like the rest of it, and the block is drawn after
 no decision about them: the fences are found from the characters that open and close them and
