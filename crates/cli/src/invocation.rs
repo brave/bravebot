@@ -353,15 +353,26 @@ pub(crate) fn parse_invocation(args: &[String]) -> Result<Invocation, String> {
     })
 }
 
+/// Which of the flags a manifest run cannot take were given: the ones read only for whether they
+/// are present.
+#[derive(Clone, Copy, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each field is one flag's presence, and naming them is what replaces four positional booleans"
+)]
+pub(crate) struct Given {
+    pub(crate) agent: bool,
+    pub(crate) advisor: bool,
+    pub(crate) output_schema: bool,
+    pub(crate) goal: bool,
+}
+
 /// The first of the flags a manifest run cannot take that this invocation gave, as the sentence that
 /// refuses it, in the order the checks run: agent, advisor, output schema, goal, tools, system
 /// prompts, resume. `None` for any other mode.
 pub(crate) fn manifest_conflict(
     mode: Mode,
-    has_agent: bool,
-    has_advisor: bool,
-    has_output_schema: bool,
-    has_goal: bool,
+    given: Given,
     prompts: &SystemPrompts,
     resume: Option<&continued::Resume>,
 ) -> Option<String> {
@@ -371,22 +382,22 @@ pub(crate) fn manifest_conflict(
     // A manifest run's plan is written by the planner before any step runs, and an addressed
     // definition is matched a turn at a time by the turn's own kernel, so the name would be taken
     // and nothing would be addressed to it.
-    if has_agent {
+    if given.agent {
         return Some(t!(cli_agent_not_with_a_manifest).to_string());
     }
     // A manifest run's steps are run from the plan, not chosen by a planner that could ask, so an
     // advisor would be named and never consulted.
-    if has_advisor {
+    if given.advisor {
         return Some(t!(cli_advisor_not_with_a_manifest).to_string());
     }
     // A manifest run has a reply per step and none for the run, so there is no one reply to hold to
     // a schema.
-    if has_output_schema {
+    if given.output_schema {
         return Some(t!(cli_output_schema_not_with_a_manifest).to_string());
     }
     // A manifest run is planned once and run from the plan, so there is no conversation to send
     // the work back into when a judge says the condition is not met.
-    if has_goal {
+    if given.goal {
         return Some(t!(cli_goal_not_with_a_manifest).to_string());
     }
     // A manifest run's steps are planned and run from the plan, not chosen from a list of tools, so

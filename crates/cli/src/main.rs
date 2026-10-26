@@ -57,7 +57,7 @@ use crate::flags::{
     without_a_prompt_to_give, without_a_tool_set_to_limit,
 };
 use crate::invocation::{
-    Invocation, input_lines_conflict, limit_not_with_a_goal, limit_not_with_a_manifest,
+    Given, Invocation, input_lines_conflict, limit_not_with_a_goal, limit_not_with_a_manifest,
     manifest_conflict, parse_invocation, prompt_to_open_on,
 };
 use crate::model::{
@@ -897,10 +897,12 @@ fn prepare_the_run(
 
     if let Some(conflict) = manifest_conflict(
         mode,
-        agent.is_some(),
-        advisor.is_some(),
-        output_schema.is_some(),
-        goal.is_some(),
+        Given {
+            agent: agent.is_some(),
+            advisor: advisor.is_some(),
+            output_schema: output_schema.is_some(),
+            goal: goal.is_some(),
+        },
         &prompts,
         resume.as_ref(),
     ) {
@@ -5489,40 +5491,53 @@ mod tests {
         let latest = continued::Resume::Latest;
 
         assert_eq!(
-            manifest_conflict(Mode::Turn, true, true, true, true, &words, Some(&latest)),
+            manifest_conflict(
+                Mode::Turn,
+                Given {
+                    agent: true,
+                    advisor: true,
+                    output_schema: true,
+                    goal: true,
+                },
+                &words,
+                Some(&latest)
+            ),
             None,
             "a turn is refused nothing here"
         );
         assert_eq!(
-            manifest_conflict(Mode::Manifest, false, false, false, false, &none, None),
+            manifest_conflict(Mode::Manifest, Given::default(), &none, None),
             None
         );
         let first = manifest_conflict(
             Mode::Manifest,
-            true,
-            true,
-            true,
-            false,
+            Given {
+                agent: true,
+                advisor: true,
+                output_schema: true,
+                ..Given::default()
+            },
             &words,
             Some(&latest),
         );
         assert_eq!(first.as_deref(), Some(t!(cli_agent_not_with_a_manifest)));
         let first = manifest_conflict(
             Mode::Manifest,
-            false,
-            true,
-            true,
-            false,
+            Given {
+                advisor: true,
+                output_schema: true,
+                ..Given::default()
+            },
             &words,
             Some(&latest),
         );
         assert_eq!(first.as_deref(), Some(t!(cli_advisor_not_with_a_manifest)));
         let first = manifest_conflict(
             Mode::Manifest,
-            false,
-            false,
-            true,
-            false,
+            Given {
+                output_schema: true,
+                ..Given::default()
+            },
             &words,
             Some(&latest),
         );
@@ -5532,23 +5547,15 @@ mod tests {
         );
         let first = manifest_conflict(
             Mode::Manifest,
-            false,
-            false,
-            false,
-            true,
+            Given {
+                goal: true,
+                ..Given::default()
+            },
             &words,
             Some(&latest),
         );
         assert_eq!(first.as_deref(), Some(t!(cli_goal_not_with_a_manifest)));
-        let first = manifest_conflict(
-            Mode::Manifest,
-            false,
-            false,
-            false,
-            false,
-            &words,
-            Some(&latest),
-        );
+        let first = manifest_conflict(Mode::Manifest, Given::default(), &words, Some(&latest));
         assert_eq!(
             first,
             Some(t!(
@@ -5556,21 +5563,13 @@ mod tests {
                 flag = "--system-prompt"
             ))
         );
-        let first = manifest_conflict(
-            Mode::Manifest,
-            false,
-            false,
-            false,
-            false,
-            &none,
-            Some(&latest),
-        );
+        let first = manifest_conflict(Mode::Manifest, Given::default(), &none, Some(&latest));
         assert_eq!(
             first,
             Some(t!(cli_resume_not_with_a_manifest, flag = "--continue"))
         );
         let id = continued::Resume::Id("abc".to_string());
-        let named = manifest_conflict(Mode::Manifest, false, false, false, false, &none, Some(&id));
+        let named = manifest_conflict(Mode::Manifest, Given::default(), &none, Some(&id));
         assert_eq!(
             named,
             Some(t!(cli_resume_not_with_a_manifest, flag = "--resume"))
