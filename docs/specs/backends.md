@@ -399,7 +399,7 @@ and the pick is the later of the two.
 `verified-by: bravebot_cli::running::a_run_asks_for_an_exported_default_where_no_file_names_a_model`
 `verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 `verified-by: bravebot_tui::app::the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked`
-`verified-by: bravebot_tui::app::the_list_the_model_command_opens_at_rest_marks_the_model_in_force_and_a_row_picked_is_put_in_force`
+`verified-by: bravebot_tui::app::the_list_the_model_command_opens_marks_the_model_in_force_and_a_row_picked_is_put_in_force`
 `verified-by: bravebot_tui::app::the_refusal_of_a_level_is_asked_of_the_model_in_force_and_its_answer_is_returned`
 `verified-by: bravebot_tui::app::the_inputs_the_roster_lists_are_those_of_the_model_in_force_which_is_the_default_unpicked`
 

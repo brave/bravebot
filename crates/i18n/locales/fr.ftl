@@ -1598,6 +1598,8 @@ model-picker-keys =
     ↑↓ choisir  ·  Entrée valider  ·  tapez pour rechercher  ·  Échap garder l'actuel
 model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
+model-picker-loading = chargement des modèles…
+model-picker-listing-lost = la liste des modèles n'a pas été reçue
 picker-current = actuel
 
 config-picker-title = mode d'édition

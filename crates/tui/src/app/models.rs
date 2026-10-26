@@ -701,57 +701,58 @@ pub(super) fn advertised_inputs<'a>(
         .map_or(&[], |model| model.advertised.input_modalities.as_slice())
 }
 
-/// Ask the endpoint what it offers, let the user pick, and remember what they picked.
+/// Open the model picker as a mode of the session, with its rows still to come.
 ///
-/// A refusal or an unreachable endpoint leaves the model as it was and says so. That is the right
-/// outcome for a list nobody could fetch: guessing a set of names would offer choices the backend
-/// may not have, and a picker showing only "automatic" would look like a server with one model.
+/// The picker is drawn on the next frame and the endpoints are asked on a thread of their own, so
+/// `/model` answers at once however long a gateway takes. The rows are taken by
+/// [`Session::settle_picking`] when they arrive. A refusal or an unreachable endpoint closes the
+/// picker, leaves the model as it was and says so.
 ///
 /// The list is content and the choice is routing. Nothing here is quarantined, because there is no
 /// planner context to keep it out of: the names are drawn for a person, and their pick is the
 /// endorsement for the request field it lands in.
-pub(super) fn choose_model(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    session: &mut Session,
-    config: &mut Config,
-) {
-    choose_model_with(session, config, |models, current, session| {
-        crate::model_prompt::choose(terminal, models, current, |frame| {
-            render::draw(frame, session);
-        })
-    });
+pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
+    let listing = listed_in_the_background(config, session.model());
+    open_model_picker_awaiting(session, config, listing);
 }
 
-/// [`choose_model`] with what puts the list in front of a person stated: it is given the rows, the
-/// model in force to mark as current and the session to draw behind the list, and returns the row that
-/// was picked, if one was.
-///
-/// Split so the part that decides what is offered and which row is current is reached without a
-/// terminal to read keys from.
-pub(super) fn choose_model_with(
+/// [`open_model_picker`] with the answer to the listing stated, so the picker's first frames can be
+/// reached without an endpoint.
+pub(super) fn open_model_picker_awaiting(
     session: &mut Session,
-    config: &mut Config,
-    choose: impl FnOnce(
-        Vec<bravebot_aichat::models::Model>,
-        Option<&str>,
-        &Session,
-    ) -> Option<bravebot_aichat::models::Model>,
+    config: &Config,
+    listing: mpsc::Receiver<crate::model_prompt::Listed>,
 ) {
-    match list_models_for_picker(config, session.model()) {
-        Ok(PickerRoster { models, problems }) => {
-            // Before the picker draws, so the sentences are in the transcript behind it and stay there
-            // once it closes.
-            for problem in problems {
-                session.note(problem);
-            }
-            let current = Some(model_in_force(session.model(), config));
-            let chosen = choose(models, current, session);
-            if let Some(chosen) = chosen {
-                model_picked(session, config, chosen);
-            }
-        }
-        Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
-    }
+    session.open_picking(crate::picking::Picking::Model(
+        crate::model_prompt::Picker::loading(
+            Some(model_in_force(session.model(), config)),
+            listing,
+        ),
+    ));
+}
+
+/// Ask the endpoints for the rows of the picker away from the thread that draws and reads keys.
+///
+/// A unit test asks on its own thread before this returns, because the account it scripts is
+/// answered per thread.
+fn listed_in_the_background(
+    config: &Config,
+    chosen: Option<&str>,
+) -> mpsc::Receiver<crate::model_prompt::Listed> {
+    let (send, receive) = mpsc::channel();
+    let config = config.clone();
+    let chosen = chosen.map(str::to_string);
+    let ask = move || {
+        let listed = list_models_for_picker(&config, chosen.as_deref())
+            .map(|PickerRoster { models, problems }| (models, problems));
+        // The picker was left before the answer came, so nobody is waiting for it.
+        send.send(listed).ok();
+    };
+    #[cfg(test)]
+    ask();
+    #[cfg(not(test))]
+    drop(thread::spawn(ask));
+    receive
 }
 
 /// Put the model the person chose in force for the next turn, and say so.
@@ -788,27 +789,6 @@ pub(super) fn model_picked(
     // account's, which the person is told where it is not the one they chose.
     say_if_kept_for_account(session);
     session.choose_model(chosen.key, config);
-}
-
-/// Ask the endpoints what they offer and open the model picker as a mode of the session, for a turn
-/// that is running.
-///
-/// A refusal or an unreachable endpoint leaves the model as it was and says so, as at rest.
-pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
-    match list_models_for_picker(config, session.model()) {
-        Ok(PickerRoster { models, problems }) => {
-            for problem in problems {
-                session.note(problem);
-            }
-            session.open_picking(crate::picking::Picking::Model(
-                crate::model_prompt::Picker::new(
-                    models,
-                    Some(model_in_force(session.model(), config)),
-                ),
-            ));
-        }
-        Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
-    }
 }
 
 /// What a unit test scripts for the account's listing, and how often it was asked for.
