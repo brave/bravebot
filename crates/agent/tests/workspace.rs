@@ -13058,6 +13058,46 @@ fn a_call_holding_the_reach_reads_and_writes_a_sibling_directory_and_opens_nothi
     escapes_the_workspace(places.read(&notes), "after the call");
 }
 
+/// Two sibling directories whose names differ only in a byte that is not UTF-8 and the character
+/// a lossy conversion turns it into, each reached through a link, are two reached directories.
+/// The regression it rejects: a first-reach record keyed on the lossy spelling, which takes the
+/// second directory for one already reached and never reports it (PATH-003).
+#[cfg(target_os = "linux")]
+#[test]
+fn two_directories_whose_names_differ_only_in_a_non_utf8_byte_are_two_reaches() {
+    use std::os::unix::ffi::OsStrExt;
+    let places = BypassPlaces::new("non-utf8-siblings");
+    let raw = places.beside.join(std::ffi::OsStr::from_bytes(b"x-\xff"));
+    let lookalike = places.beside.join("x-\u{FFFD}");
+    for (dir, link) in [(&raw, "raw"), (&lookalike, "lookalike")] {
+        std::fs::create_dir(dir).unwrap();
+        std::fs::write(dir.join("f.txt"), link).unwrap();
+        std::os::unix::fs::symlink(dir, places.beside.join(link)).unwrap();
+    }
+    assert_eq!(raw.to_string_lossy(), lookalike.to_string_lossy());
+
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("read_file", false)));
+    assert_eq!(
+        places.read(&places.beside.join("raw/f.txt")).unwrap(),
+        "raw"
+    );
+    assert_eq!(
+        places.read(&places.beside.join("lookalike/f.txt")).unwrap(),
+        "lookalike"
+    );
+    let reached: Vec<PathBuf> = places
+        .workspace
+        .take_new_reaches()
+        .into_iter()
+        .map(|first| first.directory)
+        .collect();
+    assert_eq!(reached.len(), 2, "{reached:?}");
+    assert!(reached.contains(&raw), "{reached:?}");
+    assert!(reached.contains(&lookalike), "{reached:?}");
+}
+
 /// The refusals of a granted request hold under bypass, judged where the path leads: a filesystem
 /// root, the home directory, `~/.ssh`, the state directory, a link into one of them, a wildcard
 /// and a control character. A reach that looked at the spelling alone would pass the link; one
