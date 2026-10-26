@@ -25,11 +25,12 @@ It does not cover what a skill file looks like or what any source is trusted for
 ## The sources
 
 <a id="INSTR-1"></a>
-### INSTR-1: twelve sources kept as files, and no others
+### INSTR-1: thirteen sources kept as files, and no others
 
 | File | Applies to |
 |---|---|
 | `~/.bravebot/AGENTS.md` | every project |
+| `~/.bravebot/projects/<id>/rules.md` | the project [RECALL-1](recall.md#RECALL-1) names |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
 | `~/.bravebot/agents/<name>.md` | every project |
 | `~/.bravebot/rules/<name>.md` | every project, from the turn a file its `paths` match is touched, or every turn without `paths` |

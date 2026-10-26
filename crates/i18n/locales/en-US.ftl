@@ -3071,6 +3071,7 @@ command-plan = Enter plan mode, and start on a task if you give one
 command-manifest = Plan one task in full, show you the plan, then run it with nothing re-planned
 command-agent = Run one of your definitions on a task, by its name
 command-memory = List each definition's memory, where it is kept and whether it is withheld
+command-memory-tidy = Propose what to tidy among the rules and facts kept, and change nothing
 command-init = Have the planner draft an AGENTS.md for this project
 command-review = Have the planner review local changes or a pull request
 command-help = Ask a question about bravebot, answered from its own documentation
@@ -3783,6 +3784,37 @@ memory-not-read = { $name }: { $path }, not read, since it is a link, is reached
 memory-empty = { $name }: { $path }, nothing kept there yet
 memory-kept = { $name }: { $path }, a file is kept there
 
+## The rules and facts kept (RECALL-12)
+
+memory-no-rules = no rules are kept
+memory-rules-file =
+    { $lines ->
+        [one] rules: { $path }, 1 line
+       *[other] rules: { $path }, { $lines } lines
+    }
+memory-rules-file-more = rules: { $path }, more than { $lines } lines
+memory-verified-never = never
+memory-no-facts = no facts are kept
+memory-fact = fact { $key }: { $scope }, from { $source }, { $label }, verified { $verified }, { $standing }
+memory-scope-project = this project
+memory-scope-everywhere = every project
+memory-source-person = the person
+memory-source-agent = the agent
+memory-label-public = public
+memory-label-private = private
+memory-standing-live = live
+memory-standing-superseded = superseded by { $by }
+
+## What /memory-tidy proposes (RECALL-12)
+
+tidy-nothing = nothing to tidy
+tidy-duplicate = { $first } and { $second } say nearly the same thing: keep one and supersede or remove the other
+tidy-stale = { $key } names code and has been neither verified nor edited for over { $days } days: check it, then verify or update it
+tidy-broken-link = { $from } links to { $to }, which is not a fact: write { $to } or remove the link
+tidy-missing-replacement = { $key } is superseded by a key that names no fact: write that fact or put { $key } back
+tidy-oversized = { $key } is over { $bytes } bytes: split it into smaller facts
+tidy-rules-disagree = { $first } and { $second } disagree and { $winner } wins: reword or remove one of them
+
 remove-checkout-title = remove this checkout?
 remove-checkout-which = checkout { $id }, made for delegate { $delegate }, is at
 remove-checkout-explained =
@@ -4056,6 +4088,10 @@ verb-watch-file = Watch
 verb-advisor = Advise
 verb-propose-plan = Plan
 verb-message-session = Message
+verb-remember = Remember
+verb-propose-rule = Propose
+verb-recall = Recall
+verb-recall-verify = Verify
 verb-mcp-call = MCP
 verb-unknown = Tool
 
@@ -4246,6 +4282,13 @@ home-skills-reached-through-the-workspace =
 # The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
 # through the working directory or a directory opened beside it, where a turn can write.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# The person's rules for this project when they were not read, for the same reason.
+project-rules-reached-through-the-workspace = The rules kept in ~/.bravebot for this project were not read: the way to them goes through a directory this session can write to
+# The person's rules for this project when the file exists and could not be read.
+project-rules-unreadable = The rules kept for this project at { $path } could not be read: { $reason }
+# The reason given when the trust gate, not the disk, kept the rules out.
+project-rules-policy-refused = the trust policy refused it
+project-rules-dangling-link = it is a link that leads to nothing
 # Definitions in the person's own ~/.bravebot/agents that were not loaded, for the same reason.
 home-definitions-reached-through-the-workspace =
     { $count ->
@@ -4564,3 +4607,21 @@ chatgpt-start-not-remembered = Could not remember { $name }, so no model is chos
 # quotes the service, and neither sends the person to sign in again: the refusal is of the model.
 failure-account-model-not-offered = OpenAI does not offer that model to this ChatGPT account. Choose another model
 desktop-chatgpt-model-not-offered = OpenAI does not offer that model to this ChatGPT account, so choose another model.
+
+## The prompt that offers a rule for the person's rule files (RECALL-3)
+agent-rule-approval-header = Rule
+agent-rule-approval-file = File
+agent-rule-approval-why = Why
+agent-rule-approval-private = These words came from private material, so they cannot be kept as a rule as written. Type the rule in your own words to keep it, or refuse.
+agent-rule-approval-keep = Keep this rule
+agent-rule-approval-keep-detail = Add it to the file named above. You can edit that file by hand, or type your own wording of the rule instead.
+agent-rule-approval-refuse = Don't keep it
+# Typed replies to the rule question that mean its first choice, and its second, in a session in lines
+# that lists the choices and reads a line (RECALL-3). Comma-separated, matched ignoring case.
+agent-rule-approval-yes-words = y, yes, keep, keep it
+agent-rule-approval-no-words = n, no, refuse, don't, do not keep it
+
+## Rules that disagree across layers (RECALL-4)
+agent-rules-disagree = these rules disagree: { $first_file }:{ $first_line } says "{ $first_rule }" and { $second_file }:{ $second_line } says "{ $second_rule }"; { $winner } wins, and neither file was changed
+agent-rules-check-capped = only the first { $limit } similar pairs of rules were checked for disagreement
+agent-rules-check-skipped = rules were not checked for disagreement, because no model could be asked

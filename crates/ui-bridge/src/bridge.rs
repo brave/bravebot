@@ -2555,6 +2555,11 @@ fn work(work: Work) {
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
+    // The kept facts already put in front of this session's planner, so one is injected once
+    // (RECALL-10). A session with no record yet has had none.
+    if let Some(stored) = state.handle.as_ref() {
+        task = task.with_injected_facts(stored.injected_facts().clone());
+    }
     for file in &files {
         task = task.with_file(file);
     }
@@ -2625,6 +2630,15 @@ fn work(work: Work) {
     state.rewind.keep_backups(workspace.take_backups());
 
     // Cleanup has finished on every return, including cancellation and request errors.
+    // Whatever the turn's ending: what the planner was shown on a failed turn is not shown again.
+    // A session that has injected nothing opens no handle for it.
+    let injected_facts = completed.decisions.injected_facts.clone();
+    if !injected_facts.is_empty() {
+        state
+            .handle
+            .get_or_insert_with(|| Handle::begin(&project, crate::FRONT, crate::agent_build()))
+            .set_injected_facts(injected_facts);
+    }
     state.answers.adopt(completed.decisions);
     let outcome = completed.outcome;
 

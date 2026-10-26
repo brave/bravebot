@@ -30,8 +30,10 @@
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
 use crate::calendar::civil_from_days;
+use crate::recall::project::{ProjectId, project_id};
 use crate::request_view::{Prompt, Provenance};
 use crate::skills::{Catalogue, ImportRefusal, Notice};
+use crate::tools::workspace_is_trusted;
 use crate::workspace::Workspace;
 use bravebot_config::Attribution;
 use bravebot_core::event::Sink;
@@ -40,7 +42,9 @@ use bravebot_core::value::Labelled;
 use std::path::Path;
 
 /// The file a project or a user states their conventions in.
-const AGENTS_FILE: &str = "AGENTS.md";
+pub(crate) const AGENTS_FILE: &str = "AGENTS.md";
+/// The person's rules for one project, under `projects/<dir>` in the state directory (RECALL-2).
+pub(crate) const RULES_FILE: &str = "rules.md";
 
 /// Where a project's conventions are looked for, best-known name first.
 ///
@@ -111,6 +115,10 @@ pub struct Preamble {
     /// the person of. Said by the turn and not here, because a delegate composes the same prompt
     /// and has nobody to tell.
     pub added: Vec<crate::rules::Loaded>,
+    /// The `(file, text)` of each rule layer the standing instructions admitted, in the order they
+    /// win: the home file, the person's rules for the project, and the project's own file. What
+    /// the check for rules that disagree reads, so it sees what the planner was given (RECALL-4).
+    pub layers: Vec<(String, String)>,
 }
 
 impl Preamble {
@@ -229,8 +237,30 @@ pub fn compose_in<S: Sink>(
         let origin = format!("~/.bravebot/{AGENTS_FILE}");
         admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
         standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
-        standing.push(Provenance::TrustedFile(origin), text.trim());
+        standing.push(Provenance::TrustedFile(origin.clone()), text.trim());
         standing.push(Provenance::Driver, "\n\n");
+        preamble.layers.push((origin, text));
+    }
+    // The person's rules for this project (RECALL-2). The project is the one the sources belong to,
+    // so a delegate's checkout reads its parent's.
+    let mut rules_read = false;
+    if !safe && let Some(home) = home {
+        let project = project_id(sources.root(), workspace_is_trusted(policy, sources));
+        if let Some(text) = read_project_rules(
+            policy,
+            &[sources, workspace],
+            home,
+            &project,
+            &mut preamble.notices,
+        ) {
+            let origin = format!("~/.bravebot/projects/{}/{RULES_FILE}", project.dir);
+            admit_by_size(&origin, &text, &mut standing_bytes, &mut preamble.notices);
+            standing.push(Provenance::Driver, format!("From {origin}:\n\n"));
+            standing.push(Provenance::TrustedFile(origin.clone()), text.trim());
+            standing.push(Provenance::Driver, "\n\n");
+            preamble.layers.push((origin, text));
+            rules_read = true;
+        }
     }
     for rule in &rules.home {
         stand_rule(
@@ -258,6 +288,7 @@ pub fn compose_in<S: Sink>(
                 found.text.trim(),
             );
             standing.push(Provenance::Driver, "\n\n");
+            preamble.layers.push((found.origin.to_string(), found.text));
         }
         Ok(None) => {}
         Err(notice) => preamble.notices.push(notice),
@@ -296,6 +327,13 @@ pub fn compose_in<S: Sink>(
             "\n\nStanding instructions from the user. These apply to every task here, and the \
              later ones are the more specific.\n\n",
         );
+        if rules_read {
+            preamble.add(
+                Provenance::Driver,
+                "Where the person's rules for this project and the project's own file disagree, \
+                 the project's own file wins.\n\n",
+            );
+        }
         for (provenance, text) in standing.into_pieces() {
             preamble.add(provenance, text);
         }
@@ -805,6 +843,33 @@ fn admit_by_size(origin: &str, text: &str, total: &mut usize, notices: &mut Vec<
     }
 }
 
+/// The state rule files a turn here admits, as paths: `~/.bravebot/AGENTS.md`, then the person's
+/// `rules.md` for `project` (RECALL-2). The same tests the reads below make, so `/memory` lists
+/// what a turn reads (RECALL-12): none in a safe session, a file that is not there is left out,
+/// and so is one the way to which goes through a directory one of `workspaces` may write to. A
+/// link elsewhere is followed, as a turn follows it. Reads no file and makes no directory.
+pub fn state_rule_files(
+    workspaces: &[&Workspace],
+    home: &Path,
+    project: &ProjectId,
+) -> Vec<std::path::PathBuf> {
+    if bravebot_core::safe::engaged() {
+        return Vec::new();
+    }
+    [
+        home.join(AGENTS_FILE),
+        home.join("projects").join(&project.dir).join(RULES_FILE),
+    ]
+    .into_iter()
+    .filter(|file| file.try_exists().unwrap_or(false))
+    .filter(|file| {
+        !workspaces
+            .iter()
+            .any(|workspace| crate::skills::goes_through_the_workspace(workspace, file))
+    })
+    .collect()
+}
+
 /// `~/.bravebot/AGENTS.md`, trusted for sitting where it sits.
 ///
 /// Not read where the way to it goes through a directory one of `workspaces` may write to, because
@@ -830,6 +895,66 @@ fn read_home_agents<S: Sink>(
     let origin = format!("~/.bravebot/{AGENTS_FILE}");
     let labelled = policy.label_user_configuration(&origin, text);
     policy.read_trusted_content("preamble", &labelled).ok()
+}
+
+/// `~/.bravebot/projects/<dir>/rules.md`, the person's rules for `project`, trusted for sitting
+/// where it sits and refused where the way to it goes through the workspace, as the home file is
+/// (RECALL-2). Reading it makes nothing: a project with no rules has no directory (RECALL-1).
+fn read_project_rules<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspaces: &[&Workspace],
+    home: &Path,
+    project: &ProjectId,
+    notices: &mut Vec<Notice>,
+) -> Option<String> {
+    let file = home.join("projects").join(&project.dir).join(RULES_FILE);
+    let origin = format!("~/.bravebot/projects/{}/{RULES_FILE}", project.dir);
+    // Absent is no rules; a file that cannot be told about is not the same thing (RECALL-2), and
+    // neither is a link that leads nowhere, which is there and cannot be read.
+    match file.try_exists() {
+        Ok(false) if std::fs::symlink_metadata(&file).is_ok() => {
+            notices.push(Notice::project_rules_dangling(&origin));
+            return None;
+        }
+        Ok(false) => return None,
+        Ok(true) => {}
+        Err(error) => {
+            notices.push(Notice::project_rules_unreadable(
+                &origin,
+                &error.to_string(),
+            ));
+            return None;
+        }
+    }
+    if workspaces
+        .iter()
+        .any(|workspace| crate::skills::goes_through_the_workspace(workspace, &file))
+    {
+        notices.push(Notice::project_rules_reached_through_the_workspace());
+        return None;
+    }
+    // A layer is loaded in full or the session says it could not be read (RECALL-2).
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) => {
+            notices.push(Notice::project_rules_unreadable(
+                &origin,
+                &error.to_string(),
+            ));
+            return None;
+        }
+    };
+    if text.trim().is_empty() {
+        return None;
+    }
+    let labelled = policy.label_user_configuration(&origin, text);
+    match policy.read_trusted_content("preamble", &labelled) {
+        Ok(text) => Some(text),
+        Err(_) => {
+            notices.push(Notice::project_rules_refused_by_policy(&origin));
+            None
+        }
+    }
 }
 
 /// The `AGENTS.md` files in the directories below the root that the session has read from or
@@ -881,6 +1006,43 @@ fn read_workspace_agents<S: Sink>(
     workspace: &Workspace,
     notices: &mut Vec<Notice>,
 ) -> Result<Option<Standing>, Notice> {
+    let Some(picked) = pick_workspace_agents(policy, workspace, notices)? else {
+        return Ok(None);
+    };
+    let name = picked.name;
+    if let Some((target, pointed)) = picked.pointed {
+        let text = expand_imports(policy, workspace, &pointed, &[name, &target], notices);
+        return Ok(Some(Standing {
+            origin: target,
+            text,
+        }));
+    }
+    let text = expand_imports(policy, workspace, &picked.text, &[name], notices);
+    Ok(Some(Standing {
+        origin: name.to_string(),
+        text,
+    }))
+}
+
+/// The workspace's standing-instructions file as it was chosen, before imports are expanded.
+struct Picked {
+    /// The first of [`WORKSPACE_AGENT_FILES`] the directory holds.
+    name: &'static str,
+    /// What that file says.
+    text: String,
+    /// Where it points and what the target says, where it only points and the target was read.
+    pointed: Option<(String, String)>,
+}
+
+/// Choose the file the planner is given from the workspace: the first of
+/// [`WORKSPACE_AGENT_FILES`] present, refused where a `deny` rule covers reading it or the trust
+/// gate or confinement does, and followed once to the file it points at (INSTR-8). The one
+/// choice a turn reads from and `/memory` lists (RECALL-12).
+fn pick_workspace_agents<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+    notices: &mut Vec<Notice>,
+) -> Result<Option<Picked>, Notice> {
     let Some(name) = WORKSPACE_AGENT_FILES
         .iter()
         .find(|name| workspace.root().join(name).is_file())
@@ -902,25 +1064,36 @@ fn read_workspace_agents<S: Sink>(
     //
     // Once, not until it stops. A chain is a mistake in the project rather than a layout to
     // support, and following one is how a cycle becomes a hang.
+    let mut pointed = None;
     if let Some(target) = pointer_target(&text, name)
         && workspace.root().join(&target).is_file()
     {
         if workspace.rule_denies_reading(policy, &target) {
             notices.push(Notice::denied_by_rule(&target));
-        } else if let Ok(Some(pointed)) = read_instructions(policy, workspace, &target) {
-            let text = expand_imports(policy, workspace, &pointed, &[name, &target], notices);
-            return Ok(Some(Standing {
-                origin: target,
-                text,
-            }));
+        } else if let Ok(Some(read)) = read_instructions(policy, workspace, &target) {
+            pointed = Some((target, read));
         }
     }
-
-    let text = expand_imports(policy, workspace, &text, &[name], notices);
-    Ok(Some(Standing {
-        origin: (*name).to_string(),
+    Ok(Some(Picked {
+        name,
         text,
+        pointed,
     }))
+}
+
+/// The workspace-relative name of the standing-instructions file a turn reads here, or none where
+/// it reads none. A pointer gives its target. The caller has already left a safe session out.
+pub(crate) fn workspace_agents_file<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    workspace: &Workspace,
+) -> Option<String> {
+    let picked = pick_workspace_agents(policy, workspace, &mut Vec::new())
+        .ok()
+        .flatten()?;
+    Some(match picked.pointed {
+        Some((target, _)) => target,
+        None => picked.name.to_string(),
+    })
 }
 
 /// Replace each `@path` token in `text` with the text of the markdown file it names (INSTR-11).

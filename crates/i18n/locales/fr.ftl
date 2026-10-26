@@ -2627,6 +2627,13 @@ home-skills-reached-through-the-workspace =
 # Le ~/.bravebot/AGENTS.md de la personne quand il n'a pas été lu, parce que le chemin vers le fichier passe
 # par le répertoire de travail ou un répertoire ouvert à côté, où un tour peut écrire.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md n'a pas été lu : le chemin vers ce fichier passe par un répertoire où cette session peut écrire
+# Les règles de la personne pour ce projet quand elles n'ont pas été lues, pour la même raison.
+project-rules-reached-through-the-workspace = Les règles conservées dans ~/.bravebot pour ce projet n'ont pas été lues : le chemin vers elles passe par un répertoire où cette session peut écrire
+# Les règles de la personne pour ce projet quand le fichier existe et n'a pas pu être lu.
+project-rules-unreadable = Les règles conservées pour ce projet dans { $path } n'ont pas pu être lues : { $reason }
+# La raison donnée quand la politique de confiance, et non le disque, a écarté les règles.
+project-rules-policy-refused = la politique de confiance l'a refusé
+project-rules-dangling-link = c'est un lien qui ne mène nulle part
 # Les définitions de ~/.bravebot/agents qui n'ont pas été chargées, pour la même raison.
 home-definitions-reached-through-the-workspace =
     { $count ->
@@ -3437,6 +3444,10 @@ verb-watch-file = Surveiller
 verb-advisor = Conseiller
 verb-propose-plan = Planifier
 verb-message-session = Message
+verb-remember = Retenir
+verb-propose-rule = Proposer
+verb-recall = Retrouver
+verb-recall-verify = Confirmer
 verb-mcp-call = MCP
 verb-unknown = Outil
 
@@ -4028,3 +4039,9 @@ deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non en
 # reconnecter : le refus porte sur le modèle.
 failure-account-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT. Choisissez un autre modèle
 desktop-chatgpt-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT, donc choisissez un autre modèle.
+
+agent-rule-approval-private = Ces mots viennent de contenu privé : ils ne peuvent pas devenir une règle tels quels. Tapez la règle avec vos propres mots pour la garder, ou refusez.
+
+agent-rules-disagree = ces règles se contredisent : { $first_file }:{ $first_line } dit « { $first_rule } » et { $second_file }:{ $second_line } dit « { $second_rule } » ; { $winner } l'emporte, et aucun fichier n'a été modifié
+agent-rules-check-capped = seules les { $limit } premières paires de règles semblables ont été vérifiées
+agent-rules-check-skipped = les règles n'ont pas été vérifiées, faute de modèle à interroger

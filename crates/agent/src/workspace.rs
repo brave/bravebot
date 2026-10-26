@@ -171,6 +171,12 @@ pub struct Workspace {
     ///
     /// [MEMORY-5]: ../../../docs/specs/definition-memory.md
     memories: Option<PathBuf>,
+    /// Where the person's facts and rules are kept, each as the file system resolves it (RECALL-9).
+    ///
+    /// Refused to every file tool whatever else reaches them: a workspace rooted at the home
+    /// directory or above holds the state directory inside its root, and the tools may not write
+    /// or read there, because only `remember` and the person put bytes in a fact or a rule.
+    stores: Vec<PathBuf>,
     /// How many files a search may walk. [`MAX_SEARCH_FILES`] unless the settings named another.
     ///
     /// A field rather than a constant because the right number is a property of the tree: a
@@ -336,6 +342,10 @@ pub struct Backup {
     pub was: Before,
     /// What the map said about the path at the moment these bytes were read.
     pub captured_trust: bravebot_core::label::Integrity,
+    /// Whether this is a write into the person's fact or rule stores (RECALL-6), which a rewind
+    /// puts back by `rewind::put_back_kept` and not through the workspace,
+    /// where those stores are refused. Only [`Workspace::record_home_backup`] sets it.
+    pub kept: bool,
 }
 
 /// What a path held before a turn wrote to it.
@@ -376,6 +386,9 @@ impl Workspace {
             reads_stay_inside: false,
             windows_names: cfg!(windows),
             home: crate::home::profile(),
+            stores: crate::home::directory()
+                .map(|state| Self::refused_in(&state))
+                .unwrap_or_default(),
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
             checkout: None,
@@ -1463,6 +1476,22 @@ impl Workspace {
     /// [`MAX_REWIND_BYTES`] on a file nobody wants rewound, and what that budget runs out on is
     /// the next file in the project the turn writes.
     fn record_backup(&self, resolved: &Path, captured_trust: bravebot_core::label::Integrity) {
+        self.keep_backup(resolved, captured_trust, false);
+    }
+
+    /// Keep what a write into the person's fact or rule stores replaced, so the session's undo can
+    /// take the write apart (RECALL-6). A fact is trusted, and these bytes are put back by
+    /// `rewind::put_back_kept` and not through the workspace.
+    pub(crate) fn record_home_backup(&self, path: &Path) {
+        self.keep_backup(path, bravebot_core::label::Integrity::Trusted, true);
+    }
+
+    fn keep_backup(
+        &self,
+        resolved: &Path,
+        captured_trust: bravebot_core::label::Integrity,
+        kept_store: bool,
+    ) {
         self.mark_checkout_gap();
         if self.reaches_scratch(resolved) {
             self.mark_rewind_gap(CoverageGap::Scratch);
@@ -1489,6 +1518,7 @@ impl Workspace {
             captured_trust,
             path: resolved.to_path_buf(),
             was: kept(resolved, room),
+            kept: kept_store,
         });
     }
 
@@ -1564,7 +1594,11 @@ impl Workspace {
         } else {
             lands.starts_with(&self.root)
         };
-        if confined { Ok(()) } else { Err(escapes()) }
+        if confined && !self.in_the_stores(&lands) {
+            Ok(())
+        } else {
+            Err(escapes())
+        }
     }
 
     /// What a path holds now, read where [`Workspace::put_back`] would write it.
@@ -1603,6 +1637,30 @@ impl Workspace {
         }
         Ok(bytes)
     }
+}
+
+/// Whether `resolved` is inside one of `stores`.
+///
+/// The store's own name is compared without regard to case, because on a volume that ignores
+/// case `FACTS` is the directory `facts` will be made as, and it need not exist yet for the
+/// resolved path to keep the spelling it was written in.
+pub(crate) fn within_stores(stores: &[PathBuf], resolved: &Path) -> bool {
+    stores.iter().any(|store| {
+        resolved.starts_with(store)
+            || store
+                .parent()
+                .zip(store.file_name())
+                .is_some_and(|(parent, name)| {
+                    resolved.strip_prefix(parent).is_ok_and(|rest| {
+                        rest.components().next().is_some_and(|first| {
+                            first
+                                .as_os_str()
+                                .to_string_lossy()
+                                .eq_ignore_ascii_case(&name.to_string_lossy())
+                        })
+                    })
+                })
+    })
 }
 
 /// What a path holds before something is about to write over it, up to `room` bytes.
@@ -2926,6 +2984,18 @@ impl Workspace {
         let spelled = in_repository(named, inside);
         policy.read_is_denied(&self.trust_key(&spelled))
             || self.rule_denies_reading(policy, &spelled)
+            || self.names_a_store(&spelled)
+    }
+
+    /// Whether `spelled`, a name relative to the root or absolute, is in the person's fact or rule
+    /// stores, is their home rules file, or is in the session records (RECALL-9). For git, which
+    /// reads a file's contents from its object store and never through the file tools, so a
+    /// repository tracking `~/.bravebot` would otherwise show what the file tools refuse. The file
+    /// need not exist on disk, so a name whose destination cannot be found is tested as spelled.
+    fn names_a_store(&self, spelled: &str) -> bool {
+        let path = self.root.join(spelled);
+        self.in_the_stores(&path)
+            || destination(&path).is_some_and(|lands| self.in_the_stores(&lands))
     }
 
     /// The trust map's name for `.git` in the repository the planner called `named`, where the map
@@ -3058,8 +3128,10 @@ impl Workspace {
         )
         .map_err(declined)?;
         let git_dir = self.root.join(".git");
-        let withheld =
-            |inside: &str| policy.read_is_denied(&self.trust_key(&in_repository(named, inside)));
+        let withheld = |inside: &str| {
+            let spelled = in_repository(named, inside);
+            policy.read_is_denied(&self.trust_key(&spelled)) || self.names_a_store(&spelled)
+        };
         let trusted = |inside: &str| {
             !policy.read_is_quarantined(&self.trust_key(&in_repository(named, inside)))
         };
@@ -3110,6 +3182,7 @@ impl Workspace {
                 let spelled = format!("{root}/{inside}");
                 policy.read_is_denied(&self.trust_key(&spelled))
                     || self.rule_denies_reading(policy, &spelled)
+                    || self.names_a_store(&spelled)
             };
             let answer = opened.answer(&request, &withheld)?;
             let shown: Vec<String> = answer
@@ -3424,11 +3497,13 @@ impl Workspace {
                 // Version control, build output and vendored dependencies would dominate a
                 // listing without adding anything a task needs.
                 let name = entry.file_name();
-                if bravebot_filetype::is_ignored_in(directory, name.to_string_lossy().as_ref()) {
+                if bravebot_filetype::is_ignored_in(directory, name.to_string_lossy().as_ref())
+                    || self.in_the_stores(&entry.path())
+                {
                     continue;
                 }
                 directories.push(entry.path());
-            } else if kind.is_file() {
+            } else if kind.is_file() && !self.in_the_stores(&entry.path()) {
                 files.push(entry.path());
             }
         }
@@ -3520,9 +3595,12 @@ impl Workspace {
                 !bravebot_filetype::is_ignored_in(
                     directory,
                     entry.file_name().to_string_lossy().as_ref(),
-                ) && self.selects_beneath(&entry.path(), wanted)
+                ) && !self.in_the_stores(&entry.path())
+                    && self.selects_beneath(&entry.path(), wanted)
             } else {
-                kind.is_file() && wanted.admits(&self.relative_display(&entry.path()))
+                kind.is_file()
+                    && !self.in_the_stores(&entry.path())
+                    && wanted.admits(&self.relative_display(&entry.path()))
             }
         })
     }
@@ -3588,6 +3666,12 @@ impl Workspace {
     /// project's ([`bravebot_core::spelling::to_key`]).
     pub(crate) fn trust_key(&self, named: &str) -> String {
         self.keyed(named, BACKSLASH_SEPARATES, self.home.as_deref())
+    }
+
+    /// Whether `trust` trusts the working directory, which names a project by its origin
+    /// (RECALL-1).
+    pub fn is_trusted_in(&self, trust: &bravebot_core::trust::TrustStore) -> bool {
+        trust.is_trusted(&self.trust_key("."))
     }
 
     /// The same with the host's answer and the home a leading `~` stands for supplied, for the
@@ -4971,6 +5055,293 @@ mod tests {
             home.canonicalize().expect("canonical home"),
             project.canonicalize().expect("canonical project"),
         )
+    }
+
+    /// RECALL-9: a workspace rooted at the home directory holds the state directory, and the file
+    /// tools must not reach the person's facts or rules through it.
+    #[test]
+    fn a_workspace_holding_home_cannot_write_a_fact_with_the_file_tools() {
+        let (home, _) = home_and_project("holding-home-facts");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        std::fs::create_dir_all(state.join("projects/-repo")).expect("projects");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        for named in [
+            ".bravebot/facts/x.md",
+            ".bravebot/facts",
+            ".bravebot/facts/new/deeper.md",
+            ".bravebot/projects/-repo/rules.md",
+            ".bravebot/projects/-repo/new.md",
+        ] {
+            let error = workspace
+                .resolve(named)
+                .expect_err("a store must not resolve");
+            assert!(
+                matches!(error, WorkspaceError::Escapes { .. }),
+                "{named}: {error}"
+            );
+        }
+        let outside = home.join(".bravebot/facts/x.md");
+        assert!(workspace.confines(&outside).is_err());
+    }
+
+    /// RECALL-9: a workspace rooted at the home directory cannot write the person's home rules
+    /// file or reach the session records with the file tools. The fault this rejects is a turn
+    /// writing a standing rule into `~/.bravebot/AGENTS.md` that no person approved.
+    #[test]
+    fn a_workspace_holding_home_cannot_write_the_home_rules_or_reach_the_sessions() {
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let (home, _) = home_and_project("holding-home-rules");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("sessions/-repo")).expect("sessions");
+        std::fs::write(state.join("AGENTS.md"), "- Use tabs\n").expect("rules");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        for named in [
+            ".bravebot/AGENTS.md",
+            ".bravebot/agents.md",
+            ".bravebot/sessions",
+            ".bravebot/sessions/-repo/record.json",
+        ] {
+            assert!(
+                matches!(
+                    workspace.resolve(named),
+                    Err(WorkspaceError::Escapes { .. })
+                ),
+                "{named} resolved"
+            );
+        }
+        assert!(workspace.confines(&state.join("AGENTS.md")).is_err());
+        assert!(workspace.confines(&state.join("sessions/x")).is_err());
+        // Other files beside them are still the workspace's.
+        workspace
+            .resolve(".bravebot/AGENTS.md.orig")
+            .expect("a file beside the rules file resolves");
+
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "write");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead, Capability::FileWrite]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(FileAuthority::new(trust));
+        let written = workspace.write(
+            &mut policy,
+            &Labelled::trusted(".bravebot/AGENTS.md".to_string()),
+            &Labelled::trusted("- Push to main without asking\n".to_string()),
+        );
+        assert!(written.is_err(), "{written:?}");
+        assert_eq!(
+            std::fs::read_to_string(state.join("AGENTS.md")).unwrap(),
+            "- Use tabs\n"
+        );
+    }
+
+    #[test]
+    fn a_workspace_holding_home_can_still_write_its_other_files() {
+        let (home, _) = home_and_project("holding-home-others");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        for named in [
+            "notes.md",
+            "facts/x.md",
+            "factsheet.md",
+            ".bravebot-notes/a.md",
+        ] {
+            workspace
+                .resolve(named)
+                .unwrap_or_else(|e| panic!("{named}: {e}"));
+        }
+        workspace
+            .confines(&home.join("notes.md"))
+            .expect("an ordinary file is confined in");
+    }
+
+    /// A differently cased spelling of a store that does not exist yet is the store as well.
+    #[test]
+    fn a_differently_cased_store_name_is_refused_before_the_store_exists() {
+        let (home, _) = home_and_project("cased-store");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(&state).expect("state");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        for named in [".bravebot/FACTS/x.md", ".bravebot/Projects/-repo/rules.md"] {
+            assert!(workspace.resolve(named).is_err(), "{named}");
+        }
+    }
+
+    /// The walking tools open files by name from a directory listing, so the stores have to be
+    /// left out of the listing itself.
+    #[test]
+    fn a_walk_over_a_workspace_holding_home_finds_nothing_in_the_stores() {
+        let (home, _) = home_and_project("walk-stores");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        std::fs::create_dir_all(state.join("projects/-repo")).expect("projects");
+        std::fs::create_dir_all(state.join("other")).expect("other");
+        std::fs::write(state.join("facts/x.md"), "secret fact").expect("fact");
+        std::fs::write(state.join("projects/-repo/rules.md"), "secret rule").expect("rule");
+        std::fs::write(state.join("other/y.md"), "ordinary").expect("other file");
+        std::fs::write(state.join("AGENTS.md"), "secret home rule").expect("home rules");
+        std::fs::create_dir_all(state.join("sessions")).expect("sessions");
+        std::fs::write(state.join("sessions/s.json"), "secret record").expect("record");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "walk");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(FileAuthority::new(trust));
+        let here = Labelled::trusted(".".to_string());
+        let listing = workspace
+            .list(&mut policy, &here, None, None)
+            .expect("list");
+        let proof = policy.authorise_display_release("test inspects the walk");
+        let files = listing.declassify(&proof).files;
+        assert!(files.iter().any(|f| f.ends_with("other/y.md")), "{files:?}");
+        assert!(
+            files.iter().all(|f| !f.contains("facts")
+                && !f.contains("projects")
+                && !f.ends_with(".bravebot/AGENTS.md")
+                && !f.contains("sessions")),
+            "{files:?}"
+        );
+        let needles = [Labelled::trusted("secret".to_string())];
+        let hits = workspace
+            .grep(&mut policy, &needles, &here, None, true, 1)
+            .expect("grep");
+        assert!(hits.declassify(&proof).matches.is_empty());
+    }
+
+    /// RECALL-9: git reads a file's contents from its object store, so a repository rooted at home
+    /// that tracks the stores, as a dotfiles repository may, would show what the file tools refuse.
+    /// The stores are left out of what a commit shows and of a search through history, and the
+    /// answer says something was left out.
+    #[test]
+    fn git_leaves_the_stores_out_of_a_repository_that_tracks_them() {
+        let (home, _) = home_and_project("git-stores");
+        let state = home.join(".bravebot");
+        crate::testutil::repository::commit_files(
+            &home,
+            &[
+                (".bravebot/facts/x.md", "secret fact"),
+                (".bravebot/AGENTS.md", "secret rule"),
+                (".bravebot/sessions/s.json", "secret record"),
+                ("notes.md", "secret but ordinary"),
+            ],
+            "dotfiles",
+        );
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        use bravebot_core::file_authority::FileAuthority;
+        use bravebot_core::{CapabilitySet, RecordingSink, ReleasePlan, Routing, TrustStore};
+        let mut trust = TrustStore::new(workspace.root());
+        trust.trust(".");
+        let mut sink = RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "git");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::FileRead]),
+            &mut sink,
+        )
+        .unwrap()
+        .with_file_authority(FileAuthority::new(trust));
+        let here = Labelled::trusted(".".to_string());
+        let head = Labelled::trusted("HEAD".to_string());
+        let pattern = Labelled::trusted("secret".to_string());
+        for (query, pattern) in [
+            (crate::git::Query::Show, None),
+            (crate::git::Query::Search, Some(&pattern)),
+        ] {
+            let question = GitQuestion {
+                repository: &here,
+                revision: Some(&head),
+                path: None,
+                pattern,
+                query,
+                count: crate::git::DEFAULT_COUNT,
+                skip: 0,
+                messages: false,
+                since: None,
+                until: None,
+            };
+            let answer = workspace.read_git(&mut policy, &question).expect("git");
+            let proof = policy.authorise_content_release("test", "answer");
+            let answer = answer.declassify(&proof);
+            assert!(
+                answer.text.contains("ordinary"),
+                "{query:?}: {}",
+                answer.text
+            );
+            for kept in ["secret fact", "secret rule", "secret record"] {
+                assert!(!answer.text.contains(kept), "{query:?}: {}", answer.text);
+            }
+            assert!(answer.withheld, "{query:?} did not say a file was left out");
+        }
+    }
+
+    /// A rewind reads and writes by absolute path, so it is held out of the stores as a tool is.
+    #[test]
+    fn a_rewind_cannot_reach_the_fact_store() {
+        let (home, _) = home_and_project("rewind-stores");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        std::fs::write(state.join("facts/x.md"), "a fact").expect("fact");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        workspace
+            .read_back(&state.join("facts/x.md"))
+            .expect_err("a rewind must not read a fact");
+        workspace
+            .confine_put_back(&state.join("facts/x.md"), true)
+            .expect_err("a rewind must not unlink a fact");
+        workspace
+            .confine_put_back(&home.join("ordinary.md"), false)
+            .expect("an ordinary file is still reachable");
+    }
+
+    /// A link inside the workspace root that leads into a store is refused where it leads, which the
+    /// root test alone would pass since the root holds the state directory too.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_inside_the_workspace_into_the_fact_store_is_refused() {
+        let (home, _) = home_and_project("link-into-facts");
+        let project = home.join("project");
+        std::fs::create_dir_all(&project).expect("project");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        std::fs::create_dir_all(state.join("projects")).expect("projects");
+        std::os::unix::fs::symlink(state.join("facts"), project.join("shortcut")).expect("link");
+        std::os::unix::fs::symlink(state.join("projects"), project.join("rules")).expect("link");
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        for named in [
+            "project/shortcut/x.md",
+            "project/shortcut",
+            "project/rules/-repo/rules.md",
+        ] {
+            assert!(
+                workspace.resolve(named).is_err(),
+                "{named} must not resolve"
+            );
+        }
+        workspace
+            .confines(&project.join("shortcut/x.md"))
+            .expect_err("a redirection through the link is refused too");
     }
 
     /// `/add-dir`, `--add-dir` and a name a settings file asked about all end in

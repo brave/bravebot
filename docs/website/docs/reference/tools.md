@@ -6,7 +6,7 @@ description: Every tool the model may call, what it takes, and what it is allowe
 
 # Tools
 
-There are twenty tools, and no way to add another from a configuration file. Each one splits its
+There are twenty-six tools, and no way to add another from a configuration file. Each one splits its
 arguments into **routing**, the part that decides where the effect lands, and **content**, the part
 that is merely carried.
 
@@ -35,6 +35,10 @@ that is merely carried.
 | [`propose_plan`](#propose_plan) | the plan | none | it *is* the plan you approve |
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
 | [`todo_write`](#todo_write) | none | `todos` | no |
+| [`remember`](#remember) | `key`, `scope`, `supersedes`, `new` | `text` | no |
+| [`recall`](#recall) | `query`, `key` | none | no |
+| [`recall_verify`](#recall_verify) | `key` | none | no |
+| [`propose_rule`](#propose_rule) | `scope` | `text`, `reason` | **yes, that is what it is for** |
 
 Five more are offered only where they mean something.
 [`request_path`](#request_path) goes wherever `run` is confined, so not to a delegate.
@@ -48,6 +52,11 @@ run or a planned run. [`advisor`](#advisor) goes to a session that named a model
 setting or [`/advisor`](commands.md#advisor-model--off), so not to one that did not, and not to a delegate.
 [`message_session`](#message_session) goes to a background session, so not to a session in a terminal, a
 delegate or a one-shot run.
+
+[`remember`](#remember), [`recall`](#recall), [`recall_verify`](#recall_verify) and
+[`propose_rule`](#propose_rule) are the planner's side of [memory](../customize/memory.md). None of them
+is offered to a delegate, and a session that writes nothing under `~/.bravebot`, an
+[incognito](../using/sessions.md#a-session-that-leaves-nothing-behind) one, saves, verifies and proposes nothing.
 
 Every tool also takes `why`, one line from the planner saying what the call is for. It is content
 on every tool: it is drawn beside the call for you to read, and nothing reads it or decides on it.
@@ -1105,6 +1114,88 @@ like any other content nobody vouched for.
 A turn may ask at most three times, and a fourth call is refused without a request. Each call is
 counted in the turn's tokens and recorded in the trail with its model and cost. A call that fails is
 reported to the planner as a category of failure, without anything the service said.
+
+---
+
+## `remember`
+
+Keeps one fact in your [memory](../customize/memory.md) on the planner's own judgement.
+
+| Parameter | |
+|---|---|
+| `text` | the fact, in the planner's own words |
+| `key` | a slug naming the fact, such as `release/forge-poll` |
+| `scope` | this project, or every project |
+| `supersedes` | the key of a fact this one replaces |
+| `new` | keep this as a new fact even though a close one exists |
+
+The text is released into a fact only while the planner's context has met nothing untrusted, and the
+tool offers no reference field, so a quarantined read cannot be kept. A fact saved from a private
+context is kept private. A key that is not a slug is refused before anything is written. Saving over
+a key keeps the fact's creation date and tags; a fact you asked to be remembered is never overwritten,
+and a fact another one replaced is not saved over.
+
+A save that is close to a kept fact is refused, naming that fact's key and how much of the new text it
+holds, and the answer to every save lists the facts above that share. No fact's text is quoted, but
+the answer still takes the confidentiality of every fact it names, so a private fact cannot be probed
+by guessing and the result sent to a public surface.
+
+It works in every permission mode, plan mode included, because it writes nothing in the workspace.
+Each write is backed up first, so [`/undo`](commands.md) takes it back.
+
+## `recall`
+
+Reads your kept facts. It takes `query` or `key`, never both and never neither.
+
+| Parameter | |
+|---|---|
+| `query` | words to look for, with a quoted phrase matched as written |
+| `key` | the key of one fact, to read it whether or not another replaced it |
+
+A query ranks the live facts of the project and of every project together and answers with at most
+eight, each with its key, a strength, the date it was last verified and its text. When the best
+strength is under 35 the answer begins by saying probably nothing is stored, and the planner is told
+to say so rather than assume. For each of the top three results, the facts its text links to with
+`[[key]]` follow, one hop and at most five, each marked with the fact it came from. A key that is
+superseded says by which key.
+
+Every fact an answer names gives the planner's context that fact's confidentiality from then on, so
+reading a private fact cannot be followed by sending it somewhere public. That holds for a query over
+every fact it ranked, shown or not.
+
+## `recall_verify`
+
+Marks a kept fact as checked today.
+
+| Parameter | |
+|---|---|
+| `key` | the fact to mark |
+
+Only the `verified` date changes, and the fact is backed up first so `/undo` restores the old date.
+The tool's description tells the planner to check first that any file or function the fact names
+still exists. A key no fact has is refused and nothing is written.
+
+## `propose_rule`
+
+Puts one standing rule to you, and writes it only if you say yes.
+
+| Parameter | |
+|---|---|
+| `text` | the rule, in the planner's own words |
+| `scope` | `home` for every project, or `project` for the one you are in |
+| `reason` | one line saying why |
+
+You are shown the text, the file the scope names and the reason, and you can keep the rule, refuse it,
+or type your own wording, which replaces the text. The choices are written by bravebot, never by the
+planner, and a skipped question writes nothing. Each question is asked afresh, so an earlier yes is
+never reused, and no permission mode answers it for you. Where nobody can be asked, as in a one-shot
+run, the proposal is refused.
+
+The rule is appended as one line, `- <text> (<date>) why: <reason>`, to `~/.bravebot/AGENTS.md` for
+`home` or to the project's `rules.md` for `project`, after the file is backed up, so `/undo` takes it
+back. A call from a context that has met something untrusted is refused before you are asked. Where
+the text or the reason came from private material, you are offered only refusing or typing the rule
+yourself, and what is written is your wording with `why: typed by the person`.
 
 ---
 

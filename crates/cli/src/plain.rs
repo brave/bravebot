@@ -531,6 +531,10 @@ fn run(
             },
             (),
         ),
+        injected_facts: resumed
+            .as_ref()
+            .map(|record| record.injected_facts.clone())
+            .unwrap_or_default(),
         kept,
         mcp: reached.session(),
         beside: beside_turns,
@@ -744,6 +748,9 @@ struct Running<'a> {
     /// The record a background session writes after each turn, which is what starting it again
     /// resumes from (BG-1).
     kept: Option<Kept>,
+    /// The keys of the kept facts already put in front of the planner on this session, so a fact
+    /// is injected once (RECALL-10).
+    injected_facts: std::collections::BTreeSet<String>,
 }
 
 /// The record of a background session, written down after each turn that ended.
@@ -899,6 +906,7 @@ impl Running<'_> {
     fn task(&self, prompt: &str) -> Task {
         Task::new(prompt.to_string())
             .with_mcp(self.mcp.clone())
+            .with_injected_facts(self.injected_facts.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
             .with_cache(bravebot_agent::home::cache())
@@ -975,8 +983,12 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
         // is still running, and a set dropped here would leave the next prompt paying for a second
         // index of the same tree.
         self.answers.servers = Some(servers);
+        // Taken whatever the turn's ending: what the planner was shown on a failed turn is not
+        // shown again.
+        self.injected_facts = completed.decisions.injected_facts.clone();
         self.answers.adopt(completed.decisions);
         if let Some(kept) = &mut self.kept {
+            kept.handle.set_injected_facts(self.injected_facts.clone());
             match &completed.outcome {
                 Ok(outcome) => kept.after_a_turn(
                     prompt,

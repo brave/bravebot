@@ -389,6 +389,7 @@ fn a_server_approved_in_one_turn_answers_the_next() {
     let refused = bravebot_agent::rewind::restore(
         &workspace,
         vec![bravebot_agent::workspace::Backup {
+            kept: false,
             path: workspace.root().join("src/a.rs"),
             was: bravebot_agent::workspace::Before::Bytes(b"restored original".to_vec()),
             captured_trust: bravebot_core::label::Integrity::Trusted,

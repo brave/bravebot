@@ -160,6 +160,8 @@ pub enum Action {
     ListCheckouts,
     /// List each definition's memory (MEMORY-12).
     ListMemories,
+    /// Propose what to tidy among the rules and facts kept (RECALL-12).
+    TidyMemories,
     /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal
     /// to ask on, which the loop owns.
     RemoveCheckout(String),

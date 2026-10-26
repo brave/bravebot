@@ -670,3 +670,36 @@ fn a_checkout_is_not_made_under_the_state_directory() {
         "a private session made a checkout under the state directory"
     );
 }
+
+/// RECALL-4: an incognito session does not check the rule layers, and writes no `projects/`
+/// directory, `checked` file or `disagreements` file.
+#[test]
+fn nothing_is_checked_or_written_in_incognito() {
+    use bravebot_agent::recall::conflicts::{self, Unanswerable};
+    let scratch = Scratch::new("rules-disagree");
+    let layers = vec![
+        (
+            "home/AGENTS.md".to_string(),
+            "Use tabs for indentation\n".to_string(),
+        ),
+        (
+            "AGENTS.md".to_string(),
+            "Use spaces for indentation\n".to_string(),
+        ),
+    ];
+    let mut asked = 0;
+    let said = std::sync::atomic::AtomicBool::new(false);
+    let notices = conflicts::check(
+        &scratch.home,
+        &bravebot_agent::recall::project::ProjectId::named("github.com/o/r"),
+        &layers,
+        &said,
+        &mut |_, _| -> Result<bool, Unanswerable> {
+            asked += 1;
+            Ok(true)
+        },
+    );
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(asked, 0, "the judge was asked in an incognito session");
+    assert!(!scratch.home.join("projects").exists());
+}

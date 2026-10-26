@@ -487,6 +487,12 @@ pub struct Record {
     /// notes were kept.
     #[serde(default)]
     pub notes: Vec<Note>,
+    /// The keys of the kept facts already put in front of the planner on this session, so a fact
+    /// is injected once per session, across resume ([RECALL-10](recall.md#RECALL-10)).
+    ///
+    /// Empty for a record written before facts were kept.
+    #[serde(default)]
+    pub injected_facts: std::collections::BTreeSet<String>,
     /// What a manifest run produced, where this was one.
     ///
     /// Its presence is what makes a record a manifest run, and its absence a turn session. A
@@ -876,6 +882,10 @@ pub struct StoredBackup {
     /// bytes the planner was never allowed to see, and this is on disk.
     #[serde(default)]
     pub bytes: Option<String>,
+    /// Whether this is a write into the person's fact or rule stores (RECALL-6), whose path is
+    /// kept whole and whose contents are kept without the project's trust map vouching for them.
+    #[serde(default)]
+    pub kept: bool,
 }
 
 /// The word for a path the turn created, so a rewind removes it again.
@@ -923,6 +933,17 @@ impl StoredRewind {
 
     /// Write one down, with the paths inside the project kept relative to it.
     fn of(point: &RewindPoint, project: &Path) -> Self {
+        Self::of_with_state(point, project, bravebot_agent::home::directory().as_deref())
+    }
+
+    /// [`StoredRewind::of`] with the state directory named, so a test does not depend on whose
+    /// machine it runs on.
+    ///
+    /// A backup of the person's stores keeps what it held only where that is configuration read
+    /// as public, or a fact labelled public. The session record is a file programs may read, so
+    /// the bytes of a private fact, or of one whose label cannot be read, are not written into it:
+    /// undoing that save works in this session and not after a resume (RECALL-6, RECALL-9).
+    fn of_with_state(point: &RewindPoint, project: &Path, state: Option<&Path>) -> Self {
         use base64::Engine;
         use bravebot_agent::workspace::Before;
 
@@ -972,12 +993,14 @@ impl StoredRewind {
                     let (before, bytes) = match &backup.was {
                         Before::Nothing => (NOTHING, None),
                         Before::Bytes(held)
-                            if backup.captured_trust == Integrity::Trusted
-                                && vouched_for(
-                                    &snapshot.trust,
-                                    relative,
-                                    bravebot_agent::workspace::BACKSLASH_SEPARATES,
-                                ) =>
+                            if (backup.kept && may_record_kept(state, &backup.path, held))
+                                || (!backup.kept
+                                    && backup.captured_trust == Integrity::Trusted
+                                    && vouched_for(
+                                        &snapshot.trust,
+                                        relative,
+                                        bravebot_agent::workspace::BACKSLASH_SEPARATES,
+                                    )) =>
                         {
                             (
                                 BYTES,
@@ -998,6 +1021,7 @@ impl StoredRewind {
                             .into(),
                         ),
                         bytes,
+                        kept: backup.kept,
                     }
                 })
                 .collect(),
@@ -1019,6 +1043,18 @@ impl StoredRewind {
     /// rewinding to a point a resume brought back reports nothing about a cache, where rewinding
     /// to one this process made puts back the figure it is still holding in memory.
     fn into_point(self, root: &Path) -> RewindPoint {
+        self.into_point_with_state(root, bravebot_agent::home::directory().as_deref())
+    }
+
+    /// [`StoredRewind::into_point`] with the state directory named, so a test does not depend on
+    /// whose machine it runs on.
+    ///
+    /// A backup marked as one of the person's stores is put back with no trust map asked, so the
+    /// mark is believed only for a path in `<state>/facts` or `<state>/projects`, or for
+    /// `<state>/AGENTS.md` itself. Anywhere else, or with no state directory, what it held is not
+    /// kept: a record edited by hand, or one from another machine, cannot carry bytes past the
+    /// trust map by claiming the mark (RECALL-6).
+    fn into_point_with_state(self, root: &Path, state: Option<&Path>) -> RewindPoint {
         use base64::Engine;
         use bravebot_agent::workspace::{Backup, Before};
 
@@ -1032,6 +1068,7 @@ impl StoredRewind {
                         before: NOT_KEPT.into(),
                         captured_trust: None,
                         bytes: None,
+                        kept: false,
                     });
                 }
             }
@@ -1071,20 +1108,82 @@ impl StoredRewind {
                             .map_or(Before::NotKept, Before::Bytes),
                         _ => Before::NotKept,
                     };
+                    let path = root.join(held.path);
+                    let (was, kept) = match held.kept {
+                        true if state.is_some_and(|state| in_the_stores(state, &path)) => {
+                            (was, true)
+                        }
+                        true => (Before::NotKept, false),
+                        false => (was, false),
+                    };
                     Backup {
                         captured_trust: if held.captured_trust.as_deref() == Some(TRUSTED) {
                             Integrity::Trusted
                         } else {
                             Integrity::Untrusted
                         },
-                        path: root.join(held.path),
+                        path,
                         was,
+                        kept,
                     }
                 })
                 .collect(),
             prompt: self.prompt,
         }
     }
+}
+
+/// Whether the bytes a kept backup of `path` held may go into a session record: a rules file,
+/// `<state>/AGENTS.md` or a project's `rules.md`, which is read as public configuration, or the
+/// `id` beside it, or a fact whose own `label` says public. Anything else, including a fact with no label, is private.
+fn may_record_kept(state: Option<&Path>, path: &Path, held: &[u8]) -> bool {
+    let is_a_rules_file = state.is_some_and(|state| {
+        let mut spellings = vec![state.to_path_buf()];
+        spellings.extend(std::fs::canonicalize(state).ok());
+        spellings.iter().any(|state| {
+            path == state.join("AGENTS.md")
+                || (path
+                    .file_name()
+                    .is_some_and(|name| name == "rules.md" || name == "id")
+                    && path
+                        .parent()
+                        .and_then(Path::parent)
+                        .is_some_and(|projects| projects == state.join("projects")))
+        })
+    });
+    is_a_rules_file
+        || std::str::from_utf8(held).is_ok_and(|text| {
+            bravebot_agent::recall::fact::Fact::parse("", text).label
+                == bravebot_core::label::Confidentiality::Public
+        })
+}
+
+/// Whether `path` is in the person's fact or rule stores under `state`, or is `<state>/AGENTS.md`:
+/// the places a backup marked as kept may name. Asked of the state directory as spelled and as it
+/// resolves, and a path that climbs with `..` is in neither.
+fn in_the_stores(state: &Path, path: &Path) -> bool {
+    use std::path::Component;
+    if path
+        .components()
+        .any(|step| matches!(step, Component::ParentDir | Component::CurDir))
+    {
+        return false;
+    }
+    let mut spellings = vec![state.to_path_buf()];
+    spellings.extend(std::fs::canonicalize(state).ok());
+    // A home rules file that is a link is backed up where it lands (RECALL-6), so that file is the
+    // name a backup of it carries.
+    let linked = std::fs::symlink_metadata(state.join("AGENTS.md"))
+        .is_ok_and(|meta| meta.file_type().is_symlink())
+        && std::fs::canonicalize(state.join("AGENTS.md")).is_ok_and(|lands| path == lands);
+    linked
+        || spellings.iter().any(|state| {
+            path == state.join("AGENTS.md")
+                || ["facts", "projects"].into_iter().any(|store| {
+                    path.strip_prefix(state.join(store))
+                        .is_ok_and(|rest| rest.components().next().is_some())
+                })
+        })
 }
 
 /// Whether `trust` vouches for `path`, asked of every spelling a rewind's path can arrive in.
@@ -1854,6 +1953,8 @@ pub struct Handle {
     handed_off_from: Option<String>,
     /// The notes the person has typed on this session, oldest first.
     notes: Vec<Note>,
+    /// The keys of the kept facts already injected into a prompt on this session (RECALL-10).
+    injected_facts: std::collections::BTreeSet<String>,
     /// The definition the person named on the command line, for the record to carry.
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
@@ -2026,6 +2127,7 @@ impl Handle {
             pull_request: None,
             handed_off_from: None,
             notes: Vec::new(),
+            injected_facts: std::collections::BTreeSet::new(),
             agent: None,
             skill_mode: None,
             wrote: false,
@@ -2097,6 +2199,7 @@ impl Handle {
             pull_request: record.pull_request.clone(),
             handed_off_from: record.handed_off_from.clone(),
             notes: record.notes.clone(),
+            injected_facts: record.injected_facts.clone(),
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
             // The record it came from is the one being written back to.
@@ -2307,6 +2410,16 @@ impl Handle {
         &self.notes
     }
 
+    /// The keys of the kept facts already injected into a prompt on this session (RECALL-10).
+    pub fn injected_facts(&self) -> &std::collections::BTreeSet<String> {
+        &self.injected_facts
+    }
+
+    /// Take the set a turn returned. Written with the record at the turn's save.
+    pub fn set_injected_facts(&mut self, injected: std::collections::BTreeSet<String>) {
+        self.injected_facts = injected;
+    }
+
     /// Add a note a person typed, belonging to `turn`, and write it to the record at once.
     ///
     /// Written at once because a note is typed while a turn runs, and the record is otherwise
@@ -2417,6 +2530,7 @@ impl Handle {
             pull_request: self.pull_request.clone(),
             handed_off_from: self.handed_off_from.clone(),
             notes: self.notes.clone(),
+            injected_facts: self.injected_facts.clone(),
             title,
             started: self.started,
             updated: now(),
@@ -2562,6 +2676,7 @@ impl Handle {
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
         record.notes = self.notes.clone();
+        record.injected_facts = self.injected_facts.clone();
         self.write(&directory, &mut record)
     }
 
@@ -5607,18 +5722,21 @@ mod tests {
 
         let point = a_stored_point(vec![
             StoredBackup {
+                kept: false,
                 captured_trust: None,
                 path: "notes.md".to_string(),
                 before: "some word from a later build".to_string(),
                 bytes: None,
             },
             StoredBackup {
+                kept: false,
                 captured_trust: None,
                 path: "draft.md".to_string(),
                 before: BYTES.to_string(),
                 bytes: Some("not base64 at all !!".to_string()),
             },
             StoredBackup {
+                kept: false,
                 captured_trust: None,
                 path: "made.md".to_string(),
                 before: NOTHING.to_string(),
@@ -5775,6 +5893,7 @@ mod tests {
                 (Some("future-label"), Integrity::Untrusted),
             ] {
                 let mut stored = a_stored_point(vec![StoredBackup {
+                    kept: false,
                     path: "file".into(),
                     before: BYTES.into(),
                     bytes: Some("b3JpZ2luYWw=".into()),
@@ -5793,6 +5912,171 @@ mod tests {
                     bravebot_agent::workspace::Before::Bytes(b"original".to_vec())
                 );
             }
+        }
+    }
+
+    /// RECALL-6. A write into the fact and rule stores survives a resume whole, and a record from
+    /// before the marker reads as an ordinary backup.
+    #[test]
+    fn a_kept_store_backup_survives_a_resume_and_an_old_record_reads_as_ordinary() {
+        let stored = a_stored_point(vec![StoredBackup {
+            kept: true,
+            path: "/state/facts/a.md".into(),
+            before: BYTES.into(),
+            bytes: Some("b3JpZ2luYWw=".into()),
+            captured_trust: Some(TRUSTED.into()),
+        }]);
+        let mut encoded = serde_json::to_value(&stored).unwrap();
+        let read: StoredRewind = serde_json::from_value(encoded.clone()).unwrap();
+        let point = read.into_point_with_state(Path::new("/work"), Some(Path::new("/state")));
+        assert!(point.backups[0].kept);
+        assert_eq!(point.backups[0].path, Path::new("/state/facts/a.md"));
+        assert_eq!(
+            point.backups[0].was,
+            bravebot_agent::workspace::Before::Bytes(b"original".to_vec())
+        );
+        encoded["wrote_over"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kept");
+        let old: StoredRewind = serde_json::from_value(encoded).unwrap();
+        assert!(!old.into_point(Path::new("/work")).backups[0].kept);
+    }
+
+    /// RECALL-6. A backup marked as kept that names a path outside the fact and rule stores is not
+    /// believed: what it held is dropped and it is an ordinary backup that was not kept. The fault
+    /// this rejects is a hand-edited record carrying bytes for a workspace file past the trust map.
+    #[test]
+    fn a_kept_mark_on_a_path_outside_the_stores_drops_the_backup() {
+        let state = Path::new("/state");
+        for path in [
+            "/work/src/main.rs",
+            "/state/sessions/x/record.json",
+            "/state/facts/../trusted.json",
+            "/state/facts",
+            "/state/AGENTS.md.orig",
+            "relative.txt",
+        ] {
+            let stored = a_stored_point(vec![StoredBackup {
+                kept: true,
+                path: path.into(),
+                before: BYTES.into(),
+                bytes: Some("b3JpZ2luYWw=".into()),
+                captured_trust: Some(UNTRUSTED.into()),
+            }]);
+            let point = stored.into_point_with_state(Path::new("/work"), Some(state));
+            assert!(!point.backups[0].kept, "{path}");
+            assert_eq!(
+                point.backups[0].was,
+                bravebot_agent::workspace::Before::NotKept,
+                "{path}"
+            );
+        }
+        for path in ["/state/AGENTS.md", "/state/projects/abc/rules.md"] {
+            let stored = a_stored_point(vec![StoredBackup {
+                kept: true,
+                path: path.into(),
+                before: BYTES.into(),
+                bytes: Some("b3JpZ2luYWw=".into()),
+                captured_trust: Some(UNTRUSTED.into()),
+            }]);
+            assert!(
+                stored
+                    .clone()
+                    .into_point_with_state(Path::new("/work"), Some(state))
+                    .backups[0]
+                    .kept,
+                "{path}"
+            );
+            assert!(
+                !stored
+                    .into_point_with_state(Path::new("/work"), None)
+                    .backups[0]
+                    .kept,
+                "{path} with no state directory"
+            );
+        }
+    }
+
+    /// RECALL-6. Where the home rules file is a link, a kept mark on the file it lands on is
+    /// believed, since that is where a rule's backup is taken, and a kept mark on any other file
+    /// beside it is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_kept_mark_on_the_file_a_linked_home_rules_file_lands_on_is_believed() {
+        let base =
+            std::env::temp_dir().join(format!("bravebot-kept-linked-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let state = base.join("state");
+        let dotfiles = base.join("dotfiles");
+        std::fs::create_dir_all(&state).expect("state");
+        std::fs::create_dir_all(&dotfiles).expect("dotfiles");
+        std::fs::write(dotfiles.join("AGENTS.md"), "- mine\n").expect("rules");
+        std::os::unix::fs::symlink(dotfiles.join("AGENTS.md"), state.join("AGENTS.md"))
+            .expect("link");
+        let lands = std::fs::canonicalize(dotfiles.join("AGENTS.md")).expect("canonical");
+        for (path, believed) in [
+            (lands.clone(), true),
+            (lands.with_file_name("other.md"), false),
+        ] {
+            let stored = a_stored_point(vec![StoredBackup {
+                kept: true,
+                path: path.display().to_string(),
+                before: BYTES.into(),
+                bytes: Some("b3JpZ2luYWw=".into()),
+                captured_trust: Some(UNTRUSTED.into()),
+            }]);
+            let point = stored.into_point_with_state(Path::new("/work"), Some(&state));
+            assert_eq!(point.backups[0].kept, believed, "{}", path.display());
+        }
+        std::fs::remove_dir_all(base).expect("clean");
+    }
+
+    /// RECALL-6, RECALL-9. The record keeps what a fact held before a save only where that fact
+    /// was public, and keeps a rules file's old text as it does today. The fault this rejects is
+    /// a private fact's bytes copied into a session record programs may read.
+    #[test]
+    fn overwriting_a_private_fact_leaves_no_fact_bytes_in_the_saved_record() {
+        use base64::Engine;
+        let state = Path::new("/state");
+        let fact = |label: &str| {
+            format!("---\nsource: agent\nlabel: {label}\n---\nThe vault code is 4471.\n")
+        };
+        for (path, held, recorded) in [
+            ("/state/facts/vault.md", fact("private"), false),
+            ("/state/projects/abc/facts/vault.md", fact("private"), false),
+            (
+                "/state/facts/vault.md",
+                "The vault code is 4471.\n".to_string(),
+                false,
+            ),
+            ("/state/facts/vault.md", fact("public"), true),
+            ("/state/facts/projects/abc/rules.md", fact("private"), false),
+            ("/state/AGENTS.md", "- Use tabs\n".to_string(), true),
+            (
+                "/state/projects/abc/rules.md",
+                "- Commit as nisfeb\n".to_string(),
+                true,
+            ),
+            ("/state/projects/abc/id", "github.com/o/r".to_string(), true),
+        ] {
+            let mut point =
+                a_stored_point(vec![]).into_point_with_state(Path::new("/work"), Some(state));
+            point.backups = vec![bravebot_agent::workspace::Backup {
+                captured_trust: Integrity::Trusted,
+                path: path.into(),
+                was: bravebot_agent::workspace::Before::Bytes(held.clone().into_bytes()),
+                kept: true,
+            }];
+            let stored = StoredRewind::of_with_state(&point, Path::new("/work"), Some(state));
+            let written = serde_json::to_string(&stored).unwrap();
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&held);
+            assert_eq!(written.contains(&encoded), recorded, "{path}: {written}");
+            assert_eq!(
+                stored.wrote_over[0].before,
+                if recorded { BYTES } else { NOT_KEPT },
+                "{path}"
+            );
         }
     }
 
@@ -5871,6 +6155,7 @@ mod tests {
             front: None,
             asides: Vec::new(),
             notes: Vec::new(),
+            injected_facts: Default::default(),
             conversation: Snapshot {
                 messages: Vec::new(),
                 context: "trusted".to_string(),
@@ -7895,5 +8180,39 @@ mod tests {
         let renamed = load(&root, &id).expect("the record is there");
         assert_eq!(renamed.title, "a name from the current copy");
         assert!(renamed.revision > after.revision);
+    }
+
+    /// RECALL-10: the keys already injected are kept in the record, so a resumed session does not
+    /// inject the same fact again.
+    #[test]
+    fn the_injected_set_survives_resume() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-injected-resume");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        handle.set_injected_facts(["deploy-steps".to_string()].into());
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record");
+        assert!(record.injected_facts.contains("deploy-steps"));
+        let resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(resumed.injected_facts(), &record.injected_facts);
+    }
+
+    /// RECALL-10: a record written before facts were kept reads as having injected none.
+    #[test]
+    fn an_old_record_reads_with_no_injected_set() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("injected_facts")
+            .expect("the set is written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert!(record.injected_facts.is_empty());
     }
 }

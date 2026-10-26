@@ -157,3 +157,44 @@ fn a_safe_session_reads_no_rule_file() {
         );
     }
 }
+
+/// A safe session reads no project `AGENTS.md`, so `/memory` lists none (RECALL-12).
+#[test]
+fn a_safe_session_lists_no_project_rules_file() {
+    bravebot_core::safe::engage();
+    let project = std::env::temp_dir().join("bravebot-agent-safe-listing");
+    let _ = std::fs::remove_dir_all(&project);
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("AGENTS.md"), "RULES").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    let listed = bravebot_agent::agents::project_rules_file(
+        &workspace,
+        trust,
+        bravebot_core::permissions::Permissions::new(),
+    );
+    assert_eq!(listed, None);
+}
+
+/// A safe session reads neither `~/.bravebot/AGENTS.md` nor the person's `rules.md`, so `/memory`
+/// lists no state rule layer either (RECALL-12).
+#[test]
+fn a_safe_session_lists_no_state_rule_layers() {
+    bravebot_core::safe::engage();
+    let base = std::env::temp_dir().join("bravebot-agent-safe-state-layers");
+    let _ = std::fs::remove_dir_all(&base);
+    let home = base.join("state");
+    let project = base.join("work");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(home.join("AGENTS.md"), "- Use tabs\n").unwrap();
+    let id = bravebot_agent::recall::project::project_id(&project, false);
+    let rules = home.join("projects").join(&id.dir);
+    std::fs::create_dir_all(&rules).unwrap();
+    std::fs::write(rules.join("rules.md"), "- Commit as nisfeb\n").unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+    let listed = bravebot_agent::recall::tidy::overview(&home, &workspace, false, None);
+    assert!(listed.rules.is_empty(), "{:?}", listed.rules);
+    let _ = std::fs::remove_dir_all(&base);
+}

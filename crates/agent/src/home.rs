@@ -372,6 +372,25 @@ pub fn replace(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
     written
 }
 
+/// Write `contents` to `path` so that a reader sees the old file or the new one and never a part
+/// of either.
+///
+/// The bytes go to a temporary file beside `path`, named for the process and for this call so two
+/// writers in one process do not share one, and the rename puts them in place.
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = path.with_file_name(format!(".{name}.{}.{call}.tmp", std::process::id()));
+    let written = write_file(&temporary, bytes).and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
 /// Write `contents` to a file that is not there yet, readable only by this user.
 ///
 /// Refuses, with `AlreadyExists`, a name that is taken, a link included, so a writer that must
@@ -866,5 +885,28 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, held.join("linked")).expect("link");
 
         assert!(directories_in(&held).is_empty());
+    }
+
+    #[test]
+    fn two_writers_never_leave_a_torn_file() {
+        let scratch = Scratch::new("home-atomic");
+        let path = scratch.path.join("file");
+        let payloads = [vec![b'a'; 10_000], vec![b'b'; 10_000]];
+        write_atomically(&path, &payloads[0]).expect("first write");
+
+        std::thread::scope(|scope| {
+            for payload in &payloads {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..200 {
+                        write_atomically(path, payload).expect("write");
+                    }
+                });
+            }
+            for _ in 0..400 {
+                let read = std::fs::read(&path).expect("read");
+                assert!(payloads.contains(&read), "torn: {} bytes", read.len());
+            }
+        });
     }
 }

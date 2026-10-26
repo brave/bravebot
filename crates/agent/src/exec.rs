@@ -377,6 +377,31 @@ pub fn run_plan_observed(
     running.finish(&plan.steps)
 }
 
+/// [`run_plan_observed`], with `reading` called on each redirection's source immediately before
+/// it is opened, as `entering` is on each destination. An earlier part of the line may have left
+/// a link at that name since the line was checked, and a read is opened here, outside any profile
+/// a program runs under (RECALL-9).
+#[allow(
+    clippy::too_many_arguments,
+    reason = "run_plan_observed's arguments and the read hook beside its write hook"
+)]
+pub fn run_plan_observed_reading(
+    plan: &Plan,
+    cancel: &Cancel,
+    limit: Duration,
+    scratch: Option<&std::path::Path>,
+    stdin: Option<&str>,
+    confinement: Option<&Confinement>,
+    entering: &mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>,
+    reading: &mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>,
+) -> Result<Ran, ExecError> {
+    let mut running = Running::new(&plan.directory, cancel, limit, scratch, stdin);
+    running.confinement = confinement;
+    running.entering = Some(entering);
+    running.reading = Some(reading);
+    running.finish(&plan.steps)
+}
+
 /// How a run that could be moved to the background came back.
 #[derive(Debug)]
 pub enum Waited {
@@ -458,6 +483,8 @@ type Entering<'a> = &'a mut dyn FnMut(&std::path::Path) -> Result<(), ExecError>
 
 struct Running<'a> {
     entering: Option<Entering<'a>>,
+    /// Called on a redirection's source before it is opened, where the caller gave one.
+    reading: Option<Entering<'a>>,
     directory: &'a std::path::Path,
     cancel: &'a Cancel,
     started: Instant,
@@ -505,6 +532,7 @@ impl<'a> Running<'a> {
     ) -> Self {
         Self {
             entering: None,
+            reading: None,
             directory,
             cancel,
             started: Instant::now(),
@@ -627,7 +655,12 @@ impl<'a> Running<'a> {
             }
 
             let reading_from = match &into {
-                Where::File(path, _) => Handle::from(for_reading(path)?),
+                Where::File(path, _) => {
+                    if let Some(reading) = self.reading.as_mut() {
+                        reading(path)?;
+                    }
+                    Handle::from(for_reading(path)?)
+                }
                 // Taken rather than moved, so every iteration starts with a stdin of its own.
                 _ => from_upstream(&mut upstream)?,
             };

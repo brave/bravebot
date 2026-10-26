@@ -64,6 +64,12 @@ pub struct Task {
     /// `None` for a one-shot run, an incognito session and every delegate, whose jobs end with
     /// the turn that started them.
     pub(crate) jobs: Option<tools::SessionJobs>,
+    /// The keys of the kept facts already put in front of the planner on this session, so a fact is
+    /// injected once per session (RECALL-10).
+    ///
+    /// Supplied by the session, which holds it across turns and resume. Empty by default, which is
+    /// a caller that keeps nothing between turns: every turn then injects afresh.
+    pub injected_facts: std::collections::BTreeSet<String>,
     /// The user's instruction. The only trusted input.
     pub prompt: String,
     /// Why this prompt exists, where nobody typed it.
@@ -515,6 +521,7 @@ impl Task {
             // A line somebody typed until a caller says what composed it.
             composed: None,
             driver_wrote_the_prompt: false,
+            injected_facts: std::collections::BTreeSet::new(),
             files: Vec::new(),
             attachments: Vec::new(),
             dropped_text: Vec::new(),
@@ -674,6 +681,12 @@ impl Task {
     /// (CLI-36), so the trail records them as that.
     pub fn with_vouched_channel(mut self) -> Self {
         self.vouched_channel = true;
+        self
+    }
+
+    /// Name the kept facts the session has already injected (RECALL-10).
+    pub fn with_injected_facts(mut self, injected: std::collections::BTreeSet<String>) -> Self {
+        self.injected_facts = injected;
         self
     }
 

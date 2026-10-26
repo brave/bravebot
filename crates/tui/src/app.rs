@@ -739,6 +739,9 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     if line.trim() == OUTPUTS_COMMAND {
         return open_outputs(session);
     }
+    if line.trim() == MEMORY_TIDY_COMMAND {
+        return Action::TidyMemories;
+    }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
         return Action::Redraw;
@@ -2675,6 +2678,7 @@ fn event_loop(
             Action::Mcp(argument) => held.mcp(terminal, &argument, skip_permissions),
             Action::ListCheckouts => held.list_checkouts(),
             Action::ListMemories => held.list_memories(),
+            Action::TidyMemories => held.tidy_memories(),
             Action::RemoveCheckout(id) => held.remove_checkout_command(terminal, &id),
             Action::ApplyCheckout(id, paths) => held.apply_checkout(terminal, config, &id, &paths),
             Action::Compact(focus) => held.compact(terminal, config, &focus)?,
@@ -17083,6 +17087,141 @@ mod tests {
         }
     }
 
+    /// RECALL-12. A fact file is untrusted text: control characters in what it says of itself are
+    /// drawn as pictures and a very long value is cut, so one fact cannot repaint the screen.
+    #[test]
+    fn hostile_front_matter_is_drawn_as_harmless_text() {
+        use bravebot_agent::recall::fact::{Fact, Scope, Source};
+        use bravebot_agent::recall::tidy::{Item, Overview};
+        use bravebot_core::label::Confidentiality;
+        let hostile = format!("2026\x1b[2J\x07{}", "9".repeat(10_000));
+        let mut session = Session::new("none");
+        session.report_recall(&Overview {
+            rules: Vec::new(),
+            facts: vec![(
+                Scope::Project,
+                Fact {
+                    key: "k\x1b]0;x".to_string(),
+                    source: Source::Agent,
+                    label: Confidentiality::Private,
+                    created: None,
+                    verified: Some(hostile.clone()),
+                    superseded_by: Some(hostile.clone()),
+                    session: None,
+                    tags: Vec::new(),
+                    body: String::new(),
+                },
+            )],
+        });
+        session.report_tidy(&[Item::BrokenLink {
+            from: "a\x1b".to_string(),
+            to: hostile,
+        }]);
+        for entry in session.transcript.iter() {
+            assert!(
+                !entry.text.chars().any(char::is_control),
+                "{:?}",
+                entry.text
+            );
+            assert!(entry.text.chars().count() < 1_000, "{}", entry.text.len());
+        }
+        assert_eq!(session.transcript.len(), 3);
+    }
+
+    /// RECALL-12. A fact with no verified date says so in the person's language.
+    #[test]
+    fn an_unverified_fact_says_never() {
+        use bravebot_agent::recall::fact::{Fact, Scope};
+        use bravebot_agent::recall::tidy::Overview;
+        let mut session = Session::new("none");
+        session.report_recall(&Overview {
+            rules: Vec::new(),
+            facts: vec![(Scope::Project, Fact::parse("k", "text"))],
+        });
+        assert!(
+            session.transcript[1]
+                .text
+                .contains(t!(memory_verified_never))
+        );
+    }
+
+    /// RECALL-12. `/memory tidy` stays a prompt, `/memory-tidy` is its own command, and neither
+    /// takes an argument.
+    #[test]
+    fn memory_followed_by_words_is_still_a_prompt() {
+        for (typed, expected) in [
+            ("/memory-tidy", Some(Action::TidyMemories)),
+            ("/memory tidy", None),
+            ("/memory-tidy now", None),
+        ] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            let action = handle_key(&mut session, key(KeyCode::Enter));
+            match expected {
+                Some(expected) => assert_eq!(action, expected, "{typed}"),
+                None => assert!(matches!(action, Action::Submit(_)), "{typed}"),
+            }
+        }
+    }
+
+    /// RECALL-12. Each rule file is listed with its line count, and each fact with its key, scope,
+    /// source, label, verified date and whether another fact replaced it. None kept is said.
+    #[test]
+    fn the_memory_listing_shows_rules_and_facts_with_their_standing() {
+        use bravebot_agent::recall::fact::{Fact, Scope, Source};
+        use bravebot_agent::recall::tidy::{Overview, RuleFile};
+        use bravebot_core::label::Confidentiality;
+        let fact = |key: &str, superseded_by: Option<&str>| Fact {
+            key: key.to_string(),
+            source: Source::Person,
+            label: Confidentiality::Public,
+            created: None,
+            verified: Some("2026-10-01".to_string()),
+            superseded_by: superseded_by.map(str::to_string),
+            session: None,
+            tags: Vec::new(),
+            body: "never shown\n".to_string(),
+        };
+        let mut session = Session::new("none");
+        session.report_recall(&Overview::default());
+        session.report_recall(&Overview {
+            rules: vec![RuleFile {
+                path: "/state/AGENTS.md".into(),
+                lines: 3,
+                more: false,
+            }],
+            facts: vec![
+                (Scope::Project, fact("live-one", None)),
+                (Scope::Everywhere, fact("old-one", Some("live-one"))),
+            ],
+        });
+        let said: Vec<&str> = session
+            .transcript
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect();
+        assert_eq!(said[0], t!(memory_no_rules));
+        assert_eq!(said[1], t!(memory_no_facts));
+        assert_eq!(
+            said[2],
+            t!(memory_rules_file, path = "/state/AGENTS.md", lines = 3)
+        );
+        assert_eq!(said.len(), 5);
+        for (line, key, standing) in [
+            (said[3], "live-one", "live"),
+            (said[4], "old-one", "superseded by live-one"),
+        ] {
+            assert!(
+                line.contains(key) && line.contains("2026-10-01") && line.contains(standing),
+                "{line}"
+            );
+            assert!(!line.contains("never shown"), "{line}");
+        }
+        assert!(said[3].contains("this project") && said[4].contains("every project"));
+    }
+
     /// A queued command that leaves the goal alone does not stop the goal being judged, or the goal
     /// would sit idle after `/help`.
     #[test]
@@ -29919,6 +30058,25 @@ mod tests {
         );
     }
 
+    /// RECALL-10: `/clear` begins a record of its own, so the kept facts the old session had put in
+    /// front of the planner are shown again in the new one.
+    #[test]
+    fn clearing_empties_the_injected_set() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-clear-injected");
+        std::fs::create_dir_all(&root).expect("create");
+        let (mut workspace, mut session, mut stored, _conversation, _answers) =
+            a_session_to_branch(&root);
+        stored.set_injected_facts(["deploy".to_string()].into());
+
+        let (_, fresh) = clear_session(&mut session, &mut workspace, None);
+
+        assert!(stored.injected_facts().contains("deploy"));
+        assert!(fresh.injected_facts().is_empty());
+    }
+
     /// PERM-10: a directory a settings file named and the person accepted is closed by `/clear` and
     /// by a handoff, since the answer that opened it was given by the session being cleared. The
     /// regression it rejects is a directory staying reachable, with no answer left behind it,
@@ -31160,6 +31318,7 @@ mod tests {
                 captured_trust: bravebot_core::label::Integrity::Trusted,
                 path: std::path::PathBuf::from("/work/notes.md"),
                 was: bravebot_agent::workspace::Before::Nothing,
+                kept: false,
             }]);
         session
             .rewind

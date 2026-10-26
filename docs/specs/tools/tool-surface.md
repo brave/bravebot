@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 250
+      - crates/agent/src/tools.rs: 281
       - crates/agent/src/tools/message.rs: 14
   - symbol: Produced::refused_with_a_note
     sites:
@@ -59,6 +59,10 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`ask_user`](ask-user.md) | `questions` | none | what the user answered |
 | [`request_path`](request-path.md) | `path`, `write` | none | what the person answered |
 | [`propose_plan`](../permission-modes.md#MODE-14) | `plan` | none | what the person answered, and whether plan mode ended |
+| [`remember`](remember.md) | `key`, `scope`, `supersedes`, `new` | `text` | confirmation, and the kept facts close to the new one |
+| [`propose_rule`](propose-rule.md) | `scope` | `text`, `reason` | what the person answered, and whether the rule was written |
+| [`recall`](recall.md) | `query`, `key` | none | the kept facts that match, or the one fact read |
+| [`recall_verify`](recall-verify.md) | `key` | none | confirmation that the fact's date moved |
 
 Every tool also takes `why`, which is content on every one of them and is left out of the table for
 that reason. [TOOL-5](#TOOL-5) is where that is settled.

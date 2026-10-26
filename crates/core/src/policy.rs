@@ -2385,6 +2385,80 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         Labelled::new(text, label)
     }
 
+    /// Label a fact kept by `remember` or by the person (RECALL-9, LABEL-8).
+    ///
+    /// **This is not an upgrade.** It is the first label these words receive, assigned from where
+    /// they came from: a kept fact is in the user's own memory directory, outside the workspace,
+    /// and is written only by the person or by a `remember` call they were shown. It is trusted for
+    /// that reason and no other. How private it is comes from the `label` its file states, handed
+    /// in already read, and never from anything the fact says. A fact whose file states no
+    /// `label` is private, which the caller decides before it gets here.
+    ///
+    /// It is for text read from the fact store, or composed by the driver from the keys and
+    /// numbers of facts already read, such as a recall's ranking or a save's answer. Anything else,
+    /// a tool's output, a file in the workspace or the planner's own words, must take its own
+    /// road to a label and never this one, which would trust it for sitting beside a fact.
+    ///
+    /// The trail records where the fact came from and the label it was given, and none of its words.
+    pub fn label_kept_fact(
+        &mut self,
+        origin: &str,
+        text: String,
+        confidentiality: Confidentiality,
+    ) -> Labelled<String> {
+        let label = Label::new(Integrity::Trusted, confidentiality);
+        self.allow(
+            "provenance",
+            format!("{origin}: labelled {label}, from a fact kept in the user's own memory"),
+        );
+        Labelled::new(text, label)
+    }
+
+    /// Release what the planner wrote into a fact it is saving (RECALL-9), as the text and the
+    /// confidentiality the fact is kept with.
+    ///
+    /// Refused unless the words are trusted. A context that took in something untrusted writes
+    /// untrusted words, and a fact is trusted, so keeping them would put those bytes in front of
+    /// every later turn as the person's own. The confidentiality is the context's at the call and
+    /// is returned beside the text, so the fact states it as its `label`.
+    pub fn release_into_kept_fact(
+        &mut self,
+        tool: &str,
+        value: Labelled<String>,
+    ) -> Gated<(String, Confidentiality)> {
+        let label = value.label();
+        if label.integrity != Integrity::Trusted || self.context_integrity() != Integrity::Trusted {
+            return Err(self.deny(
+                "provenance",
+                Principle::IntegrityGate,
+                format!(
+                    "{tool}: the planner's words are {label} in a context that is {:?}, and a \
+                     kept fact is trusted",
+                    self.context_integrity()
+                ),
+            ));
+        }
+        self.allow(
+            "release",
+            format!(
+                "{tool}: the planner's words, {label}, kept as a fact in the user's own memory"
+            ),
+        );
+        let proof = Declassification::authorise("the planner's words kept as a fact");
+        Ok((value.declassify(&proof), label.confidentiality))
+    }
+
+    /// Hold what a kept fact held, once the planner has been given its words.
+    ///
+    /// A private fact makes what the planner writes from here private, as a private report from a
+    /// delegate does. A fact the planner was given a reference to never entered its context.
+    pub fn read_kept_fact(&mut self, fact: &Labelled<String>) {
+        self.hold(
+            fact.label().confidentiality,
+            "the planner was given a private kept fact",
+        );
+    }
+
     /// Record an image the user pasted at their own keyboard.
     ///
     /// A paste is a keystroke, and nobody steers a keystroke. That is the provenance
@@ -15964,6 +16038,118 @@ five
         assert_eq!(value.label(), Label::trusted_public());
     }
 
+    /// A fact kept by `remember` or by the person is theirs to keep, so it is trusted. How private
+    /// it is comes from the label it was kept with, never from the words in it.
+    #[test]
+    fn a_kept_fact_is_trusted_with_the_confidentiality_it_states() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]);
+
+        let public = policy.label_kept_fact(
+            "recall: user/editor.md",
+            "uses vim".to_string(),
+            Confidentiality::Public,
+        );
+        let private = policy.label_kept_fact(
+            "recall: user/health.md",
+            "takes a pill at nine".to_string(),
+            Confidentiality::Private,
+        );
+
+        assert_eq!(public.label(), Label::trusted_public());
+        assert_eq!(private.label(), Label::trusted_private());
+    }
+
+    /// Words from a context that took in something untrusted are not kept as a trusted fact.
+    #[test]
+    fn the_planners_words_are_kept_as_a_fact_only_while_the_context_is_trusted() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]);
+        let words = policy.label_model_output("remember", "uses vim".to_string());
+        assert_eq!(
+            policy.release_into_kept_fact("remember", words).ok(),
+            Some(("uses vim".to_string(), Confidentiality::Public))
+        );
+
+        let untrusted = Labelled::new("uses vim".to_string(), Label::untrusted_public());
+        assert!(
+            policy
+                .release_into_kept_fact("remember", untrusted)
+                .is_err()
+        );
+    }
+
+    /// A trusted-labelled value handed in after the context fell is refused too: the kernel holds
+    /// the contract itself and does not rest on the caller having labelled the words from the
+    /// context.
+    #[test]
+    fn a_trusted_value_is_not_kept_as_a_fact_once_the_context_has_fallen() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]).resuming(Integrity::Untrusted);
+        let value = Labelled::new("uses vim".to_string(), Label::trusted_public());
+        assert!(policy.release_into_kept_fact("remember", value).is_err());
+    }
+
+    /// Labelling a kept fact is a provenance decision, and the trail names it like the others.
+    #[test]
+    fn labelling_a_kept_fact_is_recorded_in_the_audit_trail() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            let _ = policy.label_kept_fact(
+                "recall: user/editor.md",
+                "uses vim".into(),
+                Confidentiality::Private,
+            );
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "provenance", detail }
+                    if detail.contains("recall: user/editor.md")
+            )),
+            "the provenance decision left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    /// A private fact the planner was given is in its context, so what it writes from there is
+    /// private, and the trail records how the context came to hold it.
+    #[test]
+    fn reading_a_private_fact_makes_the_context_private() {
+        let mut sink = RecordingSink::new();
+        {
+            let mut policy = policy_trusting(&mut sink, &[]);
+            assert_eq!(policy.context_confidentiality(), Confidentiality::Public);
+            let fact = policy.label_kept_fact("recall: a.md", "x".into(), Confidentiality::Private);
+
+            policy.read_kept_fact(&fact);
+
+            assert_eq!(policy.context_confidentiality(), Confidentiality::Private);
+        }
+
+        assert!(
+            sink.events().iter().any(|e| matches!(
+                e,
+                Event::GatePassed { gate: "context", detail } if detail.contains("kept fact")
+            )),
+            "the read left no trace: {:?}",
+            sink.events()
+        );
+    }
+
+    #[test]
+    fn reading_a_public_fact_leaves_the_context_as_it_was() {
+        let mut sink = RecordingSink::new();
+        let mut policy = policy_trusting(&mut sink, &[]);
+        let fact = policy.label_kept_fact("recall: a.md", "x".into(), Confidentiality::Public);
+
+        policy.read_kept_fact(&fact);
+
+        assert_eq!(policy.context_confidentiality(), Confidentiality::Public);
+    }
+
     /// Calling a file trusted is a decision, and a decision nobody can see is one nobody can
     /// audit. The trail must name what was labelled and why, as every other provenance call does.
     #[test]
@@ -19312,7 +19498,7 @@ five
         use crate::delegate::{ADDRESSED, Definition, Definitions, Kind};
 
         /// Every tool name a turn might be offered that the tests below turn on.
-        const OFFERED: [&str; 14] = [
+        const OFFERED: [&str; 18] = [
             "read_file",
             "list_files",
             "write_file",
@@ -19326,6 +19512,10 @@ five
             "fetch_url",
             "download_url",
             "vet_content",
+            "remember",
+            "recall",
+            "recall_verify",
+            "propose_rule",
             "spawn_agent",
         ];
 
@@ -19362,6 +19552,10 @@ five
                         "fetch_url",
                         "download_url",
                         "vet_content",
+                        "remember",
+                        "recall",
+                        "recall_verify",
+                        "propose_rule",
                         "spawn_agent",
                     ]
                     .map(str::to_string)

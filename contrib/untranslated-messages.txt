@@ -7,6 +7,14 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:agent-rule-approval-file
+fr:agent-rule-approval-header
+fr:agent-rule-approval-keep
+fr:agent-rule-approval-keep-detail
+fr:agent-rule-approval-no-words
+fr:agent-rule-approval-refuse
+fr:agent-rule-approval-why
+fr:agent-rule-approval-yes-words
 fr:chatgpt-start-chosen
 fr:chatgpt-start-heading
 fr:chatgpt-start-not-remembered
@@ -14,7 +22,29 @@ fr:chatgpt-start-question
 fr:chatgpt-start-row
 fr:chatgpt-use-by-asking
 fr:chatgpt-use-by-naming
+fr:command-memory-tidy
 fr:command-outputs
+fr:memory-fact
+fr:memory-label-private
+fr:memory-label-public
+fr:memory-no-facts
+fr:memory-no-rules
+fr:memory-rules-file
+fr:memory-rules-file-more
+fr:memory-scope-everywhere
+fr:memory-scope-project
+fr:memory-source-agent
+fr:memory-source-person
+fr:memory-standing-live
+fr:memory-standing-superseded
+fr:memory-verified-never
 fr:outputs-hint
 fr:outputs-none
+fr:tidy-broken-link
+fr:tidy-duplicate
+fr:tidy-missing-replacement
+fr:tidy-nothing
+fr:tidy-oversized
+fr:tidy-rules-disagree
+fr:tidy-stale
 fr:watching-outputs-title

@@ -59,6 +59,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/manifest` | `<task>` | Plan one task in full, show you the plan, then run it with nothing re-planned |
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
+| `/memory-tidy` | | Propose what to tidy among the rules and facts kept, and change nothing |
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
@@ -929,6 +930,24 @@ nothing is kept there yet, or that a file is.
 The command shows paths and standings and never the file's bytes, so it reads nothing from a memory
 and has nothing to show of one that is withheld. Open the file yourself to read it. The word takes
 no argument: `/memory` followed by words is a prompt.
+
+It also lists the rule files you keep, each with its path and line count, and each fact in scope with
+its key, whether it is for this project or every project, who asked for it, its label, the date it
+was last verified, and whether another fact replaced it. A fact's text is not shown.
+
+## `/memory-tidy`
+
+Proposes what to tidy among the rules and facts you keep, and changes nothing. Each line names the
+fact and what would fix it, and you act on it or ask the planner to.
+
+```
+/memory-tidy
+```
+
+It lists facts that say nearly the same thing, facts that name code and have been neither verified
+nor edited for 30 days, `[[links]]` to a key that names no fact, facts superseded by a key that names
+no fact, facts over 4,000 bytes, and rules from different layers that disagree. It takes no
+argument: `/memory-tidy` followed by words is a prompt.
 
 ## `/init`
 
