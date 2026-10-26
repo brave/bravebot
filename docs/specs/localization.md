@@ -91,13 +91,15 @@ name, and the POSIX `C` locale asks for no catalog at all.
 A message that counts states its own forms, and which one is used is decided by the rules of the
 language the catalog those forms came from is written in, which for a message a translation leaves
 out is the reference. A language whose rules are not written down cannot ship a message that
-counts.
+counts. The reference may say its forms alike where its own language does not tell them apart, so
+that a translation can tell them apart.
 
 **Why.** Borrowing English's rule is how a translation comes out reading correctly for one and
 wrongly for everything else, which is a defect only a speaker of that language can see and which
 no review in English will catch.
 
 `verified-by: bravebot_i18n::lib::a_plural_select_picks_the_variant_the_language_calls_for`
+`verified-by: bravebot_i18n::generate::a_select_whose_forms_say_the_same_is_generated_as_that_text`
 `verified-by: bravebot_i18n::lib::a_language_with_a_plural_rule_is_the_only_kind_a_select_may_ship_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
