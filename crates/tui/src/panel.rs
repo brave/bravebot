@@ -2220,14 +2220,14 @@ mod tests {
             target_at(&session, area, row, inside)
         };
         assert_eq!(target(heading + 2, heading), Some(Target::Files));
-        assert_ne!(
+        assert_eq!(
             target(heading + 2, heading + 1),
-            Some(Target::Files),
+            Some(Target::Hide),
             "the totals row is cut"
         );
-        assert_ne!(
+        assert_eq!(
             target(heading + 1, heading),
-            Some(Target::Files),
+            Some(Target::Hide),
             "the heading is cut"
         );
 
