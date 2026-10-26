@@ -2100,6 +2100,17 @@ sign-in command says it in. The compiled names that stand in for a listing in a 
 here. The refusal is built from the sign-in as it stands after the listing, so a sign-in the listing
 found ended is said to have ended, with the routes, and is not said to be stored.
 
+**A start with a Bedrock or gateway block asks the same question about that service's models.** Where
+the start would be refused for the model in force being Brave's own, a Bedrock or gateway block is
+configured, no model was named on the command line, a configured service lists at least one model that
+the machine-level layer allows, stdin, stdout and stderr are all terminals and the session is not
+incognito, those models are shown as numbered lines in the picker's order and the start asks which to
+use, answered, recorded and declined exactly as above. A stored sign-in beside such a block is not
+asked about and not read, so the question is about the block's services alone. A gateway whose block
+names no models is asked for its listing, and one that cannot be asked offers nothing, so the start
+goes on to the refusal that names the `model` key. A one-shot run, a start that names a model and
+`doctor` ask nothing.
+
 The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
 Where a subscription is stored and could not be read, what the store said about it is said first.
 A machine with nowhere to keep credentials has none stored rather than a batch it could not read.
@@ -2169,6 +2180,9 @@ refusal exists because one does not.
 `verified-by: bravebot_agent::backend::a_configured_bedrock_or_gateway_block_keeps_its_line_whatever_a_sign_in_holds`
 `verified-by: bravebot_cli::running::a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_names_the_model_key`
 `verified-by: bravebot_agent::chatgpt::a_stored_account_is_told_apart_from_an_absent_one_and_from_one_that_cannot_be_read`
+`verified-by: bravebot_cli::chatgpt_start::a_start_with_a_configured_gateway_asks_which_model_and_the_pick_is_what_the_next_start_opens_on`
+`verified-by: bravebot_cli::chatgpt_start::a_declined_gateway_question_records_nothing_and_ends_at_the_refusal`
+`verified-by: bravebot_cli::chatgpt_start::nothing_is_asked_where_a_model_is_served_or_a_gateway_is_configured`
 `verified-by: bravebot_cli::model::a_stored_chatgpt_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes`
 `verified-by: bravebot_cli::running::a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run`
 `verified-by: bravebot_cli::running::doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured`

@@ -616,8 +616,8 @@ fn an_incognito_start_asks_nothing_and_records_nothing() {
 }
 
 /// BACKEND-39: a start whose model in force is served asks nothing, and so does one where a gateway
-/// block is configured, whose refusal names the `model` key and is not replaced by a question about
-/// an account. The regressions it rejects are a question at every start of a person who has signed
+/// block is configured, which asks about the gateway's models and not the account's, and whose
+/// declined question ends at the refusal that names the `model` key. The regressions it rejects are a question at every start of a person who has signed
 /// in, and a question where a service other than the account is configured.
 #[test]
 fn nothing_is_asked_where_a_model_is_served_or_a_gateway_is_configured() {
@@ -647,11 +647,16 @@ fn nothing_is_asked_where_a_model_is_served_or_a_gateway_is_configured() {
     )
     .expect("a settings file");
     let stand_in = offering(THE_ACCOUNTS_MODELS);
-    let terminal = plain_session(&home, &stand_in, &[]);
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    terminal.end_input();
     let ran = terminal.finish(Duration::from_secs(30));
     assert_eq!(ran.code, Some(3), "{}", ran.shown);
     assert!(ran.shown.contains("`model` key"), "{}", ran.shown);
-    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(
+        ran.shown.contains("openrouter/z-ai/glm-4.6") && !ran.shown.contains("the account offers"),
+        "the question was not the gateway's: {}",
+        ran.shown
+    );
     assert!(
         stand_in.asked().is_empty(),
         "the account was asked beside a configured gateway: {:?}",
@@ -913,10 +918,12 @@ fn the_sign_in_command_promises_the_question_only_to_a_person_the_next_start_ask
         terminal.contains("Name one of the account's models") && !terminal.contains(promise),
         "{terminal}"
     );
-    let ran = plain_session(&home, &stand_in, &[]).finish(Duration::from_secs(30));
+    let mut start = plain_session(&home, &stand_in, &[]);
+    start.end_input();
+    let ran = start.finish(Duration::from_secs(30));
     assert_eq!(ran.code, Some(3), "{}", ran.shown);
     assert!(ran.shown.contains("`model` key"), "{}", ran.shown);
-    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+    assert!(!ran.shown.contains("the account offers"), "{}", ran.shown);
 
     let stand_in = offering(THE_ACCOUNTS_MODELS);
     let (home, terminal) = signed_in_by_the_command(
@@ -971,4 +978,93 @@ fn a_pick_the_start_cannot_read_back_is_not_said_to_be_remembered_and_ends_the_s
         ran.shown
     );
     assert!(ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+}
+
+/// A home with a gateway block that names two models and no `model` key, so the model in force stays
+/// Brave's own, and no sign-in.
+fn gateway_home(name: &str) -> Scratch {
+    let home = Scratch::new(name);
+    std::fs::write(
+        home.path.join(".bravebot/settings.json"),
+        r#"{"provider": {"openai": {
+            "options": {"baseURL": "http://127.0.0.1:1/v1"},
+            "models": {"gpt-z": {}, "gpt-4o-mini": {}}
+        }}}"#,
+    )
+    .expect("write the settings");
+    home
+}
+
+/// BACKEND-39: a start with a gateway configured and Brave's model in force lists the gateway's models
+/// by number, records the pick as `/model` records one, opens on it, and the next start asks nothing.
+///
+/// The block names `gpt-z` first and the picker lists by name, so number 1 is `gpt-4o-mini`.
+/// The regressions it rejects are a start that ends at the refusal naming the `model` key, a pick not
+/// recorded as `/model` records it, and a next start that asks again.
+#[test]
+fn a_start_with_a_configured_gateway_asks_which_model_and_the_pick_is_what_the_next_start_opens_on()
+{
+    let home = gateway_home("cli-gateway-start-asks");
+    let stand_in = StandIn::new(vec![]);
+
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    assert!(
+        terminal.shows(THE_QUESTION, Duration::from_secs(30)),
+        "nothing was asked: {}",
+        terminal.shown.text()
+    );
+    terminal.type_line("1");
+    let opened = terminal.shows(&opening_on("openai/gpt-4o-mini"), Duration::from_secs(30));
+    terminal.end_input();
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert!(
+        opened,
+        "the session did not open on the pick: {}",
+        ran.shown
+    );
+    assert!(
+        ran.shown.contains("  2. gpt-z (openai/gpt-z)"),
+        "{}",
+        ran.shown
+    );
+    assert!(
+        ran.shown.contains("  1. gpt-4o-mini (openai/gpt-4o-mini)"),
+        "{}",
+        ran.shown
+    );
+    assert!(!ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+    assert_eq!(
+        the_state_file(&home, "model").as_deref(),
+        Some("openai/gpt-4o-mini\n")
+    );
+
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    let opened = terminal.shows(&opening_on("openai/gpt-4o-mini"), Duration::from_secs(30));
+    terminal.end_input();
+    let ran = terminal.finish(Duration::from_secs(30));
+    assert!(
+        opened,
+        "the next start did not open on the pick: {}",
+        ran.shown
+    );
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+}
+
+/// BACKEND-39: an answer that is not a row's number declines, records nothing and ends at the
+/// refusal that names the `model` key. The regression it rejects is a start that picks a model for
+/// the person.
+#[test]
+fn a_declined_gateway_question_records_nothing_and_ends_at_the_refusal() {
+    let home = gateway_home("cli-gateway-start-declined");
+    let stand_in = StandIn::new(vec![]);
+
+    let mut terminal = plain_session(&home, &stand_in, &[]);
+    assert!(terminal.shows(THE_QUESTION, Duration::from_secs(30)));
+    terminal.type_line("");
+    let ran = terminal.finish(Duration::from_secs(30));
+
+    assert_ne!(ran.code, Some(0), "{}", ran.shown);
+    assert!(ran.shown.contains(THE_REFUSAL), "{}", ran.shown);
+    assert_eq!(the_state_file(&home, "model"), None);
 }

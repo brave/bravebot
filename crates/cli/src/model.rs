@@ -153,9 +153,49 @@ pub(crate) fn ask_which_of_the_accounts_models(config: &Config) -> Asked {
         Ok(models) => models,
         Err(listing) => return Asked::NothingOffered(why_no_model_was_offered(&listing)),
     };
+    ask_among(config, &models, t!(chatgpt_start_heading))
+}
+
+/// Whether `serving` is a start that asks which of a configured service's models to use
+/// (BACKEND-39): nothing serves the model in force, no model was named on the command line, and a
+/// Bedrock or gateway block is configured, which a stored sign-in beside it does not change.
+pub(crate) fn asks_which_of_the_configured_models(
+    serving: &bravebot_agent::backend::Serving,
+    named: Option<&str>,
+) -> bool {
+    named.is_none()
+        && matches!(
+            serving,
+            bravebot_agent::backend::Serving::NothingConfigured {
+                a_service_is_configured: true,
+                chatgpt: AccountFile::NotStored,
+                ..
+            }
+        )
+}
+
+/// Ask which of the models of the configured Bedrock account and gateways the start is to use, and
+/// record the answer as `/model` records a pick (BACKEND-39), as
+/// [`ask_which_of_the_accounts_models`] does for a sign-in.
+///
+/// A service that lists no model, because its block names none and it could not be asked, offers
+/// nothing to choose from, and the start goes on to its refusal as a decline does.
+pub(crate) fn ask_which_of_the_configured_models(config: &Config) -> Asked {
+    if !import::a_person_can_be_asked() {
+        return Asked::Nobody;
+    }
+    let models = bravebot_tui::app::configured_models_to_start_on(config);
+    if models.is_empty() {
+        return Asked::Declined;
+    }
+    ask_among(config, &models, t!(configured_start_heading))
+}
+
+/// List `models` under `heading`, ask which, and record the pick.
+fn ask_among(config: &Config, models: &[Model], heading: impl AsRef<str>) -> Asked {
     // The process's own stdin, whose buffer later readers share, as the import's question has it.
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
-    let Some(chosen) = which_of(&mut asking, &models) else {
+    let Some(chosen) = which_of(&mut asking, models, heading.as_ref()) else {
         return Asked::Declined;
     };
     bravebot_session::store::record_model(config, &chosen.key);
@@ -190,8 +230,9 @@ fn why_no_model_was_offered(listing: &bravebot_agent::chatgpt::AccountModels) ->
 fn which_of<'a, R: BufRead, W: Write>(
     asking: &mut Prompting<R, W>,
     models: &'a [Model],
+    heading: &str,
 ) -> Option<&'a Model> {
-    asking.say(t!(chatgpt_start_heading));
+    asking.say(heading);
     for (number, model) in (1..).zip(models) {
         asking.say(&format!(
             "  {number}. {}",
@@ -384,7 +425,7 @@ mod tests {
         let mut shown = Vec::new();
         let picked = {
             let mut asking = Prompting::new(std::io::Cursor::new(typed.to_string()), &mut shown);
-            which_of(&mut asking, rows).map(|row| row.key.clone())
+            which_of(&mut asking, rows, t!(chatgpt_start_heading)).map(|row| row.key.clone())
         };
         (picked, String::from_utf8(shown).expect("text"))
     }

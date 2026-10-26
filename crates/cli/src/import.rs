@@ -94,6 +94,13 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
             }
             crate::model::Asked::Nobody | crate::model::Asked::Declined => {}
         }
+    } else if crate::model::asks_which_of_the_configured_models(&serving, named)
+        && matches!(
+            crate::model::ask_which_of_the_configured_models(config),
+            crate::model::Asked::InForce
+        )
+    {
+        return None;
     }
     let (subscription, a_service_is_configured, chatgpt) = match serving {
         bravebot_agent::backend::Serving::Configured => return None,
