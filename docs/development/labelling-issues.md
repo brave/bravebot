@@ -159,7 +159,10 @@ however it was filed.
 
 The Test determinism workflow files one issue per flaky test, titled `Flaky test: <name>`, through
 `contrib/measure-flakes.py`. It applies `flaky-test` and no other label, because nobody has read
-what it files, so no kind, `area` or axis is claimed for it. The poster applies `flaky-test` to an
+what it files, so no kind, `area` or axis is claimed for it. Those issues are authored by
+`app/github-actions`, a bot, and the [triage-issues skill](../../agents/skills/triage-issues/SKILL.md)
+skips a bot's issues except ones carrying `flaky-test`, so a triage run reads them, applies the
+kind, the `area` and the three axes, and closes one whose test no longer flakes. The poster applies `flaky-test` to an
 issue about a flaky test filed from a session, in addition to the kind and the `area` that issue
 would otherwise get. The poster refuses to post while `flaky-test` does not exist, because a person
 creates labels:
