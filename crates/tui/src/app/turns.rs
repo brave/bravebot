@@ -640,8 +640,12 @@ pub(super) fn run_turn_animated(
         // the tools that fill in a verdict read the task's answer, and this is what decides whether a
         // verdict that objects can refuse, so the two reading different answers would be a run that
         // screens nothing while believing it does.
+        //
+        // The sandbox mode comes off the task for the same reason: bypassing answers the start of a
+        // language server only where nothing is confined (LSP-5).
         let mut confirmer =
-            bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting);
+            bravebot_agent::Confining::new(&mut asking, permission_mode, task.auto_vetting)
+                .with_sandbox_mode(task.sandbox);
         // Owned by the worker for the duration and handed back afterwards, whether the turn
         // succeeded or not. A failed turn is still part of the conversation, and the next one
         // is usually about it.

@@ -82,7 +82,7 @@ fn ask(question: &Question<'_>) -> Option<bravebot_lsp::Answer> {
 
     // LSP-5 asks before a server starts. A test is not a person, so it says yes explicitly rather
     // than having the answer inferred: what is being exercised is the protocol, not the prompt.
-    match servers.ask(&mut policy, question, &mut |_| true) {
+    match servers.ask(&mut policy, question, &mut |_, _| true) {
         Ok(answer) => Some(answer),
         // A server that is installed and was allowed to start must answer. Skipping here would hide
         // exactly the failures this file exists to catch, since every one of them presents as a

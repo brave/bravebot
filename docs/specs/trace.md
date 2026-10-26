@@ -274,7 +274,10 @@ leaves it to whatever confirms (a person, or nothing that can ask). The entries 
 in "asking" say what the policy decided, and they read as a person having been asked. A write that
 is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
-Other prompts a mode answers, such as a fetch or a server start, are not named here.
+A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
+`approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
+being asked about, since the policy decides nothing about one. Other prompts a mode answers, such
+as a fetch, are not named here.
 
 Answers that were never a prompt already say so in their own entry: a rule in the settings file, a
 command the user vouched for, and the audited table.
@@ -288,6 +291,8 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::turn::an_approval_names_what_answered_it`
 `verified-by: bravebot_agent::manifest::a_manifest_run_records_the_mode_it_began_with`
 `verified-by: bravebot_agent::manifest::a_planned_write_names_what_answered_it`
+`verified-by: bravebot_agent::lsp::bypass_with_the_sandbox_off_starts_a_language_server_and_the_trail_names_the_mode`
+`verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

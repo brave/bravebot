@@ -108,7 +108,11 @@ later run without the flag asks. A remote server whose reply points somewhere el
 followed: a yes would rewrite your declaration to an address the server chose, so the hop is refused
 without asking. See [MCP servers](../customize/mcp-servers.md#approving-one).
 
-Starting a language server is still put to you in this mode, and is refused where nobody can be asked.
+Starting a language server is answered only where the sandbox mode is `off`, which
+`--dangerously-bypass-approvals-and-sandbox` sets. A server runs with no sandbox profile, so under any
+other sandbox mode this mode would give it access no other program of the session has. There the
+start is still put to you, and is refused where nobody can be asked, as in a one-shot run. Where this
+mode answers it, the audit trail records the mode as the one that answered.
 
 **No check runs where nothing would read its word.** A [vetting check](vetting.md) normally sits in front
 of every prompt whose answer would promote quarantined content, and this is the one mode where those

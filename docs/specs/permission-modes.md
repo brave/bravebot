@@ -208,8 +208,11 @@ shell's startup files, a per-user job, git's own configuration) and the person's
 is the one way the permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 The mode never changes which sandbox mode is in force, so `strict` keeps the per-path request, and
 bypass does not approve a line that asks to start with no profile
-([SANDBOX-29](sandboxing.md#SANDBOX-29)), nor the start of a language server, which runs with no
-profile either ([LSP-5](tools/lsp.md#LSP-5)). A delegate's programs are not given it. Under
+([SANDBOX-29](sandboxing.md#SANDBOX-29)). A delegate's programs are not given it. Bypass approves
+the start of a language server only where the sandbox mode is `off`, since a server runs with no
+profile and a confining sandbox mode would otherwise be widened for it
+([LSP-5](tools/lsp.md#LSP-5)), and a delegate that holds `lsp` is answered as the lead session is
+([MODE-9](#MODE-9)). Under
 `read-only` the mode answers no write at all: the file tools' writes, a manifest plan that writes
 and a spawn asking for a checkout are refused before there is a question to answer
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
@@ -269,7 +272,8 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
-`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
+`verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
@@ -516,7 +520,8 @@ word for bypassing would let a session reach the one mode MODE-5 keeps to the co
 The flag opens the session in bypassing (MODE-5) and settles the sandbox mode as `off`
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)), as `--dangerously-skip-permissions --sandbox off` does. Nothing
 is asked and no program is confined, so a `run` line that asks for `unconfined` is refused by the mode
-and is not put to the person ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It is read from the command
+and is not put to the person ([SANDBOX-29](sandboxing.md#SANDBOX-29)), and the start of a language
+server is answered by the mode ([LSP-5](tools/lsp.md#LSP-5)). It is read from the command
 line only, as the flag in MODE-5 is, so no settings file, recorded session or command inside a session
 turns it on, and a resumed session or a background session must be given it again, or refuses it as
 MODE-5 says.
@@ -539,6 +544,7 @@ says it once, on the command line, where no content can say it for them.
 
 `verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off`
 `verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_is_refused_where_the_bypass_flag_is_and_beside_a_sandbox_mode`
+`verified-by: bravebot_cli::running::a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_off`
 
 <a id="MODE-14"></a>
 ### MODE-14: a finished plan is put to the person, who chooses the mode the work continues in

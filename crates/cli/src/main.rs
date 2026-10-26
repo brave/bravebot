@@ -1452,8 +1452,11 @@ fn run_and_report(
     }
     // Screening off the task, so the answer the tools fill a verdict in under and the answer that
     // decides whether a verdict which objects can refuse are the one value resolved above.
+    // The sandbox mode off the task as well, since bypassing answers the start of a language server
+    // only where nothing is confined (LSP-5).
     let mut confirmer =
-        bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting);
+        bravebot_agent::Confining::new(&mut one_shot, permission_mode, task.auto_vetting)
+            .with_sandbox_mode(task.sandbox);
 
     // Progress goes to stderr so stdout stays the reply and nothing else, which is what makes
     // the command pipeable. Without it a long turn prints nothing until it is over.
