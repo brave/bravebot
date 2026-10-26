@@ -6,11 +6,13 @@
 // rather than beginning another. Each of those needs a model to answer, so this needs credentials
 // and the driver above does not.
 //
-// Run it the way `drive-turn.mjs` is run. Like the other drivers it perturbs `bravebot-ui.json`,
-// and it puts its own keys back.
+// Run it the way `drive-turn.mjs` is run. It runs against a scratch user-data directory and state
+// directory, and it puts its own keys back. The scratch state directory holds copies of the real
+// `settings.json`, `model` and `leo-premium.json`, so the agent can reach the backend the real one
+// is configured for, and the copies are removed when it ends.
 
 import { checker, launch, COMPOSER_INPUT, SIDEBAR_TAB, ASSISTANT_BUBBLE, BOT_OPEN_BUTTON } from './drive-support.mjs'
-import { appBots, appState, forgetCheckoutSessions, locateProfile, openBot, settle } from './drive-profile.mjs'
+import { appBots, appState, forgetCheckoutSessions, openBot, scratchProfile, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -18,9 +20,9 @@ mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
 const { check, problems } = checker()
 
-const { userData, stateFile } = await locateProfile()
+const { userData, stateFile, remove } = scratchProfile('bravebot-drive-bot-turn', { live: true })
 const { readState, putKey } = appState(stateFile)
-const { readBots, putBots } = appBots()
+const { readBots, putBots } = appBots(userData)
 const hadView = readState().view
 
 // This driver's own row and no more. `bots` holds somebody's actual bots — names and purposes they
@@ -33,7 +35,7 @@ const withoutMine = () => readBots().filter((bot) => bot.slug !== MINE)
 putBots(withoutMine())
 putKey('view', undefined)
 
-const app = await launch()
+const app = await launch(userData)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -97,7 +99,7 @@ await app.close()
 
 // --- and the whole point: the same session, resumed --------------------------------------
 
-const back = await launch()
+const back = await launch(userData)
 const page2 = await back.firstWindow()
 await page2.waitForLoadState('domcontentloaded')
 await page2.waitForTimeout(2500)
@@ -132,4 +134,5 @@ rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 forgetCheckoutSessions(home)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
+remove()
 process.exit(problems.length ? 1 : 0)

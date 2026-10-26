@@ -163,6 +163,75 @@ fn what_a_read_dropped_and_a_file_it_could_not_use_are_answered_beside_the_rows(
 }
 
 #[test]
+fn a_read_says_whether_rows_in_the_old_file_still_wait_to_be_moved() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let state = bravebot_agent::home::directory().unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    let mut bridge = bridge();
+
+    std::fs::write(
+        data.join("bravebot-ui.json"),
+        json!({"bots": [bot("old")]}).to_string(),
+    )
+    .unwrap();
+    let moved = call(&mut bridge, "bot.list", json!({"dataFolder": data})).unwrap();
+    assert_eq!(moved["bots"][0]["slug"], json!("old"));
+    assert_eq!(moved["oldRowsWaiting"].as_bool(), Some(false));
+
+    std::fs::remove_file(bots_file()).unwrap();
+    std::fs::write(data.join("bravebot-ui.json"), "{\"bots\": [").unwrap();
+    let stuck = call(&mut bridge, "bot.list", json!({"dataFolder": data})).unwrap();
+    assert_eq!(stuck["bots"], json!([]));
+    assert_eq!(stuck["oldRowsWaiting"].as_bool(), Some(true));
+}
+
+#[test]
+fn a_state_file_that_cannot_be_used_is_answered_as_unusable_and_not_as_no_home() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let data = data_folder();
+    let state = bravebot_agent::home::directory().unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    let mut bridge = bridge();
+    let replace = |bridge: &mut Bridge| {
+        call(
+            bridge,
+            "bot.replace",
+            json!({"dataFolder": data, "bots": [bot("ok")]}),
+        )
+        .expect_err("refused")
+    };
+
+    std::fs::write(bots_file(), "{ not json").unwrap();
+    assert_eq!(replace(&mut bridge).code.as_str(), "state_unusable");
+    std::fs::remove_file(bots_file()).unwrap();
+
+    std::fs::write(data.join("bravebot-ui.json"), "{\"bots\": 3}").unwrap();
+    assert_eq!(replace(&mut bridge).code.as_str(), "state_unusable");
+    std::fs::remove_file(data.join("bravebot-ui.json")).unwrap();
+
+    let held = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(state.join("bots.json.lock"))
+        .unwrap();
+    held.lock().unwrap();
+    let refused = replace(&mut bridge);
+    assert_eq!(refused.code.as_str(), "state_unusable");
+    assert!(
+        refused.message.contains("bots.json.lock"),
+        "{}",
+        refused.message
+    );
+}
+
+#[test]
 fn a_refused_replacement_writes_nothing_and_says_why() {
     if !test_profile::in_isolated_profile() {
         return;

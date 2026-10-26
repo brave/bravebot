@@ -28,8 +28,11 @@ const inByteOrder = (a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0)
 /**
  * The agent's `bot.list` and `bot.replace`, kept in memory.
  *
- * `rows` is what the bots file holds, `calls` every request made, and `refuse` makes the next
- * replaces fail with that message. `unreadable` and `dropped` are what a list reports. Like the
+ * `rows` is what the bots file holds, `calls` every request made, `refuse` makes the next
+ * replaces fail with that message and `repair` changes each row a replace writes, as the agent does
+ * to a model or an avatar it does not accept. `unreadable` and `dropped` are what a list reports, and
+ * `oldRowsWaiting` is the list's answer to whether rows are still in `bravebot-ui.json` unmoved
+ * (`leaveOut` names list answer fields to omit, as an older agent would). Like the
  * agent, a replace writes the rows in the byte order of the slug, without the `remembered` and `quiet`
  * figures the row no longer holds, and answers with them.
  */
@@ -38,16 +41,26 @@ export function fakeBots(initial = []) {
     rows: initial.map(({ remembered, quiet, ...row }) => structuredClone(row)),
     calls: [],
     refuse: null,
+    repair: null,
     unreadable: null,
     dropped: [],
+    oldRowsWaiting: false,
+    leaveOut: [],
     async request(method, params) {
       state.calls.push([method, params])
       if (method === 'bot.list') {
-        return { bots: structuredClone(state.unreadable ? [] : state.rows), dropped: state.dropped, unreadable: state.unreadable }
+        const answer = {
+          bots: structuredClone(state.unreadable ? [] : state.rows),
+          dropped: state.dropped,
+          unreadable: state.unreadable,
+          oldRowsWaiting: state.oldRowsWaiting,
+        }
+        for (const field of state.leaveOut) delete answer[field]
+        return answer
       }
       if (method === 'bot.replace') {
         if (state.refuse) throw new Error(state.refuse)
-        state.rows = structuredClone(params.bots).map(({ remembered, quiet, ...row }) => row).sort(inByteOrder)
+        state.rows = structuredClone(params.bots).map(({ remembered, quiet, ...row }) => (state.repair ? state.repair(row) : row)).sort(inByteOrder)
         return { bots: structuredClone(state.rows) }
       }
       throw new Error(`a method the bots store does not call: ${method}`)

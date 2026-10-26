@@ -51,6 +51,136 @@ test('the bots key of bravebot-ui.json is neither read nor written', async () =>
   } finally { clean() }
 })
 
+const PREFERENCES = {
+  putLayout: [{ left: 240, right: 300, collapsed: { left: false, right: true } }, 'layout'],
+  putView: [{ grouped: true, collapsed: [], tab: 'bots' }, 'view'],
+  putTheme: ['dark', 'theme'],
+  putRecents: [['/work/project'], 'recents'],
+  putForks: [[{ child: { directory: '/work/project', id: ids[0] }, parent: { directory: '/work/project', id: ids[1] }, prompt: 1, at: 5 }], 'forks'],
+}
+const OLD_BOTS_FILE = (profile) => JSON.stringify({ layout: { left: 1, right: 2, collapsed: { left: false, right: false } }, bots: [botRow({ slug: 'only-copy' })], recents: ['/work/earlier'] }, null, 2) + '\n'
+
+const FAILED_FIRST_READS = {
+  'a list the agent could not answer': (file, main, profile) => main.useBotsBridge(async () => { throw new Error('the agent exited') }),
+  'a list that reports the old file as unreadable': (file, main, profile) => {
+    file.unreadable = { path: OLD_FILE(profile), reason: 'the lock was held' }
+    file.oldRowsWaiting = true
+  },
+  'a list that reports a bravebot-ui.json that does not parse': (file, main, profile) => {
+    writeFileSync(OLD_FILE(profile), '{"bots": [')
+    file.unreadable = { path: OLD_FILE(profile), reason: 'expected value at line 1' }
+    file.oldRowsWaiting = true
+  },
+  'a list for a machine that names no state directory, with rows still in the old key': (file) => { file.oldRowsWaiting = true },
+  'a list from an agent that does not say whether rows are waiting': (file) => { file.leaveOut = ['oldRowsWaiting'] },
+}
+
+for (const [name, fail] of Object.entries(FAILED_FIRST_READS)) {
+  test(`a preference is not written to bravebot-ui.json after ${name}, and is written once a list answers`, async () => {
+    const { profile, file, main, clean } = fixture([botRow({ slug: 'kept' })])
+    try {
+      writeFileSync(OLD_FILE(profile), OLD_BOTS_FILE(profile))
+      fail(file, main, profile)
+      const before = readFileSync(OLD_FILE(profile))
+      await main.bots()
+      for (const [put, [value, key]] of Object.entries(PREFERENCES)) {
+        main[put](value)
+        assert.deepEqual(readFileSync(OLD_FILE(profile)), before, `${put} left the old file as it was found`)
+        assert.deepEqual(main.readState()[key], value, `${put} is still what the window is told`)
+      }
+
+      main.useBotsBridge(file.request)
+      file.unreadable = null
+      file.oldRowsWaiting = false
+      file.leaveOut = []
+      await main.bots()
+      const written = JSON.parse(readFileSync(OLD_FILE(profile), 'utf8'))
+      for (const [put, [value, key]] of Object.entries(PREFERENCES)) assert.deepEqual(written[key], value, `${put} reached the file once a list answered`)
+      assert.equal('bots' in written, false, 'and the file no longer carries the bots key')
+    } finally { clean() }
+  })
+}
+
+test('a bots file that does not parse, with no old rows waiting, does not hold preferences back, and the problem is still shown', async () => {
+  const { profile, file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    writeFileSync(OLD_FILE(profile), JSON.stringify({ view: { grouped: true, collapsed: [], tab: 'sessions' } }))
+    file.unreadable = { path: join(profile, 'bots.json'), reason: 'expected value at line 1' }
+    file.oldRowsWaiting = false
+    await main.bots()
+    main.putTheme('dark')
+    main.putRecents(['/p', '/q'])
+    const written = JSON.parse(readFileSync(OLD_FILE(profile), 'utf8'))
+    assert.equal(written.theme, 'dark')
+    assert.deepEqual(written.recents, ['/p', '/q'])
+    assert.match(main.botsProblem(), /bots\.json/, 'the person is still told the bots file cannot be read')
+  } finally { clean() }
+})
+
+test('a machine that names no state directory, with rows in the old key, says so and keeps the old file as it was', async () => {
+  const { profile, file, main, clean } = fixture([])
+  try {
+    writeFileSync(OLD_FILE(profile), OLD_BOTS_FILE(profile))
+    const before = readFileSync(OLD_FILE(profile))
+    file.oldRowsWaiting = true
+    await main.bots()
+    main.putTheme('dark')
+    assert.deepEqual(readFileSync(OLD_FILE(profile)), before)
+    const problem = main.botsProblem()
+    assert.match(problem, /earlier version/)
+    assert.ok(problem.includes(OLD_FILE(profile)), 'it names the file that holds them')
+    assert.match(problem, /preferences are not saved/)
+  } finally { clean() }
+})
+
+test('a preference is written at once after a list has answered, even if a later read fails', async () => {
+  const { profile, file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    await main.bots()
+    file.unreadable = { path: '/home/someone/.bravebot/bots.json', reason: 'expected value at line 1' }
+    await main.bots()
+    main.putTheme('dark')
+    assert.equal(JSON.parse(readFileSync(OLD_FILE(profile), 'utf8')).theme, 'dark')
+  } finally { clean() }
+})
+
+test('the first read of the bots is waited for only so long, and preferences stay held until a list answers', async () => {
+  const { profile, file, main, clean } = fixture([botRow({ slug: 'kept' })])
+  try {
+    writeFileSync(OLD_FILE(profile), OLD_BOTS_FILE(profile))
+    const before = readFileSync(OLD_FILE(profile))
+    main.useBotsBridge(() => new Promise(() => {}))
+    const started = Date.now()
+    await main.firstBotsRead(40)
+    assert.ok(Date.now() - started < 2000, 'an agent that never answers does not keep the window from loading')
+    main.putTheme('dark')
+    assert.deepEqual(readFileSync(OLD_FILE(profile)), before, 'and until it answers the file is not written')
+
+    main.useBotsBridge(file.request)
+    await main.bots()
+    assert.equal(JSON.parse(readFileSync(OLD_FILE(profile), 'utf8')).theme, 'dark')
+
+    const quick = Date.now()
+    await main.firstBotsRead(60_000)
+    assert.ok(Date.now() - quick < 2000, 'an answer ends the wait at once')
+  } finally { clean() }
+})
+
+test('a save answers with the row the agent wrote, not the one it was sent', async () => {
+  const { file, main, clean } = fixture([botRow({ slug: 'plain', definition: null })])
+  try {
+    file.repair = (row) => ({ ...row, model: row.model === 'inherit' ? null : row.model, avatar: row.avatar.trim() === '' ? row.slug : row.avatar })
+    const stored = (await main.bot('plain'))
+    const form = await main.saveFormBot({ ...stored, model: 'inherit', avatar: ' ' }, null)
+    assert.equal(form.model, null, 'a model the agent did not keep is not shown as kept')
+    assert.equal(form.avatar, 'plain', 'nor an avatar')
+    assert.equal(file.rows[0].model, null)
+
+    const picked = await main.saveBotModel(await main.bot('plain'), 'inherit', null)
+    assert.equal(picked.model, null)
+  } finally { clean() }
+})
+
 test('the entries the agent dropped and a file it could not read are reported with their path and reason', async () => {
   const { file, main, clean } = fixture([botRow({ slug: 'kept' })])
   try {

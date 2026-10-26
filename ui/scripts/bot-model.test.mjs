@@ -174,12 +174,11 @@ test('a bot with a definition keeps its memory where the agent keeps that defini
     assert.equal(nudgeDue(legacy), true)
     await saveBot(defined)
     await saveBot(legacy)
-    const writes = () => file.calls.filter(([method]) => method === 'bot.replace').length
-    const before = writes()
+    const rowBefore = structuredClone(file.rows.find((row) => row.slug === 'web-dev'))
+    const writesBefore = file.calls.filter(([method]) => method === 'bot.replace').length
     await noteBotMemory('web-dev')
-    assert.equal(writes(), before, 'a turn end counted a quiet turn against an addressed bot')
-    await noteBotMemory('old-bot')
-    assert.equal(writes(), before + 1, 'a turn end counts a quiet turn against a bot with no definition')
+    assert.equal(file.calls.filter(([method]) => method === 'bot.replace').length, writesBefore, 'a turn end wrote the row of an addressed bot')
+    assert.deepEqual(file.rows.find((row) => row.slug === 'web-dev'), rowBefore, 'a turn end changed the row of an addressed bot')
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
