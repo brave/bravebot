@@ -84,6 +84,9 @@ mod records;
 pub(crate) use records::coverage_causes;
 use records::*;
 
+mod phase;
+use phase::Phase;
+
 mod session_commands;
 use session_commands::*;
 
@@ -1905,6 +1908,7 @@ struct Startup {
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    layout: crate::layout::Layout,
     start: Start,
     named: Option<String>,
     links: Links,
@@ -1966,28 +1970,29 @@ pub fn run(
         }
     };
 
-    let result = match start {
-        // The Sessions screen refuses Enter on one of these, and `--resume` refuses it too. If a
-        // record still arrives here, loading its empty conversation as a turn would continue a run
-        // that cannot be continued.
-        Start::Resuming(record) if record.manifest.is_some() => Ok(Ended::Left(None)),
-        // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it
-        // has begun, so leaving the screen is an ordinary session rather than nothing.
-        mut start => {
-            // A `/resume` ends the loop with the record it chose, and the next one begins from it
-            // exactly as a session started with `--resume` does, so what comes back is what that
-            // flag restores and nothing a second path decided. The servers outlive the switch:
-            // they were started for this process, not for one conversation.
-            let mut workspace = workspace.clone();
-            // Only the first session is the one the command line named a definition for. A
-            // session `/resume` switches to works under the definition its own record names.
-            let mut named = agent;
-            // Likewise: a link the command line gave belongs to the session it opened.
-            let mut links = links;
-            // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the
-            // command lasts until the process ends.
-            let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
-            loop {
+    // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the command
+    // lasts until the process ends. The servers outlive a switch: they were started for this
+    // process, not for one conversation.
+    let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
+    let mut workspace = workspace.clone();
+    // Only the first session is the one the command line named a definition for. A session
+    // `/resume` switches to works under the definition its own record names.
+    let mut named = agent;
+    // Likewise: a link the command line gave belongs to the session it opened.
+    let mut links = links;
+    let layout = crate::layout::Layout::default();
+
+    // `--resume` and `--from-pr` begin a session. The Sessions screen opens over it once it has
+    // begun, so leaving the screen is that session rather than nothing. A manifest record begins
+    // none: loading its empty conversation as a turn would continue a run that cannot be continued.
+    let mut phase = Phase::starting_with(start);
+    let result = loop {
+        phase = match phase {
+            Phase::Session { start, carrying } => {
+                if let Some(carried) = carrying {
+                    workspace = carried.workspace;
+                    sandbox = carried.sandbox;
+                }
                 let mut switch = None;
                 let ended = event_loop(
                     &mut terminal,
@@ -1998,6 +2003,7 @@ pub fn run(
                         confinement: confinement.clone(),
                         sockets_with_a_path_reachable,
                         sandbox: sandbox.clone(),
+                        layout,
                         start,
                         named: named.take(),
                         links: std::mem::take(&mut links),
@@ -2008,16 +2014,10 @@ pub fn run(
                     moments,
                     &mut switch,
                 );
-                match (ended, switch) {
-                    (Ok(_), Some(next)) => {
-                        workspace = next.workspace;
-                        sandbox = next.sandbox;
-                        start = Start::Resuming(next.record);
-                    }
-                    (ended, _) => break ended,
-                }
+                Phase::after_a_session(ended, switch)
             }
-        }
+            Phase::Over(ended) => break ended,
+        };
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
@@ -2553,6 +2553,7 @@ struct SessionBasis {
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    layout: crate::layout::Layout,
     skip_permissions: bool,
     asked_for_auto: bool,
     /// Whether a `bravebot://open` link started the session, which then never reads
@@ -2609,6 +2610,7 @@ fn new_session(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         skip_permissions,
         asked_for_auto,
         from_link,
@@ -2618,6 +2620,7 @@ fn new_session(
     let mut session = Session::new(confinement)
         .with_sockets_with_a_path_reachable(sockets_with_a_path_reachable)
         .with_sandbox(sandbox)
+        .in_layout(layout)
         .with_stored_history()
         .in_workspace(workspace.root())
         .on_tier(config)
@@ -2784,6 +2787,7 @@ fn begin_session(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         start,
         named,
         links,
@@ -2795,6 +2799,7 @@ fn begin_session(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         skip_permissions,
         asked_for_auto,
         from_link: matches!(start, Start::Prefilling(..)),
