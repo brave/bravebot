@@ -2981,6 +2981,36 @@ mod tests {
         assert!(!refused_a_level(&config, "gateway-b/shared-slug"));
     }
 
+    /// The ChatGPT account's branch: a level one of its models refused is reported for that model
+    /// and for no other service offering the same slug, and the account's refusal is read from the
+    /// account's own host, not Brave's endpoint or a gateway.
+    ///
+    /// The faults this rejects: the branch dropped, so the account's model falls through to Brave's
+    /// endpoint and reads false after a refusal, and the account's refusal asked at the wrong
+    /// service's address.
+    #[test]
+    fn a_level_the_chatgpt_account_refused_is_reported_for_its_model_only() {
+        use crate::testutil::{Answer, serving_host};
+        let (mut config, _) = every_service_with_the_same_slug();
+        config.endpoint = "http://127.0.0.1:9/never-asked".into();
+        let host = serving_host(vec![Answer::Status(400), Answer::Words("ok")]);
+        let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+        assert!(!refused_a_level(&config, "chatgpt/shared-slug"));
+
+        ask_with_a_level(&config, "chatgpt/shared-slug");
+
+        assert_eq!(host.header("authorization").len(), 2, "sent again once");
+        assert!(refused_a_level(&config, "chatgpt/shared-slug"));
+        assert!(!refused_a_level(&config, "chatgpt/another-account-model"));
+        for elsewhere in [
+            "gateway-a/shared-slug",
+            "gateway-b/shared-slug",
+            "shared-slug",
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
+    }
+
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
         "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
         "usage":{"input_tokens":3,"output_tokens":1}}"#;
