@@ -3149,6 +3149,29 @@ mod tests {
         }
     }
 
+    /// The first branch: a model a Bedrock account answers for is asked of Bedrock's record, ahead
+    /// of the gateway, ChatGPT and default-endpoint ones, so a refusal Brave's endpoint holds for
+    /// the same name is not the account's. Bedrock's own record is private to its crate, so only
+    /// the order is pinned here and the record is left to the crate that holds it.
+    ///
+    /// The faults this rejects: the Bedrock branch dropped or moved behind the last one, which asks
+    /// Brave's endpoint about a model it never serves and reports its refusal.
+    #[test]
+    fn a_model_a_bedrock_account_answers_for_is_not_asked_of_the_default_endpoint() {
+        let brave = a_service_that_refuses_the_level();
+        let mut endpoint_only = Config::from_lookup(aichat_only).expect("configured");
+        endpoint_only.endpoint = brave.clone();
+        assert!(endpoint_only.bedrock_for("opus-arn").is_none());
+        ask_with_a_level(&endpoint_only, "opus-arn");
+        assert!(refused_a_level(&endpoint_only, "opus-arn"));
+
+        let mut config = both_backends();
+        config.endpoint = brave;
+        assert!(config.bedrock_for("opus-arn").is_some());
+
+        assert!(!refused_a_level(&config, "opus-arn"));
+    }
+
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
         "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
         "usage":{"input_tokens":3,"output_tokens":1}}"#;
