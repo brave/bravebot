@@ -126,7 +126,6 @@ fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// A task's status in words, as a printed plan says it.
 fn status_word(status: bravebot_core::todo::Status) -> &'static str {
     use bravebot_core::todo::Status;
     match status {
@@ -157,7 +156,6 @@ pub(crate) const MARGIN_BESIDE_THE_STATUS: usize =
 /// still fits a row.
 const LEAST_TEXT_COLUMNS: usize = 2;
 
-/// The widest status word a printed plan says, in columns.
 fn status_column() -> usize {
     use bravebot_core::todo::Status;
     [
