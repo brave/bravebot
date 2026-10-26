@@ -997,11 +997,6 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
 `verified-by: bravebot_aichat::client::a_model_that_refuses_the_thinking_budget_is_asked_again_without_it`
 `verified-by: bravebot_aichat::client::a_refusal_of_a_request_asking_for_no_level_is_reported_after_one_request`
-`verified-by: bravebot_aichat::call::the_level_is_dropped_only_for_a_refusal_of_a_request_that_carried_one`
-`verified-by: bravebot_aichat::call::a_request_starts_from_what_the_model_was_known_to_refuse`
-`verified-by: bravebot_aichat::call::a_probe_that_answered_remembers_the_refusal`
-`verified-by: bravebot_aichat::call::a_probe_that_failed_as_well_remembers_nothing_and_goes_back`
-`verified-by: bravebot_aichat::call::a_request_that_probed_nothing_settles_nothing`
 `verified-by: bravebot_aichat::call::the_order_fields_are_given_up_in_is_the_callers`
 `verified-by: bravebot_aichat::call::a_probe_that_failed_as_well_remembers_nothing_and_restores_what_was_known`
 `verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
@@ -1019,6 +1014,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
+`verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug`
+`verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
+`verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
@@ -1898,6 +1896,7 @@ category and the request count and no more, as for every failure.
 `verified-by: bravebot_aichat::call::beginning_an_attempt_keeps_what_the_earlier_ones_were_billed`
 `verified-by: bravebot_aichat::call::a_stop_that_lands_between_attempts_is_answered_before_the_next_is_sent`
 `verified-by: bravebot_aichat::call::attempts_are_capped_and_a_concession_is_not_one`
+`verified-by: bravebot_aichat::call::a_mended_failure_is_sent_again_at_once_and_counts_against_nothing`
 `verified-by: bravebot_aichat::call::beginning_a_call_clears_the_count_and_both_usages`
 `verified-by: bravebot_aichat::call::a_wait_ends_early_and_says_so_when_a_stop_lands_in_the_middle_of_it`
 `verified-by: bravebot_aichat::call::a_wait_nobody_stops_finishes_and_says_so`
@@ -2884,6 +2883,10 @@ parsed number only how long.
 `verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_a_service_asked_for`
+`verified-by: bravebot_bedrock::lib::a_throttled_request_is_waited_out_for_as_long_as_the_service_asked`
+`verified-by: bravebot_bedrock::lib::a_throttle_asking_for_longer_than_the_ceiling_fails_at_once_with_the_figure`
+`verified-by: bravebot_aichat::client::a_google_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling`
+`verified-by: bravebot_aichat::client::a_responses_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling`
 `verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
 `verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
 

@@ -5685,6 +5685,59 @@ fn a_calls_signature_comes_back_with_it_in_the_next_request() {
     }
 }
 
+/// A 429 that asks for a wait is sat through for as long as it asked, and one that asks for longer
+/// than the client sits through ends the call at once with the figure, as for every other client.
+#[test]
+fn a_google_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling() {
+    let egress = Egress::new();
+    let model = "google/gemini-throttled";
+    let request = ChatRequest::new(model, vec![Message::user("hello")]);
+
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "1"),
+        Attempt::Json(GENERATE_CONTENT_REPLY.to_string()),
+    ]);
+    let provider = express_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = express_client(&egress, &provider, model);
+    let started = std::time::Instant::now();
+    client
+        .complete(&mut policy, &request)
+        .expect("the second request answered");
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "asked again after {:?}, before the second the service asked for",
+        started.elapsed()
+    );
+    assert_eq!(client.attempts(), 2);
+    assert_eq!(received.try_iter().count(), 2);
+
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "600"),
+        Attempt::Json(GENERATE_CONTENT_REPLY.to_string()),
+    ]);
+    let provider = express_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = express_client(&egress, &provider, model);
+    let started = std::time::Instant::now();
+    let error = client
+        .complete(&mut policy, &request)
+        .expect_err("a wait past the ceiling ends the call");
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(received.try_iter().count(), 1, "the request was sent again");
+    match error {
+        ChatError::Egress(bravebot_net::EgressError::Status {
+            status: 429,
+            retry_after: Some(asked),
+            ..
+        }) => assert_eq!(asked, Duration::from_secs(600)),
+        other => panic!("expected the 429 with its wait, got {other:?}"),
+    }
+}
+
 /// A model that refuses the thinking budget is asked again without it, and what answered is
 /// remembered, so the next request does not ask for it. A request that carried no level was not
 /// refused for it.
@@ -7236,6 +7289,70 @@ fn an_account_asks_for_its_token_before_every_request_and_sends_the_one_it_is_gi
         ],
         "an attempt after a failure was sent with the token of the one before"
     );
+}
+
+/// The same for the Responses client: a 429's wait is taken, and one past the ceiling ends the call
+/// with the figure and no second request.
+#[test]
+fn a_responses_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling() {
+    let egress = Egress::new();
+    let request = ChatRequest::new("a-model", vec![Message::user("hello")]);
+
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "1"),
+        Attempt::Frames(text_reply(&["ok"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = ResponsesClient::new(
+        &egress,
+        &provider,
+        "a-model",
+        Some(bravebot_config::Secret::new(RESPONSES_KEY)),
+    )
+    .with_backoff(Duration::from_millis(1));
+    let started = std::time::Instant::now();
+    client
+        .complete(&mut policy, &request)
+        .expect("the second request answered");
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "asked again after {:?}, before the second the service asked for",
+        started.elapsed()
+    );
+    assert_eq!(client.attempts(), 2);
+    assert_eq!(received.try_iter().count(), 2);
+
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::StatusAfter(429, "600"),
+        Attempt::Frames(text_reply(&["ok"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut client = ResponsesClient::new(
+        &egress,
+        &provider,
+        "a-model",
+        Some(bravebot_config::Secret::new(RESPONSES_KEY)),
+    )
+    .with_backoff(Duration::from_millis(1));
+    let started = std::time::Instant::now();
+    let error = client
+        .complete(&mut policy, &request)
+        .expect_err("a wait past the ceiling ends the call");
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(client.attempts(), 1);
+    assert_eq!(received.try_iter().count(), 1, "the request was sent again");
+    match error {
+        ChatError::Egress(bravebot_net::EgressError::Status {
+            status: 429,
+            retry_after: Some(asked),
+            ..
+        }) => assert_eq!(asked, Duration::from_secs(600)),
+        other => panic!("expected the 429 with its wait, got {other:?}"),
+    }
 }
 
 /// CHATGPT-7: a token the host turns away is replaced and the request sent once more with the new

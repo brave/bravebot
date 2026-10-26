@@ -561,6 +561,32 @@ sent, and lifting the interjection out to make room would take back a line the p
 Shift-Enter still starts a line rather than sending it, so a paragraph can be written mid-turn and
 is not sent half-finished.
 
+**The queue and the shared buffer are two containers, and the buffer holds only what the turn may
+read.** The terminal keeps `Session::queued` for everything waiting and gives the shared
+`Interjections` buffer ([interjections.rs](../../crates/agent/src/interjections.rs)) a copy of each
+prompt. A prompt is therefore in both, and the buffer is the one place that says whether the turn
+has taken it, which the session reads by asking the buffer (`forget_last`, `held`) and never by
+counting its own. The queue stays because the buffer cannot express four things:
+
+- **Commands and command lines.** They wait in order among the prompts but are never offered to the
+  turn, so they cannot be in the buffer, which is the one thing that reaches the planner from the
+  terminal. The queue is what keeps their place among the prompts.
+- **The line as typed.** The buffer holds the line resolved to words (INPUT-10, "What it carries is
+  text"), which is what the planner reads. The screen, the history and Up show what the person
+  typed, with its markers.
+- **What each prompt named.** The files and pictures settled when it was queued, the history ticket
+  and the hurried flag (INPUT-36) are kept for the turn a prompt becomes when it is not taken, and
+  for Up. The buffer carries lines and no side data.
+- **Which prompt the turn took.** The buffer hands a line to the turn without saying which queued
+  prompt it was. `Session::interjected` removes the oldest prompt from the queue because the buffer
+  is first in, first out and holds a copy of the prompts in the same order.
+
+What is held back from the turn in flight is kept by the buffer and not by the queue: the session
+reads the count with `held()` and the buffer keeps those lines out of `take` and `drain`, so the
+two cannot disagree about it. Moving the queue into the buffer would need commands in a buffer the
+planner reads, or a second kind of line the buffer carries and never hands out, and either leaves
+the buffer holding what a person typed alongside what the planner is given.
+
 **Why.** Enter mid-turn used to reach nothing at all. The line stayed in the box until the person
 noticed the turn had ended and pressed it again, which is indistinguishable from a key press that
 was ignored. This does not weaken what a running turn refuses: a second turn still cannot begin
@@ -610,6 +636,11 @@ while the first is in flight, and the queue is what makes that refusal visible i
 `verified-by: bravebot_agent::interjections::forget_last_drops_the_newest_and_says_whether_it_did`
 `verified-by: bravebot_agent::interjections::a_poisoned_lock_reads_as_empty_and_drops_additions`
 `verified-by: bravebot_agent::interjections::a_line_for_a_turn_that_is_not_reading_is_handed_back`
+`verified-by: bravebot_agent::interjections::a_held_line_is_not_taken_or_drained_and_keeps_its_place`
+`verified-by: bravebot_agent::interjections::a_line_pushed_behind_a_held_line_is_held`
+`verified-by: bravebot_agent::interjections::forget_last_drops_a_held_line_before_a_readable_one`
+`verified-by: bravebot_agent::interjections::beginning_a_turn_removes_the_oldest_lines_and_keeps_the_rest_in_order`
+`verified-by: bravebot_tui::state::prompts_held_back_from_the_turn_are_counted_by_the_shared_buffer`
 
 <a id="INPUT-42"></a>
 ### INPUT-42: a prompt waiting on a long command moves the command to the background

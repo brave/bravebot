@@ -3036,6 +3036,119 @@ mod tests {
         }
     }
 
+    /// The default endpoint's record is the default endpoint's alone: a slug it refused is not
+    /// refused at a gateway that offers the same bare name. The name selects the gateway there,
+    /// and the gateway has not been asked.
+    ///
+    /// The faults this rejects: asking the default endpoint's record first, and asking by the model
+    /// name alone, either of which reports a gateway's model as refusing a level it was never sent.
+    #[test]
+    fn a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug() {
+        let [brave, gateway] = std::array::from_fn(|_| a_service_that_refuses_the_level());
+        let slug = "a-slug-both-the-default-endpoint-and-a-gateway-answer-to";
+
+        let mut alone = with_providers("{}");
+        alone.endpoint = brave.clone();
+        ask_with_a_level(&alone, slug);
+        assert!(
+            refused_a_level(&alone, slug),
+            "the default endpoint refused"
+        );
+
+        let mut offered = with_providers(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "{gateway}/v1", "apiKey": "a-key"}},
+                "models": {{"{slug}": {{}}}}}}}}}}"#
+        ));
+        offered.endpoint = brave;
+        assert!(
+            !refused_a_level(&offered, slug),
+            "the gateway was reported as refusing what only the default endpoint refused"
+        );
+
+        ask_with_a_level(&offered, slug);
+        assert!(refused_a_level(&offered, slug), "the gateway then refused");
+    }
+
+    /// A model both a Bedrock account and a gateway answer to is Bedrock's, as
+    /// [`Backend::select`] has it, so a refusal the gateway recorded for the same name is not
+    /// reported for it. The gateway's own spelling of the model still reports it.
+    ///
+    /// The Bedrock record itself is written by the Bedrock client and cannot be reached from
+    /// outside that crate (its host is fixed and its recorder is private), so what is pinned here
+    /// is the order of the lookups and that a Bedrock model is asked of Bedrock's record, which
+    /// `bravebot_bedrock`'s `a_request_refused_on_a_parameter_is_asked_again_without_the_effort_level`
+    /// and its neighbours hold.
+    ///
+    /// The fault this rejects: asking a gateway before Bedrock, which reports the gateway's
+    /// refusal for a model Bedrock serves.
+    #[test]
+    fn a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name() {
+        let gateway = a_service_that_refuses_the_level();
+        let mut config = with_providers(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "{gateway}/v1", "apiKey": "a-key"}},
+                "models": {{"opus-arn": {{}}}}}}}}}}"#
+        ));
+        config.endpoint = a_service_that_refuses_the_level();
+        let egress = Egress::new();
+        assert!(
+            matches!(
+                Backend::select(&config, &egress, "opus-arn"),
+                Backend::Bedrock { .. }
+            ),
+            "Backend::select no longer sends the name to Bedrock, so this is not the case"
+        );
+        assert!(
+            matches!(
+                Backend::select(&config, &egress, "gateway-a/opus-arn"),
+                Backend::Gateway { .. }
+            ),
+            "the gateway's own spelling is not the gateway's"
+        );
+        assert!(bedrock_reads_effort("opus-arn"), "nothing refused it yet");
+        assert!(!refused_a_level(&config, "opus-arn"));
+
+        ask_with_a_level(&config, "gateway-a/opus-arn");
+
+        assert!(refused_a_level(&config, "gateway-a/opus-arn"));
+        assert!(
+            !refused_a_level(&config, "opus-arn"),
+            "Bedrock's model was reported refused on the strength of a gateway's record"
+        );
+        assert!(bedrock_reads_effort("opus-arn"));
+    }
+
+    /// The ChatGPT account's branch: a level its model refused is reported for that model alone,
+    /// and no other service's model or the account's other models are reported with it.
+    ///
+    /// The faults this rejects: reading the account's record by the model name alone, or from the
+    /// default endpoint's, which reports every model that shares the wire name.
+    #[test]
+    fn a_level_the_account_refused_is_reported_for_its_model_only() {
+        use crate::testutil::{Answer, serving_host};
+        let host = serving_host(vec![Answer::Status(400), Answer::Words("ok")]);
+        let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+        let (config, _) = every_service_with_the_same_slug();
+        assert!(config.offers_chatgpt_account());
+        assert!(!refused_a_level(&config, "chatgpt/shared-slug"), "before");
+
+        ask_with_a_level(&config, "chatgpt/shared-slug");
+
+        assert_eq!(host.header("authorization").len(), 2, "sent again once");
+        assert!(refused_a_level(&config, "chatgpt/shared-slug"));
+        for elsewhere in [
+            "chatgpt/another-model-of-the-account",
+            "gateway-a/shared-slug",
+            "gateway-b/shared-slug",
+            "shared-slug",
+            "opus-arn",
+            DEFAULT_MODEL,
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
+    }
+
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
         "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
         "usage":{"input_tokens":3,"output_tokens":1}}"#;

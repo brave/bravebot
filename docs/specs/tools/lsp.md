@@ -18,6 +18,9 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/turn/sentences.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: Operation::parse
   - symbol: locations_in
