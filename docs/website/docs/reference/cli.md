@@ -176,8 +176,8 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 `--mode manifest`, `--bg` and the commands that start no session refuse them.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
-question, including the ones that decide trust. See
-[modes](../security/permission-modes.md) for what it costs.
+question, including the ones that decide trust, and it gives the file tools the reach of your account
+outside the workspace. See [modes](../security/permission-modes.md) for what it costs.
 
 ### `--accept-edits`
 

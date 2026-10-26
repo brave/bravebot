@@ -211,12 +211,23 @@ impl Workspace {
     /// The file need not exist yet, so the destination is what is tested rather than the name:
     /// the same test every write through this workspace gets, so the two cannot come apart.
     pub fn confines(&self, path: &Path) -> Result<(), WorkspaceError> {
+        self.confines_as(path, None)
+    }
+
+    /// [`Workspace::confines`] for a destination the line writes, which is what a redirection is:
+    /// where the permission mode reaches a path outside the workspace, a write is judged by the
+    /// refusals that hold for one (PATHREQ-7).
+    pub fn confines_writing(&self, path: &Path) -> Result<(), WorkspaceError> {
+        self.confines_as(path, Some(true))
+    }
+
+    fn confines_as(&self, path: &Path, write: Option<bool>) -> Result<(), WorkspaceError> {
         let escapes = || WorkspaceError::Escapes {
             path: path.display().to_string(),
             remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if self.lands_in_reach(&resolved) {
+        if self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write) {
             return Ok(());
         }
         Err(escapes())
@@ -454,7 +465,7 @@ impl Workspace {
             remedy,
         };
         let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
-        if !self.is_opened(&resolved) {
+        if !self.is_opened(&resolved) && !self.bypass_reaches(&resolved, None) {
             return Err(escapes(self.remedy_outside(&resolved)));
         }
         if let Some(below) = self

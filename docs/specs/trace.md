@@ -39,6 +39,11 @@ sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded th
 `sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
 that writes, and a `run` line it refuses for redirecting output into a file.
 
+The first reach of the file tools into a directory outside the workspace that the permission mode
+gave ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is recorded as a `path_reach` permission naming
+the mode, the directory, the tool and the argument that named the path. It records no trust and no
+opened directory, since nothing was either, and a later call into the same directory adds none.
+
 A `run` call that asks for no sandbox (`unconfined`, [SANDBOX-29](sandboxing.md#SANDBOX-29)) or for
 credential scopes (`scopes`, [SANDBOX-26](sandboxing.md#SANDBOX-26)) and is refused is recorded as a
 refusal under `sandbox`. The entry names the argument and each cause that held: the sandbox mode by
@@ -84,6 +89,7 @@ put to a person and is recorded under `mcp_call` alone.
 asked", which is most of what anyone asks it.
 
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
+`verified-by: bravebot_core::policy::the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing`
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
 `verified-by: bravebot_core::policy::a_turn_cannot_begin_without_routing`

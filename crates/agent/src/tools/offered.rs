@@ -1432,9 +1432,11 @@ fn table(
              the user turned the sandbox off or the workspace is not trusted. It does not widen \
              read_file, write_file, edit_file or the other file tools, which stay inside the \
              workspace and the directories the user added with /add-dir, unless the user has \
-             turned permission prompts off: there a request is granted without a question, also \
-             opens the directory to those tools and trusts it, as /add-dir does, and the result \
-             says whether they now reach it.",
+             turned permission prompts off: there those tools reach a path outside the workspace \
+             with no request, except the places a request is refused too, so call this for the \
+             programs you start with run; a request is granted without a question, also opens \
+             the directory to those tools and trusts it, as /add-dir does, and the result says \
+             whether they now reach it.",
             json!({
                 "type": "object",
                 "properties": {

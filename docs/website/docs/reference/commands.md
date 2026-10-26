@@ -91,6 +91,8 @@ Reports everything the session knows about itself:
 
 - the working directory, and anything opened with `/add-dir`, and whether a later session started
   there will trust it without asking because a yes was [kept](#forget-trust);
+- under [bypass](../security/permission-modes.md#bypassing), each directory outside the workspace the file
+  tools were taken into, with the tool that first reached it. Nothing is opened or trusted by it;
 - each [checkout](../customize/agents.md#a-checkout-of-its-own) a delegate kept or that could not be
   removed, with its number, the commit it holds and the delegate it was made for, since the
   transcript says one was kept but not where;
