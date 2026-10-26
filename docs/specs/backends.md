@@ -359,7 +359,10 @@ pick. It still displaces the key a lower file named, so with nothing recorded th
 or the build answers. Above all of it are `--model` and a model picked in the session that is
 running. The `/model` picker opens on the model in force and marks it as current: the pick where the
 session has one, and otherwise the model this ranking settles on, so a session on the `model` key marks
-that model and Brave's `automatic` only where `automatic` is what the ranking settles on.
+that model and Brave's `automatic` only where `automatic` is what the ranking settles on. The same model
+in force is the one the roster is read for the window, whether a level is read, and the one the sign-in
+a session makes and the refusal of a level a turn learned are asked about, so none of them is read for
+the pick alone.
 
 **Why.** Every release bakes a default model in, so this value ranked like the rest of the file would
 lose on every binary anybody was given: the key would parse, `doctor` would report it, and nothing
@@ -394,6 +397,7 @@ and the pick is the later of the two.
 `verified-by: bravebot_cli::running::a_run_asks_for_an_exported_default_where_no_file_names_a_model`
 `verified-by: bravebot_cli::running::doctor_names_the_pick_a_checkouts_model_cannot_displace`
 `verified-by: bravebot_tui::app::the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked`
+`verified-by: bravebot_tui::app::the_refusal_of_a_level_is_asked_of_the_model_in_force_and_its_answer_is_returned`
 
 <a id="BACKEND-12"></a>
 ### BACKEND-12: a tier word names a model some reachable service serves

@@ -268,10 +268,7 @@ pub(super) fn manifest_animated(
     // The other place a level goes out, so the other place one can be refused. A run carries the
     // session's chosen level the way a turn does, and the session it comes back to is the one that
     // reports whether a level is in force.
-    let refused = bravebot_agent::backend::refused_a_level(
-        config,
-        session.model().unwrap_or(&config.default_model),
-    );
+    let refused = refused_level_in_force(session, config, bravebot_agent::backend::refused_a_level);
     note_a_refused_level(session, refused);
 
     let recorded = run.complete(session, workspace.root(), &asked, &outcome, &cancel);
@@ -1084,10 +1081,7 @@ pub(super) fn finish_turn(
     // model in force now, as is the budget below, even where a model was picked while the turn ran:
     // the pick already recorded whether its model reads a level and moved the gauge to its budget,
     // and both describe the model the next turn is sent to (`Session::update_budget`).
-    let refused = bravebot_agent::backend::refused_a_level(
-        config,
-        session.model().unwrap_or(&config.default_model),
-    );
+    let refused = refused_level_in_force(session, config, bravebot_agent::backend::refused_a_level);
     note_a_refused_level(session, refused);
 
     let carried = if let Err(turn::TurnError::Cancelled { attempts }) = &outcome {

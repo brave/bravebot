@@ -3,13 +3,27 @@
 
 use super::*;
 
-/// The model a request names now: the pick where the session has one, and otherwise the configured
-/// default, which a `model` key of the settings file sets.
+/// The model a request names now: the pick where there is one, and otherwise the configured default,
+/// which a `model` key of the settings file sets.
 ///
-/// What the picker marks as current and what the budget and the effort note are read for, so that a
-/// session opened on a configured model is not taken for one on Brave's `automatic`.
-pub(super) fn model_in_force<'a>(session: &'a Session, config: &'a Config) -> &'a str {
-    session.model().unwrap_or(&config.default_model)
+/// What the picker marks as current, what the roster is ordered around, and what the budget, the
+/// level the roster says is read, the sign-in a session makes before a turn and the refusal of a level
+/// are asked about, so that a session opened on a configured model is not taken for one on Brave's
+/// `automatic`. The callers that hand a pick to `list_models`, `Config::adopt_window_of_model_in_force`
+/// and `Config::runs_on_chatgpt_account` leave the default to them, which read it themselves.
+pub(super) fn model_in_force<'a>(picked: Option<&'a str>, config: &'a Config) -> &'a str {
+    picked.unwrap_or(&config.default_model)
+}
+
+/// Whether the service has refused a level for the model in force, which the turn or the manifest run
+/// that has just ended may have learned. `refused` asks it of a model, so which model is asked is
+/// reached without a service that has refused one.
+pub(super) fn refused_level_in_force(
+    session: &Session,
+    config: &Config,
+    refused: impl FnOnce(&Config, &str) -> bool,
+) -> bool {
+    refused(config, model_in_force(session.model(), config))
 }
 
 /// Ask the endpoint what it offers.
@@ -93,10 +107,7 @@ fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<Picker
                         Vec::new()
                     }
                 };
-                configured.extend(in_reading_order(
-                    listed,
-                    chosen.unwrap_or(&config.default_model),
-                ));
+                configured.extend(in_reading_order(listed, model_in_force(chosen, config)));
             }
         }
     }
@@ -107,7 +118,7 @@ fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<Picker
     if account {
         let asked = ask_the_account(config);
         problems.extend(account_problem_said(&asked));
-        configured.extend(account_rows(asked, chosen.unwrap_or(&config.default_model)));
+        configured.extend(account_rows(asked, model_in_force(chosen, config)));
     }
     let rostered = |models| PickerRoster {
         models: requestable(config, models),
@@ -479,17 +490,16 @@ pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut
     }) {
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
-    let in_force = model_in_force(session, config).to_string();
+    let in_force = model_in_force(session.model(), config).to_string();
     config.adopt_inputs(&in_force, advertised_inputs(&models, session.model()));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
     // The model in force, not the pick: with no pick the configured default is what a request names,
     // and it is the roster row for that one which says whether a level is read (BACKEND-22).
-    session.note_model_reads_effort(reads_effort_in_force(
+    session.note_model_reads_effort(reads_effort(
         &models,
-        session.model(),
-        &config.default_model,
+        model_in_force(session.model(), config),
     ));
 }
 
@@ -649,18 +659,6 @@ pub(super) fn lists_structured_output(
         })
 }
 
-/// Whether the roster says the model a request names reads an effort level: the pick where there is
-/// one, and the configured default where there is none.
-///
-/// Split out so the choice of which name is looked up is testable without a server.
-pub(super) fn reads_effort_in_force(
-    models: &[bravebot_aichat::models::Model],
-    picked: Option<&str>,
-    default_model: &str,
-) -> bool {
-    reads_effort(models, picked.unwrap_or(default_model))
-}
-
 /// Whether the roster says `chosen` reads an effort level.
 ///
 /// Split from the fetch so the matching is testable without a server. True for a model no listing
@@ -724,7 +722,7 @@ pub(super) fn choose_model(
             for problem in problems {
                 session.note(problem);
             }
-            let current = Some(model_in_force(session, config));
+            let current = Some(model_in_force(session.model(), config));
             let chosen = crate::model_prompt::choose(terminal, models, current, |frame| {
                 render::draw(frame, session);
             });
@@ -783,7 +781,10 @@ pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
                 session.note(problem);
             }
             session.open_picking(crate::picking::Picking::Model(
-                crate::model_prompt::Picker::new(models, Some(model_in_force(session, config))),
+                crate::model_prompt::Picker::new(
+                    models,
+                    Some(model_in_force(session.model(), config)),
+                ),
             ));
         }
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),

@@ -1656,7 +1656,7 @@ fn sign_in_if_needed(
     session: &mut Session,
     config: &Config,
 ) -> io::Result<()> {
-    let model = session.model().unwrap_or(&config.default_model).to_string();
+    let model = model_in_force(session.model(), config).to_string();
     if !bravebot_agent::backend::Backend::needs_sign_in(config, &model) {
         return Ok(());
     }
@@ -4895,6 +4895,41 @@ mod tests {
             picker_opened(&mut session, &config),
             in_force(bravebot_config::DEFAULT_MODEL),
             "`automatic` was not marked where it is the default"
+        );
+    }
+
+    /// BACKEND-22, BACKEND-11: the refusal of a level a turn or a run learned is asked of the model in
+    /// force, which is the configured default where nothing is picked and the pick where there is one,
+    /// and the answer is the one given for that model. Asked through the one function the end of a
+    /// turn and the end of a manifest run both call. The regressions it rejects are the pick alone
+    /// read as the model in force, which asks about no model for a session on the settings model, and a
+    /// default that outranks a pick.
+    #[test]
+    fn the_refusal_of_a_level_is_asked_of_the_model_in_force_and_its_answer_is_returned() {
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        let asked_of = |session: &Session, answer: bool| {
+            let mut model = None;
+            let refused = refused_level_in_force(session, &config, |_, asked| {
+                model = Some(asked.to_string());
+                answer
+            });
+            (model, refused)
+        };
+
+        let mut session = Session::new("none");
+        assert_eq!(
+            asked_of(&session, false),
+            (Some("chatgpt/gpt-5.5".to_string()), false),
+            "the settings model was not the one asked about"
+        );
+        assert!(asked_of(&session, true).1, "the answer was not returned");
+
+        session.name_model("opus-arn".to_string());
+        assert_eq!(
+            asked_of(&session, false).0.as_deref(),
+            Some("opus-arn"),
+            "the default outranked the pick"
         );
     }
 
@@ -14791,24 +14826,34 @@ mod tests {
     }
 
     /// With no pick, the configured default is what a request names, so it is the row the roster is
-    /// asked about. Looking up nothing took the level as read whatever the row said.
+    /// asked about. Looking up nothing took the level as read whatever the row said. A pick is the row
+    /// asked about once there is one, whatever the default's row says.
     #[test]
     fn a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_is_picked() {
+        use models::scripted_account::offer;
         let row = |key: &str, reads_effort: bool| bravebot_aichat::models::Model {
-            key: key.to_string(),
-            display_name: key.to_string(),
-            premium: false,
-            provider: None,
-            conversation_tokens: None,
             reads_effort,
-            advertised: bravebot_aichat::models::Advertised::default(),
+            ..listed(key, None)
         };
-        let roster = vec![row("gateway/plain", false), row("gateway/reasons", true)];
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/plain".to_string();
+        offer(vec![
+            row("chatgpt/plain", false),
+            row("chatgpt/reasons", true),
+        ]);
 
-        assert!(!reads_effort_in_force(&roster, None, "gateway/plain"));
-        assert!(reads_effort_in_force(&roster, None, "gateway/reasons"));
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
         assert!(
-            reads_effort_in_force(&roster, Some("gateway/reasons"), "gateway/plain"),
+            !session.model_reads_effort(),
+            "the default's row, which reads no level, was not the one looked up"
+        );
+
+        let mut session = Session::new("none");
+        session.name_model("chatgpt/reasons".to_string());
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert!(
+            session.model_reads_effort(),
             "the default was looked up where a model was picked"
         );
     }
