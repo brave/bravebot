@@ -1,14 +1,17 @@
 //! The pickers that `/model`, `/config`, `/theme` and `/effort` open, held as state of the session.
 //!
-//! At rest each of them is a loop of its own: it draws, reads a key and returns what was picked.
-//! A turn cannot wait inside such a loop, because the same thread draws the turn and puts the
-//! worker's questions on the screen. So while a turn runs the picker is a mode of the session
-//! instead: the key handler gives it every key, the frame draws it over everything else, and the
-//! loop that runs the turn goes on as before. A question the worker asks takes the screen for as
-//! long as it is open, and the picker is there again when it is answered.
+//! `/model` is always a mode of the session. The others are loops of their own at rest: each draws,
+//! reads a key and returns what was picked. A turn cannot wait inside such a loop, because the same
+//! thread draws the turn and puts the worker's questions on the screen. So while a turn runs they
+//! are modes of the session too: the key handler gives them every key, the frame draws them over
+//! everything else, and the loop that runs the turn goes on as before. A question the worker asks
+//! takes the screen for as long as it is open, and the picker is there again when it is answered.
 //!
-//! The rows, the cursor and the keys are the ones the picker has at rest, read from the same
-//! modules. What this adds is only where the state lives.
+//! The model picker opens before its rows are known and takes them when the endpoints have
+//! answered, so typing `/model` draws at once.
+//!
+//! The rows, the cursor and the keys are the ones each picker module defines. What this adds is
+//! only where the state lives.
 //!
 //! Nothing labelled is involved. The rows are fixed strings or names a person picks from, and the
 //! pick is the person's own keystroke.

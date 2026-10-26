@@ -1817,6 +1817,8 @@ model-picker-heading = Select model
 model-picker-keys = ↑↓ choose  ·  Enter select  ·  type to search  ·  Esc keep current
 model-picker-search-placeholder = Search
 model-picker-nothing-matches = nothing matches that
+model-picker-loading = loading models…
+model-picker-listing-lost = the model list was not delivered
 picker-current = current
 
 # Choosing how hard to think. The level names are the words sent and stored, so they are not

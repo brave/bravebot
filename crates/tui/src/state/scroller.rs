@@ -167,6 +167,37 @@ impl Session {
         }
     }
 
+    /// Whether a model picker is open and its rows have yet to arrive.
+    pub fn picking_is_loading(&self) -> bool {
+        matches!(&self.picking, Some(crate::picking::Picking::Model(picker)) if picker.is_loading())
+    }
+
+    /// Take the rows of an open model picker if they have arrived, without waiting for them.
+    ///
+    /// Asked on every pass of the loops that own the session, since the rows arrive from a thread
+    /// and no key is pressed for them. The sentences about services that could not be read go into
+    /// the transcript as the rows arrive. A listing that failed closes the picker and says why, so
+    /// the model stays as it was. Returns whether the screen changed.
+    pub fn settle_picking(&mut self) -> bool {
+        let Some(crate::picking::Picking::Model(picker)) = &mut self.picking else {
+            return false;
+        };
+        match picker.settle() {
+            crate::model_prompt::Arrival::Nothing => false,
+            crate::model_prompt::Arrival::Rows(problems) => {
+                for problem in problems {
+                    self.note(problem);
+                }
+                true
+            }
+            crate::model_prompt::Arrival::Failed(problem) => {
+                self.picking = None;
+                self.note(t!(session_models_unavailable, problem = problem));
+                true
+            }
+        }
+    }
+
     /// What the picker closed on, taken so it is carried out once.
     pub fn take_pick(&mut self) -> Option<crate::picking::Picked> {
         self.picked.take()

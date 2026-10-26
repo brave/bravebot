@@ -16,19 +16,32 @@
 
 use bravebot_aichat::models::Model;
 use ratatui::Frame;
-use ratatui::Terminal;
-use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use std::sync::mpsc;
 
-use crate::input;
 use crate::theme;
 use crate::wrap::display_width;
 use bravebot_i18n::t;
 use unicode_width::UnicodeWidthChar;
+
+/// What a listing that was asked for in the background answers: the rows, and one sentence for each
+/// service whose rows could not be read, or why there is no list at all.
+pub type Listed = Result<(Vec<Model>, Vec<String>), String>;
+
+/// What [`Picker::settle`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Arrival {
+    /// Nothing has arrived, or nothing was being waited for.
+    Nothing,
+    /// The rows arrived. These are the sentences about services whose rows could not be read.
+    Rows(Vec<String>),
+    /// There is no list to choose from. This is why.
+    Failed(String),
+}
 
 /// What the picker is showing and where the cursor is.
 #[derive(Debug)]
@@ -41,6 +54,8 @@ pub struct Picker {
     selected: usize,
     /// The one in use when the picker opened, so it can be marked as current.
     current: Option<String>,
+    /// Where the rows will come from, while the endpoints are still being asked for them.
+    listing: Option<mpsc::Receiver<Listed>>,
 }
 
 impl Picker {
@@ -51,14 +66,64 @@ impl Picker {
             search: String::new(),
             selected: 0,
             current: current.map(str::to_string),
+            listing: None,
         };
-        let selected = picker
+        picker.select_current();
+        picker
+    }
+
+    /// Open with no rows, to take them from `listing` when the endpoints have answered.
+    ///
+    /// The endpoints are asked over the network, and a picker that waited for them would leave the
+    /// person looking at the line they typed `/model` on until the slowest one answered.
+    pub fn loading(current: Option<&str>, listing: mpsc::Receiver<Listed>) -> Self {
+        Self {
+            listing: Some(listing),
+            ..Self::new(Vec::new(), current)
+        }
+    }
+
+    /// Whether the rows are still being waited for.
+    pub fn is_loading(&self) -> bool {
+        self.listing.is_some()
+    }
+
+    /// Take the rows if they have arrived, without waiting for them.
+    ///
+    /// What has been typed while waiting narrows the rows when they come, and the cursor goes to
+    /// the model in use among the ones that match.
+    pub fn settle(&mut self) -> Arrival {
+        let Some(listing) = &self.listing else {
+            return Arrival::Nothing;
+        };
+        match listing.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => Arrival::Nothing,
+            Ok(Ok((models, problems))) => {
+                self.listing = None;
+                self.models = models;
+                self.select_current();
+                Arrival::Rows(problems)
+            }
+            Ok(Err(problem)) => {
+                self.listing = None;
+                Arrival::Failed(problem)
+            }
+            // The thread that was asking ended without answering.
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.listing = None;
+                Arrival::Failed(t!(model_picker_listing_lost).to_string())
+            }
+        }
+    }
+
+    /// Put the cursor on the model in use, or the first row where it is not among the matches.
+    fn select_current(&mut self) {
+        let selected = self
             .matching()
             .iter()
-            .position(|model| picker.is_current(model))
+            .position(|model| self.is_current(model))
             .unwrap_or(0);
-        picker.selected = selected;
-        picker
+        self.selected = selected;
     }
 
     /// The models matching what has been typed, grouped by the service that answers them.
@@ -208,6 +273,7 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
 
     match code {
         KeyCode::Esc => Outcome::Cancel,
+        KeyCode::Enter if picker.is_loading() => Outcome::Continue,
         KeyCode::Enter => Outcome::Select,
         KeyCode::Up => {
             picker.up();
@@ -228,51 +294,6 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
             Outcome::Continue
         }
         _ => Outcome::Continue,
-    }
-}
-
-/// Show the list over whatever `behind` draws, and return the model the user picked, or `None` if
-/// they kept the current one.
-///
-/// `behind` is the session. Drawn first each frame so the panel sits over the transcript somebody
-/// opened it from, rather than replacing it with a page that looks like a different program.
-pub fn choose<B: Backend>(
-    terminal: &mut Terminal<B>,
-    models: Vec<Model>,
-    current: Option<&str>,
-    mut behind: impl FnMut(&mut Frame),
-) -> Option<Model> {
-    let mut picker = Picker::new(models, current);
-
-    loop {
-        // A terminal that cannot be drawn to cannot carry the question, so nothing is changed.
-        if terminal
-            .draw(|frame| {
-                behind(frame);
-                draw(frame, &picker);
-            })
-            .is_err()
-        {
-            return None;
-        }
-
-        let Ok(event) = input::read() else {
-            return None;
-        };
-        let Some(key) = input::key_of(&event) else {
-            continue;
-        };
-        // A key event arrives twice on Windows, once pressed and once released, and the release
-        // would otherwise choose whatever the press had just moved to.
-        if key.kind != event::KeyEventKind::Press {
-            continue;
-        }
-
-        match handle_key(&mut picker, key.code, key.modifiers) {
-            Outcome::Continue => continue,
-            Outcome::Cancel => return None,
-            Outcome::Select => return picker.chosen().cloned(),
-        }
     }
 }
 
@@ -381,6 +402,12 @@ fn rows<'a>(matching: &[&'a Model]) -> Vec<Row<'a>> {
 /// The list itself, and a word when the search matches nothing.
 fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
     let matching = picker.matching();
+    if matching.is_empty() && picker.is_loading() {
+        return vec![Line::from(Span::styled(
+            format!(" {}", t!(model_picker_loading)),
+            Style::default().fg(theme::muted()),
+        ))];
+    }
     if matching.is_empty() {
         return vec![Line::from(Span::styled(
             format!(" {}", t!(model_picker_nothing_matches)),

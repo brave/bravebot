@@ -2458,6 +2458,8 @@ fn event_loop(
         session.settle_sessions(|| past_sessions_offered(workspace.root(), stored.id()));
         // A picture decoded since the last pass is drawn on this one rather than at the next key.
         needs_draw |= session.settle_previews();
+        // The rows of a model picker still being listed are drawn on the pass they arrive.
+        needs_draw |= session.settle_picking();
         // A suggestion the box has stopped being empty for is dropped, and one whose request has
         // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
         session.settle_suggestion();
@@ -2548,7 +2550,7 @@ fn event_loop(
                         let mut wait = wait_for_a_key(opening, crate::indicator::stilled());
                         // Short while a suggestion is on its way, so it is drawn as it arrives
                         // rather than at the next key.
-                        if suggesting.is_some() {
+                        if suggesting.is_some() || session.picking_is_loading() {
                             wait = wait.min(FRAME);
                         }
                         // Through the reader rather than the terminal, so a run is seen whole.
@@ -2621,7 +2623,7 @@ fn event_loop(
             Action::Rewind(turns) => held.rewind_command(&turns),
             Action::Hunks(argument) => held.hunks_command(&argument),
             Action::Show => show_transcript(terminal, held.session)?,
-            Action::ChooseModel => choose_model(terminal, held.session, config),
+            Action::ChooseModel => open_model_picker(held.session, config),
             Action::ChooseTheme => choose_theme(terminal, held.session),
             Action::SetTheme(name) => set_theme(held.session, &name),
             Action::ChooseEffort => choose_effort(terminal, held.session),
@@ -4324,6 +4326,7 @@ mod tests {
 
         let mut session = Session::new("none");
         open_model_picker(&mut session, &config);
+        session.settle_picking();
 
         let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
             panic!("no model picker is open");
@@ -4829,6 +4832,7 @@ mod tests {
 
         let mut session = Session::new("none");
         open_model_picker(&mut session, &config);
+        session.settle_picking();
 
         assert_eq!(asked(), 1, "the picker did not ask");
         let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
@@ -4842,16 +4846,14 @@ mod tests {
         );
     }
 
-    /// BACKEND-11: the list `/model` opens at rest marks the model in force, as the one opened in the
-    /// middle of a turn does, and picking a row puts that model in force. Reached through the part of
-    /// the command that decides what is offered and which row is current, since the part that reads
-    /// keys needs a terminal. Run with the model set by settings and nothing picked, with a pick, and
-    /// where a row is chosen. The regressions it rejects are the pick alone read as the model in force,
-    /// which marks Brave's `automatic` for a session on the settings model, and a default that
-    /// outranks a pick.
+    /// BACKEND-11: the list `/model` opens marks the model in force, and picking a row puts that
+    /// model in force. Run with the model set by settings and nothing picked, with a pick, and where
+    /// a row is typed to and chosen. The regressions it rejects are the pick alone read as the model
+    /// in force, which marks Brave's `automatic` for a session on the settings model, a default that
+    /// outranks a pick, and a row chosen that is not put in force.
     #[test]
-    fn the_list_the_model_command_opens_at_rest_marks_the_model_in_force_and_a_row_picked_is_put_in_force()
-     {
+    fn the_list_the_model_command_opens_marks_the_model_in_force_and_a_row_picked_is_put_in_force()
+    {
         use models::scripted_account::offer;
         let mut config = a_config_with_a_named_roster();
         config.default_model = "chatgpt/gpt-5.5".to_string();
@@ -4859,33 +4861,30 @@ mod tests {
             bravebot_aichat::models::Model::automatic(),
             listed("chatgpt/gpt-5.5", Some(65_536)),
         ]);
-        let marked = |session: &mut Session, config: &mut Config| -> Option<String> {
-            let mut current = None;
-            choose_model_with(session, config, |_, marked, _| {
-                current = marked.map(str::to_string);
-                None
-            });
-            current
-        };
 
         let mut session = Session::new("none");
         assert_eq!(
-            marked(&mut session, &mut config).as_deref(),
-            Some("chatgpt/gpt-5.5"),
-            "the settings model was not the one marked at rest"
+            picker_opened(&mut session, &config).1,
+            ["chatgpt/gpt-5.5"],
+            "the settings model was not the one marked"
         );
 
         session.name_model("opus-arn".to_string());
         assert_eq!(
-            marked(&mut session, &mut config).as_deref(),
-            Some("opus-arn"),
-            "the default outranked the pick at rest"
+            picker_opened(&mut session, &config).1,
+            ["opus-arn"],
+            "the default outranked the pick"
         );
 
         let mut session = Session::new("none");
-        choose_model_with(&mut session, &mut config, |models, _, _| {
-            models.into_iter().find(|model| model.key == "opus-arn")
-        });
+        open_model_picker(&mut session, &config);
+        session.settle_picking();
+        for letter in "opus".chars() {
+            session.press_in_picking(KeyCode::Char(letter), KeyModifiers::NONE);
+        }
+        session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+        let picked = session.take_pick().expect("nothing was picked");
+        carry_out_pick(&mut session, &mut config, picked);
         assert_eq!(
             session.model(),
             Some("opus-arn"),
@@ -4893,9 +4892,86 @@ mod tests {
         );
     }
 
+    /// `/model` draws its picker before the endpoints have answered, and takes the rows when they
+    /// do. The regression it rejects is the command waiting for the listing before anything is
+    /// drawn, which left a person looking at the line they typed for as long as the slowest endpoint
+    /// took. Enter in the meantime chooses nothing, and what was typed narrows the rows when they
+    /// arrive.
+    #[test]
+    fn the_model_command_opens_its_picker_before_the_listing_has_arrived() {
+        use crate::picking::Picking;
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        let mut session = Session::new("none");
+
+        open_model_picker_awaiting(&mut session, &config, listing);
+
+        assert!(session.picking_is_loading(), "the picker was not open");
+        let Some(Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        assert!(picker.matching().is_empty(), "rows before the listing");
+        assert!(!session.settle_picking(), "rows arrived from nowhere");
+        for letter in "gpt".chars() {
+            session.press_in_picking(KeyCode::Char(letter), KeyModifiers::NONE);
+        }
+        session.press_in_picking(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(
+            session.take_pick().is_none(),
+            "Enter chose a row of a list that has not arrived"
+        );
+        assert!(session.picking_is_loading(), "Enter left the picker");
+
+        answer
+            .send(Ok((
+                vec![listed("chatgpt/gpt-5.5", None), listed("opus-arn", None)],
+                vec!["a gateway could not be listed".to_string()],
+            )))
+            .expect("the picker dropped its listing");
+
+        assert!(session.settle_picking(), "the arrival was not reported");
+        assert!(!session.picking_is_loading());
+        let Some(Picking::Model(picker)) = session.picking() else {
+            panic!("the picker closed on arrival");
+        };
+        let keys: Vec<&str> = picker.matching().iter().map(|m| m.key.as_str()).collect();
+        assert_eq!(keys, ["chatgpt/gpt-5.5"], "what was typed did not narrow");
+        let said: Vec<&str> = session.transcript.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(said, ["a gateway could not be listed"]);
+    }
+
+    /// A listing that fails after the picker opened closes it, says why and leaves the model as it
+    /// was; a listing thread that ends without answering does the same. The regression it rejects is
+    /// a picker left open on "loading" for good.
+    #[test]
+    fn a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why() {
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        let mut session = Session::new("none");
+        open_model_picker_awaiting(&mut session, &config, listing);
+        answer
+            .send(Err("no route to host".to_string()))
+            .expect("the picker dropped its listing");
+
+        assert!(session.settle_picking());
+        assert!(session.picking().is_none(), "the picker stayed open");
+        assert_eq!(
+            session.transcript.last().map(|e| e.text.clone()),
+            Some(t!(session_models_unavailable, problem = "no route to host"))
+        );
+        assert_eq!(session.model(), None);
+
+        let (answer, listing) = std::sync::mpsc::channel();
+        open_model_picker_awaiting(&mut session, &config, listing);
+        drop(answer);
+        assert!(session.settle_picking());
+        assert!(session.picking().is_none(), "the picker stayed open");
+    }
+
     /// The row the picker's cursor opens on and the rows it marks as current, for a session as it stands.
     fn picker_opened(session: &mut Session, config: &Config) -> (Option<String>, Vec<String>) {
         open_model_picker(session, config);
+        session.settle_picking();
         let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
             panic!("no model picker is open");
         };
@@ -5176,6 +5252,7 @@ mod tests {
             script();
             let mut session = Session::new("none");
             open_model_picker(&mut session, &config);
+            session.settle_picking();
             let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
                 panic!("no model picker is open");
             };
@@ -22648,6 +22725,7 @@ mod tests {
         beside_holding(&mut config, |beside| {
             typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside)
         });
+        session.settle_picking();
 
         let Some(Picking::Model(picker)) = session.picking() else {
             panic!("no model picker opened: {:?}", session.picking());
@@ -22683,6 +22761,7 @@ mod tests {
         beside_holding(&mut config, |beside| {
             typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside)
         });
+        session.answer_while_working(Session::settle_picking);
 
         assert!(
             session.picking().is_none(),
@@ -22716,6 +22795,7 @@ mod tests {
 
         beside_holding(&mut config, |beside| {
             typed_during_a_turn(&mut session, MODEL_COMMAND, key(KeyCode::Enter), beside);
+            session.settle_picking();
             for c in "son".chars() {
                 turn_key(&mut session, key(KeyCode::Char(c)), &cancel, beside);
             }

@@ -497,8 +497,14 @@ does not read:
   answered. The theme under the cursor is in force while the list is open, and Escape puts back the
   one that was. A row taken is carried out as a name typed is, and what it says goes into the
   transcript as it is said. A list still open when the turn ends stays open and takes the next key. The roster `/model`
-  lists is asked for on the thread that draws the turn, so a slow listing holds the drawing, and
-  any question the turn asks, until it returns.
+  lists is asked for on a thread of its own, so the list is drawn the moment the word is entered,
+  at rest and mid-turn, with a line saying the models are loading. The rows are taken on the first
+  pass after the endpoints answer. What is typed in the meantime narrows them, and Enter chooses
+  nothing until they have arrived. A listing that fails closes the list, leaves the model as it
+  was and says why.
+
+  `verified-by: bravebot_tui::app::the_model_command_opens_its_picker_before_the_listing_has_arrived`
+  `verified-by: bravebot_tui::app::a_listing_that_fails_after_the_picker_opened_closes_it_and_says_why`
 - **`/sandbox`.** It sets the mode the programs `run` starts are held to
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn is built with the mode in force when it begins and
   does not read it again, so every stage of the running turn, those already started and those yet

@@ -693,6 +693,11 @@ pub(super) fn run_turn_animated(
         // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
         // turned off then, not at the next pass of the outer loop (CMD-12).
         session.keep_awake();
+        // The rows of a model picker opened during the turn, taken as they arrive. What it notes
+        // is said while working, as the command that opened the picker was.
+        if session.picking_is_loading() {
+            session.answer_while_working(Session::settle_picking);
+        }
         redraw(terminal, session)?;
 
         // Input is polled here rather than in the outer loop, which is blocked for the duration
