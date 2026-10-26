@@ -358,7 +358,7 @@ columns wide.
 | `Home` `End`, `g` `G` | highlight the first or last file |
 | `PgUp` `PgDn` | scroll the edits |
 | `←` `→`, `h` `l` | scroll to the previous or next edit |
-| `q`, `Esc`, `/diff`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+| `q`, `Esc`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
 
 A bar under the file's name shows which edit is at the top of the edits, as `edit 2 of 3`, with a
 control either side that puts the header of the previous or the next edit at the top. A control with
