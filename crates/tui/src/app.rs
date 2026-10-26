@@ -4342,8 +4342,13 @@ mod tests {
         for (gateway, id) in [("Down Gateway", "down"), ("Garbled Gateway", "garbled")] {
             let note = said.iter().find(|note| note.contains(gateway)).unwrap();
             assert!(
-                note.contains(&format!("--model {id}/<model>")),
-                "no way to name a model of {gateway}: {note}"
+                note.contains(&format!(r#"`bravebot -i "<prompt>" --model {id}/<model>`"#))
+                    && note.contains(&format!(r#"`bravebot "<task>" --model {id}/<model>`"#)),
+                "no command that names a model of {gateway}: {note}"
+            );
+            assert!(
+                !note.contains("bravebot --model"),
+                "a form that needs a task: {note}"
             );
         }
         for rows_of in ["readable/llama3", "named/m", "opus-arn"] {
@@ -4920,6 +4925,42 @@ mod tests {
             "{:?}",
             notes_of(&session)
         );
+    }
+
+    /// CHATGPT-9: the notes the picker says of a ChatGPT account whose models could not be listed name
+    /// the two commands that work as typed, `bravebot -i "<prompt>" --model chatgpt/<model>` and
+    /// `bravebot "<task>" --model chatgpt/<model>`, and never `bravebot --model chatgpt/<model>`, which
+    /// is refused for want of a task. The note for a refused listing names no command, since
+    /// naming one would not mend it.
+    #[test]
+    fn the_notes_the_picker_says_of_the_accounts_listing_name_only_commands_that_work_as_typed() {
+        use bravebot_agent::chatgpt::AccountModels;
+        let models = || vec![listed("chatgpt/gpt-5.5", None)];
+
+        for (listing, what) in [
+            (AccountModels::Unreadable, "an unreadable sign-in file"),
+            (
+                AccountModels::Compiled(models()),
+                "a listing that could not be had",
+            ),
+        ] {
+            let note = account_problem_said(&listing).expect("a note");
+            let named: Vec<&str> = note.split('`').skip(1).step_by(2).collect();
+            assert_eq!(
+                named,
+                [
+                    r#"bravebot -i "<prompt>" --model chatgpt/<model>"#,
+                    r#"bravebot "<task>" --model chatgpt/<model>"#
+                ],
+                "{what}: {note}"
+            );
+            assert!(!note.contains("bravebot --model"), "{what}: {note}");
+        }
+        let refused = account_problem_said(&AccountModels::Refused(
+            bravebot_aichat::responses::protocol::Refusal::UsageLimit,
+        ))
+        .expect("a note");
+        assert!(!refused.contains("--model"), "{refused}");
     }
 
     /// BACKEND-39: a start that nothing serves offers the rows the account listed, in the order the

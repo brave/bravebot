@@ -2809,13 +2809,13 @@ session-models-unavailable = impossible de lister les modèles : { $problem }
 # les modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être obtenue,
 # où le sélecteur montre la liste intégrée. Le troisième concerne une liste refusée par un code qui
 # désigne le compte, où se reconnecter ne change rien.
-session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
-session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
 session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
 # Dit à l'ouverture du sélecteur quand une passerelle dont les réglages ne nomment aucun modèle n'a pas pu
 # être interrogée sur sa liste, donc aucun de ses modèles n'est proposé. Une passerelle dont la clé manque
 # n'est pas interrogée et n'est pas signalée ici.
-session-gateway-models-unreadable = impossible de lire la liste des modèles de { $gateway }, donc aucun de ses modèles n'est proposé ; réessayez, ou nommez-en un, comme dans bravebot --model { $id }/<modèle>
+session-gateway-models-unreadable = impossible de lire la liste des modèles de { $gateway }, donc aucun de ses modèles n'est proposé ; réessayez, ou nommez-en un, comme dans `bravebot -i "<invite>" --model { $id }/<modèle>` ou `bravebot "<tâche>" --model { $id }/<modèle>`
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire

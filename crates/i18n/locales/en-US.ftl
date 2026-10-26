@@ -3301,12 +3301,12 @@ session-models-unavailable = could not list models: { $problem }
 # row. The second is for a listing that could not be had, where the picker shows the built-in list. The
 # third is for a listing the service refused in a code that names the account, where signing in again
 # is no remedy.
-session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
-session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in bravebot --model chatgpt/<model>
+session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
+session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
 session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
 # Said when the picker opens and a gateway whose settings name no models could not be asked for its list,
 # so none of its models are offered. A gateway whose key is missing is not asked and is not said here.
-session-gateway-models-unreadable = could not read the list of models from { $gateway }, so none of its models are offered; try again, or name one, as in bravebot --model { $id }/<model>
+session-gateway-models-unreadable = could not read the list of models from { $gateway }, so none of its models are offered; try again, or name one, as in `bravebot -i "<prompt>" --model { $id }/<model>` or `bravebot "<task>" --model { $id }/<model>`
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type

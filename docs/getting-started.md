@@ -246,8 +246,11 @@ bravebot auth login chatgpt
 This prints an address and opens it in a browser, where you sign in to OpenAI. The browser then returns
 to a port bravebot holds open on `127.0.0.1`, and the command waits five minutes for it. The sign-in is
 stored only where OpenAI's reply grants the scope that lets bravebot use the account's tokens. On a machine with no browser, open the printed address
-somewhere else and forward that port. Once the sign-in is stored, `/model` offers the models the account
-reaches, named `chatgpt/<model>`, and `--model chatgpt/<model>` names one. A `provider` block named
+somewhere else and forward that port. Once the sign-in is stored, `bravebot` started on its own in a
+terminal asks which of the account's models to use and remembers the answer, where nothing serves the
+model in force. `/model` offers the models the account reaches once a session is open, named
+`chatgpt/<model>`, and `--model chatgpt/<model>`, given with a prompt or a task as in
+`bravebot -i "<prompt>" --model chatgpt/<model>`, names one. A `provider` block named
 `chatgpt` that states an endpoint is a gateway and keeps the name, and the sign-in is refused until
 it is renamed. The design is [specs/chatgpt-sign-in.md](specs/chatgpt-sign-in.md).
 

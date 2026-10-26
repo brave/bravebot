@@ -1081,8 +1081,8 @@ written when the picker opens, so before it draws, at rest or mid-turn. The wind
 message of its own, one sentence in sentence case that says what happened and what to do, sent with the
 command it names so the picker draws that command as code, and the terminal's note is lower case and names
 `/model`, which the window has no use for. A gateway whose listing could not be read is said in the same
-place by both pickers, the terminal's note adding the way to name one of its models and the window's warning
-saying to try again ([BACKEND-19](backends.md#BACKEND-19)). Where the compiled list is offered both say that
+place by both pickers, the terminal's note adding the commands that name one of its models and the window's
+warning saying to try again ([BACKEND-19](backends.md#BACKEND-19)). Where the compiled list is offered both say that
 it is built in and may name a model the account cannot reach. A listing refused with a code of
 [CHATGPT-8](#CHATGPT-8)'s closed list is said by both in a sentence of that code's own, which does not send
 the person to sign in again. A person who never signed in is told nothing, and a listing that was read,
@@ -1156,6 +1156,8 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, that a warning with no command or a command its sentence does not hold is a plain paragraph, and that markup in either is drawn as characters; make check-ui runs it; ui/scripts/drive-models.mjs opens the real picker against a model list with one warning and the command it names, and asserts that the command is drawn as code in the code type role and inside the menu, at the window's size and at its minimum)`
 `verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose`
 `verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
+`verified-by: bravebot_tui::app::the_notes_the_picker_says_of_the_accounts_listing_name_only_commands_that_work_as_typed`
+`verified-by: bravebot_ui_bridge::models::no_warning_the_window_sends_names_a_command_line_that_names_a_model`
 `verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
 `verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_account_whatever_model_is_configured`

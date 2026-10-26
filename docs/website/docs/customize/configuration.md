@@ -27,10 +27,11 @@ opens, so picking one of Brave's models from `/model` mid-session does not raise
 **If you have configured a service and still see this, you are one key from working.** A settings
 block copied out of another tool names its models and names no default, so the model in force is
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
-than the routes. A stored [ChatGPT sign-in](providers/chatgpt.md) is such a service where nothing else is
-configured: the line says to pick one of the account's models in `/model` or to name one as
-`--model chatgpt/<model>`. Beside a gateway or an AWS account the line is the one that names the
-`model` key. A sign-in file that cannot be read configures nothing, and a first run with nothing else
+than the routes. A stored [ChatGPT sign-in](providers/chatgpt.md) is such a service where nothing else
+serves the model in force: `bravebot` started on its own in a terminal asks which of the account's
+models to use, and where it does not ask the line names `bravebot -i "<prompt>" --model chatgpt/<model>` and
+`bravebot "<task>" --model chatgpt/<model>`. Beside a gateway or an AWS account the line is the one that
+names the `model` key. A sign-in file that cannot be read configures nothing, and a first run with nothing else
 configured says so, with what to run, before the routes.
 
 **If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
