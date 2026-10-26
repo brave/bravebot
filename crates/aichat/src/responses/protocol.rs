@@ -508,9 +508,10 @@ impl std::fmt::Display for Refusal {
 
 /// The codes of a refusal that says the account may not be used this way, each with what it says.
 ///
-/// Read from another program's source and not observed against the service. A code that is not
-/// listed, whatever it says, is not one of these: the two codes that service uses for a condition
-/// that passes are left out on purpose.
+/// Read from another program's source and listed in OpenAI's documentation. One of the seven,
+/// `subscription_sharing_unsupported_capability`, was seen from the service, as the `error.code` of a
+/// 400, and the other six were not. A code that is not listed, whatever it says, is not one of
+/// these: the two codes that service uses for a condition that passes are left out on purpose.
 pub(crate) const REFUSAL_CODES: &[(&str, Refusal)] = &[
     (
         "subscription_sharing_usage_limit_exceeded",

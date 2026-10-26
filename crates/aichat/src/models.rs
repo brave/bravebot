@@ -392,9 +392,8 @@ struct AccountListing {
 
 /// One row of the account's listing.
 ///
-/// Every field but the list is held as it arrived, because the shape is read from another
-/// program's source and has not been observed, and a field in a form this code did not expect must
-/// cost that row its place and no more: a listing that fails to decode offers nothing.
+/// Every field but the list is held as it arrived, so that a field in a form this code did not
+/// expect costs that row its place and no more: a listing that fails to decode offers nothing.
 #[derive(Debug, Default, Deserialize)]
 struct ListedByAccount {
     /// What a request names.
