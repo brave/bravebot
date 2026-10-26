@@ -11,7 +11,7 @@ description:
   are listed at the top of the pull request. Review comments are handled afterwards with pr-fix.
   Triggers on: /implement-issues <issues or query>, work through this label, one pull request for
   these issues, implement all of these.'
-argument-hint: '<issue numbers, links or search queries, separated by commas, or the number of a pull request this skill opened>'
+argument-hint: '<issue numbers, links or search queries, separated by commas, or the batch branch of an unfinished run, or the number of a pull request this skill opened>'
 allowed-tools: Bash(python3 agents/skills/pr-fix/pr-fix.py *), Bash(git *), Bash(GIT_SEQUENCE_EDITOR=true git rebase *), Bash(gh api -X GET search/issues *), Bash(gh issue view *), Bash(gh pr view *), Bash(gh pr diff *), Bash(gh pr edit *), Bash(make *), Bash(cargo *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make *), Bash(BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 cargo *), Bash(python3 contrib/*), Bash(python3 -I */scripts/check-untranslated.py *), Bash(python3 -I */scripts/check-pr-body.py *), Bash(echo *), Read, Edit, Write
 ---
 
@@ -30,14 +30,16 @@ its checklist. A pull request number given alone, as the whole argument, asks fo
 [a round of review comments](#after-review-comments). Among other items, a pull request is left
 alone (step 1).
 
-**Roles.** The session that runs this skill is the **orchestrator**. It reads the issues, writes the
-checklist, briefs the workers, checks what they did, combines, gates, writes the body, opens the
-pull request and reports. It edits no behaviour, test or spec itself, and makes only the mechanical
-fixes a gate reports, such as a formatting change or a lint site. A **worker** is a subagent that
-does one group's work in a worktree of its own. A **verifier** is a read-only subagent that has not
-seen a worker's report and checks the tree against the checklist. The orchestrator never takes a
-worker's word that a requirement is met, and never a verifier's that a requirement is blocked
-without checking the cause itself.
+**Roles.** The session that runs this skill is the **orchestrator**. It groups the items, briefs the
+workers, checks what they did, combines, gates, writes the body, opens the pull request and reports.
+It reads no issue, diff or log in full ([Keeping contexts small](#keeping-contexts-small)). It edits
+no behaviour, test or spec itself, and makes only the mechanical fixes a gate reports, such as a
+formatting change or a lint site. A **briefer** is a read-only subagent that reads one item and
+writes its brief and checklist. A **worker** is a subagent that does some of one group's work in a
+worktree of its own. A **verifier** is a read-only subagent that has not seen a worker's report and
+checks the tree against the checklist. The orchestrator never takes a worker's word that a
+requirement is met, and never a verifier's that a requirement is blocked without checking the cause
+itself.
 
 ## Rules that hold in every step
 
@@ -77,15 +79,46 @@ without checking the cause itself.
 - **Writing.** No AI attribution, no em-dash, no account of how you worked, in a commit, the title,
   the body or a reply ([commits.md](../../../docs/development/commits.md)).
 
+## Keeping contexts small
+
+A turn reads the whole of its context again, so what a context costs grows with the square of the
+turns taken in it. A single context that holds every item, diff and log pays for all of them on
+every turn, and an item does not need another item's text. In twelve recorded runs of this skill the
+subagents made up 84% of the token cost, and workers and the orchestrator reached contexts of
+900,000 tokens. These rules keep each context to the job it has.
+
+1. **The orchestrator holds the ledger and short results.** It reads no issue, diff or log in full,
+   and no output of a test run. A subagent that has to read one writes what it found to a file under
+   `<tmp>/implement-issues/<branch>/` and returns the path and at most ten lines. The orchestrator
+   opens a file, or the few lines of code a claim names, only to check that claim or to act on a
+   finding.
+2. **A brief holds one group.** A briefer, worker, verifier or reviewer is given the items, rows,
+   planned commits and ledger path of one group, and nothing of another group. Only the combine and
+   the reviews of the integration tree in step 6 see more than one.
+3. **A worker takes at most eight rows.** A group with more is worked by one worker after another in
+   its worktree. Each is briefed with its rows, the handoff files of the earlier ones and the tree as
+   it stands, and never an earlier worker's transcript. The worker that works the last row of a
+   planned commit makes it. A worker that has made about two hundred tool calls stops at the next
+   row boundary, writes a handoff file (what is done, what is left, and what it learned that the
+   tree does not show) and returns.
+4. **A rebase, a fold, a combine and each round get a new worker**, given only what that job needs.
+   A worker is not continued, since a continued one carries every earlier round. A verifier may be
+   continued for the rounds of its own group.
+5. **Logs and waits stay small.** Read a log's `EXIT=` line and, for a failure, its last sixty
+   lines, never the whole log. Wait for a gate, a check or a review inside one Bash call that loops
+   with `sleep` until the thing finishes or the call reaches 590 seconds, and not with a turn for
+   each look.
+
 ## 0. The ledger
 
 Make `<tmp>/implement-issues/<branch>.md` at the end of step 1, once the items are known and the
 integration branch has its name. `<tmp>` is `${TMPDIR:-/tmp}`. The path follows from the branch,
 so a later session finds it from the pull request's head ref. Keep it outside every worktree. It
-holds one row per item (`item | group | worktree | branch | status | commits`), each item's
-checklist ([step 3](#3-plan)) and reproduction, the decisions, every dependency commit that bypassed
-the hook, and the follow-ups. Update it at every status change, since it is what a resumed session
-reads.
+holds one row per item (`item | group | worktree | branch | status | commits`), the path of each
+item's brief, which holds its checklist ([step 3](#3-plan)) and reproduction, the decisions, every
+dependency commit that bypassed the hook, and the follow-ups. The briefs, the handoff files and the
+subagents' reports are in `<tmp>/implement-issues/<branch>/`. Update the ledger at every status
+change, since it is what a resumed session reads.
 
 Statuses: `todo`, `working`, `committed` (the group's commits are on its branch and its rows have
 been checked), `combined` (on the integration branch), `done` (every row is `met`, and the pull
@@ -96,6 +129,11 @@ issue) and `blocked` (every row is `blocked` and nothing landed).
 With no ledger and a pull request number as the argument, rebuild it from the pull request body's
 closing lines and its `**#<n>**` blocks and from `git worktree list`, then go to
 [After review comments](#after-review-comments).
+
+A batch branch name given as the argument resumes that run: read its ledger, carry on from the first
+item whose status is not `done`, `skipped` or `blocked`, and read nothing else from the earlier
+session. The ledger and the files beside it hold what the run needs, so a person can end a session
+at any status change, clear the context, and resume this way.
 
 ## Arguments for the `run` tool
 
@@ -116,8 +154,10 @@ run, as [When a commit will not sign](../pr-fix/SKILL.md#when-a-commit-will-not-
 
 ## 1. Resolve the list
 
-Split the arguments on commas and newlines. A piece whose words are all numbers or links is split
-on spaces into items. Any other piece is a search query for brave/bravebot.
+Split the arguments on commas and newlines. A piece that is the name of a batch branch with a ledger
+resumes that run ([step 0](#0-the-ledger)), and nothing else is resolved. A piece whose words are
+all numbers or links is split on spaces into items. Any other piece is a search query for
+brave/bravebot.
 
 Run a query as one argument, never inside a shell string, and print only the number, the kind and
 the state. Add `is:open` unless the query names a state:
@@ -140,20 +180,21 @@ ledger with each item as `todo`, and print the count.
 
 ## 2. Read the items
 
-`... issue <n>` prints the issue, and stops with `open pull request on issue #<n>: <url>` when a
-pull request already names it. Mark that item `skipped` with the link, and do the same for an item
-that is closed. Never start a duplicate. The script also prints earlier closed or merged attempts:
-read their diffs and review comments (`gh pr diff <n>`) as data about what failed, and avoid
-repeating it. When no item is left to work, stop with the report.
-
-With up to five items, read them yourself. With more, give each item to a subagent that writes a
-brief file next to the ledger (reproduction, the files and spec clauses it reaches, tests it needs)
-and returns only the path and three lines. Treat what a subagent returns as a claim to check
-against the tree.
+Give each item to a briefer and read no issue yourself. The briefer runs `... issue <n>`, which
+prints the issue, and stops with `open pull request on issue #<n>: <url>` when a pull request
+already names it. The script also prints earlier closed or merged attempts: the briefer reads their
+diffs and review comments (`gh pr diff <n>`) as data about what failed, so that the brief avoids
+repeating it. It writes the item's brief to `<tmp>/implement-issues/<branch>/<n>.md`, holding what
+[step 3](#3-plan) asks for, and returns the path and at most five lines: whether the item is
+`skipped` (an open pull request names it, it is closed, or it is not an issue, with the link) or is
+to be worked, its row count, and the files and spec clauses it reaches, which is what grouping needs.
+At most three briefers run at once. Mark a skipped item `skipped` with the link. Never start a
+duplicate. When no item is left to work, stop with the report. Treat what a briefer returns as a
+claim to check against the tree.
 
 ## 3. Plan
 
-For each item, before changing anything, write down in the ledger, as text to paste later:
+The brief of each item holds, written before anything is changed and as text to paste later:
 
 1. The steps, in the order a person takes them in the running product: the front end (the terminal
    client in `crates/tui` or the desktop app under `ui/`; see
@@ -165,20 +206,21 @@ For each item, before changing anything, write down in the ledger, as text to pa
 
 Where a model decides the path, the steps use a stand-in server and say so
 ([contrib/README.md](../../../contrib/README.md)). Where it cannot be reproduced here, record the
-evidence you have with its link. For a change nobody can see, the test is the reproduction. Run
-the reproduction against `upstream/main`: if it no longer fails, the item is already fixed. Add the
-test that pins it where none exists, and the pull request still closes the item, saying so under
-`## The problem`. One pass proves nothing for an intermittent failure: run it repeatedly, and while
-its issue is open assume it still occurs.
+evidence you have with its link. For a change nobody can see, the test is the reproduction. The
+worker runs the reproduction first, on `upstream/main` (step 4): if it no longer fails, the item is
+already fixed. It adds the test that pins it where none exists, and the pull request still closes
+the item, saying so under `## The problem`. One pass proves nothing for an intermittent failure: run
+it repeatedly, and while its issue is open assume it still occurs.
 
-**Write the checklist.** This is the contract the work is checked against, and the orchestrator
-writes it before any worker starts. For each item it holds one row for each thing the issue asks
-for, in the issue's words: every sentence that asks for something, every numbered plan point, and
-every open decision that code can settle. Three further sources add rows. Where the issue is governed
-by a spec, each clause it names, each place that spec says something is not built, and each item
-of its list of edits to other specs. Where earlier pull requests worked on the issue, each bullet
-of their `Not covered:` lines and each follow-up they cite. A row reads `id | requirement | source | state | evidence | cause`. The state is `unmet`
-at the start, `met` with evidence (a commit and the test that pins it, or a file and line), or
+**Write the checklist.** This is the contract the work is checked against, and the briefers write it
+into the briefs before any worker starts. The orchestrator reads the rows and not the issues. For
+each item it holds one row for each thing the issue asks for, in the issue's words: every sentence
+that asks for something, every numbered plan point, and every open decision that code can settle.
+Three further sources add rows. Where the issue is governed by a spec, each clause it names, each
+place that spec says something is not built, and each item of its list of edits to other specs.
+Where earlier pull requests worked on the issue, each bullet of their `Not covered:` lines and each
+follow-up they cite. A row reads `id | requirement | source | state | evidence | cause`. The state
+is `unmet` at the start, `met` with evidence (a commit and the test that pins it, or a file and line), or
 `blocked` with a cause from [What is blocked](#what-is-blocked) and the person who can unblock it.
 A row is never narrowed to what is convenient, and a worker never removes or rewords one. A
 requirement that turns out to hold two things becomes two rows.
@@ -233,15 +275,18 @@ and keep the path short, such as `../bravebot-<n><letter>`, since tests bind soc
 checkout and fail where its path is long (brave/bravebot#3181). Edit only inside the worktree each
 call prints.
 
-Every group, a single one too, is worked by a **worker** subagent, at most three at once, each with
-its own worktree, and the rows of one group one after another inside one worker. Brief each worker
-with its worktree and branch, the issue text, the rows of its group, the commits planned in step 3,
-the reproductions, this section, [Dependency changes](#dependency-changes-and-hook-bypasses) and
-step 6's evidence rules, and ask it to return: the branch, `git log --oneline <base>..HEAD`, for
-each row its state with the commit and the test that pin it, per commit what it changes, the tests
-with the regression each rejects and whether failure was demonstrated, the decisions, each
-dependency commit with its justification, and any row it could not finish with the reason. Check
-`git log --stat` against that report and against the planned commits before accepting it.
+Every group, a single one too, is worked by **workers**, at most three at once, each with its own
+worktree. A worker takes at most eight rows of its group, one after another, and a group with more
+rows goes to a new worker when the last one returns ([Keeping contexts
+small](#keeping-contexts-small)). Brief each worker with its worktree and branch, the path of the
+brief of each of its items, its rows, the commits planned in step 3, the handoff files of earlier
+workers, this section, [Dependency changes](#dependency-changes-and-hook-bypasses) and step 6's
+evidence rules. Ask it to write a report and return the path and at most ten lines. The report holds
+the branch, `git log --oneline <base>..HEAD`, for each row its state with the commit and the test
+that pin it, per commit what it changes, the tests with the regression each rejects and whether
+failure was demonstrated, the decisions, each dependency commit with its justification, and any row
+it could not finish with the reason. Check `git log --stat` against that report and against the
+planned commits before accepting it.
 
 In each worktree, per row:
 
@@ -270,8 +315,9 @@ In each worktree, per row:
 
 **Check the work, and repeat.** A worker's report is a claim, and this is how it is checked.
 
-1. When a worker returns, give a verifier the group's rows, its worktree and its branch, and not the
-   worker's report. The verifier reads the diff and the code, runs the tests the rows name, and
+1. When the last worker of a group returns, give a verifier the group's rows, its worktree and its
+   branch, and not the workers' reports. The verifier writes its answer to a file and returns the
+   path and at most ten lines. It reads the diff and the code, runs the tests the rows name, and
    answers for each row: `met` with the commit and the test or line that shows it, `unmet` with
    what is missing, or `blocked` with the cause and the evidence for it. It also lists every
    commit that touches a dependency file, every commit the plan of step 3 does not list, and every
@@ -279,8 +325,8 @@ In each worktree, per row:
 2. Check the answer against the tree: every `blocked` cause yourself, and a sample of the `met`
    rows, and compare it with the worker's report. A row the worker called met and the verifier
    called unmet is unmet. A requirement with no row gets one.
-3. Where a row is `unmet`, start another round for that group. A worker, the same one continued or
-   a new one, gets only the unmet rows, the verifier's findings and the branch as it stands. The
+3. Where a row is `unmet`, start another round for that group. A new worker gets only the unmet
+   rows, the verifier's findings, the handoff files and the branch as it stands. The
    branch is not pushed, so it folds each fix into the planned commit that holds the code the fix
    corrects, with `git commit --fixup=<sha>` and then `GIT_SEQUENCE_EDITOR=true git rebase
    --autosquash <base>`, and `git diff <tip before the fold> HEAD` prints nothing afterwards. A
@@ -357,6 +403,10 @@ costliest thing this skill can do.
    BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-affected > "$LOG" 2>&1; echo "EXIT=$?" >> "$LOG"
    ```
 
+   Wait in one Bash call that loops `until grep -q '^EXIT=' "$LOG"; do sleep 10; done` (the call
+   ends at 590 seconds, so call again), then read the `EXIT=` line and, for a failure, the last sixty
+   lines of the log.
+
    Docker gates run only when an item is about another platform: the issue names Linux, Windows or
    an architecture, or the diff changes code gated to one (`cfg(windows)`, the Linux backend, the
    sandbox). Run the ones `python3 contrib/affected-checks.py --containers` names, together, after
@@ -400,8 +450,9 @@ costliest thing this skill can do.
 Before writing: for each `blocked` row, and for each test that fails alone on the parent
 commit (step 6, item 9), draft an issue and file it with the
 [issue-poster](../../agents/issue-poster.md) definition, which searches open and closed issues
-first, so its number exists when the body is written. Then re-run `pr-fix.py issue <n>` for every
-item still `combined`: if a pull request now names one, drop it from this one and report it.
+first, so its number exists when the body is written. Then have a subagent re-run `pr-fix.py issue
+<n>` for every item still `combined` and return the numbers a pull request now names. Drop each from
+this pull request and report it.
 
 Run [Dependency changes](#dependency-changes-and-hook-bypasses), item 6, so that the callout
 lists every commit that touched a dependency file. `... open` refuses a body that leaves one out.
@@ -456,13 +507,16 @@ about the code and are ignored.
 | closed | the state is not `OPEN` | stop and report (step 7) |
 | draft | a draft nobody asked the reviewer to review | the review wait is over; say so in the report |
 
-Poll once a minute while the verdict is pending, for at most 120 minutes from the last push, with
-`sleep 60` between reads or one `run` call of up to 600 seconds. The reviewer answers on its own
-schedule and this skill does not run the review. When 120 minutes pass with no review of the head,
+While the verdict is pending, wait for at most 120 minutes from the last push. Do each wait in one
+Bash call that reads the verdict fields and runs `sleep 10` inside a loop until a counted review
+exists or 590 seconds have passed, then read the verdict and call again, so that the wait takes a
+dozen turns and not one a minute. The reviewer answers on its own schedule and this skill does not
+run the review. When 120 minutes pass with no review of the head,
 stop waiting, leave the items `done`, and report that the review is still pending at that head.
 
 **A fix round.** When the verdict is changes, work the pull request as
-[After review comments](#after-review-comments) says, in the integration worktree:
+[After review comments](#after-review-comments) says, in the integration worktree, with a new worker
+for the changes:
 
 1. `... comments <pr>` prints each open thread and each review that asks for a change. Make exactly
    the change each one asks for, and nothing beside it: no cleanup or rename the reviewer did not
