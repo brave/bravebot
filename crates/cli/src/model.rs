@@ -153,7 +153,6 @@ pub(crate) fn ask_which_of_the_accounts_models(config: &Config) -> Asked {
         Ok(models) => models,
         Err(listing) => return Asked::NothingOffered(why_no_model_was_offered(&listing)),
     };
-    // The process's own stdin, whose buffer later readers share, as the import's question has it.
     ask_among(config, &models, t!(chatgpt_start_heading))
 }
 
