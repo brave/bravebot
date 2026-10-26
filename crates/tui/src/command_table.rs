@@ -168,6 +168,11 @@ pub(crate) const PANEL_COMMAND: &str = "/panel";
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const DIFF_COMMAND: &str = "/diff";
 
+/// The line that prints the whole plan in the transcript.
+///
+/// Carried out by the driver from the plan the session holds and starts no turn (CMD-28).
+pub(crate) const TODOS_COMMAND: &str = "/todos";
+
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
 
@@ -376,7 +381,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 57] {
+pub fn commands() -> [Command; 58] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -598,6 +603,12 @@ pub fn commands() -> [Command; 57] {
             name: DIFF_COMMAND,
             argument: "",
             description: t!(command_diff),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: TODOS_COMMAND,
+            argument: "",
+            description: t!(command_todos),
             mid_turn: MidTurn::Runs,
         },
         Command {

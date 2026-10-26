@@ -2899,6 +2899,16 @@ panel-hidden-cancelled = { $count ->
     [one] +{ $count } cancelled
    *[other] +{ $count } cancelled
     }
+# What /todos puts in the transcript above the plan it prints, and what it says where there is none.
+todos-heading = plan: { $done } of { $total } done
+# The same where some of its tasks were cancelled, which are counted apart from the done ones.
+todos-heading-cancelled = plan: { $done } of { $total } done, { $cancelled } cancelled
+todos-none = there is no plan in this session yet
+# The status each task of a printed plan carries beside its mark.
+todos-status-pending = pending
+todos-status-active = in progress
+todos-status-done = completed
+todos-status-cancelled = cancelled
 
 # The files state of the info panel, which lists what the session wrote (`/diff`).
 # Its heading, above the list: how many files the session's write calls changed.
@@ -3034,6 +3044,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-panel = Show or hide the info panel beside the transcript
 command-diff = List the files the session wrote and show every edit to the one highlighted
+command-todos = Print the whole plan, every task with its status
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one

@@ -11,6 +11,7 @@
  - Added an `x` at the right end of the heading row of `/diff`, which leaves the view. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Added a bar above the edits of `/diff` with controls for the previous and the next edit. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Added clicking the Files heading, or the count under it, in the info panel to open `/diff`. ([#3259](https://github.com/brave/bravebot/issues/3259))
+ - Added `/todos`, which prints the whole plan in the transcript with every task's status and its text in full. ([#3319](https://github.com/brave/bravebot/issues/3319))
  - Changed Ctrl-L to list delegates and asides only, and added `/outputs` and an `outputs` key (Alt-L, movable in `keybindings`), which open what the commands a session ran printed, background jobs included, with the same keys, marks and read status. The row beneath the box counts what each opens. A `keybindings` block that already put an action on `alt-l` loses that mapping, because the new `outputs` default contests the key and the request falls back to its default: move `outputs` to another key, or move the other action. ([#3207](https://github.com/brave/bravebot/issues/3207))
  - Changed the keys that move between the edits of `/diff` from `[` and `]` to Left and Right, and `h` and `l`. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Changed where `/diff` names its keys: the last row of the panel names them, and the hint line names them only where the panel is not drawn. ([#3259](https://github.com/brave/bravebot/issues/3259))

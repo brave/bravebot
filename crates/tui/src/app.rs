@@ -747,6 +747,12 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.toggle_files();
         return Action::Redraw;
     }
+    // From the plan the session holds: nothing is read, fetched or sent, and no turn starts
+    // (CMD-28).
+    if line.trim() == TODOS_COMMAND {
+        session.report_plan();
+        return Action::Redraw;
+    }
     if line.trim() == THINKING_COMMAND {
         session.toggle_thinking();
         return Action::Redraw;
@@ -13159,6 +13165,152 @@ mod tests {
         );
     }
 
+    /// A plan of four tasks, one in each status.
+    fn a_plan_of_four_tasks() -> Vec<bravebot_core::todo::Row> {
+        use bravebot_core::todo::{Item, List, Status};
+        bravebot_core::todo::rows(&List::new(vec![
+            Item::new("read the spec", Status::Done),
+            Item::new("drop the old test", Status::Cancelled),
+            Item::new("write the test", Status::Active),
+            Item::new("run the checks", Status::Pending),
+        ]))
+    }
+
+    /// CMD-28: `/todos` puts the whole plan in the transcript and starts no turn, so nothing is
+    /// sent and nothing is spent, and the plan it prints is not kept with the session as the plan
+    /// of any turn.
+    ///
+    /// A turn has run first and left a plan of its own, and the plan printed is a later one, so a
+    /// printed entry that counted as a turn's plan would replace the turn's in the record.
+    ///
+    /// Rejects: a command that sends the line as a prompt, one that starts a turn to read the plan
+    /// out, an entry that carries the plan as a turn's, which the session record would then keep
+    /// under that turn in place of its own, and an export that draws the printed plan, which the
+    /// last assertion holds `render/export.rs` to.
+    #[test]
+    fn the_todos_command_prints_the_plan_and_starts_no_turn() {
+        use bravebot_core::todo::{Item, List, Status};
+        let mut session = a_turn_running_on("first");
+        session.set_todos(bravebot_core::todo::rows(&List::new(vec![Item::new(
+            "the plan the turn ended with",
+            Status::Done,
+        )])));
+        session.complete("done", Vec::new(), 0);
+        assert!(!session.a_turn_is_running());
+        session.set_todos(a_plan_of_four_tasks());
+        let prompts = |session: &Session| {
+            session
+                .transcript
+                .iter()
+                .filter(|entry| entry.speaker == crate::state::Speaker::User)
+                .count()
+        };
+        let kept = session.todos_by_turn();
+        assert_eq!(kept.len(), 1, "the turn did not keep its plan: {kept:?}");
+        let (turns, entries, sent) = (session.turns, session.transcript.len(), prompts(&session));
+
+        assert_eq!(enter_line(&mut session, "/todos"), Action::Redraw);
+
+        assert_eq!(session.turns, turns, "a turn was started");
+        assert_eq!(session.transcript.len(), entries + 1, "one entry was left");
+        assert_eq!(prompts(&session), sent, "the line was recorded as a prompt");
+        let printed = session.transcript.last().expect("the plan");
+        assert_eq!(printed.speaker, crate::state::Speaker::System);
+        assert_eq!(printed.whole_plan, a_plan_of_four_tasks());
+        assert_eq!(
+            printed.text,
+            t!(todos_heading_cancelled, done = 1, total = 4, cancelled = 1)
+        );
+        assert!(
+            printed.whole_plan_left_open,
+            "no turn is running, so a row still to do is drawn left open"
+        );
+        assert!(
+            printed.todos.is_empty(),
+            "the printed plan is kept as a turn's plan"
+        );
+        assert_eq!(
+            session.todos_by_turn(),
+            kept,
+            "the printed plan replaced a turn's"
+        );
+        assert!(!session.take_driver_prompt());
+        assert!(session.interjections().take().is_none());
+
+        // The export draws a turn's plan and not the printed one.
+        let exported = crate::render::as_markdown(&session, "t");
+        assert!(
+            exported.contains("the plan the turn ended with"),
+            "the export lost a turn's plan: {exported}"
+        );
+        assert!(
+            !exported.contains("read the spec"),
+            "the printed plan reached an export: {exported}"
+        );
+    }
+
+    /// CMD-28, CMD-17: a session that has no plan says so and prints no heading over nothing.
+    ///
+    /// Rejects: a printout of no rows under a heading that counts none, in place of the note.
+    #[test]
+    fn the_todos_command_says_so_when_there_is_no_plan() {
+        let mut session = Session::new("none");
+        assert_eq!(enter_line(&mut session, "/todos"), Action::Redraw);
+        let said = session.transcript.last().expect("a note");
+        assert_eq!(said.text, t!(todos_none));
+        assert!(said.whole_plan.is_empty());
+    }
+
+    /// CMD-28, CMD-2: the command takes no argument, so a sentence that starts with the word is a
+    /// prompt.
+    ///
+    /// Rejects: a command matched by the start of the line, which prints the plan for `/todoss` and
+    /// `/todos now`, and one matched anywhere in it, which does so for `show /todos`.
+    #[test]
+    fn a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt() {
+        for line in ["/todos now", "/todoss", "show /todos"] {
+            let mut session = Session::new("none");
+            session.set_todos(a_plan_of_four_tasks());
+            assert_eq!(
+                enter_line(&mut session, line),
+                Action::Submit(line.to_string())
+            );
+            assert_eq!(session.turns, 1, "{line:?}");
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .all(|entry| entry.whole_plan.is_empty()),
+                "{line:?} printed the plan"
+            );
+        }
+    }
+
+    /// CMD-28, CMD-8: typed while a turn runs, the plan is printed as the turn has reported it so
+    /// far, as it is typed. The turn holds nothing the command reads, and queueing it behind a long
+    /// turn would print a plan the turn has since changed.
+    #[test]
+    fn the_todos_command_is_carried_out_while_a_turn_runs() {
+        let mut session = a_turn_running_on("first");
+        session.set_todos(a_plan_of_four_tasks());
+        assert_eq!(type_while_working(&mut session, "/todos"), Action::Redraw);
+        assert!(
+            session.take_queued_command().is_none(),
+            "the command was queued"
+        );
+        let said = session.said_while_working();
+        assert_eq!(said.len(), 1);
+        assert_eq!(said[0].whole_plan, a_plan_of_four_tasks());
+        assert_eq!(
+            said[0].text,
+            t!(todos_heading_cancelled, done = 1, total = 4, cancelled = 1)
+        );
+        assert!(
+            !said[0].whole_plan_left_open,
+            "a turn is running, so a row still to do is drawn as work being done"
+        );
+    }
+
     /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is
     /// recorded.
     #[test]
@@ -20181,6 +20333,7 @@ mod tests {
                 STYLE_COMMAND,
                 THEME_COMMAND,
                 THINKING_COMMAND,
+                TODOS_COMMAND,
                 WATCH_COMMAND,
             ]
         );

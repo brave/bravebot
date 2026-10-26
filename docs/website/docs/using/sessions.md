@@ -335,6 +335,8 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   nearest the first one still to do, and its last row counts what it left out in words of their own,
   as `+3 to do, +40 done, +2 cancelled`. A kind with none left out is not named. A task list with no
   rows leaves the plan as the last list that had rows. `/clear`, a rewind and a new turn clear it.
+  [`/todos`](../reference/commands.md#todos) prints the whole plan in the transcript, every
+  task with its status and its text in full, a task still to do drawn filled or hollow as it is here.
 
 Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
 hint line under the box, unless the terminal is too short for the panel to show them; the mode, a

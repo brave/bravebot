@@ -81,13 +81,31 @@ fn dim() -> Style {
     Style::default().fg(theme::muted())
 }
 
+/// The inks of a task's mark and of its text.
+///
+/// Tasks no longer outstanding are struck through and dimmed, which is what makes progress legible
+/// at a glance: the eye finds the unstruck lines. A cancelled one is struck too, with its marker in
+/// the muted colour rather than the success one, so dropped work does not read as finished work.
+/// Shared by the plan under a turn and the plan `/todos` prints, so the two read alike.
+fn task_inks(row: &bravebot_core::todo::Row) -> (Style, Style) {
+    if row.status == bravebot_core::todo::Status::Cancelled {
+        (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+    } else if row.struck() {
+        (
+            Style::default().fg(theme::ok()),
+            dim().add_modifier(Modifier::CROSSED_OUT),
+        )
+    } else {
+        (
+            Style::default().fg(theme::running()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )
+    }
+}
+
 /// Draw a task list beneath whatever it belongs to.
 ///
 /// The first row carries a branch so the block attaches to the line above rather than floating.
-/// Tasks no longer outstanding are struck through and dimmed, which is what makes progress
-/// legible at a glance: the eye finds the unstruck lines. A cancelled one is struck too, with its
-/// marker in the muted colour rather than the success one, so dropped work does not read as
-/// finished work.
 fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
     todos
         .iter()
@@ -98,24 +116,162 @@ fn todo_lines(todos: &[bravebot_core::todo::Row]) -> Vec<Line<'static>> {
             } else {
                 "    ".to_string()
             };
-            let (marker, text) = if row.status == bravebot_core::todo::Status::Cancelled {
-                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
-            } else if row.struck() {
-                (
-                    Style::default().fg(theme::ok()),
-                    dim().add_modifier(Modifier::CROSSED_OUT),
-                )
-            } else {
-                (
-                    Style::default().fg(theme::running()),
-                    Style::default().add_modifier(Modifier::BOLD),
-                )
-            };
+            let (marker, text) = task_inks(row);
             Line::from(vec![
                 Span::styled(lead, dim()),
                 Span::styled(format!("{} ", row.marker), marker),
                 Span::styled(row.content.clone(), text),
             ])
+        })
+        .collect()
+}
+
+/// A task's status in words, as a printed plan says it.
+fn status_word(status: bravebot_core::todo::Status) -> &'static str {
+    use bravebot_core::todo::Status;
+    match status {
+        Status::Pending => t!(todos_status_pending),
+        Status::Active => t!(todos_status_active),
+        Status::Done => t!(todos_status_done),
+        Status::Cancelled => t!(todos_status_cancelled),
+    }
+}
+
+/// The columns every mark of a task takes, the hollow one a row left open has included.
+const MARK_COLUMNS: usize = 1;
+
+/// The columns of blank before the mark of a printed task.
+const INDENT_COLUMNS: usize = 2;
+
+/// The columns of blank between the mark of a printed task and its status word.
+const SPACE_COLUMNS: usize = 1;
+
+/// The columns of blank between the status word of a printed task and its text.
+const GAP_COLUMNS: usize = 2;
+
+/// The columns of the margin of a printed task that are not its status word.
+pub(crate) const MARGIN_BESIDE_THE_STATUS: usize =
+    INDENT_COLUMNS + MARK_COLUMNS + SPACE_COLUMNS + GAP_COLUMNS;
+
+/// The columns a printed task's text keeps at the least, so that a character two columns wide
+/// still fits a row.
+const LEAST_TEXT_COLUMNS: usize = 2;
+
+/// The widest status word a printed plan says, in columns.
+fn status_column() -> usize {
+    use bravebot_core::todo::Status;
+    [
+        Status::Pending,
+        Status::Active,
+        Status::Done,
+        Status::Cancelled,
+    ]
+    .into_iter()
+    .map(|status| wrap::display_width(status_word(status)))
+    .max()
+    .unwrap_or(0)
+}
+
+/// The columns the margin of a printed plan takes at `width` (VIEW-37).
+///
+/// The indent, the mark, a space, the status column and the gap before the text. A width that would
+/// leave the text fewer than [`LEAST_TEXT_COLUMNS`] shortens it, and it is never less than the
+/// column the mark takes.
+pub(crate) fn printed_margin(width: usize) -> usize {
+    let whole = MARGIN_BESIDE_THE_STATUS + status_column();
+    whole
+        .min(width.saturating_sub(LEAST_TEXT_COLUMNS))
+        .max(MARK_COLUMNS)
+}
+
+/// The margin of the first row of a printed task, `margin` columns wide: its mark and, where the
+/// margin has room beyond the mark, the indent, the status in words and the gap.
+///
+/// A status word wider than the room the margin has for it is cut with an ellipsis. A margin with
+/// room for a single column of it, which an ellipsis alone would fill, holds the mark and blanks.
+fn first_margin(
+    row: &bravebot_core::todo::Row,
+    mark: Span<'static>,
+    margin: usize,
+) -> Vec<Span<'static>> {
+    if margin <= MARGIN_BESIDE_THE_STATUS + 1 {
+        return vec![mark, Span::raw(" ".repeat(margin - MARK_COLUMNS))];
+    }
+    let column = margin - MARGIN_BESIDE_THE_STATUS;
+    let word = crate::status::cut(status_word(row.status), column);
+    let padding = " ".repeat(column - wrap::display_width(&word));
+    vec![
+        Span::raw(" ".repeat(INDENT_COLUMNS)),
+        mark,
+        Span::raw(" ".repeat(SPACE_COLUMNS)),
+        Span::styled(format!("{word}{padding}"), dim()),
+        Span::raw(" ".repeat(GAP_COLUMNS)),
+    ]
+}
+
+/// `text` with each character wider than `room` columns drawn as a replacement character, so that
+/// no row built from it is wider than `room`. `text` has been through [`printable`].
+fn fitting(text: &str, room: usize) -> String {
+    let mut fitted = String::with_capacity(text.len());
+    let mut at = 0;
+    for (bytes, columns) in wrap::clusters(text) {
+        if columns > room {
+            fitted.push('\u{fffd}');
+        } else {
+            fitted.push_str(text.get(at..at + bytes).unwrap_or_default());
+        }
+        at += bytes;
+    }
+    fitted
+}
+
+/// The whole plan, as `/todos` prints it (VIEW-37): a mark and the status in words for
+/// each task, then the task wrapped to `width`.
+///
+/// A row that is neither completed nor cancelled is drawn as work being done, as the plan under a
+/// turn is, or, where `left_open` says no turn is running, hollow and dim as the panel draws it
+/// (PANEL-10). The status word is the planner's either way.
+///
+/// The task is the planner's text, so it is laid out by [`marked_rows`] as the lines of a call's
+/// result are: control characters are drawn as visible characters, and every row the task breaks
+/// into begins with a margin drawn here. The first row's margin holds the mark and the status the
+/// task carries and the others' are blank, so no task can draw a mark, a status or a margin of its
+/// own.
+///
+/// No row is wider than `width`, so the transcript does not wrap one again and a continuation never
+/// starts outside the margin. The margin is shortened to leave the text [`LEAST_TEXT_COLUMNS`]
+/// (see [`printed_margin`]). Where `width` leaves the text a single column, a character that does
+/// not fit it is drawn as a replacement character, and at a single column there is room for the
+/// margin alone, so a task is drawn as its mark.
+pub(crate) fn plan_lines(
+    plan: &[bravebot_core::todo::Row],
+    left_open: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    if plan.is_empty() {
+        return Vec::new();
+    }
+    let margin = printed_margin(width);
+    let room = width.saturating_sub(margin);
+    plan.iter()
+        .flat_map(|row| {
+            let (glyph, mark_ink, text_ink) = if left_open && !row.struck() {
+                (crate::panel::LEFT_OPEN_MARKER, dim(), dim())
+            } else {
+                let (mark_ink, text_ink) = task_inks(row);
+                (row.marker, mark_ink, text_ink)
+            };
+            let first = first_margin(row, Span::styled(glyph, mark_ink), margin);
+            if room == 0 {
+                return vec![Line::from(first)];
+            }
+            let blank = Span::raw(" ".repeat(margin));
+            let text = fitting(&printable(&row.content), room);
+            let mut rows = marked_rows(&blank, &[Span::styled(text, text_ink)], width);
+            if let Some(head) = rows.first_mut() {
+                head.spans.splice(0..1, first);
+            }
+            rows
         })
         .collect()
 }

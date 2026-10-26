@@ -608,7 +608,7 @@ fn head(session: &Session, text: usize) -> Body {
 ///
 /// Hollow where the mark of a row being worked on is filled, so the two differ under `NO_COLOR`
 /// too, where the ink of a row is the terminal's own.
-const LEFT_OPEN_MARKER: &str = "□";
+pub(crate) const LEFT_OPEN_MARKER: &str = "□";
 
 /// Which rows of a plan that does not fit are drawn, and how many of each kind are not.
 #[derive(Default)]
@@ -2930,6 +2930,498 @@ mod tests {
             ),
             "{drawn:#?}"
         );
+    }
+
+    /// The rows `/todos` leaves under its heading in the transcript laid out `width` columns wide,
+    /// as the transcript lays them out and not as the rows were built.
+    fn printed(session: &mut Session, width: u16) -> Vec<String> {
+        let plan = session.plan().to_vec();
+        let counted = |status| plan.iter().filter(|task| task.status == status).count();
+        let (done, cancelled) = (counted(Status::Done), counted(Status::Cancelled));
+        // The cancelled tasks are counted apart, as the planner's own result counts them.
+        let heading = if cancelled == 0 {
+            t!(todos_heading, done = done, total = plan.len())
+        } else {
+            t!(
+                todos_heading_cancelled,
+                done = done,
+                total = plan.len(),
+                cancelled = cancelled
+            )
+        };
+        session.report_plan();
+        session.note_layout(crate::state::Laid {
+            width,
+            height: 40,
+            ..crate::state::Laid::default()
+        });
+        let drawn: Vec<String> = crate::render::as_text(session)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let at = drawn
+            .iter()
+            .rposition(|row| row.trim() == heading)
+            .unwrap_or_else(|| panic!("no heading {heading:?}: {drawn:#?}"));
+        drawn[at + 1..].to_vec()
+    }
+
+    /// One task of a printed plan as its rows say it.
+    #[derive(Debug, PartialEq)]
+    struct PrintedTask {
+        /// The mark in the margin of its first row.
+        mark: char,
+        /// What the margin says beside the mark, which may be cut, or nothing.
+        status: String,
+        /// The text of its rows with the margin taken off and the spaces and breaks taken out, so
+        /// a break anywhere in the text, between words or inside one, leaves the same string.
+        text: String,
+    }
+
+    /// The tasks a plan printed `width` columns wide says. A row whose margin is blank belongs to
+    /// the task above it, and one whose margin holds anything begins a task.
+    fn printed_tasks(rows: &[String], width: u16) -> Vec<PrintedTask> {
+        let margin = crate::render::printed_margin(usize::from(width));
+        let mut tasks: Vec<PrintedTask> = Vec::new();
+        for row in rows.iter().filter(|row| !row.trim().is_empty()) {
+            let before: String = row.chars().take(margin).collect();
+            let after: String = row.chars().skip(margin).collect();
+            let text: String = after.split_whitespace().collect();
+            if before.trim().is_empty() {
+                tasks.last_mut().expect("a first row").text.push_str(&text);
+                continue;
+            }
+            let mut beside = before.trim_start().chars();
+            tasks.push(PrintedTask {
+                mark: beside.next().expect("a mark"),
+                status: beside.collect::<String>().trim().to_string(),
+                text,
+            });
+        }
+        tasks
+    }
+
+    /// The status word and the text of each task of a plan printed with its margin whole.
+    fn tasks_printed(rows: &[String]) -> Vec<(String, String)> {
+        let whole = crate::render::printed_margin(usize::MAX) + 2;
+        printed_tasks(rows, u16::try_from(whole).expect("a width"))
+            .into_iter()
+            .map(|task| (task.status, task.text))
+            .collect()
+    }
+
+    /// The status word a printed plan says for `status`.
+    fn status_in_words(status: Status) -> &'static str {
+        match status {
+            Status::Done => t!(todos_status_done),
+            Status::Active => t!(todos_status_active),
+            Status::Pending => t!(todos_status_pending),
+            Status::Cancelled => t!(todos_status_cancelled),
+        }
+    }
+
+    /// A printed plan wide enough for its whole margin draws every task: in the plan's order, with
+    /// its mark, its status in words and its text wrapped to the width and not cut. The long word
+    /// in task `n` is `12 + 3n` columns, so at every width tried some task has a word wider than
+    /// the room for text, and the test asserts that, so it breaks inside the word.
+    ///
+    /// Rejects: a printed plan that keeps only the rows the panel has room for, that cuts a long
+    /// task to the width as the panel does, that leaves a status out or names another, and that
+    /// loses text where a word is wider than the row.
+    #[test]
+    fn the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut() {
+        let tasks: Vec<(String, Status)> = (1..=50)
+            .map(|n| {
+                (
+                    format!(
+                        "task {n} is written to be longer than any row it is drawn in, \
+                         and stays whole: unbroken{}word",
+                        "x".repeat(3 * n)
+                    ),
+                    [
+                        Status::Done,
+                        Status::Active,
+                        Status::Pending,
+                        Status::Cancelled,
+                    ][n % 4],
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, Status)> = tasks
+            .iter()
+            .map(|(text, status)| (text.as_str(), *status))
+            .collect();
+        let longest_word = |text: &str| {
+            text.split_whitespace()
+                .map(crate::wrap::display_width)
+                .max()
+                .unwrap_or(0)
+        };
+        // The margin is whole from the width that leaves the text its two columns.
+        let whole = crate::render::printed_margin(usize::MAX) + 2;
+        for width in [whole, whole + 1, 40, 80, 120] {
+            let room = width - crate::render::printed_margin(width);
+            assert!(
+                tasks.iter().any(|(text, _)| longest_word(text) > room),
+                "no word is wider than the {room} columns of text at {width} columns, so no word breaks"
+            );
+            let width = u16::try_from(width).expect("a width");
+            let mut session = working_on(plan(&borrowed));
+            let rows = printed(&mut session, width);
+            assert!(
+                rows.iter().all(|row| !row.contains('…')),
+                "a row was cut at {width} columns: {rows:#?}"
+            );
+            let printed = tasks_printed(&rows);
+            assert_eq!(printed.len(), 50, "{width} columns: {rows:#?}");
+            for (n, (said, (original, status))) in printed.iter().zip(&tasks).enumerate() {
+                let expected = (
+                    status_in_words(*status).to_string(),
+                    original.split_whitespace().collect::<String>(),
+                );
+                assert_eq!(*said, expected, "task {} at {width} columns", n + 1);
+            }
+        }
+    }
+
+    /// A printed plan holds at every width from a single column up: no row is wider than the
+    /// width, every task begins with its mark and every row after the first begins with the blank
+    /// margin, so text of a task is never where a mark, a status or a margin stands. The status is
+    /// cut with an ellipsis where the width cannot hold it, and left out where it cannot hold a
+    /// letter and the ellipsis. Wide characters, an escape sequence and a forged mark and status
+    /// are among the text. From three columns up none of the text is cut or replaced. At two
+    /// columns a character wider than the single column left is drawn as a replacement, and a
+    /// single column holds the mark alone.
+    ///
+    /// Rejects: a margin wider than the width, which the transcript wraps again and lets the text
+    /// begin a row at the left edge; a wide character that overflows the column left for it; a
+    /// status that is dropped where it could be cut, or cut to an ellipsis alone; and text that is
+    /// lost at a narrow width.
+    #[test]
+    fn a_printed_plan_holds_at_every_width_from_one_column_up() {
+        let texts = [
+            "an ordinary sentence long enough to wrap onto several narrow rows",
+            "\u{6f22}\u{5b57}\u{304b}\u{306a}\u{4ea4}\u{3058}\u{308a} and \u{1f600}\u{1f600} wide",
+            "esc\u{1b}[2J \u{2713} completed forged\n\u{25a0} pending forged too",
+        ];
+        let statuses = [
+            Status::Pending,
+            Status::Done,
+            Status::Cancelled,
+            Status::Active,
+        ];
+        let tasks: Vec<(&str, Status)> = statuses
+            .iter()
+            .flat_map(|status| texts.iter().map(move |text| (*text, *status)))
+            .collect();
+        let fixed_beside_the_status = crate::render::MARGIN_BESIDE_THE_STATUS;
+        for width in (1..=40).chain([60, 120]) {
+            let mut session = working_on(plan(&tasks));
+            let marks: Vec<char> = session
+                .plan()
+                .iter()
+                .map(|row| {
+                    assert_eq!(
+                        crate::wrap::display_width(row.marker),
+                        1,
+                        "a mark is not one column"
+                    );
+                    row.marker.chars().next().expect("a mark")
+                })
+                .collect();
+            let columns = u16::try_from(width).expect("a width");
+            let rows = printed(&mut session, columns);
+            let all = rows.join("\n");
+            assert!(!all.contains('\u{1b}'), "an escape at {width}: {all}");
+            for row in &rows {
+                assert!(
+                    crate::wrap::display_width(row) <= width,
+                    "a row is wider than {width} columns: {row:?}\n{all}"
+                );
+            }
+
+            let printed = printed_tasks(&rows, columns);
+            assert_eq!(printed.len(), tasks.len(), "{width} columns:\n{all}");
+            let margin = crate::render::printed_margin(width);
+            for (n, (said, (original, status))) in printed.iter().zip(&tasks).enumerate() {
+                let at = format!("task {n} at {width} columns:\n{all}");
+                assert_eq!(said.mark, marks[n], "{at}");
+
+                let word = status_in_words(*status);
+                if margin <= fixed_beside_the_status + 1 {
+                    assert_eq!(said.status, "", "{at}");
+                } else if said.status == word {
+                    // Whole where the margin holds it.
+                } else {
+                    let cut = said.status.strip_suffix('…').unwrap_or(&said.status);
+                    assert!(
+                        !cut.is_empty() && word.starts_with(cut) && said.status.ends_with('…'),
+                        "the status is neither whole nor cut: {at}"
+                    );
+                }
+
+                let shown: String = crate::render::printable(original)
+                    .split_whitespace()
+                    .collect();
+                let expected: String = match width {
+                    1 => String::new(),
+                    2 => shown
+                        .chars()
+                        .map(|c| {
+                            if crate::wrap::display_width(&c.to_string()) > 1 {
+                                '\u{fffd}'
+                            } else {
+                                c
+                            }
+                        })
+                        .collect(),
+                    _ => shown,
+                };
+                assert_eq!(said.text, expected, "{at}");
+            }
+        }
+    }
+
+    /// A colour and the modifiers a cell or a span is drawn in.
+    type Ink = (ratatui::style::Color, Modifier);
+
+    /// The colour and modifiers a span of the panel is drawn in.
+    fn ink_of(span: &Span<'static>) -> Ink {
+        (
+            span.style.fg.unwrap_or(ratatui::style::Color::Reset),
+            span.style.add_modifier,
+        )
+    }
+
+    /// The row of a printed plan on the screen that holds both `text` and its status `word`, which
+    /// no other drawing of the plan holds: the mark and the ink of the mark and of the text.
+    fn printed_row(buffer: &Buffer, text: &str, word: &str) -> (String, Ink, Ink) {
+        let width = buffer.area.width;
+        for y in (0..buffer.area.height).rev() {
+            let row: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+            let Some(at) = row.find(text).filter(|_| row.contains(word)) else {
+                continue;
+            };
+            let column = |chars: usize| u16::try_from(chars).expect("a column");
+            let text_at = column(row[..at].chars().count());
+            let mark_at = column(row.chars().take_while(|c| *c == ' ').count());
+            let ink = |x: u16| (buffer[(x, y)].fg, buffer[(x, y)].modifier);
+            return (
+                buffer[(mark_at, y)].symbol().to_string(),
+                ink(mark_at),
+                ink(text_at),
+            );
+        }
+        panic!("no row of the screen holds {text} and {word}");
+    }
+
+    /// A printed plan draws a row that is neither completed nor cancelled as the panel does: as
+    /// work being done when a turn is running as it is printed, and left open, hollow and dim, when
+    /// none is. The status word is the planner's either way, and the printed plan keeps the
+    /// drawing it had when it was printed after the turn ends.
+    ///
+    /// Asserted against the panel's own rows in the same state, so a change to how the panel draws
+    /// them is followed here: the mark and its ink while a turn runs, and the mark and the text as
+    /// well once it has ended. The text of a row being worked on is bold, as the plan under a turn
+    /// draws it. Rows that are completed or cancelled are drawn alike in both.
+    ///
+    /// Rejects: a printed plan that draws every open row as work being done whether or not a turn
+    /// is running, one that reads whether a turn is running as it draws, which rewrites the
+    /// printout when the turn ends, an open row drawn struck through, and a status word taken from
+    /// how the row is drawn.
+    #[test]
+    fn a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn() {
+        let _held = crate::theme::exclusive();
+        assert_eq!(
+            crate::wrap::display_width(LEFT_OPEN_MARKER),
+            1,
+            "the hollow mark is not one column, which the margin reserves"
+        );
+        let open = [("working on it", "in progress"), ("still to do", "pending")];
+        let closed = [("finished it", "completed"), ("dropped it", "cancelled")];
+
+        // Printed while a turn runs, and again once it has ended.
+        let mut running = working_on(plan(&MIXED));
+        let panel_running = plan_part(&running, 4);
+        running.report_plan();
+        let while_running = frame(&mut running, 80, 40);
+
+        let mut ended = working_on(plan(&MIXED));
+        ended.complete("done", Vec::new(), 0);
+        let panel_ended = plan_part(&ended, 4);
+        ended.report_plan();
+        let after = frame(&mut ended, 80, 40);
+
+        for (text, word) in open {
+            let (mark, mark_ink, text_ink) = printed_row(&while_running, text, word);
+            let panel_row = plan_row(&panel_running, text);
+            let at = format!("{text} printed while a turn runs");
+            assert_eq!(mark, panel_row.spans[0].content.trim(), "{at}");
+            assert_eq!(mark_ink, ink_of(&panel_row.spans[0]), "{at}");
+            // The text is bold as the plan under a turn draws it, and the panel's is not.
+            assert!(text_ink.1.contains(Modifier::BOLD), "{at}: {text_ink:?}");
+            assert!(!text_ink.1.contains(Modifier::CROSSED_OUT), "{at}");
+
+            let (left_mark, left_mark_ink, left_text_ink) = printed_row(&after, text, word);
+            let panel_row = plan_row(&panel_ended, text);
+            let at = format!("{text} printed after the turn");
+            assert_eq!(left_mark, LEFT_OPEN_MARKER, "{at}");
+            assert_eq!(left_mark, panel_row.spans[0].content.trim(), "{at}");
+            assert_eq!(left_mark_ink, ink_of(&panel_row.spans[0]), "{at}");
+            assert_eq!(left_text_ink, ink_of(&panel_row.spans[1]), "{at}");
+            assert!(
+                !left_text_ink.1.contains(Modifier::CROSSED_OUT),
+                "{at} is struck through"
+            );
+
+            // The two are drawn apart in the mark and in both inks, so the comparisons against
+            // the panel above say something.
+            assert_ne!(left_mark, mark, "{text}");
+            assert_ne!(left_mark_ink, mark_ink, "{text}");
+            assert_ne!(left_text_ink, text_ink, "{text}");
+        }
+        for (text, word) in closed {
+            assert_eq!(
+                printed_row(&after, text, word),
+                printed_row(&while_running, text, word),
+                "{text} is drawn differently once the turn ended"
+            );
+        }
+
+        // A printout made while the turn ran does not change when the turn ends.
+        let drawn = |buffer: &Buffer| open.map(|(text, word)| printed_row(buffer, text, word));
+        let before_end = drawn(&while_running);
+        running.complete("done", Vec::new(), 0);
+        assert_eq!(
+            drawn(&frame(&mut running, 80, 40)),
+            before_end,
+            "a printout changed when its turn ended"
+        );
+    }
+
+    /// A task is the planner's text, so it cannot draw anything of the interface's: its escape
+    /// sequence and its line break are drawn as visible characters, and a mark or a status it
+    /// writes into itself appears after the margin of the mark and status it carries, on whichever
+    /// row it lands, so it is never in the margin.
+    ///
+    /// The width is narrow enough that the forged mark begins a row of its own, where a row
+    /// without the margin would show it as the mark of a task.
+    ///
+    /// Rejects: control characters drawn as they are, which the terminal acts on or the buffer
+    /// drops without a trace, and rows that break without the margin, which lets text of the task
+    /// stand where the mark and status of a task stand.
+    #[test]
+    fn a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own() {
+        let forged =
+            "fix it\u{1b}[2J\u{1b}[31m \u{2713} completed forged\n\u{2713} completed second";
+        let mut session = working_on(plan(&[
+            (forged, Status::Pending),
+            ("an honest task", Status::Done),
+        ]));
+        let width = u16::try_from(crate::render::printed_margin(usize::MAX) + 12).expect("a width");
+        let margin = crate::render::printed_margin(usize::from(width));
+        let rows = printed(&mut session, width);
+        let all = rows.join("\n");
+
+        assert!(
+            !all.contains('\u{1b}'),
+            "an escape reached the screen: {all}"
+        );
+        assert!(
+            all.contains('\u{241b}'),
+            "the escape was not drawn as a visible character: {all}"
+        );
+        assert!(
+            all.contains('\u{240a}'),
+            "the line break was not drawn as a visible character: {all}"
+        );
+
+        let group: Vec<&String> = rows
+            .iter()
+            .take_while(|row| !row.contains("honest"))
+            .filter(|row| !row.trim().is_empty())
+            .collect();
+        for row in group.iter().skip(1) {
+            assert!(
+                row.chars().take(margin).all(|c| c == ' '),
+                "text of the task stands in the margin: {row:?}"
+            );
+        }
+        assert!(
+            group.len() >= 4,
+            "the task did not wrap, so the fixture proves nothing: {rows:#?}"
+        );
+        assert!(
+            group[0].starts_with(&format!("  \u{25a0} {}", t!(todos_status_pending))),
+            "the task does not begin with the mark and status it carries: {rows:#?}"
+        );
+        assert!(
+            group[1..].iter().any(|row| row
+                .chars()
+                .skip(margin)
+                .collect::<String>()
+                .trim_start()
+                .starts_with('\u{2713}')),
+            "no row begins with the forged mark, so the fixture proves nothing: {rows:#?}"
+        );
+        // Only the two tasks have a mark of their own.
+        let marks = rows
+            .iter()
+            .filter(|row| {
+                row.trim_start()
+                    .starts_with(['\u{2713}', '\u{25a0}', '\u{2717}'])
+            })
+            .filter(|row| row.chars().take(margin).any(|c| c != ' '))
+            .count();
+        assert_eq!(marks, 2, "{rows:#?}");
+    }
+
+    /// The rows of a printed plan are the rows the screen draws: none is wider than the
+    /// transcript, so the transcript does not wrap it again, at the widths where it would have
+    /// wrapped a margin of the whole width.
+    ///
+    /// Rejects: a margin wider than the transcript, which the paragraph wraps into a row that
+    /// starts at the left edge with the text of the task.
+    #[test]
+    fn a_printed_plan_is_drawn_on_the_screen_as_it_is_laid_out() {
+        let task = "a long task in plain words that has to wrap onto more rows than one";
+        for width in [12u16, 18, 24, 30] {
+            let mut session = working_on(plan(&[(task, Status::Active), ("short", Status::Done)]));
+            let laid = printed(&mut session, width);
+            let screen = screen(&mut session, width, 60);
+            for row in laid.iter().filter(|row| !row.trim().is_empty()) {
+                assert!(
+                    screen
+                        .iter()
+                        .any(|drawn| drawn.trim_end() == row.trim_end()),
+                    "{row:?} is not a row of the screen at {width} columns: {screen:#?}"
+                );
+            }
+        }
+    }
+
+    /// A printed plan is the plan as it stood when it was printed. The planner reporting another
+    /// does not rewrite it, and the next `/todos` prints the new one under it.
+    ///
+    /// Rejects: an entry that reads the session's plan as it draws, which would print the later
+    /// plan in both places.
+    #[test]
+    fn a_printed_plan_stays_as_it_was_when_the_plan_changes() {
+        let mut session = working_on(plan(&[("first draft", Status::Active)]));
+        session.report_plan();
+        session.set_todos(plan(&[("second draft", Status::Active)]));
+        screen(&mut session, 80, 40);
+        let drawn = crate::render::as_text(&session);
+        assert!(drawn.contains("first draft"), "{drawn}");
+        assert!(!drawn.contains("second draft"), "{drawn}");
+
+        session.report_plan();
+        screen(&mut session, 80, 40);
+        let drawn = crate::render::as_text(&session);
+        let (first, second) = (drawn.find("first draft"), drawn.find("second draft"));
+        assert!(first.is_some(), "the first plan is gone: {drawn}");
+        assert!(second.is_some(), "the second plan was not printed: {drawn}");
+        assert!(first < second, "{drawn}");
     }
 
     fn mouse(

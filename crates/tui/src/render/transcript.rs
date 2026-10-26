@@ -21,7 +21,7 @@ use crate::wrap;
 
 use super::{
     DETAIL_MARKER, LEAD, MAX_DIFF_LINES, TURN_MARKER, activity_lines, call_rows, delegate_lines,
-    dim, printable, quarantined_lines, reported_lines, returned_lines, todo_lines,
+    dim, plan_lines, printable, quarantined_lines, reported_lines, returned_lines, todo_lines,
 };
 
 /// Draw what the model said, styled rather than shown with its markdown markers.
@@ -342,6 +342,13 @@ fn entry_extras(
 
     // The plan the turn worked to, kept next to what it produced.
     lines.extend(todo_lines(&entry.todos));
+
+    // The whole plan, where the person asked for it to be printed (VIEW-37).
+    lines.extend(plan_lines(
+        &entry.whole_plan,
+        entry.whole_plan_left_open,
+        width as usize,
+    ));
 
     if session.show_trail && !entry.trail.is_empty() {
         for recorded in &entry.trail {
