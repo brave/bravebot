@@ -15,6 +15,7 @@ fr:chatgpt-start-row
 fr:chatgpt-use-by-asking
 fr:chatgpt-use-by-naming
 fr:command-outputs
+fr:configured-start-heading
 fr:outputs-hint
 fr:outputs-none
 fr:watching-outputs-title

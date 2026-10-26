@@ -4555,6 +4555,8 @@ chatgpt-start-chosen = Using { $name }. It is remembered for the next start, and
 # Said instead where what the start reads back is not the pick: the name is one that is not kept or the write
 # failed. The start is then refused as it is where nothing is picked.
 chatgpt-start-not-remembered = Could not remember { $name }, so no model is chosen.
+# The same question where a Bedrock account or a gateway is configured and the model in force is Brave's own.
+configured-start-heading = A model service is configured, and offers these models:
 
 ## A model the ChatGPT account does not offer
 

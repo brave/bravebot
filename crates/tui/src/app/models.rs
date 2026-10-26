@@ -63,6 +63,36 @@ pub(super) fn list_models_for_picker(
 
 /// The rosters of every service, with the ChatGPT account's where `account` says to ask it.
 fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<PickerRoster, String> {
+    let (mut configured, mut problems) = configured_rows(config, chosen);
+
+    // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
+    // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
+    // names and is said, so a person who signed in does not take them for what the account reaches.
+    if account {
+        let asked = ask_the_account(config);
+        problems.extend(account_problem_said(&asked));
+        configured.extend(account_rows(asked, model_in_force(chosen, config)));
+    }
+    let rostered = |models| PickerRoster {
+        models: requestable(config, models),
+        problems,
+    };
+
+    // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
+    // would list a roster whose every request then fails unsigned.
+    if !config.serves_aichat() {
+        return Ok(rostered(configured));
+    }
+
+    combined(configured, fetch_models(config)).map(rostered)
+}
+
+/// The rows of the Bedrock account and of every gateway the configuration names, in the order a
+/// picker lists them, and what a person is told where a gateway's rows could not be had.
+fn configured_rows(
+    config: &Config,
+    chosen: Option<&str>,
+) -> (Vec<bravebot_aichat::models::Model>, Vec<String>) {
     // Bedrock is additive. Its tiers come from configuration rather than from a listing, since it has
     // no listing endpoint and an ARN does not say which model it resolves to, but the Brave roster is
     // what everyone has and a settings block adds to it rather than replacing it.
@@ -111,27 +141,7 @@ fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<Picker
             }
         }
     }
-
-    // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
-    // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
-    // names and is said, so a person who signed in does not take them for what the account reaches.
-    if account {
-        let asked = ask_the_account(config);
-        problems.extend(account_problem_said(&asked));
-        configured.extend(account_rows(asked, model_in_force(chosen, config)));
-    }
-    let rostered = |models| PickerRoster {
-        models: requestable(config, models),
-        problems,
-    };
-
-    // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
-    // would list a roster whose every request then fails unsigned.
-    if !config.serves_aichat() {
-        return Ok(rostered(configured));
-    }
-
-    combined(configured, fetch_models(config)).map(rostered)
+    (configured, problems)
 }
 
 /// Run a listing request under a policy that may fetch and nothing else.
@@ -312,6 +322,17 @@ pub fn account_models_to_start_on(
         }
         none => Err(none),
     }
+}
+
+/// The rows of the Bedrock account and the gateways a start nothing serves offers to choose a model
+/// from ([BACKEND-39](../../../../docs/specs/backends.md#BACKEND-39)), as the picker lists them and
+/// without the models the machine-level layer refuses.
+///
+/// Only the configured services: Brave's own roster is what the start was refused for. A gateway that
+/// names no models is asked, and one that cannot be asked adds none, so an empty answer is a start
+/// that goes on to its refusal.
+pub fn configured_models_to_start_on(config: &Config) -> Vec<bravebot_aichat::models::Model> {
+    requestable(config, configured_rows(config, None).0)
 }
 
 /// The roster without the models the machine-level layer refuses (BACKEND-48).

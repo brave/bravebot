@@ -72,7 +72,10 @@ pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
 mod models;
 use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
-pub use models::{account_models_to_start_on, adopt_listing_for_model, reads_structured_output};
+pub use models::{
+    account_models_to_start_on, adopt_listing_for_model, configured_models_to_start_on,
+    reads_structured_output,
+};
 
 mod opening;
 use opening::*;
