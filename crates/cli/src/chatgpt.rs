@@ -10,13 +10,14 @@
 
 use crate::exit::{Ending, fail};
 use crate::plain::Prompting;
+use bravebot_agent::chatgpt::AccountModels;
 use bravebot_agent::confirm::Decision;
 use bravebot_config::Config;
 use bravebot_i18n::t;
 use bravebot_net::Transport;
 use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
 use bravebot_skus::chatgpt::{
-    Account, AccountError, Announcement, Class, Defect, Hosts, Limits, Pages, SignInError,
+    Account, AccountError, Announcement, Class, Defect, Hosts, Limits, Pages, SignInError, SignedIn,
 };
 use std::ffi::OsStr;
 use std::io::IsTerminal;
@@ -71,11 +72,14 @@ pub(crate) fn login() -> ExitCode {
     let incognito = bravebot_core::incognito::engaged();
     // A configuration that cannot be read cannot say whether a block names the service. It is not
     // read in an incognito session, where the answer would not change the refusal.
-    let named_by_a_gateway = match Config::from_env() {
-        _ if incognito => false,
-        Ok(config) => config.providers.iter().any(|provider| provider.id == NAME),
+    let config = match Config::from_env() {
+        _ if incognito => None,
+        Ok(config) => Some(config),
         Err(problem) => return fail(Ending::Configuration, problem),
     };
+    let named_by_a_gateway = config
+        .as_ref()
+        .is_some_and(|config| config.providers.iter().any(|provider| provider.id == NAME));
     let stored = matches!(Account::load(), Ok(Some(_)));
     let facts = Facts {
         incognito,
@@ -90,7 +94,7 @@ pub(crate) fn login() -> ExitCode {
     after_asking(
         stored,
         &mut Prompting::new(std::io::stdin().lock(), std::io::stderr()),
-        sign_in,
+        || sign_in(config.as_ref()),
     )
 }
 
@@ -114,8 +118,11 @@ fn after_asking<R: std::io::BufRead, W: std::io::Write>(
     then()
 }
 
-/// The sign-in itself: the listener, the address, the browser, the exchange and the file.
-fn sign_in() -> ExitCode {
+/// The sign-in itself: the listener, the address, the browser, the exchange and the file, and then
+/// what the account reaches.
+///
+/// `config` is `None` only in an incognito session, which [`refusal`] stops before this runs.
+fn sign_in(config: Option<&Config>) -> ExitCode {
     let signed_in = bravebot_skus::chatgpt::sign_in(
         &Hosts::compiled_in(),
         Transport::shared().agent_config_builder(),
@@ -130,16 +137,81 @@ fn sign_in() -> ExitCode {
         Ok(signed_in) => signed_in,
         Err(stopped) => return fail(Ending::Failed, said_of_sign_in(&stopped)),
     };
-    println!(
+    // A standard output that cannot be written to has nobody to tell, and the sign-in is stored
+    // whatever was said. Read once the sign-in is stored, since whether a start would ask depends on it.
+    let asks = config.is_some_and(crate::model::a_start_would_ask);
+    finish(
+        &signed_in,
+        &mut std::io::stdout(),
+        || match config {
+            Some(config) => bravebot_agent::chatgpt::account_models(
+                config,
+                &mut bravebot_session::audit::Trail::new(),
+            ),
+            None => AccountModels::Absent,
+        },
+        asks,
+    )
+    .unwrap_or(());
+    ExitCode::SUCCESS
+}
+
+/// Say that the sign-in is stored, then ask what the account reaches and say that
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// The sign-in is said before the listing is asked, so a service slow to answer leaves a person
+/// knowing it was kept. What the listing says never changes the ending: the sign-in is stored
+/// whatever the account reaches today.
+///
+/// `asks` is whether a start would ask which of the account's models to use, which decides whether
+/// the sentence sends the person to run `bravebot`.
+fn finish(
+    signed_in: &SignedIn,
+    shown: &mut impl std::io::Write,
+    listing: impl FnOnce() -> AccountModels,
+    asks: bool,
+) -> std::io::Result<()> {
+    writeln!(
+        shown,
         "{}",
         t!(
             chatgpt_stored,
-            expires = signed_in.expires,
+            expires = signed_in.expires.clone(),
             path = signed_in.stored_in.display().to_string()
         )
-    );
-    println!("{}", t!(chatgpt_use_by_name));
-    ExitCode::SUCCESS
+    )?;
+    shown.flush()?;
+    writeln!(shown, "{}", said_of_listing(&listing(), asks))
+}
+
+/// The sentence for what the listing answered: how to choose a model, that the account reaches none,
+/// or that the listing could not be had and why.
+///
+/// A listing that was read and is empty is the service's answer, and is not told as a failure. One
+/// refused in a code that names the account is said in that clause's sentence, which does not send
+/// the person to sign in again.
+///
+/// Each sentence that names a way to use the account names a command that works as typed: `bravebot`
+/// only where `asks` says a start would ask which model to use, or a command that names one together
+/// with the prompt or the task that starts something. A person with a service of their own configured,
+/// or a model in force that something serves, is not asked, and is not told they will be. `/model` is
+/// named only as what lists the models once a session is open, since the sign-in does not open one.
+pub(crate) fn said_of_listing(listing: &AccountModels, asks: bool) -> String {
+    match listing {
+        AccountModels::Offered(models) if models.is_empty() => t!(chatgpt_reaches_no_model).into(),
+        AccountModels::Unreadable => t!(chatgpt_listing_unreadable).into(),
+        AccountModels::Compiled(_) => t!(chatgpt_listing_compiled).into(),
+        AccountModels::Refused(refusal) => {
+            t!(
+                chatgpt_listing_refused,
+                refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
+            )
+        }
+        AccountModels::Offered(_) | AccountModels::Absent => match asks {
+            true => t!(chatgpt_use_by_asking).into(),
+            false => t!(chatgpt_use_by_naming).into(),
+        },
+    }
 }
 
 /// Show the address and the port, then ask for the browser.
@@ -243,23 +315,24 @@ pub(crate) fn logout() -> ExitCode {
 /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)): the variants hold none, and a
 /// path and what the operating system said are all a store failure adds.
 fn said_of_sign_in(stopped: &SignInError) -> String {
+    let class = |class: &Class| match class {
+        Class::Refused => t!(chatgpt_class_refused),
+        Class::RateLimited => t!(chatgpt_class_rate_limited),
+        Class::Unavailable => t!(chatgpt_class_unavailable),
+        Class::Incomplete => t!(chatgpt_class_incomplete),
+        Class::Transport => t!(chatgpt_class_transport),
+    };
     match stopped {
         SignInError::Listener => t!(chatgpt_failed_listener).into(),
         SignInError::TimedOut => t!(chatgpt_failed_timed_out).into(),
         SignInError::NoCode => t!(chatgpt_failed_no_code).into(),
         SignInError::NoClient => t!(chatgpt_failed_no_client).into(),
         SignInError::ClientChanged => t!(chatgpt_failed_client_changed).into(),
-        SignInError::Exchange(class) => t!(
-            chatgpt_failed_exchange,
-            reason = match class {
-                Class::Refused => t!(chatgpt_class_refused),
-                Class::RateLimited => t!(chatgpt_class_rate_limited),
-                Class::Unavailable => t!(chatgpt_class_unavailable),
-                Class::Incomplete => t!(chatgpt_class_incomplete),
-                Class::Transport => t!(chatgpt_class_transport),
-            }
-        ),
+        SignInError::Exchange(failed) => t!(chatgpt_failed_exchange, reason = class(failed)),
         SignInError::NoUseScope => t!(chatgpt_failed_no_use_scope).into(),
+        SignInError::KeySet(failed) => t!(chatgpt_failed_key_set, reason = class(failed)),
+        SignInError::IdToken => t!(chatgpt_failed_id_token).into(),
+        SignInError::Clock => t!(chatgpt_failed_clock).into(),
         SignInError::Store(failure) => said_of_account(failure),
     }
 }
@@ -530,6 +603,201 @@ mod tests {
         let _ = &mut shown;
     }
 
+    /// A sign-in as the flow reports it, with a path that names nothing real.
+    fn signed_in() -> SignedIn {
+        SignedIn {
+            expires: "2026-10-22T21:05:27Z".to_string(),
+            stored_in: std::path::PathBuf::from("/placeholder/chatgpt-account.json"),
+        }
+    }
+
+    /// CHATGPT-8, CHATGPT-9: once the sign-in is stored the command says what the account reaches,
+    /// and each answer of the listing has its own sentence. An account that reaches no model is told
+    /// as that and not as a failure, and a listing that could not be had is not told as the account
+    /// reaching none, since the person would then stop looking for a model the account has. Where
+    /// the compiled list stands in for it the sentence says so and that a row may be refused, and
+    /// where nothing is offered it says that. A refusal in a code that names the account is said in
+    /// its own sentence and does not send the person to sign in again. Only a listing with a model
+    /// in it sends the person to run `bravebot` to choose one.
+    #[test]
+    fn each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose() {
+        use bravebot_agent::chatgpt::{Model, Refusal};
+
+        let reaches_none = said_of_listing(&AccountModels::Offered(Vec::new()), true);
+        let unreadable = said_of_listing(&AccountModels::Unreadable, true);
+        let compiled = said_of_listing(&AccountModels::Compiled(vec![Model::automatic()]), true);
+        let offered = said_of_listing(&AccountModels::Offered(vec![Model::automatic()]), true);
+        assert_eq!(reaches_none, t!(chatgpt_reaches_no_model));
+        assert_eq!(unreadable, t!(chatgpt_listing_unreadable));
+        assert_eq!(compiled, t!(chatgpt_listing_compiled));
+        assert_eq!(offered, t!(chatgpt_use_by_asking));
+        assert_eq!(said_of_listing(&AccountModels::Absent, true), offered);
+
+        let mut distinct = vec![
+            reaches_none.clone(),
+            unreadable.clone(),
+            compiled.clone(),
+            offered.clone(),
+        ];
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 4, "two answers share a sentence");
+        assert!(
+            unreadable.contains("--model chatgpt/<model>"),
+            "no way out for an unreadable listing: {unreadable}"
+        );
+        assert!(
+            offered.starts_with("Run bravebot"),
+            "the sentence does not send the person to the command that asks: {offered}"
+        );
+        assert!(
+            compiled.contains("built-in list") && compiled.contains("cannot reach"),
+            "the compiled list was not said to be one that may be refused: {compiled}"
+        );
+        assert!(
+            compiled.contains("--model chatgpt/<model>"),
+            "no way out for a model the account cannot reach: {compiled}"
+        );
+        assert!(
+            !compiled.contains("reaches no model") && !unreadable.contains("built-in"),
+            "an answer was told as another: {compiled} / {unreadable}"
+        );
+        assert!(
+            !reaches_none.contains("could not"),
+            "an empty listing was told as a failure: {reaches_none}"
+        );
+        assert!(
+            !unreadable.contains("reaches no model"),
+            "a failed listing was told as the account having nothing: {unreadable}"
+        );
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let said = said_of_listing(&AccountModels::Refused(refusal), true);
+            assert_eq!(
+                said,
+                t!(
+                    chatgpt_listing_refused,
+                    refusal = bravebot_agent::chatgpt::said_of_refusal(refusal)
+                ),
+                "{refusal:?}"
+            );
+            assert!(
+                !said.contains("sign in again") && !said.contains("auth login"),
+                "a refusal sent the person to sign in again: {said}"
+            );
+        }
+    }
+
+    /// CHATGPT-8: each sentence the sign-in ends with that names a way to use the account names the
+    /// two commands that work as typed, one that opens a session and one that runs a task, each with
+    /// a model, and names `/model` only after saying a session is open. The regressions it rejects
+    /// are `bravebot --model chatgpt/<model>`, which is refused for want of a task, and a
+    /// sentence that sends a person to `/model` before any session can be open, which is what the
+    /// sign-in ended with before a start asked which model to use.
+    #[test]
+    fn every_command_the_sign_in_ends_by_naming_is_one_that_works_as_typed() {
+        use bravebot_agent::chatgpt::Model;
+        const WORKING: [&str; 2] = [
+            r#"bravebot -i "<prompt>" --model chatgpt/<model>"#,
+            r#"bravebot "<task>" --model chatgpt/<model>"#,
+        ];
+
+        for asks in [true, false] {
+            for listing in [
+                AccountModels::Offered(vec![Model::automatic()]),
+                AccountModels::Unreadable,
+                AccountModels::Compiled(vec![Model::automatic()]),
+            ] {
+                let said = said_of_listing(&listing, asks);
+                let named: Vec<&str> = said.split('`').skip(1).step_by(2).collect();
+                assert_eq!(named, WORKING, "{said}");
+                assert!(!said.contains("bravebot --model"), "{said}");
+                if let Some(at) = said.find("/model") {
+                    assert!(
+                        said[..at].contains("session is open"),
+                        "/model is named before a session is open: {said}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CHATGPT-8, BACKEND-39: the sign-in promises the question only where a start would ask it. The
+    /// sentence that sends a person to run `bravebot` for it is said where one would, and where it
+    /// would not, because a service of the person's own is configured or a model is in force that
+    /// something serves, the sentence names the commands and says nothing of being asked. No other
+    /// sentence the command ends with promises it: where the listing could not be had nothing can be
+    /// asked, whoever the person is. The regression it rejects is the promise made to everybody.
+    #[test]
+    fn the_sign_in_promises_the_question_only_where_a_start_would_ask_it() {
+        use bravebot_agent::chatgpt::Model;
+        let models = || vec![Model::automatic()];
+
+        let asked = said_of_listing(&AccountModels::Offered(models()), true);
+        let not_asked = said_of_listing(&AccountModels::Offered(models()), false);
+        assert_eq!(asked, t!(chatgpt_use_by_asking));
+        assert_eq!(not_asked, t!(chatgpt_use_by_naming));
+        assert!(asked.contains("Run bravebot"), "{asked}");
+        for said in [
+            &not_asked,
+            &said_of_listing(&AccountModels::Unreadable, true),
+            &said_of_listing(&AccountModels::Compiled(models()), true),
+            &said_of_listing(&AccountModels::Unreadable, false),
+            &said_of_listing(&AccountModels::Compiled(models()), false),
+        ] {
+            assert!(
+                !said.contains("Run bravebot") && !said.contains("asked which"),
+                "the sentence promises a question: {said}"
+            );
+        }
+        for listing in [AccountModels::Unreadable, AccountModels::Compiled(models())] {
+            assert_eq!(
+                said_of_listing(&listing, true),
+                said_of_listing(&listing, false),
+                "a sentence for a listing that could not be had changed with who is asked"
+            );
+        }
+    }
+
+    /// CHATGPT-8: the sign-in is said before the listing is asked, so a service slow to answer
+    /// leaves a person knowing the sign-in was kept, and the listing is asked once. What the listing
+    /// says follows, and the line that says the sign-in is stored names its expiry and where it is
+    /// kept. The regression it rejects is asking first, which holds the confirmation back for as
+    /// long as the request takes.
+    #[test]
+    fn the_sign_in_is_said_before_the_listing_is_asked_and_the_listing_is_asked_once() {
+        let shown = Shown::default();
+        let by_then = std::cell::RefCell::new(None);
+        let mut asked = 0;
+
+        finish(
+            &signed_in(),
+            &mut shown.clone(),
+            || {
+                asked += 1;
+                *by_then.borrow_mut() =
+                    Some(String::from_utf8(shown.0.borrow().clone()).expect("text"));
+                AccountModels::Offered(Vec::new())
+            },
+            false,
+        )
+        .expect("written");
+
+        assert_eq!(asked, 1);
+        let stored = t!(
+            chatgpt_stored,
+            expires = "2026-10-22T21:05:27Z",
+            path = "/placeholder/chatgpt-account.json"
+        );
+        assert_eq!(
+            by_then.into_inner().expect("the listing was asked"),
+            format!("{stored}\n"),
+            "the sign-in was not said before the listing was asked"
+        );
+        let all = String::from_utf8(shown.0.borrow().clone()).expect("text");
+        assert_eq!(all, format!("{stored}\n{}\n", t!(chatgpt_reaches_no_model)));
+    }
+
     /// CHATGPT-8: each step that stops the sign-in has its own sentence, the sentences of the
     /// failed requests differ by the class of the status, and each names the command that is the
     /// remedy where signing in again is one. The sentence for a refused scope names the gateway
@@ -548,6 +816,10 @@ mod tests {
             SignInError::Exchange(Class::Unavailable),
             SignInError::Exchange(Class::Incomplete),
             SignInError::Exchange(Class::Transport),
+            SignInError::IdToken,
+            SignInError::KeySet(Class::Refused),
+            SignInError::KeySet(Class::Transport),
+            SignInError::Clock,
         ]
         .iter()
         .map(said_of_sign_in)
@@ -574,6 +846,26 @@ mod tests {
         assert!(sentences[6].contains("refused"), "{}", sentences[6]);
         assert!(sentences[7].contains("limiting"), "{}", sentences[7]);
         assert!(sentences[8].contains("unavailable"), "{}", sentences[8]);
+        assert!(
+            sentences[11].contains("bravebot auth login chatgpt"),
+            "{}",
+            sentences[11]
+        );
+        assert!(
+            sentences[13].contains("could not be reached"),
+            "{}",
+            sentences[13]
+        );
+        assert!(
+            sentences[14].contains("clock") && sentences[14].contains("1970"),
+            "{}",
+            sentences[14]
+        );
+        assert!(
+            sentences[14].contains("bravebot auth login chatgpt"),
+            "{}",
+            sentences[14]
+        );
     }
 
     /// CHATGPT-8: a failure to store is worded with the path and what the system said, made safe to

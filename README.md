@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="docs/assets/readme-banner.svg" alt="bravebot: a general-purpose agent that a web page cannot redirect." width="100%">
+  <img src="docs/assets/readme-banner.svg" alt="bravebot: a general-purpose agent that untrusted data cannot redirect." width="100%">
 </h1>
 
 <p align="center">
@@ -18,8 +18,8 @@
 Brave Bot is a general-purpose agent, meant as a drop-in replacement for Claude Code, Codex and
 OpenCode. Brave has always shipped user agents, and this one is the user's agent in both senses:
 
-- **Structural resistance to indirect prompt injection:** a web page cannot redirect an agent
-  working on your behalf.
+- **Structural resistance to indirect prompt injection:** no untrusted data the agent reads can
+  redirect it, whether a web page, a file, a command's output, a tool's result or an email.
 - **As few tokens as possible.**
 - **As fast as it can be.**
 - **Nothing hidden:** what it read and what it decided are on the screen.
@@ -62,8 +62,8 @@ That puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`, takes `INSTALL_D
 else, and adds the directory to your user `PATH` unless `BRAVEBOT_NO_MODIFY_PATH` is set.
 
 Either way, run `bravebot` in a repository afterwards. The installers verify the release
-checksum and the signature on the binary (see "Check a download by hand" in the
-[quickstart](docs/website/docs/quickstart.md)), and a session started on an old version says so and gives the line that updates it. See
+checksum and the signature on the binary (see "Check a download by hand" on the
+[install page](docs/website/docs/install.md#check-a-download-by-hand)), and a session started on an old version says so and gives the line that updates it. See
 [docs/getting-started.md](docs/getting-started.md) for installing, running, and what it asks you.
 
 The documentation site at
@@ -102,7 +102,7 @@ bravebot --mode manifest "collect every TODO comment into notes/todos.md"
 ```
 
 In a session, `/manifest <task>` does the same for one task.
-[A plan is put to you first](docs/website/docs/using/headless.md#a-plan-is-put-to-you-first) says
+[A plan is put to you first](docs/website/docs/using/manifest-mode.md#a-plan-is-put-to-you-first) says
 what the approval covers.
 
 ## Specs
@@ -121,11 +121,22 @@ Vertex AI, AWS Bedrock or a gateway), your prompts and file contents go to that 
 and its terms govern what it retains and whether it trains on them. A model server on your own
 machine, such as Ollama, keeps them on your machine.
 
+If bravebot panics, the next launch sends a crash report to Brave's Backtrace project. A report holds
+the version, the operating system and architecture, how bravebot was installed, and the source file,
+line and column of the panic. It never holds your prompts, file contents, credentials or paths on your
+machine, or anything a model or a server said, and nothing in it is the same from one report to the
+next. The service sees the network address the report came from, as any server does. Reports are on in
+released builds. Set `BRAVEBOT_CRASH_REPORTS=0`, or `"crashReports": false` in
+`~/.bravebot/settings.json`, to stop them. A build from source sends nothing unless it was built with
+a submission address. See [docs/specs/crash-reports.md](docs/specs/crash-reports.md) for what a report
+may hold.
+
 `bravebot --incognito` runs a session that adds nothing to `~/.bravebot`: no prompt history, no
 session record, no audit trail, and no change to the model or theme you have chosen. It still reads
 all of that, so the session is the one you configured rather than a fresh install. It edits your
 project as usual, since that is the work rather than a trace of it. See
-[docs/specs/incognito.md](docs/specs/incognito.md) for what it covers and what it does not.
+[Incognito sessions](docs/website/docs/using/incognito.md) for what it covers and what it does not,
+and [docs/specs/incognito.md](docs/specs/incognito.md) for the clauses.
 
 ## Reporting a Vulnerability
 

@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/delegate.rs
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/one_shot.rs
   - crates/cli/src/workspace.rs
@@ -22,7 +23,9 @@ guards:
   - symbol: Session::starting_in_bypass
   - symbol: Session::make_bypass_unreachable
   - symbol: Session::cycle_permission_mode
-documented-by: docs/website/docs/security/permissions.md
+documented-by:
+  - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
 ---
 
 ## Scope

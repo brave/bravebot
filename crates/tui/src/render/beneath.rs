@@ -313,14 +313,14 @@ fn slash_lines(
             Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
             Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
             Origin::Server { alias, .. } => {
-                t!(skill_from_mcp_server, alias = alias.as_str()).to_string()
+                t!(skill_from_mcp_server, alias = alias.as_str())
             }
         };
         // After where it was found, so the row says both: a skill the planner is kept from is one only
         // this line can load (SKILL-20).
         let from = match skill.person_only {
             true => format!("{found} {}", t!(skill_person_only)),
-            false => found.to_string(),
+            false => found,
         };
         // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
         // where the skill came from is still on the row.
@@ -400,7 +400,7 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The thirteen the file can move
+/// list names the key that answers rather than the key that used to. The fifteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
@@ -427,6 +427,7 @@ pub(super) fn shortcuts(
         ("ctrl-d".to_string(), "exit"),
         (bindings.editor_name(), "write prompt in $EDITOR"),
         (bindings.watch_name(), "watch a delegate work"),
+        (bindings.outputs_name(), "read what a command printed"),
         (bindings.scroller_name(), "open the scroller"),
         (bindings.history_name(), "search earlier prompts"),
         (bindings.stash_name(), "stash, bring it back, or search"),
@@ -434,6 +435,7 @@ pub(super) fn shortcuts(
         (bindings.paste_name(), "paste, pictures too"),
         (bindings.background_name(), "background a running command"),
         (bindings.panel_name(), "show or hide the info panel"),
+        (bindings.todos_name(), t!(shortcut_todos)),
         (
             bindings.scope_name(),
             "earlier prompts: this session or all",

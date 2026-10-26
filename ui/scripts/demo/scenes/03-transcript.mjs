@@ -6,6 +6,7 @@
 // confined content — labelled as what it is, not as text the model simply read — which is the
 // whole argument the app is making.
 import { findSession, openSession, openNewest } from '../pick.mjs'
+import { ASSISTANT_BUBBLE } from '../../drive-support.mjs'
 
 export default {
   id: '03-transcript',
@@ -63,7 +64,7 @@ export default {
       await s.shot('03-confined')
     }
 
-    const reply = page.locator('.bubble.assistant').last()
+    const reply = page.locator(ASSISTANT_BUBBLE).last()
     if (await reply.count()) await s.glideTo(reply)
   },
 }

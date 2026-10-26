@@ -20,10 +20,8 @@ const ROOM: usize = 4096;
 /// Ctrl-C has to be read here: raw mode is what keeps it from reaching the process as a signal.
 pub fn read(question: &str) -> std::io::Result<Option<Secret>> {
     let mut stderr = std::io::stderr();
-    write!(stderr, "{question} ")?;
-    stderr.flush()?;
     let answer = {
-        let _raw = Raw::enable()?;
+        let _raw = ask(&mut stderr, question, Raw::enable)?;
         let mut typed = Typed::new();
         loop {
             if let Event::Key(key) = event::read()?
@@ -35,6 +33,22 @@ pub fn read(question: &str) -> std::io::Result<Option<Secret>> {
     };
     writeln!(stderr)?;
     Ok(answer)
+}
+
+/// Turn echo off with `enable`, and only then write `question`.
+///
+/// A key arriving while the terminal still echoes is drawn and stays in the scrollback, and a person
+/// who pastes the key as the question appears is the case that does it. Where `enable` fails, as it
+/// does without a terminal, nothing is written.
+fn ask<G>(
+    out: &mut impl Write,
+    question: &str,
+    enable: impl FnOnce() -> std::io::Result<G>,
+) -> std::io::Result<G> {
+    let raw = enable()?;
+    write!(out, "{question} ")?;
+    out.flush()?;
+    Ok(raw)
 }
 
 /// Raw mode for as long as this is held, left however the read ends, a panic included.
@@ -178,6 +192,53 @@ mod tests {
         keys.into_iter()
             .find_map(|key| typed.answer_to(key))
             .map(|answer| answer.map(|secret| secret.expose().to_string()))
+    }
+
+    /// A writer that records whether echo was off, by `Rc<Cell>`, when each write reached it.
+    struct Watching(std::rc::Rc<std::cell::Cell<bool>>, Vec<(bool, Vec<u8>)>);
+
+    impl Write for Watching {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.1.push((self.0.get(), bytes.to_vec()));
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// CLI-18: echo is off before the question is written, so a key that arrives as the question
+    /// appears is never drawn. A reader that wrote the question first would leave the terminal
+    /// echoing for as long as it took to turn echo off.
+    #[test]
+    fn echo_is_off_before_the_question_is_written() {
+        let off = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut out = Watching(off.clone(), Vec::new());
+        let flag = off.clone();
+        ask(&mut out, "Key?", || {
+            flag.set(true);
+            Ok(())
+        })
+        .expect("asked");
+        assert!(!out.1.is_empty(), "the question was never written");
+        for (echo_off, bytes) in &out.1 {
+            assert!(*echo_off, "{:?} was written while echo was on", bytes);
+        }
+        let written: Vec<u8> = out.1.iter().flat_map(|(_, bytes)| bytes.clone()).collect();
+        assert_eq!(written, b"Key? ");
+    }
+
+    /// CLI-18: where echo cannot be turned off, nothing is asked, since a question that cannot be
+    /// answered without drawing the key is not one to put to anybody.
+    #[test]
+    fn nothing_is_asked_where_echo_cannot_be_turned_off() {
+        let mut out = Watching(Default::default(), Vec::new());
+        let refused = ask(&mut out, "Key?", || -> std::io::Result<()> {
+            Err(std::io::Error::other("not a terminal"))
+        });
+        assert!(refused.is_err());
+        assert!(out.1.is_empty(), "wrote {:?}", out.1);
     }
 
     fn characters(text: &str) -> Vec<KeyEvent> {

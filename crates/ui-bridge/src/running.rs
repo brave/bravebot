@@ -17,7 +17,7 @@ use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::todo::Row;
 use bravebot_core::trust::TrustStore;
 use bravebot_session::sessions::Handle;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -129,6 +129,18 @@ pub struct State {
     /// state so that the end waits for the turn that is running, which holds the state for as long as
     /// it runs. Not saved: a reopened session and a fork begin their own.
     pub moments: Option<bravebot_agent::hooks::SessionMoments>,
+    /// The agents this session has started and where each stands. The reporter of every turn and
+    /// run reports into it, so the list lasts across them, and the window is sent the whole of it
+    /// each time it changes (VIEW-35). Not saved: a reopened session and a fork start with none.
+    pub roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
+    /// What this session carries into its requests to the ChatGPT account: the identifier they carry
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Begun with the state, so a session opened, one resumed from a record and a fork each have an
+    /// identifier of their own, and a second session in the process never shares the first's. Held
+    /// here so that every turn and run of the session is built with the same one. Not saved: the
+    /// record holds nothing about which requests the account tied together.
+    pub account: bravebot_agent::chatgpt::AccountSession,
 }
 
 /// The session's own directory outside the project, or why it has none.
@@ -211,6 +223,8 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
+            roster: Arc::default(),
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
         }
     }
 
@@ -223,16 +237,18 @@ impl State {
     /// is what makes a turn taken here land in the session it was taken in — and what
     /// `bravebot --resume` needs in order to pick the same session back up. The terminal does
     /// the same at `crates/tui/src/app.rs`.
+    ///
+    /// `Err` is a record another process holds, which the window is not given (SESSION-38).
     pub fn resumed(
         project: &Path,
         record: &bravebot_session::sessions::Record,
         trust: TrustStore,
-    ) -> Self {
-        let mut handle = Handle::resuming(project, record, crate::FRONT, crate::agent_build());
+    ) -> Result<Self, bravebot_session::sessions::Held> {
+        let mut handle = Handle::resuming(project, record, crate::FRONT, crate::agent_build())?;
         // The desktop addresses no definition, so the turns it writes are not the definition's and
         // the record must not go on saying they were.
         handle.set_agent(None);
-        Self {
+        Ok(Self {
             conversation: Conversation::restored(record.conversation.clone()),
             answers: Answers::opening(trust, record.trusted_programs(project), Default::default()),
             directories: record.directories.iter().map(PathBuf::from).collect(),
@@ -255,7 +271,9 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
-        }
+            roster: Arc::default(),
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
+        })
     }
 
     /// The state a fork begins with: part of another session's conversation, and an id of its
@@ -322,35 +340,15 @@ impl State {
             question_ids: Arc::new(AtomicU64::new(0)),
             question_answers: Arc::default(),
             moments: None,
+            roster: Arc::default(),
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
         }
     }
 }
 
 /// What a person typed while a turn ran, for the turn to read at its next round boundary
-/// (INPUT-10).
-///
-/// The dispatch thread adds to the back and the worker takes from the front, so lines reach the
-/// planner in the order they were typed. Neither side waits: the worker polls it between rounds
-/// and a full lock is only ever held for a push or a pop. A poisoned lock reads as empty, since it
-/// is only poisoned by a panic elsewhere and the turn is ending either way.
-#[derive(Debug, Clone, Default)]
-pub struct Interjections(Arc<Mutex<VecDeque<String>>>);
-
-impl Interjections {
-    /// Add a line for the turn to take at its next boundary.
-    fn push(&self, said: String) -> bool {
-        let Ok(mut waiting) = self.0.lock() else {
-            return false;
-        };
-        waiting.push_back(said);
-        true
-    }
-
-    /// Take the oldest line, or `None`. Never waits.
-    pub fn take(&self) -> Option<String> {
-        self.0.lock().ok()?.pop_front()
-    }
-}
+/// (INPUT-10). The buffer is the one in `bravebot_agent`, which the terminal also uses.
+pub use bravebot_agent::interjections::Interjections;
 
 /// A turn in flight, from the dispatch thread's point of view.
 ///
@@ -442,12 +440,10 @@ impl Running {
     /// answers without another round ends with the line unread, and the `turn.interjected` event is
     /// what says it was.
     pub fn interject(&self, said: String) -> bool {
-        if self.is_finished() || self.cancel.is_cancelled() {
-            return false;
-        }
+        let reading = !self.is_finished() && !self.cancel.is_cancelled();
         self.interjections
             .as_ref()
-            .is_some_and(|waiting| waiting.push(said))
+            .is_some_and(|waiting| waiting.offer(reading, said).is_ok())
     }
 
     /// Answer the question that is waiting, if this is an answer to that question.
@@ -513,5 +509,48 @@ impl Running {
         // match arm accepts it. A `Write` sent at a waiting run would be discarded as
         // a mismatch and the turn would block until the channel dropped instead.
         let _ = self.answers.send(question.kind.refusal());
+    }
+}
+
+/// What the tests of the desktop's account sessions read: the identifier of the session each turn
+/// and each manifest run was built in, in the order they began.
+///
+/// Recorded by [`crate::bridge`]'s worker and [`crate::manifest`]'s walk at the point they hand the
+/// task they built to the agent, so a task built outside the session says so here. The agent sends
+/// the identifier to a host that is a constant, which no test of this crate can stand a server in
+/// for. A test that reads it runs in a process of its own (`in_isolated_profile`), so what it reads
+/// is what that test did.
+#[cfg(test)]
+pub(crate) mod built_in {
+    use std::sync::Mutex;
+
+    static SEEN: Mutex<Vec<(&'static str, String)>> = Mutex::new(Vec::new());
+
+    /// Note that a `kind` of work, `"turn"` or `"manifest"`, was built in the session `identifier`.
+    pub(crate) fn record(kind: &'static str, identifier: &str) {
+        if let Ok(mut seen) = SEEN.lock() {
+            seen.push((kind, identifier.to_string()));
+        }
+    }
+
+    /// Everything recorded so far.
+    pub(crate) fn seen() -> Vec<(&'static str, String)> {
+        SEEN.lock().map(|seen| seen.clone()).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CHATGPT-10: two sessions open in one process are two sessions to the account, so neither
+    /// takes the other's share of the service's cache. The regression it rejects is an identifier
+    /// for the process, which is what every session carried before it had one of its own.
+    #[test]
+    fn two_sessions_open_in_one_process_carry_identifiers_of_their_own() {
+        let first = State::fresh(TrustStore::new("/work"));
+        let second = State::fresh(TrustStore::new("/work"));
+
+        assert_ne!(first.account.identifier(), second.account.identifier());
     }
 }

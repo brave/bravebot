@@ -4,6 +4,7 @@ title: Seeing what happened outside the transcript
 status: normative
 governs:
   - crates/tui/src/state.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/entry.rs
   - crates/tui/src/state/standing.rs
   - crates/tui/src/state/watching.rs
@@ -14,6 +15,7 @@ governs:
   - crates/tui/src/render/beneath.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/agent/src/aside.rs
@@ -24,7 +26,8 @@ documented-by: docs/website/docs/using/interactive-mode.md
 
 What a person sees of what happened outside the transcript: the delegates a turn started, the
 commands it ran, and the questions a person asked beside the work, where their lines go, how much
-of them is kept, the mode Ctrl-L opens over them, and what that mode does not offer. What a
+of them is kept, the mode Ctrl-L opens over the agents, the entry that opens the same mode over what
+commands printed, and what that mode does not offer. What a
 delegate is, how many run at once and what crosses back to the planner is
 [delegation.md](delegation.md); what a command line may do is
 [tools/command-line.md](tools/command-line.md). Nothing here changes either: the subject is what
@@ -158,19 +161,46 @@ do.
 `verified-by: bravebot_tui::state::what_a_delegate_says_between_its_tool_calls_is_not_in_the_transcript`
 
 <a id="WATCH-7"></a>
-### WATCH-7: Ctrl-L opens what happened outside the transcript: the list where there are several rows, the one where there is one
+### WATCH-7: Ctrl-L opens the agents: the list where there are several rows, the one where there is one
 
-The list is the way in where the view holds more than one row, and where it holds one that row's
+The agents are the delegates and the questions asked beside the work. A command's output is not an
+agent and is not in the list Ctrl-L opens, however many commands a session ran. What commands
+printed is a list of its own, opened by `/outputs` and by the `outputs` chord (Alt-L by default),
+over the same mode: the keys, the footer and the way out are the ones the agents have, and a row in
+it is opened by the clauses below. The chord and the command take one path, so
+they open the same list and say the same thing where there is nothing to open.
+
+The list is the way in where the list holds more than one row, and where it holds one that row's
 own lines are what opens. The view opens on the delegate that is working, and on the last row in
 the list where none is.
 
-Where the view holds nothing the key does nothing at all.
+Where the agents list holds nothing the key does nothing at all, and a session that ran commands
+and no delegate is such a session. `/outputs` where no command has run opens nothing and says so in
+the transcript, and so does the `outputs` chord. Ctrl-L does not fall back to the outputs: where only
+commands have run it does nothing.
+
+Inside the view the `outputs` chord is the view's own. Over the outputs list or a command's lines
+it closes the view, as the watch chord does. Over the agents list or a delegate's lines it switches
+to the outputs, or says there is no output and leaves the view where it was when no command has
+run. A chord that is moved onto another action's key, or another action's default, is refused, so
+Alt-L is never also the key of an action that opens the agents.
+
+A place in the list is a place in the list that is open. A delegate that starts moves a place in
+the agents list and no place in the outputs list, and a command that runs moves a place in the
+outputs list and none in the agents list.
 
 The list is a panel over the session, sized to the delegates it holds and never to the screen, and
 the transcript stays drawn behind it. A delegate's own lines take the screen. Where there are more
 delegates than the panel is tall, the rows drawn are the ones around the highlight.
 
-**Why.** Which row is the question a person has when several runs are going, and a mode that
+**Why.** A delegate is work somebody handed on and a command's output is what a program printed.
+They are read for different reasons, and a list holding both puts the build that passed beside the
+agent that did the work. A person who wants a build's output mid-turn should not have to type a
+command to read it. Every Ctrl letter is
+taken, so the chord is an Alt letter, and it is an action a settings file can move
+([INPUT-32](terminal-input.md#INPUT-32)) because a terminal may use Alt-L itself.
+
+Which row is the question a person has when several runs are going, and a mode that
 opened straight into one of them answers a question they did not ask. A list of one is a row to
 press through to reach the only thing behind it. A mode that opens on an empty screen is worse
 than a key that does not answer: it puts somebody somewhere, with nothing to read and something to
@@ -184,6 +214,17 @@ lasts, and a panel is the wrong container for that.
 
 `verified-by: bravebot_tui::app::ctrl_l_watches_the_delegate_that_is_working`
 `verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_no_delegate_has_run`
+`verified-by: bravebot_tui::app::ctrl_l_lists_the_delegate_and_not_the_command`
+`verified-by: bravebot_tui::app::ctrl_l_does_nothing_where_only_commands_have_run`
+`verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::app::alt_l_opens_the_outputs_and_not_the_agents`
+`verified-by: bravebot_tui::app::alt_l_says_what_the_outputs_command_says_where_no_command_has_run`
+`verified-by: bravebot_tui::app::ctrl_l_where_only_commands_ran_does_not_take_the_outputs_path`
+`verified-by: bravebot_tui::app::alt_l_inside_the_view_closes_the_outputs_and_switches_from_the_agents`
+`verified-by: bravebot_tui::app::alt_l_over_the_agents_with_no_command_says_so_and_stays`
+`verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
+`verified-by: bravebot_tui::state::the_watch_list_holds_the_delegate_and_not_the_command`
+`verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
 `verified-by: bravebot_tui::app::enter_opens_the_delegate_the_list_is_on`
 `verified-by: bravebot_tui::state::watching_opens_on_the_delegate_that_is_working`
 `verified-by: bravebot_tui::state::there_is_nothing_to_watch_until_a_delegate_has_run`
@@ -308,9 +349,13 @@ position and the keys for moving between delegates appear only where there is mo
 The list carries its own title and its own key row, and fills the row that would open edge to
 edge rather than marking it.
 
-Once the view has anything to open, the hint line names the key and says how many rows there are,
-counting every kind of row together. The key is in the shortcut list. No other row names it,
-including the one that reports what the turn is doing.
+Once the agents list has anything to open, the hint line names the key and says how many rows it
+holds. Once a command has run, it also names the `outputs` chord and `/outputs` and says how many
+rows they open. Each figure counts what its own way in opens and nothing else, so a session with
+one delegate and two commands reads `ctrl-l 1 to open` beside `alt-l or /outputs 2 to open`, and a
+clause is absent while its list
+is empty. The key is in the shortcut list. No other row names it, including the one that reports
+what the turn is doing.
 
 **Why.** The turn's transcript shows one block and three rows of a delegate, and a preview and a
 count of what a command printed, so somebody who does not already know the key has no way to find
@@ -319,9 +364,10 @@ turn, and what the view holds is most worth opening afterwards: what a delegate 
 sentence about work nobody has read. The count is there because a key with nothing behind it does
 nothing, and that line is read at a glance.
 
-**Why every kind in one count.** The key opens one list and the count stands for what is in it. A
-count of delegates alone leaves a session that ran commands and spawned none with a key that opens
-something and no line on the screen saying so, which is the case the hint exists for.
+**Why a count for each way in.** A count stands for what its key opens. One figure for both lists
+names a key and counts rows it does not open, and a count of agents alone leaves a session that ran
+commands and spawned no delegate with an entry that opens something and no line on the screen
+saying so, which is the case the hint exists for.
 
 **Why only there.** One key named twice on one screen, once beside the spinner and once at the
 foot, reads as two things to press. The line that is always drawn is the one to put it on.
@@ -333,7 +379,7 @@ foot, reads as two things to press. The line that is always drawn is the one to 
 `verified-by: bravebot_tui::render::a_narrow_row_keeps_the_count_and_loses_the_end_of_the_task`
 `verified-by: bravebot_tui::render::the_row_that_says_what_the_turn_is_doing_leaves_the_key_to_the_hint_line`
 `verified-by: bravebot_tui::render::the_hint_line_names_the_delegate_key_once_one_has_run`
-`verified-by: bravebot_tui::render::the_hint_line_counts_the_commands_as_well_as_the_delegates`
+`verified-by: bravebot_tui::render::the_hint_line_counts_what_each_way_into_the_view_opens`
 `verified-by: bravebot_tui::render::the_shell_hint_line_names_the_view_key_once_something_can_be_opened`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_key_that_watches`
 
@@ -383,7 +429,7 @@ would claim a confinement that is not there; drawing an unread one plain would h
 <a id="WATCH-14"></a>
 ### WATCH-14: the session is the first row of the list, and choosing it goes back to the conversation
 
-The list holds the session above the delegates. The key that opens a row opens it, and what that
+Either list holds the session above its rows. The key that opens a row opens it, and what that
 does is close the mode and put the turn's own view back where it was left. Moving up from the
 first delegate reaches it; moving down from it reaches the first delegate again.
 
@@ -405,10 +451,12 @@ press of enter into an exit.
 `verified-by: bravebot_tui::app::opening_the_session_row_goes_back_to_the_conversation`
 
 <a id="WATCH-15"></a>
-### WATCH-15: what a command printed is one of the rows the view opens
+### WATCH-15: what a command printed is a row of the outputs list, which the view opens
 
-Every command a turn ran is a row in the same list, after the delegates and in the order they ran.
-Opening one draws what it printed, as far back as is kept, in the shape a delegate's own lines are
+Every command a turn ran, background jobs included, is a row in the outputs list, in the order they
+ran. It is opened by `/outputs` and the `outputs` chord ([WATCH-7](#WATCH-7)) and is in no list
+Ctrl-L opens. Opening one
+draws what it printed, as far back as is kept, in the shape a delegate's own lines are
 drawn in. Where the planner was kept from the output, every row of it carries the margin every
 quarantined block carries, and what is not kept is said rather than dropped silently.
 
@@ -416,18 +464,24 @@ A command's row is there whether or not the planner read what it printed, and th
 
 **Why.** The transcript has room for a preview and a count, and a person who owns the directory is
 entitled to the rest: "12 lines, quarantined" does not tell them what their agent just ran. That is
-the same reason a delegate has a view, so it is the same list rather than a second key to learn.
+the same reason a delegate has a view, so it is the same mode rather than a second one to learn.
 
-**Why after the delegates.** A row's place is what somebody steps through, and a list ordered by
-when things happened would move the row under them every time a command finished.
+**Why a list of its own.** What a program printed is read as a log and an agent's work is read as
+a conversation, and a list holding both puts a log beside a conversation. One mode keeps the keys,
+the footer and the marks in one implementation.
+
+**Why oldest first.** A row's place is what somebody steps through, and a list ordered by when
+things happened would move the row under them every time a command finished.
 
 `verified-by: bravebot_agent::turn::what_a_command_printed_reaches_the_person_watching`
 `verified-by: bravebot_tui::state::a_command_this_session_ran_is_something_the_view_can_open`
-`verified-by: bravebot_tui::state::the_list_holds_delegates_and_commands_together`
 `verified-by: bravebot_tui::state::a_rows_place_in_the_list_does_not_move_when_the_next_command_runs`
 `verified-by: bravebot_tui::state::a_command_row_keeps_whether_the_planner_read_it`
 `verified-by: bravebot_tui::render::a_command_row_says_whether_the_planner_read_it`
-`verified-by: bravebot_tui::state::stepping_through_the_list_reaches_a_command_after_a_delegate`
+`verified-by: bravebot_tui::state::stepping_through_the_outputs_list_reaches_every_command`
+`verified-by: bravebot_tui::state::the_two_lists_hold_their_own_kinds_of_row`
+`verified-by: bravebot_tui::app::the_outputs_command_opens_what_commands_printed`
+`verified-by: bravebot_tui::state::a_new_delegate_does_not_take_the_screen_from_a_command_being_read`
 `verified-by: bravebot_tui::render::opening_a_command_shows_what_it_printed`
 `verified-by: bravebot_tui::render::output_the_planner_was_kept_from_is_marked_on_every_row`
 `verified-by: bravebot_tui::render::a_command_that_printed_more_than_is_kept_says_so`
@@ -441,15 +495,17 @@ with the line that ran, an aside as an aside. Stepping from one kind to another 
 say. A command's view also says whether the planner read what it printed, and an aside's whether
 the record keeps its answer.
 
-**Why.** One list holds all of them, and the keys that move through it do not ask what a row is.
-With nothing saying so, stepping from a delegate onto a command reads as the same view showing
-different lines, and a person cannot tell work their agent handed on from work it did itself.
+**Why.** The agents list holds delegates and asides, and the keys that move through it do not ask
+what a row is. With nothing saying so, stepping from a delegate onto an aside reads as the same view
+showing different lines. A command's view and an agent's are the same mode, so the header and the
+footer say which of the two it is.
 Whether the planner read something, or will read it back, is the one thing about it that cannot be
 worked out from the bytes.
 
 `verified-by: bravebot_tui::render::the_view_says_which_kind_of_thing_it_is_showing`
 `verified-by: bravebot_tui::render::the_view_says_whether_the_model_read_what_a_command_printed`
 `verified-by: bravebot_tui::render::stepping_from_one_kind_of_row_to_another_changes_the_header_and_the_footer`
+`verified-by: bravebot_tui::render::a_commands_view_names_it_and_counts_the_outputs`
 
 <a id="WATCH-17"></a>
 ### WATCH-17: a command's row and its view say how the run ended
@@ -479,8 +535,7 @@ about the program that is not true.
 <a id="WATCH-18"></a>
 ### WATCH-18: a question asked beside the work is one of the rows the view opens
 
-Every `/btw` is a row in the same list, before the delegates and the commands and in the order
-they were asked. Opening one draws the question above the answer, the question in the shape a
+Every `/btw` is a row in the agents list, before the delegates and in the order they were asked. Opening one draws the question above the answer, the question in the shape a
 prompt is drawn in and the answer in the shape a reply is. The row says whether the record keeps
 the answer.
 
@@ -495,8 +550,8 @@ stops meaning anything as soon as the list holds two.
 
 **Why before the delegates.** An aside is the only row that survives a resume, so a resumed
 session's list is asides alone. Put last, every delegate a later turn spawned would be inserted
-above them and move their places; put first, everything the session goes on to do appends after
-them.
+above them and move their places; put first, every delegate the session goes on to start appends
+after them.
 
 `verified-by: bravebot_tui::state::an_aside_is_something_the_view_can_open`
 `verified-by: bravebot_tui::state::an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it`

@@ -352,6 +352,26 @@ pub fn write_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     file.write_all(contents)
 }
 
+/// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
+/// file as it was and a reader never sees half of it.
+///
+/// The temporary file is named for this process and this write, since two sessions writing at once
+/// would otherwise write into one file and rename whatever the pair of them left there. It is
+/// removed when the write or the rename fails.
+pub fn replace(path: &Path, text: impl AsRef<[u8]>) -> std::io::Result<()> {
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(".{}.{write}.tmp", std::process::id()));
+    let temporary = std::path::PathBuf::from(temporary);
+    let written =
+        write_file(&temporary, text.as_ref()).and_then(|()| std::fs::rename(&temporary, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
+
 /// Write `contents` to a file that is not there yet, readable only by this user.
 ///
 /// Refuses, with `AlreadyExists`, a name that is taken, a link included, so a writer that must
@@ -731,6 +751,34 @@ mod tests {
 
         assert_eq!(mode_of(&file), 0o600);
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "a prompt\n");
+    }
+
+    #[test]
+    fn a_replaced_file_is_whole_and_private_and_a_failed_one_leaves_nothing_beside_it() {
+        let scratch = Scratch::new("home-replace");
+        let file = scratch.path.join("model");
+        replace(&file, "one\n").expect("written");
+        replace(&file, "two\n").expect("replaced");
+
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "two\n");
+        assert_eq!(mode_of(&file), 0o600);
+
+        // A directory in the way makes the rename fail, after the temporary file was written.
+        let blocked = scratch.path.join("blocked");
+        std::fs::create_dir_all(blocked.join("inside")).expect("blocker");
+        assert!(replace(&blocked, "x").is_err());
+        let mut names: Vec<_> = std::fs::read_dir(&scratch.path)
+            .expect("listed")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("utf8")
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["blocked", "model"]);
     }
 
     /// The file an older build left is the one holding the history worth protecting, so writing it

@@ -21,6 +21,12 @@ delegate's number. A planner that has only delegates left ends its round with on
 outstanding, and that line stays in the transcript. The turn then waits and asks the planner again once
 the report arrives.
 
+**In the desktop window, the sidebar's Agents entry counts the agents the open conversation has
+started.** While any is working, the entry also says how many. Choosing it opens a list with one row
+for each agent: its kind, its number, what it was asked, and whether it is working, finished or did
+not finish. Nothing an agent printed is in the list, and Done returns to the conversation. An agent
+still working when its turn ends is listed as not finished.
+
 A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A reply that opened with the model's working leaves that block off when it
@@ -46,6 +52,10 @@ you to approve text, a block's heading, and a file name draw every byte, colour 
 
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.
+The exception is the notes `/add-dir` and `/add-dir close` write, and the notes about the
+directories a settings file names: one that says a directory was opened or closed is drawn in the
+ink for finished, and one that refuses a path or asks for one in the ink for failed, so a directory
+that was added is not read as another error.
 
 Colour is never what makes that marking hold. A colour can be imitated by the content beside it, so
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
@@ -193,7 +203,7 @@ that same question and discarded, and a terminal that answers with nothing holds
 its full 80 milliseconds. It happens once a session, before there is a box to type into.
 :::
 
-See [Configuration](../customize/configuration.md#choosing-a-theme) for where the choice is stored
+See [Choosing a theme](../customize/theme.md) for where the choice is stored
 and how to write one of your own.
 
 ## The model picker
@@ -347,7 +357,7 @@ collapses it. The extra lines are cleaned the same way the short view is: contro
 replaced and each line is cut to one row. Clicking a call that has more to show does the same for
 that call, and clicking it again collapses it. Clicking a delegate's block opens that delegate's view, as the watch key does. A drag, a double click or a triple click still selects.
 
-In the [info panel](sessions.md#telling-sessions-apart), clicking the model row opens the `/model` picker and clicking the effort row opens the `/effort` picker, clicking the context reading runs `/context`, and clicking a started MCP server lists the servers as `/mcp` does.
+In the [info panel](sessions.md#telling-sessions-apart), clicking the model row opens the `/model` picker and clicking the effort row opens the `/effort` picker, clicking the context reading runs `/context`, and clicking a started MCP server lists the servers as `/mcp` does. Clicking the Files heading or the count under it opens the files view that `/diff` draws. In that view, clicking a file in the list highlights it, clicking the `x` at the right end of its heading row leaves the view, clicking the previous or next control above its edits steps between them, and the wheel scrolls the list or the edits, whichever the pointer is over. Clicking the permission mode under the box cycles it, as the key does, and clicking the panel's last row, which names the key that hides it, hides the panel. Clicking in the text of the prompt box puts the caret there. In the `/effort`, `/config` and `/theme` pickers, clicking a row moves the cursor to it and clicking it again takes it, as Enter does.
 
 `v` opens the transcript in your editor. What goes is the rows as they are drawn, margins and all,
 so untrusted content is marked in the file exactly the way it is marked on the screen. It is written

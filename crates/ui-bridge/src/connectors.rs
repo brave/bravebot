@@ -161,7 +161,7 @@ pub fn connect(request: &Request) -> Result<Value, Failure> {
     bravebot_agent::home::create_directory(&directory)
         .map_err(|error| written(&directory, error))?;
     let file = mcp::declarations_file(&directory);
-    bravebot_agent::mcp::replace(&file, declarations.to_text())
+    bravebot_agent::home::replace(&file, declarations.to_text())
         .map_err(|error| written(&file, error))?;
     let mut approvals = approvals_to_change(&directory)?;
     servers::record(
@@ -205,11 +205,11 @@ pub fn remove(request: &Request) -> Result<Value, Failure> {
     }
     if let Some(mut approvals) = approvals {
         let file = mcp::declarations_file(&directory);
-        bravebot_agent::mcp::replace(&file, declarations.to_text())
+        bravebot_agent::home::replace(&file, declarations.to_text())
             .map_err(|error| written(&file, error))?;
         approvals.keep_only(&declarations);
         let file = mcp::approvals_file(&directory);
-        bravebot_agent::mcp::replace(&file, approvals.to_text())
+        bravebot_agent::home::replace(&file, approvals.to_text())
             .map_err(|error| written(&file, error))?;
     }
     list()
@@ -472,7 +472,7 @@ fn write_settings(settings: &Destination) -> Result<(), Failure> {
     if let Some(parent) = target.parent() {
         bravebot_agent::home::create_directory(parent).map_err(|error| written(parent, error))?;
     }
-    bravebot_agent::mcp::replace(&target, text.expose()).map_err(|error| written(&target, error))
+    bravebot_agent::home::replace(&target, text.expose()).map_err(|error| written(&target, error))
 }
 
 fn unwritable(why: Unwritable, path: &Path) -> Failure {

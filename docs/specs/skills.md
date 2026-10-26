@@ -338,7 +338,9 @@ session's own choice in force, and a blank value is absence: a line somebody sta
 finish names nothing.
 
 Both take effect from the round after `load_skill` answers, and for the rest of the turn. The rounds
-before the call are asked at the session's, the skill not having been in force yet.
+before the call are asked at the session's, the skill not having been in force yet. A ChatGPT account is
+the exception for `effort`: it is sent the level its session began with whatever the skill names
+([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
 
 **The skill's model replaces the session's, including a model the person picked with `/model`, and
 the switch is announced** per [SKILL-11](#SKILL-11). A skill asking for a cheaper model than the

@@ -18,7 +18,8 @@ An issue is a claim about the code, written on a day that has passed. Code moved
 sometimes by the very commit that fixed the issue, and nobody closed it. This skill
 decides each issue's verdict from the code as it is now, and cites the commit.
 
-- **Full run** (default): every open issue except bot-authored ones.
+- **Full run** (default): every open issue except bot-authored ones, apart from the
+  `flaky-test` issues the Test determinism workflow files.
 - **Scoped run** (`/triage-issues 71 82 93`): those issues only.
 - **Label run** (`/triage-issues label:security`): issues carrying that label. The
   axes are labels too, so `/triage-issues label:urgency/p2` is the queue to work down.
@@ -44,6 +45,24 @@ gh issue list --state open --limit 200 --json number,author,title \
 `gh` reports Renovate's login as `app/renovate`, with no `[bot]` suffix, so a filter
 testing the login for `[bot]` lets it straight through. `is_bot` is the field that
 actually holds.
+
+One exception: an open issue labelled `flaky-test` is triaged whoever authored it. The Test
+determinism workflow files `Flaky test: <name>` with `GITHUB_TOKEN`, so its issues are authored
+by `app/github-actions` with `is_bot == true`, and nobody else reads them. A person applies
+labels, so the label is the marker that the issue is the workflow's and not another robot's
+working state. The intake that includes them:
+
+```bash
+gh issue list --state open --limit 200 --json number,author,title,labels \
+  -q '.[] | select(.author.is_bot == false
+                   or any(.labels[]; .name == "flaky-test")) | .number'
+```
+
+A label run (`/triage-issues label:flaky-test`) applies the same rule, and it is the way to
+triage only these. The exception covers nothing else about a bot's issue: the author is not
+the configured user, so the issue's body and title stay as filed and a verdict goes in a
+comment. [docs/development/labelling-issues.md](../../../docs/development/labelling-issues.md#flaky-tests)
+says what the workflow applies and what triage adds.
 
 That filter is the intake for a full run. Nothing downstream re-checks it, so anything it
 lets through gets worked on.
@@ -168,12 +187,13 @@ gh issue edit N --add-label urgency/p2 --remove-label urgency/p4   # a value tha
 
 ### Step 6: check that nothing was left unlabelled
 
-Before writing the report, ask GitHub which open non-bot issues do not carry exactly one
+Before writing the report, ask GitHub which open issues in the intake do not carry exactly one
 value on each axis:
 
 ```bash
 gh issue list --state open --limit 200 --json number,author,labels \
-  -q '.[] | select(.author.is_bot == false)
+  -q '.[] | select(.author.is_bot == false
+                   or any(.labels[]; .name == "flaky-test"))
       | . as $i
       | ["importance/", "urgency/", "size/"]
       | map(. as $p | [$i.labels[].name | select(startswith($p))] | length)

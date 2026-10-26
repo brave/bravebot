@@ -725,6 +725,10 @@ pub fn run(
         .with_profile(profile.map(std::path::Path::to_path_buf))
         .remembering(seeded.remembering.clone())
         .with_model(delegate_model)
+        // Also the level of the delegate's own session for the ChatGPT account, which the task
+        // begins with its first request: the requests of a delegate share no prefix with its
+        // parent's, so they share no cache affinity, and the level is held for the whole run,
+        // except that a model which refuses a level is sent none (BACKEND-22).
         .with_effort(delegate_effort)
         .with_permissions(seeded.permissions.clone())
         .with_permission_mode(permission_mode)

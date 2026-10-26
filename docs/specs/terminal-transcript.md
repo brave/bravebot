@@ -22,6 +22,8 @@ governs:
   - crates/tui/src/render/beneath.rs
   - crates/tui/src/render/hint.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/entry.rs
   - crates/tui/src/state/scroller.rs
   - crates/tui/src/theme.rs
@@ -33,10 +35,16 @@ governs:
   - ui/src/renderer/thinking.ts
   - ui/src/renderer/apply.ts
   - ui/src/renderer/live.ts
+  - ui/src/renderer/components/Agents.tsx
+  - ui/src/renderer/components/Sidebar.tsx
+  - ui/src/renderer/App.tsx
   - crates/ui-bridge/src/turn.rs
   - ui/scripts/ux-state.test.mjs
+  - ui/scripts/agents.test.mjs
   - ui/scripts/marking.test.mjs
-documented-by: docs/website/docs/using/transcript.md
+documented-by:
+  - docs/website/docs/using/transcript.md
+  - docs/website/docs/customize/theme.md
 ---
 
 ## Scope
@@ -201,10 +209,27 @@ What the session says in its own voice, the trust answer, an unavailable confine
 report, is drawn in a single ink belonging to nothing else, and never in the ink that marks
 untrusted content.
 
+A note written by `Session::note_done` is drawn in the ink for finished and one written by
+`Session::note_refused` in the ink for failed ([VIEW-9](#VIEW-9)), so a directory that was added is
+not read as another error. The code that writes the note chooses which, from what happened and
+never from the words of the note. `/add-dir` writes a done note for a directory it opened and a
+refused note for a path it refuses or asks for. `/add-dir close` writes a done note for a directory
+it closed and a refused note for a name it cannot close or asks for. The opening of the directories
+a settings file names goes through the `/add-dir` handler, so it writes the same done note for a
+directory it opens and the same refused note for a name that does not open. Every other note has
+the shared-ink tone and is drawn in the shared ink, whether it is written by `Session::note` or
+built as an entry directly. Neither tone is a failed turn: an export, the failure the status area
+repeats and the reason a turn is recorded under are read from the entry's speaker, which the choice
+leaves as it was. Where every ink is the terminal's own, the wording ("added", "could not add") is
+what tells them apart. Under `brave`, neither ink is the one that marks untrusted content.
+
 **Why.** That ink is spoken for twice over: a call still running, and the margin down every block
 of content the planner may not read. Drawing a note in it said the trust answer was quarantined.
 An ink of its own rather than merely a different one, because a note sharing with any third meaning
-puts the question back where it started.
+puts the question back where it started. Under `brave` that ink is Brave orange, which reads as
+red, so a success drawn in it reads as an error beside the refusals around it. A note that says
+something was done or refused takes the ink that already means that, and the ink every other note
+shares is still used by nothing else.
 
 This is about which ink, and it is never what makes the marking hold. VIEW-3 stands on the margin
 because a colour can be imitated by the content beside it, and nothing here weakens that: no ink
@@ -213,6 +238,12 @@ outside a block.
 
 `verified-by: bravebot_tui::render::a_system_note_is_not_drawn_in_the_ink_that_marks_untrusted_content`
 `verified-by: bravebot_tui::theme::the_note_ink_is_shared_with_no_other_ink_of_the_brave_palette`
+`verified-by: bravebot_tui::render::a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares`
+`verified-by: bravebot_tui::app::add_dir_draws_the_directory_it_added_apart_from_the_names_it_refused`
+`verified-by: bravebot_tui::app::add_dir_close_draws_what_it_closed_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::under_a_palette_without_colour_the_wording_tells_what_add_dir_did_from_what_it_refused`
+`verified-by: bravebot_tui::app::the_directories_a_settings_file_names_are_told_in_the_tones_of_add_dir`
+`verified-by: bravebot_tui::app::a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it`
 
 <a id="VIEW-9"></a>
 ### VIEW-9: under `brave`, an ink that carries meaning is mixed, not chosen by the terminal
@@ -1086,6 +1117,109 @@ character gives up that character.
 
 `verified-by: bravebot_ui_bridge::reporting::the_models_thinking_is_reported_in_order_and_a_delegates_and_an_empty_one_are_not`
 `verified-by: by-construction (the renderer is not a crate this workspace compiles, so ui/scripts/ux-state.test.mjs drives the window's own event reducer with the bridge's events: the thinking is held apart from the transcript's entries, only its last 4,096 characters are kept and a cut through a character gives it up, a new round, a words event, a call, a new turn, a finished turn, a failed or stopped turn and a plan run starting, finishing or failing each clear it, the choice to show it outlives the round it was made in, and the button is offered from the first thinking sent and stays through every round's end; ui/scripts/marking.test.mjs renders the working row through react-dom and asserts that the last eight lines are drawn under one head, that markup in them is drawn as the characters it is and makes no element, attribute or request, that nothing is drawn with the toggle off or with nothing thought, and that the button is absent for a session sent no thinking and present for one that was, between rounds as well; make check-ui runs both)`
+
+<a id="VIEW-35"></a>
+### VIEW-35: the bridge tells the desktop window which agents a conversation has started and where each stands, and nothing they printed
+
+The bridge keeps the session's agents in the `Roster` the terminal uses ([WATCH-12](watching.md#WATCH-12)),
+and sends the whole list in an `agents` event each time a delegate starts, each time one ends, and
+when a turn or plan run ends with one still working. The event carries `agents`, one entry for each
+agent in the order started, and the counts `started` and `working`. An entry holds `id`, the
+driver's own spelling of the delegate's number (`d1`, `d2.1`), `kind`, `task`, the words the planner
+gave it, and `state`, which is `working`, `finished` or `failed`. A finish is applied to the latest
+agent with that number that is still working, so delegates ending in any order are each marked, and
+a number used again after its first agent ended is a second agent. The list is kept for the session,
+so it lasts across turns, and is not saved: a reopened session and a fork start with none.
+
+An agent still working when a turn or plan run ends did not finish, because a delegate does not
+outlive the turn that started it, so the bridge marks it `failed` and sends the list before
+`turn.done`, `turn.error`, `manifest.done` or `manifest.error`.
+
+The event carries no line a delegate printed, no thought, no tool call, no note the driver wrote
+about how it ended and nothing it reported back, and the stop token is not sent. What a delegate
+said reaches no screen of the window and is written to no record
+([WATCH-12](watching.md#WATCH-12)). A window that counts or lists agents does so from this event and
+from nothing a delegate wrote.
+
+**Why.** A person watching a window has no other way to know that work is going on beside the turn,
+or how much. The terminal draws it from the same type, so the two clients do not each keep their own
+copy of when an agent starts, ends or is counted. The `task` is the planner's own line, and the
+planner holds no untrusted content, so it is words the driver already carries to a screen. What a
+delegate that met untrusted content printed is not, and no event here can carry it because the
+payload is built from the agent's number, kind, task and state alone, and nothing branches on the
+task.
+
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_crosses_in_the_agents_event_carrying_none_of_its_lines`
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_finishing_before_an_earlier_one_marks_its_own_agent`
+`verified-by: bravebot_ui_bridge::reporting::a_delegate_number_used_again_is_a_second_agent`
+`verified-by: bravebot_ui_bridge::reporting::an_end_of_turn_or_run_leaves_no_agent_working`
+`verified-by: bravebot_ui_bridge::reporting::the_list_lasts_across_the_reporters_of_a_session`
+
+<a id="VIEW-36"></a>
+### VIEW-36: the desktop window counts the agents a conversation has started and lists them from the sidebar
+
+The sidebar's foot has an Agents entry beside Settings. It shows the number of agents the open
+conversation has started, and after it the number still working while any is. With none started it
+shows the label alone. Choosing it opens a list over the conversation, one row for each agent in the
+order started, holding the agent's kind, its number, what it was asked, and whether it is working,
+finished or did not finish. The list says so when there are none, and its Done control closes it and
+returns focus to the entry.
+
+The window draws the list and counts VIEW-35 sends and keeps no rule of its own for when an agent
+starts, ends or is counted, and counts none itself: its number, kind and task, and its state, are the bridge's. A new
+conversation starts with none. Nothing a delegate printed is kept
+or drawn here, as the watching spec says.
+
+The accelerator that focuses the composer is not changed by this entry.
+
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agents.test.mjs pins it: it folds the agents event through the window's own event reducer and asserts that the list it carries replaces the window's, that a number sent twice is two rows, that no turn.done, turn.error, manifest.done or manifest.error changes an agent, that the sidebar counts are the two the bridge sent, and that a new conversation starts with none; it renders the real Agents view and sidebar foot through react-dom and asserts the rows, the empty sentence, the Done control, the label alone for none started, the count, and the count of those working; make check-ui runs it)`
+
+<a id="VIEW-37"></a>
+### VIEW-37: a plan printed on request is drawn whole, behind a margin its text cannot draw
+
+`/todos` ([CMD-28](commands.md#CMD-28)) and the key that does the same
+([INPUT-32](terminal-input.md#INPUT-32)) put the session's plan in the transcript under a heading
+that says how many of its tasks are done, and how many are cancelled where any are. Every task is
+there, in the plan's order, whatever room the info panel has for rows
+([PANEL-10](info-panel.md#PANEL-10)). A task takes the rows its text needs. The first begins with
+the task's mark and its status in words (`pending`, `in progress`, `completed` or `cancelled`), both
+read from the status the task carries, and the text follows, wrapped to the width. Every row after
+the first has the same margin, blank where the mark and the status stood. A task no longer
+outstanding is struck through, in the colours the plan has under a turn. A task that is neither
+completed nor cancelled is drawn as work being done where a turn is running as it is printed, with
+the mark and ink the panel gives it ([PANEL-10](info-panel.md#PANEL-10)), and left open, with the
+hollow mark and the dim text the panel gives it then, where none is. Its status in words is the one
+the planner wrote either way.
+
+No row is wider than the transcript, so none is wrapped again outside its margin. The margin is
+shortened to leave the text two columns. A status word that does not fit is cut with an ellipsis, a
+margin with room for one column of it holds the mark and blanks, and a margin of one column is the
+mark. From three columns up no text is cut or replaced. At two columns a character wider than the
+column left is drawn as a replacement character, and a single column holds the mark alone, so a task
+is drawn as its mark.
+
+A task's text is the planner's, so it is drawn as the lines of a call's result are. Control
+characters are replaced with visible glyphs ([VIEW-3](#VIEW-3)), a line break among them, so an
+escape sequence in a task is drawn as visible characters and a task is always rows of its own. The margin is drawn by
+the interface on every row, so a task that writes a mark, a status or a margin into its text draws
+it after the margin of the mark and status it carries, and never in place of them.
+
+The entry holds the plan as it stood when it was printed, and whether a turn was running then. A
+later report from the planner, or the end of the turn, does not change it. It is not part of the conversation, the session record or an export.
+
+**Why.** The panel cuts each task to its width and the plan to its room, so a person who wants a
+task's whole text or the whole plan has nowhere else to read it. The text is what the planner wrote
+and may have been dictated by something it read, so a mark or a status inside it would otherwise be
+taken for the interface's own, as a forged margin would be.
+
+`verified-by: bravebot_tui::panel::the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut`
+`verified-by: bravebot_tui::panel::a_printed_plan_holds_at_every_width_from_one_column_up`
+`verified-by: bravebot_tui::panel::a_printed_plan_is_drawn_on_the_screen_as_it_is_laid_out`
+`verified-by: bravebot_tui::panel::a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own`
+`verified-by: bravebot_tui::panel::a_printed_plan_stays_as_it_was_when_the_plan_changes`
+`verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
+`verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
 
 ## Known costs
 

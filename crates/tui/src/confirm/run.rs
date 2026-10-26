@@ -379,7 +379,6 @@ pub(super) fn authority(spent: &bravebot_core::ambient::Spent) -> String {
             t!(run_authority_metadata, named = named)
         }
     }
-    .to_string()
 }
 
 /// Draw the run confirmation, marking in `shown` the rows of the body this draw put on the screen.

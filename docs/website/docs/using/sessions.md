@@ -9,12 +9,13 @@ description: What is kept between runs, how to pick a session back up, and what 
 A session belongs to the directory it ran in. Records live under `~/.bravebot/sessions`, one
 directory per working directory, so resuming in one project lists only that project's sessions.
 
-Each session is two files, named after a version 4 UUID:
+Each session is named after a version 4 UUID and keeps up to three files:
 
 | File | What it holds |
 |---|---|
 | `<id>.json` | the record: the conversation, what the picker shows, and what a resume needs |
 | `<id>.audit.jsonl` | the trail, appended a turn at a time: one JSON object per line |
+| `<id>.lock` | empty: the lock a process holds while it writes the record |
 
 **Both are private to you.** On Unix, session directories are created mode 0700 and records, trails
 and the temporary files beside them are written mode 0600, with anything already there tightened on
@@ -66,15 +67,25 @@ listed, so two directories that share a store do not show each other's sessions,
 [background sessions](#sessions-in-the-background) instead.
 
 `--continue` takes the session the picker would offer first and picks it up exactly as naming its id
-would. It passes over a [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) rather
-than refusing it. Where this directory holds nothing continuable it says so and fails rather than
-starting a fresh session.
+would. It passes over a
+[manifest run](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued) rather than
+refusing it. Where this directory holds nothing continuable it says so and fails rather than starting
+a fresh session.
 
 **From inside a session**, [`/resume`](../reference/commands.md#resume-id) opens the same list, or
 takes an id, and moves you onto that session without leaving the program.
 
 **Leaving a session prints the command that resumes it**, after the terminal is handed back, so it
 stays on the screen you are left looking at. A session that never wrote a record prints nothing.
+
+**A session is open in one place at a time.** The process running a session holds its record, so
+resuming it from a second terminal or window is refused, and the refusal names the session and says
+to copy it with `bravebot --fork <id>`. `--resume`, `--continue`, the `--resume` list, `/resume`, a
+one-shot run given a task, the desktop app and `attach` or `reply` on a stopped background session
+all refuse in the same way. Two processes that wrote one record would each replace the other's turns,
+and with them any file you had not trusted: the file would read as trusted afterwards. The hold ends
+when the session does, or when its process does, however it ends. A record that another process wrote
+after yours read it is not resumed either, and says to resume it again.
 
 ### Trying a second approach
 
@@ -91,9 +102,9 @@ is reset and the title is marked.
 From inside a session, [`/branch`](../reference/commands.md#branch-name) does the same and moves
 you onto the copy, saying the id of the original so `--resume` reaches it.
 
-A [manifest run](#a-manifest-run-is-recorded-but-cannot-be-continued) is refused, because there is no
-conversation inside one to carry on from. An [incognito](#a-session-that-leaves-nothing-behind)
-session writes no copy, so forking in one opens the conversation and records nothing.
+A [manifest run](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued) is refused,
+because there is no conversation inside one to carry on from. An [incognito](incognito.md) session
+writes no copy, so forking in one opens the conversation and records nothing.
 
 ### A session that changed directory
 
@@ -112,14 +123,8 @@ directory you resumed from.
 
 ### A manifest run is recorded, but cannot be continued
 
-A [plan-then-execute run](headless.md#planning-the-whole-run-first) cannot be resumed. Its
-conversation is empty, because a session is turns over one conversation and a manifest run has none.
-The picker marks the row and refuses Enter. Naming one on the command line prints what it produced,
-and still does not continue it. That print is a **report rather than a refusal**: it goes to stdout
-and exits successfully, because reading a run back is what naming one is for.
-
-The record holds its goal, its proposed plan, its frozen steps and what each one did, finished or
-not.
+A plan-then-execute run is recorded as its own record and cannot be resumed. See
+[Plan first, then execute](manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued).
 
 ## What a resume restores
 
@@ -131,8 +136,8 @@ on, and the **standing permissions its user granted**:
 - the list of [commands you said to stop asking about](../security/permissions.md#vouching-for-a-command);
 - every question you asked with [`/btw`](../reference/commands.md#btw-question), and the answers the
   record could keep, which come back into the view Ctrl-L opens and into no conversation;
-- the [turns a rewind can still reach](#a-rewind-survives-a-resume), so `/undo` after a resume reaches
-  the same turns it reached before;
+- the [turns a rewind can still reach](rewind.md#a-rewind-survives-a-resume), so `/undo` after a
+  resume reaches the same turns it reached before;
 - the model the record names, which stays in force for the first save outside a turn as well, and the
   pull request and issue you gave with `/pr` and `/issue`. `bravebot --fork` copies both, and
   `/clear` begins a session with neither.
@@ -227,7 +232,7 @@ is not written at all, and the trail is labels and gate names with no content in
 back into a later turn's context, so anything written that the planner could not have held would
 enter that context on the next resume.
 
-A [rewind point](#taking-turns-back) is the one part of a record built from bytes no message carried:
+A [rewind point](rewind.md) is the one part of a record built from bytes no message carried:
 it holds what the files a turn wrote over held, read off the disk rather than out of the conversation.
 Those bytes go into the record only where the trust map that stood before the turn vouched for the
 path. What a file nobody vouched for held is written down as contents this session did not keep.
@@ -321,14 +326,20 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   shows neither and a turn that only wrote to the cache shows the write alone. The cache figures update after each round of a turn in flight, including
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
-- the files the session has written, as a count with the lines added and removed and the command that
-  opens the files view below, once one has been written,
+- the files the session has written, as a count with the lines added and removed, once one has been
+  written. Clicking its heading or the count opens the files view below,
 - the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
   filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
-  that wrote the list has ended or in a resumed session. Where it runs past the bottom it keeps the
-  task in progress in view and counts the rows left out above and below it, as `+12 earlier` or
-  `+3 more`. A task list with no rows leaves the plan as the last list that had rows. `/clear`, a
-  rewind and a new turn clear it.
+  that wrote the list has ended or in a resumed session. Where it runs past the bottom it shows the
+  task in progress and the pending tasks first, in the order of the plan, then the finished tasks
+  nearest the first one still to do, and a row after them counts what it left out in words of their own,
+  as `+3 to do, +40 done, +2 cancelled`. A kind with none left out is not named. A task list with no
+  rows leaves the plan as the last list that had rows. `/clear`, a rewind and a new turn clear it.
+  [`/todos`](../reference/commands.md#todos), or Alt-A, prints the whole plan in the transcript, every
+  task with its status and its text in full, a task still to do drawn filled or hollow as it is here.
+  The plan ends with a row that names the key, unless the
+  room is under three rows, the plan fills the room to its last row, or the row would take the place
+  of a task still to do. The `?` list always names it.
 
 Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
 hint line under the box, unless the terminal is too short for the panel to show them; the mode, a
@@ -340,7 +351,7 @@ session's own counters, the servers you approved and where the session runs, and
 
 ### The files the session wrote
 
-Type `/files` and the panel lists every file the session's write calls changed, in the order each was
+Type `/diff`, or click the Files section of the panel, and the panel lists every file the session's write calls changed, in the order each was
 first written, with the lines added and removed at the right edge. Under the list are all the edits to
 the highlighted file, oldest first, each under a header with its place, its turn and its counts, with
 line numbers in a gutter and every change drawn, where the transcript draws the first twelve of each
@@ -352,8 +363,22 @@ columns wide.
 | `↑` `↓`, `k` `j` | highlight the previous or next file |
 | `Home` `End`, `g` `G` | highlight the first or last file |
 | `PgUp` `PgDn` | scroll the edits |
-| `[` `]` | scroll to the previous or next edit |
-| `q`, `Esc`, `/files`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+| `←` `→`, `h` `l` | scroll to the previous or next edit |
+| `q`, `Esc`, `Ctrl-C` | leave the view; the panel is as it was before, and a turn running goes on |
+
+A bar under the file's name shows which edit is at the top of the edits, as `edit 2 of 3`, with a
+control either side that puts the header of the previous or the next edit at the top. A control with
+no edit to go to is dim and does nothing. The edits say how many of their rows are above and below the
+ones drawn. The last row of the panel names these keys, and the hint line under the box keeps the
+context reading and the cache rate. Where the terminal is too narrow to draw the panel, the hint
+line names the keys as well.
+
+With the mouse, clicking a file in the list highlights it and shows its edits from the top, clicking
+a control of the bar steps between the edits, and clicking the `x` at the right end of the heading row
+leaves the view as `q` does. The wheel scrolls the pane the pointer is over: the list, without moving
+the highlight, or the edits, by the number of rows `tui.wheelRows` names, and the transcript where the
+pointer is over it. A key that moves the highlight brings it back into view. A drag, a double click or
+a triple click still selects text.
 
 Every other key does nothing there, and the line in the box comes back as you left it. Edits that
 finish while the view is open are added without moving the highlight or the scroll. The view lists
@@ -384,8 +409,8 @@ background session states its mode on its opening lines and again when `attach` 
 refusal of bypass says that a session nobody watches does not run in a mode that answers every
 question, and names a one-shot run (`-p`) as the way to ask for that. `--dangerously-bypass-approvals-and-sandbox`
 is refused the same way. With no model service configured, `--bg` is refused in the terminal you
-typed it in, with the configuration status and the three routes (Bedrock, an OpenAI-compatible
-gateway, importing Leo), and no background process is started.
+typed it in, with the configuration status and the four routes (Bedrock, an OpenAI-compatible
+gateway, a ChatGPT sign-in, importing Leo), and no background process is started.
 
 | Command | What it does |
 |---|---|
@@ -421,7 +446,7 @@ socket requires. A confined stage cannot read that directory.
 `bravebot sessions delete <id>` removes one session of this directory, taking the id from
 `bravebot sessions list`. `bravebot sessions purge` removes all of them; it asks first, naming the
 directory and how many, unless you pass `-y`, and `--dry-run` prints what it would remove and
-removes nothing. Each deletes the record, its trail and its search index, and nothing else: your
+removes nothing. Each deletes the record, its trail, its search index and its lock, and nothing else: your
 prompt history is one file for every project and stays, and so do the sessions of other
 directories. A session running in the background is left until you stop it with
 `bravebot sessions stop`. A session open in another terminal is not seen, and its next save writes
@@ -470,110 +495,16 @@ permissions, and closes any directory `/add-dir` had opened.
 
 ## Starting a plan-then-execute run
 
-```
-/manifest collect every TODO comment into notes/todos.md
-```
-
-starts one [plan-then-execute run](headless.md#planning-the-whole-run-first) and hands the session
-back afterwards. It is a run, not a mode the session holds: a session is several turns over one
-conversation, each deciding what to do next after the last one read something, so nothing about the
-session could stay in that mode.
-
-The session is **blocked for the duration.** There is no planner inside a manifest run to hand a line
-to, so you can read, scroll and stop, but not send.
-
-**The conversation is neither read nor written.** It does not go in, because the planner that reads
-the task may hold the task and nothing else. Nothing comes back out either, because every step's
-result is quarantined and there is no planner left to show it to. What the transcript shows is the
-goal as the planner understood it, the frozen plan, each step as it runs, and the reply, none of it in
-the exchange a later turn resumes. The run leaves the conversation exactly as declining a plan leaves
-the workspace.
-
-The run is written down as **its own record** and the session records its name, so the session still
-resumes as a conversation while the run stays a run the picker refuses. A run you stopped is not
-written at all, since there is nothing in it to read. A run that fails or is stopped after it wrote a
-file keeps what it learned about that file: the file stays untrusted, and the saved session resumes with
-the same trust.
-
-The plan is [put to you before it runs](headless.md#a-plan-is-put-to-you-first), drawn and scrolled
-here rather than printed on one line. In [plan mode](../security/permissions.md#answering-in-advance-modes)
-a plan with a write in it does not run at all, decided before the plan is put to anybody.
+[`/manifest`](../reference/commands.md#manifest-task) starts one plan-then-execute run and hands
+the session back afterwards. [Plan first, then execute](manifest-mode.md#starting-a-plan-then-execute-run)
+has the rest.
 
 ## Taking turns back
 
 [`/undo`](../reference/commands.md#undo) puts the session back where it stood before the most recent
-turn: the files that turn wrote go back to what they held, a file it created is removed, and the
-conversation, turn count, spend, timing and remembered command approvals go back with them. The prompt
-of the earliest turn taken back returns to the input box, as a prompt, when the box is empty and no
-turn is running.
-**Saying it again goes back another turn**, as far as the last five.
-
-File trust follows what undo restored or left on disk. Restored files get the lower of their backup's
-trust and their trust before the turn; untouched files get the lower of their current trust and their
-trust before the turn. Grants made during undone turns are withdrawn. A file you distrusted during
-those turns stays distrusted if undo leaves it untouched; you can grant trust again. One failed
-restoration leaves that path untrusted without withdrawing unrelated grants.
-
-### Reading a rewind before running one
-
-A task continued with `bravebot -p "task" --continue` (or `--resume <id>`) adds a rewind point of its
-own behind the record's earlier ones. `/undo` in the session you resume next takes back only that
-turn, files and conversation, and warns about a program the turn ran or a language server the
-session started, since neither can be put back.
-
-`/rewind` on its own lists the points the session can go back to, most recent first and numbered
-from one. Each row says how many turns back it is, which turn it would land before, what that turn
-was asked, and every path that turn wrote over, or that it wrote over none.
-
-`/rewind <n>` then goes back that many turns, which is what saying `/undo` n times does, so it puts
-back every row from the first down to the one chosen. A number past what the session remembers
-rewinds nothing and says how far back it does go, rather than going as far as it can: reading a tree
-two turns younger than you believe it is would be worse than a refusal.
-
-### Putting back one hunk
-
-`/hunks` lists the hunks the last turn wrote, numbered from one across its files, and `/hunks 2` puts
-hunk 2 back as it stood before the turn while every other line of the file stays as it is. The list
-is drawn again afterwards, since the numbers below the hunk have moved, and `/undo` still puts the
-whole turn back.
-
-It is for the case where most of a turn is right and one change is not. A file you have edited since
-is protected: the file is compared with what the turn kept, and a hunk that has moved or changed is
-refused rather than written over. Only a file the session trusts is compared, so any other is named
-and left to `/undo`. The [command reference](../reference/commands.md#hunks-number) has the rest.
-
-### What will not go back
-
-- **Changes outside file tools.** Commands, hooks, scratch writes, language servers and desktop
-  turns keep undo available, but their changes may remain. Undo names the recorded causes in its
-  warning. Restoring a backed-up file can overwrite later command changes to that same file;
-  undo does not reverse the command itself.
-- **An edit you made since.** What goes back is what the path held *before the turn wrote to it*, so
-  an edit of your own in between is lost. Nothing compares the file first, and nothing asks.
-- **A file past the budget.** What the last five turns wrote over is held to one budget between them
-  rather than one each. Past it the path is still remembered and its contents are not, so the rewind
-  **names that path** as one that did not go back, and the rest of the rewind still happens.
-- **The session's own scratch directory**, which is not part of the project. See
-  [Trusted directories](../security/trust.md).
-
-### What gives up every point
-
-These changes outside a turn give up every point: `/clear`, `/compact`, `/btw`, `/rename`,
-`/add-dir`, and `/cd`. After one of these, `/undo` says there is nothing left to undo rather than
-rewinding to a point that describes a different session. Shell-mode commands keep the points and
-add a coverage warning.
-
-A rewind past the first turn removes the record only when restoration is complete, there are no
-coverage warnings, and file trust matches the original snapshot. Otherwise the resulting state
-stays saved. A name you gave the session before that turn stays with it.
-
-### A rewind survives a resume
-
-The points are kept with the record, so `/undo` and `/rewind` after a resume reach the same turns
-they reached before the program was closed. One path is the exception: what a file **nobody vouched
-for** held is kept only in memory, never written down, so after a resume that path is reported as one
-that did not go back. The file is left alone rather than deleted, and the turn is undone in every
-other respect.
+turn, and **saying it again goes back another turn**, as far as the last five.
+[Taking turns back](rewind.md) covers reading a rewind before running one, putting back one hunk,
+what will not go back, what gives up every point, and what a resume keeps.
 
 ## Prompt history
 
@@ -636,85 +567,9 @@ inside a round, so a call is never separated from its results.
 
 ## A session that leaves nothing behind
 
-```sh
-bravebot --incognito
-```
-
-An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the two files
-[below](#what-it-does-not-cover). No prompt reaches the history, no session record and no title are
-written, no audit trail is kept, and a model, theme or effort level chosen inside it applies for
-that session without being recorded. The sessions directory is not created either, since an empty
-one still says that a session ran, in this project, at this time. No record is written, so nothing
-is resumable. An incognito session does not appear in the picker, including to itself.
-
-A history and records that were already there are left exactly as they were, and an ordinary session
-from before stays resumable. It stops being updated for as long as the incognito one runs.
-
-**Reading is untouched.** The settings, the model and theme you chose, your standing instructions,
-your skills and your imported credentials are all read as usual, so the session is the one you
-configured rather than a fresh install. The record of command lines you asked to be remembered past a
-session is read on the same terms: a line already in it still stops the asking, and the key that would
-add one is not offered. So is the record of directories you answered yes to at the startup question,
-which is [kept](../security/trust.md#remembering-the-answer): a kept yes still trusts the directory,
-the session says so as it opens, a new yes is not kept and the question says so, and `/forget-trust`
-changes nothing and names the file so you can remove it yourself.
-
-**One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
-pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,
-an incognito session asks anyway. A model and a theme decide what a session looks like, and that one
-decides whether you are asked, which is not a decision to inherit into a session you asked to leave
-nothing behind. `--vet` and the `vetting.auto` key in your settings still work here, so you can say
-what you want of this run.
-
-The flag may go anywhere in the command line and combines with `-p`, `--resume`, `--mode` and a
-bare invocation alike. It cannot be turned off once the session has started.
-
-### What it does not cover
-
-Nine things still reach the filesystem:
-
-- **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
-  than a trace of it.
-- **Programs you run.** A program reaches the filesystem with the access your own shell would give
-  it, and may write whatever it likes. What confines one is
-  [confinement](../security/security.md#confinement), which is a different question.
-- **The editor hand-off.** Composing in `$EDITOR` writes a scratch file. It goes to the system
-  temporary directory rather than `~/.bravebot`, is readable by nobody else, and does not outlive the
-  edit.
-- **The session's own scratch directory.** Somewhere to put a file that is not part of the project is
-  something a turn needs, and this mode does not take it away. It sits in the system temporary
-  directory on the same terms as the editor's file and goes with the session. Its name says which
-  program made it and nothing about which project or which session, so an empty one records only that
-  this program ran at this time.
-- **A language server's index.** A server indexes the workspace before it can answer anything, and
-  the index is too large to hold in memory. It goes to a directory of its own in the system temporary
-  directory and goes with the session, so the next session indexes again. It is never written into the
-  project.
-- **A local MCP server's home.** A [server](../customize/mcp-servers.md) is given a directory of its
-  own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
-  on the same terms and goes once the server stops, so a runner fetches its package again each
-  session.
-- **A credential you spent.** With a [Leo Premium](../customize/premium.md) subscription imported,
-  the session spends credentials from it as any session does, and records which ones it spent in the
-  file the import created under `~/.bravebot`. A credential is single use and presenting it to the
-  service spends it there, so one left looking unspent would be offered again in your next session,
-  wasting a credential you paid for. If the batch runs out while you are working, a new one is
-  fetched for the same subscription and written to the same file, rather than thrown away when you
-  exit. What ends up in the file is credentials for a subscription you imported before the session
-  and which of them are spent, and nothing about the project or what you asked.
-- **The copy of a picture you are asked to open.** When a [vetting](../security/vetting.md) prompt is
-  about a picture, you are handed a copy to open in your own viewer. It is written to
-  `bravebot/vetting` under your cache directory, readable by you alone, and removed when the prompt
-  closes. A process killed with the prompt open leaves it behind.
-- **A memory left untrusted.** Where the session writes something nobody vouched for into a
-  [delegate definition's memory](../customize/agents.md#memory),
-  the path is recorded under `~/.bravebot/untrusted`, so that your next session does not read it as
-  trusted. The record names the file and nothing else, though that does say you worked in the
-  project.
-
-[`import-leo-creds`](../customize/premium.md) is refused rather than quietly skipped, since a
-credential that did not outlive the session would not be an import. `--forget` still works, because
-removing a stored secret leaves less behind rather than more.
+`bravebot --incognito` runs a session that leaves no prompt history, session record, title or
+audit trail. [Incognito sessions](incognito.md) covers what it still reads and what it does not
+cover.
 
 ## When it cannot be written down
 

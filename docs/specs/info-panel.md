@@ -149,12 +149,14 @@ border.
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it
 
-The panel's last row is `{chord} hide panel`, naming the chord in force. While the panel is closed
+The panel's last row is `{chord} hide panel`, naming the chord in force, and in the files state the
+keys of that state instead ([FILES-4](files-mode.md#FILES-4)). While the panel is closed
 on a terminal wide enough for it, the hint line has a `{chord} info` part, and that part is the
 first the line drops when the row is short ([INPUT-13](terminal-input.md#INPUT-13)). With the panel
 open, or on a terminal too narrow for it, the line has no such part.
 
 `verified-by: bravebot_tui::panel::the_last_row_names_the_chord_in_force`
+`verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
 `verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_only_while_it_is_closed_and_would_fit`
 `verified-by: bravebot_tui::panel::the_info_part_is_the_first_the_hint_line_gives_up`
 
@@ -220,10 +222,10 @@ narrow for it.
    they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
-8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote,
-   and a row naming `/files`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
-   It is left out until a file has been written. The Plan takes the rows it leaves, as PANEL-13
-   says of the server sections.
+8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
+   A click on its heading or on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as
+   `/diff` does ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The
+   Plan takes the rows it leaves, as PANEL-13 says of the server sections.
 9. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
@@ -249,20 +251,51 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
-`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows`
+`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
 
 The plan is the session's last `todo_write` list ([TODO-1](tools/todo-write.md#TODO-1)), each row
-with the mark [TODO-2](tools/todo-write.md#TODO-2) gives it, and a finished row struck through. It
+with a mark for its status, and a finished row struck through. It
 stays after the turn that wrote it ends, is replaced by the next report that has rows, and is
 emptied by `/clear`. A report with no rows leaves it as it was, since the session record does not
 tell a turn that emptied its list from one that kept none. It is the last section and has the rows
-the others leave, the language servers and MCP servers included. A plan longer than that shows the rows that fit less one. Where the task in
-progress would fall below the cut, the rows shown move down the list until it is among them. The
-last row counts the rows left out above the ones shown apart from those below them (`+12 earlier`,
-`+15 earlier, +7 more`, `+3 more`).
+the others leave, the language servers and MCP servers included.
+
+A plan longer than that shows the rows that fit less the row after them that says what was left out,
+and less the key row where that is drawn. The rows shown are chosen from each row's status and from
+nothing else, and a status that is not recognised reads as outstanding
+([TODO-2](tools/todo-write.md#TODO-2)). The task in progress comes first, then the pending rows,
+each in the plan's order, and then, where room is left, the finished rows (completed or cancelled)
+nearest the first row still outstanding, or nearest the end of a plan with none. The rows shown are
+drawn in the plan's order. The row after them counts each kind of row left out in words of its own,
+the rows still to do first and a kind with none left out not named (`+6 done`,
+`+3 to do, +40 done, +2 cancelled`), so a count of finished work is not read as work still to come
+and a cancelled row is not counted as done. Where the panel is too narrow for every count the row
+is cut with an ellipsis, and the count of the rows still to do is the last to be cut.
+
+The row that counts keeps its place however little room there is, and a row still to do gives up
+its place to it. A plan of ten rows with two still to do, in a section of two rows, draws the first
+of the two and counts the other (`+1 to do, +8 done`), and in a section of one row draws the count
+alone (`+2 to do, +8 done`). Drawing both of the two and counting the eight finished rows takes
+three rows.
+
+**Why.** What somebody glancing at the panel looks for is what is still to do. A window that starts
+at the top of a long plan fills with finished rows and leaves the unfinished ones behind a count
+that does not say they are there. Dropping the count to draw one more row still to do would leave
+the finished rows out without saying so, and the count is the one row that says rows still to do
+are not drawn.
+
+The section's last row names the key that prints the whole plan, the chord in force
+([INPUT-32](terminal-input.md#INPUT-32)), as the panel's last row names the key that hides it. It
+reads `alt-a whole plan` by default and is cut with an ellipsis to the width of the panel, so a plan
+the panel cannot draw whole, or draws with its text cut, can be read in full. The row is drawn where
+the section has three rows of room or more, the plan does not fill them exactly, and every row still
+to do is drawn beside it: the plan is shorter than the room, or the room less the key row and the
+row that counts what was left out holds every row still to do. So the row takes the place of no row
+still to do and of no task of a plan that fits the room, and only of finished rows in a plan too
+long for it. The `?` list names the key whatever the plan holds.
 
 A row that is neither completed nor cancelled is drawn as work being done only while a turn is
 running. While none is, as after the turn that wrote the list has ended and in a resumed session,
@@ -278,7 +311,18 @@ says the work is finished reads as work still going.
 `verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
 `verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
 `verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
-`verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
+`verified-by: bravebot_tui::panel::a_long_plan_shows_the_rows_still_to_do_before_the_finished_ones`
+`verified-by: bravebot_tui::panel::the_rows_shown_keep_the_order_of_the_plan`
+`verified-by: bravebot_tui::panel::the_task_in_progress_is_kept_when_there_are_more_rows_still_to_do_than_room`
+`verified-by: bravebot_tui::panel::room_left_over_goes_to_the_finished_rows_nearest_the_first_one_still_to_do`
+`verified-by: bravebot_tui::panel::the_row_that_counts_what_was_left_out_names_each_kind_in_words_of_its_own`
+`verified-by: bravebot_tui::panel::the_panel_draws_a_plan_of_none_one_twelve_and_fifty_rows_and_at_the_least_height`
+`verified-by: bravebot_tui::panel::the_rows_drawn_and_counted_follow_the_status_and_never_the_text`
+`verified-by: bravebot_tui::panel::the_last_row_of_the_plan_names_the_key_that_prints_it_whole`
+`verified-by: bravebot_tui::panel::the_key_row_never_takes_the_place_of_a_row_still_to_do`
+`verified-by: bravebot_tui::panel::the_row_naming_the_key_is_cut_to_the_width_of_a_narrow_panel`
+`verified-by: bravebot_tui::panel::the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
 `verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
 `verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
 `verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`

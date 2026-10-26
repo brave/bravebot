@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 1
 title: Anthropic
 description: Reach Claude with an Anthropic API key through its Messages API, and what the block, the roster, the reply ceiling and prompt caching do.
 ---
@@ -19,12 +19,14 @@ An entry keyed `anthropic` reaches Anthropic's own API with an API key:
 }
 ```
 
-Export the key as `ANTHROPIC_API_KEY=<your key>`, or store it with
-`bravebot auth login gateway anthropic`. The block has to say where the key lives: a block naming no
-`env`, no `options.apiKey` and no stored key sends none, and Anthropic refuses the request.
-`ANTHROPIC_API_KEY` is a name other tools read as well, and naming it in `env` is what makes
-bravebot send the key your shell holds. Like any variable a `provider` block names, it is
-[withheld from the programs bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
+Export the key as `ANTHROPIC_API_KEY=<your key>`, or store it with `bravebot auth login gateway
+anthropic`, which needs no block written first: it adds `"provider": {"anthropic": {}}` to your
+settings, and that entry sends the stored key to `api.anthropic.com`. A block you write yourself has
+to say where the key lives: one naming no `env`, no `options.apiKey` and no stored key sends none,
+and Anthropic refuses the request. `ANTHROPIC_API_KEY` is a name other tools read as well, and
+naming it in `env` is what makes bravebot send the key your shell holds, so the entry the sign-in
+adds does not name it. Like any variable a `provider` block names, it is [withheld from the programs
+bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
 
 This is a different route from [AWS Bedrock](bedrock.md), which reaches Claude through an AWS
 account and signs its requests. Nothing here needs an AWS account.
@@ -67,7 +69,7 @@ models you use:
 
 ## What a request carries
 
-**Effort.** The level chosen with [`/effort`](../configuration.md#choosing-how-hard-to-think), or the
+**Effort.** The level chosen with [`/effort`](../effort.md), or the
 `effort` setting, is sent in `output_config`. It is not sent to a model whose listing says it reads
 none, and a model the listing does not describe, including every model of a block that lists `models`,
 is sent it and judged by Anthropic's answer: one that refuses it is not sent it again and is shown as

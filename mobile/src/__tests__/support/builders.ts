@@ -1,4 +1,4 @@
-import type { JsonValue, Pending, Row } from '@brave/agent-client'
+import type { JsonValue, Pending, Row, SupportedApproval } from '@brave/agent-client'
 
 // Builders for the payload shapes the bridge sends (ui/docs/phase-0-rpc-protocol.md, section 8),
 // so a test reads as the rows it shows.
@@ -36,7 +36,7 @@ export function activity(
   }
 }
 
-export function approval(id: number, turn: number, kind: 'confirm' | 'run' | 'fetch' | 'ask', data: Record<string, JsonValue>, resolved = false): Row {
+export function approval(id: number, turn: number, kind: SupportedApproval, data: Record<string, JsonValue>, resolved = false): Row {
   return { id, turn, kind: 'approval', event: `${kind}.request`, data, resolved }
 }
 

@@ -31,60 +31,10 @@ use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::Row;
 use std::sync::mpsc::{Receiver, Sender};
 
-/// Prompts typed while a turn runs, waiting for it to reach a round boundary.
-///
-/// Shared between the two threads rather than sent down a channel, and the reason is that a queued
-/// prompt can be taken back. A line posted into a channel is gone: Up would appear to retrieve it
-/// and it would arrive at the planner anyway, a moment later, having been un-queued on the screen.
-/// One buffer both ends hold makes taking it back mean what it says.
-///
-/// The turn takes from the front and the interface adds to the back, so they stay in the order they
-/// were typed. Poisoning is treated as empty: a lock this shallow is only poisoned by a panic
-/// elsewhere, the turn is ending either way, and nothing is worth failing a turn over here.
-#[derive(Debug, Clone, Default)]
-pub struct Interjections(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
-
-impl Interjections {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add a line for the turn to take at its next boundary.
-    pub fn push(&self, said: String) {
-        if let Ok(mut waiting) = self.0.lock() {
-            waiting.push_back(said);
-        }
-    }
-
-    /// Take the oldest, or `None`. Never waits: see [`Confirmer::interjection`].
-    pub fn take(&self) -> Option<String> {
-        self.0.lock().ok()?.pop_front()
-    }
-
-    /// Take every line, oldest first, leaving the buffer empty.
-    pub fn drain(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|mut waiting| waiting.drain(..).collect())
-            .unwrap_or_default()
-    }
-
-    /// Drop the newest, for a prompt the person is taking back off the queue.
-    ///
-    /// The newest rather than the oldest because that is the end Up takes from: the queue is taken
-    /// back from the end the person is typing at.
-    ///
-    /// `false` where there was nothing to drop, which is how a caller learns that the turn has
-    /// already taken every line there was. A prompt the planner is holding cannot be taken back,
-    /// and this is the only place that can tell: the two threads move independently, so a line can
-    /// be taken between the key press and the moment anything looks at the queue.
-    pub fn forget_last(&self) -> bool {
-        self.0
-            .lock()
-            .map(|mut waiting| waiting.pop_back().is_some())
-            .unwrap_or(false)
-    }
-}
+/// Prompts typed while a turn runs are held in the shared buffer of `bravebot_agent`, which both
+/// the terminal and the desktop bridge use. The buffer is shared between the two threads rather
+/// than sent down a channel because a queued prompt can be taken back (`Interjections::forget_last`).
+pub use bravebot_agent::interjections::Interjections;
 
 /// What a worker sends the main thread.
 #[derive(Debug)]

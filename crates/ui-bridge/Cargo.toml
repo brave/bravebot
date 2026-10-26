@@ -16,6 +16,7 @@ base64 = { workspace = true }
 bravebot-agent = { path = "../agent" }
 # One reading of a proposed write as plain lines, the one the command-line session shows.
 bravebot-approval = { path = "../approval" }
+bravebot-backtrace = { path = "../backtrace" }
 # For `Message` and `Role`: cutting a conversation has to look at what a message *is*, and
 # `Snapshot::messages` is a `Vec<Message>` from this crate. Reading the type the agent already
 # hands us is not a widening of what this depends on.
@@ -41,6 +42,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# The test of what the bridge sends and keeps for a failed ChatGPT turn signs in to a stand-in and
+# runs the turns against it. The seams are on for a build of this crate's tests alone, and a release
+# build refuses them (CHATGPT-2).
+bravebot-config = { path = "../config", features = ["test-hosts"] }
+bravebot-skus = { path = "../skus", features = ["test-hosts"] }
 # O_NONBLOCK and read(2) for the boundary test, whose value differs between Unixes.
 libc = { workspace = true }
 tempfile = { workspace = true }

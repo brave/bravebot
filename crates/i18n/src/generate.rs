@@ -182,6 +182,15 @@ fn render(value: &Value, language: &str, indent: usize) -> String {
         return append(&variants[*default].parts, &pad);
     }
 
+    // Nor does a select whose variants all say the same. The reference may state the forms a
+    // translation needs and say them alike where its own language does not tell them apart.
+    if others
+        .iter()
+        .all(|variant| variant.parts == variants[*default].parts)
+    {
+        return append(&variants[*default].parts, &pad);
+    }
+
     let mut out = String::new();
     if others.iter().any(|v| matches!(v.key, Key::Exact(_))) {
         out.push_str(&format!("{pad}let exact = {arg}.get();\n"));
@@ -317,6 +326,56 @@ mod tests {
             arm(&generated, "EnUs").contains(r#"category("en", rounds.get())"#),
             "the reference stopped being formed by its own rules:\n{generated}"
         );
+    }
+
+    /// The reference may state the forms of a count and say them alike, where its language does not
+    /// tell them apart and a translation's does. What is generated for the reference is the text
+    /// once, with no choice among equal branches, and the translation keeps its own forms. A select
+    /// in which any form differs from the default is still chosen between, since a language that
+    /// has that form needs it.
+    ///
+    /// Rejects: an `if` over variants that say the same, which clippy refuses in the generated
+    /// code, a translation that loses its own forms because the reference's are alike, and a
+    /// collapse that looks at only some of the variants, which drops `y` from `[one] x`, `[few] y`,
+    /// `*[other] x` and from `[one] y`, `[few] x`, `*[other] x`.
+    #[test]
+    fn a_select_whose_forms_say_the_same_is_generated_as_that_text() {
+        const ALIKE: &str =
+            "done = { $count ->\n    [one] +{ $count } done\n   *[other] +{ $count } done\n    }\n";
+        const ALIKE_IN_FRENCH: &str = "done = { $count ->\n    [one] +{ $count } terminée\n   *[other] +{ $count } terminées\n    }\n";
+        let catalogs = vec![catalog("en-US", ALIKE), catalog("fr", ALIKE_IN_FRENCH)];
+        let generated = messages(&catalogs, &catalogs[0]);
+
+        let english = arm(&generated, "EnUs");
+        assert!(
+            !english.contains("category") && !english.contains("if "),
+            "alike forms were still chosen between:\n{english}"
+        );
+        assert!(
+            english.contains(r#"out.push_str(" done")"#),
+            "the text was not generated:\n{english}"
+        );
+        let french = arm(&generated, "Fr");
+        assert!(
+            french.contains(r#"category("fr", count.get())"#)
+                && french.contains(r#"out.push_str(" terminée")"#)
+                && french.contains(r#"out.push_str(" terminées")"#),
+            "the translation lost one of its own forms:\n{french}"
+        );
+
+        // One form that differs, first or last of the variants that are not the default, keeps the
+        // choice and the form.
+        for differing in [
+            "done = { $count ->\n    [one] x\n    [few] y\n   *[other] x\n    }\n",
+            "done = { $count ->\n    [one] y\n    [few] x\n   *[other] x\n    }\n",
+        ] {
+            let catalogs = vec![catalog("en-US", differing)];
+            let english = arm(&messages(&catalogs, &catalogs[0]), "EnUs");
+            assert!(
+                english.contains("if ") && english.contains(r#"out.push('y')"#),
+                "a form that differs was dropped from {differing:?}:\n{english}"
+            );
+        }
     }
 
     /// A language nothing writes a plural rule for would have its select formed by another

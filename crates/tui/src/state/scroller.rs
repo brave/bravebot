@@ -43,6 +43,8 @@ pub struct Laid {
     pub continued: Vec<(u16, bool)>,
     /// The regions of the screen a selection can begin in, empty for a view that has none.
     pub panes: Vec<(crate::select::Pane, ratatui::layout::Rect)>,
+    /// The cells the permission mode is drawn in on the hint row, where it is drawn (MOUSE-14).
+    pub mode: Option<ratatui::layout::Rect>,
 }
 
 impl Laid {
@@ -161,6 +163,37 @@ impl Session {
             crate::picking::Step::Picked(picked) => {
                 self.picking = None;
                 self.picked = Some(picked);
+            }
+        }
+    }
+
+    /// Whether a model picker is open and its rows have yet to arrive.
+    pub fn picking_is_loading(&self) -> bool {
+        matches!(&self.picking, Some(crate::picking::Picking::Model(picker)) if picker.is_loading())
+    }
+
+    /// Take the rows of an open model picker if they have arrived, without waiting for them.
+    ///
+    /// Asked on every pass of the loops that own the session, since the rows arrive from a thread
+    /// and no key is pressed for them. The sentences about services that could not be read go into
+    /// the transcript as the rows arrive. A listing that failed closes the picker and says why, so
+    /// the model stays as it was. Returns whether the screen changed.
+    pub fn settle_picking(&mut self) -> bool {
+        let Some(crate::picking::Picking::Model(picker)) = &mut self.picking else {
+            return false;
+        };
+        match picker.settle() {
+            crate::model_prompt::Arrival::Nothing => false,
+            crate::model_prompt::Arrival::Rows(problems) => {
+                for problem in problems {
+                    self.note(problem);
+                }
+                true
+            }
+            crate::model_prompt::Arrival::Failed(problem) => {
+                self.picking = None;
+                self.note(t!(session_models_unavailable, problem = problem));
+                true
             }
         }
     }
@@ -525,6 +558,7 @@ impl Session {
         self.held_view = Some(self.scroll);
         self.scroll = 0;
         self.watching = Some(Watching {
+            scope: WatchScope::Agents,
             at: self.asides.len() + place,
             listing: false,
             on_session: false,

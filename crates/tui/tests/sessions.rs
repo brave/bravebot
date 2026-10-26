@@ -205,21 +205,27 @@ fn a_session_is_named_once_there_is_a_record_to_name() {
         },
     );
 
-    let named = handle.resumable().expect("a written session has a name");
+    let named = handle
+        .resumable()
+        .expect("a written session has a name")
+        .to_string();
     assert_eq!(named, handle.id());
 
     // And the name is the one that fetches it, which is the whole of what it is for.
-    let record = sessions::load(&scratch.project, named).expect("the named session loads");
+    let record = sessions::load(&scratch.project, &named).expect("the named session loads");
     assert_eq!(record.title, "make a space invaders game");
 
     // A resumed session writes back to the record it came from, so it can be named from the start.
+    // The session that wrote the record has ended, so nothing holds it.
+    drop(handle);
     let resumed = Handle::resuming(
         &scratch.project,
         &record,
         Front::Terminal,
         bravebot_stamp::BUILD,
-    );
-    assert_eq!(resumed.resumable(), Some(named));
+    )
+    .expect("the record is free");
+    assert_eq!(resumed.resumable(), Some(named.as_str()));
 }
 
 #[test]
@@ -374,14 +380,17 @@ fn sessions_are_written_read_back_and_kept_per_directory() {
     assert_eq!(sessions::list(&elsewhere).len(), 1);
     assert_eq!(sessions::list(&scratch.project).len(), 1);
 
-    // Resuming continues the same session rather than starting a new one beside it.
+    // Resuming continues the same session rather than starting a new one beside it. The session
+    // that wrote the record has ended, so nothing holds it.
+    drop(handle);
     let record = sessions::load(&scratch.project, &listed[0].id).expect("the session loads");
     let mut resumed = Handle::resuming(
         &scratch.project,
         &record,
         Front::Terminal,
         bravebot_stamp::BUILD,
-    );
+    )
+    .expect("the record is free");
     resumed.save(
         "",
         Standing {
@@ -4585,8 +4594,11 @@ mod preserved_history {
             next.contains("Failure category: unauthorized. Requests sent for the failed call: 1."),
             "{next}"
         );
+        // The request names the scratch directory, which holds this process's id, and an id can
+        // hold the status the service replied with.
+        let without_the_process_id = next.replace(&std::process::id().to_string(), "");
         assert!(
-            !next.contains("401"),
+            !without_the_process_id.contains("401"),
             "the status of the reply was sent: {next}"
         );
         assert!(
@@ -5558,22 +5570,28 @@ fn a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume() {
     save(&mut handle, &[]);
     let workspace = Workspace::new(&scratch.project).expect("workspace");
     let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+    let id = handle.id().to_string();
+    // The session that wrote the record has ended, so nothing holds it.
+    drop(handle);
     let mut resumed = Handle::resuming(
         &scratch.project,
         &record,
         Front::Terminal,
         bravebot_stamp::BUILD,
-    );
+    )
+    .expect("the record is free");
     assert_eq!(record.restore_checkouts(&workspace, &mut resumed), None);
 
-    save(&mut handle, &[a_kept_checkout()]);
-    let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+    save(&mut resumed, &[a_kept_checkout()]);
+    let record = sessions::load(&scratch.project, &id).expect("loads");
+    drop(resumed);
     let mut resumed = Handle::resuming(
         &scratch.project,
         &record,
         Front::Terminal,
         bravebot_stamp::BUILD,
-    );
+    )
+    .expect("the record is free");
     let said = record
         .restore_checkouts(&workspace, &mut resumed)
         .expect("a checkout that is not there is not named");
@@ -5582,7 +5600,7 @@ fn a_checkout_that_is_not_where_the_record_put_it_is_named_on_resume() {
 
     // The next save, from a session that holds none, must not erase what could not be taken back.
     save(&mut resumed, &[]);
-    let again = sessions::load(&scratch.project, handle.id()).expect("loads");
+    let again = sessions::load(&scratch.project, &id).expect("loads");
     assert_eq!(
         again
             .checkouts
@@ -5630,16 +5648,20 @@ fn a_resume_that_restores_no_checkout_still_writes_the_records_checkouts_back() 
     let mut handle = Handle::begin(&scratch.project, Front::Terminal, bravebot_stamp::BUILD);
     save(&mut handle, &[a_kept_checkout()]);
     let record = sessions::load(&scratch.project, handle.id()).expect("loads");
+    let id = handle.id().to_string();
+    // The session that wrote the record has ended, so nothing holds it.
+    drop(handle);
 
     let mut resumed = Handle::resuming(
         &scratch.project,
         &record,
         Front::Desktop,
         bravebot_stamp::BUILD,
-    );
+    )
+    .expect("the record is free");
     save(&mut resumed, &[]);
 
-    let again = sessions::load(&scratch.project, handle.id()).expect("loads");
+    let again = sessions::load(&scratch.project, &id).expect("loads");
     assert_eq!(
         again
             .checkouts
@@ -5737,11 +5759,38 @@ fn resume_refuses_a_record_a_running_background_session_holds() {
     let free = recorded(&scratch.project, "the free one", false);
     let load = |id: &str| Box::new(sessions::load(&scratch.project, id).expect("a record"));
 
-    let refusal = continuable_unless(load(&held), |id| id == held).unwrap_err();
+    let refusal = continuable_unless(load(&held), |id| id == held, |_| false).unwrap_err();
     assert_eq!(refusal, Refusal::Held);
     assert!(!refusal.note().contains(&held), "{}", refusal.note());
-    let record = continuable_unless(load(&free), |id| id == held).expect("a record nothing holds");
+    let record = continuable_unless(load(&free), |id| id == held, |_| false)
+        .expect("a record nothing holds");
     assert_eq!(record.id, free);
+}
+
+/// SESSION-38, CMD-14. A record another process holds is refused by `/resume <id>`, with a line that
+/// does not carry the id, and is let through once the process that held it has ended.
+#[test]
+fn resume_refuses_a_record_another_process_holds() {
+    use bravebot_tui::resume::{Refusal, named};
+    let scratch = Scratch::new("resume-open-elsewhere");
+    let id = recorded(&scratch.project, "the open one", false);
+    let record = sessions::load(&scratch.project, &id).expect("a record");
+
+    let holder = Handle::resuming(
+        &scratch.project,
+        &record,
+        Front::Terminal,
+        bravebot_stamp::BUILD,
+    )
+    .expect("nothing holds the record");
+    let refusal = named(&scratch.project, "another-session", &id).unwrap_err();
+    assert_eq!(refusal, Refusal::HeldByAnother);
+    assert!(!refusal.note().contains(&id), "{}", refusal.note());
+
+    drop(holder);
+    let taken = named(&scratch.project, "another-session", &id)
+        .expect("the record is free once its holder has ended");
+    assert_eq!(taken.id, id);
 }
 
 /// CMD-14. A typed id is a person's, but it is joined onto a path all the same: one that climbs out
@@ -5873,14 +5922,18 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
         "a yes that did not say so came back as one that did"
     );
 
-    // A later turn, written back to the record it came from, carries the answer of that turn.
+    // A later turn, written back to the record it came from, carries the answer of that turn. The
+    // session that wrote the record has ended, so nothing holds it.
     let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let id = handle.id().to_string();
+    drop(handle);
     let mut resumed = Handle::resuming(
         &scratch.project,
         &record,
         Front::Terminal,
         bravebot_stamp::BUILD,
-    );
+    )
+    .expect("the record is free");
     macro_rules! next {
         ($trust:expr) => {
             sessions::Continuation {
@@ -5899,7 +5952,7 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
         };
     }
     assert!(resumed.save_continuation(record.clone(), next!(&unsaid)));
-    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let record = sessions::load(&scratch.project, &id).expect("the session loads");
     assert!(
         !record
             .trust_map(&scratch.project)
@@ -5908,7 +5961,7 @@ fn a_resume_keeps_the_answer_about_confined_lines_for_its_own_directory_only() {
         "a later turn kept an answer its map no longer held"
     );
     assert!(resumed.save_continuation(record.clone(), next!(&said)));
-    let record = sessions::load(&scratch.project, handle.id()).expect("the session loads");
+    let record = sessions::load(&scratch.project, &id).expect("the session loads");
     assert!(
         record
             .trust_map(&scratch.project)

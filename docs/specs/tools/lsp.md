@@ -9,6 +9,8 @@ governs:
   - crates/lsp/src/server.rs
   - crates/agent/src/lsp.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -16,10 +18,15 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/turn/sentences.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: Operation::parse
   - symbol: locations_in
-documented-by: docs/website/docs/reference/tools.md
+documented-by:
+  - docs/website/docs/reference/tools.md
+  - docs/website/docs/reference/lsp-tool.md
 ---
 
 ## Scope

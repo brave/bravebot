@@ -53,6 +53,8 @@ pub struct Picker {
     said: HashMap<String, String>,
     /// Whether a running background session holds a record, which Enter refuses (BG-9).
     held: fn(&str) -> bool,
+    /// Whether another process holds a record of a project, which Enter refuses (SESSION-38).
+    open: fn(&Path, &str) -> bool,
     /// The record whose deletion is waiting on a `y`, asked about before anything is removed.
     deleting: Option<String>,
 }
@@ -71,6 +73,7 @@ impl Picker {
             corpus: None,
             said: HashMap::new(),
             held: bravebot_session::jobs::is_running,
+            open: sessions::is_open_elsewhere,
             deleting: None,
         }
     }
@@ -92,6 +95,13 @@ impl Picker {
     #[cfg(test)]
     fn with_held(mut self, held: fn(&str) -> bool) -> Self {
         self.held = held;
+        self
+    }
+
+    /// Ask `open` rather than the record's lock whether another process holds a record.
+    #[cfg(test)]
+    fn with_open(mut self, open: fn(&Path, &str) -> bool) -> Self {
+        self.open = open;
         self
     }
 
@@ -295,6 +305,13 @@ fn held_note(id: &str, held: impl Fn(&str) -> bool) -> Option<String> {
     Some(bravebot_session::jobs::held_refusal(id, NAME_SHOWN))
 }
 
+/// The refusal for choosing a record another process holds, which names the session and says how to
+/// copy it instead, or `None` where nothing holds it (SESSION-38).
+fn open_note(picker: &Picker, id: &str) -> Option<String> {
+    let project = picker.reads_from.as_deref()?;
+    (picker.open)(project, id).then(|| sessions::Held::Open { id: id.to_string() }.refusal())
+}
+
 /// How much of a title the deletion question quotes, so the keys after it stay on the row.
 const TITLE_ASKED: usize = 40;
 
@@ -334,7 +351,9 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
         },
         KeyCode::Enter => match picker.chosen() {
             Some(session) if session.manifest => Outcome::Refused(manifest_note().to_string()),
-            Some(session) => match held_note(&session.id, picker.held) {
+            Some(session) => match held_note(&session.id, picker.held)
+                .or_else(|| open_note(picker, &session.id))
+            {
                 Some(note) => Outcome::Refused(note),
                 None => Outcome::Resume,
             },
@@ -395,6 +414,8 @@ pub enum Refusal {
     Manifest,
     /// A running background session holds the record, so a second writer would fork it (BG-9).
     Held,
+    /// Another process holds the record, which one process writes at a time (SESSION-38).
+    HeldByAnother,
 }
 
 impl Refusal {
@@ -405,6 +426,7 @@ impl Refusal {
             Self::AlreadyHere => t!(session_resume_already_here).to_string(),
             Self::Manifest => manifest_note().to_string(),
             Self::Held => t!(session_resume_held_by_background).to_string(),
+            Self::HeldByAnother => t!(session_resume_held_by_another_process).to_string(),
         }
     }
 }
@@ -421,27 +443,37 @@ pub fn named(project: &Path, current: &str, typed: &str) -> Result<Box<sessions:
         .flatten()
         .map(Box::new)
         .ok_or(Refusal::NoSuchSession)
-        .and_then(continuable)
+        .and_then(|record| continuable(project, record))
 }
 
 /// The record, if it is one that can be carried on from: neither a manifest run nor one a running
-/// background session holds. The picker refuses the first on Enter; the second is checked here
-/// because a record is picked up in this process and not another.
-pub fn continuable(record: Box<sessions::Record>) -> Result<Box<sessions::Record>, Refusal> {
-    continuable_unless(record, bravebot_session::jobs::is_running)
+/// background session or another process holds. The picker refuses the first on Enter; the others
+/// are checked here because a record is picked up in this process and not another.
+pub fn continuable(
+    project: &Path,
+    record: Box<sessions::Record>,
+) -> Result<Box<sessions::Record>, Refusal> {
+    continuable_unless(record, bravebot_session::jobs::is_running, |id| {
+        sessions::is_open_elsewhere(project, id)
+    })
 }
 
-/// [`continuable`], with the question of whether a running background session holds an id put by
-/// the caller, so that the refusal can be reached without one.
+/// [`continuable`], with the questions of whether a running background session holds an id and
+/// whether another process does put by the caller, so that the refusals can be reached without
+/// either.
 pub fn continuable_unless(
     record: Box<sessions::Record>,
     held: impl Fn(&str) -> bool,
+    open: impl Fn(&str) -> bool,
 ) -> Result<Box<sessions::Record>, Refusal> {
     if record.manifest.is_some() {
         return Err(Refusal::Manifest);
     }
     if held(&record.id) {
         return Err(Refusal::Held);
+    }
+    if open(&record.id) {
+        return Err(Refusal::HeldByAnother);
     }
     Ok(record)
 }
@@ -1138,6 +1170,59 @@ mod tests {
             panic!("a held session was picked");
         };
         assert!(note.contains("bravebot attach 22222222"), "{note}");
+    }
+
+    /// SESSION-38: a record another process holds is refused on Enter in the picker, with the line
+    /// that names the session and says how to copy it; a record nothing holds is picked as before.
+    #[test]
+    fn a_session_another_process_holds_cannot_be_picked() {
+        fn holds_the_second(_project: &Path, id: &str) -> bool {
+            id == "2222222222"
+        }
+        let mut picker = Picker::new(
+            vec![
+                summary("1111111111", "free", 200),
+                summary("2222222222", "held", 100),
+            ],
+            "/work",
+        )
+        .reading(Path::new("/work"))
+        .with_open(holds_the_second);
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Resume
+        );
+        picker.down();
+        let Outcome::Refused(note) = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE)
+        else {
+            panic!("a record another process holds was picked");
+        };
+        assert!(note.contains("bravebot --fork 2222222222"), "{note}");
+    }
+
+    /// SESSION-38: the list `--from-pr` opens refuses a record another process holds, as the plain
+    /// list does.
+    #[test]
+    fn a_session_another_process_holds_cannot_be_picked_from_a_pull_requests_list() {
+        fn holds_it(_project: &Path, id: &str) -> bool {
+            id == "2222222222"
+        }
+        let mut held = summary("2222222222", "held", 100);
+        held.pull_request = Some("https://github.com/brave/bravebot/pull/12".to_string());
+        let mut picker = Picker::new(vec![held], "/work")
+            .reading(Path::new("/work"))
+            .with_open(holds_it)
+            .from_pull_request("12");
+        assert_eq!(
+            picker.matching().len(),
+            1,
+            "the list did not offer the session"
+        );
+        let Outcome::Refused(note) = handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE)
+        else {
+            panic!("a record another process holds was picked from a pull request's list");
+        };
+        assert!(note.contains("bravebot --fork 2222222222"), "{note}");
     }
 
     #[test]

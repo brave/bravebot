@@ -16,8 +16,10 @@ Every job follows the same steps:
 4. Commit the ledger the skill wrote, if it has one, on a branch and open a pull request. A ledger
    records what was reviewed, so the next run, on any machine, reads only what is new.
 
-Filed issues are assigned to netzenbot, and `/pr-fix <issue>` implements one. Fixing is a separate
-step from finding, and a run never does both.
+Filed issues are assigned to netzenbot, and `/pr-fix <issue>` implements one.
+[`/implement-issues`](../../agents/skills/implement-issues/SKILL.md) implements a list of them, or
+every issue a search returns, in one pull request, and `/pr-fix <pr>` handles its review comments.
+Fixing is a separate step from finding, and a run never does both.
 
 ## The jobs
 
@@ -61,7 +63,9 @@ never edits a spec. A repeat run reviews only the clauses whose code changed sin
 review. `/check-spec full` reads every clause again.
 
 **maintenance.** `make check-maintenance` prints the mechanical candidates with no model and no
-clippy lane. The skill reads each candidate and drafts issues only for the ones worth fixing. A
+clippy lane. The skill reads each candidate and drafts issues only for the ones worth fixing, then
+has a reader check each draft's claim against `HEAD` (one reader for every four to six drafts) and
+marks a rejected draft with the reason. A
 cleanup that would move a decision about labelled content is rejected, whatever it saves.
 
 **peer-features.** The default run reviews six units, specs first and then the least recently
@@ -81,8 +85,9 @@ baseline, together.
 | `make check-lint-increase` | Every commit that touches code `make check` runs, and every pull request in CI | Nothing. A pull request that adds sites of a lint the tree has many of fails, and its author removes them or marks a site `#[expect(clippy::lint, reason = "...")]`. Do not raise the base. |
 | [`mutation-testing.yml`](../../.github/workflows/mutation-testing.yml) | Sundays | Read the report for `bravebot-core`. Each mutation no test noticed is a test to add. |
 | [`test-determinism.yml`](../../.github/workflows/test-determinism.yml) | Mondays | Read the report. Each test that failed on an unchanged tree is a flaky test to fix. |
+| [`fuzz.yml`](../../.github/workflows/fuzz.yml) | Wednesdays | Read each failed run. Its log and artifact hold the input that stopped the target. File it as [fuzzing.md](fuzzing.md#when-a-target-finds-something) says. |
 
-Neither scheduled run gates a pull request. A report nobody reads is the same as no report.
+No scheduled run gates a pull request. A report nobody reads is the same as no report.
 
 ## Before a release
 

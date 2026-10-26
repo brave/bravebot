@@ -4,10 +4,13 @@ title: Background sessions
 status: proposed
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/session_commands.rs
   - crates/agent/src/home.rs
   - crates/tui/src/command_table.rs
   - crates/cli/src/supervisor.rs
@@ -312,7 +315,9 @@ foreground terminal would be handed, and nothing the session holds beyond that.
 
 A record a running background session holds is not resumed or continued by another process.
 `--resume` and `--continue` name the session and say to attach. `--fork` copies the record as it
-was last written, and the copy is a new session.
+was last written, and the copy is a new session. A record a terminal holds is refused the same way,
+and a stopped session whose record a terminal holds is not started again by `attach` or `reply`
+([SESSION-38](sessions.md#SESSION-38)).
 
 **Why.** If detaching ended the turn, closing a laptop would cancel work the person started with
 `--bg` in order to keep. If a second process could resume the record, two processes would write one

@@ -904,3 +904,86 @@ fn the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36() {
         assert_eq!(corrupt.panel_columns(120), 36, "a corrupt width was used");
     });
 }
+
+/// What the last note in the transcript says, which is how `/caffeinate` answers.
+fn last_note(session: &bravebot_tui::state::Session) -> String {
+    session.transcript.last().expect("a note").text.clone()
+}
+
+/// CMD-12: the second `/caffeinate` writes the agreement, and the next session that reads it turns
+/// on at its first press. The first press writes nothing, since nothing has been agreed to yet.
+#[test]
+fn the_second_caffeinate_is_read_back_and_the_next_session_turns_on_at_once() {
+    with_temp_home("caffeinate-agreement", || {
+        let file = store::directory().expect("a home").join("caffeinate");
+
+        let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+        session.adopt_caffeinate();
+        session.toggle_caffeinate();
+        assert_eq!(last_note(&session), bravebot_i18n::t!(caffeinate_explained));
+        assert!(!file.exists(), "the explaining press wrote the agreement");
+        session.toggle_caffeinate();
+        assert_eq!(last_note(&session), bravebot_i18n::t!(caffeinate_on));
+        assert_eq!(
+            std::fs::read_to_string(&file).expect("the agreement"),
+            "confirmed\n",
+            "the second press did not record the agreement"
+        );
+
+        let mut next = bravebot_tui::state::Session::new("test").with_stored_history();
+        next.adopt_caffeinate();
+        next.toggle_caffeinate();
+        assert_eq!(
+            last_note(&next),
+            bravebot_i18n::t!(caffeinate_on),
+            "the next session explained again"
+        );
+    });
+}
+
+/// A session that does not persist neither writes the agreement nor reads one, so a test or a
+/// private run is not handed the developer's own answer.
+#[test]
+fn a_session_that_does_not_persist_neither_writes_nor_reads_the_caffeinate_agreement() {
+    with_temp_home("caffeinate-no-persist", || {
+        let file = store::directory().expect("a home").join("caffeinate");
+
+        let mut session = bravebot_tui::state::Session::new("test");
+        session.toggle_caffeinate();
+        session.toggle_caffeinate();
+        assert_eq!(last_note(&session), bravebot_i18n::t!(caffeinate_on));
+        assert!(!file.exists(), "a session that does not persist wrote it");
+
+        std::fs::create_dir_all(file.parent().expect("a directory")).expect("the directory");
+        std::fs::write(&file, "confirmed\n").expect("seed the agreement");
+        let mut next = bravebot_tui::state::Session::new("test");
+        next.adopt_caffeinate();
+        next.toggle_caffeinate();
+        assert_eq!(
+            last_note(&next),
+            bravebot_i18n::t!(caffeinate_explained),
+            "a session that does not persist read the agreement"
+        );
+    });
+}
+
+/// Only the word `confirmed` on the first line is an agreement: a file somebody edited, or an old
+/// one in another shape, explains again.
+#[test]
+fn a_caffeinate_file_that_does_not_say_confirmed_still_explains() {
+    with_temp_home("caffeinate-corrupt", || {
+        let file = store::directory().expect("a home").join("caffeinate");
+        std::fs::create_dir_all(file.parent().expect("a directory")).expect("the directory");
+        for contents in ["", "yes\n", "\nconfirmed\n", "unconfirmed\n"] {
+            std::fs::write(&file, contents).expect("seed the file");
+            let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+            session.adopt_caffeinate();
+            session.toggle_caffeinate();
+            assert_eq!(
+                last_note(&session),
+                bravebot_i18n::t!(caffeinate_explained),
+                "{contents:?} counted as an agreement"
+            );
+        }
+    });
+}

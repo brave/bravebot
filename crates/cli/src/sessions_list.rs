@@ -119,7 +119,6 @@ fn row(session: &Summary) -> String {
             t!(sessions_list_continuable)
         }
     )
-    .to_string()
 }
 
 /// A field a record written before it was kept has nothing for, and a detached head has no branch

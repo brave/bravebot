@@ -111,3 +111,23 @@ esac
 # models such as llama-3-8b-instruct always work. GET /v1/models reports which is
 # which in an "access" field when called with Brave-Product: bravebot.
 export BRAVEBOT_DEFAULT_MODEL="automatic-bravebot"
+
+# ---------------------------------------------------------------------------
+# Crash reports. The submission URL of the Backtrace project a release build
+# sends them to, token included. Optional: a build without it writes and sends
+# nothing, which is what a build from source should do.
+#
+# Baked into the binary at build time and read from nowhere at run time, so
+# exporting it when starting a binary changes nothing. Releases are built by
+# the Jenkins job `bravebot-build`, which needs the same variable set; this
+# file only covers a build made here, `make all-platforms` included.
+#
+# Leave it commented out for day-to-day work. A build that has it sends your
+# own panics too, marked as debug builds, and a program the agent runs from a
+# shell that exports it inherits the token.
+#
+# Created in the Backtrace console under Project settings > API tokens, with
+# only the capability to submit errors:
+#
+#   export BACKTRACE_SUBMIT_URL="https://submit.backtrace.io/<universe>/<token>/json"
+# ---------------------------------------------------------------------------

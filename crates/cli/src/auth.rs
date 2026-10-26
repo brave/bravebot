@@ -11,14 +11,16 @@ use bravebot_agent::backend::{Backend, CredentialError};
 use bravebot_agent::confirm::Decision;
 use bravebot_agent::home;
 use bravebot_config::bedrock::{Bedrock, Tier};
-use bravebot_config::import::{Destination, Unwritable};
+use bravebot_config::import::{Destination, Gateway, Unwritable};
 use bravebot_config::keys::{self, Keys};
-use bravebot_config::provider::{Credential, Provider, Source};
-use bravebot_config::{Config, ConfigError, Managed, Settings, env_var};
+use bravebot_config::provider::{Credential, Provider, Source, known_ids};
+use bravebot_config::{Config, ConfigError, Managed, Secret, Settings, env_var};
 use bravebot_i18n::t;
 use bravebot_net::Transport;
 use bravebot_skus::StoredCredentials;
 use bravebot_skus::store::StoreError;
+use std::borrow::Cow;
+use std::fmt::Display;
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::process::ExitCode;
@@ -59,13 +61,15 @@ impl Way {
             .find(|way| way.name().eq_ignore_ascii_case(word))
     }
 
-    fn description(self) -> &'static str {
+    /// What the list says this way is. The gateway line names the services bravebot knows, read
+    /// from the same table a session reaches them by.
+    fn description(self) -> String {
         match self {
-            Way::Leo => t!(auth_way_leo),
-            Way::Bedrock => t!(auth_way_bedrock),
-            Way::Import => t!(auth_way_import),
-            Way::Gateway => t!(auth_way_gateway),
-            Way::ChatGpt => t!(auth_way_chatgpt),
+            Way::Leo => t!(auth_way_leo).to_string(),
+            Way::Bedrock => t!(auth_way_bedrock).to_string(),
+            Way::Import => t!(auth_way_import).to_string(),
+            Way::Gateway => t!(auth_way_gateway, services = listed(known_ids())),
+            Way::ChatGpt => t!(auth_way_chatgpt).to_string(),
         }
     }
 }
@@ -124,9 +128,10 @@ fn login(args: &[String]) -> ExitCode {
     }
     // Scoped, so the lock on stdin is released before the way runs: `import-providers` takes its
     // own, and a second lock on stdin from the same thread waits forever.
+    let directory = home::directory();
     let picked = {
         let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
-        picked(&mut asking, &held)
+        picked(&mut asking, &|way| held(way, directory.as_deref()))
     };
     match picked {
         Ok(Some((way, rest))) => sign_in(way, &rest),
@@ -158,7 +163,7 @@ fn picked<R: BufRead, W: Write>(
                 description = way.description(),
                 status = status
             ),
-            None => way.description().to_string(),
+            None => way.description(),
         };
         asking.say(&format!("  {number}. {:<9}{description}", way.name()));
     }
@@ -167,11 +172,8 @@ fn picked<R: BufRead, W: Write>(
         Some(answer) if !answer.is_empty() => answer,
         _ => return Ok(None),
     };
-    let way = answer
-        .parse::<usize>()
-        .ok()
-        .and_then(|number| number.checked_sub(1))
-        .and_then(|index| Way::ALL.get(index).copied())
+    let way = crate::plain::numbered_row(&answer, &Way::ALL)
+        .copied()
         .or_else(|| Way::named(&answer));
     let Some(way) = way else {
         return Err(t!(auth_not_a_listed_way, answer = printable(&answer)));
@@ -199,8 +201,9 @@ fn picked<R: BufRead, W: Write>(
 /// What a way already holds, as the list shows it, or `None` where it holds nothing.
 ///
 /// Never the credential: the Leo line is the one `doctor` prints, a count of what is left, and an
-/// AWS account is reported only as signed in.
-fn held(way: Way) -> Option<String> {
+/// AWS account is reported only as signed in. `directory` is the state directory the keys are kept
+/// in, where there is one.
+fn held(way: Way, directory: Option<&Path>) -> Option<String> {
     match way {
         Way::Leo => bravebot_skus::store::load().ok().map(|stored| {
             t!(
@@ -227,11 +230,17 @@ fn held(way: Way) -> Option<String> {
             _ => None,
         },
         // The ids alone. Which host each key goes to is the provider block's to say.
-        Way::Gateway => match Keys::read(&home::directory()?) {
-            Ok(stored) if stored.is_empty() => None,
-            Ok(stored) => Some(t!(auth_gateway_held, ids = listed(stored.ids()))),
-            Err(keys::Unreadable) => Some(t!(auth_gateway_held_unreadable).to_string()),
-        },
+        Way::Gateway => gateways_held(Keys::read(directory?)),
+    }
+}
+
+/// What the gateway line of the list says of the keys stored: every id one is stored for, whether or
+/// not a provider block names it.
+fn gateways_held(stored: Result<Keys, keys::Unreadable>) -> Option<String> {
+    match stored {
+        Ok(stored) if stored.is_empty() => None,
+        Ok(stored) => Some(t!(auth_gateway_held, ids = listed(stored.ids()))),
+        Err(keys::Unreadable) => Some(t!(auth_gateway_held_unreadable).to_string()),
     }
 }
 
@@ -286,6 +295,18 @@ fn unexpected(way: Way, argument: &str) -> ExitCode {
     )
 }
 
+/// The refusal of a word after a gateway's id. Not repeated, as for `login`: it is most likely
+/// the key.
+fn unexpected_gateway_word(verb: &str) -> ExitCode {
+    fail(
+        Ending::Argument,
+        t!(
+            auth_gateway_extra_word,
+            command = format!("bravebot auth {verb} gateway")
+        ),
+    )
+}
+
 /// Sign in to every AWS account the configuration names, where it has no usable session.
 ///
 /// The sign-in a session would make before its first turn (BACKEND-9), made now, so the URL and
@@ -313,7 +334,7 @@ fn bedrock() -> ExitCode {
             match switch {
                 Switch::PinnedOff => t!(
                     auth_bedrock_pinned_off,
-                    path = printable(&bravebot_config::managed_file().display().to_string()),
+                    path = managed_path(),
                     switch = env_var::USE_BEDROCK
                 ),
                 Switch::Off => t!(auth_bedrock_off, switch = env_var::USE_BEDROCK),
@@ -539,7 +560,94 @@ fn accounts<'c>(config: &'c Config, inherited: Option<&str>) -> Vec<(Option<Stri
     accounts
 }
 
-/// Store a key for a gateway a provider block names, typed at the terminal with nothing drawn.
+/// A service `auth login gateway` can store a key for.
+struct Offer<'c> {
+    provider: Cow<'c, Provider>,
+    /// Whether no block of the configuration names the id. It is then one of the known names, and a
+    /// session sends a key stored for it only once the person's settings name it.
+    unconfigured: bool,
+}
+
+impl Offer<'_> {
+    fn id(&self) -> &str {
+        &self.provider.id
+    }
+}
+
+/// What a key can be stored for: the gateways the configuration names, then each known id no block
+/// of it names, each with the host a key for it is sent to.
+///
+/// No known id where the machine-level layer names the gateways. That layer replaces the blocks a
+/// person wrote, so a block recorded for a known id in the person's file would not be read.
+fn offered<'c>(providers: &'c [Provider], managed: &Managed) -> Vec<Offer<'c>> {
+    let mut offers: Vec<Offer<'c>> = providers
+        .iter()
+        .filter(|provider| provider.bedrock.is_none())
+        .map(|provider| Offer {
+            provider: Cow::Borrowed(provider),
+            unconfigured: false,
+        })
+        .collect();
+    if managed.gateways().is_none() {
+        offers.extend(
+            known_ids()
+                .filter(|id| !providers.iter().any(|provider| provider.id == *id))
+                .filter_map(Provider::known)
+                .map(|provider| Offer {
+                    provider: Cow::Owned(provider),
+                    unconfigured: true,
+                }),
+        );
+    }
+    offers
+}
+
+/// A path made printable, since a path may hold control characters a terminal would act on.
+fn shown(path: &Path) -> String {
+    printable(&path.display().to_string())
+}
+
+fn managed_path() -> String {
+    shown(&bravebot_config::managed_file())
+}
+
+/// The refusal of an id that is not offered: the ids that are, and where the machine-level layer
+/// names the gateways, the file that does, since that is why no known service is among them.
+fn not_offered(offers: &[Offer<'_>], managed: &Managed) -> String {
+    let ids = listed(offers.iter().map(Offer::id));
+    match managed.gateways() {
+        Some(_) => t!(
+            auth_gateway_not_configured_managed,
+            path = managed_path(),
+            ids = ids
+        ),
+        None => t!(auth_gateway_not_configured, ids = ids),
+    }
+}
+
+/// The line over the list of what a key can be stored for, which names the machine-level file where
+/// that file names the gateways.
+fn offers_heading(managed: &Managed) -> String {
+    match managed.gateways() {
+        Some(_) => t!(auth_gateways_heading_managed, path = managed_path()),
+        None => t!(auth_gateways_heading).to_string(),
+    }
+}
+
+/// What the gateway sign-in is handed besides the questions and the key.
+struct Task<'a> {
+    /// The gateways the configuration names, with the Bedrock accounts among them.
+    providers: &'a [Provider],
+    managed: &'a Managed,
+    named: Option<&'a str>,
+    /// Whether stdin and stderr are both terminals.
+    terminal: bool,
+    /// The state directory, `None` where nothing may be written.
+    directory: Option<&'a Path>,
+    lookup: &'a dyn Fn(&str) -> Option<String>,
+}
+
+/// Store a key for a service a key can be stored for, typed at the terminal with nothing drawn.
 ///
 /// Never taken from the command line (CRED-24), where every process on the machine can read it and
 /// the shell keeps it in its history. Every check that needs no answer is made before the key is
@@ -549,94 +657,240 @@ fn gateway(named: Option<&str>) -> ExitCode {
     if bravebot_core::incognito::engaged() {
         return fail(Ending::Failed, t!(auth_gateway_not_while_incognito));
     }
-    let config = match Config::from_env() {
-        Ok(config) => config,
+    let providers = match gateways_configured(Config::from_env()) {
+        Ok(providers) => providers,
         Err(problem) => return fail(Ending::Configuration, problem),
     };
-    let gateways: Vec<&Provider> = config
-        .providers
-        .iter()
-        .filter(|provider| provider.bedrock.is_none())
-        .collect();
-    if gateways.is_empty() {
-        return fail(Ending::Configuration, t!(auth_gateway_none_configured));
+    let managed = Managed::load();
+    let directory = home::writable();
+    let task = Task {
+        providers: &providers,
+        managed: &managed,
+        named,
+        // Both ends, as `import-providers` asks for them.
+        terminal: std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
+        directory: directory.as_deref(),
+        lookup: &|name| std::env::var(name).ok(),
+    };
+    sign_in_gateway(
+        &task,
+        || Prompting::new(std::io::stdin().lock(), std::io::stderr()),
+        bravebot_tui::hidden::read,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    )
+    .code()
+}
+
+/// The gateways a configuration names, where it can be read.
+///
+/// A configuration that lacks only the Brave credentials is one that names no gateway and no AWS
+/// account, since either makes them optional, so it names none here. Refusing it would stop the person
+/// this sign-in is for, who holds a key and has configured nothing else.
+fn gateways_configured(config: Result<Config, ConfigError>) -> Result<Vec<Provider>, ConfigError> {
+    match config {
+        Ok(config) => Ok(config.providers),
+        Err(ConfigError::Missing(_) | ConfigError::Empty(_)) => Ok(Vec::new()),
+        Err(other) => Err(other),
     }
-    let named = match named {
+}
+
+/// One line to a stream. A failed write is ignored, since stdout and stderr are the only places one
+/// could be reported.
+fn tell(to: &mut impl Write, line: impl Display) {
+    writeln!(to, "{line}").unwrap_or_default();
+}
+
+fn refused(err: &mut impl Write, ending: Ending, message: impl Display) -> Ending {
+    ending.say(err, message);
+    ending
+}
+
+/// What was answered about the service the key is for.
+enum Asked<'o, 'c> {
+    Nothing,
+    /// A key is typed: none was stored, or it is to be replaced.
+    Type(&'o Offer<'c>),
+    /// The key stored is kept.
+    Keep(&'o Offer<'c>),
+}
+
+/// What the checks that need no answer found.
+struct Ready<'a> {
+    managed: &'a Managed,
+    offers: Vec<Offer<'a>>,
+    named: Option<usize>,
+    directory: &'a Path,
+    stored: Keys,
+}
+
+/// The checks that need no answer, each of which refuses before anything is asked.
+fn ready<'a>(task: &Task<'a>, err: &mut impl Write) -> Result<Ready<'a>, Ending> {
+    let offers = offered(task.providers, task.managed);
+    if offers.is_empty() {
+        return Err(refused(
+            err,
+            Ending::Configuration,
+            t!(auth_gateway_none_configured, path = managed_path()),
+        ));
+    }
+    let named = match task.named {
         None => None,
-        Some(id) => match gateways.iter().find(|provider| provider.id == id) {
-            Some(provider) => Some(*provider),
+        Some(id) => match offers.iter().position(|offer| offer.id() == id) {
+            Some(at) => Some(at),
             // Not repeated back either: a word naming no gateway may be the key, typed where the id
             // goes by somebody who took it for the argument.
             None => {
-                return fail(
+                return Err(refused(
+                    err,
                     Ending::Argument,
-                    t!(
-                        auth_gateway_not_configured,
-                        ids = listed(gateways.iter().map(|provider| provider.id.as_str()))
-                    ),
-                );
+                    not_offered(&offers, task.managed),
+                ));
             }
         },
     };
-    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-        return fail(Ending::Argument, t!(auth_gateway_needs_a_terminal));
+    if !task.terminal {
+        return Err(refused(
+            err,
+            Ending::Argument,
+            t!(auth_gateway_needs_a_terminal),
+        ));
     }
-    let Some(directory) = home::writable() else {
-        return fail(Ending::Failed, t!(auth_gateway_no_home));
+    let Some(directory) = task.directory else {
+        return Err(refused(err, Ending::Failed, t!(auth_gateway_no_home)));
     };
-    let path = keys::file(&directory);
-    let Ok(stored) = Keys::read(&directory) else {
-        return fail(
+    let Ok(stored) = Keys::read(directory) else {
+        return Err(refused(
+            err,
             Ending::Failed,
-            t!(auth_gateway_keys_unreadable, path = path.display()),
-        );
+            t!(
+                auth_gateway_keys_unreadable,
+                path = keys::file(directory).display()
+            ),
+        ));
     };
+    Ok(Ready {
+        managed: task.managed,
+        offers,
+        named,
+        directory,
+        stored,
+    })
+}
 
-    // Scoped, so the lock on stdin is released before the key is read from the terminal.
-    let picked = {
-        let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
-        which_gateway(&mut asking, &gateways, named, &stored)
+/// Ask which service the key is for and, where one is stored for it, whether to replace it.
+///
+/// A service whose block has to be recorded is checked before the question about replacing a key,
+/// so nobody answers it and is then told the sign-in cannot be finished.
+fn asked<'o, 'a, R: BufRead, W: Write>(
+    ready: &'o Ready<'a>,
+    settings: &Path,
+    open_questions: impl FnOnce() -> Prompting<R, W>,
+    err: &mut impl Write,
+) -> Result<Asked<'o, 'a>, Ending> {
+    let named = ready.named.and_then(|at| ready.offers.get(at));
+    let mut asking = open_questions();
+    let heading = offers_heading(ready.managed);
+    let offer = match which_gateway(&mut asking, &ready.offers, named, &ready.stored, &heading) {
+        Ok(Some(offer)) => offer,
+        Ok(None) => return Ok(Asked::Nothing),
+        Err(refusal) => return Err(refused(err, Ending::Argument, refusal)),
     };
-    let provider = match picked {
-        Ok(Some(provider)) => provider,
-        Ok(None) => return ExitCode::SUCCESS,
-        Err(refused) => return fail(Ending::Argument, refused),
+    if offer.unconfigured
+        && let Err(problem) = with_block(offer, settings)
+    {
+        return Err(refused(
+            err,
+            Ending::Failed,
+            t!(
+                auth_gateway_cannot_record,
+                id = printable(offer.id()),
+                problem = problem
+            ),
+        ));
+    }
+    Ok(match replaced(&mut asking, offer, &ready.stored) {
+        true => Asked::Type(offer),
+        false => Asked::Keep(offer),
+    })
+}
+
+/// The sign-in of `bravebot auth login gateway`, over the places it reads and writes, so a test
+/// runs the whole of it: the pick, the key, where it is stored and the block that names its id.
+///
+/// `open_questions` is called for the questions and what it returns is let go before the key is
+/// read, so the lock on stdin is released before the terminal is read for the key.
+fn sign_in_gateway<R: BufRead, W: Write>(
+    task: &Task<'_>,
+    open_questions: impl FnOnce() -> Prompting<R, W>,
+    read_key: impl FnOnce(&str) -> std::io::Result<Option<Secret>>,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Ending {
+    let ready = match ready(task, err) {
+        Ok(ready) => ready,
+        Err(ending) => return ending,
+    };
+    let settings = bravebot_config::user_settings_file(ready.directory);
+    let offer = match asked(&ready, &settings, open_questions, err) {
+        Ok(Asked::Type(offer)) => offer,
+        Ok(Asked::Keep(offer)) => {
+            return record_kept(offer, ready.directory, &settings, out, err);
+        }
+        Ok(Asked::Nothing) => return Ending::Done,
+        Err(ending) => return ending,
     };
 
     // BACKEND-16 reads a variable before a stored key, so one set here is what a session sends, and
     // that is said before the key is typed rather than after it is kept.
-    if let Some(variable) = variable_in_force(provider, |name| std::env::var(name).ok()) {
-        eprintln!("{}", t!(auth_gateway_variable_wins, variable = variable));
+    if let Some(variable) = variable_in_force(&offer.provider, |name| (task.lookup)(name)) {
+        tell(err, t!(auth_gateway_variable_wins, variable = variable));
     }
     let question = t!(
         auth_gateway_key_question,
-        id = printable(&provider.id),
-        host = printable(provider.host())
+        id = printable(offer.id()),
+        host = printable(offer.provider.host())
     );
-    let key = match bravebot_tui::hidden::read(&question) {
+    let key = match read_key(&question) {
         Ok(Some(key)) => key,
         Ok(None) => {
-            eprintln!("{}", t!(auth_gateway_nothing_stored));
-            return ExitCode::SUCCESS;
+            tell(err, t!(auth_gateway_nothing_stored));
+            return record_kept(offer, ready.directory, &settings, out, err);
         }
         Err(error) => {
-            return fail(
+            return refused(
+                err,
                 Ending::Failed,
                 t!(auth_gateway_not_read, error = error.to_string()),
             );
         }
     };
-    // Read again: the copy above is as old as the questions took to answer, and writing it back
-    // would restore a key another command forgot in the meantime.
-    let Ok(mut stored) = Keys::read(&directory) else {
-        return fail(
+    store_key(offer, key, &ready, &settings, out, err)
+}
+
+/// Store the key typed for `offer`, then record the block that names its id where one is needed.
+fn store_key(
+    offer: &Offer<'_>,
+    key: Secret,
+    ready: &Ready<'_>,
+    settings: &Path,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Ending {
+    let path = keys::file(ready.directory);
+    // Read again: the copy from before the questions is as old as they took to answer, and writing
+    // it back would restore a key another command forgot in the meantime.
+    let Ok(mut stored) = Keys::read(ready.directory) else {
+        return refused(
+            err,
             Ending::Failed,
             t!(auth_gateway_keys_unreadable, path = path.display()),
         );
     };
-    stored.insert(&provider.id, key);
-    if let Err(error) = store(&directory, &stored) {
-        return fail(
+    stored.insert(offer.id(), key);
+    if let Err(error) = store(ready.directory, &stored) {
+        return refused(
+            err,
             Ending::Failed,
             t!(
                 auth_gateway_not_stored,
@@ -645,48 +899,157 @@ fn gateway(named: Option<&str>) -> ExitCode {
             ),
         );
     }
-    println!(
-        "{}",
-        t!(
-            auth_gateway_stored,
-            id = printable(&provider.id),
-            path = path.display(),
-            host = printable(provider.host())
-        )
+    // Said once the block is recorded where one is needed, since until then no session sends the key.
+    if offer.unconfigured
+        && let Err(problem) = record_block(offer, settings)
+    {
+        return not_recorded(err, offer, settings, problem);
+    }
+    let (id, host) = (printable(offer.id()), printable(offer.provider.host()));
+    tell(
+        out,
+        match offer.unconfigured {
+            false => t!(
+                auth_gateway_stored,
+                id = id,
+                path = path.display(),
+                host = host
+            ),
+            true => t!(
+                auth_gateway_stored_and_recorded,
+                id = id,
+                path = path.display(),
+                file = shown(settings),
+                host = host
+            ),
+        },
     );
-    ExitCode::SUCCESS
+    Ending::Done
 }
 
-/// The gateway the key is for, `None` where nothing was picked or a key held is to be kept, or the
-/// refusal of an answer that names no gateway listed.
+/// The person's settings with a block naming `offer`'s id added, or what stops one being added.
 ///
-/// One configured, or one named, is not asked about. A key already stored for the one picked is
-/// asked about before it is replaced, because the one it replaces is gone once the file is written.
-fn which_gateway<'p, R: BufRead, W: Write>(
+/// A file that names the id already is not added to, whether it names a block or something a block
+/// is not: the entry a gateway needs is the person's to write there.
+fn with_block(offer: &Offer<'_>, settings: &Path) -> Result<Destination, String> {
+    let mut destination = Destination::open(settings).map_err(|why| unrecordable(why, settings))?;
+    if destination.holds_gateway(offer.id()) {
+        return Err(t!(
+            auth_gateway_entry_not_a_service,
+            file = shown(settings),
+            id = printable(offer.id())
+        ));
+    }
+    destination.add_gateway(Gateway::bare(offer.id(), &offer.provider.base_url));
+    // Past the size the settings reader reads, which a destination says only once it is asked.
+    destination
+        .text()
+        .map_err(|why| unrecordable(why, settings))?;
+    Ok(destination)
+}
+
+/// Record a block naming `offer`'s id, as `"provider": {"<id>": {}}`, which is the reading that
+/// reaches the host compiled in for the id and names no variable and no key.
+fn record_block(offer: &Offer<'_>, settings: &Path) -> Result<(), String> {
+    crate::import::write(&with_block(offer, settings)?, unrecordable)
+}
+
+fn recorded(offer: &Offer<'_>, settings: &Path) -> String {
+    t!(
+        auth_gateway_recorded,
+        file = shown(settings),
+        id = printable(offer.id()),
+        host = printable(offer.provider.host())
+    )
+}
+
+/// The failure to record a block for a key that is stored, which leaves the key as it is, names the
+/// entry to add by hand and never repeats the key.
+fn not_recorded(
+    err: &mut impl Write,
+    offer: &Offer<'_>,
+    settings: &Path,
+    problem: String,
+) -> Ending {
+    refused(
+        err,
+        Ending::Failed,
+        t!(
+            auth_gateway_not_recorded,
+            id = printable(offer.id()),
+            entry = format!(r#""provider": {{"{}": {{}}}}"#, printable(offer.id())),
+            file = shown(settings),
+            problem = problem
+        ),
+    )
+}
+
+/// Record the block for a key that was already stored, where no block names its id.
+///
+/// A key stored for a known id that no block names is sent by no session, so keeping it, or
+/// replacing it and not typing another, still records the block, which leaves nothing to add by
+/// hand. Nothing is recorded for an id no key is stored for.
+fn record_kept(
+    offer: &Offer<'_>,
+    directory: &Path,
+    settings: &Path,
+    out: &mut impl Write,
+    err: &mut impl Write,
+) -> Ending {
+    if !offer.unconfigured {
+        return Ending::Done;
+    }
+    // Read again, since another command may have forgotten the key meanwhile.
+    match Keys::read(directory) {
+        Ok(stored) if stored.get(offer.id()).is_some() => {}
+        Ok(_) => return Ending::Done,
+        Err(keys::Unreadable) => {
+            return refused(
+                err,
+                Ending::Failed,
+                t!(
+                    auth_gateway_keys_unreadable,
+                    path = keys::file(directory).display()
+                ),
+            );
+        }
+    }
+    match record_block(offer, settings) {
+        Ok(()) => {
+            tell(out, recorded(offer, settings));
+            Ending::Done
+        }
+        Err(problem) => not_recorded(err, offer, settings, problem),
+    }
+}
+
+/// The service the key is for, `None` where nothing was picked, or the refusal of an answer that
+/// names none of those listed.
+///
+/// One offered, or one named, is not asked about.
+fn which_gateway<'o, 'c, R: BufRead, W: Write>(
     asking: &mut Prompting<R, W>,
-    gateways: &[&'p Provider],
-    named: Option<&'p Provider>,
+    offers: &'o [Offer<'c>],
+    named: Option<&'o Offer<'c>>,
     stored: &Keys,
-) -> Result<Option<&'p Provider>, String> {
-    let provider = match (named, gateways) {
+    heading: &str,
+) -> Result<Option<&'o Offer<'c>>, String> {
+    let offer = match (named, offers) {
         (Some(named), _) => named,
         (None, [only]) => only,
         (None, _) => {
-            asking.say(t!(auth_gateways_heading));
+            asking.say(heading);
             // In characters, which is what the padding counts; an id is free text in settings.
-            let width = gateways
-                .iter()
-                .map(|provider| provider.id.chars().count())
-                .max();
-            for (number, provider) in (1..).zip(gateways) {
-                let held = match stored.get(&provider.id) {
+            let width = offers.iter().map(|offer| offer.id().chars().count()).max();
+            for (number, offer) in (1..).zip(offers) {
+                let held = match stored.get(offer.id()) {
                     Some(_) => format!(" ({})", t!(auth_gateway_key_stored)),
                     None => String::new(),
                 };
                 asking.say(&format!(
                     "  {number}. {:<width$}  {}{held}",
-                    printable(&provider.id),
-                    printable(provider.host()),
+                    printable(offer.id()),
+                    printable(offer.provider.host()),
                     width = width.unwrap_or(0)
                 ));
             }
@@ -694,32 +1057,35 @@ fn which_gateway<'p, R: BufRead, W: Write>(
                 Some(answer) if !answer.is_empty() => answer,
                 _ => return Ok(None),
             };
-            let picked = answer
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| number.checked_sub(1))
-                .and_then(|index| gateways.get(index).copied())
-                .or_else(|| {
-                    gateways
-                        .iter()
-                        .copied()
-                        .find(|provider| provider.id == answer)
-                });
+            let picked = crate::plain::numbered_row(&answer, offers)
+                .or_else(|| offers.iter().find(|offer| offer.id() == answer));
             match picked {
-                Some(provider) => provider,
+                Some(offer) => offer,
                 None => {
                     return Err(t!(auth_not_a_listed_gateway, answer = printable(&answer)));
                 }
             }
         }
     };
-    if stored.get(&provider.id).is_some() {
-        asking.say(&t!(auth_gateway_key_held, id = printable(&provider.id)));
-        if asking.ask(&[], t!(auth_gateway_replace)) != Decision::Approve {
-            return Ok(None);
-        }
+    Ok(Some(offer))
+}
+
+/// Whether a key is to be typed for `offer`: where one is stored already, only on a yes, because
+/// the one replaced is gone once the file is written.
+fn replaced<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    offer: &Offer<'_>,
+    stored: &Keys,
+) -> bool {
+    if stored.get(offer.id()).is_none() {
+        return true;
     }
-    Ok(Some(provider))
+    let id = printable(offer.id());
+    asking.say(&match offer.unconfigured {
+        false => t!(auth_gateway_key_held, id = id),
+        true => t!(auth_gateway_key_held_unrecorded, id = id),
+    });
+    asking.ask(&[], t!(auth_gateway_replace)) == Decision::Approve
 }
 
 /// The variable in the block's `env` a session would send instead of a stored key, as BACKEND-16
@@ -834,6 +1200,9 @@ fn status(args: &[String]) -> ExitCode {
             t!(cli_unknown_option, flag = printable(option_name(flag))),
         );
     }
+    if way == Way::Gateway && rest.len() > takes {
+        return unexpected_gateway_word("status");
+    }
     if let Some(extra) = rest.get(takes) {
         return fail(
             Ending::Argument,
@@ -859,10 +1228,14 @@ fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
                 Backend::session_of,
             )),
             Way::Gateway => {
-                let unreadable = home::directory().is_some_and(|dir| Keys::read(&dir).is_err());
-                match gateway_standings(Config::from_env(), gateway_id, unreadable, |name| {
-                    std::env::var(name).ok()
-                }) {
+                let stored = home::directory().map_or(Ok(Keys::default()), |dir| Keys::read(&dir));
+                match gateway_standings(
+                    Config::from_env(),
+                    &Managed::load(),
+                    &stored,
+                    gateway_id,
+                    |name| std::env::var(name).ok(),
+                ) {
                     Ok(found) => lines.extend(found),
                     Err((ending, refusal)) => return fail(ending, refusal),
                 }
@@ -1026,11 +1399,16 @@ fn bedrock_standing(session: Result<(), CredentialError>) -> Standing {
 /// Each gateway a provider block names, or the one `named`, with whether a turn would find a key
 /// for it, and where.
 ///
-/// A refusal where the id names no gateway, as `auth login gateway` refuses it.
+/// A known service no block names is asked about only where it is named, or where a key is stored for
+/// it: a turn sends none, so it is not signed in, and signing in again records the block. Without a
+/// name, every other known service is left out, since nobody holds a key for all of them.
+///
+/// A refusal where the id is one `auth login gateway` does not offer, as it refuses it.
 fn gateway_standings(
     config: Result<Config, ConfigError>,
+    managed: &Managed,
+    stored: &Result<Keys, keys::Unreadable>,
     named: Option<&str>,
-    keys_unreadable: bool,
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Vec<Line>, (Ending, String)> {
     let config = match config {
@@ -1042,53 +1420,88 @@ fn gateway_standings(
             )]);
         }
     };
-    let gateways: Vec<&Provider> = config
-        .providers
-        .iter()
-        .filter(|provider| provider.bedrock.is_none())
-        .collect();
-    if gateways.is_empty() {
-        let none = t!(auth_gateway_none_configured);
+    let offers = offered(&config.providers, managed);
+    if offers.is_empty() {
+        let none = t!(auth_gateway_none_configured, path = managed_path());
         return match named {
-            Some(_) => Err((Ending::Configuration, none.into())),
-            None => Ok(vec![("gateway".into(), Standing::NotSignedIn(none.into()))]),
+            Some(_) => Err((Ending::Configuration, none)),
+            None => Ok(vec![("gateway".into(), Standing::NotSignedIn(none))]),
         };
     }
     if let Some(id) = named
-        && !gateways.iter().any(|provider| provider.id == id)
+        && !offers.iter().any(|offer| offer.id() == id)
     {
         // Not repeated back, as in `auth login gateway`: the word may be a key.
-        return Err((
-            Ending::Argument,
-            t!(
-                auth_gateway_not_configured,
-                ids = listed(gateways.iter().map(|provider| provider.id.as_str()))
-            ),
-        ));
+        return Err((Ending::Argument, not_offered(&offers, managed)));
     }
-    Ok(gateways
+    let key_stored = |offer: &Offer<'_>| {
+        stored
+            .as_ref()
+            .is_ok_and(|stored| stored.get(offer.id()).is_some())
+    };
+    let asked_about: Vec<&Offer<'_>> = offers
+        .iter()
+        .filter(|offer| match named {
+            Some(id) => offer.id() == id,
+            None => !offer.unconfigured || key_stored(offer),
+        })
+        .collect();
+    if asked_about.is_empty() {
+        let standing = match stored {
+            Err(keys::Unreadable) => Standing::Unusable(t!(auth_gateway_held_unreadable).into()),
+            Ok(_) => Standing::NotSignedIn(t!(auth_status_gateway_none).into()),
+        };
+        return Ok(vec![("gateway".into(), standing)]);
+    }
+    Ok(asked_about
         .into_iter()
-        .filter(|provider| named.is_none_or(|id| provider.id == id))
-        .map(|provider| {
-            let standing = match provider.credential_and_source(&lookup) {
-                (Credential::Token(_), Some(Source::Stored)) => {
-                    Standing::SignedIn(t!(doctor_gateway_token_stored).into())
-                }
-                (Credential::Token(_), _) => Standing::SignedIn(t!(doctor_gateway_token).into()),
-                (Credential::NotNeeded, _) => {
-                    Standing::SignedIn(t!(doctor_gateway_token_not_needed).into())
-                }
-                (Credential::Absent, _) if keys_unreadable => {
-                    Standing::Unusable(t!(auth_gateway_held_unreadable).into())
-                }
-                (Credential::Absent, _) => Standing::NotSignedIn(t!(
-                    doctor_gateway_token_absent,
-                    id = printable(&provider.id)
-                )),
+        .map(|offer| {
+            let id = printable(offer.id());
+            let standing = match offer.unconfigured {
+                true => unconfigured_standing(&id, stored, key_stored(offer)),
+                false => configured_standing(&offer.provider, stored.is_err(), &lookup),
             };
-            (format!("gateway {}", printable(&provider.id)), standing)
+            (format!("gateway {id}"), standing)
         })
         .collect())
+}
+
+/// How a gateway a provider block names stands: whether a turn would find a key for it, and where.
+fn configured_standing(
+    provider: &Provider,
+    keys_unreadable: bool,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Standing {
+    match provider.credential_and_source(lookup) {
+        (Credential::Token(_), Some(Source::Stored)) => {
+            Standing::SignedIn(t!(doctor_gateway_token_stored).into())
+        }
+        (Credential::Token(_), _) => Standing::SignedIn(t!(doctor_gateway_token).into()),
+        (Credential::NotNeeded, _) => {
+            Standing::SignedIn(t!(doctor_gateway_token_not_needed).into())
+        }
+        (Credential::Absent, _) if keys_unreadable => {
+            Standing::Unusable(t!(auth_gateway_held_unreadable).into())
+        }
+        (Credential::Absent, _) => Standing::NotSignedIn(t!(
+            doctor_gateway_token_absent,
+            id = printable(&provider.id)
+        )),
+    }
+}
+
+/// How a known service no block names stands. A turn sends no key to it, whether or not one is
+/// stored, so it is never signed in, and signing in again is what records the block.
+fn unconfigured_standing(
+    id: &str,
+    stored: &Result<Keys, keys::Unreadable>,
+    key_stored: bool,
+) -> Standing {
+    match (stored, key_stored) {
+        (Err(keys::Unreadable), _) => Standing::Unusable(t!(auth_gateway_held_unreadable).into()),
+        (Ok(_), true) => Standing::NotSignedIn(t!(auth_status_gateway_unrecorded, id = id)),
+        (Ok(_), false) => Standing::NotSignedIn(t!(auth_status_gateway_none_stored, id = id)),
+    }
 }
 
 /// Several names on one line, in the order given.
@@ -1112,7 +1525,7 @@ fn logout(args: &[String]) -> ExitCode {
                 t!(cli_unknown_option, flag = printable(option_name(flag))),
             );
         }
-        (Way::Gateway, [_, extra, ..]) => Some(extra),
+        (Way::Gateway, [_, _, ..]) => return unexpected_gateway_word("logout"),
         (Way::Gateway, _) => None,
         (_, extra) => extra.first(),
     };
@@ -1164,15 +1577,7 @@ fn forget_gateway(named: Option<&str>) -> ExitCode {
             ),
         );
     }
-    // The host from the block that names the id, where one still does: the key is good there until
-    // whoever issued it revokes it, and forgetting it here is not that.
-    let host = Config::from_env().ok().and_then(|config| {
-        config
-            .providers
-            .iter()
-            .find(|provider| provider.bedrock.is_none() && provider.id == id)
-            .map(|provider| printable(provider.host()))
-    });
+    let host = host_a_key_works_at(&Config::from_env(), &id);
     let id = printable(&id);
     match host {
         Some(host) => println!(
@@ -1182,6 +1587,24 @@ fn forget_gateway(named: Option<&str>) -> ExitCode {
         None => println!("{}", t!(auth_logout_gateway_forgotten_elsewhere, id = id)),
     }
     ExitCode::SUCCESS
+}
+
+/// The host a key stored for `id` is good at until whoever issued it revokes it, which forgetting it
+/// here is not: the host the block that names the id states, or for a known service no block names
+/// the host compiled in for it.
+///
+/// Nothing for an id that is neither, such as a gateway whose block has since been taken out.
+fn host_a_key_works_at(config: &Result<Config, ConfigError>, id: &str) -> Option<String> {
+    let block = config.as_ref().ok().and_then(|config| {
+        config
+            .providers
+            .iter()
+            .find(|provider| provider.bedrock.is_none() && provider.id == id)
+    });
+    match block {
+        Some(provider) => Some(printable(provider.host())),
+        None => Provider::known(id).map(|provider| printable(provider.host())),
+    }
 }
 
 /// The id whose key is forgotten: the one named, or the only one stored where none is.
@@ -1343,6 +1766,7 @@ pub(crate) fn import_leo_creds(args: &[String]) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// What the list said and what was picked, for `answers` typed in turn.
     fn asked(answers: &str, held: &dyn Fn(Way) -> Option<String>) -> (String, Picked) {
@@ -1381,6 +1805,59 @@ mod tests {
                 way.name()
             );
         }
+    }
+
+    /// CLI-18: the gateway line says a key is a way to sign in to the services bravebot knows, and
+    /// names each from the table a session reaches them by, so a service added there is on the line.
+    #[test]
+    fn the_gateway_line_names_every_service_bravebot_knows() {
+        let (said, _) = asked("\n", &nothing_held);
+        let line = said
+            .lines()
+            .find(|line| line.starts_with("  4. gateway"))
+            .unwrap_or_else(|| panic!("gateway is not listed: {said}"));
+        assert!(known_ids().count() > 0);
+        for id in known_ids() {
+            assert!(line.contains(id), "{id} is not on the gateway line: {line}");
+        }
+        assert!(line.contains("provider block"), "{line}");
+    }
+
+    /// CLI-18: what the gateway line says is held is every id a key is stored for in the state
+    /// directory, read from the file as the list reads it with no configuration consulted, so a key
+    /// stored for a known service that no block names is shown, and nothing stored shows nothing.
+    #[test]
+    fn the_gateway_line_shows_a_key_stored_for_a_service_no_block_names() {
+        let scratch = Scratch::new("cli-auth-held-line");
+        let directory = scratch.0.join("state");
+        let held_in = |directory: &Path| held(Way::Gateway, Some(directory));
+
+        std::fs::create_dir_all(&directory).expect("a state directory");
+        assert_eq!(held_in(&directory), None, "nothing is stored");
+        assert_eq!(
+            held(Way::Gateway, None),
+            None,
+            "there is no state directory"
+        );
+
+        store(&directory, &placeholder_keys(&["openai", "anthropic"])).expect("stored");
+        let line = held_in(&directory).expect("keys are held");
+        assert!(
+            line.contains("openai") && line.contains("anthropic"),
+            "{line}"
+        );
+        assert!(!line.contains("placeholder-gateway-key"), "{line}");
+        assert!(
+            !directory.join("settings.json").exists(),
+            "the line was read with a block written"
+        );
+
+        std::fs::write(keys::file(&directory), "not a file of keys").expect("spoil the keys");
+        assert!(
+            held_in(&directory)
+                .expect("said")
+                .contains("cannot be read")
+        );
     }
 
     /// CLI-18: a way is picked by its number or by its name, nothing typed picks nothing, and an
@@ -1553,21 +2030,40 @@ mod tests {
         .to_vec()
     }
 
-    /// What the gateway question said and which id was picked, for `answers` typed in turn.
+    /// The gateways `providers` configure, as the sign-in offers them.
+    fn blocks(providers: &[Provider]) -> Vec<Offer<'_>> {
+        providers
+            .iter()
+            .map(|provider| Offer {
+                provider: Cow::Borrowed(provider),
+                unconfigured: false,
+            })
+            .collect()
+    }
+
+    /// What the gateway question said and which id a key is to be typed for, for `answers` typed in
+    /// turn: `None` where nothing was picked or a key held is kept.
     fn gateway_asked(
         answers: &str,
         gateways: &[Provider],
         named: Option<&str>,
         stored: &Keys,
     ) -> (String, Result<Option<String>, String>) {
-        let gateways: Vec<&Provider> = gateways.iter().collect();
-        let named = named.and_then(|id| gateways.iter().copied().find(|g| g.id == id));
+        let offers = blocks(gateways);
+        let named = named.and_then(|id| offers.iter().find(|offer| offer.id() == id));
         let mut said = Vec::new();
         let picked = {
             let mut asking = Prompting::new(answers.as_bytes(), &mut said);
-            which_gateway(&mut asking, &gateways, named, stored)
+            which_gateway(
+                &mut asking,
+                &offers,
+                named,
+                stored,
+                t!(auth_gateways_heading),
+            )
+            .map(|picked| picked.filter(|offer| replaced(&mut asking, offer, stored)))
         };
-        let picked = picked.map(|picked| picked.map(|provider| provider.id.clone()));
+        let picked = picked.map(|picked| picked.map(|offer| offer.id().to_string()));
         (String::from_utf8(said).expect("utf-8"), picked)
     }
 
@@ -1699,6 +2195,60 @@ mod tests {
         assert!(forgotten(&Keys::default(), None).is_err());
     }
 
+    /// CLI-18: a configuration that lacks only the Brave credentials names no gateway, which is the
+    /// state of a person who holds a key and nothing else, so the sign-in offers the known services
+    /// to it. Any other fault in the configuration is still refused.
+    #[test]
+    fn a_configuration_lacking_only_credentials_names_no_gateway_and_another_fault_is_refused() {
+        assert!(
+            matches!(Config::from_lookup(|_| None), Err(ConfigError::Missing(_))),
+            "a configuration with nothing in it is no longer one that lacks credentials"
+        );
+        for lacking in [
+            ConfigError::Missing("SERVICES_KEY_AICHAT"),
+            ConfigError::Empty("SERVICES_KEY_AICHAT"),
+        ] {
+            assert_eq!(
+                gateways_configured(Err(lacking)).map(|found| found.len()),
+                Ok(0)
+            );
+        }
+        let invalid = || ConfigError::InvalidEndpoint {
+            value: "ftp://elsewhere".to_string(),
+        };
+        assert_eq!(
+            gateways_configured(Err(invalid())).map(|found| found.len()),
+            Err(invalid())
+        );
+        let config = configured(TWO_GATEWAYS_WITH_A_KNOWN_ID, &Managed::default());
+        let found = gateways_configured(Ok(config)).expect("readable");
+        let ids: Vec<&str> = found.iter().map(|provider| provider.id.as_str()).collect();
+        assert_eq!(ids, ["openrouter", "work"]);
+    }
+
+    /// CLI-18: forgetting a key names the host it still works at: the one its block states, the one
+    /// compiled in for a known service no block names, and none for an id that is neither.
+    #[test]
+    fn a_forgotten_key_names_the_host_it_still_works_at() {
+        let configuration = Ok(configured(
+            TWO_GATEWAYS_WITH_A_KNOWN_ID,
+            &Managed::default(),
+        ));
+        let host = |id: &str| host_a_key_works_at(&configuration, id);
+        assert_eq!(host("work").as_deref(), Some("gateway.work.example"));
+        assert_eq!(host("openrouter").as_deref(), Some("openrouter.example"));
+        assert_eq!(host("openai").as_deref(), Some("api.openai.com"));
+        assert_eq!(host("anthropic").as_deref(), Some("api.anthropic.com"));
+        assert_eq!(host("taken-out"), None);
+
+        let unreadable = Err(ConfigError::Missing("SERVICES_KEY_AICHAT"));
+        assert_eq!(
+            host_a_key_works_at(&unreadable, "openai").as_deref(),
+            Some("api.openai.com")
+        );
+        assert_eq!(host_a_key_works_at(&unreadable, "work"), None);
+    }
+
     /// BACKEND-16: a variable the block names is sent before a stored key, so the sign-in names one
     /// that is set. A variable set to space is not, as it is not where the token is read.
     #[test]
@@ -1715,6 +2265,1054 @@ mod tests {
         assert_eq!(variable_in_force(openrouter, set("  ")), None);
         assert_eq!(variable_in_force(openrouter, |_| None), None);
         assert_eq!(variable_in_force(&gateways[1], set("a-placeholder")), None);
+    }
+
+    /// The placeholder typed as a key. Never a real one.
+    const A_TYPED_KEY: &str = "sk-test-placeholder-not-a-key";
+
+    /// A placeholder already stored for an id, which a typed key replaces.
+    const AN_OLD_KEY: &str = "sk-test-old-placeholder-not-a-key";
+
+    /// A placeholder the process has exported under the name a block gives for its credential.
+    const AN_EXPORTED_KEY: &str = "sk-test-exported-placeholder-not-a-key";
+
+    /// What a run of the sign-in is given, besides the state directory it makes.
+    #[derive(Default)]
+    struct Given<'a> {
+        /// The person's own settings file, which the configuration is read from too.
+        settings: Option<&'a str>,
+        /// The file of stored keys.
+        keys: Option<&'a str>,
+        /// The machine-level file.
+        managed: Option<&'a str>,
+        /// The id typed after `gateway`.
+        named: Option<&'a str>,
+        /// What is typed to the questions, a line each.
+        answers: &'a str,
+        /// What is typed when the key is asked for, `None` for Escape.
+        typed: Option<&'a str>,
+        /// Something that happens while the key is typed.
+        meanwhile: Option<&'a dyn Fn(&Path)>,
+        /// Variables the process has exported.
+        exported: &'a [(&'a str, &'a str)],
+        /// Stdin or stderr is not a terminal.
+        no_terminal: bool,
+    }
+
+    /// What a run said and left behind. Holds the scratch directory until it is dropped.
+    struct Run {
+        ending: Ending,
+        out: String,
+        err: String,
+        asked: String,
+        /// The question the key was asked with, where it was asked.
+        key_question: Option<String>,
+        directory: PathBuf,
+        _scratch: Scratch,
+    }
+
+    impl Run {
+        fn settings(&self) -> PathBuf {
+            bravebot_config::user_settings_file(&self.directory)
+        }
+
+        fn settings_text(&self) -> Option<String> {
+            std::fs::read_to_string(self.settings()).ok()
+        }
+
+        fn keys(&self) -> Keys {
+            Keys::read(&self.directory).expect("a file of keys")
+        }
+
+        /// Nothing the run printed, asked or wrote into settings holds a key typed or stored.
+        fn holds_no_key(&self) {
+            let settings = self.settings_text().unwrap_or_default();
+            for (stream, text) in [
+                ("stdout", &self.out),
+                ("stderr", &self.err),
+                ("questions", &self.asked),
+                ("settings", &settings),
+            ] {
+                for key in [A_TYPED_KEY, AN_OLD_KEY, AN_EXPORTED_KEY] {
+                    assert!(!text.contains(key), "{stream} holds a key: {text}");
+                }
+            }
+            if let Some(question) = &self.key_question {
+                assert!(!question.contains(A_TYPED_KEY), "{question}");
+            }
+        }
+    }
+
+    /// The configuration a session started with `settings` and `managed` would read, as far as the
+    /// sign-in looks at it: the gateways, which the managed layer replaces where it names any.
+    fn configured(settings: &str, managed: &Managed) -> Config {
+        let mut config = Config::from_lookup(|name| match name {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-east-1".into()),
+            _ => None,
+        })
+        .expect("a configuration");
+        config.providers = match managed.gateways() {
+            Some(gateways) => gateways.to_vec(),
+            None => Settings::parse(settings).providers().to_vec(),
+        };
+        config
+    }
+
+    /// Run the whole sign-in with no terminal: the pick, the key, where it is stored and the block
+    /// that names its id.
+    fn sign_in(name: &str, given: Given<'_>) -> Run {
+        let scratch = Scratch::new(name);
+        let directory = scratch.0.join("state");
+        std::fs::create_dir_all(&directory).expect("a state directory");
+        if let Some(text) = given.settings {
+            std::fs::write(bravebot_config::user_settings_file(&directory), text)
+                .expect("settings");
+        }
+        if let Some(text) = given.keys {
+            std::fs::write(keys::file(&directory), text).expect("keys");
+        }
+        let managed = match given.managed {
+            Some(text) => {
+                let file = scratch.0.join("managed.json");
+                std::fs::write(&file, text).expect("a machine-level file");
+                Managed::at(&file)
+            }
+            None => Managed::default(),
+        };
+        let config = configured(given.settings.unwrap_or(""), &managed);
+        let task = Task {
+            providers: &config.providers,
+            managed: &managed,
+            named: given.named,
+            terminal: !given.no_terminal,
+            directory: Some(&directory),
+            lookup: &|name| {
+                given
+                    .exported
+                    .iter()
+                    .find(|(exported, _)| *exported == name)
+                    .map(|(_, value)| value.to_string())
+            },
+        };
+        let (mut out, mut err, mut asked) = (Vec::new(), Vec::new(), Vec::new());
+        let mut key_question = None;
+        let ending = sign_in_gateway(
+            &task,
+            || Prompting::new(given.answers.as_bytes(), &mut asked),
+            |question| {
+                key_question = Some(question.to_string());
+                if let Some(meanwhile) = given.meanwhile {
+                    meanwhile(&directory);
+                }
+                Ok(given.typed.map(Secret::new))
+            },
+            &mut out,
+            &mut err,
+        );
+        let text = |bytes: Vec<u8>| String::from_utf8(bytes).expect("utf-8");
+        Run {
+            ending,
+            out: text(out),
+            err: text(err),
+            asked: text(asked),
+            key_question,
+            directory: directory.clone(),
+            _scratch: scratch,
+        }
+    }
+
+    /// The listed rows of a question, as `(id, host)`.
+    fn rows(asked: &str) -> Vec<(String, String)> {
+        asked
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                words.next()?.strip_suffix('.')?.parse::<usize>().ok()?;
+                Some((words.next()?.to_string(), words.next()?.to_string()))
+            })
+            .collect()
+    }
+
+    /// CLI-18 and BACKEND-17: a known service no block names is offered with the host a session
+    /// sends it to, the key typed for it is stored under its id, and the settings file the sign-in
+    /// leaves holds exactly the entry that makes a session send it. Picked by id, by number, or named.
+    #[test]
+    fn a_known_service_no_block_names_is_listed_and_its_key_is_stored_and_its_block_recorded() {
+        let number = known_ids().position(|id| id == "openai").expect("known") + 1;
+        let by_number = format!("{number}\n");
+        for (how, named, answers) in [
+            ("by id", None, "openai\n"),
+            ("by number", None, by_number.as_str()),
+            ("named", Some("openai"), ""),
+        ] {
+            let run = sign_in(
+                "cli-auth-known-recorded",
+                Given {
+                    named,
+                    answers,
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            run.holds_no_key();
+
+            if named.is_none() {
+                let listed = rows(&run.asked);
+                let hosts: Vec<(String, String)> = known_ids()
+                    .map(|id| {
+                        let host = Provider::known(id).expect("known").host().to_string();
+                        (id.to_string(), host)
+                    })
+                    .collect();
+                assert_eq!(listed, hosts, "{how}: {}", run.asked);
+            } else {
+                assert!(run.asked.is_empty(), "a named service was asked about");
+            }
+
+            let stored = run.keys();
+            assert_eq!(stored.ids().collect::<Vec<_>>(), ["openai"], "{how}");
+            assert_eq!(
+                stored.get("openai").map(Secret::expose),
+                Some(A_TYPED_KEY),
+                "{how}"
+            );
+
+            let written = run.settings_text().expect("the settings file was written");
+            let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+            assert_eq!(
+                value,
+                serde_json::json!({"provider": {"openai": {}}}),
+                "{how}: {written}"
+            );
+            // Through the reader a session uses: the entry is the service at the host compiled in,
+            // and the key stored for its id is the credential it finds.
+            let mut read = Settings::parse(&written).providers().to_vec();
+            assert_eq!(read.len(), 1, "{how}: {written}");
+            let mut openai = read.remove(0);
+            assert_eq!(openai.id, "openai");
+            assert_eq!(openai.host(), "api.openai.com", "{how}");
+            assert_eq!(
+                openai.base_url,
+                Provider::known("openai").expect("known").base_url
+            );
+            openai.stored_key = stored.get("openai").cloned();
+            match openai.credential_and_source(|_| None) {
+                (Credential::Token(token), Some(Source::Stored)) => {
+                    assert_eq!(token.expose(), A_TYPED_KEY, "{how}");
+                }
+                _ => panic!("{how}: the stored key is not the credential of the recorded block"),
+            }
+
+            assert!(run.out.contains("api.openai.com"), "{how}: {}", run.out);
+            assert!(run.out.contains("settings.json"), "{how}: {}", run.out);
+            assert_eq!(run.out.lines().count(), 1, "{how}: {}", run.out);
+            let question = run.key_question.as_deref().expect("the key was asked for");
+            assert!(
+                question.contains("openai") && question.contains("api.openai.com"),
+                "{question}"
+            );
+        }
+    }
+
+    /// CLI-18 and BACKEND-17: the gateways configured come first, a known service some block names
+    /// is not listed again, and the one that is listed keeps the host its block states.
+    #[test]
+    fn the_configured_gateways_are_listed_first_and_a_known_id_is_listed_once_with_its_blocks_host()
+    {
+        let config = configured(TWO_GATEWAYS_WITH_A_KNOWN_ID, &Managed::default());
+        let offers = offered(&config.providers, &Managed::default());
+        let listed: Vec<(&str, &str, bool)> = offers
+            .iter()
+            .map(|offer| (offer.id(), offer.provider.host(), offer.unconfigured))
+            .collect();
+        let known: Vec<(String, String)> = known_ids()
+            .filter(|id| *id != "openrouter")
+            .map(|id| {
+                let host = Provider::known(id).expect("known").host().to_string();
+                (id.to_string(), host)
+            })
+            .collect();
+        let mut expected = vec![
+            ("openrouter", "openrouter.example", false),
+            ("work", "gateway.work.example", false),
+        ];
+        expected.extend(
+            known
+                .iter()
+                .map(|(id, host)| (id.as_str(), host.as_str(), true)),
+        );
+        assert_eq!(listed, expected);
+    }
+
+    /// Two gateways in a settings file, one of them under a known id and stating its own host.
+    const TWO_GATEWAYS_WITH_A_KNOWN_ID: &str = r#"{"provider": {
+        "openrouter": {"env": ["OPENROUTER_API_KEY"],
+            "options": {"baseURL": "https://openrouter.example/api/v1"}},
+        "work": {"options": {"baseURL": "https://gateway.work.example/v1"}}
+    }}"#;
+
+    /// CLI-18: a block with the id picked is the gateway, whatever the table says of the id: its key
+    /// is stored, the settings file is left byte for byte as it was, and nothing is said of a block.
+    #[test]
+    fn a_block_with_the_same_id_keeps_its_host_and_nothing_is_recorded() {
+        let settings = r#"{"provider": {"openai": {"options": {"baseURL": "https://proxy.example.invalid/v1"}}}}"#;
+        let run = sign_in(
+            "cli-auth-known-with-a-block",
+            Given {
+                settings: Some(settings),
+                answers: "openai\n",
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        run.holds_no_key();
+
+        let listed = rows(&run.asked);
+        let openai: Vec<&(String, String)> =
+            listed.iter().filter(|(id, _)| id == "openai").collect();
+        assert_eq!(
+            openai,
+            [&("openai".to_string(), "proxy.example.invalid".to_string())],
+            "{}",
+            run.asked
+        );
+        assert_eq!(run.settings_text().as_deref(), Some(settings));
+        assert_eq!(
+            run.keys().get("openai").map(Secret::expose),
+            Some(A_TYPED_KEY)
+        );
+        assert!(run.out.contains("proxy.example.invalid"), "{}", run.out);
+        assert_eq!(run.out.lines().count(), 1, "{}", run.out);
+    }
+
+    /// CLI-18: a settings file that names the id as something that is not a block, or has a
+    /// `provider` that is not a block of entries, cannot take the block, so the key is not asked
+    /// for, nothing is stored and the file is left as it is. The words say what the file holds.
+    #[test]
+    fn a_file_that_names_the_id_as_no_service_is_refused_before_the_key_is_asked_for() {
+        for (settings, id) in [
+            (r#"{"provider": {"openai": null}}"#, "openai"),
+            (
+                r#"{"provider": {"openai": "https://api.openai.com/v1"}}"#,
+                "openai",
+            ),
+            (r#"{"provider": []}"#, "openai"),
+            (r#"{"provider": "none"}"#, "openrouter"),
+            (
+                r#"{"provider": {"anthropic": {"npm": "@ai-sdk/openai-compatible"}}}"#,
+                "anthropic",
+            ),
+        ] {
+            let run = sign_in(
+                "cli-auth-known-not-a-service",
+                Given {
+                    settings: Some(settings),
+                    named: Some(id),
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Failed, "{settings}: {}", run.err);
+            assert_eq!(run.key_question, None, "{settings}: the key was asked for");
+            assert!(
+                !keys::file(&run.directory).exists(),
+                "{settings}: a key was stored"
+            );
+            assert_eq!(run.settings_text().as_deref(), Some(settings));
+            assert!(
+                run.err.contains("settings.json") && run.err.contains(id),
+                "{settings}: {}",
+                run.err
+            );
+            assert!(run.out.is_empty(), "{settings}: {}", run.out);
+            run.holds_no_key();
+        }
+    }
+
+    /// CLI-18: a settings file that cannot be added to is refused before the key is asked for,
+    /// writing nothing, where the id is one the file does not configure. Where it is, as a gateway
+    /// the machine-level layer names is, the file is not needed and the key is stored.
+    #[test]
+    fn an_unwritable_settings_file_is_refused_before_the_key_is_asked_for() {
+        let too_large = format!(r#"{{"theme": "{}"}}"#, "x".repeat(70 * 1024));
+        for (settings, said) in [
+            (
+                "not a settings document",
+                "does not hold a settings document",
+            ),
+            (too_large.as_str(), "past what bravebot reads"),
+        ] {
+            let run = sign_in(
+                "cli-auth-known-unwritable",
+                Given {
+                    settings: Some(settings),
+                    answers: "openai\n",
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+            assert_eq!(run.key_question, None, "the key was asked for");
+            assert!(!keys::file(&run.directory).exists(), "a key was stored");
+            assert_eq!(run.settings_text().as_deref(), Some(settings));
+            assert!(run.err.contains(said), "{}", run.err);
+            run.holds_no_key();
+        }
+
+        let run = sign_in(
+            "cli-auth-managed-with-unwritable-settings",
+            Given {
+                settings: Some("not a settings document"),
+                managed: Some(
+                    r#"{"provider": {"corp": {"options": {"baseURL": "https://corp.example/v1"}}}}"#,
+                ),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert_eq!(
+            run.keys().get("corp").map(Secret::expose),
+            Some(A_TYPED_KEY)
+        );
+        assert_eq!(
+            run.settings_text().as_deref(),
+            Some("not a settings document")
+        );
+    }
+
+    /// CLI-18 and BACKEND-38: where the machine-level layer names gateways only those are offered,
+    /// since a block recorded in the person's file would not be read, so a known id is refused by
+    /// the words of an id that is not offered. Where it names none, there is nothing to offer.
+    #[test]
+    fn no_known_service_is_offered_where_the_machine_level_layer_names_the_gateways() {
+        let corp = r#"{"provider": {"corp": {"options": {"baseURL": "https://corp.example/v1"}}}}"#;
+        let run = sign_in(
+            "cli-auth-managed-names-gateways",
+            Given {
+                managed: Some(corp),
+                named: Some("openai"),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Argument, "{}", run.err);
+        assert!(run.err.contains("corp"), "{}", run.err);
+        assert!(
+            !run.err.contains("openai"),
+            "the id was repeated: {}",
+            run.err
+        );
+        assert!(
+            run.err
+                .contains(&bravebot_config::managed_file().display().to_string()),
+            "the refusal does not say the machine-level file names the gateways: {}",
+            run.err
+        );
+        assert_eq!(run.key_question, None);
+        assert!(!keys::file(&run.directory).exists());
+
+        let scratch = Scratch::new("cli-auth-managed-offers");
+        let file = scratch.0.join("managed.json");
+        std::fs::write(&file, corp).expect("a machine-level file");
+        let managed = Managed::at(&file);
+        let config = configured("", &managed);
+        let offers = offered(&config.providers, &managed);
+        let ids: Vec<&str> = offers.iter().map(Offer::id).collect();
+        assert_eq!(
+            ids,
+            ["corp"],
+            "a known id was offered beside the pinned gateways"
+        );
+
+        let run = sign_in(
+            "cli-auth-managed-names-none",
+            Given {
+                managed: Some(r#"{"provider": {}}"#),
+                named: Some("openai"),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Configuration, "{}", run.err);
+        assert!(
+            run.err
+                .contains(&bravebot_config::managed_file().display().to_string()),
+            "{}",
+            run.err
+        );
+        assert_eq!(run.key_question, None);
+        assert!(!keys::file(&run.directory).exists());
+    }
+
+    /// CLI-18: a key stored for a known id that no block names is sent by no session, so a sign-in
+    /// that keeps it, replaces it or stops at the key still records the block, and a sign-in that
+    /// picked nothing records nothing.
+    #[test]
+    fn a_stored_key_no_block_names_gets_its_block_whichever_way_replacing_it_is_answered() {
+        let stored = r#"{"gateways": {"openai": "sk-test-old-placeholder-not-a-key"}}"#;
+        let recorded = serde_json::json!({"provider": {"openai": {}}});
+        for (how, answers, typed, kept) in [
+            ("kept", "openai\nn\n", None, true),
+            ("replaced", "openai\ny\n", Some(A_TYPED_KEY), false),
+            ("stopped at the key", "openai\ny\n", None, true),
+        ] {
+            let run = sign_in(
+                "cli-auth-known-orphan",
+                Given {
+                    keys: Some(stored),
+                    answers,
+                    typed,
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            run.holds_no_key();
+            let expected = if kept { AN_OLD_KEY } else { A_TYPED_KEY };
+            assert_eq!(
+                run.keys().get("openai").map(Secret::expose),
+                Some(expected),
+                "{how}"
+            );
+            let written = run.settings_text().unwrap_or_default();
+            let value: serde_json::Value = serde_json::from_str(&written).expect("json");
+            assert_eq!(value, recorded, "{how}: {written}");
+            assert!(run.out.contains("settings.json"), "{how}: {}", run.out);
+            assert!(
+                run.asked.contains("no provider block names it"),
+                "{how}: the question did not say the key is sent by no session: {}",
+                run.asked
+            );
+        }
+
+        let run = sign_in(
+            "cli-auth-known-orphan-named",
+            Given {
+                keys: Some(stored),
+                named: Some("openai"),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert!(
+            run.settings_text().is_some(),
+            "the end of the input kept the key unrecorded"
+        );
+
+        let run = sign_in(
+            "cli-auth-known-orphan-nothing-picked",
+            Given {
+                keys: Some(stored),
+                answers: "\n",
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert_eq!(
+            run.settings_text(),
+            None,
+            "a block was recorded for no pick"
+        );
+    }
+
+    /// CLI-18: a key stored with no block to send it is a sign-in the person has to finish by hand,
+    /// so the failure names the entry to add, and is not told as a success.
+    #[test]
+    fn a_block_that_cannot_be_recorded_after_the_key_leaves_it_stored_and_names_the_entry() {
+        for (how, written) in [
+            ("not a settings document", "not json"),
+            ("the id as no service", r#"{"provider": {"openai": null}}"#),
+        ] {
+            let spoil = |directory: &Path| {
+                std::fs::write(bravebot_config::user_settings_file(directory), written)
+                    .expect("spoil the settings");
+            };
+            let run = sign_in(
+                "cli-auth-known-record-fails",
+                Given {
+                    named: Some("openai"),
+                    typed: Some(A_TYPED_KEY),
+                    meanwhile: Some(&spoil),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Failed, "{how}: {}", run.err);
+            assert_eq!(
+                run.keys().get("openai").map(Secret::expose),
+                Some(A_TYPED_KEY),
+                "{how}: the key was not left stored"
+            );
+            assert!(
+                run.err.contains(r#""provider": {"openai": {}}"#)
+                    && run.err.contains("settings.json"),
+                "{how}: {}",
+                run.err
+            );
+            assert!(run.out.is_empty(), "{how}: said it worked: {}", run.out);
+            run.holds_no_key();
+        }
+    }
+
+    /// CRED-24: a word typed where the id goes may be the key, so refusing it must not repeat it. A
+    /// missing terminal is found before anything is read or written, so nothing is left behind.
+    #[test]
+    fn a_word_naming_no_offered_service_is_not_repeated_and_no_terminal_writes_nothing() {
+        let run = sign_in(
+            "cli-auth-known-key-as-id",
+            Given {
+                named: Some(A_TYPED_KEY),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Argument);
+        for id in known_ids() {
+            assert!(run.err.contains(id), "{id} is not named: {}", run.err);
+        }
+        assert!(
+            !run.err
+                .contains(&bravebot_config::managed_file().display().to_string()),
+            "the refusal names a machine-level file where none names gateways: {}",
+            run.err
+        );
+        run.holds_no_key();
+        assert_eq!(run.key_question, None);
+
+        let run = sign_in(
+            "cli-auth-known-no-terminal",
+            Given {
+                named: Some("openai"),
+                typed: Some(A_TYPED_KEY),
+                no_terminal: true,
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Argument, "{}", run.err);
+        assert!(run.err.contains("terminal"), "{}", run.err);
+        assert_eq!(run.key_question, None);
+        assert!(!keys::file(&run.directory).exists());
+        assert_eq!(run.settings_text(), None);
+    }
+
+    /// The standings `auth status gateway` prints, as `(name, said)`, for the keys `stored` and the
+    /// provider blocks `settings` writes. A stored key is attached to the block of its id as the
+    /// configuration does.
+    fn standings(
+        settings: &str,
+        managed: &Managed,
+        stored: &Result<Keys, keys::Unreadable>,
+        named: Option<&str>,
+    ) -> Result<Vec<(String, String)>, (Ending, String)> {
+        let mut config = configured(settings, managed);
+        for provider in &mut config.providers {
+            provider.stored_key = stored
+                .as_ref()
+                .ok()
+                .and_then(|stored| stored.get(&provider.id).cloned());
+        }
+        gateway_standings(Ok(config), managed, stored, named, |_| None).map(|lines| {
+            lines
+                .into_iter()
+                .map(|(name, standing)| (name, standing.said()))
+                .collect()
+        })
+    }
+
+    /// CLI-23: a known service no block names is never signed in, since a turn sends it nothing,
+    /// whether or not a key is stored for it.
+    #[test]
+    fn a_known_service_no_block_names_is_not_signed_in_whether_or_not_a_key_is_stored() {
+        let none = Managed::default();
+        let nothing = Ok(Keys::default());
+        let lines = standings("", &none, &nothing, Some("openai")).expect("asked about");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].0, "gateway openai");
+        assert!(
+            lines[0]
+                .1
+                .starts_with("not signed in: no key is stored for openai")
+                && lines[0].1.contains("bravebot auth login gateway openai"),
+            "{lines:?}"
+        );
+
+        let held = Ok(placeholder_keys(&["openai"]));
+        let lines = standings("", &none, &held, Some("openai")).expect("asked about");
+        assert!(
+            lines[0]
+                .1
+                .starts_with("not signed in: a key is stored for openai")
+                && lines[0].1.contains("no provider block names it"),
+            "{lines:?}"
+        );
+        assert!(!lines[0].1.contains("placeholder-gateway-key"), "{lines:?}");
+
+        let lines = standings("", &none, &Err(keys::Unreadable), Some("openai")).expect("asked");
+        assert!(lines[0].1.starts_with("unusable: "), "{lines:?}");
+
+        // A block that names the id is the gateway, and the stored key is found for it.
+        let with_a_block = r#"{"provider": {"openai": {"options": {"baseURL": "https://proxy.example.invalid/v1"}}}}"#;
+        let lines = standings(with_a_block, &none, &held, Some("openai")).expect("asked");
+        assert!(lines[0].1.starts_with("signed in: stored by"), "{lines:?}");
+    }
+
+    /// CLI-23: with no name, the gateways in force are asked about and so is a key stored for a known
+    /// service no block names, which a turn does not send. The other known services are left out,
+    /// since nobody holds a key for all of them and a named way has to be usable throughout.
+    #[test]
+    fn without_a_name_a_known_service_is_asked_about_only_where_a_key_is_stored_for_it() {
+        let none = Managed::default();
+        let names = |lines: Vec<(String, String)>| -> Vec<String> {
+            lines.into_iter().map(|(name, _)| name).collect()
+        };
+
+        let lines = standings(
+            TWO_GATEWAYS_WITH_A_KNOWN_ID,
+            &none,
+            &Ok(Keys::default()),
+            None,
+        )
+        .expect("asked about");
+        assert_eq!(names(lines), ["gateway openrouter", "gateway work"]);
+
+        let lines = standings(
+            TWO_GATEWAYS_WITH_A_KNOWN_ID,
+            &none,
+            &Ok(placeholder_keys(&["anthropic"])),
+            None,
+        )
+        .expect("asked about");
+        assert_eq!(
+            names(lines),
+            ["gateway openrouter", "gateway work", "gateway anthropic"]
+        );
+
+        let lines = standings("", &none, &Ok(Keys::default()), None).expect("asked about");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].0, "gateway");
+        assert!(
+            lines[0]
+                .1
+                .starts_with("not signed in: no gateway key is stored"),
+            "{lines:?}"
+        );
+        let lines = standings("", &none, &Err(keys::Unreadable), None).expect("asked about");
+        assert!(lines[0].1.starts_with("unusable: "), "{lines:?}");
+    }
+
+    /// CLI-23: an id the sign-in does not offer is refused with the ids it does, without being
+    /// repeated. A known service is not one where the machine-level layer names the gateways, and
+    /// where it names none there is no gateway to ask about.
+    #[test]
+    fn status_refuses_an_id_the_sign_in_does_not_offer_and_names_the_ids_it_does() {
+        let nothing = Ok(Keys::default());
+        let (ending, said) =
+            standings("", &Managed::default(), &nothing, Some(A_TYPED_KEY)).expect_err("refused");
+        assert_eq!(ending, Ending::Argument);
+        for id in known_ids() {
+            assert!(said.contains(id), "{id} is not named: {said}");
+        }
+        assert!(!said.contains(A_TYPED_KEY), "{said}");
+        let file = bravebot_config::managed_file().display().to_string();
+        assert!(
+            !said.contains(&file),
+            "the refusal names a machine-level file where none names gateways: {said}"
+        );
+
+        let scratch = Scratch::new("cli-auth-status-managed");
+        let managed_of = |name: &str, text: &str| {
+            let file = scratch.0.join(name);
+            std::fs::write(&file, text).expect("a machine-level file");
+            Managed::at(&file)
+        };
+        let corp = managed_of(
+            "corp.json",
+            r#"{"provider": {"corp": {"options": {"baseURL": "https://corp.example/v1"}}}}"#,
+        );
+        let (ending, said) = standings("", &corp, &nothing, Some("openai")).expect_err("refused");
+        assert_eq!(ending, Ending::Argument);
+        assert!(said.contains("corp") && !said.contains("openai"), "{said}");
+        assert!(
+            said.contains(&file),
+            "the refusal does not say the machine-level file names the gateways: {said}"
+        );
+        let lines = standings("", &corp, &nothing, None).expect("asked about");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0].0, "gateway corp");
+
+        let empty = managed_of("empty.json", r#"{"provider": {}}"#);
+        let (ending, said) = standings("", &empty, &nothing, Some("openai")).expect_err("refused");
+        assert_eq!(ending, Ending::Configuration);
+        assert!(
+            said.contains(&bravebot_config::managed_file().display().to_string()),
+            "{said}"
+        );
+        let lines = standings("", &empty, &nothing, None).expect("asked about");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].1.starts_with("not signed in: "), "{lines:?}");
+    }
+
+    /// CLI-18: a settings file that cannot take the entry is refused before the question about
+    /// replacing a key stored for the id, so nobody answers it and is then refused. The key stays
+    /// as it was.
+    #[test]
+    fn a_file_that_cannot_take_the_entry_is_refused_before_replacing_a_key_is_asked_about() {
+        let stored = r#"{"gateways": {"openai": "sk-test-old-placeholder-not-a-key"}}"#;
+        for settings in [
+            "not a settings document",
+            r#"{"provider": {"openai": null}}"#,
+        ] {
+            let run = sign_in(
+                "cli-auth-known-refused-before-replacing",
+                Given {
+                    settings: Some(settings),
+                    keys: Some(stored),
+                    answers: "openai\ny\n",
+                    typed: Some(A_TYPED_KEY),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Failed, "{settings}: {}", run.err);
+            assert!(
+                !run.asked.contains("Replace it?") && !run.asked.contains("already stored"),
+                "{settings}: the question about replacing the key was asked: {}",
+                run.asked
+            );
+            assert_eq!(run.key_question, None, "{settings}");
+            assert_eq!(
+                run.keys().get("openai").map(Secret::expose),
+                Some(AN_OLD_KEY),
+                "{settings}"
+            );
+            assert_eq!(run.settings_text().as_deref(), Some(settings));
+            run.holds_no_key();
+        }
+    }
+
+    /// CLI-18: where the file spoils between the question about replacing a key and the end, the
+    /// key already stored is not changed and the person is told to add the entry, as for a new key.
+    #[test]
+    fn a_block_that_cannot_be_recorded_for_a_key_already_stored_fails_and_names_the_entry() {
+        let stored = r#"{"gateways": {"openai": "sk-test-old-placeholder-not-a-key"}}"#;
+        for (how, written) in [
+            ("not a settings document", "not json"),
+            ("the id as no service", r#"{"provider": {"openai": null}}"#),
+        ] {
+            let spoil = |directory: &Path| {
+                std::fs::write(bravebot_config::user_settings_file(directory), written)
+                    .expect("spoil the settings");
+            };
+            let run = sign_in(
+                "cli-auth-known-kept-record-fails",
+                Given {
+                    keys: Some(stored),
+                    answers: "openai\ny\n",
+                    typed: None,
+                    meanwhile: Some(&spoil),
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Failed, "{how}: {}", run.err);
+            assert_eq!(
+                run.keys().get("openai").map(Secret::expose),
+                Some(AN_OLD_KEY),
+                "{how}: the key stored was changed"
+            );
+            assert!(
+                run.err.contains(r#""provider": {"openai": {}}"#)
+                    && run.err.contains("settings.json"),
+                "{how}: {}",
+                run.err
+            );
+            assert!(run.out.is_empty(), "{how}: said it worked: {}", run.out);
+            run.holds_no_key();
+        }
+    }
+
+    /// CLI-18: a configured gateway's block is the person's, so keeping its key records nothing and
+    /// touches no file.
+    #[test]
+    fn a_configured_gateway_with_a_kept_key_ends_well_and_records_nothing() {
+        let settings = r#"{"provider": {"work": {"options": {"baseURL": "https://gateway.work.example/v1"}}}}"#;
+        let stored = r#"{"gateways": {"work": "sk-test-old-placeholder-not-a-key"}}"#;
+        for (how, answers) in [("kept", "n\n"), ("replaced, then nothing typed", "y\n")] {
+            let run = sign_in(
+                "cli-auth-configured-kept",
+                Given {
+                    settings: Some(settings),
+                    keys: Some(stored),
+                    named: Some("work"),
+                    answers,
+                    typed: None,
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            assert!(run.out.is_empty(), "{how}: {}", run.out);
+            assert!(
+                !run.err.contains("provider") && !run.err.contains("settings.json"),
+                "{how}: said something of a block: {}",
+                run.err
+            );
+            assert_eq!(run.settings_text().as_deref(), Some(settings), "{how}");
+            assert_eq!(
+                run.keys().get("work").map(Secret::expose),
+                Some(AN_OLD_KEY),
+                "{how}"
+            );
+            run.holds_no_key();
+        }
+    }
+
+    /// BACKEND-16: a variable the block names outranks a stored key, so the person is told before
+    /// typing one that it would not be sent. The variable is named and its value never shown.
+    #[test]
+    fn a_variable_the_block_names_is_said_to_win_before_the_key_is_typed() {
+        let settings = r#"{"provider": {"work": {"env": ["WORK_API_KEY"],
+            "options": {"baseURL": "https://gateway.work.example/v1"}}}}"#;
+        let set = [("WORK_API_KEY", AN_EXPORTED_KEY)];
+        for (exported, said) in [(&set[..], true), (&[][..], false)] {
+            let run = sign_in(
+                "cli-auth-variable-wins",
+                Given {
+                    settings: Some(settings),
+                    named: Some("work"),
+                    typed: Some(A_TYPED_KEY),
+                    exported,
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{}", run.err);
+            assert_eq!(
+                run.err.contains("WORK_API_KEY is set"),
+                said,
+                "the notice is wrong where the variable is {}: {}",
+                if said { "set" } else { "not set" },
+                run.err
+            );
+            assert!(run.key_question.is_some(), "the key was not asked for");
+            run.holds_no_key();
+        }
+    }
+
+    /// BACKEND-38: a person who finds no known service on the list is told which file decided that.
+    #[test]
+    fn the_list_names_the_machine_level_file_where_it_names_the_gateways() {
+        let file = bravebot_config::managed_file().display().to_string();
+        let corp = r#"{"provider": {
+            "corp": {"options": {"baseURL": "https://corp.example/v1"}},
+            "other": {"options": {"baseURL": "https://other.example/v1"}}}}"#;
+
+        let run = sign_in(
+            "cli-auth-managed-list",
+            Given {
+                managed: Some(corp),
+                answers: "\n",
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Done, "{}", run.err);
+        assert!(run.asked.contains(&file), "{}", run.asked);
+        let ids: Vec<String> = rows(&run.asked).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(ids, ["corp", "other"], "{}", run.asked);
+
+        let plain = sign_in(
+            "cli-auth-plain-list",
+            Given {
+                answers: "\n",
+                ..Given::default()
+            },
+        );
+        assert!(
+            plain.asked.contains("Services a key can be stored for:")
+                && !plain.asked.contains(&file),
+            "{}",
+            plain.asked
+        );
+    }
+
+    /// CLI-18: an entry is recorded for a key that is stored, so stopping at the key prompt with none
+    /// stored leaves the settings as they were, or absent.
+    #[test]
+    fn stopping_at_the_key_with_none_stored_records_no_block() {
+        for (how, settings) in [
+            ("no settings file", None),
+            ("a settings file", Some(r#"{"theme": "dark"}"#)),
+        ] {
+            let run = sign_in(
+                "cli-auth-known-stopped-at-the-key",
+                Given {
+                    settings,
+                    named: Some("openai"),
+                    typed: None,
+                    ..Given::default()
+                },
+            );
+            assert_eq!(run.ending, Ending::Done, "{how}: {}", run.err);
+            assert_eq!(run.settings_text().as_deref(), settings, "{how}");
+            assert!(
+                !keys::file(&run.directory).exists(),
+                "{how}: a key was stored"
+            );
+            assert!(run.out.is_empty(), "{how}: {}", run.out);
+            assert!(!run.err.contains("provider"), "{how}: {}", run.err);
+        }
+    }
+
+    /// CLI-18: a file of keys that cannot be read once the key is not typed is a failure, as it is
+    /// everywhere else the file is read, and not a sign-in that ended well.
+    #[test]
+    fn a_file_of_keys_that_cannot_be_read_when_no_key_is_typed_ends_as_a_failure() {
+        let spoil = |directory: &Path| {
+            std::fs::write(keys::file(directory), "not a file of keys").expect("spoil the keys");
+        };
+        let run = sign_in(
+            "cli-auth-known-keys-spoiled",
+            Given {
+                named: Some("openai"),
+                typed: None,
+                meanwhile: Some(&spoil),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+        assert!(
+            run.err.contains("is not a file of keys bravebot wrote"),
+            "{}",
+            run.err
+        );
+        assert_eq!(run.settings_text(), None, "a block was recorded");
+        assert_eq!(
+            std::fs::read_to_string(keys::file(&run.directory)).expect("the keys"),
+            "not a file of keys"
+        );
+    }
+
+    /// CLI-18: a settings file under the size bravebot reads can be taken past it by the entry, which
+    /// is found before the key is asked for.
+    #[test]
+    fn a_file_the_entry_would_take_past_the_size_bravebot_reads_is_refused_before_the_key() {
+        // The reader takes no file past 64 KiB, and the entry is written with the file's own
+        // content re-indented, so this one is under the limit and the result is not.
+        let limit = 64 * 1024;
+        let settings = format!(r#"{{"pad": "{}"}}"#, "x".repeat(limit - 20));
+        assert!(settings.len() < limit, "the file is already past the limit");
+        let run = sign_in(
+            "cli-auth-known-takes-the-file-past-the-limit",
+            Given {
+                settings: Some(&settings),
+                named: Some("openai"),
+                typed: Some(A_TYPED_KEY),
+                ..Given::default()
+            },
+        );
+        assert_eq!(run.ending, Ending::Failed, "{}", run.err);
+        assert_eq!(run.key_question, None, "the key was asked for");
+        assert!(!keys::file(&run.directory).exists(), "a key was stored");
+        assert_eq!(run.settings_text().as_deref(), Some(settings.as_str()));
+        assert!(run.err.contains("past what bravebot reads"), "{}", run.err);
     }
 
     /// A directory of its own under the target directory, removed when the test ends.

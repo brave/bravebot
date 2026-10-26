@@ -17,7 +17,7 @@
 // Costs nothing: it opens a stored session rather than sending a prompt. The save sheet is
 // modal and would hang the run, so `dialog.showSaveDialog` is replaced in the main process —
 // the same trick `drive-menu.mjs` plays on `Menu.prototype.popup`.
-import { checker, launch } from './drive-support.mjs'
+import { checker, launch, ASSISTANT_BUBBLE } from './drive-support.mjs'
 import { mkdirSync, existsSync, readFileSync, statSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -211,7 +211,7 @@ if (count === 0) {
     // is that the file holds the conversation and nothing besides, so: one heading per
     // bubble on screen, no more and no fewer. A leaked tool line, diff or approval card
     // would push the count up; a dropped reply would push it down.
-    const onScreen = await page.locator('.bubble.user, .bubble.assistant').count()
+    const onScreen = await page.locator(`.bubble.user, ${ASSISTANT_BUBBLE}`).count()
     const headings = (text.match(/^\*\*(You|Brave Bot)\*\*$/gm) ?? []).length
     check(
       headings === onScreen && onScreen > 0,
@@ -266,7 +266,7 @@ if (count === 0) {
       `it carries every call and no more (${calls} lines for ${onScreenCalls} on screen)`,
     )
     // The conversation is untouched by the setting: the same turns, in the same places.
-    const onScreenTurns = await page.locator('.bubble.user, .bubble.assistant').count()
+    const onScreenTurns = await page.locator(`.bubble.user, ${ASSISTANT_BUBBLE}`).count()
     const headings = (text.match(/^\*\*(You|Brave Bot)\*\*$/gm) ?? []).length
     check(headings === onScreenTurns, 'and still exactly the conversation besides')
     // The footer is the file's own account of what it dropped, so it has to have changed

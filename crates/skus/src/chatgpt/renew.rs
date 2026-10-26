@@ -24,10 +24,11 @@ const MARGIN: u64 = 60;
 /// holds text from a reply ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
 #[derive(Debug)]
 pub enum TokenError {
-    /// Nothing is stored.
+    /// Nothing is stored, and this renewer has not found a sign-in end.
     NotSignedIn,
     /// The authorization server says the refresh token is no longer valid. The stored copy was
-    /// removed where it was the one refused.
+    /// removed where it was the one refused. Every later ask of the same renewer says so as well,
+    /// until a sign-in is stored again.
     Ended,
     /// The refresh failed in another way and no token in hand could be sent.
     Refresh(Class),
@@ -73,6 +74,14 @@ pub struct Renewer {
     agent: ureq::Agent,
     path: PathBuf,
     unwritten: Option<Unwritten>,
+    /// A refresh was refused as the refresh token no longer being valid and the file was removed.
+    /// A missing file does not say why it is missing, so this is what tells a later ask that the
+    /// sign-in ended, where the file alone would say none was made. Forgotten where a sign-in is
+    /// found stored again.
+    ended: bool,
+    /// Seconds since 1970 where an expiry is made and compared, which is 0 for a clock set before
+    /// that. The system clock outside a test.
+    now: fn() -> u64,
 }
 
 impl Renewer {
@@ -95,6 +104,8 @@ impl Renewer {
             agent: exchange::agent(transport),
             path,
             unwritten: None,
+            ended: false,
+            now,
         }
     }
 
@@ -112,13 +123,30 @@ impl Renewer {
         self.obtain(Some(refused))
     }
 
+    /// The stored sign-in, read from the file. One found there is not the sign-in that ended, so
+    /// finding it forgets the end.
+    fn read(&mut self) -> Result<Option<Account>, TokenError> {
+        let stored = account::load_at(&self.path).map_err(TokenError::Store)?;
+        if stored.is_some() {
+            self.ended = false;
+        }
+        Ok(stored)
+    }
+
+    /// What a file holding no sign-in means: that this process found it end, or that none is stored.
+    fn missing(&self) -> TokenError {
+        if self.ended {
+            TokenError::Ended
+        } else {
+            TokenError::NotSignedIn
+        }
+    }
+
     fn obtain(&mut self, refused: Option<&Secret>) -> Result<Access, TokenError> {
         // Nothing in memory and nothing to replace: no claim is needed to read a good token.
         if self.unwritten.is_none() {
-            let stored = account::load_at(&self.path)
-                .map_err(TokenError::Store)?
-                .ok_or(TokenError::NotSignedIn)?;
-            if !needs_replacing(&stored, refused) {
+            let stored = self.read()?.ok_or_else(|| self.missing())?;
+            if !needs_replacing(&stored, refused, (self.now)()) {
                 return Ok(Access {
                     token: stored.access_token,
                     unwritten: None,
@@ -128,7 +156,7 @@ impl Renewer {
 
         let _claim = account::claim(&self.path).map_err(TokenError::Store)?;
         // Read again with the claim held: another process may have replaced the token meanwhile.
-        let mut stored = account::load_at(&self.path).map_err(TokenError::Store)?;
+        let mut stored = self.read()?;
         let mut failed_write = None;
         if let Some(held) = self.unwritten.take() {
             let still_ours = stored
@@ -149,9 +177,9 @@ impl Renewer {
         let current = match (&self.unwritten, stored.as_ref()) {
             (Some(held), _) => held.account.clone(),
             (None, Some(file)) => file.clone(),
-            (None, None) => return Err(TokenError::NotSignedIn),
+            (None, None) => return Err(self.missing()),
         };
-        if !needs_replacing(&current, refused) {
+        if !needs_replacing(&current, refused, (self.now)()) {
             return Ok(Access {
                 token: current.access_token,
                 unwritten: failed_write,
@@ -170,7 +198,7 @@ impl Renewer {
                     refresh_token: renewed
                         .refresh
                         .unwrap_or_else(|| current.refresh_token.clone()),
-                    expires_at: now().saturating_add(renewed.lifetime),
+                    expires_at: (self.now)().saturating_add(renewed.lifetime),
                     client_id: current.client_id.clone(),
                     host_id: current.host_id.clone(),
                 };
@@ -211,6 +239,10 @@ impl Renewer {
                 // The sign-in has ended whether or not the file could be removed. A failed removal
                 // is not the answer: the next request meets the same refusal and tries again.
                 let _ = account::remove_held(&self.path);
+                // Kept for the rest of the process: the file is gone now, and the next ask, which
+                // may be the turn's after a picker's listing found the end, must not take that for
+                // a sign-in nobody made.
+                self.ended = true;
                 Err(TokenError::Ended)
             }
             Err(exchange::Refused::Failed(class)) => {
@@ -219,7 +251,7 @@ impl Renewer {
                 // expires.
                 let refused_now =
                     refused.is_some_and(|refused| same_secret(&current.access_token, refused));
-                if !refused_now && current.expires_at > now() {
+                if !refused_now && current.expires_at > (self.now)() {
                     Ok(Access {
                         token: current.access_token,
                         unwritten: failed_write,
@@ -234,9 +266,9 @@ impl Renewer {
 
 /// Whether a request cannot be built from this account's access token: it is within the margin of
 /// its expiry, or it is the one the serving host refused.
-fn needs_replacing(account: &Account, refused: Option<&Secret>) -> bool {
+fn needs_replacing(account: &Account, refused: Option<&Secret>, now: u64) -> bool {
     refused.is_some_and(|refused| same_secret(&account.access_token, refused))
-        || account.expires_at <= now().saturating_add(MARGIN)
+        || account.expires_at <= now.saturating_add(MARGIN)
 }
 
 fn same_secret(a: &Secret, b: &Secret) -> bool {
@@ -376,6 +408,58 @@ mod tests {
         );
     }
 
+    /// The known cost of CHATGPT-7: under a clock set before 1970 every expiry looks far off, a
+    /// token the service refuses is replaced, and the renewal stores an `expires_at` of the reply's
+    /// lifetime past 1970. The next start under a correct clock finds that expired and renews it
+    /// again. A renewal that stored another expiry through any path would leave the file as the
+    /// start under a correct clock finds it.
+    #[test]
+    fn a_renewal_under_a_clock_before_1970_stores_an_expiry_the_next_start_renews_again() {
+        use super::super::encoding::now_at;
+        use std::time::{Duration, UNIX_EPOCH};
+
+        fn before_1970() -> u64 {
+            now_at(UNIX_EPOCH - Duration::from_secs(86_400))
+        }
+
+        let path = scratch("clock-before-1970");
+        account::save_at(&path, &stored("old", "r0", 3600)).expect("a stored account");
+        let server = serve(vec![
+            reply("new", Some("r1"), 1800),
+            reply("newer", Some("r2"), 1800),
+        ]);
+
+        let mut under_that_clock = renewer(&server.base, &path);
+        under_that_clock.now = before_1970;
+        let unexpired = under_that_clock.access_token().expect("a token");
+        assert_eq!(
+            unexpired.token.expose(),
+            "old",
+            "a token an hour from its expiry is sent"
+        );
+        let renewed = under_that_clock
+            .replace_refused(&Secret::new("old"))
+            .expect("a token");
+        assert_eq!(renewed.token.expose(), "new");
+        assert_eq!(
+            on_disk(&path).expires_at,
+            1800,
+            "the expiry is the reading of the clock, which is 0, plus the reply's lifetime"
+        );
+
+        let next = renewer(&server.base, &path)
+            .access_token()
+            .expect("a token");
+        assert_eq!(
+            next.token.expose(),
+            "newer",
+            "the next start did not renew it"
+        );
+        let asked = server.finish();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert_eq!(named(&asked[1].form(), "refresh_token"), "r1");
+    }
+
     /// A reply that grants no refresh token keeps the one presented: replacing it with nothing
     /// would sign the person out an hour later.
     #[test]
@@ -416,6 +500,61 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// A renewer that found the sign-in end says so to every later ask, whichever kind, and asks the
+    /// token endpoint nothing more. The file is gone by then, and an implementation that read a
+    /// missing file as a sign-in nobody made would say so to the turn that asks after a picker's
+    /// listing found the end. The end is this renewer's: another over the same missing file has not
+    /// seen it and says nothing is stored.
+    #[test]
+    fn a_renewer_that_found_the_sign_in_end_says_so_to_every_later_ask() {
+        let path = scratch("ended-kept");
+        account::save_at(&path, &stored("old", "r0", -5)).expect("a stored account");
+        let server = serve(vec![Reply::json(400, "{\"error\":\"invalid_grant\"}")]);
+        let mut found = renewer(&server.base, &path);
+
+        let first = found.access_token();
+        assert!(matches!(first, Err(TokenError::Ended)), "{first:?}");
+        assert!(!path.exists());
+        let later = [
+            found.access_token().map(|_| ()),
+            found.replace_refused(&Secret::new("old")).map(|_| ()),
+            found.access_token().map(|_| ()),
+        ];
+        for outcome in later {
+            assert!(matches!(outcome, Err(TokenError::Ended)), "{outcome:?}");
+        }
+        let other = renewer(&server.base, &path).access_token();
+        assert!(matches!(other, Err(TokenError::NotSignedIn)), "{other:?}");
+        assert_eq!(
+            server.finish().len(),
+            1,
+            "the token endpoint was asked again"
+        );
+    }
+
+    /// A sign-in stored after the end is used, and the end is forgotten: it is not the sign-in that
+    /// ended, so it is not told the end, and a file removed afterwards is a sign-in nobody holds.
+    /// An implementation that answered the end without reading the file would refuse the new
+    /// sign-in, and one that never forgot it would say the new sign-in ended when the person logged
+    /// out.
+    #[test]
+    fn a_sign_in_stored_after_the_end_is_used_and_the_end_is_forgotten() {
+        let path = scratch("ended-forgotten");
+        account::save_at(&path, &stored("old", "r0", -5)).expect("a stored account");
+        let server = serve(vec![Reply::json(400, "{\"error\":\"invalid_grant\"}")]);
+        let mut found = renewer(&server.base, &path);
+        assert!(matches!(found.access_token(), Err(TokenError::Ended)));
+
+        account::save_at(&path, &stored("signed-in-again", "r9", 3000)).expect("a new sign-in");
+        let again = found.access_token().expect("the new sign-in's token");
+        assert_eq!(again.token.expose(), "signed-in-again");
+
+        std::fs::remove_file(&path).expect("a logout");
+        let after = found.access_token();
+        assert!(matches!(after, Err(TokenError::NotSignedIn)), "{after:?}");
+        assert_eq!(server.finish().len(), 1);
+    }
+
     /// Any other failure leaves the file as it was. A busy server, a refusal with another code and
     /// a connection that failed must not delete a sign-in that still works.
     #[test]
@@ -444,6 +583,33 @@ mod tests {
             assert_eq!(file.access_token.expose(), "old");
             assert_eq!(file.refresh_token.expose(), "r0");
         }
+    }
+
+    /// A redirect in answer to a refresh is a failure and is not followed, since the request carries
+    /// the refresh token and a followed redirect would send it to a host nobody compiled in. It ends
+    /// nothing: the file keeps the access token and the refresh token that were presented. A renewer
+    /// whose client followed redirects would pass the exchange's test, which builds its own client.
+    #[test]
+    fn a_redirect_in_answer_to_a_refresh_is_not_followed_and_the_sign_in_is_left_alone() {
+        let elsewhere = serve(vec![reply("never-sent", Some("never-sent"), 3600)]);
+
+        let (outcome, asked, path) = run(
+            "redirect",
+            Some(&stored("old", "r0", -5)),
+            vec![Reply::redirect(&format!("{}/token", elsewhere.base))],
+            Renewer::access_token,
+        );
+
+        let reached = elsewhere.finish();
+        assert!(reached.is_empty(), "the redirect was followed: {reached:?}");
+        assert_eq!(asked.len(), 1);
+        assert!(
+            matches!(outcome, Err(TokenError::Refresh(Class::Refused))),
+            "{outcome:?}"
+        );
+        let file = on_disk(&path);
+        assert_eq!(file.access_token.expose(), "old");
+        assert_eq!(file.refresh_token.expose(), "r0");
     }
 
     /// Where the refresh fails and the access token has not yet passed its expiry, the request is

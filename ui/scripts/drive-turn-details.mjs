@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
+import { COMPOSER_NAME } from './drive-support.mjs'
 
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-turn-details-profile-'))
 const directory = mkdtempSync(join(tmpdir(), 'bravebot-turn-details-project-'))
@@ -45,7 +46,7 @@ try {
   const done = (turn, changes = {}, session = 's-a') => emit('turn.done', { turn, id: session.slice(2), reply: `Finished turn ${turn}.`, model: 'sample/actual', tokens: 12840, outputTokens: 1620, steps: 4, clean: false, notices: ['Loaded instructions from AGENTS.md.', 'Could not load skill “interface-review”: file not found.'], trust: { rules: [] }, archived: 0, ...changes }, session)
   const selectConversation = (id) => page.locator('.session').filter({ hasText: `Conversation ${id}` }).click()
   const send = async (prompt) => {
-    await page.getByRole('textbox', { name: 'Message the agent' }).fill(prompt)
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).fill(prompt)
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     await page.locator('.transcript .working').waitFor()
   }

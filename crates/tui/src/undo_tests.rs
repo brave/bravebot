@@ -697,7 +697,8 @@ fn bridge_handoff(ending: &str) {
         session.record_turn(start, &conversation);
     }
     save(&mut stored, &session, &conversation, &trust, &programs);
-    let source = sessions::load(root, stored.id()).unwrap();
+    let id = stored.id().to_string();
+    let source = sessions::load(root, &id).unwrap();
     assert_eq!(source.rewind_points(root).len(), 2);
     assert!(
         source
@@ -705,10 +706,12 @@ fn bridge_handoff(ending: &str) {
             .iter()
             .all(|point| point.wrote_over.is_empty())
     );
-    let full_fork = sessions::fork(root, stored.id()).unwrap();
+    let full_fork = sessions::fork(root, &id).unwrap();
     assert!(full_fork.rewind.is_empty());
     assert_eq!(full_fork.trust_map(root), Some(trust.clone()));
-    assert_eq!(sessions::load(root, stored.id()).unwrap().rewind.len(), 2);
+    assert_eq!(sessions::load(root, &id).unwrap().rewind.len(), 2);
+    // The terminal session ends, so the desktop can open the record it left.
+    drop(stored);
     let (config, requests, server) = endpoint::endpoint(
         vec![
             endpoint::tool("read_file", json!({"path":"input.txt"})),
@@ -743,7 +746,7 @@ fn bridge_handoff(ending: &str) {
     let opened = call(
         &mut bridge,
         "session.open",
-        json!({"directory":root,"id":stored.id()}),
+        json!({"directory":root,"id":id}),
     );
     let handle = opened["session"].as_str().unwrap();
     call(
@@ -794,7 +797,7 @@ fn bridge_handoff(ending: &str) {
         std::fs::read_to_string(root.join("output.txt")).unwrap(),
         SENTINEL
     );
-    let record = sessions::load(root, stored.id()).unwrap();
+    let record = sessions::load(root, &id).unwrap();
     // The desktop turn opened a point of its own and kept what it wrote over.
     let points = record.rewind_points(root);
     assert_eq!(points.len(), 3);
@@ -835,12 +838,26 @@ fn bridge_handoff(ending: &str) {
             .any(|rule| rule["path"] == "output.txt" && rule["integrity"] == "untrusted")
     );
     assert_eq!(
-        sessions::load(root, stored.id()).unwrap().trust_map(root),
+        sessions::load(root, &id).unwrap().trust_map(root),
         Some(trust.clone())
     );
-    let full_fork = sessions::fork(root, stored.id()).unwrap();
+    let full_fork = sessions::fork(root, &id).unwrap();
     assert_eq!(full_fork.trust_map(root), Some(trust.clone()));
     assert!(full_fork.rewind.is_empty());
+    // The desktop session is closed, and the terminal resumes the record it wrote.
+    call(&mut bridge, "session.close", json!({"session":handle}));
+    assert!(
+        bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the desktop session's work did not end"
+    );
+    let record = sessions::load(root, &id).unwrap();
+    let mut stored = sessions::Handle::resuming(
+        root,
+        &record,
+        sessions::Front::Terminal,
+        bravebot_stamp::BUILD,
+    )
+    .expect("the record is free once the desktop session is closed");
     conversation = Conversation::restored(record.conversation.clone());
     session = Session::new("test");
     session.replay(
@@ -1165,12 +1182,15 @@ fn immediate_undo_after_resume_keeps_server_warnings_for_later_turns() {
         .unwrap()
         .remove("server_children_may_run");
     let record: sessions::Record = serde_json::from_value(encoded).unwrap();
+    // The session that wrote the record has ended, so nothing holds it.
+    drop(stored);
     stored = sessions::Handle::resuming(
         workspace.root(),
         &record,
         sessions::Front::Terminal,
         bravebot_stamp::BUILD,
-    );
+    )
+    .expect("the record is free");
 
     let mut resumed = Session::new("test");
     resumed.restore_rewind_points(record.rewind_points(workspace.root()), &conversation);
@@ -1319,12 +1339,15 @@ fn resumed_undo_keeps_the_record_when_gap_evidence_is_missing() {
         let record: sessions::Record = serde_json::from_value(encoded).unwrap();
         let mut resumed = Session::new("test");
         resumed.restore_rewind(&record, &workspace, &conversation);
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(stored);
         stored = sessions::Handle::resuming(
             workspace.root(),
             &record,
             sessions::Front::Terminal,
             bravebot_stamp::BUILD,
-        );
+        )
+        .expect("the record is free");
         rewind(
             &mut resumed,
             &mut conversation,

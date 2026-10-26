@@ -4,7 +4,7 @@
 use crate::command_table::{
     command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
 };
-use crate::state::{Session, Status, Unenhanceable};
+use crate::state::{Session, Status, Unenhanceable, WatchScope};
 use crate::{input, render};
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
@@ -747,6 +747,20 @@ pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watching();
             Action::Redraw
         }
+        // The outputs chord, read off the bindings and before the arm that refuses chords. Over the
+        // command output it closes, as the watch chord does. Over the agents it moves to the
+        // command output, or says there is none and stays (WATCH-7).
+        _ if session.bindings().is_outputs(&key) => {
+            if session
+                .watching()
+                .is_some_and(|watching| watching.scope == WatchScope::Outputs)
+            {
+                session.stop_watching();
+                Action::Redraw
+            } else {
+                super::open_outputs(session)
+            }
+        }
 
         // Half a screen, and a whole one back, in the scroller's chords (SCROLL-3). They are the
         // view's own, so they are read before the arm that refuses every other chord.
@@ -931,8 +945,8 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::End | KeyCode::Char('G') => session.files_to_end(true),
         KeyCode::PageUp => session.files_scroll(-session.files_page()),
         KeyCode::PageDown => session.files_scroll(session.files_page()),
-        KeyCode::Char('[') => session.files_to_edit(false),
-        KeyCode::Char(']') => session.files_to_edit(true),
+        KeyCode::Left | KeyCode::Char('h') => session.files_to_edit(false),
+        KeyCode::Right | KeyCode::Char('l') => session.files_to_edit(true),
         _ => return Action::None,
     }
     Action::Redraw
@@ -1375,6 +1389,17 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
                 Action::None
             }
         }
+        // The same view over what commands printed, by the path `/outputs` takes, so an empty
+        // list is said rather than silent (WATCH-7). In the shared ladder for the watch chord's
+        // reason: it sends nothing.
+        _ if session.bindings().is_outputs(&key) => super::open_outputs(session),
+        // The whole plan, printed as `/todos` prints it and said into the transcript as that is
+        // (CMD-28). In the shared ladder for the same reason: it sends nothing, and a plan is most
+        // worth reading in full while the turn works through it.
+        _ if session.bindings().is_todos(&key) => {
+            session.answer_while_working(|session| session.report_plan());
+            Action::Redraw
+        }
         // Before the Tab arm below, since a terminal that has been asked to disambiguate reports
         // this as Tab with a modifier rather than as its own code, and it would otherwise be taken
         // for a completion. Both spellings, because which one arrives is the terminal's choice.
@@ -1754,6 +1779,14 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             session.scroller_on(session.wheel_rows());
             Action::Redraw
         }
+        // Over the panel in the files state the wheel scrolls the pane under the pointer, and
+        // over the transcript it scrolls the transcript (MOUSE-19).
+        MouseEventKind::ScrollUp if session.files_wheel(mouse.row, mouse.column, true) => {
+            Action::Redraw
+        }
+        MouseEventKind::ScrollDown if session.files_wheel(mouse.row, mouse.column, false) => {
+            Action::Redraw
+        }
         MouseEventKind::ScrollUp => {
             session.scroll_up(session.wheel_rows());
             Action::Redraw
@@ -1823,30 +1856,88 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         // A click on the panel's model, effort, context or MCP server row asks what `/model`,
-        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13). The press and the release are on one cell and the
-        // press is a single click, so a drag, a double click and a triple click stay selections.
-        MouseEventKind::Up(MouseButton::Left)
-            if !session.scrolling()
-                && !session.searching_history()
-                && session.last_click.is_some_and(|click| {
-                    click.count() == 1 && click.cell() == (mouse.row, mouse.column)
-                })
-                && session.panel_target_at(mouse.row, mouse.column).is_some() =>
-        {
+        // `/effort`, `/context` or `/mcp` asks (MOUSE-11, MOUSE-12, MOUSE-13), one on the Files
+        // section asks what `/diff` asks (MOUSE-20), one on a file of the files state highlights
+        // it, one on its `x` ends it and one on a control of its bar steps between the edits
+        // (MOUSE-18), and one on the permission mode under the box cycles it (MOUSE-14).
+        MouseEventKind::Up(MouseButton::Left) if is_a_shortcut_click(session, mouse) => {
+            click_shortcut(session, mouse)
+        }
+        // A click in the prompt box that swept nothing puts the caret where it landed (MOUSE-16).
+        MouseEventKind::Up(MouseButton::Left) if is_a_click_on(session, mouse) => {
             session.clear_selection();
-            match session.panel_target_at(mouse.row, mouse.column) {
-                Some(crate::panel::Target::Model) => super::ask_which_model(session),
-                Some(crate::panel::Target::Effort) => Action::ChooseEffort,
-                Some(crate::panel::Target::Context) => {
-                    session.report_context();
-                    Action::Redraw
-                }
-                Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
-                None => Action::Redraw,
-            }
+            session.click_in_the_box(mouse.row, mouse.column);
+            Action::Redraw
         }
         MouseEventKind::Up(MouseButton::Left) => Action::Copy,
         _ => Action::None,
+    }
+}
+
+/// Whether a release is the end of a single click that swept nothing, on something that has a
+/// shortcut: a row of the info panel or the permission mode under the box. The press and the
+/// release are on one cell and the press is a single click, so a drag, a double click and a triple
+/// click stay selections.
+fn is_a_shortcut_click(session: &Session, mouse: MouseEvent) -> bool {
+    !session.scrolling()
+        && !session.searching_history()
+        && session
+            .last_click
+            .is_some_and(|click| click.count() == 1 && click.cell() == (mouse.row, mouse.column))
+        && (session.panel_target_at(mouse.row, mouse.column).is_some()
+            || session.on_the_mode(mouse.row, mouse.column))
+}
+
+/// Whether a release is the end of a single click that swept nothing, on a cell of the prompt box's
+/// text, with the box in use at the plain prompt.
+fn is_a_click_on(session: &Session, mouse: MouseEvent) -> bool {
+    !session.scrolling()
+        && !session.searching_history()
+        && session
+            .last_click
+            .is_some_and(|click| click.count() == 1 && click.cell() == (mouse.row, mouse.column))
+        && session.offset_in_the_box(mouse.row, mouse.column).is_some()
+}
+
+/// What a click [`is_a_shortcut_click`] names does.
+fn click_shortcut(session: &mut Session, mouse: MouseEvent) -> Action {
+    session.clear_selection();
+    match session.panel_target_at(mouse.row, mouse.column) {
+        Some(crate::panel::Target::Model) => super::ask_which_model(session),
+        Some(crate::panel::Target::Effort) => Action::ChooseEffort,
+        Some(crate::panel::Target::Context) => {
+            session.report_context();
+            Action::Redraw
+        }
+        Some(crate::panel::Target::Servers) => Action::Mcp(String::new()),
+        Some(crate::panel::Target::File(index)) => {
+            session.files_select(index);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::CloseFiles) => {
+            session.close_files();
+            Action::Redraw
+        }
+        Some(crate::panel::Target::PreviousEdit) => {
+            session.files_to_edit(false);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::NextEdit) => {
+            session.files_to_edit(true);
+            Action::Redraw
+        }
+        Some(crate::panel::Target::Files) => {
+            session.toggle_files();
+            Action::Redraw
+        }
+        Some(crate::panel::Target::Hide) => {
+            session.toggle_panel();
+            Action::Redraw
+        }
+        None => {
+            session.cycle_permission_mode();
+            Action::Redraw
+        }
     }
 }
 

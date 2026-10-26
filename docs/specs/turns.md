@@ -4,6 +4,8 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/conversation.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs

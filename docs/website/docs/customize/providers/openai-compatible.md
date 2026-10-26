@@ -1,5 +1,5 @@
 ---
-sidebar_position: 2
+sidebar_position: 6
 title: An OpenAI-compatible gateway
 description: Name a gateway, the models it offers and where its credential lives, including a local Ollama that wants no key.
 ---
@@ -48,8 +48,8 @@ rather than refused. opencode's `cost`, `modality` and `package` fields do nothi
 
 ### Where the requests go
 
-**A gateway bravebot already knows an endpoint for needs no `baseURL`.** `openrouter` and `openai` are
-the names it knows today. Any other id needs one written down, and an entry with neither a known name
+**A gateway bravebot already knows an endpoint for needs no `baseURL`.** [`openrouter`](openrouter.md)
+and [`openai`](openai.md) are the names it knows today. Any other id needs one written down, and an entry with neither a known name
 nor a stated endpoint configures no service. A stated `baseURL` always wins, so a known name stays
 usable against a proxy or a private deployment. A known name supplies the endpoint and nothing else:
 the block still says where its credential lives, as [below](#the-credential).
@@ -107,140 +107,13 @@ agree to.
 
 ### OpenAI
 
-An entry keyed `openai` reaches OpenAI with an API key, through its chat-completions endpoint:
-
-```json
-{
-  "provider": {
-    "openai": {
-      "env": ["OPENAI_API_KEY"]
-    }
-  },
-  "model": "openai/<model id>"
-}
-```
-
-The endpoint is `https://api.openai.com/v1`, and a stated `baseURL` wins, so a proxy or another
-deployment speaking the same protocol is reached by writing where it is. Export the key as
-`OPENAI_API_KEY=<your key>`, or store it with `bravebot auth login gateway openai`. The block has to say
-where the key lives: a block naming no `env`, no `options.apiKey` and no stored key sends none, and
-OpenAI refuses the request. `OPENAI_API_KEY` is a name other OpenAI tools read as well, and naming it
-in `env` is what makes bravebot send the key your shell holds. Like any variable a `provider` block
-names, it is [withheld from the programs bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
-
-With no `models` key, OpenAI is asked what it serves and `/model` offers everything it lists. The
-listing says nothing about what a model can do, so embedding, speech and image models are in it beside
-the chat models, and so are models OpenAI serves only through its Responses API. An entry reaches those
-by naming `@ai-sdk/openai` in `npm`, as it does in opencode, and without that line picking one fails. A
-block that lists `models` is offered those and no others, which is how to keep the picker to the models
-you use:
-
-```json
-{
-  "provider": {
-    "openai": {
-      "env": ["OPENAI_API_KEY"],
-      "models": { "<model id>": {} }
-    }
-  }
-}
-```
-
-### The Responses API
-
-OpenAI also serves models through its Responses API, and some only through it. An entry that names
-`@ai-sdk/openai` is sent requests there, at `/responses` under its `baseURL`, instead of at
-`/chat/completions`:
-
-```json
-{
-  "provider": {
-    "openai": {
-      "npm": "@ai-sdk/openai",
-      "env": ["OPENAI_API_KEY"],
-      "models": { "<model id>": {} }
-    }
-  }
-}
-```
-
-The SDK decides for every model the entry lists, and the entry's `id` does not matter except for
-`google-vertex`: any other entry naming it, a proxy included, is reached in this protocol. The conversation is never kept at the service
-(`store` is off), the reply is always streamed, and the model's earlier reasoning is not sent back with
-a later request. Pictures are sent, and a document attachment is not. The effort level is sent as
-`reasoning.effort`, with a summary of the reasoning that `/thinking` shows.
-
-A model is named with the id in front, as `openai/<model id>`, in `--model` or the `model` key. Signing
-in with a ChatGPT account instead of a key is not supported.
+[Reaching OpenAI with an API key](openai.md) says how an entry keyed `openai` reaches OpenAI, which
+models it offers, and how an entry reaches the Responses API.
 
 ### Google Vertex AI
 
-Vertex AI is reached with an API key in one of two ways, and whether the entry states a project picks
-between them. With a project, the entry reaches Vertex AI's OpenAI-compatible endpoint:
-
-```json
-{
-  "provider": {
-    "google-vertex": {
-      "env": ["GOOGLE_API_KEY"],
-      "options": { "project": "<your project id>", "location": "global" }
-    }
-  },
-  "model": "google-vertex/google/gemini-2.5-flash"
-}
-```
-
-The host is built from `project` and `location`, which is `global` where you state none. A `project`
-holding a character a project id cannot hold, such as `/` or `@`, configures nothing rather than
-sending your key somewhere else. A stated `baseURL` still wins.
-
-The key is read from the variable `env` names and sent in the `x-goog-api-key` header, which is the
-only place Google reads it from. Export it as `GOOGLE_API_KEY=<your key>`, or name another variable in
-`env`. A block naming no `env` and no `options.apiKey` sends no key, and Vertex AI refuses it.
-
-With no block, exporting `GOOGLE_API_KEY` and `GOOGLE_CLOUD_PROJECT` is enough, and `VERTEX_LOCATION`
-sets a location other than `global`. A block replaces this. The service is only asked once a model
-named `google-vertex/...` is chosen. `GOOGLE_API_KEY` is a name other Google tools read as well, so
-the key you exported for one of them is what is sent here once you choose such a model.
-
-Vertex AI has no model listing a key can call, so `/model` offers a short list of Gemini models
-built into bravebot, which `bravebot doctor` names. A block that lists `models` is offered those
-instead. No preview model is on the built-in list, because Google withdraws previews without notice.
-The list is what the `global` location serves, and another location may not serve all of it. A model
-on the built-in list is named with the id in front, as `google-vertex/google/gemini-2.5-pro`, in
-`--model` or the `model` key, and one off it is named the same way, as
-`google-vertex/google/gemini-3-flash-preview`. Signing in with Google Cloud credentials instead of a
-key is not supported.
-
-#### Express mode, with a key and no project
-
-An entry that states no `project` is reached in Vertex AI express mode, through Google's native
-`generateContent` API. It needs the key and nothing else:
-
-```json
-{
-  "provider": {
-    "google-vertex": {
-      "env": ["GOOGLE_API_KEY"]
-    }
-  },
-  "model": "google-vertex/google/gemini-2.5-flash"
-}
-```
-
-With no block, exporting `GOOGLE_API_KEY` alone is enough. The request goes to
-`aiplatform.googleapis.com` with no region in the address, and Google chooses where it is served, so
-`location` and `VERTEX_LOCATION` are not read. State a `project` to reach a particular region. An
-entry that states a `baseURL` and no project keeps speaking the OpenAI-compatible protocol to it,
-unless it also states `"npm": "@ai-sdk/google-vertex"`, which says the host takes Vertex's own API.
-The key is sent in `x-goog-api-key`, as above. Tool calls work, and the signature Gemini 3 models attach to a
-call is sent back with it. A model is named as `google-vertex/<publisher>/<model>`, and the publisher
-is `google` for the Gemini models. The thinking level you choose with `/effort` is sent as a thinking
-budget, and a model that refuses one is sent none. Application Default Credentials, service-account
-files and `gcloud auth` tokens are not supported.
-
-Exporting `GOOGLE_API_KEY` for another Google tool also configures this service, and takes the
-variable out of the environment of the programs bravebot starts.
+[Reaching Google Vertex AI with an API key](google-vertex.md) says how an entry keyed `google-vertex`
+reaches Vertex AI with or without a project, and what express mode is.
 
 ### The credential
 
@@ -252,10 +125,12 @@ bravebot auth login gateway openrouter
 ```
 
 asks for the key with nothing shown as you type it, and keeps it in `~/.bravebot/gateway-keys.json`,
-readable only by your account, under the block's id. [Signing in](../signing-in.md#gateway) has
-the details. `options.apiKey` is read too, because it is opencode's field. Where more than one is
-present a variable wins, then the stored key, then `options.apiKey`. A long-lived token in a
-settings file is a token in a file people paste into issues.
+readable only by your account, under the block's id. `openrouter`, `openai` and `anthropic` need no
+block first: for one that no block names, the sign-in adds an entry that holds no field. [Signing
+in](../signing-in.md#gateway) has the details. `options.apiKey` is read too, because it is
+opencode's field. Where more than one is present a variable wins, then the stored key, then
+`options.apiKey`. A long-lived token in a settings file is a token in a file people paste into
+issues.
 
 A variable is read at the point a request needs it rather than once at startup, so exporting a new
 one takes effect in a session already open. A stored key is read when a session starts, so one
@@ -294,30 +169,11 @@ Ollama wants no API key, so its block names none:
 [compiled in](#where-the-requests-go) for. There is no `models` key, so Ollama is asked what it has
 pulled and `/model` lists what came back. A first run with nothing configured offers to write this
 block for you where Ollama is running ([Importing from Claude Code, opencode or a local model
-server](../configuration.md#importing-from-claude-code-opencode-or-a-local-model-server)).
+server](../importing.md)).
 
-LM Studio and llama-server want no key either, so their blocks differ from this one in the name and
-the address. LM Studio's server listens on port `1234` once it is started, and llama-server's on
-`9931` unless it is told another port:
-
-```json
-{
-  "provider": {
-    "lmstudio": {
-      "name": "LM Studio (local)",
-      "options": { "baseURL": "http://127.0.0.1:1234/v1" }
-    },
-    "llama-server": {
-      "name": "llama-server (local)",
-      "options": { "baseURL": "http://127.0.0.1:9931/v1" }
-    }
-  },
-  "model": "lmstudio/qwen/qwen3-coder-30b"
-}
-```
-
-The model names are the ones each server lists: `/model` shows them once the block is in place. A
-first run offers to write either block where the server is running, as it does for Ollama.
+LM Studio and llama-server want no key either. [Ollama](ollama.md), [LM Studio](lm-studio.md) and
+[llama-server](llama-server.md) each have a page that says how the first run finds the server, what
+its block looks like and what to state for its context window.
 
 ### Which models are offered
 
@@ -325,7 +181,7 @@ first run offers to write either block where the server is running, as it does f
 trip. That is what keeps a configured gateway working with no network, and is the way to pin a short
 list out of a service offering hundreds.
 
-**A block that lists none has the gateway asked**, except on [Google Vertex AI](#google-vertex-ai),
+**A block that lists none has the gateway asked**, except on [Google Vertex AI](google-vertex.md),
 which has no listing to ask. That is the ordinary case rather than a mistake: opencode resolves its
 roster from a registry it fetches, so the commonest block copied out of it names a credential and
 nothing else. What your credential may reach is asked for first, and the service's full catalogue

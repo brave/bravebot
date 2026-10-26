@@ -14,14 +14,14 @@ use unicode_width::UnicodeWidthStr;
 use crate::colour_codes;
 use crate::logo;
 use crate::markdown;
-use crate::state::{Entry, Laid, Session, Speaker};
+use crate::state::{Entry, Laid, Session, Speaker, Tone};
 use crate::table;
 use crate::theme::{self, Palette};
 use crate::wrap;
 
 use super::{
     DETAIL_MARKER, LEAD, MAX_DIFF_LINES, TURN_MARKER, activity_lines, call_rows, delegate_lines,
-    dim, printable, quarantined_lines, reported_lines, returned_lines, todo_lines,
+    dim, plan_lines, printable, quarantined_lines, reported_lines, returned_lines, todo_lines,
 };
 
 /// Draw what the model said, styled rather than shown with its markdown markers.
@@ -116,8 +116,7 @@ fn request_lines(
                                 request_instruction_file,
                                 path = *path,
                                 bytes = *bytes
-                            )
-                            .to_string())
+                            ))
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
@@ -169,16 +168,23 @@ fn has_more_to_show(entry: &Entry) -> bool {
             .is_some_and(|activity| activity.changes.len() > MAX_DIFF_LINES)
 }
 
-/// A note, one line to each line of `text`.
+/// A note, one line to each line of `text`, in the ink its `tone` says.
 ///
 /// Shared by the notes in the transcript and by what commands typed during a turn answered, which
-/// are the same voice and have to look it.
-fn note_lines(text: &str) -> Vec<Line<'static>> {
+/// are the same voice and have to look it. The ink is the tone's and is not worked out from the
+/// words. Under `brave` none of the three is the ink that marks untrusted content, and under the
+/// plain palette every ink is the terminal's own (VIEW-8).
+fn note_lines(text: &str, tone: Tone) -> Vec<Line<'static>> {
+    let ink = match tone {
+        Tone::Note => theme::note(),
+        Tone::Done => theme::ok(),
+        Tone::Refused => theme::fail(),
+    };
     text.lines()
         .map(|text| {
             Line::from(Span::styled(
                 format!("{:LEAD$}{text}", ""),
-                Style::default().fg(theme::note()),
+                Style::default().fg(ink),
             ))
         })
         .collect()
@@ -219,7 +225,7 @@ fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'stat
         // The session in its own voice, indented to the column the rest of the transcript's
         // text starts in. Not behind the detail marker: that says the line belongs to the
         // entry above it, and the notes starting up leaves are drawn before there is one.
-        Speaker::System => lines.extend(note_lines(&entry.text)),
+        Speaker::System => lines.extend(note_lines(&entry.text, entry.tone)),
         // In the same column as a note and in the colour of a failure, wrapped rather than
         // clipped: a reason is the one line in the transcript somebody reads to the end.
         Speaker::Failure | Speaker::Stopped => {
@@ -344,6 +350,13 @@ fn entry_extras(
     // The plan the turn worked to, kept next to what it produced. The turn that reported it has
     // already ended, so a row still outstanding is drawn left open rather than as work going on.
     lines.extend(todo_lines(&entry.todos, true));
+
+    // The whole plan, where the person asked for it to be printed (VIEW-37).
+    lines.extend(plan_lines(
+        &entry.whole_plan,
+        entry.whole_plan_left_open,
+        width as usize,
+    ));
 
     if session.show_trail && !entry.trail.is_empty() {
         for recorded in &entry.trail {
@@ -503,7 +516,7 @@ fn push_tail(session: &Session, width: u16, opening: bool, lines: &mut Vec<Line<
                 lines.push(Line::raw(""));
                 lines.push(Line::from(Span::styled(
                     format!("{TURN_MARKER} {note}"),
-                    Style::default().fg(if delegate.failed {
+                    Style::default().fg(if delegate.failed() {
                         theme::fail()
                     } else {
                         theme::ok()
@@ -1157,7 +1170,8 @@ mod tests {
     }
 
     use super::*;
-    use crate::render::{LEFT_OPEN_MARKER, QUARANTINE_BAR};
+    use crate::panel::LEFT_OPEN_MARKER;
+    use crate::render::QUARANTINE_BAR;
     use bravebot_agent::diff::Change;
     use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
     use bravebot_core::todo::{Row, Status};

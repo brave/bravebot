@@ -1,4 +1,5 @@
-import { SIDEBAR_TAB } from '../../drive-support.mjs'
+import { BOT_NAME, botRow, openBotsTab } from '../bots.mjs'
+import { BOT_OPEN_BUTTON } from '../../drive-support.mjs'
 // The half of a bot's memory nobody presses a key for.
 //
 // `13-bot-memory` films the memory being written because somebody asked for it in so many words,
@@ -21,7 +22,6 @@ import { SIDEBAR_TAB } from '../../drive-support.mjs'
 // for a turn the app sent, if the world it inherited has one. It bows out where it has nothing —
 // `s.skip` is for a scene with nothing to show, and a bot that has not yet needed reminding is
 // exactly that. Filmed after `13-bot-memory`, whose session it reads.
-const NAME = 'Harbour Watch'
 
 export default {
   id: '14-bot-remembering',
@@ -31,20 +31,15 @@ export default {
   async run(s) {
     const { page } = s
 
-    const tab = page.locator(SIDEBAR_TAB).nth(1)
-    if (!(await tab.count())) s.skip('this build has no bots tab')
-    await s.click(tab)
-    await page.waitForTimeout(600)
+    await openBotsTab(s)
 
-    const row = page
-      .locator('.bot')
-      .filter({ has: page.locator('.bot-name', { hasText: new RegExp(`^${NAME}$`) }) })
-    if (!(await row.count())) s.skip(`"${NAME}" is not in the list — 12-bots makes it`)
+    const row = botRow(page, BOT_NAME)
+    if (!(await row.count())) s.skip(`"${BOT_NAME}" is not in the list — 12-bots makes it`)
 
     // --- what it has kept ---------------------------------------------------------------------
 
     await s.say('What a bot has kept', 'The memory is a file, and its details show it as it stands.', 2.6)
-    await s.click(row.locator('.bot-open-button'))
+    await s.click(row.locator(BOT_OPEN_BUTTON))
     await page.locator('[data-test="bot-details"]').waitFor()
     // A bot keeps one memory per folder; `13-bot-memory` worked in a project, so that one is shown.
     const folder = page.locator('[data-test="memory-folder"]')
@@ -71,7 +66,7 @@ export default {
     // --- and the turn nobody asked for ---------------------------------------------------------
 
     const conversation = page.locator('[data-test="bot-conversations"] .bot-history-row').first()
-    if (!(await conversation.count())) s.skip(`"${NAME}" has no conversation yet, 13-bot-memory starts one`)
+    if (!(await conversation.count())) s.skip(`"${BOT_NAME}" has no conversation yet, 13-bot-memory starts one`)
     await s.click(conversation)
     await page.waitForTimeout(2200)
 

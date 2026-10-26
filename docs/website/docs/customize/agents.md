@@ -93,7 +93,7 @@ back to the turn's model, so an intended cost control cannot be silently bypasse
 answered by a different model than the one named says so, so a misspelt name is not silent.
 
 **`effort` chooses how hard that model is asked to think.** It takes the same five words as
-[`/effort`](configuration.md#choosing-how-hard-to-think): `low`, `medium`, `high`, `xhigh`
+[`/effort`](effort.md): `low`, `medium`, `high`, `xhigh`
 and `max`. A checker that greps logs can ask for `low` while a worker doing a refactor asks for
 `high`, whatever the session is set to. Where `effort` is omitted the delegate asks for the level
 the turn that spawned it runs at, so a level you chose with `/effort` reaches your delegates. The key

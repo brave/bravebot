@@ -1,0 +1,23 @@
+[package]
+name = "bravebot-backtrace"
+description = "Crash reports: what a panic leaves on disk, and sending it to Backtrace on a later launch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bravebot-agent = { path = "../agent" }
+bravebot-config = { path = "../config" }
+bravebot-core = { path = "../core" }
+bravebot-net = { path = "../net" }
+bravebot-stamp = { path = "../stamp" }
+rand = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

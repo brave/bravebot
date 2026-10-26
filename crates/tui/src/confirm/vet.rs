@@ -656,8 +656,7 @@ pub(super) fn draw_vouch(
             t!(
                 vouch_rule,
                 rule = bravebot_agent::confirm::shown_name(&request.rule).as_str()
-            )
-            .to_string(),
+            ),
             Style::default().fg(theme::muted()),
         )),
         Line::raw(""),
