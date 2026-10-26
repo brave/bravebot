@@ -715,6 +715,28 @@ pub(super) fn choose_model(
     session: &mut Session,
     config: &mut Config,
 ) {
+    choose_model_with(session, config, |models, current, session| {
+        crate::model_prompt::choose(terminal, models, current, |frame| {
+            render::draw(frame, session);
+        })
+    });
+}
+
+/// [`choose_model`] with what puts the list in front of a person stated: it is given the rows, the
+/// model in force to mark as current and the session to draw behind the list, and returns the row that
+/// was picked, if one was.
+///
+/// Split so the part that decides what is offered and which row is current is reached without a
+/// terminal to read keys from.
+pub(super) fn choose_model_with(
+    session: &mut Session,
+    config: &mut Config,
+    choose: impl FnOnce(
+        Vec<bravebot_aichat::models::Model>,
+        Option<&str>,
+        &Session,
+    ) -> Option<bravebot_aichat::models::Model>,
+) {
     match list_models_for_picker(config, session.model()) {
         Ok(PickerRoster { models, problems }) => {
             // Before the picker draws, so the sentences are in the transcript behind it and stay there
@@ -723,9 +745,7 @@ pub(super) fn choose_model(
                 session.note(problem);
             }
             let current = Some(model_in_force(session.model(), config));
-            let chosen = crate::model_prompt::choose(terminal, models, current, |frame| {
-                render::draw(frame, session);
-            });
+            let chosen = choose(models, current, session);
             if let Some(chosen) = chosen {
                 model_picked(session, config, chosen);
             }

@@ -4836,6 +4836,57 @@ mod tests {
         );
     }
 
+    /// BACKEND-11: the list `/model` opens at rest marks the model in force, as the one opened in the
+    /// middle of a turn does, and picking a row puts that model in force. Reached through the part of
+    /// the command that decides what is offered and which row is current, since the part that reads
+    /// keys needs a terminal. Run with the model set by settings and nothing picked, with a pick, and
+    /// where a row is chosen. The regressions it rejects are the pick alone read as the model in force,
+    /// which marks Brave's `automatic` for a session on the settings model, and a default that
+    /// outranks a pick.
+    #[test]
+    fn the_list_the_model_command_opens_at_rest_marks_the_model_in_force_and_a_row_picked_is_put_in_force()
+     {
+        use models::scripted_account::offer;
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        offer(vec![
+            bravebot_aichat::models::Model::automatic(),
+            listed("chatgpt/gpt-5.5", Some(65_536)),
+        ]);
+        let marked = |session: &mut Session, config: &mut Config| -> Option<String> {
+            let mut current = None;
+            choose_model_with(session, config, |_, marked, _| {
+                current = marked.map(str::to_string);
+                None
+            });
+            current
+        };
+
+        let mut session = Session::new("none");
+        assert_eq!(
+            marked(&mut session, &mut config).as_deref(),
+            Some("chatgpt/gpt-5.5"),
+            "the settings model was not the one marked at rest"
+        );
+
+        session.name_model("opus-arn".to_string());
+        assert_eq!(
+            marked(&mut session, &mut config).as_deref(),
+            Some("opus-arn"),
+            "the default outranked the pick at rest"
+        );
+
+        let mut session = Session::new("none");
+        choose_model_with(&mut session, &mut config, |models, _, _| {
+            models.into_iter().find(|model| model.key == "opus-arn")
+        });
+        assert_eq!(
+            session.model(),
+            Some("opus-arn"),
+            "the row picked was not put in force"
+        );
+    }
+
     /// The row the picker's cursor opens on and the rows it marks as current, for a session as it stands.
     fn picker_opened(session: &mut Session, config: &Config) -> (Option<String>, Vec<String>) {
         open_model_picker(session, config);
