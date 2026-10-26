@@ -18,8 +18,18 @@ methods `bot.list` and `bot.replace`, which the graphical user interface calls w
 Electron gives it as `dataFolder` on each request. The bridge takes the folder on each request
 because starting the bridge with a flag would need the same flag pinned in both programs that start
 it. A write of more than 100 rows through `bot.replace` is refused and writes nothing. The
-interface loads its page after its first read of the rows, so the move from `bravebot-ui.json`
-happens before the interface writes that file.
+interface loads its page after its first read of the rows, waiting at most five seconds, and holds
+every write of `bravebot-ui.json` until a read answers that no rows are still waiting in that file
+(`oldRowsWaiting` in the `bot.list` answer), so the rows in that file are moved or absent before the
+interface writes it. A `bots.json` that does not parse leaves nothing waiting, so preferences are
+still written while the problem is shown.
+
+Slice 1 does not change what the interface does at the ceiling. Its make still cuts the list to 100
+rows, dropping the slug that sorts last, before it calls `bot.replace`, so the refusal at 100 rows
+that the module makes is reached from the interface in slice 3. The rows the bridge returns carry no
+`remembered` or `quiet` field, so slice 1 already stops persisting them. `noteBotMemory`,
+`keepingMemoryMark`, `nudgeDue`, `noteBotNudged` and `QUIET_MAX` in `ui/src/main/bots.ts` run on a
+count of zero until slice 6 removes them.
 
 The order of the remaining work:
 
@@ -100,6 +110,16 @@ The design as a whole is proposed and not accepted. These decisions are accepted
     the list it draws with `localeCompare`, and the terminal draws the rows in the order the module
     returns them, so the two lists can differ in a locale that sorts a pair of letters as one letter.
     Decided 2026-10-22.
+- Bots need a `~/.bravebot` that can be written. When the move of the rows out of `bravebot-ui.json`
+  cannot happen (no state directory is named, a private run, a folder that cannot be made or written,
+  a lock that fails or is held past the wait, a write that fails, or an old file that cannot be
+  used), the read lists no rows and reports the cause. The interface does not list the old rows from
+  `bravebot-ui.json`, since that would be a second reader of the key with its own reading rules, and
+  the interface could not save a change to them. The rows stay in `bravebot-ui.json`, and the interface
+  writes nothing to that file while they wait (`oldRowsWaiting` in the `bot.list` answer), so theme,
+  layout, recents and fork lineage are not saved until the rows are moved or the old file is repaired
+  or removed. That includes a damaged `bravebot-ui.json`, which the interface used to replace with
+  defaults on its next write and now reports with its path. Decided 2026-10-26.
 
 ### Slices
 
@@ -272,6 +292,11 @@ for bots, so each terminal function is in the bots layout.
    migrated and change only the counters in its row, which this slice removes with the fields. Done when a search of `ui/src` finds no `ground(`,
    `groundText`, `seedProjectMemory`, `nudgeDue`, `noteBotNudged` or `keepingMemoryMark`, the GUI's
    turn of a bot is shown unchanged and a legacy bot's first turn is migrated and answered as before.
+   The checks of `ui/scripts/drive-bot-turn.mjs` and `ui/scripts/drive-bot-memory.mjs` that assert the
+   briefing file, the memory seeded in the checkout and the briefing drawn on a reopened session go
+   with the code, since a live turn no longer reaches it. Three checks of `drive-bot-turn.mjs` fail in a live
+   run today, and `drive-bot-memory.mjs` stops at its first check of the briefing file, so its later checks
+   do not run.
 7. **The terminal talks to a bot.**
    - Draw the layout's chat and prompt input panes. A session started as a bot addresses every turn to
      the row's definition ([BOT-10](specs/bots.md#BOT-10)), runs in the home folder, a folder the
@@ -353,3 +378,16 @@ for bots, so each terminal function is in the bots layout.
 
 Three cases are not specified. They are listed under "Known costs" in
 [specs/bots.md](specs/bots.md#known-costs).
+
+Questions slice 1 raised for the owner:
+
+- The order of the list the interface draws. The accepted conclusion of 2026-10-22 says the interface
+  keeps sorting what it draws with `localeCompare`, and slice 1's "Done when" says a hand-edited file
+  not in slug order is listed in file order. Both cannot hold for the interface. The interface does
+  not sort when it draws, so after slice 1 its list is in the order the module returns, which is the
+  byte order of the slug as written, and in a locale that sorts a pair of letters as one letter the
+  list differs from before.
+- Whether a clause that a later slice completes may name tests for the part an earlier slice
+  builds. [BOT-2](specs/bots.md#BOT-2) to [BOT-5](specs/bots.md#BOT-5) do, and neither
+  [specs/README.md](specs/README.md) nor
+  [development/spec-enforced-development.md](development/spec-enforced-development.md) says.

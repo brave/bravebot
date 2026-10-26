@@ -142,6 +142,7 @@ pub struct Listing {
     pub rows: Vec<Row>,
     pub dropped: Vec<Dropped>,
     pub unreadable: Option<Problem>,
+    pub old_rows_waiting: bool,
 }
 
 impl Listing {
@@ -212,7 +213,7 @@ impl fmt::Display for Refused {
             ),
             Self::Locked(path) => write!(
                 out,
-                "another program holds {}, so nothing was saved",
+                "another program holds {} and did not release it in time",
                 path.display()
             ),
             Self::Io(problem) => write!(out, "the bots could not be saved ({problem})"),
@@ -324,7 +325,20 @@ fn is_text(value: &str) -> bool {
 }
 
 fn is_blank(character: char) -> bool {
-    character.is_whitespace() || character == '\u{feff}'
+    matches!(
+        character,
+        '\u{9}'..='\u{d}'
+            | '\u{20}'
+            | '\u{a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+            | '\u{feff}'
+    )
 }
 
 pub fn is_model(value: &str) -> bool {
@@ -524,13 +538,38 @@ fn now() -> f64 {
 
 pub fn list(data_folder: &Path) -> Listing {
     let Some(home) = crate::home::directory() else {
-        return Listing::default();
+        return Listing {
+            old_rows_waiting: old_rows_waiting(None, data_folder),
+            ..Listing::default()
+        };
     };
     list_in(&home, crate::home::writable().is_some(), data_folder, now())
 }
 
 pub fn list_in(home: &Path, may_move: bool, data_folder: &Path, now: f64) -> Listing {
-    if may_move && let Err(refused) = move_old_rows(home, data_folder) {
+    list_waiting(home, may_move, data_folder, now, LOCK_WAIT)
+}
+
+fn list_waiting(
+    home: &Path,
+    may_move: bool,
+    data_folder: &Path,
+    now: f64,
+    wait: Duration,
+) -> Listing {
+    let mut listing = read_after_move(home, may_move, data_folder, now, wait);
+    listing.old_rows_waiting = old_rows_waiting(Some(home), data_folder);
+    listing
+}
+
+fn read_after_move(
+    home: &Path,
+    may_move: bool,
+    data_folder: &Path,
+    now: f64,
+    wait: Duration,
+) -> Listing {
+    if may_move && let Err(refused) = move_with(home, data_folder, wait, || {}) {
         return match refused.problem() {
             Some(problem) => Listing::unreadable(problem),
             None => Listing::default(),
@@ -549,6 +588,7 @@ pub fn list_in(home: &Path, may_move: bool, data_folder: &Path, now: f64) -> Lis
                 rows,
                 dropped,
                 unreadable: None,
+                ..Listing::default()
             }
         }
         Err(reason) => Listing::unreadable(Problem::new(&path, reason)),
@@ -665,6 +705,13 @@ fn old_rows(data_folder: &Path) -> OldRows {
         Some(Value::Array(entries)) => OldRows::Entries(entries.clone()),
         Some(_) => OldRows::Unconvertible(Problem::new(&path, "its `bots` key is not an array")),
     }
+}
+
+fn old_rows_waiting(home: Option<&Path>, data_folder: &Path) -> bool {
+    if home.is_some_and(|home| bots_file(home).exists()) {
+        return false;
+    }
+    !matches!(old_rows(data_folder), OldRows::Nothing)
 }
 
 pub fn move_old_rows(home: &Path, data_folder: &Path) -> Result<Moved, Refused> {
@@ -1283,6 +1330,72 @@ mod tests {
         .expect("the lock was released with the handle");
     }
 
+    #[test]
+    fn a_read_that_cannot_take_the_lock_for_the_move_is_not_reported_as_a_failed_save() {
+        let scratch = Scratch::made("held-read");
+        scratch.write_old(&json!({ "bots": [bot("old")] }).to_string());
+        let held = lock(&scratch.home(), Duration::from_secs(1)).unwrap();
+
+        let refused = move_with(
+            &scratch.home(),
+            &scratch.data(),
+            Duration::from_millis(100),
+            || {},
+        )
+        .unwrap_err();
+        drop(held);
+
+        let problem = refused.problem().expect("the lock file is named");
+        assert_eq!(problem.path, scratch.home().join("bots.json.lock"));
+        assert!(
+            !problem.reason.contains("saved"),
+            "a read was reported as a save: {}",
+            problem.reason
+        );
+    }
+
+    #[test]
+    fn a_name_or_purpose_is_blank_exactly_when_javascript_trim_leaves_nothing() {
+        let scratch = Scratch::made("blank-set");
+        let blank_to_javascript: Vec<char> = [
+            '\u{9}', '\u{a}', '\u{b}', '\u{c}', '\u{d}', '\u{20}', '\u{a0}', '\u{1680}',
+            '\u{2028}', '\u{2029}', '\u{202f}', '\u{205f}', '\u{3000}', '\u{feff}',
+        ]
+        .into_iter()
+        .chain('\u{2000}'..='\u{200a}')
+        .collect();
+        let mut rows: Vec<Value> = Vec::new();
+        for (index, space) in blank_to_javascript.iter().enumerate() {
+            let mut named = bot(&format!("name-{index}"));
+            named["name"] = json!(format!("{space}{space}"));
+            rows.push(named);
+            let mut purposed = bot(&format!("purpose-{index}"));
+            purposed["purpose"] = json!(format!("{space}"));
+            rows.push(purposed);
+        }
+        let mut next_line_name = bot("next-line-name");
+        next_line_name["name"] = json!("\u{85}");
+        let mut next_line_purpose = bot("next-line-purpose");
+        next_line_purpose["purpose"] = json!("\u{85}");
+        rows.push(next_line_name);
+        rows.push(next_line_purpose);
+        scratch.write_bots(&Value::Array(rows));
+
+        let listing = scratch.list();
+
+        assert_eq!(slugs(&listing), ["next-line-name", "next-line-purpose"]);
+        assert_eq!(listing.dropped.len(), blank_to_javascript.len() * 2);
+        assert!(
+            listing
+                .dropped
+                .iter()
+                .all(|each| each.reason == Reason::BlankNameOrPurpose)
+        );
+        assert!(is_model("\u{85}"), "U+0085 is text to JavaScript");
+        assert!(!is_model("\u{a0}"), "U+00A0 is blank to JavaScript");
+        assert!(!is_model("a\u{feff}"), "U+FEFF at the edge is a space");
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_write_that_fails_before_the_rename_leaves_the_file_as_it_was() {
@@ -1492,7 +1605,132 @@ mod tests {
 
         let listing = list_in(&scratch.home(), false, &scratch.data(), 1.0);
 
-        assert_eq!(listing, Listing::default());
+        assert!(listing.rows.is_empty());
+        assert_eq!(listing.unreadable, None);
         assert_eq!(scratch.bots_text(), None);
+    }
+
+    fn waiting(scratch: &Scratch) -> bool {
+        scratch.list().old_rows_waiting
+    }
+
+    #[test]
+    fn nothing_waits_when_a_bots_file_exists_whether_or_not_it_parses() {
+        for (name, bots_file) in [
+            ("parses", json!({"bots": [bot("kept")]}).to_string()),
+            ("corrupt", "{\"bots\": [".to_string()),
+        ] {
+            let scratch = Scratch::made(&format!("waiting-exists-{name}"));
+            scratch.write_old(&json!({"bots": [bot("old")]}).to_string());
+            std::fs::write(scratch.home().join("bots.json"), bots_file).unwrap();
+
+            assert!(!waiting(&scratch), "{name}");
+        }
+        let scratch = Scratch::made("waiting-corrupt-no-old");
+        std::fs::write(scratch.home().join("bots.json"), "not json").unwrap();
+        assert!(!waiting(&scratch), "corrupt with no old file");
+    }
+
+    #[test]
+    fn nothing_waits_when_the_old_file_has_no_rows() {
+        for (name, old) in [
+            ("absent", None),
+            ("no-key", Some("{\"layout\": null}")),
+            ("empty", Some("{\"bots\": []}")),
+        ] {
+            let scratch = Scratch::made(&format!("waiting-none-{name}"));
+            if let Some(old) = old {
+                scratch.write_old(old);
+            }
+
+            assert!(!waiting(&scratch), "{name}");
+        }
+    }
+
+    #[test]
+    fn nothing_waits_once_the_rows_have_moved() {
+        let scratch = Scratch::made("waiting-moved");
+        scratch.write_old(&json!({"bots": [bot("old")]}).to_string());
+
+        let listing = scratch.list();
+
+        assert_eq!(slugs(&listing), ["old"]);
+        assert!(!listing.old_rows_waiting);
+    }
+
+    #[test]
+    fn rows_wait_when_the_lock_is_held_past_the_limit() {
+        let scratch = Scratch::made("waiting-held");
+        scratch.write_old(&json!({"bots": [bot("old")]}).to_string());
+        let held = lock(&scratch.home(), Duration::from_secs(1)).unwrap();
+
+        let listing = list_waiting(
+            &scratch.home(),
+            true,
+            &scratch.data(),
+            1.0,
+            Duration::from_millis(100),
+        );
+        drop(held);
+
+        assert!(listing.unreadable.is_some());
+        assert!(listing.old_rows_waiting);
+    }
+
+    #[test]
+    fn rows_wait_when_the_state_directory_cannot_be_made() {
+        let scratch = Scratch::new("waiting-unwritable");
+        scratch.write_old(&json!({"bots": [bot("old")]}).to_string());
+        std::fs::write(scratch.home(), "a file where the directory belongs").unwrap();
+
+        let listing = scratch.list();
+
+        assert!(listing.unreadable.is_some());
+        assert!(listing.old_rows_waiting);
+    }
+
+    #[test]
+    fn rows_wait_where_nothing_may_be_written() {
+        let scratch = Scratch::made("waiting-private");
+        scratch.write_old(&json!({"bots": [bot("old")]}).to_string());
+
+        let listing = list_in(&scratch.home(), false, &scratch.data(), 1.0);
+
+        assert!(listing.old_rows_waiting);
+        let without = Scratch::made("waiting-private-none");
+        assert!(!list_in(&without.home(), false, &without.data(), 1.0).old_rows_waiting);
+    }
+
+    #[test]
+    fn rows_wait_when_the_old_file_cannot_be_used() {
+        for (name, text) in [
+            ("truncated", Some("{\"bots\": [{")),
+            ("an-object", Some("{\"bots\": {\"a\": 1}}")),
+            ("null", Some("{\"bots\": null}")),
+            ("a-directory", None),
+        ] {
+            let scratch = Scratch::made(&format!("waiting-bad-{name}"));
+            match text {
+                Some(text) => {
+                    scratch.write_old(text);
+                }
+                None => std::fs::create_dir_all(scratch.data().join("bravebot-ui.json")).unwrap(),
+            }
+
+            assert!(waiting(&scratch), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_machine_with_no_state_directory_decides_from_the_old_file_alone() {
+        let scratch = Scratch::new("waiting-no-home");
+        std::fs::create_dir_all(scratch.data()).unwrap();
+        assert!(!old_rows_waiting(None, &scratch.data()));
+        scratch.write_old("{\"bots\": []}");
+        assert!(!old_rows_waiting(None, &scratch.data()));
+        scratch.write_old(&json!({"bots": [bot("old")]}).to_string());
+        assert!(old_rows_waiting(None, &scratch.data()));
+        scratch.write_old("{\"bots\": ");
+        assert!(old_rows_waiting(None, &scratch.data()));
     }
 }

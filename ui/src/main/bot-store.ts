@@ -1,5 +1,7 @@
 import { app } from 'electron'
+import { join } from 'node:path'
 import type { Bot } from '../shared/bots'
+import { allowStateWrites } from './state'
 
 export type BotsBridge = (method: string, params: Record<string, unknown>) => Promise<unknown>
 
@@ -7,6 +9,7 @@ interface Listed {
   bots: Omit<Bot, 'remembered' | 'quiet'>[]
   dropped: { index: number; slug: string | null; reason: string }[]
   unreadable: { path: string; reason: string } | null
+  oldRowsWaiting?: unknown
 }
 
 let ask: BotsBridge | null = null
@@ -44,9 +47,18 @@ function report(listed: Listed): string | null {
     .join('\n')
 }
 
+function waitingProblem(): string {
+  const file = join(app.getPath('userData'), 'bravebot-ui.json')
+  return `The bots saved by an earlier version are still in ${file} and could not be moved, so preferences are not saved until they are.`
+}
+
 async function list(): Promise<Listed> {
   const listed = (await request('bot.list', {})) as Listed
-  unread = report(listed)
+  const waiting = listed.oldRowsWaiting !== false
+  const problems = [report(listed)]
+  if (waiting && !listed.unreadable) problems.push(waitingProblem())
+  unread = problems.filter((each) => each !== null).join('\n') || null
+  if (!waiting) allowStateWrites()
   return listed
 }
 
@@ -64,6 +76,18 @@ export async function readBots(): Promise<Bot[]> {
     unread = message(error)
     return []
   }
+}
+
+export const FIRST_READ_WAIT_MS = 5000
+
+export function firstBotsRead(wait = FIRST_READ_WAIT_MS): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, wait)
+    void readBots().finally(() => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
 }
 
 let queue: Promise<unknown> = Promise.resolve()

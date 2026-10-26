@@ -987,10 +987,11 @@ export function App(): React.JSX.Element {
       if (first) void showSession(first)
       return
     }
+    void readBots({ asked: true })
     if (open?.bot) return
     const first = activeBots(botsRef.current)[0]
     if (first) openBot(first)
-  }, [showSession, openBot])
+  }, [showSession, openBot, readBots])
 
   /**
    * Move a chat nothing has been said in to another folder.

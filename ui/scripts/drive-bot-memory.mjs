@@ -26,11 +26,13 @@
 // be non-zero, which is the thing being avoided. The comparison it turns on is two lines in
 // `src/main/index.ts`; the expensive parts around it are what is driven here.
 //
-// Run it the way `drive-bot-turn.mjs` is run. It costs two turns. Like the other drivers it
-// perturbs `bravebot-ui.json`, and it puts its own keys back.
+// Run it the way `drive-bot-turn.mjs` is run. It costs two turns. It runs against a scratch
+// user-data directory and state directory, and it puts its own keys back. The scratch state
+// directory holds copies of the real `settings.json`, `model` and `leo-premium.json`, so the agent
+// can reach the backend the real one is configured for, and the copies are removed when it ends.
 
 import { checker, launch, COMPOSER_INPUT } from './drive-support.mjs'
-import { appBots, appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { appBots, appState, forgetCheckoutSessions, openBot, scratchCheckout, scratchProfile, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -38,9 +40,9 @@ mkdirSync('/tmp/bravebot-ui', { recursive: true })
 
 const { check, problems } = checker()
 
-const { userData, stateFile } = await locateProfile()
+const { userData, stateFile, remove } = scratchProfile('bravebot-drive-bot-memory', { live: true })
 const { readState, putKey } = appState(stateFile)
-const { readBots, putBots } = appBots()
+const { readBots, putBots } = appBots(userData)
 const hadView = readState().view
 const checkout = scratchCheckout('bravebot-ui-drive-bot-memory')
 
@@ -63,7 +65,7 @@ putKey('view', undefined)
  */
 const LOOKALIKE = '[bravebot-ui] Keeping your memory current.'
 
-const app = await launch()
+const app = await launch(userData)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -100,6 +102,7 @@ if (first === 'unconfigured') {
   putBots(withoutMine())
   putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessions' })
   rmSync(checkout, { recursive: true, force: true })
+  remove()
   process.exit(0)
 }
 check(first === 'done', `the first turn finished (${first})`)
@@ -178,7 +181,7 @@ await app.close()
 
 // --- and how it is drawn when the session is read back ------------------------------------
 
-const back = await launch()
+const back = await launch(userData)
 const page2 = await back.firstWindow()
 await page2.waitForLoadState('domcontentloaded')
 await page2.waitForTimeout(2500)
@@ -225,4 +228,5 @@ rmSync(join(userData, 'bot-homes', MINE), { recursive: true, force: true })
 forgetCheckoutSessions(checkout)
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
+remove()
 process.exit(problems.length ? 1 : 0)

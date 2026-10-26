@@ -240,8 +240,7 @@ export async function saveFormBot(next: Bot, define: DefineRequest | null): Prom
   } else {
     kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
   }
-  await saveBot(kept)
-  return kept
+  return saveBot(kept)
 }
 
 let saving: Promise<unknown> = Promise.resolve()
@@ -323,8 +322,7 @@ export async function saveBotModel(held: Bot, model: string | null, define: Defi
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
     await redefine(held.definition, next, define)
   }
-  await saveBot(next)
-  return next
+  return saveBot(next)
 }
 
 async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {
@@ -337,8 +335,9 @@ async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<
 }
 
 /** Write a bot down, replacing whatever shared its slug, and stamp when that happened. */
-export async function saveBot(next: Bot): Promise<void> {
-  await updateBots((all) => withBot(all, { ...next, updated: Date.now() }))
+export async function saveBot(next: Bot): Promise<Bot> {
+  const written = await updateBots((all) => withBot(all, { ...next, updated: Date.now() }))
+  return written.find((each) => each.slug === next.slug) ?? next
 }
 
 /**

@@ -185,7 +185,7 @@ it.
 `verified-by: bravebot_agent::bots::rows_are_written_in_the_byte_order_of_the_slug`
 `verified-by: bravebot_agent::bots::a_hundred_and_first_row_is_refused_and_every_row_is_kept`
 `verified-by: bravebot_ui_bridge::bots::what_a_read_dropped_and_a_file_it_could_not_use_are_answered_beside_the_rows`
-`verified-by: by-construction (the desktop sorts the list it draws with localeCompare, which a Rust test cannot run, so ui/scripts/bot-rows-bridge.test.mjs writes slugs of digits and hyphens through the real bravebot-rpc and asserts that the file holds them in byte order and that this is the order localeCompare gives in English, that a hand-edited file is listed in file order, a repaired row is listed repaired and a Windows path is accepted, and that a dropped row and a row past the 100th are each reported; ui/scripts/bot-store.test.mjs asserts the report reaches the window as one text naming each entry with its reason, and the path of a file that could not be read; make check-ui runs both)`
+`verified-by: by-construction (localeCompare is JavaScript's and a Rust test cannot run it, so ui/scripts/bot-rows-bridge.test.mjs writes slugs of digits and hyphens through the real bravebot-rpc and asserts that the file holds them in byte order and that this is the order localeCompare gives in English, that a hand-edited file is listed in file order, a repaired row is listed repaired and a Windows path is accepted, and that a dropped row and a row past the 100th are each reported; ui/scripts/bot-store.test.mjs asserts the report reaches the window as one text naming each entry with its reason, and the path of a file that could not be read; make check-ui runs both)`
 
 <a id="BOT-4"></a>
 ### BOT-4: the rows are the file `~/.bravebot/bots.json`, which the terminal and the GUI read and write
@@ -247,8 +247,9 @@ inside it. The data folder follows the operating system and the name of the appl
 
 The function that computes the data folder takes the operating system and the environment as
 arguments, and a test pins its result for each system in the table. The GUI does not use it: the GUI passes
-the path Electron gives it (`app.getPath('userData')`) to the bridge when it starts, so a renamed app or
-a `--user-data-dir` does not make the two differ, and the terminal uses the function. The module makes the home folder with mode 0700 when a bot is made, when a form's save
+the path Electron gives it (`app.getPath('userData')`) to the bridge as `dataFolder` on each request that reads
+or writes the rows, because `launch()` in `crates/ui-bridge/src/arguments.rs` is shared with `bravebot-acp`. A renamed app or
+a `--user-data-dir` therefore does not make the two differ, and the terminal uses the function. The module makes the home folder with mode 0700 when a bot is made, when a form's save
 writes a bot, so an edit makes a home that was removed by hand, and when a conversation is started or
 reopened in it, and reports whether it could be made. The first bot made when the data folder does
 not exist makes the folder with mode 0700. A change of the model, an archive and a restore do not

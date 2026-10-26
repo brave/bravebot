@@ -726,11 +726,16 @@ docs/                       the protocol design, this document, testing and the 
 | `view` | Whether the chat list is grouped by checkout, which headings are shut, and which tab is open |
 | `recents` | The projects opened before, newest first |
 | `forks` | Which session came out of which |
-| `bots` | The bots defined here: name, purpose, avatar seed, home folder, model, each conversation ID with the folder it ran in, and memory bookkeeping |
 | `theme` | Appearance: `system`, `light`, or `dark` |
 
 Additional state lives outside this file:
 
+- `bots.json` in the agent's state directory (`~/.bravebot`, which `BRAVEBOT_HOME` moves): the bots
+  defined here. Each row holds the name, purpose, avatar seed, home folder, model, definition name,
+  each conversation ID with the folder it ran in, and the archive length last seen. The agent reads
+  and writes it, and the main process asks it through the bridge with this app's `userData` folder.
+  The first read moves any bots still held in the `bots` key of `bravebot-ui.json` to this file,
+  and this app does not write `bravebot-ui.json` until a read of the bots has answered.
 - `experience.json`: per-conversation drafts, scroll, pins, archives and bot associations;
   also recent model choices.
 - `bots/<slug>/ground.md` and `memory-history-<folder hash>.json`: cached briefing and memory
@@ -743,20 +748,21 @@ See [file access and retention](file-access-security.md) for retention and permi
 
 One file, but not one judgement: `src/shared/state.ts` decides nothing itself. It delegates each
 key whole to the validator that already owned that shape — `parseLayout`, `parseView`,
-`parseRecents`, `parseForks`, `parseBots`, so a hand-edited grouping flag still cannot cost
+`parseRecents`, `parseForks`, so a hand-edited grouping flag still cannot cost
 somebody their column widths. Every write goes through `src/main/state.ts`, which replaces exactly
 one key and leaves the rest of the file as it found it, and what lands on disk is always the parsed
 state rather than the object a caller passed.
 
-The renderer reaches four of those keys, and only through a channel of its own per shape:
-`layout`, `view`, `theme` and `bots`. `recents` and `forks` are written by the main process alone, from a
+The renderer reaches three of those keys, and only through a channel of its own per shape:
+`layout`, `view` and `theme`. It reaches the bots through their own channels, which end in the
+main process and the agent. `recents` and `forks` are written by the main process alone, from a
 native picker and from what the *agent* answered — the window can read them and has no way to
 write a line into either.
 
 Bot records split user preferences from main-process bookkeeping. The editor supplies
 name, purpose and model; a native picker supplies the project at creation. The project
 cannot change on an existing bot. Main-process code validates the avatar seed, creates
-the slug, and records conversation IDs and memory bookkeeping from agent events.
+the slug, and records conversation IDs and the archive length from agent events.
 Renderer input cannot replace those bookkeeping fields through the bot editor.
 
 This replaces `layout.json`, `view.json`, `recents.json` and `forks.json`. Those are read once, on

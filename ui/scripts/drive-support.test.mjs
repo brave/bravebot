@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COMPOSER_IDLE, COMPOSER_INPUT, SIDEBAR_TAB, checker, launchLive, showSessions } from './drive-support.mjs'
+import * as support from './drive-support.mjs'
 
 // A page that records what it was asked, in order, and answers every wait and click with the
 // outcome the test gives it.
@@ -129,4 +130,9 @@ test('the selector constants name the classes the renderer owns', () => {
   assert.equal(COMPOSER_INPUT, '.composer textarea')
   assert.equal(COMPOSER_IDLE, `${COMPOSER_INPUT}:not([disabled])`)
   assert.equal(SIDEBAR_TAB, '.sidebar-tabs [role="option"]')
+})
+
+test('a launch names the user-data directory it is given, and none otherwise', () => {
+  assert.deepEqual(support.launchArguments('/tmp/scratch/user-data'), ['.', '--user-data-dir=/tmp/scratch/user-data'])
+  assert.deepEqual(support.launchArguments(), ['.'])
 })

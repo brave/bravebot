@@ -1,9 +1,9 @@
 // Setup that the drivers running against the live session list share.
 //
-// Everything launched from here uses the real profile: no `--user-data-dir` is passed, so the app
-// reads and writes the person's own `bravebot-ui.json` and `experience.json`, and the agent it
-// starts uses their `HOME`. `ui/docs/testing.md` lists which drivers do that. A driver that
-// launches through this module is on that list.
+// A launch given no user-data directory uses the real profile: no `--user-data-dir` is passed, so
+// the app reads and writes the person's own `bravebot-ui.json` and `experience.json`, and the agent
+// it starts uses their `HOME`. `ui/docs/testing.md` lists which drivers do that. A driver that
+// launches through this module without a user-data directory is on that list.
 //
 // `playwright-core` is loaded when a launch happens, so the helpers that only take a page can be
 // tested without a browser driver installed.
@@ -24,12 +24,15 @@ export function checker() {
   return { check, problems }
 }
 
+export const launchArguments = (userData) => ['.', ...(userData ? [`--user-data-dir=${userData}`] : [])]
+
 /**
- * Launch the app against the real profile (no `--user-data-dir`), as the development build runs.
+ * Launch the app against `userData`, or against the real profile when none is given, as the
+ * development build runs.
  */
-export const launch = async () => {
+export const launch = async (userData) => {
   const { _electron: electron } = await import('playwright-core')
-  return electron.launch({ args: ['.'], cwd: process.cwd(), timeout: 40000 })
+  return electron.launch({ args: launchArguments(userData), cwd: process.cwd(), timeout: 40000 })
 }
 
 // The left column has two tabs and remembers which was last open, so a run after somebody left it

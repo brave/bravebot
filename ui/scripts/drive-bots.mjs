@@ -23,11 +23,11 @@
 // What is not here: sending a bot a turn. That needs credentials and a model, which the drivers
 // do not have — `smoke-turn.sh` is where a real turn is driven.
 //
-// Like the other drivers this perturbs `bravebot-ui.json`, and it puts its own key back: the bots
+// This driver runs against a scratch user-data directory and state directory, and it puts its own key back: the bots
 // list is this driver's to write and the rest of that file is somebody's arrangement of the window.
 
 import { checker, launch, SIDEBAR_TAB } from './drive-support.mjs'
-import { appBots, appState, locateProfile } from './drive-profile.mjs'
+import { appBots, appState, scratchProfile } from './drive-profile.mjs'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -48,9 +48,9 @@ const { check, problems } = checker()
 // Electron's to decide and differs by platform. A launch of its own, because this driver's key has
 // to be cleared before the first launch that is measured — a bot left behind by an earlier run
 // would be a row these assertions did not make.
-const { userData, stateFile } = await locateProfile()
+const { userData, stateFile, remove } = scratchProfile('bravebot-drive-bots')
 const { readState, putKey } = appState(stateFile)
-const { readBots, putBots } = appBots()
+const { readBots, putBots } = appBots(userData)
 
 // What was there before this ran, so it can be there after. This driver's two keys only.
 //
@@ -106,7 +106,7 @@ const archiveOpen = async (page, name) => {
   await page.waitForTimeout(600)
 }
 
-const app = await launch()
+const app = await launch(userData)
 const page = await app.firstWindow()
 await page.waitForLoadState('domcontentloaded')
 page.on('pageerror', (error) => console.log('PAGE ERROR:', error.message))
@@ -214,7 +214,7 @@ check((await faceOf(renamed)) === first, 'and keeps the face it had — the poin
 
 await app.close()
 
-const second_app = await launch()
+const second_app = await launch(userData)
 const back = await second_app.firstWindow()
 await back.waitForLoadState('domcontentloaded')
 await back.waitForTimeout(2500)
@@ -401,4 +401,5 @@ putKey('view', { ...(hadView ?? { grouped: false, collapsed: [] }), tab: 'sessio
 for (const home of homes) rmSync(home, { recursive: true, force: true })
 
 console.log(problems.length ? `\nRESULT: ${problems.length} problem(s)` : '\nRESULT: ok')
+remove()
 process.exit(problems.length ? 1 : 0)

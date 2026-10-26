@@ -512,3 +512,39 @@ fn a_delegate_does_not_open_a_wallet_of_its_own() {
         );
     });
 }
+
+#[test]
+fn a_machine_that_names_no_state_directory_lists_no_bots_and_refuses_to_write_any() {
+    let data_folder = std::path::Path::new("/gui");
+
+    let refused = with_no_home(|| bravebot_agent::bots::replace(data_folder, &[]));
+    let listing = with_no_home(|| bravebot_agent::bots::list(data_folder));
+
+    assert!(
+        matches!(refused, Err(bravebot_agent::bots::Refused::NoFolder)),
+        "{refused:?}"
+    );
+    assert_eq!(listing, bravebot_agent::bots::Listing::default());
+}
+
+#[test]
+fn a_machine_that_names_no_state_directory_says_whether_old_rows_are_waiting() {
+    let data_folder = std::env::temp_dir().join("bravebot-agent-home-no-state-old-rows");
+    let _ = std::fs::remove_dir_all(&data_folder);
+    std::fs::create_dir_all(&data_folder).expect("a data folder");
+    let old_file = data_folder.join("bravebot-ui.json");
+    let waiting = || with_no_home(|| bravebot_agent::bots::list(&data_folder).old_rows_waiting);
+
+    assert!(!waiting(), "no old file");
+    std::fs::write(&old_file, r#"{"bots": []}"#).expect("an old file");
+    assert!(!waiting(), "an empty array");
+    std::fs::write(&old_file, r#"{"bots": [{"slug": "old"}]}"#).expect("an old file");
+    assert!(
+        waiting(),
+        "rows that cannot be moved without a state directory"
+    );
+    std::fs::write(&old_file, r#"{"bots": ["#).expect("an old file");
+    assert!(waiting(), "an old file that does not parse");
+
+    let _ = std::fs::remove_dir_all(&data_folder);
+}

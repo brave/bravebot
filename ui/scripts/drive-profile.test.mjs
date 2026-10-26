@@ -5,10 +5,12 @@
 // pinned without launching Electron.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { appState, forgetCheckoutSessions, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import { dirname, join } from 'node:path'
+import { appBots, appState, forgetCheckoutSessions, openBot, scratchCheckout, settle } from './drive-profile.mjs'
+import * as profiles from './drive-profile.mjs'
 
 const temp = () => mkdtempSync(join(tmpdir(), 'drive-profile-test-'))
 
@@ -184,4 +186,313 @@ test('openBot records a failed check when the bot is not in the list exactly onc
   const checks = []
   await openBot(app, page, { name: 'X', row: /^X$/, purpose: 'p', checkout: '/c', check: (ok, what) => checks.push([ok, what]) })
   assert.deepEqual(checks, [[false, 'the bot is in the list']])
+})
+
+function withBravebotHome(value, body) {
+  const before = process.env.BRAVEBOT_HOME
+  if (value === undefined) delete process.env.BRAVEBOT_HOME
+  else process.env.BRAVEBOT_HOME = value
+  try { return body() } finally {
+    if (before === undefined) delete process.env.BRAVEBOT_HOME
+    else process.env.BRAVEBOT_HOME = before
+  }
+}
+
+test('the bots helper refuses to act on the real state directory', () => {
+  withBravebotHome(undefined, () => assert.throws(() => appBots(temp()), /BRAVEBOT_HOME/))
+})
+
+test('readBots is none for a missing file and refuses a file that exists and does not parse', () => {
+  const dir = temp()
+  withBravebotHome(dir, () => {
+    const { readBots } = appBots(temp())
+    assert.deepEqual(readBots(), [])
+    writeFileSync(join(dir, 'bots.json'), '{"bots": [')
+    assert.throws(() => readBots(), /bots\.json/)
+  })
+})
+
+test('putBots writes through a file renamed into place, so a reader never sees part of a write', () => {
+  const dir = temp()
+  withBravebotHome(dir, () => {
+    const file = join(dir, 'bots.json')
+    writeFileSync(file, '{"bots": [{"slug": "theirs"}]}\n')
+    linkSync(file, join(dir, 'held-open'))
+    const { readBots, putBots } = appBots(temp())
+    putBots([{ slug: 'mine' }])
+    assert.deepEqual(readBots(), [{ slug: 'mine' }])
+    assert.equal(readFileSync(join(dir, 'held-open'), 'utf8'), '{"bots": [{"slug": "theirs"}]}\n', 'the old file was replaced and not rewritten in place')
+    assert.deepEqual(readdirSync(dir).sort(), ['bots.json', 'held-open'], 'no temporary file is left')
+  })
+})
+
+test('the bots helper needs the user-data directory the driver launches with', () => {
+  withBravebotHome(temp(), () => assert.throws(() => appBots(), /user-data/))
+})
+
+test('the bots helper refuses a user-data directory whose bravebot-ui.json holds bots the agent has not moved', () => {
+  const userData = temp()
+  writeFileSync(join(userData, 'bravebot-ui.json'), JSON.stringify({ bots: [{ slug: 'theirs' }] }))
+  withBravebotHome(temp(), () => assert.throws(() => appBots(userData), /bravebot-ui\.json/))
+})
+
+test('the bots helper accepts a user-data directory with nothing waiting to be moved', () => {
+  const state = temp()
+  const moved = temp()
+  const empty = temp()
+  const keyless = temp()
+  const unparseable = temp()
+  writeFileSync(join(state, 'bots.json'), '{"bots": []}\n')
+  writeFileSync(join(moved, 'bravebot-ui.json'), JSON.stringify({ bots: [{ slug: 'moved' }] }))
+  writeFileSync(join(empty, 'bravebot-ui.json'), JSON.stringify({ bots: [] }))
+  writeFileSync(join(keyless, 'bravebot-ui.json'), JSON.stringify({ theme: 'dark' }))
+  writeFileSync(join(unparseable, 'bravebot-ui.json'), '{"bots": [')
+  withBravebotHome(state, () => assert.doesNotThrow(() => appBots(moved), 'bots.json exists, so the old key has been moved'))
+  for (const userData of [empty, keyless, unparseable, temp()]) {
+    withBravebotHome(temp(), () => assert.doesNotThrow(() => appBots(userData)))
+  }
+})
+
+test('a scratch profile is a user-data directory and a state directory of its own, and removing it removes both', () => {
+  withBravebotHome(undefined, () => {
+    const profile = profiles.scratchProfile('drive-profile-test')
+    try {
+      assert.ok(profile.userData.startsWith(tmpdir()), 'under the temporary directory, never the real profile')
+      assert.equal(profile.stateFile, join(profile.userData, 'bravebot-ui.json'))
+      assert.ok(existsSync(profile.userData))
+      const state = process.env.BRAVEBOT_HOME
+      assert.ok(state && state.startsWith(tmpdir()) && existsSync(state), 'the app and its agent are told to keep their state there')
+      assert.notEqual(join(state, '..'), tmpdir(), 'inside a directory of its own')
+      assert.doesNotThrow(() => appBots(profile.userData), 'the bots helper accepts it')
+      profile.remove()
+      assert.equal(existsSync(profile.userData), false)
+      assert.equal(existsSync(state), false)
+    } finally {
+      profile.remove()
+    }
+  })
+})
+
+test('two scratch profiles never share a directory', () => {
+  withBravebotHome(undefined, () => {
+    const first = profiles.scratchProfile('drive-profile-test')
+    const second = profiles.scratchProfile('drive-profile-test')
+    try {
+      assert.notEqual(first.userData, second.userData)
+    } finally {
+      first.remove()
+      second.remove()
+    }
+  })
+})
+
+function realState(files) {
+  const dir = temp()
+  for (const [name, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, name)), { recursive: true })
+    writeFileSync(join(dir, name), text)
+  }
+  return dir
+}
+
+const modeOf = (path) => statSync(path).mode & 0o777
+const unix = process.platform === 'win32' ? { skip: 'file modes are a Unix notion' } : {}
+
+test('a live profile copies the settings, the recorded model and the subscription, and nothing else the real directory holds', () => {
+  const real = realState({
+    'settings.json': '{"env": {"A": "1"}}',
+    model: 'a-model',
+    'leo-premium.json': '{"token": "t"}',
+    history: 'typed words',
+    theme: 'dark',
+    'bots.json': '{"bots": []}',
+    'AGENTS.md': 'standing instructions',
+    'sessions/one/record.json': '{}',
+    'agents/mine.md': 'a definition',
+    'untrusted/memory.json': '{}',
+    'leo-premium.lock': '',
+  })
+  withBravebotHome(undefined, () => {
+    const profile = profiles.scratchProfile('drive-profile-test', { live: true, realState: real })
+    try {
+      assert.deepEqual(readdirSync(process.env.BRAVEBOT_HOME).sort(), ['leo-premium.json', 'model', 'settings.json'])
+      assert.deepEqual(profile.seeded.sort(), ['leo-premium.json', 'model', 'settings.json'])
+    } finally {
+      profile.remove()
+    }
+  })
+})
+
+test('the copies are byte for byte the originals and readable by their owner alone', unix, () => {
+  const real = realState({ 'settings.json': '{"env": {"A": "1"}}', model: 'a-model', 'leo-premium.json': '{"token": "t"}' })
+  for (const name of ['settings.json', 'model']) chmodSync(join(real, name), 0o644)
+  withBravebotHome(undefined, () => {
+    const profile = profiles.scratchProfile('drive-profile-test', { live: true, realState: real })
+    try {
+      for (const name of ['settings.json', 'model', 'leo-premium.json']) {
+        const copy = join(process.env.BRAVEBOT_HOME, name)
+        assert.deepEqual(readFileSync(copy), readFileSync(join(real, name)), name)
+        assert.equal(modeOf(copy), 0o600, name)
+      }
+    } finally {
+      profile.remove()
+    }
+  })
+})
+
+test('seeding never changes the real files or their modes', unix, () => {
+  const real = realState({ 'settings.json': '{"env": {"A": "1"}}', model: 'a-model', 'leo-premium.json': '{"token": "t"}', history: 'h' })
+  chmodSync(join(real, 'settings.json'), 0o644)
+  const names = ['settings.json', 'model', 'leo-premium.json', 'history']
+  const before = names.map((name) => [readFileSync(join(real, name)), modeOf(join(real, name)), statSync(join(real, name)).mtimeMs])
+  withBravebotHome(undefined, () => {
+    const profile = profiles.scratchProfile('drive-profile-test', { live: true, realState: real })
+    profile.remove()
+  })
+  const after = names.map((name) => [readFileSync(join(real, name)), modeOf(join(real, name)), statSync(join(real, name)).mtimeMs])
+  assert.deepEqual(after, before)
+  assert.deepEqual(readdirSync(real).sort(), ['history', 'leo-premium.json', 'model', 'settings.json'])
+})
+
+test('a file the real directory does not have is skipped, and so is a real directory that is not there', () => {
+  withBravebotHome(undefined, () => {
+    const some = profiles.scratchProfile('drive-profile-test', { live: true, realState: realState({ 'settings.json': '{}' }) })
+    try {
+      assert.deepEqual(readdirSync(process.env.BRAVEBOT_HOME), ['settings.json'])
+      assert.deepEqual(some.seeded, ['settings.json'])
+    } finally {
+      some.remove()
+    }
+    const none = profiles.scratchProfile('drive-profile-test', { live: true, realState: join(temp(), 'absent') })
+    try {
+      assert.deepEqual(readdirSync(process.env.BRAVEBOT_HOME), [])
+      assert.deepEqual(none.seeded, [])
+    } finally {
+      none.remove()
+    }
+  })
+})
+
+test('a file that is a link to another file is copied as that file, not as a link', unix, () => {
+  const real = realState({ 'elsewhere.json': '{"env": {"A": "1"}}' })
+  symlinkSync(join(real, 'elsewhere.json'), join(real, 'settings.json'))
+  withBravebotHome(undefined, () => {
+    const profile = profiles.scratchProfile('drive-profile-test', { live: true, realState: real })
+    try {
+      const copy = join(process.env.BRAVEBOT_HOME, 'settings.json')
+      assert.equal(readFileSync(copy, 'utf8'), '{"env": {"A": "1"}}')
+      assert.equal(statSync(copy).isFile(), true)
+      assert.equal(readdirSync(process.env.BRAVEBOT_HOME).length, 1)
+    } finally {
+      profile.remove()
+    }
+  })
+})
+
+test('a profile that is not live copies nothing, whatever the real directory holds', () => {
+  const real = realState({ 'settings.json': '{}', model: 'a-model', 'leo-premium.json': '{}' })
+  withBravebotHome(undefined, () => {
+    for (const options of [undefined, { realState: real }, { live: false, realState: real }]) {
+      const profile = profiles.scratchProfile('drive-profile-test', options)
+      try {
+        assert.deepEqual(readdirSync(process.env.BRAVEBOT_HOME), [])
+        assert.deepEqual(profile.seeded, [])
+      } finally {
+        profile.remove()
+      }
+    }
+  })
+})
+
+test('removing a live profile removes its copies with it', () => {
+  const real = realState({ 'settings.json': '{}', model: 'a-model', 'leo-premium.json': '{}' })
+  withBravebotHome(undefined, () => {
+    const profile = profiles.scratchProfile('drive-profile-test', { live: true, realState: real })
+    const root = dirname(profile.userData)
+    assert.equal(existsSync(join(process.env.BRAVEBOT_HOME, 'leo-premium.json')), true)
+    profile.remove()
+    assert.equal(existsSync(root), false)
+    assert.doesNotThrow(() => profile.remove(), 'removing twice is not an error')
+  })
+})
+
+test('the real state directory is the one the agent would use', () => {
+  const absolute = join(tmpdir(), 'named-state')
+  assert.equal(profiles.realStateDirectory({ BRAVEBOT_HOME: absolute, HOME: '/home/someone' }), absolute)
+  assert.equal(profiles.realStateDirectory({ HOME: '/home/someone' }), join('/home/someone', '.bravebot'))
+  for (const passedOver of ['', 'relative/dir']) {
+    assert.equal(profiles.realStateDirectory({ BRAVEBOT_HOME: passedOver, HOME: '/home/someone' }), join('/home/someone', '.bravebot'), JSON.stringify(passedOver))
+  }
+  assert.equal(profiles.realStateDirectory({}), null)
+  assert.equal(profiles.realStateDirectory({ HOME: '' }), null)
+})
+
+/** A program that makes a live scratch profile, says where, and then ends the way `ending` says. */
+function profileInAnotherProcess(real, ending) {
+  const scripts = temp()
+  const script = join(scripts, 'profile.mjs')
+  const module = new URL('./drive-profile.mjs', import.meta.url).href
+  writeFileSync(
+    script,
+    [
+      `import { scratchProfile } from ${JSON.stringify(module)}`,
+      `const profile = scratchProfile('drive-profile-child-test', { live: true, realState: ${JSON.stringify(real)} })`,
+      'console.log(profile.userData)',
+      ending,
+    ].join('\n'),
+  )
+  const child = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'], env: { PATH: process.env.PATH } })
+  let said = ''
+  const where = new Promise((resolve) => {
+    child.stdout.on('data', (chunk) => {
+      said += chunk
+      if (said.includes('\n')) resolve(dirname(said.split('\n')[0]))
+    })
+  })
+  const ended = new Promise((resolve) => child.on('close', (code, signal) => resolve({ code, signal })))
+  return { child, where, ended }
+}
+
+const bounded = { timeout: 20_000 }
+
+async function withChild(real, ending, body) {
+  const run = profileInAnotherProcess(real, ending)
+  try {
+    await body(run)
+  } finally {
+    if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill('SIGKILL')
+  }
+}
+
+test('a live profile is removed when the program ends without removing it', bounded, async () => {
+  const real = realState({ 'leo-premium.json': '{"token": "t"}' })
+  await withChild(real, '', async (run) => {
+    const root = await run.where
+    await run.ended
+    assert.equal(existsSync(root), false)
+  })
+})
+
+test('a live profile is removed when the program ends on an uncaught error', bounded, async () => {
+  const real = realState({ 'leo-premium.json': '{"token": "t"}' })
+  await withChild(real, "throw new Error('a driver failed')", async (run) => {
+    const root = await run.where
+    const { code } = await run.ended
+    assert.notEqual(code, 0)
+    assert.equal(existsSync(root), false)
+  })
+})
+
+test('a live profile is removed when the program is stopped by a signal', { ...unix, ...bounded }, async () => {
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    const real = realState({ 'leo-premium.json': '{"token": "t"}' })
+    await withChild(real, 'setInterval(() => {}, 1000)', async (run) => {
+      const root = await run.where
+      assert.equal(existsSync(join(root, 'state', 'leo-premium.json')), true, `${signal}: copied before the signal`)
+      run.child.kill(signal)
+      const { code, signal: ended } = await run.ended
+      assert.ok(code !== 0 || ended !== null, `${signal}: the program still stops`)
+      assert.equal(existsSync(root), false, signal)
+    })
+  }
 })

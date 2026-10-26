@@ -658,3 +658,17 @@ fn a_checkout_is_not_made_under_the_state_directory() {
         "a private session made a checkout under the state directory"
     );
 }
+
+#[test]
+fn a_private_session_refuses_to_write_the_bots_and_says_why() {
+    let scratch = Scratch::new("bots");
+
+    let refused = bravebot_agent::bots::replace(&scratch.home, &[]).expect_err("refused");
+
+    assert!(
+        matches!(refused, bravebot_agent::bots::Refused::Incognito),
+        "{refused}"
+    );
+    assert!(refused.to_string().contains("incognito"), "{refused}");
+    assert!(!scratch.home.join("bots.json").exists());
+}

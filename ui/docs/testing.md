@@ -216,27 +216,50 @@ running it, and do not run one you have not read on a machine whose bots or sess
 about. These launch without `--user-data-dir`. All but `drive`, `drive-packaged` and `drive-smoke`
 launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use the real profile:
 
-`drive`, `drive-ask`, `drive-bot-memory`, `drive-bot-turn`, `drive-bots`, `drive-columns`,
-`drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
-`drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`, `drive-tree` and `drive-turn`.
+`drive`, `drive-ask`, `drive-columns`, `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`,
+`drive-packaged`, `drive-panels`, `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`,
+`drive-tree` and `drive-turn`.
 
 `drive-support.mjs` also exports the selectors the drivers share for the composer's text box
 (`COMPOSER_INPUT`, `COMPOSER_IDLE`) and the left column's tabs (`SIDEBAR_TAB`), so a markup
 change to either is made there and in the test that pins them to the renderer.
 
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
-real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), which spends
-credits from whatever backend is configured. `drive-columns`, `drive-panels`, `drive-tree` and
+real profile (and so does `drive-turn`), which spends credits from whatever backend is configured.
+`drive-bot-turn` and `drive-bot-memory` send live model turns as well, from a scratch profile. `drive-columns`, `drive-panels`, `drive-tree` and
 `drive-theme` put back the key they change; do not assume any of the others do.
 
-`drive-bots`, `drive-bot-turn`, `drive-bot-memory` and `drive-theme` write `bravebot-ui.json` through
-`appState` in `scripts/drive-profile.mjs`, the one place that code is written; it changes one key
-at a time, and a driver replaces only its own rows inside a shared key such as `bots`.
+`drive-theme` writes the real `bravebot-ui.json` through `appState` in `scripts/drive-profile.mjs`,
+the one place that code is written; it changes one key at a time.
+
+`drive-bots`, `drive-bot-turn` and `drive-bot-memory` run against `scratchProfile` in the same
+module: a temporary user-data directory, which they pass to `launch`, and a temporary state
+directory, which they set as `BRAVEBOT_HOME` for the app and the agent it starts. None of them reads
+or writes your `bravebot-ui.json`, your bots file or your sessions. They write the scratch
+`bravebot-ui.json` through `appState` and the scratch bots file through `appBots(userData)`, and a
+driver replaces only its own rows in it. `appBots` throws unless `BRAVEBOT_HOME` is set, throws for
+a user-data directory whose `bravebot-ui.json` still holds bots with no bots file in the state
+directory (a launch would move them into that directory and drop them from the file they came
+from), throws on a file that does not parse, and writes through a temporary file renamed into
+place. The refusal stops a driver that is pointed at a real user-data directory.
+
+A scratch state directory starts empty, so the agent in it has no `settings.json`, recorded model or
+subscription. `drive-bot-turn` and `drive-bot-memory` send live turns and ask for a live profile:
+`scratchProfile(name, { live: true })` copies `settings.json`, `model` and `leo-premium.json` from
+your real state directory (the `BRAVEBOT_HOME` the driver was started with, otherwise
+`~/.bravebot`) into the scratch one, skips any that does not exist, writes each copy readable by you
+alone and opens none of your files for writing. Nothing else in that directory is copied. These
+drivers need the backend they call to be configured in those files or in environment variables, and
+`drive-bot-memory` skips when it finds none. The copies are removed with the scratch directory when
+the driver ends, including on an uncaught error, SIGINT, SIGTERM or SIGHUP. A SIGKILL leaves them in
+the temporary directory, so remove a directory named `bravebot-drive-bot-turn-*` or
+`bravebot-drive-bot-memory-*` after killing a driver that way. `drive-bots` spends no tokens and
+copies nothing.
 
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
-`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,
-`drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
+`drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-memory`,
+`drive-bot-turn`, `drive-bots`, `drive-connectors`, `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
 `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,

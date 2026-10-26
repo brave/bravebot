@@ -120,6 +120,7 @@ fn every_error_code_has_a_distinct_wire_name() {
         ErrorCode::TurnInFlight,
         ErrorCode::NotADirectory,
         ErrorCode::NoHome,
+        ErrorCode::StateUnusable,
         ErrorCode::Config,
         ErrorCode::Internal,
     ];

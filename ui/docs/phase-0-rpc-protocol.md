@@ -941,6 +941,7 @@ version; `home` and `defaultModel` may be null. Sent as the
 | `not_a_directory` | the path given to `session.new` is not a directory |
 | `not_allowed` | the local host does not offer this method, parameter or session to this client ([local host](#local-host)) |
 | `no_home` | `~/.bravebot` could not be located or created |
+| `state_unusable` | a file in `~/.bravebot` exists and cannot be used, or another program holds its lock; `message` names the file |
 | `config` | `Config::from_env` failed; `message` carries the detail |
 | `internal` | a bug; `message` is for a report, not for a user |
 

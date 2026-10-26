@@ -163,6 +163,12 @@ export class Bridge {
     return report
   }
 
+  /** Add a line of this app's own to the diagnostics a bug report carries. */
+  note(line: string): void {
+    this.diagnostics.push(`${line}\n`)
+    if (this.diagnostics.length > 200) this.diagnostics.shift()
+  }
+
   /** The agent's own diagnostics, for a bug report. */
   stderr(): string {
     return this.diagnostics.join('')

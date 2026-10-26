@@ -19,7 +19,8 @@ import { parseContextRef, parseWindowState } from '../shared/commands'
 import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
 import { putLayout, putTheme, putView, readState } from './state'
-import { botsProblem, noteBotsFailure, readBots, useBotsBridge } from './bot-store'
+import { botsProblem, firstBotsRead, noteBotsFailure, useBotsBridge } from './bot-store'
+import { eventQueue } from './event-queue'
 import { isProjectPath } from '../shared/recents'
 import { forgetFork, forks, noteFork } from './forks'
 import {
@@ -322,9 +323,8 @@ async function consolidate(
   }
 }
 
-async function deliver(message: BridgeEvent): Promise<void> {
-  // What this app has to say about the event, held until the event itself has been sent. See
-  // the note where it is called.
+async function record(message: BridgeEvent): Promise<(() => void) | void> {
+  // What this app has to say about the event, held until the event itself has been sent.
   let after: (() => void) | null = null
   // Two things a bot needs to remember are only ever said here, and only by the agent: the
   // durable id of the session behind it (which becomes real on the turn that first writes a
@@ -384,15 +384,14 @@ async function deliver(message: BridgeEvent): Promise<void> {
     }
   }
 
-  // The event first, and this app's own announcement after it. Both arrive as messages to the
-  // same window in the order they are sent, and the wrong order here is visible: a consolidation
-  // announced before the `turn.done` that provoked it draws its line above the reply it comes
-  // after, which reads as though the app interrupted rather than followed.
-  tell('bravebot:event', message)
-  after?.()
+  return after ?? undefined
 }
 
-let delivering: Promise<unknown> = Promise.resolve()
+const deliver = eventQueue({
+  prepare: record,
+  tell: (message) => tell('bravebot:event', message),
+  report: (error) => bridge?.note(`delivering an event to the window failed: ${error instanceof Error ? error.message : String(error)}`),
+})
 
 const recorded = (work: Promise<unknown>): Promise<unknown> => work.catch(noteBotsFailure)
 
@@ -437,9 +436,7 @@ function createWindow(): void {
   bridge = new Bridge((message) => {
     if (message.session && message.event === 'turn.started') runningHandles.add(message.session)
     if (message.session && (message.event === 'turn.done' || message.event === 'turn.error')) runningHandles.delete(message.session)
-    // One at a time, in the order they arrived: a turn's end waits for its row to be written, and an
-    // event that arrived after it must not be drawn before it.
-    delivering = delivering.then(() => deliver(message)).catch(() => undefined)
+    deliver(message)
   }, selectedSettings)
   useBotsBridge((method, params) => (bridge ? bridge.request(method, params) : Promise.reject(new Error('The agent is not running, so the bots cannot be reached.'))))
 
@@ -452,9 +449,10 @@ function createWindow(): void {
   window.on('closed', () => { if (watchClock) clearInterval(watchClock); watchClock = null })
 
   // The first read of the bots moves any held in `bravebot-ui.json` to the bots file, and this
-  // app's next write of that file drops them from it. The page is loaded after that read, so none
-  // of the writes it triggers can come first.
-  void readBots().then(() => {
+  // app's next write of that file drops them from it. The page is loaded after that read, or after
+  // `FIRST_READ_WAIT_MS` when the agent does not answer, and `state.ts` holds its writes until a
+  // read has answered.
+  void firstBotsRead().then(() => {
     if (process.env.ELECTRON_RENDERER_URL) void window?.loadURL(process.env.ELECTRON_RENDERER_URL)
     else void window?.loadFile(join(__dirname, '../renderer/index.html'))
   })

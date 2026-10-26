@@ -46,12 +46,30 @@ export const botHome = (slug: string): string => join(app.getPath('userData'), '
  */
 export function readState(): StoredState {
   try {
-    return parseState(JSON.parse(readFileSync(file(), 'utf8')))
+    return parseState({ ...JSON.parse(readFileSync(file(), 'utf8')), ...held })
   } catch {
     // No file here yet. There may be four older ones, though, and somebody's columns are not
     // worth losing to a rename.
-    return inherited()
+    return parseState({ ...inherited(), ...held })
   }
+}
+
+// Preferences changed while writes are held, which win over the file until they are written.
+let held: Partial<StoredState> | null = {}
+
+/**
+ * Let the file be written, and write what was changed while it could not be.
+ *
+ * Called when a read of the bots has answered that no rows are waiting in this file. Until then
+ * the file may hold the only copy of bots the agent has not moved to its own file, and every write
+ * here rebuilds the file from the keys this app knows, which no longer include them. Once open it
+ * stays open: the move happens at most once, so a later failed read has nothing left to protect.
+ */
+export function allowStateWrites(): void {
+  if (held === null) return
+  const changes = held
+  held = null
+  if (Object.keys(changes).length > 0) update(changes)
 }
 
 /**
@@ -90,6 +108,10 @@ function inherited(): StoredState {
  * judgement each of the files this replaces made about itself.
  */
 function update(change: Partial<StoredState>): void {
+  if (held !== null) {
+    held = { ...held, ...change }
+    return
+  }
   const next = parseState({ ...readState(), ...change })
   try {
     writeFileSync(file(), `${JSON.stringify(next, null, 2)}\n`, 'utf8')
