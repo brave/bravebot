@@ -2932,6 +2932,8 @@ panel-goal-paused = paused
 panel-context = Context
 panel-language-servers = Language servers
 panel-mcp-servers = MCP servers
+# What a click on a language server row of the info panel says. The names are the programs the session started.
+panel-language-servers-started = Language servers started this session: { $programs }.
 panel-plan = Plan
 panel-links = Links
 # The rows of the info panel's Links section, each followed by the link.

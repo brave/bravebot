@@ -13,7 +13,7 @@ Dragging across the screen to copy text. The mouse is captured so the wheel can 
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
 drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort,
 context, MCP server and Files rows of the info panel, the permission mode under the box, the panel's hide row, the rows of
-the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list, the close
+the language server rows of the info panel, the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list, the close
 control and the edit bar in the files state of the info panel, and the wheel over that state, is
 built. Clicking other things on the screen, a context menu, edge
 scrolling and copying a selection longer than the screen are proposed in
@@ -212,7 +212,7 @@ In the info panel, a left click that sweeps nothing on the row of a started MCP 
 servers, as a bare `/mcp` does. As for [MOUSE-12](#MOUSE-12), the press and the release are on one
 cell and the press is a single click, so a drag, a double click and a triple click are selections,
 and a click over the scroller or a history search asks for nothing. The heading, the rows around
-the servers and a language server's row are not targets, nor is a row cut for want of room. The
+the servers are not targets, nor is a row cut for want of room. The
 command stays the way to do it without a mouse, and the listing is the session's own, with nothing
 a tool returned in it ([PANEL-11](info-panel.md#PANEL-11)).
 
@@ -379,3 +379,19 @@ handle, no other row is a target for this, and the files state has none
 `verified-by: bravebot_tui::app::a_click_on_the_panels_hide_row_hides_the_panel`
 `verified-by: bravebot_tui::app::a_drag_over_the_hide_row_or_a_click_in_the_scroller_leaves_the_panel_open`
 `verified-by: bravebot_tui::panel::only_the_hide_row_is_a_hide_target`
+
+<a id="MOUSE-22"></a>
+### MOUSE-22: a click on a panel's language server row names the servers started
+
+In the info panel, a left click that sweeps nothing on the row of a started language server adds a
+note naming the programs of the language servers the session started, as the rows list them
+([PANEL-13](info-panel.md#PANEL-13)). As for [MOUSE-12](#MOUSE-12), the press and the release are on
+one cell and the press is a single click, so a drag, a double click and a triple click are
+selections, and a click over the scroller or a history search says nothing. The heading and the rows
+around the servers are not targets. The note names only those programs, with nothing a language
+server returned in it ([PANEL-11](info-panel.md#PANEL-11)). The panel stays the way to see them
+without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_language_server_row_names_the_servers`
+`verified-by: bravebot_tui::app::a_drag_over_a_language_server_row_or_a_click_in_the_scroller_says_nothing`
+`verified-by: bravebot_tui::panel::only_a_started_language_servers_rows_are_click_targets`

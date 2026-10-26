@@ -3642,6 +3642,8 @@ panel-goal-paused = suspendu
 panel-context = Contexte
 panel-language-servers = Serveurs de langage
 panel-mcp-servers = Serveurs MCP
+# Ce que dit un clic sur une ligne de serveur de langage du panneau. Les noms sont les programmes démarrés par la session.
+panel-language-servers-started = Serveurs de langage démarrés dans cette session : { $programs }.
 panel-plan = Plan
 panel-links = Liens
 # Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.

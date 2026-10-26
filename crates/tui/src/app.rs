@@ -9425,6 +9425,48 @@ mod tests {
         assert_ne!(click(&mut session, row, column), Action::Mcp(String::new()));
     }
 
+    /// MOUSE-22: a click on a started language server's row says which servers the session
+    /// started, in a note, and nothing else.
+    #[test]
+    fn a_click_on_the_panels_language_server_row_names_the_servers() {
+        use bravebot_agent::lsp::{Language, Roster};
+        let (mut session, _) = panel_with_a_context();
+        session.report_language_servers(Roster::of([Language::Python, Language::Rust]));
+        let programs = session.language_servers().programs();
+        assert_eq!(programs.len(), 2);
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, &programs[0]);
+        let before = session.transcript.len();
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert_eq!(session.transcript.len(), before + 1);
+        let note = last_note(&session).to_string();
+        assert!(
+            programs
+                .iter()
+                .all(|program| note.contains(program.as_str())),
+            "the note does not name every server: {note}"
+        );
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-22: a drag over the row and a click over the scroller add no note.
+    #[test]
+    fn a_drag_over_a_language_server_row_or_a_click_in_the_scroller_says_nothing() {
+        use bravebot_agent::lsp::{Language, Roster};
+        let (mut session, _) = panel_with_a_context();
+        session.report_language_servers(Roster::of([Language::Rust]));
+        let program = session.language_servers().programs().remove(0);
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, &program);
+        let before = session.transcript.len();
+        swept(&mut session, (row, column), (row, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        session.open_scroller();
+        click(&mut session, row, column);
+        assert_eq!(session.transcript.len(), before, "a note was added");
+    }
+
     /// The cell of the first letter of the panel's hide row. `find_on` counts bytes, and the border
     /// drawn before the text is more than one.
     fn on_the_hide_row(buffer: &ratatui::buffer::Buffer) -> (u16, u16) {
