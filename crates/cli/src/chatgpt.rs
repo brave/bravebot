@@ -138,14 +138,20 @@ fn sign_in(config: Option<&Config>) -> ExitCode {
         Err(stopped) => return fail(Ending::Failed, said_of_sign_in(&stopped)),
     };
     // A standard output that cannot be written to has nobody to tell, and the sign-in is stored
-    // whatever was said.
-    finish(&signed_in, &mut std::io::stdout(), || match config {
-        Some(config) => bravebot_agent::chatgpt::account_models(
-            config,
-            &mut bravebot_session::audit::Trail::new(),
-        ),
-        None => AccountModels::Absent,
-    })
+    // whatever was said. Read once the sign-in is stored, since whether a start would ask depends on it.
+    let asks = config.is_some_and(crate::model::a_start_would_ask);
+    finish(
+        &signed_in,
+        &mut std::io::stdout(),
+        || match config {
+            Some(config) => bravebot_agent::chatgpt::account_models(
+                config,
+                &mut bravebot_session::audit::Trail::new(),
+            ),
+            None => AccountModels::Absent,
+        },
+        asks,
+    )
     .unwrap_or(());
     ExitCode::SUCCESS
 }
@@ -156,10 +162,14 @@ fn sign_in(config: Option<&Config>) -> ExitCode {
 /// The sign-in is said before the listing is asked, so a service slow to answer leaves a person
 /// knowing it was kept. What the listing says never changes the ending: the sign-in is stored
 /// whatever the account reaches today.
+///
+/// `asks` is whether a start would ask which of the account's models to use, which decides whether
+/// the sentence sends the person to run `bravebot`.
 fn finish(
     signed_in: &SignedIn,
     shown: &mut impl std::io::Write,
     listing: impl FnOnce() -> AccountModels,
+    asks: bool,
 ) -> std::io::Result<()> {
     writeln!(
         shown,
@@ -171,16 +181,22 @@ fn finish(
         )
     )?;
     shown.flush()?;
-    writeln!(shown, "{}", said_of_listing(&listing()))
+    writeln!(shown, "{}", said_of_listing(&listing(), asks))
 }
 
-/// The sentence for what the listing answered: where to pick a model, that the account reaches none,
+/// The sentence for what the listing answered: how to choose a model, that the account reaches none,
 /// or that the listing could not be had and why.
 ///
 /// A listing that was read and is empty is the service's answer, and is not told as a failure. One
 /// refused in a code that names the account is said in that clause's sentence, which does not send
 /// the person to sign in again.
-pub(crate) fn said_of_listing(listing: &AccountModels) -> String {
+///
+/// Each sentence that names a way to use the account names a command that works as typed: `bravebot`
+/// only where `asks` says a start would ask which model to use, or a command that names one together
+/// with the prompt or the task that starts something. A person with a service of their own configured,
+/// or a model in force that something serves, is not asked, and is not told they will be. `/model` is
+/// named only as what lists the models once a session is open, since the sign-in does not open one.
+pub(crate) fn said_of_listing(listing: &AccountModels, asks: bool) -> String {
     match listing {
         AccountModels::Offered(models) if models.is_empty() => t!(chatgpt_reaches_no_model).into(),
         AccountModels::Unreadable => t!(chatgpt_listing_unreadable).into(),
@@ -191,7 +207,10 @@ pub(crate) fn said_of_listing(listing: &AccountModels) -> String {
                 refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
             )
         }
-        AccountModels::Offered(_) | AccountModels::Absent => t!(chatgpt_use_by_name).into(),
+        AccountModels::Offered(_) | AccountModels::Absent => match asks {
+            true => t!(chatgpt_use_by_asking).into(),
+            false => t!(chatgpt_use_by_naming).into(),
+        },
     }
 }
 
@@ -599,20 +618,20 @@ mod tests {
     /// the compiled list stands in for it the sentence says so and that a row may be refused, and
     /// where nothing is offered it says that. A refusal in a code that names the account is said in
     /// its own sentence and does not send the person to sign in again. Only a listing with a model
-    /// in it points at `/model` as the way to pick one.
+    /// in it sends the person to run `bravebot` to choose one.
     #[test]
-    fn each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker() {
+    fn each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose() {
         use bravebot_agent::chatgpt::{Model, Refusal};
 
-        let reaches_none = said_of_listing(&AccountModels::Offered(Vec::new()));
-        let unreadable = said_of_listing(&AccountModels::Unreadable);
-        let compiled = said_of_listing(&AccountModels::Compiled(vec![Model::automatic()]));
-        let offered = said_of_listing(&AccountModels::Offered(vec![Model::automatic()]));
+        let reaches_none = said_of_listing(&AccountModels::Offered(Vec::new()), true);
+        let unreadable = said_of_listing(&AccountModels::Unreadable, true);
+        let compiled = said_of_listing(&AccountModels::Compiled(vec![Model::automatic()]), true);
+        let offered = said_of_listing(&AccountModels::Offered(vec![Model::automatic()]), true);
         assert_eq!(reaches_none, t!(chatgpt_reaches_no_model));
         assert_eq!(unreadable, t!(chatgpt_listing_unreadable));
         assert_eq!(compiled, t!(chatgpt_listing_compiled));
-        assert_eq!(offered, t!(chatgpt_use_by_name));
-        assert_eq!(said_of_listing(&AccountModels::Absent), offered);
+        assert_eq!(offered, t!(chatgpt_use_by_asking));
+        assert_eq!(said_of_listing(&AccountModels::Absent, true), offered);
 
         let mut distinct = vec![
             reaches_none.clone(),
@@ -626,6 +645,10 @@ mod tests {
         assert!(
             unreadable.contains("--model chatgpt/<model>"),
             "no way out for an unreadable listing: {unreadable}"
+        );
+        assert!(
+            offered.starts_with("Run bravebot"),
+            "the sentence does not send the person to the command that asks: {offered}"
         );
         assert!(
             compiled.contains("built-in list") && compiled.contains("cannot reach"),
@@ -649,7 +672,7 @@ mod tests {
         );
 
         for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
-            let said = said_of_listing(&AccountModels::Refused(refusal));
+            let said = said_of_listing(&AccountModels::Refused(refusal), true);
             assert_eq!(
                 said,
                 t!(
@@ -665,6 +688,77 @@ mod tests {
         }
     }
 
+    /// CHATGPT-8: each sentence the sign-in ends with that names a way to use the account names the
+    /// two commands that work as typed, one that opens a session and one that runs a task, each with
+    /// a model, and names `/model` only after saying a session is open. The regressions it rejects
+    /// are `bravebot --model chatgpt/<model>`, which is refused for want of a task, and a
+    /// sentence that sends a person to `/model` before any session can be open, which is what the
+    /// sign-in ended with before a start asked which model to use.
+    #[test]
+    fn every_command_the_sign_in_ends_by_naming_is_one_that_works_as_typed() {
+        use bravebot_agent::chatgpt::Model;
+        const WORKING: [&str; 2] = [
+            r#"bravebot -i "<prompt>" --model chatgpt/<model>"#,
+            r#"bravebot "<task>" --model chatgpt/<model>"#,
+        ];
+
+        for asks in [true, false] {
+            for listing in [
+                AccountModels::Offered(vec![Model::automatic()]),
+                AccountModels::Unreadable,
+                AccountModels::Compiled(vec![Model::automatic()]),
+            ] {
+                let said = said_of_listing(&listing, asks);
+                let named: Vec<&str> = said.split('`').skip(1).step_by(2).collect();
+                assert_eq!(named, WORKING, "{said}");
+                assert!(!said.contains("bravebot --model"), "{said}");
+                if let Some(at) = said.find("/model") {
+                    assert!(
+                        said[..at].contains("session is open"),
+                        "/model is named before a session is open: {said}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// CHATGPT-8, BACKEND-39: the sign-in promises the question only where a start would ask it. The
+    /// sentence that sends a person to run `bravebot` for it is said where one would, and where it
+    /// would not, because a service of the person's own is configured or a model is in force that
+    /// something serves, the sentence names the commands and says nothing of being asked. No other
+    /// sentence the command ends with promises it: where the listing could not be had nothing can be
+    /// asked, whoever the person is. The regression it rejects is the promise made to everybody.
+    #[test]
+    fn the_sign_in_promises_the_question_only_where_a_start_would_ask_it() {
+        use bravebot_agent::chatgpt::Model;
+        let models = || vec![Model::automatic()];
+
+        let asked = said_of_listing(&AccountModels::Offered(models()), true);
+        let not_asked = said_of_listing(&AccountModels::Offered(models()), false);
+        assert_eq!(asked, t!(chatgpt_use_by_asking));
+        assert_eq!(not_asked, t!(chatgpt_use_by_naming));
+        assert!(asked.contains("Run bravebot"), "{asked}");
+        for said in [
+            &not_asked,
+            &said_of_listing(&AccountModels::Unreadable, true),
+            &said_of_listing(&AccountModels::Compiled(models()), true),
+            &said_of_listing(&AccountModels::Unreadable, false),
+            &said_of_listing(&AccountModels::Compiled(models()), false),
+        ] {
+            assert!(
+                !said.contains("Run bravebot") && !said.contains("asked which"),
+                "the sentence promises a question: {said}"
+            );
+        }
+        for listing in [AccountModels::Unreadable, AccountModels::Compiled(models())] {
+            assert_eq!(
+                said_of_listing(&listing, true),
+                said_of_listing(&listing, false),
+                "a sentence for a listing that could not be had changed with who is asked"
+            );
+        }
+    }
+
     /// CHATGPT-8: the sign-in is said before the listing is asked, so a service slow to answer
     /// leaves a person knowing the sign-in was kept, and the listing is asked once. What the listing
     /// says follows, and the line that says the sign-in is stored names its expiry and where it is
@@ -676,12 +770,17 @@ mod tests {
         let by_then = std::cell::RefCell::new(None);
         let mut asked = 0;
 
-        finish(&signed_in(), &mut shown.clone(), || {
-            asked += 1;
-            *by_then.borrow_mut() =
-                Some(String::from_utf8(shown.0.borrow().clone()).expect("text"));
-            AccountModels::Offered(Vec::new())
-        })
+        finish(
+            &signed_in(),
+            &mut shown.clone(),
+            || {
+                asked += 1;
+                *by_then.borrow_mut() =
+                    Some(String::from_utf8(shown.0.borrow().clone()).expect("text"));
+                AccountModels::Offered(Vec::new())
+            },
+            false,
+        )
         .expect("written");
 
         assert_eq!(asked, 1);

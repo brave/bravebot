@@ -35,9 +35,10 @@ say which.
 3. The browser returns to the listener, and bravebot exchanges what it was given for an access token, an
    ID token and a refresh token. It checks the ID token before storing anything. The tab says you can close
    it, and the terminal says the sign-in is stored, when the access token expires, and where.
-4. The account is then asked which models it offers. The command says to pick one in `/model` or to name
-   one, that the account reaches no model, or that the listing could not be read. The sign-in is
-   stored first, so a slow answer leaves you knowing it was kept.
+4. The account is then asked which models it offers. The command says to run `bravebot`, which asks which
+   one to use, where nothing serves the model in force, and otherwise to name one, that the account reaches no
+   model, or that the listing could not be read. The sign-in is stored first, so a slow answer leaves you
+   knowing it was kept.
 
 The ID token is checked against the key set OpenAI publishes, and the check covers its signature, its
 issuer, its audience, its expiry, the one-time value bravebot sent and that it names a subject. No other

@@ -25,7 +25,7 @@ mod chatgpt_run;
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
 
-use chatgpt_run::{Scratch, Shown, environment};
+use chatgpt_run::{Scratch, Shown, environment, sign_in_with};
 use chatgpt_stand_in::{
     ACCESS_TWO, Asked, MODEL, NOT_ELIGIBLE, REFRESH_ONE, REFRESH_TWO, Refresh, Serving, StandIn,
     USAGE_LIMIT, now,
@@ -854,6 +854,86 @@ fn the_refusal_says_which_start_asks_and_the_starts_that_show_it_without_asking_
     let asked = terminal.shows(THE_QUESTION, Duration::from_secs(30));
     let ran = terminal.finish(Duration::from_millis(100));
     assert!(asked, "a start on its own did not ask: {}", ran.shown);
+}
+
+/// A home with no sign-in yet and `settings` in its settings file, and the sign-in made there with
+/// Brave's own hosts named. Returns what the command showed.
+fn signed_in_by_the_command(
+    name: &str,
+    settings: Option<&str>,
+    stand_in: &StandIn,
+) -> (Scratch, String) {
+    let home = Scratch::new(name);
+    if let Some(settings) = settings {
+        std::fs::write(home.path.join(".bravebot/settings.json"), settings)
+            .expect("a settings file");
+    }
+    let (terminal, _, signed_in) = sign_in_with(&home, stand_in, |command| {
+        at_braves_hosts(command, &home, stand_in);
+    });
+    assert!(signed_in, "the sign-in failed: {terminal}");
+    (home, terminal)
+}
+
+/// BACKEND-39, CHATGPT-1: the sign-in command promises the question only to a person the next start
+/// asks. Where nothing serves the model in force it sends the person to run `bravebot`, and the start
+/// then asks. Where a gateway is configured, or a model is in force that something serves, it names the
+/// commands and promises nothing, and the start then asks nothing: the gateway's refusal names the
+/// `model` key, and the served model opens. The regression it rejects is the promise made to every
+/// person who signs in, which is false for those two.
+#[test]
+fn the_sign_in_command_promises_the_question_only_to_a_person_the_next_start_asks() {
+    let promise = "Run bravebot to be asked";
+
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let (home, terminal) = signed_in_by_the_command("cli-chatgpt-start-promise", None, &stand_in);
+    assert!(terminal.contains(promise), "{terminal}");
+    let start = plain_session(&home, &stand_in, &[]);
+    let asked = start.shows(THE_QUESTION, Duration::from_secs(30));
+    let ran = start.finish(Duration::from_millis(100));
+    assert!(
+        asked,
+        "the start did not ask what the sign-in promised: {}",
+        ran.shown
+    );
+
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let (home, terminal) = signed_in_by_the_command(
+        "cli-chatgpt-start-no-promise-gateway",
+        Some(
+            r#"{"provider": {"openrouter": {
+                "env": ["OPENROUTER_API_KEY"],
+                "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                "models": {"z-ai/glm-4.6": {}}
+            }}}"#,
+        ),
+        &stand_in,
+    );
+    assert!(
+        terminal.contains("Name one of the account's models") && !terminal.contains(promise),
+        "{terminal}"
+    );
+    let ran = plain_session(&home, &stand_in, &[]).finish(Duration::from_secs(30));
+    assert_eq!(ran.code, Some(3), "{}", ran.shown);
+    assert!(ran.shown.contains("`model` key"), "{}", ran.shown);
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
+
+    let stand_in = offering(THE_ACCOUNTS_MODELS);
+    let (home, terminal) = signed_in_by_the_command(
+        "cli-chatgpt-start-no-promise-served",
+        Some(&format!(r#"{{"model": "{MODEL}"}}"#)),
+        &stand_in,
+    );
+    assert!(
+        terminal.contains("Name one of the account's models") && !terminal.contains(promise),
+        "{terminal}"
+    );
+    let mut start = plain_session(&home, &stand_in, &[]);
+    let opened = start.shows(&opening_on(MODEL), Duration::from_secs(30));
+    start.end_input();
+    let ran = start.finish(Duration::from_secs(30));
+    assert!(opened, "{}", ran.shown);
+    assert!(!ran.shown.contains(THE_QUESTION), "{}", ran.shown);
 }
 
 /// A name the store reads back as no choice, since a recorded name is read only up to 128 bytes: with

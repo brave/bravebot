@@ -1225,6 +1225,13 @@ chatgpt-replace = Replace it?
 chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
+# What the sign-in command ends with where the account lists models and a start would ask which one to
+# use (chatgpt-start-question): running bravebot is the way to choose. The commands name a model together
+# with the prompt or the task that starts something.
+chatgpt-use-by-asking = Run bravebot to be asked which of the account's models to use, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them.
+# The same where a start would not ask, because a service of the person's own is configured or a model
+# is already in force: nothing is said of being asked.
+chatgpt-use-by-naming = Name one of the account's models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them.
 # What a refusal says. A refusal is also what a one-shot run, a start that names a model and `doctor` end
 # in, and none of those asks, so the last sentence says which start does: one on its own. Both commands
 # name a model together with the prompt or the task that starts something, since
@@ -1235,8 +1242,8 @@ chatgpt-use-by-name = Name one of the account's models, as in `bravebot -i "<pro
 # two for a listing that could not be had, the second is for an account whose picker offers the built-in
 # list in its place.
 chatgpt-reaches-no-model = This ChatGPT account reaches no model through bravebot, so /model offers none. The sign-in stays stored.
-chatgpt-listing-unreadable = The account's models could not be listed, so /model offers none. Try /model later, or name one, as in bravebot --model chatgpt/<model>
-chatgpt-listing-compiled = The account's models could not be listed, so /model offers a built-in list that may name a model the account cannot reach. Try /model later, or name one, as in bravebot --model chatgpt/<model>
+chatgpt-listing-unreadable = The account's models could not be listed. Name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
+chatgpt-listing-compiled = The account's models could not be listed, and once a session is open /model offers a built-in list that may name a model the account cannot reach. Name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
 chatgpt-listing-refused = The account's models could not be listed: { $refusal }
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings

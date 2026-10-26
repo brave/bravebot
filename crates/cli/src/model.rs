@@ -177,7 +177,9 @@ pub(crate) fn ask_which_of_the_accounts_models(config: &Config) -> Asked {
 fn why_no_model_was_offered(listing: &bravebot_agent::chatgpt::AccountModels) -> String {
     match listing {
         bravebot_agent::chatgpt::AccountModels::Absent => t!(failure_account_ended).to_string(),
-        other => crate::chatgpt::said_of_listing(other),
+        // The sentence for a listing that gave no row is the same whoever is asked, so what a start
+        // would ask is no part of it.
+        other => crate::chatgpt::said_of_listing(other, false),
     }
 }
 
@@ -202,6 +204,17 @@ fn which_of<'a, R: BufRead, W: Write>(
     }
     let answer = asking.answer(t!(chatgpt_start_question))?;
     crate::plain::numbered_row(&answer, models)
+}
+
+/// Whether a start with no model named would ask which of the account's models to use, setting aside
+/// the terminals and the mode it also needs ([`asks_which_of_the_accounts_models`]).
+///
+/// For the sign-in command, which tells a person what to run next. A person with a Bedrock or a gateway
+/// block, or with a model in force that something serves, is not asked, and is told so.
+pub(crate) fn a_start_would_ask(config: &Config) -> bool {
+    let model = model_for_this_run(None, config);
+    let serving = bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model);
+    asks_which_of_the_accounts_models(&serving, None)
 }
 
 /// How to configure a service, where nothing configured serves `model`, or `None` where something

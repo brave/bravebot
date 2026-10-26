@@ -928,7 +928,10 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
 `verified-by: bravebot_cli::chatgpt::each_stop_of_the_sign_in_has_its_own_sentence_and_names_the_remedy_where_there_is_one`
 `verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
-`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
+`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose`
+`verified-by: bravebot_cli::chatgpt::every_command_the_sign_in_ends_by_naming_is_one_that_works_as_typed`
+`verified-by: bravebot_cli::chatgpt::the_sign_in_promises_the_question_only_where_a_start_would_ask_it`
+`verified-by: bravebot_cli::chatgpt_start::the_sign_in_command_promises_the_question_only_to_a_person_the_next_start_asks`
 `verified-by: bravebot_cli::chatgpt::the_sign_in_is_said_before_the_listing_is_asked_and_the_listing_is_asked_once`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_agent::backend::an_account_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy`
@@ -1151,7 +1154,7 @@ out by it. The alternative is a sign-in that fails for an account that reaches n
 `verified-by: bravebot_ui_bridge::models::the_accounts_models_join_the_roster_and_a_failed_listing_adds_the_compiled_list_and_a_warning`
 `verified-by: bravebot_ui_bridge::account_words::each_warning_of_the_picker_is_one_sentence_and_says_nothing_where_nothing_failed`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, that a warning with no command or a command its sentence does not hold is a plain paragraph, and that markup in either is drawn as characters; make check-ui runs it; ui/scripts/drive-models.mjs opens the real picker against a model list with one warning and the command it names, and asserts that the command is drawn as code in the code type role and inside the menu, at the window's size and at its minimum)`
-`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_point_at_the_picker`
+`verified-by: bravebot_cli::chatgpt::each_answer_of_the_listing_has_its_own_sentence_and_only_models_send_the_person_to_choose`
 `verified-by: bravebot_tui::app::the_picker_says_why_a_signed_in_accounts_models_are_missing_and_says_nothing_otherwise`
 `verified-by: bravebot_tui::app::only_an_unreadable_or_a_refused_listing_is_a_problem_the_picker_says`
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_account_only_for_one_of_its_own_models`
@@ -1434,8 +1437,12 @@ A sign-in made now is used by a turn whose model is named `chatgpt/<name>`, and 
 listing cannot be read, the compiled names. A start that nothing serves, with the sign-in stored, asks which
 of the models the listing offers to use and records the answer as `/model` does
 ([BACKEND-39](backends.md#BACKEND-39)). Once the sign-in
-is stored the command asks the listing, as a picker does, and tells the person to pick a model in `/model` or
-to name one, that the account reaches no model, or that the listing could not be had.
+is stored the command asks the listing, as a picker does. Where the listing offers models it tells the person
+to run `bravebot`, which asks which model to use, where a start would ask, and otherwise to name one in a
+command that opens a session or runs a task. Where the account reaches no model, or the listing could not be
+had, it says that. A person with a service of their own configured, or with a model in force that something
+serves, is not asked and is not told they will be. `/model` is named only as what lists the models once a
+session is open.
 
 ## Decisions left open
 

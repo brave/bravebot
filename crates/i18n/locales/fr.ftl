@@ -1050,8 +1050,8 @@ chatgpt-use-by-name = Nommez l'un des modèles du compte, comme dans `bravebot -
 # enregistrée dans chaque cas. Des deux messages pour une liste qui n'a pas pu être obtenue, le second
 # concerne un compte dont le sélecteur propose la liste intégrée à la place.
 chatgpt-reaches-no-model = Ce compte ChatGPT n'atteint aucun modèle avec bravebot, donc /model n'en propose aucun. La connexion reste enregistrée.
-chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés, donc /model n'en propose aucun. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
-chatgpt-listing-compiled = Les modèles du compte n'ont pas pu être listés, donc /model propose une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés. Nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+chatgpt-listing-compiled = Les modèles du compte n'ont pas pu être listés, et, une fois une session ouverte, /model propose une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser. Nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
 chatgpt-listing-refused = Les modèles du compte n'ont pas pu être listés : { $refusal }
 chatgpt-forgotten =
     connexion ChatGPT enregistrée oubliée. Elle reste valide chez OpenAI tant qu'on n'y met pas fin : déconnectez-vous de ChatGPT, ou retirez l'accès de bravebot dans les réglages du compte
