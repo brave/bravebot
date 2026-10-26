@@ -336,13 +336,14 @@ fn laid_out(
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
     // The hint line takes one row and the key that hides the panel another. The files state has no
     // Context section, so the line keeps both figures there (FILES-4).
-    drawn(session, columns)
-        && !session.files_open()
-        && head(session, text_width(session.panel_columns(columns)))
-            .0
-            .len()
-            + 2
-            <= usize::from(rows)
+    let Some(crate::layout::RightColumn::InfoPanel {
+        columns: panel_columns,
+    }) = session.interface_layout().right_column(session, columns)
+    else {
+        return false;
+    };
+    !session.files_open()
+        && head(session, text_width(panel_columns)).0.len() + 2 <= usize::from(rows)
 }
 
 /// One column for the border and one for the space after it.

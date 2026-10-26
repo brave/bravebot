@@ -8,10 +8,11 @@ evidence, and this file is updated when a change materially moves the status bel
 ### Status
 
 The design is proposed and waits for a design pull request. Slice 1 is built on the branch
-`bots/slice-1-rows-module`, stacked on the design branch, and waits for a pull request. No other
-slice exists. The design is [design/bots-layer.md](design/bots-layer.md) and the clauses are
-[specs/bots.md](specs/bots.md), which is `proposed`. The clauses and the slices below agree with the
-design.
+`bots/slice-1-rows-module`, stacked on the design branch, and waits for a pull request. Slice 2a is
+built on the branch `bots/slice-2a-layouts`, stacked on `bots/slice-1-rows-module`, and waits for a
+pull request together with slice 1. Neither branch is pushed. No other slice exists. The design is
+[design/bots-layer.md](design/bots-layer.md) and the clauses are [specs/bots.md](specs/bots.md),
+which is `proposed`. The clauses and the slices below agree with the design.
 
 Slice 1 reads and writes the rows through the `bots` module of `bravebot-agent` and the bridge
 methods `bot.list` and `bot.replace`, which the graphical user interface calls with the folder
@@ -30,6 +31,32 @@ that the module makes is reached from the interface in slice 3. The rows the bri
 `remembered` or `quiet` field, so slice 1 already stops persisting them. `noteBotMemory`,
 `keepingMemoryMark`, `nudgeDue`, `noteBotNudged` and `QUIET_MAX` in `ui/src/main/bots.ts` run on a
 count of zero until slice 6 removes them.
+
+Slice 2a adds `crates/tui/src/layout.rs`. `Layout` has one value, `default`, and answers what the
+interface draws to the right of the chat (`right_column`) and which keys it claims before the prompt
+reads them (`claims_key`, which claims none). The info panel is that right column: `draw_frame` in
+`render.rs` draws it where the layout says, and `panel::shows_context` asks the layout. `run` in
+`crates/tui/src/app.rs` is a loop over the phases in `crates/tui/src/app/phase.rs`. The `--resume`
+picker is a phase with no session, and what follows the picker and what follows a session are pure
+functions that tests pin. Leaving the picker with Ctrl-C ends the interface and fires no hooks,
+because the session-started moment fires only on the session path.
+
+The slice differs from its text in five places. The getter on `Session` is `interface_layout`,
+because `Session` already has a `layout` field for the transcript. The phase types are in
+`app/phase.rs`. The layout's claim is consulted last in `claimed_by_a_mode`, so every existing mode
+keeps its precedence, and slice 2b pins whichever order it chooses. `run` creates `Layout::default()`
+and passes it to `Session::in_layout`, while `Phase`, the value `event_loop` returns and
+`resume::choose` carry no layout, because the shape of that return is slice 2b's design and nothing
+in 2a would read it. Three places still decide from the terminal width and the session's panel flag
+and are not behind the layout: `Session::toggle_panel`, `Session::toggle_files` and the panel hint in
+`render/hint.rs`. Slice 2b's entry below says what it does about them.
+
+In a real terminal the first frame, which is the question whether to trust the directory, is
+byte-identical to the base's at 80, 100 and 140 columns. The opening screen draws an animated mascot
+whose face differs on each run, including between two runs of the base, so the screen after the
+answer is not byte-identical. Every cell that differs from the base's lies in the mascot's rows and
+columns, and no other cell differs. The `run` loop has no unit test. The real-terminal run and the
+tests of the pure transitions cover it.
 
 The order of the remaining work:
 
@@ -204,7 +231,7 @@ for bots, so each terminal function is in the bots layout.
      `--incognito` run (and, from slice 4, with a form or a confirmation open), and ends nothing when refused. `--layout` is refused, naming both flags, with
      each flag and command [BOT-17](specs/bots.md#BOT-17) lists, in a test that reads the command
      line's own lists of one-shot flags and of commands that start no session, and `--layout default`
-     is the same as no flag. In the bots layout `/branch`, `/resume`, `/manifest` and `/panel` are
+     is the same as no flag. In the bots layout `/branch`, `/resume`, `/manifest`, `/panel` and `/files` are
      refused, the layout draws no info panel, and each pane it draws is a pane for the selection of
      [MOUSE-1](specs/mouse.md#MOUSE-1), whose list gains them. The no-session phase draws the prompt box,
      which takes `/layout`, the key help and quitting and follows [INPUT-4](specs/terminal-input.md#INPUT-4):
@@ -212,7 +239,17 @@ for bots, so each terminal function is in the bots layout.
      and a second press leaves, and Esc at the top level of a pane returns focus to the prompt. The phase
      starts with focus in the bots list. The tests of INPUT-4's ladder run on this box. At 80 columns `--layout bots` draws the prompt box and the
      line about width with focus in the prompt box, `/layout default` and the quit ladder work, and at 100
-     columns the list is drawn. Verified with `cargo test -p bravebot-tui` and
+     columns the list is drawn. A mode open over the session (the picker, a delegate view, the
+     scroller, a history search) is tested against the bots layout's claim through both `handle_key`
+     and `handle_key_while_working`, pinning whichever order 2b chooses, since 2a leaves the claim
+     last and no test can see the order with one layout. A refused `/panel` or `/files`, and the
+     panel chord where it is refused, leave the panel flag and the saved panel preference unchanged
+     (`Session::toggle_panel` writes it with `bravebot_session::store::save_panel`), and the hint in
+     `render/hint.rs` does not offer a chord the layout refuses. [BOT-17](specs/bots.md#BOT-17) does
+     not say what the panel chord (`bindings().is_panel`, reached from `navigate` and `files_key`)
+     does in the bots layout, so 2b decides it and writes it into BOT-17 in the same change. 2b adds
+     the layout to `Phase` and to what `event_loop` returns, so `/layout` can end a session into the
+     no-session phase of another layout. Verified with `cargo test -p bravebot-tui` and
      `make check-spec`.
 3. **The module holds the row operations, and the GUI calls them through the bridge.**
    - The GUI's TypeScript stops computing the rows. Each operation below becomes the module's, and the

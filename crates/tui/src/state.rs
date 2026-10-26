@@ -863,6 +863,7 @@ pub struct Session {
     /// Held here and not read from `bravebot_config::sandbox::in_force`, which is what start-up
     /// settled and cannot change: `/sandbox` moves this, and every turn is built from it.
     sandbox: crate::sandbox_command::Sandboxed,
+    interface_layout: crate::layout::Layout,
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
@@ -1474,6 +1475,7 @@ impl Session {
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
             sandbox: crate::sandbox_command::Sandboxed::at_start(),
+            interface_layout: crate::layout::Layout::default(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,

@@ -940,7 +940,8 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
 ///
 /// A mode owns every key before anything edits the line: while a picker is open, a delegate is
 /// being watched, the scroller is open or a history search is, there is no line being edited, and a
-/// letter belongs to the mode rather than to a box nobody can see. Checked in that order.
+/// letter belongs to the mode rather than to a box nobody can see. Checked in that order, and then
+/// the open layout's claim.
 fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if session.picking().is_some() {
         session.press_in_picking(key.code, key.modifiers);
@@ -958,7 +959,7 @@ fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
     if session.searching_history() {
         return Some(history_search_key(session, key));
     }
-    None
+    session.interface_layout().claims_key(session, key)
 }
 
 /// Interpret a key press against the session.

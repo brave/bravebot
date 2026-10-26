@@ -16,6 +16,15 @@ impl Session {
         self
     }
 
+    pub fn in_layout(mut self, layout: crate::layout::Layout) -> Self {
+        self.interface_layout = layout;
+        self
+    }
+
+    pub fn interface_layout(&self) -> crate::layout::Layout {
+        self.interface_layout
+    }
+
     /// The sandbox mode the next turn's programs run under.
     pub fn sandbox_mode(&self) -> bravebot_sandbox::SandboxMode {
         self.sandbox.choice.mode

@@ -729,17 +729,18 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .areas(frame.area());
-    let (left, panel) = if crate::panel::drawn(session, frame.area().width) {
-        let [left, panel] = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Min(1),
-                Constraint::Length(session.panel_columns(frame.area().width)),
-            ])
-            .areas(body);
-        (left, Some(panel))
-    } else {
-        (body, None)
+    let (left, panel) = match session
+        .interface_layout()
+        .right_column(session, frame.area().width)
+    {
+        Some(crate::layout::RightColumn::InfoPanel { columns }) => {
+            let [left, panel] = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(1), Constraint::Length(columns)])
+                .areas(body);
+            (left, Some(panel))
+        }
+        None => (body, None),
     };
     let width = left.width;
 

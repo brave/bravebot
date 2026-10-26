@@ -62,6 +62,9 @@ use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
 pub use models::{adopt_listing_for_model, reads_structured_output};
 
+mod phase;
+use phase::{Phase, Screen};
+
 mod session_commands;
 use session_commands::*;
 
@@ -1526,45 +1529,28 @@ pub fn run(
         }
     };
 
-    // Asked before the session begins, so what it starts with is settled before anything is
-    // drawn for it. Choosing nothing is an ordinary session rather than an error.
-    let start = match start {
-        choosing @ (Start::Choose | Start::ChooseFromPr(_)) => {
-            let from_pr = match &choosing {
-                Start::ChooseFromPr(wanted) => Some(wanted.as_str()),
-                _ => None,
-            };
-            match crate::resume::choose(&mut terminal, workspace.root(), from_pr) {
-                crate::resume::Choice::Resume(record) => Some(Start::Resuming(record)),
-                crate::resume::Choice::Fresh => Some(Start::Fresh),
-                // Leaving at the picker starts nothing. The terminal is still put back below.
-                crate::resume::Choice::Quit => None,
-            }
-        }
-        chosen => Some(chosen),
-    };
+    // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the command
+    // lasts until the process ends.
+    let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
+    let mut workspace = workspace.clone();
+    // Only the first session is the one the command line named a definition for. A session
+    // `/resume` switches to works under the definition its own record names.
+    let mut named = agent;
+    // Likewise: a link the command line gave belongs to the session it opened.
+    let mut links = links;
+    let layout = crate::layout::Layout::default();
 
-    let result = match start {
-        // The picker refuses Enter on one of these, and `--resume` refuses it too. If a record
-        // still arrives here, loading its empty conversation as a turn would continue a run
-        // that cannot be continued.
-        Some(Start::Resuming(record)) if record.manifest.is_some() => Ok(Ended::Left(None)),
-        Some(start) => {
-            // A `/resume` ends the loop with the record it chose, and the next one begins from it
-            // exactly as a session started with `--resume` does, so what comes back is what that
-            // flag restores and nothing a second path decided. The servers outlive the switch:
-            // they were started for this process, not for one conversation.
-            let mut workspace = workspace.clone();
-            let mut start = start;
-            // Only the first session is the one the command line named a definition for. A
-            // session `/resume` switches to works under the definition its own record names.
-            let mut named = agent;
-            // Likewise: a link the command line gave belongs to the session it opened.
-            let mut links = links;
-            // What start-up chose, until `/sandbox` moves it. Carried across a `/resume` so the
-            // command lasts until the process ends.
-            let mut sandbox = crate::sandbox_command::Sandboxed::at_start();
-            loop {
+    let mut phase = Phase::starting_with(start);
+    let result = loop {
+        phase = match phase {
+            Phase::NoSession(Screen::ResumePicker { from_pr }) => Phase::after_the_picker(
+                crate::resume::choose(&mut terminal, workspace.root(), from_pr.as_deref()),
+            ),
+            Phase::Session { start, carrying } => {
+                if let Some(carried) = carrying {
+                    workspace = carried.workspace;
+                    sandbox = carried.sandbox;
+                }
                 let mut switch = None;
                 let ended = event_loop(
                     &mut terminal,
@@ -1573,6 +1559,7 @@ pub fn run(
                     confinement.clone(),
                     sockets_with_a_path_reachable,
                     sandbox.clone(),
+                    layout,
                     &mut servers,
                     start,
                     named.take(),
@@ -1582,19 +1569,10 @@ pub fn run(
                     moments,
                     &mut switch,
                 );
-                match (ended, switch) {
-                    (Ok(_), Some(next)) => {
-                        workspace = next.workspace;
-                        sandbox = next.sandbox;
-                        start = Start::Resuming(next.record);
-                    }
-                    (ended, _) => break ended,
-                }
+                Phase::after_a_session(ended, switch)
             }
-        }
-        // Leaving at the picker resumed nothing and started nothing, so there is nothing to say
-        // about picking anything up.
-        None => Ok(Ended::Left(None)),
+            Phase::Over(ended) => break ended,
+        };
     };
 
     // Restore the terminal even if the loop failed: leaving a user in raw mode on an
@@ -2317,6 +2295,7 @@ fn begin_session(
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    layout: crate::layout::Layout,
     servers: &mut crate::state::Servers,
     start: Start,
     named: Option<String>,
@@ -2340,6 +2319,7 @@ fn begin_session(
     let mut session = Session::new(confinement)
         .with_sockets_with_a_path_reachable(sockets_with_a_path_reachable)
         .with_sandbox(sandbox)
+        .in_layout(layout)
         .with_stored_history()
         .in_workspace(workspace.root())
         .on_tier(config)
@@ -2605,6 +2585,7 @@ fn event_loop(
     confinement: String,
     sockets_with_a_path_reachable: bool,
     sandbox: crate::sandbox_command::Sandboxed,
+    layout: crate::layout::Layout,
     servers: &mut crate::state::Servers,
     start: Start,
     named: Option<String>,
@@ -2630,6 +2611,7 @@ fn event_loop(
         confinement,
         sockets_with_a_path_reachable,
         sandbox,
+        layout,
         servers,
         start,
         named,
