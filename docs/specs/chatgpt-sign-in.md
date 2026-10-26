@@ -1534,10 +1534,15 @@ program" where it was the program:
 
 - The authorization endpoint and token endpoint on `auth.openai.com`, with the paths of
   [CHATGPT-2](#CHATGPT-2), complete a sign-in through a loopback listener on a port the operating system
-  chooses. A sign-in that was not answered in the browser ended at the five minute bound with the sentence
-  that the browser did not return, and stored nothing.
+  chooses. Two sign-ins were completed, each through a port the operating system chose, and the two ports
+  differed. Two others, on other ports, were not answered in time, so nothing is claimed of them. A sign-in
+  that was not answered in the browser ended at the five minute bound with the sentence that the browser did
+  not return, and stored nothing.
 - The authorization server registers a client for the placeholder client and `agent_name_hint`: the callback
-  carries a `client_id`, and a refresh presenting it is accepted.
+  carries a `client_id`, and a refresh presenting it is accepted. A second sign-in, made where none was
+  stored, registered a new client and a new host identifier: the stored fields have the same names, and the
+  client and host identifiers differ from the first sign-in's, with the same shape. The access tokens of both
+  sign-ins were accepted by the listing at the same time.
 - The authorization endpoint answered every request from a client that is not a browser, with any redirect
   port, with 403.
 - The scopes and the `resource`, `nonce` and `ext_agent_host_id` parameters are accepted, and the reply's
@@ -1749,8 +1754,8 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
   initial registration onward, with the path `/auth/callback`. Its example names a port. It says later
   sign-ins may use another available port, that the scheme, host and path stay unchanged, and that
   `localhost` is not substituted. It does not say whether registration accepts a port other than its
-  example's. The list above from a sign-in records only that a port the operating system chose was accepted
-  at a first sign-in.
+  example's. The list above from sign-ins records only that two different ports the operating system chose
+  were accepted.
 - Client authentication. "Registration and sign-in" says this direct flow is a public client and needs
   neither a client secret nor a partner API key. "On your website" says an identity-only public client
   authenticates at the token endpoint with `none`.
@@ -1818,9 +1823,9 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
 **Stated by the clauses from opencode's source, and not confirmed:**
 
 - That the authorization server accepts a redirect to `http://127.0.0.1:<port>/auth/callback` for any port.
-  A port the operating system chose is accepted and no other is confirmed. Another port cannot be tried
-  without a browser, as the observed list records. OpenAI's documentation states a redirect rule, which is
-  listed above and confirms no port.
+  Two different ports the operating system chose were accepted, and no other port is confirmed. Another port
+  cannot be tried without a browser, as the observed list records. OpenAI's documentation states a redirect
+  rule, which is listed above and confirms no port.
 - The error codes that end the use of a subscription, other than
   `subscription_sharing_unsupported_capability`, which the observed list holds:
   `subscription_sharing_usage_limit_exceeded`, `subscription_sharing_user_not_eligible`,
@@ -1840,8 +1845,7 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
   advertises no sender-constrained form, which does not show that a request for one is refused.
 - Whether the listing is dependable for another account or on another date. A listing that includes a model
   the account cannot reach was not seen.
-- Whether OpenAI limits the clients registered for one host identifier, and what a second sign-in on a
-  machine that has signed out registers.
+- Whether OpenAI limits the clients registered for one host identifier.
 
 ## What this changes elsewhere
 

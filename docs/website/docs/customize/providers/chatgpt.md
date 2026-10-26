@@ -226,8 +226,8 @@ token, the listing's fields, and the events of a text turn, a tool call and a re
 Still read only from another program's source, opencode's, and not observed against the service.
 [What the documents state](#what-the-documents-state) says what OpenAI's own documents add to some of them:
 
-- that the authorization server accepts a redirect to any loopback port, where only a port the operating
-  system chose has been tried. OpenAI's authorization endpoint answered every request that was not from a
+- that the authorization server accepts a redirect to any loopback port, where only two ports the operating
+  system chose have been tried. OpenAI's authorization endpoint answered every request that was not from a
   browser with 403, so this could not be tried another way. OpenAI's documentation says only the port may
   vary at later sign-ins;
 - what the other two identifiers, `thread-id` and `x-client-request-id`, do for the service's prompt cache.
