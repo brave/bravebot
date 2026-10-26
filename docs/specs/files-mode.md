@@ -125,6 +125,9 @@ open stops drawing it and draws it again when widened.
 The heading row is `{n} files changed` with `+{added}` and `-{removed}` beside it, from the sums of
 FILES-2, and an `x` at its right end that ends the state (FILES-3).
 
+The row of the highlighted file's name draws the edit count whole in every language: a path that
+fills its room is cut from the left by what the count needs.
+
 `verified-by: bravebot_tui::files_mode::the_state_is_half_the_columns_between_sixty_and_a_hundred`
 `verified-by: bravebot_tui::files_mode::the_state_is_not_drawn_below_a_hundred_columns_and_comes_back_when_widened`
 `verified-by: bravebot_tui::files_mode::dragging_the_border_does_nothing_in_the_state_and_keeps_the_dragged_width`
@@ -132,6 +135,7 @@ FILES-2, and an `x` at its right end that ends the state (FILES-3).
 `verified-by: bravebot_tui::files_mode::no_ordinary_section_is_drawn_in_the_state`
 `verified-by: bravebot_tui::files_mode::the_close_control_ends_the_heading_row_beside_a_cut_note_about_earlier_edits`
 `verified-by: bravebot_tui::files_in_french::a_cut_note_leaves_the_close_control_at_the_end_of_the_heading_row_in_french`
+`verified-by: bravebot_tui::files_in_french::a_long_path_leaves_the_whole_edit_count_on_the_name_row_in_french`
 `verified-by: bravebot_tui::files_mode::the_hint_line_keeps_the_reading_and_the_cache_rate_and_no_key_while_the_panel_is_drawn`
 `verified-by: bravebot_tui::files_mode::the_hint_line_names_the_keys_where_the_panel_is_not_drawn`
 `verified-by: bravebot_tui::files_mode::the_hint_line_of_the_state_is_cut_with_an_ellipsis_where_the_row_is_short`

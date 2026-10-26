@@ -93,6 +93,34 @@ fn a_cut_note_leaves_the_close_control_at_the_end_of_the_heading_row_in_french()
     );
 }
 
+/// FILES-4: in French the edit count is longer than the room the row once kept for it, so a path
+/// that fills its room is cut by what the count needs, and the count is drawn whole.
+#[test]
+fn a_long_path_leaves_the_whole_edit_count_on_the_name_row_in_french() {
+    bravebot_i18n::init(bravebot_i18n::find("fr").expect("a French catalogue"));
+    let mut session = Session::new("none");
+    session.transcript.push(Entry::user("avant"));
+    for _ in 0..18 {
+        session.transcript.push(write(
+            "some/long/directory/with/many/parts/a_rather_long_file_name.rs",
+        ));
+    }
+    drawn(&mut session);
+    session.toggle_files();
+    assert!(session.files_open(), "the state did not open");
+
+    let rows = drawn(&mut session);
+    let count = bravebot_i18n::t!(files_edit_count, count = 18);
+    let name = rows
+        .iter()
+        .find(|row| row.contains("modifications") && row.contains('…'))
+        .unwrap_or_else(|| panic!("no cut name row: {rows:#?}"));
+    assert!(
+        name.trim_end().ends_with(&format!("  {count}")),
+        "the count is cut: {name:?}"
+    );
+}
+
 /// FILES-4, FILES-9: in French the hint row of the state is longer than a row without the panel, so
 /// the line is cut at the row's width with an ellipsis: it starts with the keys, then the context
 /// reading, and the cache rate is cut short.
