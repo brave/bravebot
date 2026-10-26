@@ -22,6 +22,12 @@ docs/specs/commits.md:COMMIT-8: the person is told what was committed and what w
 docs/specs/commits.md:COMMIT-9: taking a turn back takes its commit back, as one unbroken run the branch still stands on
 docs/specs/commits.md:COMMIT-10: a rewind point holds the commit its turn made, and a resume brings it back
 docs/specs/commits.md:COMMIT-11: every front end commits and rewinds through one shared implementation
+docs/specs/grounding.md:GROUND-1: count commands and writes, in session order
+docs/specs/grounding.md:GROUND-2: tell the planner what each delegate actually did
+docs/specs/grounding.md:GROUND-3: show the person the same counts, without paths
+docs/specs/grounding.md:GROUND-4: give the goal judge the record since the goal was set
+docs/specs/grounding.md:GROUND-5: the judge still decides
+docs/specs/grounding.md:GROUND-6: every new sentence is fixed text plus numbers
 docs/specs/plugins.md:PLUGIN-1: a plugin is installed only by a command a person types
 docs/specs/plugins.md:PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
 docs/specs/plugins.md:PLUGIN-3: fetching a source is a network effect, and the host is put to the person before it happens
