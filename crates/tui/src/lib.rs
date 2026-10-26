@@ -53,6 +53,7 @@ pub mod invisible;
 pub mod issue_link;
 pub mod jobs_command;
 pub mod keybindings;
+pub mod layout;
 pub mod list_picker;
 pub mod logo;
 pub mod loops;

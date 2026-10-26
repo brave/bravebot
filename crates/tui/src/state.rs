@@ -691,6 +691,7 @@ pub struct Session {
     /// runs applies to what it starts after that (SANDBOX-22). Moved only with `sandbox`, by
     /// [`Session::set_sandbox_mode`] and [`Session::with_sandbox`].
     live_sandbox: bravebot_agent::LiveSandbox,
+    interface_layout: crate::layout::Layout,
     /// The MCP servers this session started, which is what makes the confinement above one it is
     /// using rather than one it has on offer.
     pub servers: Servers,
@@ -1471,6 +1472,7 @@ impl Session {
             laid: Laid::default(),
             confinement: confinement.into(),
             sockets_with_a_path_reachable: false,
+            interface_layout: crate::layout::Layout::default(),
             servers: Servers::default(),
             language_servers: bravebot_agent::lsp::Roster::default(),
             kept_jobs: None,
