@@ -10,8 +10,22 @@ use bravebot_net::Egress;
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
-    let (rows, warnings) = roster(config, true);
+    let (rows, warnings) = roster(
+        config,
+        Accounts {
+            chatgpt: true,
+            xai: true,
+        },
+    );
     catalogue(config, rows, warnings)
+}
+
+/// Which accounts a roster asks for its rows: a stored sign-in's token goes to the serving host of each
+/// that is asked.
+#[derive(Clone, Copy)]
+struct Accounts {
+    chatgpt: bool,
+    xai: bool,
 }
 
 /// Take the window of the model a turn will be answered by, the one `model` names or, where it names
@@ -23,9 +37,16 @@ pub fn list(config: &Config) -> Value {
 /// row describes, or a listing that could not be fetched, leaves the default in place, except that the
 /// compiled names of the ChatGPT account stand in for its listing and carry the assumed window.
 pub fn adopt_window(config: &mut Config, model: Option<&str>) {
-    // The account is asked only for a turn on one of its own models, as the terminal does: a turn on
+    // An account is asked only for a turn on one of its own models, as the terminal does: a turn on
     // any other model has no use for the account's listing, and its token goes nowhere for it.
-    let rows = roster(config, config.runs_on_chatgpt_account(model)).0;
+    let rows = roster(
+        config,
+        Accounts {
+            chatgpt: config.runs_on_chatgpt_account(model),
+            xai: config.runs_on_xai_account(model),
+        },
+    )
+    .0;
     config.adopt_window_of_model_in_force(model, |in_force| {
         rows.iter()
             .find(|row| row.key == in_force)
@@ -43,7 +64,7 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 /// text built here. The window reads the reference catalog whatever language the machine is set to
 /// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so a person reads the same words from
 /// either.
-fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<Said>) {
+fn roster(config: &Config, accounts: Accounts) -> (Vec<Model>, Vec<Said>) {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
@@ -107,9 +128,13 @@ fn roster(config: &Config, account: bool) -> (Vec<Model>, Vec<Said>) {
             ))),
         }
     }
-    // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away.
-    if account {
+    // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away, and so
+    // does a stored xAI sign-in ([XAI-19](../../../docs/specs/xai-sign-in.md#XAI-19)).
+    if accounts.chatgpt {
         with_account(&mut rows, &mut warnings, ask_the_account(config));
+    }
+    if accounts.xai {
+        with_xai_account(&mut rows, &mut warnings, ask_the_xai_account(config));
     }
     if config.serves_aichat() {
         let mut routing = Routing::new();
@@ -146,6 +171,37 @@ fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
     #[cfg(not(test))]
     {
         bravebot_agent::chatgpt::account_models(config, &mut bravebot_session::audit::Trail::new())
+    }
+}
+
+/// What the xAI account offers, asked of the serving host with the stored sign-in
+/// ([XAI-19](../../../docs/specs/xai-sign-in.md#XAI-19)).
+///
+/// The one place this crate asks, for the reason [`ask_the_account`] gives.
+fn ask_the_xai_account(config: &Config) -> bravebot_agent::xai::AccountModels {
+    #[cfg(test)]
+    {
+        let _ = config;
+        scripted_xai::ask()
+    }
+    #[cfg(not(test))]
+    {
+        bravebot_agent::xai::account_models(config, &mut bravebot_session::audit::Trail::new())
+    }
+}
+
+/// Add what the xAI account offers to the rows, or say that its listing could not be had. A person who
+/// never signed in is told nothing, and a listing that was read, empty or not, is not a failure.
+fn with_xai_account(
+    rows: &mut Vec<Model>,
+    warnings: &mut Vec<Said>,
+    account: bravebot_agent::xai::AccountModels,
+) {
+    warnings.extend(account_words::of_xai_listing(&account));
+    match account {
+        bravebot_agent::xai::AccountModels::Offered(models) => rows.extend(models),
+        bravebot_agent::xai::AccountModels::Unlisted
+        | bravebot_agent::xai::AccountModels::Absent => {}
     }
 }
 
@@ -316,6 +372,38 @@ pub fn selection(value: Option<&Value>) -> Result<Option<String>, crate::protoco
         _ => Err(crate::protocol::Failure::bad_request(
             "model must be a non-empty model ID",
         )),
+    }
+}
+
+/// What a unit test scripts for the xAI account's listing, and how often it was asked for.
+#[cfg(test)]
+mod scripted_xai {
+    use bravebot_agent::xai::AccountModels;
+    use bravebot_aichat::models::Model;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static OFFERED: RefCell<Option<Vec<Model>>> = const { RefCell::new(None) };
+        static ASKED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Offer `models` to whatever asks on this thread, and forget how often it was asked.
+    pub(super) fn offer(models: Vec<Model>) {
+        OFFERED.with(|offered| *offered.borrow_mut() = Some(models));
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// How often the account was asked on this thread since [`offer`], or since it began.
+    pub(super) fn asked() -> usize {
+        ASKED.with(Cell::get)
+    }
+
+    pub(super) fn ask() -> AccountModels {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        OFFERED.with(|offered| match offered.borrow().as_ref() {
+            Some(models) => AccountModels::Offered(models.clone()),
+            None => AccountModels::Absent,
+        })
     }
 }
 
@@ -555,6 +643,120 @@ mod tests {
         with_account(&mut rows, &mut warnings, AccountModels::Absent);
         assert_eq!(rows, [elsewhere]);
         assert!(warnings.is_empty());
+    }
+
+    fn xai_row(key: &str) -> Model {
+        Model {
+            key: key.to_string(),
+            display_name: key.to_string(),
+            premium: false,
+            reads_effort: false,
+            provider: Some("xAI".into()),
+            conversation_tokens: Some(500_000),
+            advertised: Advertised::default(),
+        }
+    }
+
+    /// XAI-19 in the window: the xAI account's models are added beside the rows already there and take
+    /// none away, and reach the window under the provider the listing files them under, which is all
+    /// the desktop picker groups by, so the picker needs no knowledge of this service. A listing that
+    /// could not be had adds nothing and warns once with the command that signs in, in the window's own
+    /// sentence. An account nobody signed in to and a listing that was read are not mentioned.
+    #[test]
+    fn the_xai_accounts_models_join_the_roster_and_a_failed_listing_adds_none_and_a_warning() {
+        use bravebot_agent::xai::AccountModels;
+        let elsewhere = Model {
+            provider: Some("openrouter".into()),
+            ..account_row("openrouter/z-ai/glm-4.6")
+        };
+
+        let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+        with_xai_account(
+            &mut rows,
+            &mut warnings,
+            AccountModels::Offered(vec![xai_row("xai/grok-4.5"), xai_row("xai/grok-4.6")]),
+        );
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["openrouter/z-ai/glm-4.6", "xai/grok-4.5", "xai/grok-4.6"]
+        );
+        assert!(warnings.is_empty());
+        let result = catalogue(&configured("the-configured-model", None), rows, warnings);
+        let row = result["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["id"] == "xai/grok-4.5")
+            .expect("the account's row reached the window");
+        assert_eq!(row["provider"], "xAI");
+        assert_eq!(row["contextWindow"], 500_000);
+
+        let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+        with_xai_account(&mut rows, &mut warnings, AccountModels::Unlisted);
+        assert_eq!(rows, std::slice::from_ref(&elsewhere));
+        assert_eq!(
+            warnings,
+            [Said::naming(
+                "bravebot auth login xai",
+                "Could not load models from xAI, so try again, or run bravebot auth login xai in a terminal to sign in again."
+            )]
+        );
+        let warned = catalogue(
+            &configured("the-configured-model", None),
+            Vec::new(),
+            warnings,
+        );
+        assert_eq!(
+            warned["warningCommands"],
+            json!(["bravebot auth login xai"])
+        );
+
+        for listing in [AccountModels::Absent, AccountModels::Offered(Vec::new())] {
+            let (mut rows, mut warnings) = (vec![elsewhere.clone()], Vec::new());
+            with_xai_account(&mut rows, &mut warnings, listing);
+            assert_eq!(rows, std::slice::from_ref(&elsewhere));
+            assert!(warnings.is_empty());
+        }
+    }
+
+    /// XAI-19 in the window: a turn on a model that is not the xAI account's sends the stored token
+    /// nowhere, and one on its own model asks for its row and takes the window the listing states. The
+    /// window is asked from a fresh configuration each time, as every turn builds one.
+    #[test]
+    fn a_turn_in_the_window_asks_the_xai_account_only_for_one_of_its_own_models() {
+        let model_for = |model: Option<&str>| {
+            let mut config = configured("the-configured-model", None);
+            scripted_xai::offer(vec![xai_row("xai/grok-4.5")]);
+            adopt_window(&mut config, model);
+            (scripted_xai::asked(), config.context_budget)
+        };
+
+        for other in [None, Some("openrouter/z-ai/glm-4.6"), Some("xai")] {
+            assert_eq!(model_for(other).0, 0, "{other:?} asked the account");
+        }
+        let (asked, budget) = model_for(Some("xai/grok-4.5"));
+        assert_eq!(asked, 1);
+        assert_eq!(budget, 500_000);
+    }
+
+    /// XAI-19: the window's model list asks the xAI account whatever model is configured, so a person who
+    /// has not chosen one is shown the account's models.
+    #[test]
+    fn the_models_list_asks_the_xai_account_whatever_model_is_configured() {
+        scripted_xai::offer(vec![xai_row("xai/grok-4.5")]);
+
+        let listed = list(&configured("the-configured-model", None));
+
+        assert_eq!(scripted_xai::asked(), 1);
+        assert!(
+            listed["models"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .any(|row| row["id"] == "xai/grok-4.5"),
+            "{listed}"
+        );
     }
 
     /// The window has no command line, so no warning it sends names the flag that names a model, and

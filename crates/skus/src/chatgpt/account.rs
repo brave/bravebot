@@ -7,8 +7,8 @@
 //! token expires, the client OpenAI issued and the host identifier. It does not hold the ID token.
 
 use crate::Secret;
+use crate::oauth::{self, AccountError, Defect, Kind, Refused, Renewed};
 use crate::secret::Document;
-use crate::store::{Claim, StoreError, beside, write_through};
 use std::path::{Path, PathBuf};
 
 /// The file, in the state directory.
@@ -16,14 +16,6 @@ const FILE: &str = "chatgpt-account.json";
 
 /// The claim taken while the file is written or removed.
 const CLAIM: &str = "chatgpt-account.lock";
-
-/// How old a claim has to be before it is taken to belong to a process that died holding it.
-///
-/// Longer than the thirty seconds a request for a new token may wait for its reply
-/// ([CHATGPT-7](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)), so a holder still waiting
-/// is never broken. Writing the file at a sign-in holds it for a moment, and a claim this old is a
-/// process that died.
-const ABANDONED_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A signed-in ChatGPT account.
 ///
@@ -43,72 +35,63 @@ pub struct Account {
     pub host_id: String,
 }
 
-/// Where a file that exists is not what this version writes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Defect {
-    /// The file holds nothing, which an interrupted write leaves behind.
-    Empty,
-    /// The file is not JSON.
-    NotJson,
-    /// The file was written by another version.
-    OtherVersion,
-    /// A field is missing or empty.
-    MissingField,
-    /// The expiry is missing or is not a number of seconds.
-    NoExpiry,
-}
+/// The ChatGPT sign-in as the file and the renewer of [`oauth`] state it: which file, what it holds,
+/// and what presenting its refresh token looks like.
+pub struct ChatGpt;
 
-/// Why the sign-in could not be read, written or removed.
-///
-/// Each is a condition. The words that say what to do about it are the caller's, since this crate
-/// holds no message catalog, and a `detail` is a path and what the operating system said, which is
-/// text about a file and not about the sign-in.
-#[derive(Debug)]
-pub enum AccountError {
-    /// The environment names no directory to keep a sign-in in, so none is stored and none can be.
-    Nowhere { detail: String },
-    /// The file exists and could not be read.
-    Unusable { detail: String },
-    /// The file exists and is not what this version writes.
-    Malformed(Defect),
-    /// The file could not be written or removed.
-    Unwritable { detail: String },
-}
+impl Kind for ChatGpt {
+    type Account = Account;
+    type Hosts = super::Hosts;
+    const FILE: &'static str = FILE;
+    const CLAIM: &'static str = CLAIM;
 
-/// A short name for the condition, for a log or a test. What a person is told is the caller's.
-impl std::fmt::Display for AccountError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Nowhere { .. } => f.write_str("nowhere"),
-            Self::Unusable { .. } => f.write_str("unusable"),
-            Self::Malformed(defect) => write!(f, "malformed ({defect:?})"),
-            Self::Unwritable { .. } => f.write_str("unwritable"),
+    fn encode(account: &Account) -> Secret {
+        encode(account)
+    }
+
+    fn decode(raw: &str) -> Result<Account, AccountError> {
+        decode(raw)
+    }
+
+    fn access(account: &Account) -> &Secret {
+        &account.access_token
+    }
+
+    fn refresh(account: &Account) -> &Secret {
+        &account.refresh_token
+    }
+
+    fn expires_at(account: &Account) -> u64 {
+        account.expires_at
+    }
+
+    fn replace(
+        current: &Account,
+        access: Secret,
+        refresh: Option<Secret>,
+        expires_at: u64,
+    ) -> Account {
+        Account {
+            access_token: access,
+            refresh_token: refresh.unwrap_or_else(|| current.refresh_token.clone()),
+            expires_at,
+            client_id: current.client_id.clone(),
+            host_id: current.host_id.clone(),
         }
     }
-}
 
-impl std::error::Error for AccountError {}
-
-/// A store failure while writing or removing the file, which the store words for the Leo file.
-fn unwritable(failure: StoreError) -> AccountError {
-    match failure {
-        StoreError::Unusable { detail } | StoreError::Malformed { detail } => {
-            AccountError::Unwritable { detail }
-        }
-        other => AccountError::Unwritable {
-            detail: other.to_string(),
-        },
+    fn renew(
+        agent: &ureq::Agent,
+        hosts: &super::Hosts,
+        account: &Account,
+    ) -> Result<Renewed, Refused> {
+        super::exchange::refresh(agent, hosts, &account.client_id, &account.refresh_token)
     }
 }
 
 /// Where the sign-in is kept.
 pub fn path() -> Result<PathBuf, AccountError> {
-    beside(FILE).map_err(|failure| match failure {
-        StoreError::Unusable { detail } => AccountError::Nowhere { detail },
-        other => AccountError::Nowhere {
-            detail: other.to_string(),
-        },
-    })
+    oauth::path::<ChatGpt>()
 }
 
 impl Account {
@@ -134,59 +117,33 @@ impl Account {
 
     /// The instant the access token expires, as `2026-10-22T21:05:27Z`.
     pub fn expires(&self) -> String {
-        super::encoding::utc(self.expires_at)
+        crate::oauth::encoding::utc(self.expires_at)
     }
 }
 
 pub(super) fn load_at(path: &Path) -> Result<Option<Account>, AccountError> {
-    // A buffer that clears itself: the text of the file is both tokens, and a read that is
-    // answered with an error hands it back as readily as one that succeeds.
-    let raw = match std::fs::read_to_string(path) {
-        Ok(raw) => Secret::new(raw),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => {
-            return Err(AccountError::Unusable {
-                detail: format!("{}: {e}", path.display()),
-            });
-        }
-    };
-    decode(raw.expose()).map(Some)
+    oauth::load_at::<ChatGpt>(path)
 }
 
 pub(super) fn save_at(path: &Path, account: &Account) -> Result<(), AccountError> {
-    let _claim = claim(path)?;
-    write_held(path, account)
+    oauth::save_at::<ChatGpt>(path, account)
 }
 
 pub(super) fn forget_at(path: &Path) -> Result<bool, AccountError> {
-    let _claim = claim(path)?;
-    remove_held(path)
+    oauth::forget_at::<ChatGpt>(path)
 }
 
-/// The claim every write and removal of the file is made under. A caller that holds one across a
-/// request for new tokens writes with [`write_held`] and removes with [`remove_held`], which take
-/// none of their own: a second claim by the process that holds the first would wait on itself.
-pub(super) fn claim(path: &Path) -> Result<Claim, AccountError> {
-    Claim::take_as(path, CLAIM, ABANDONED_AFTER).map_err(unwritable)
+/// The claim every write and removal of the file is made under, which a test holds as the renewer
+/// does across a request for new tokens.
+#[cfg(test)]
+pub(super) fn claim(path: &Path) -> Result<crate::store::Claim, AccountError> {
+    oauth::claim::<ChatGpt>(path)
 }
 
 /// Write the file, the caller holding the claim.
+#[cfg(test)]
 pub(super) fn write_held(path: &Path, account: &Account) -> Result<(), AccountError> {
-    use std::io::Write;
-
-    let text = encode(account);
-    write_through(path, |file| file.write_all(text.expose().as_bytes())).map_err(unwritable)
-}
-
-/// Remove the file, the caller holding the claim. Whether there was one is the answer.
-pub(super) fn remove_held(path: &Path) -> Result<bool, AccountError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(AccountError::Unwritable {
-            detail: format!("{}: {e}", path.display()),
-        }),
-    }
+    oauth::write_held::<ChatGpt>(path, account)
 }
 
 fn encode(account: &Account) -> Secret {
@@ -248,6 +205,8 @@ fn decode(raw: &str) -> Result<Account, AccountError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::oauth::ABANDONED_AFTER;
+    use crate::store::{Claim, write_through};
 
     fn account() -> Account {
         Account {

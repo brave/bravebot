@@ -35,11 +35,15 @@ governs:
   - crates/skus/src/chatgpt/mod.rs
   - crates/skus/src/chatgpt/account.rs
   - crates/skus/src/chatgpt/authorize.rs
-  - crates/skus/src/chatgpt/encoding.rs
   - crates/skus/src/chatgpt/exchange.rs
   - crates/skus/src/chatgpt/id_token.rs
   - crates/skus/src/chatgpt/listener.rs
   - crates/skus/src/chatgpt/renew.rs
+  - crates/skus/src/oauth/encoding.rs
+  - crates/skus/src/oauth/file.rs
+  - crates/skus/src/oauth/mod.rs
+  - crates/skus/src/oauth/renew.rs
+  - crates/skus/src/oauth/wire.rs
   - crates/skus/src/lib.rs
   - crates/config/src/lib.rs
   - crates/agent/src/turn/task.rs
@@ -224,9 +228,10 @@ no more.
   address of the completion route and the client) and twice in `chatgpt.rs` (its definition and the roster),
   and `account_models_from`, which asks for the listing, has one caller, the roster, which gives it that
   provider. `Provider::chatgpt_account`, which builds the provider whose address is the serving host, has one
-  caller, in the agent. The functions that take a `Hosts` are those of the sign-in's own module, by name.
+  caller, in the agent. The functions that take a `Hosts` are those of the sign-in's own module and of `oauth`, the module of
+  the file and the renewer that more than one sign-in uses, by name.
   The access token is asked for with `.access_token()` once in the account's client and once in the agent's
-  roster, and the one implementation of that call in the sign-in module is the renewer's.
+  roster, and the one implementation of that call in the crate that signs in is the renewer's, which `oauth` holds.
 - One compares the bodies of `Hosts::compiled_in`, `chatgpt_serving_host` and `Provider::chatgpt_account` to
   their text, so an environment read there that is not behind the gate, or a host that is not one of the four
   constants, fails. The name of the variable is a literal in the two gated constants and in no other source,
@@ -315,8 +320,8 @@ that program.
 `verified-by: bravebot_skus::chatgpt::authorize::the_challenge_is_the_hash_of_the_verifier_and_the_verifier_is_not_in_the_url`
 `verified-by: bravebot_skus::chatgpt::authorize::each_sign_in_generates_its_own_verifier_state_and_nonce`
 `verified-by: bravebot_skus::chatgpt::authorize::the_values_are_percent_encoded_in_the_url`
-`verified-by: bravebot_skus::chatgpt::encoding::a_challenge_is_the_rfc_7636_one_for_its_verifier`
-`verified-by: bravebot_skus::chatgpt::encoding::a_random_value_is_43_url_safe_characters_and_a_new_one_each_time`
+`verified-by: bravebot_skus::oauth::encoding::a_challenge_is_the_rfc_7636_one_for_its_verifier`
+`verified-by: bravebot_skus::oauth::encoding::a_random_value_is_43_url_safe_characters_and_a_new_one_each_time`
 `verified-by: bravebot_skus::chatgpt::a_first_sign_in_exchanges_the_code_under_the_issued_client_and_stores_the_account`
 
 <a id="CHATGPT-4"></a>
@@ -370,7 +375,7 @@ token, which has to name it as its audience ([CHATGPT-5](#CHATGPT-5)).
 `verified-by: bravebot_skus::chatgpt::listener::each_page_carries_the_callers_words_escaped_and_the_two_differ`
 `verified-by: bravebot_skus::chatgpt::listener::a_reply_reaches_a_client_that_sent_more_than_its_request_line`
 `verified-by: bravebot_skus::chatgpt::listener::a_wait_that_sees_no_callback_ends_at_the_bound`
-`verified-by: bravebot_skus::chatgpt::encoding::two_values_are_the_same_only_when_every_byte_is`
+`verified-by: bravebot_skus::oauth::encoding::two_values_are_the_same_only_when_every_byte_is`
 `verified-by: bravebot_skus::chatgpt::the_browser_has_five_minutes_to_return_by_default`
 `verified-by: bravebot_skus::chatgpt::a_callback_naming_another_client_than_the_stored_one_ends_the_sign_in_unexchanged`
 `verified-by: bravebot_skus::chatgpt::a_callback_without_a_code_or_without_a_usable_first_client_stops_before_the_exchange`
@@ -491,8 +496,8 @@ whether the token verified, and what leaves the crate is that answer and no clai
 `verified-by: bravebot_skus::chatgpt::id_token::a_decoded_part_is_overwritten_where_it_lies`
 `verified-by: bravebot_skus::chatgpt::id_token::an_exponent_of_65537_or_more_is_used_and_a_smaller_one_is_not_whatever_its_leading_zeros`
 `verified-by: bravebot_skus::chatgpt::id_token::the_decoded_header_and_payload_are_held_in_buffers_that_are_cleared_in_each_way_a_check_ends`
-`verified-by: bravebot_skus::chatgpt::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
-`verified-by: bravebot_skus::chatgpt::encoding::a_clock_before_1970_reads_as_no_time_and_the_epoch_and_after_as_the_seconds_since`
+`verified-by: bravebot_skus::oauth::encoding::base64url_reads_back_what_it_writes_and_nothing_else`
+`verified-by: bravebot_skus::oauth::encoding::a_clock_before_1970_reads_as_no_time_and_the_epoch_and_after_as_the_seconds_since`
 `verified-by: bravebot_skus::chatgpt::a_clock_set_before_1970_ends_the_sign_in_before_anything_is_opened_or_asked`
 `verified-by: bravebot_skus::chatgpt::a_clock_that_cannot_be_read_where_the_reply_arrives_ends_the_sign_in_with_nothing_stored`
 
@@ -589,19 +594,29 @@ with it.
 
 The refresh is taken under an exclusive claim on the file, as the Leo store takes one for a spend, and the
 file is read again once the claim is held. Every write of the file and its removal is made under the claim.
-A process that finds a token other than the one it was about to replace uses it and presents nothing. The
-refresh request has a deadline of thirty seconds, and a claim is judged abandoned only after sixty, so a
-refresh still waiting for its reply is never broken. A claim older than that belongs to a process that died
-holding it and is broken as the Leo store breaks one, by moving it aside and judging it there.
+A process that finds a token other than the one it was about to replace uses it and presents nothing. A
+refresh request has a deadline of thirty seconds, and a claim is judged abandoned once its file was last
+modified sixty seconds ago. A refresh makes one request, or two where the first was refused as ended and the
+file had changed since (below), and the claim is made as young as a new one before the second, so no request
+waits under a claim older than thirty seconds. A claim older than sixty belongs to a process that died holding
+it, or to one that was stopped for longer than a request may take, and is broken as the Leo store breaks one,
+by moving it aside and judging it there. A holder that was stopped that long can have its claim broken, and
+what follows from that is below.
 
 A refresh the authorization server refuses as the refresh token no longer being valid ends the sign-in. That
 is a status of 400 or 401 whose error code is `invalid_grant`, which is RFC 6749 section 5.2's code for it and
 the one this server sent, as `{"error":"invalid_grant"}` in a 400, for a refresh token it does not know. The
 code is read from `error` as a string, so a body whose `error` is an object, as the serving host's refusals
 have it, is not that code. A refusal with any other code or status is a failure of the request and ends
-nothing. The file is removed, and the turn says the sign-in has ended, whether or not the file could be
-removed. The file was read with the claim held, so it holds the refresh token that was refused or one this
-process replaced and so killed. Any other failure of the refresh, a connection that did not complete or
+nothing. The file is read again immediately before it is removed, and is removed only while it holds a refresh
+token this process knows to be spent: the one just refused, or the one it replaced before it, which the server
+killed when it gave the refused one. A claim is judged abandoned by its age, so a holder that was stopped and is
+alive can have its claim broken, and the process that broke it then presents a refresh token the holder has
+already spent and is refused for it while the holder writes the tokens it was given. Where the file holds
+another refresh token the sign-in has not ended: that token is used, and is replaced once with its own refresh
+token if it too is due, and a second refusal with the file changed again removes nothing and is told as a
+refresh that failed. Where the file is removed, the turn says the sign-in has ended, whether or not the file
+could be removed. Any other failure of the refresh, a connection that did not complete or
 a reply that says the service is busy or unavailable, leaves the file as it is and says which of the
 backends spec's failure categories it was. A write of the reply that fails is reported to the person, once,
 as a notice of the turn, in a sentence that names no path and quotes nothing the file or the system said. The
@@ -628,8 +643,9 @@ such as one that starts after it, finds no file and says no sign-in is stored.
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
 second process read before the first's reply is dead. A session, a background run and a one-shot run on one
 machine present it together as a matter of course, and the one that loses ends the sign-in for all of them.
-The claim is held across a network round trip, so it has an age longer than that trip's deadline: the Leo
-claim is judged abandoned after seconds because its hold is one local read and write. The reply is written
+The claim is held across up to two network round trips, so its age of abandonment is twice a trip's deadline, and
+it is made young again between the two: the Leo claim is judged abandoned after seconds because its hold is one
+local read and write. The reply is written
 first because a process that stops between receiving it and writing it has spent a refresh token it cannot
 present again. This server replaces the refresh token on use, so the claim and the early write are
 required here. A server that did not replace it would lose nothing to them. Removing the file
@@ -661,6 +677,9 @@ list, or the code of a model not offered, ends the turn without a replacement.
 `verified-by: bravebot_skus::chatgpt::renew::a_write_that_fails_is_reported_and_tried_again_before_the_next_request`
 `verified-by: bravebot_skus::chatgpt::renew::tokens_held_in_memory_are_dropped_where_the_file_holds_another`
 `verified-by: bravebot_skus::chatgpt::renew::an_ended_sign_in_removes_the_file_that_holds_the_token_this_process_replaced`
+`verified-by: bravebot_skus::chatgpt::renew::a_refusal_of_a_spent_refresh_token_does_not_remove_what_another_process_wrote`
+`verified-by: bravebot_skus::chatgpt::renew::a_sign_in_another_process_wrote_that_is_due_is_replaced_once_and_not_chased`
+`verified-by: bravebot_skus::xai::renew::a_second_refresh_under_one_claim_is_made_with_the_claim_as_young_as_a_new_one`
 `verified-by: bravebot_skus::chatgpt::renew::a_renewer_that_found_the_sign_in_end_says_so_to_every_later_ask`
 `verified-by: bravebot_skus::chatgpt::renew::a_sign_in_stored_after_the_end_is_used_and_the_end_is_forgotten`
 `verified-by: bravebot_skus::chatgpt::a_sign_in_made_after_a_renewer_found_the_old_one_end_is_the_one_it_uses`
@@ -963,7 +982,7 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_skus::chatgpt::a_reply_that_does_not_allow_the_use_stores_nothing`
 `verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
 `verified-by: bravebot_skus::chatgpt::an_unreachable_server_and_a_reply_of_another_shape_are_reported_as_such`
-`verified-by: bravebot_skus::chatgpt::exchange::a_status_is_classed_as_the_backends_classify_it`
+`verified-by: bravebot_skus::oauth::wire::a_status_is_classed_as_the_backends_classify_it`
 `verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
 `verified-by: bravebot_cli::chatgpt::each_stop_of_the_sign_in_has_its_own_sentence_and_names_the_remedy_where_there_is_one`
 `verified-by: bravebot_cli::chatgpt::a_failure_of_the_file_is_worded_with_its_detail_made_printable_and_the_remedy`
@@ -1484,7 +1503,11 @@ The test runs the built binary with `--incognito` against a stand-in through the
 ## What is built
 
 The sign-in is the `chatgpt` module of `bravebot-skus` and the command is `crates/cli/src/chatgpt.rs`.
-[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers the module, which depends on no crate of this
+The file of [CHATGPT-6](#CHATGPT-6), the claim it is written under, the requests to the token endpoint and the
+renewer of [CHATGPT-7](#CHATGPT-7) are the `oauth` module of the same crate, which any sign-in that keeps its
+tokens in a file states itself to. The ChatGPT account states which file, what it holds and what a refresh
+presents (`ChatGpt`, in `crates/skus/src/chatgpt/account.rs`), and `Renewer` is that renewer for it.
+[LAYER-1](layering.md#LAYER-1)'s row for `bravebot-skus` covers both modules, which depend on no crate of this
 workspace, so [CHATGPT-5](#CHATGPT-5)'s first condition holds by reading its manifest. The signature of the ID
 token is checked with `ring`, the library `rustls` already brings, at the version and with the features it
 brings.
@@ -1510,8 +1533,9 @@ of the models the listing offers to use and records the answer as `/model` does
 is stored the command asks the listing, as a picker does. Where the listing offers models it tells the person
 to run `bravebot`, which asks which model to use, where a start would ask, and otherwise to name one in a
 command that opens a session or runs a task. Where the account reaches no model, or the listing could not be
-had, it says that. A person with a service of their own configured, or with a model in force that something
-serves, is not asked and is not told they will be. `/model` is named only as what lists the models once a
+had, it says that. A person with a model in force that something serves is not asked and is not told they will
+be, and one with a Bedrock or gateway block is asked about that service's models and not the account's
+([BACKEND-39](backends.md#BACKEND-39)), so is not told the account's question will be asked. `/model` is named only as what lists the models once a
 session is open.
 
 ## Decisions left open
@@ -1867,8 +1891,8 @@ These are the places where another spec states something about this service, eac
 
 - **Backends.** [BACKEND-3](backends.md#BACKEND-3) and [BACKEND-18](backends.md#BACKEND-18) gain the
   `chatgpt/` identifier. [BACKEND-9](backends.md#BACKEND-9) gains a note that this service starts no
-  sign-in. [BACKEND-39](backends.md#BACKEND-39) names four ways to configure a service, a stored
-  ChatGPT sign-in among them. [BACKEND-13](backends.md#BACKEND-13), [BACKEND-17](backends.md#BACKEND-17)
+  sign-in. [BACKEND-39](backends.md#BACKEND-39) names five ways to configure a service, a stored
+  ChatGPT sign-in and a stored xAI sign-in among them, and asks over both accounts at a start. [BACKEND-13](backends.md#BACKEND-13), [BACKEND-17](backends.md#BACKEND-17)
   and [BACKEND-5](backends.md#BACKEND-5) each gain the case of [CHATGPT-9](#CHATGPT-9): an entry named
   `chatgpt` that states no endpoint is read for `models`, where an entry of any other name with no endpoint
   configures no service. [BACKEND-19](backends.md#BACKEND-19) gains this service's listing and its
@@ -1879,7 +1903,7 @@ These are the places where another spec states something about this service, eac
   also gains the case that the effort level of a session is fixed when it starts, except for a model that
   refuses a level ([BACKEND-22](backends.md#BACKEND-22)), and the aichat client gains a zstd body encoding,
   which [BACKEND-61](backends.md#BACKEND-61) states.
-- **The command line.** [CLI-18](cli.md#CLI-18) lists five ways and states `logout chatgpt`.
+- **The command line.** [CLI-18](cli.md#CLI-18) lists six ways and states `logout chatgpt`.
   [CLI-23](cli.md#CLI-23) takes `chatgpt` as a way.
 - **Incognito.** [INCOG-7](incognito.md#INCOG-7) refuses the sign-in, and
   [INCOG-8](incognito.md#INCOG-8) lists the refresh among what is still written.
@@ -1939,6 +1963,11 @@ These are the places where another spec states something about this service, eac
 - A process that rotated the refresh token and could not write the file holds the only good copy in
   memory. If another process finds the file's refresh token dead and removes it, and the first exits before
   its write succeeds, the sign-in is gone and the person signs in again.
+- A claim is judged abandoned at sixty seconds whatever its holder is doing, so a holder that was stopped for
+  longer than a request may take, such as a machine that slept, can have its claim broken. The process that broke
+  it presents a refresh token the holder has spent and is refused for it. It reads the file again before it
+  removes anything and uses what the holder wrote, and where the holder wrote nothing before it was stopped for
+  good the sign-in ends ([CHATGPT-7](#CHATGPT-7)).
 - A renewal the file could not take is said by the first turn that makes a request after it. A process that
   exits before one does, such as one that renewed for a compaction and then exited, says nothing, and the
   next start finds the sign-in ended. The terminal shows a notice it has already shown in a conversation

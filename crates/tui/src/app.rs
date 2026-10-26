@@ -74,7 +74,7 @@ use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
 pub use models::{
     account_models_to_start_on, adopt_listing_for_model, configured_models_to_start_on,
-    reads_structured_output,
+    reads_structured_output, xai_models_to_start_on,
 };
 
 mod opening;
@@ -5211,6 +5211,203 @@ mod tests {
         );
     }
 
+    /// The rows the xAI account's tests script: two models of the account, with windows a budget can
+    /// be told apart from the default by, filed under the provider the listing files them under.
+    fn the_xai_accounts_listing() -> Vec<bravebot_aichat::models::Model> {
+        ["xai/grok-4.5", "xai/grok-build-0.1"]
+            .into_iter()
+            .map(|key| bravebot_aichat::models::Model {
+                provider: Some("xAI".to_string()),
+                reads_effort: false,
+                ..listed(key, Some(131_072))
+            })
+            .collect()
+    }
+
+    /// XAI-19: the picker asks the xAI account whatever model is in force, and offers what it lists
+    /// beside the rows already there and beside the ChatGPT account's, each under its own identifier.
+    /// A picker that asked only for the account's own models would never show them to a person who has yet
+    /// to choose one, and one that took the other rows away would leave a person with the account alone.
+    #[test]
+    fn the_picker_asks_the_xai_account_whatever_model_is_in_force_and_lists_what_it_offers() {
+        use models::scripted_account::offer as offer_chatgpt;
+        use models::scripted_xai::{asked, offer};
+        let config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        offer(the_xai_accounts_listing());
+        offer_chatgpt(the_accounts_listing());
+
+        let mut session = Session::new("none");
+        open_model_picker(&mut session, &config);
+        session.settle_picking();
+
+        assert_eq!(asked(), 1, "the picker did not ask");
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let rows = picker.matching();
+        let keys: Vec<&str> = rows.iter().map(|m| m.key.as_str()).collect();
+        for key in [
+            "xai/grok-4.5",
+            "xai/grok-build-0.1",
+            "chatgpt/gpt-6-sol",
+            "opus-arn",
+        ] {
+            assert!(keys.contains(&key), "{key} is not offered: {keys:?}");
+        }
+        let row = rows
+            .iter()
+            .find(|m| m.key == "xai/grok-4.5")
+            .expect("a row");
+        assert_eq!(row.provider.as_deref(), Some("xAI"));
+        assert!(
+            !row.reads_effort,
+            "a level is shown as read that is not sent"
+        );
+        assert!(
+            session.transcript.is_empty(),
+            "a listing that was read said something: {:?}",
+            session.transcript
+        );
+    }
+
+    /// XAI-16: a run that chose an effort level is told that a model of the xAI account reads none, for
+    /// every name of the account: one the listing offers, an alias, an id the rule leaves out, one nobody
+    /// listed, and where the listing could not be read. A model of another service is left to its own
+    /// listing, so a name no listing describes still has a level sent. The regression it rejects is the
+    /// answer read from the listing's row alone, which is true for every name the listing does not
+    /// describe and sends no level without saying so.
+    #[test]
+    fn a_run_on_any_name_of_the_xai_account_is_told_the_model_reads_no_level() {
+        use models::scripted_xai::{fail_to_list, offer};
+        for name in [
+            "xai/grok-4.5",
+            "xai/grok-code-fast-1",
+            "xai/grok-imagine-image",
+            "xai/an-id-nobody-listed",
+        ] {
+            offer(the_xai_accounts_listing());
+            let mut config = a_config_with_a_named_roster();
+            assert!(!adopt_listing_for_model(&mut config, name), "{name}");
+        }
+        fail_to_list();
+        let mut config = a_config_with_a_named_roster();
+        assert!(
+            !adopt_listing_for_model(&mut config, "xai/grok-4.5"),
+            "a listing that could not be read left the level to go out"
+        );
+
+        // Another service's model that no listing describes still has the level sent.
+        let mut config = a_config_with_a_named_roster();
+        assert!(adopt_listing_for_model(
+            &mut config,
+            "a-model-nothing-lists"
+        ));
+    }
+
+    /// XAI-19: a session or a turn on a model that is not the xAI account's sends the stored token
+    /// nowhere, and one on its own model asks for its row and takes the window the listing states. Each
+    /// caller that wants the row of the model in force reaches the account only through `list_models`,
+    /// so each is run on a model of another service and then on the account's own. A caller that asked
+    /// for every model would send the token at each of them.
+    #[test]
+    fn a_caller_asks_the_xai_account_only_for_one_of_its_own_models_and_takes_the_window_it_lists()
+    {
+        use models::scripted_xai::{asked, offer};
+        let mut config = a_config_with_a_named_roster();
+        offer(the_xai_accounts_listing());
+
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
+        adopt_listing_for_model(&mut config, "opus-arn");
+        config_for_turn(&config, Some("opus-arn"));
+        reads_structured_output(&config, "opus-arn");
+        reads_structured_output(&config, "xai");
+        assert_eq!(asked(), 0, "a model of another service asked the account");
+
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("xai/grok-4.5".to_string(), &config);
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert_eq!(asked(), 1, "the lookup at session start did not ask");
+        assert_eq!(config.context_budget, 131_072);
+
+        offer(the_xai_accounts_listing());
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "xai/grok-4.5");
+        assert_eq!(asked(), 1, "a run's lookup did not ask");
+        assert_eq!(config.context_budget, 131_072);
+
+        // The listing could not be had, so the window is the assumed one and the turn goes on.
+        models::scripted_xai::fail_to_list();
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "xai/grok-4.5");
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+    }
+
+    /// XAI-19: a stored sign-in whose listing could not be had offers none of the account's rows, since
+    /// no list is built in for it, and the picker says so once with the commands that work as typed. An
+    /// account nobody signed in to, and a listing that was read, empty or not, say nothing: the first is
+    /// not owed a warning about a service it does not use, and the second is the service's answer. The
+    /// rows already there stay.
+    #[test]
+    fn the_picker_says_why_the_xai_accounts_models_are_missing_and_says_nothing_otherwise() {
+        use models::scripted_xai::{fail_to_list, offer};
+        let config = a_config_with_a_named_roster();
+        let said_after_opening = |script: &dyn Fn()| -> (Vec<String>, Vec<String>) {
+            script();
+            let mut session = Session::new("none");
+            open_model_picker(&mut session, &config);
+            session.settle_picking();
+            let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+                panic!("no model picker is open");
+            };
+            let rows = picker.matching().iter().map(|m| m.key.clone()).collect();
+            let said = session.transcript.iter().map(|e| e.text.clone()).collect();
+            (said, rows)
+        };
+
+        let (said, rows) = said_after_opening(&fail_to_list);
+        assert_eq!(said, [t!(session_xai_models_unreadable).to_string()]);
+        assert!(said[0].contains("bravebot auth login xai"), "{said:?}");
+        assert!(
+            said[0].contains("--model xai/<model>"),
+            "no command that names a model: {said:?}"
+        );
+        assert!(
+            !said[0].contains("chatgpt") && !said[0].contains("built-in"),
+            "{said:?}"
+        );
+        assert!(rows.contains(&"opus-arn".to_string()), "{rows:?}");
+        assert!(
+            !rows.iter().any(|row| row.starts_with("xai/")),
+            "a listing that could not be read offered rows: {rows:?}"
+        );
+
+        let (said, rows) = said_after_opening(&|| offer(Vec::new()));
+        assert!(said.is_empty(), "an empty listing was said: {said:?}");
+        assert!(!rows.iter().any(|row| row.starts_with("xai/")));
+
+        // Nobody signed in: no script on this thread, so the account answers as an absent one does.
+        let fresh = std::thread::spawn(|| {
+            let config = a_config_with_a_named_roster();
+            let mut session = Session::new("none");
+            open_model_picker(&mut session, &config);
+            session.settle_picking();
+            (session.transcript.len(), models::scripted_xai::asked())
+        })
+        .join()
+        .expect("a picker opened on a thread of its own");
+        assert_eq!(
+            fresh,
+            (0, 1),
+            "a machine nobody signed in on was told something"
+        );
+    }
+
     /// BACKEND-11: the list `/model` opens marks the model in force, and picking a row puts that
     /// model in force. Run with the model set by settings and nothing picked, with a pick, and where
     /// a row is typed to and chosen. The regressions it rejects are the pick alone read as the model
@@ -5629,6 +5826,49 @@ mod tests {
         );
     }
 
+    /// BACKEND-39: a start that nothing serves offers the rows the xAI account listed, in the order the
+    /// picker lists them, and none where the service listed none, with the listing that gave none so the
+    /// start can say why. A listing that could not be had offers nothing, since no list built into this
+    /// program stands in for it, and an account nobody signed in to is not asked about. The regressions
+    /// it rejects are the service's order in place of the picker's, which would number a row differently
+    /// from the `/model` the person meets next, a roster read from the ChatGPT account's answer, and a
+    /// failed listing reported as an empty one.
+    #[test]
+    fn a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else() {
+        use bravebot_agent::xai::AccountModels;
+        use models::scripted_xai::{fail_to_list, offer};
+        let config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            xai_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(the_xai_accounts_listing().into_iter().rev().collect());
+        assert_eq!(keys(&config), ["xai/grok-4.5", "xai/grok-build-0.1"]);
+
+        offer(Vec::new());
+        assert_eq!(
+            xai_models_to_start_on(&config),
+            Err(AccountModels::Offered(Vec::new())),
+            "a listing with no row offered one, or was not said to be empty"
+        );
+        fail_to_list();
+        assert_eq!(
+            xai_models_to_start_on(&config),
+            Err(AccountModels::Unlisted),
+            "a listing that could not be had offered rows or was said to be empty"
+        );
+
+        // Nobody signed in: no script on this thread, so the account answers as an absent one does.
+        let fresh = std::thread::spawn(|| xai_models_to_start_on(&a_config_with_a_named_roster()))
+            .join()
+            .expect("a start on a thread of its own");
+        assert_eq!(fresh, Err(AccountModels::Absent));
+    }
+
     /// BACKEND-48: a start does not offer a model this machine may not request, as the picker does
     /// not, so a person is not refused after choosing it.
     #[test]
@@ -5658,6 +5898,50 @@ mod tests {
 
         config.models = bravebot_config::Managed::at(&path).models().clone();
         assert_eq!(keys(&config), ["chatgpt/gpt-a"]);
+    }
+
+    /// BACKEND-48: a start does not offer a model of the xAI account this machine may not request, as
+    /// the picker does not, so a person is not refused after choosing it. The regression it rejects is
+    /// the xAI rows taken from the listing without the machine-level layer's `models.deny`, which offers
+    /// a row that is refused once picked.
+    #[test]
+    fn a_start_is_not_offered_an_xai_model_the_machine_level_layer_refuses() {
+        use models::scripted_xai::offer;
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-start-xai-models-refused");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["xai/grok-4.5"]}}"#).expect("a managed file");
+        let mut config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            xai_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(the_xai_accounts_listing());
+        assert_eq!(keys(&config), ["xai/grok-4.5", "xai/grok-build-0.1"]);
+
+        offer(the_xai_accounts_listing());
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(keys(&config), ["xai/grok-build-0.1"]);
+
+        // Where the layer refuses every row the account offers, the start is told the listing gave
+        // none to choose from.
+        std::fs::write(
+            &path,
+            r#"{"models": {"deny": ["xai/grok-4.5", "xai/grok-build-0.1"]}}"#,
+        )
+        .expect("a managed file");
+        offer(the_xai_accounts_listing());
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(
+            xai_models_to_start_on(&config),
+            Err(bravebot_agent::xai::AccountModels::Offered(Vec::new()))
+        );
     }
 
     /// CHATGPT-9: a person who signed in to ChatGPT and whose listing could not be had is told why, in
@@ -39673,6 +39957,60 @@ mod tests {
         );
         assert!(said.contains("bravebot auth login chatgpt"), "{said}");
         assert!(!said.contains("unauthorized"), "{said}");
+    }
+
+    /// XAI-15: a `/compact` that failed on the xAI account says that failure's own sentence in the line it
+    /// leaves, which names the command that signs in to xAI and none of ChatGPT's, and not the name of a
+    /// category, which cannot. The thread that summarises is the real one, on a model of the account in a
+    /// profile nobody signed in to, so nothing is sent. The regressions it rejects are the category's name
+    /// for a failure of the account, and the ChatGPT account's sentence for the xAI account's failure,
+    /// which sends a person to sign in to the wrong service.
+    #[test]
+    fn a_compact_that_failed_on_the_xai_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-xai-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        let (to_main, _from_worker) = mpsc::channel();
+
+        let (done, _unchanged, _trail) = summarise_on_a_worker(
+            &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            conversation,
+            Some("xai/grok-4.5"),
+            TrustStore::new(&root),
+            None,
+            &Cancel::new(),
+            &workspace,
+            None,
+            to_main,
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        compact_ended(&mut session, 100_000, &done, false);
+        let said = last_note(&session);
+        assert!(said.contains("not signed in to xAI"), "{said}");
+        assert!(said.contains("bravebot auth login xai"), "{said}");
+        assert!(
+            !said.contains("unauthorized")
+                && !said.contains("ChatGPT")
+                && !said.contains("auth login chatgpt"),
+            "{said}"
+        );
     }
 
     /// CHATGPT-8: a `/compact` that the account refused as a 429 with a wait says the refusal's

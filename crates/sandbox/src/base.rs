@@ -845,6 +845,8 @@ mod tests {
             "leo-premium.lock",
             "chatgpt-account.json",
             "chatgpt-account.lock",
+            "xai-account.json",
+            "xai-account.lock",
             "mcp.json",
             "mcp-approved",
             "mcp-projects",

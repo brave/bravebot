@@ -295,6 +295,11 @@ person ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)). A turn on that model that fi
 before a request is sent, naming the command. Replacing an access token that is about to expire is not a
 sign-in and is done inside the turn ([CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7)).
 
+The xAI sign-in starts none either: `bravebot auth login xai` is typed by a person
+([XAI-7](xai-sign-in.md#XAI-7)). A model named `xai/<name>` needs no sign-in before work starts, and a turn
+on it that finds no usable sign-in ends before a request is sent, naming the command
+([XAI-17](xai-sign-in.md#XAI-17)).
+
 `verified-by: bravebot_agent::backend::a_brave_model_never_needs_an_aws_sign_in`
 `verified-by: bravebot_agent::backend::without_bedrock_configured_nothing_needs_a_sign_in`
 `verified-by: bravebot_agent::backend::signing_in_for_a_model_no_aws_account_serves_does_nothing`
@@ -304,6 +309,8 @@ sign-in and is done inside the turn ([CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7)).
 `verified-by: bravebot_agent::backend::an_aws_block_leaves_the_other_rosters_needing_no_sign_in`
 `verified-by: bravebot_agent::backend::the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for`
 `verified-by: bravebot_cli::layering::the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else`
+`verified-by: bravebot_cli::layering::the_xai_sign_in_is_started_by_the_command_and_nothing_else`
+`verified-by: bravebot_agent::backend::a_turn_on_an_xai_model_with_no_usable_sign_in_ends_before_a_request_naming_the_command`
 `verified-by: bravebot_cli::running::a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_nothing`
 
 <a id="BACKEND-10"></a>
@@ -702,6 +709,12 @@ are the ones the account is offered as. A bare name that begins `chatgpt/` is th
 of another id lists it, and that gateway's model is reached by naming it with the gateway's identifier ahead of
 the name, as for any model: `<id>/chatgpt/<name>`.
 
+The xAI account of [XAI-13](xai-sign-in.md#XAI-13) is named the same way, by the identifier `xai`, and a
+`provider` entry with that id that states an endpoint keeps it: the entry's models go to its gateway and none is
+the account's. An entry with that id that states no endpoint and is no known name is no gateway and holds
+nothing, and its `models` are not read for the account. A bare name that begins `xai/` is the account's even where
+a gateway of another id lists it, and that gateway's model is reached as `<id>/xai/<name>`.
+
 **Why.** One model is reachable through more than one service, billed and credentialled differently,
 and a bare name cannot say which was chosen. That mattered less while a gateway served only what a
 settings file listed, because the file was the record of the choice. It decides correctness once a
@@ -729,6 +742,10 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 `verified-by: bravebot_agent::backend::a_gateway_entry_named_chatgpt_keeps_its_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_chatgpt_is_reached_by_its_qualified_name_alone`
 `verified-by: bravebot_agent::backend::a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account`
+`verified-by: bravebot_config::lib::only_the_qualified_name_selects_the_xai_account_and_only_the_rest_of_it_is_sent`
+`verified-by: bravebot_config::lib::a_provider_entry_named_xai_keeps_the_name_and_no_model_is_the_accounts`
+`verified-by: bravebot_config::lib::an_entry_named_xai_that_states_no_endpoint_holds_nothing_and_its_models_are_not_read`
+`verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_xai_is_reached_by_its_qualified_name_alone`
 
 <a id="BACKEND-19"></a>
 ### BACKEND-19: a gateway that was told no models is asked what it serves
@@ -744,6 +761,9 @@ The desktop says it in a warning that names the gateway and says to
 try again, and gives no command line, since a window has none. A gateway whose block names a credential
 nothing holds is not asked, and the picker does not say it could not be read, since `doctor` says the
 credential is missing. A gateway whose block names its models is not asked and is not mentioned.
+
+The xAI account's models are asked for beside a gateway's when a person signed in to xAI, and are said in the same two
+places when the listing could not be had ([XAI-19](xai-sign-in.md#XAI-19)).
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
 wider roster answers only where the narrower question does not. A block naming no credential has no
@@ -914,6 +934,10 @@ Anthropic's listing states the capability per model, as an object with a `suppor
 `effort`, and only a `false` there says the model reads none. A model whose entry omits the object,
 or states it as anything else, is a model the listing does not describe.
 
+The xAI account is sent no level and is reported as reading none ([XAI-16](xai-sign-in.md#XAI-16)). Its listing
+states `reasoning_effort` levels for some models in a field this clause does not read for a gateway, and the
+service was not asked with a level.
+
 The ChatGPT account's listing states it per model in `supported_reasoning_levels`
 ([CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9)). A row that lists levels reads one, a row whose list is empty
 reads none, and a row that does not mention the field, or states it as anything but a list, is a model the
@@ -1038,6 +1062,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_tui::app::a_level_the_service_refused_stops_being_reported_as_in_force`
 `verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
+`verified-by: bravebot_agent::backend::the_xai_account_reads_no_level_is_one_service_and_is_asked_for_the_name_after_its_identifier`
 
 
 <a id="BACKEND-23"></a>
@@ -2029,11 +2054,13 @@ that path rather than with the person in front of the screen.
 
 Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
 subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
-A session does not open and a one-shot run asks nothing. What is said instead is the four ways to
+A session does not open and a one-shot run asks nothing. What is said instead is the five ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
 through Bedrock, an OpenAI-compatible gateway, signing in with a ChatGPT account
-(`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), and importing a Leo
-Premium subscription. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
+(`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), signing in with an xAI
+account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and importing a Leo Premium
+subscription. The line for each sign-in says that the account's models are then offered in `/model`
+as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
 `bravebot --bg <prompt>` is refused the same way, in the terminal that typed it, before the
 background process is started.
 
@@ -2057,30 +2084,36 @@ its shape from lands: those blocks name their models and name no default, so the
 one the build baked in. What is said there is the key that names one of the configured service's
 models, and the routes are left out.
 
-**A stored ChatGPT sign-in is such a service.** It is a fourth way to configure one, beside a Bedrock
+**A stored ChatGPT or xAI sign-in is such a service.** Each is a way to configure one, beside a Bedrock
 block, a gateway block and a stored Leo batch, and is read only where none of those has answered. A
-Bedrock or gateway block that is configured keeps the line above whatever else is stored: the file is not
-read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT is told to name a
-model with the `model` key, and that line is not replaced by one about the account. A start whose model
-in force is Brave's own and that finds a sign-in stored and nothing else configured, and that is not
-asked which model to use (below) or declines, is told that a ChatGPT sign-in is stored, and to name one
-of the account's models in a command that works as typed: `bravebot -i "<prompt>" --model
-chatgpt/<model>` opens a session on it, and `bravebot "<task>" --model chatgpt/<model>` runs a task on
-it. `bravebot --model chatgpt/<model>` alone starts nothing, since a task is required, and is not named.
-`/model` is named only as what lists the account's models once a session is open. It says that
-`bravebot` started on its own asks which one to use, in a terminal outside an incognito session, where
-the account lists its models, because a one-shot run, a start that names a model and `doctor` end in the
-same refusal and ask nothing. It is not shown the routes, and no import is offered, since a service is
-configured. A sign-in file that cannot be read
-configures nothing and is said first, with the remedy of
-[CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11), above the routes. `doctor` says it once, in its own line
-for the sign-in. A model that a configured service serves does not read the file.
+Bedrock or gateway block that is configured keeps the line above whatever else is stored: neither file is
+read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT or xAI is asked
+which of that service's models to use where a person can be asked (below), and is told to name a model with
+the `model` key where that is declined or cannot be asked, and neither the question nor that line is about
+an account. A sign-in file that cannot be read is not said there, since it is not read; `doctor` reports it. A start whose
+model in force is Brave's own and that finds a sign-in stored and nothing else configured, and that is not
+asked which model to use (below) or declines, is told which sign-in is stored, and to name one of the
+account's models in a command that works as typed: `bravebot -i "<prompt>" --model chatgpt/<model>` or
+`--model xai/<model>` opens a session on it, and `bravebot "<task>" --model chatgpt/<model>` or `--model
+xai/<model>` runs a task on it. `bravebot --model xai/<model>` alone starts nothing, since a task is
+required, and is not named. `/model` is named only as what lists the account's models once a session is
+open. It says that `bravebot` started on its own asks which one to use, in a terminal outside an incognito
+session, where the account lists its models, because a one-shot run, a start that names a model and `doctor`
+end in the same refusal and ask nothing. It is not shown the routes, and no import is offered, since a
+service is configured. Where both sign-ins are stored it says so once, in one line that names both, and
+names a command for each account's models. A sign-in file that cannot be read configures nothing and is said
+first, with the remedy of [CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11) or of
+[XAI-8](xai-sign-in.md#XAI-8), above the routes. `doctor` says it once, in its own line for the sign-in. A
+model that a configured service serves does not read either file.
 
-**A start with that sign-in asks which of the account's models to use before it refuses.** Where the
-start would be refused for the stored sign-in alone, no model was named on the command line, the
+**A start with a stored sign-in asks which of the accounts' models to use before it refuses.** Where the
+start would be refused for the stored sign-in or sign-ins alone, no model was named on the command line, an
 account lists at least one model, stdin, stdout and stderr are all terminals and the session is not
-incognito, the account's rows are shown as numbered lines, in the order and without the models the
-pickers leave out, and the start asks which to use. The question goes to stderr and is read from
+incognito, the rows of the accounts that listed some are shown as numbered lines, the ChatGPT account's
+first and the xAI account's after them, each account's in the order and without the models the pickers
+leave out, and the start asks which to use. Only an account whose sign-in is stored is asked. A heading
+over the rows names the accounts that gave them, so a number is the one row it numbers whichever account
+it belongs to, and a pick of a row is recorded under its own identifier. The question goes to stderr and is read from
 stdin a line at a time, as the question about an import is ([import.md](import.md)). A number picks
 its row. The pick is recorded as a `/model` pick is, and the start goes on and opens on it, so the next
 start has it in force and asks nothing. The start says the pick is remembered only where what it reads
@@ -2091,14 +2124,16 @@ records nothing: the start is refused as it is where nothing can be asked. Nothi
 nothing is read from stdin, where a person cannot be asked or a model was named on the command line.
 The start never chooses a model for the person.
 
-The account is asked for its listing only where a person can be asked, and that may renew the access
-token and write the sign-in file, as any turn does ([CHATGPT-14](chatgpt-sign-in.md#CHATGPT-14)), or
-remove it where the sign-in has ended. Where the account offers no row, because the listing could not
-be had, was refused with a code that names the account, is empty, or the sign-in ended while it was
-asked for, nothing is asked and the refusal says why, under its first line, in the sentence the
-sign-in command says it in. The compiled names that stand in for a listing in a picker are not rows
-here. The refusal is built from the sign-in as it stands after the listing, so a sign-in the listing
-found ended is said to have ended, with the routes, and is not said to be stored.
+An account is asked for its listing only where a person can be asked, and that may renew the access
+token and write the sign-in file, as any turn does ([CHATGPT-14](chatgpt-sign-in.md#CHATGPT-14),
+[XAI-17](xai-sign-in.md#XAI-17)), or remove it where the sign-in has ended. Where an account offers no row,
+because the listing could not be had, was refused with a code that names the account, is empty, or the
+sign-in ended while it was asked for, that account is said, in the sentence the sign-in command says it in
+for ChatGPT and in a sentence of its own for xAI. Where another account gave rows the sentence is said above
+them and the rows are offered; where none did, nothing is asked and the refusal says why, under its first
+line. The compiled names that stand in for a listing in a picker are not rows here, and no list is built in
+for the xAI account. The refusal is built from the sign-ins as they stand after the listings, so a sign-in a
+listing found ended is said to have ended, with the routes, and is not said to be stored.
 
 **A start with a Bedrock or gateway block asks the same question about that service's models.** Where
 the start would be refused for the model in force being Brave's own, a Bedrock or gateway block is
@@ -2132,23 +2167,26 @@ Refusing rather than letting the request go, for the reason
 over it: what comes back from a request that was never going to be served carries no sign of why,
 and nothing about a bad session points at where a request went.
 
-Four routes rather than one, and each named by what to type, because a refusal that states the
+Five routes rather than one, and each named by what to type, because a refusal that states the
 problem and no way out of it has moved the work to the person and told them nothing they could not
 already see. Leo Premium is last and says why it is last: those models are reached through Brave's
 AI gateway, which has problems of its own being worked on. It is still the shortest route for
 somebody who already subscribes, which is why it is offered rather than left out. The ChatGPT
-sign-in comes before it, since it reaches OpenAI's own service and not Brave's gateway, and says the
-command to type because a session never starts that sign-in itself
-([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
+and xAI sign-ins come before it, since each reaches its own service and not Brave's gateway, and each says
+the command to type because a session never starts a sign-in itself
+([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1), [XAI-7](xai-sign-in.md#XAI-7)).
 
 A person who has only signed in has no model name to give. The names are known from the account's
 listing, and a session that would show the listing does not open until a model is served. Asking at the
 start puts the listing in front of the person at the moment the start would be refused, and the answer
-applies at once, to a sign-in made earlier as well as to one made now. A model named on the command
+applies at once, to a sign-in made earlier as well as to one made now. The xAI account's start is the
+same question over the same mechanism, so the two accounts are asked by one start: a person with both
+signed in is asked once, over one list, and one account that is down does not keep the other's models
+from being chosen. A model named on the command
 line is left alone because it outranks a recorded pick, so a pick made there would change nothing.
 
 Telling the configured case apart is the same argument in the other direction. Somebody there is
-one settings key from working, and four ways to set up a service would be four things to read
+one settings key from working, and five ways to set up a service would be five things to read
 past on the way to the one that applies, the first of which is the thing they already did.
 
 The test is the endpoint rather than a switch somebody sets. A build pointed at a host that is not
@@ -2206,8 +2244,31 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::model::the_rows_are_numbered_from_one_in_the_order_given_and_the_number_typed_picks_its_row`
 `verified-by: bravebot_cli::model::an_answer_that_is_not_the_number_of_a_row_picks_none`
 `verified-by: bravebot_cli::model::a_name_the_service_gave_is_shown_without_its_control_characters`
+`verified-by: bravebot_agent::backend::a_stored_xai_sign_in_is_a_service_configured_and_an_unreadable_one_is_not`
+`verified-by: bravebot_agent::xai::a_stored_sign_in_is_told_apart_from_an_absent_one_and_from_one_that_cannot_be_read`
+`verified-by: bravebot_cli::model::a_stored_xai_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes`
+`verified-by: bravebot_cli::model::where_both_accounts_are_signed_in_the_refusal_says_both`
+`verified-by: bravebot_cli::model::an_xai_sign_in_that_cannot_be_read_configures_nothing_and_the_routes_stay`
+`verified-by: bravebot_cli::model::a_start_asks_the_accounts_that_are_stored_and_nothing_else`
+`verified-by: bravebot_cli::model::an_xai_listing_that_gave_no_row_says_which_way_and_the_heading_names_the_accounts_that_offered`
+`verified-by: bravebot_tui::app::a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else`
+`verified-by: bravebot_cli::xai_sign_in::a_start_with_only_an_xai_sign_in_asks_which_model_and_the_pick_is_what_the_session_and_the_next_start_open_on`
+`verified-by: bravebot_cli::xai_sign_in::the_interface_that_draws_asks_the_same_question_for_an_xai_sign_in_and_draws_once_a_row_is_picked`
+`verified-by: bravebot_cli::xai_sign_in::a_start_with_both_accounts_signed_in_asks_over_both_lists_and_records_the_pick_of_either`
+`verified-by: bravebot_cli::xai_sign_in::an_account_that_gave_no_row_is_said_above_the_rows_the_other_account_gave`
+`verified-by: bravebot_cli::xai_sign_in::an_xai_listing_that_gave_no_row_ends_the_start_with_the_sentence_that_says_which_way_it_did_not`
+`verified-by: bravebot_cli::xai_sign_in::an_xai_sign_in_that_ended_while_the_listing_was_asked_for_is_not_said_to_be_stored`
+`verified-by: bravebot_cli::xai_sign_in::a_start_that_is_not_in_a_terminal_asks_nothing_reads_nothing_and_names_the_xai_commands`
+`verified-by: bravebot_cli::xai_sign_in::the_routes_offered_where_nothing_is_stored_include_xai_with_the_command_and_the_name_its_models_have`
+`verified-by: bravebot_cli::xai_sign_in::an_incognito_start_with_an_xai_sign_in_asks_nothing_and_records_nothing`
+`verified-by: bravebot_cli::xai_sign_in::nothing_is_asked_where_a_model_is_named_or_served_or_a_gateway_is_configured`
+`verified-by: bravebot_cli::xai_sign_in::an_unreadable_xai_sign_in_beside_a_configured_gateway_is_not_read_at_the_start`
+`verified-by: bravebot_cli::xai_sign_in::every_command_the_xai_refusal_names_works_as_typed`
+`verified-by: bravebot_cli::xai_sign_in::doctor_says_an_xai_sign_in_is_stored_where_a_start_would_and_asks_the_account_nothing`
+`verified-by: bravebot_cli::xai_sign_in::an_xai_sign_in_that_cannot_be_read_is_said_before_the_routes_and_the_report_says_it_once`
 `verified-by: bravebot_tui::app::a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else`
 `verified-by: bravebot_tui::app::a_start_is_not_offered_a_model_the_machine_level_layer_refuses`
+`verified-by: bravebot_tui::app::a_start_is_not_offered_an_xai_model_the_machine_level_layer_refuses`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable

@@ -20,8 +20,13 @@ Ways to sign in to a model service:
   3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
   4. gateway  A key for openrouter, openai, anthropic or a gateway a provider block in settings names, typed here and kept by bravebot
   5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
+  6. xai      An xAI SuperGrok subscription, signed in to with a code entered on any device
 Which one? Type its number or its name, or nothing to stop:
 ```
+
+A way that already holds a sign-in says so at the end of its line. For xAI that is what `auth status xai` says:
+when the access token expires, that it is sent to `api.x.ai` alone, and that the refresh token is sent to
+`auth.x.ai` alone.
 
 Each way is the command it was before, run for you:
 
@@ -32,12 +37,14 @@ Each way is the command it was before, run for you:
 | `import` | `bravebot import-providers` | [Importing](importing.md) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
 | `chatgpt` | nothing before it: a sign-in in a browser | [ChatGPT](providers/chatgpt.md) |
+| `xai` | nothing before it: a sign-in with a code entered on any device | [below](#xai) |
 
 A script names the way, so nothing is asked: `bravebot auth login leo nightly`,
-`bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`. With no way
-named and no terminal to ask on, the command is refused and prints these forms. `gateway` is the
-exception, since the key is typed at the terminal and never given on the command line. `chatgpt` shows
-an address to open and waits for the browser, so it needs a terminal on standard error.
+`bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`,
+`bravebot auth login xai`. With no way named and no terminal to ask on, the command is refused and prints
+these forms. `gateway` is the exception, since the key is typed at the terminal and never given on the
+command line. `chatgpt` shows an address to open and waits for the browser, and `xai` shows an address and a
+code and waits for them to be used, so each needs a terminal on standard error.
 
 **Leo** asks which channel, and nothing typed means stable. If a subscription is already imported it
 asks before signing in again, because each import registers this machine with Brave as one more
@@ -58,12 +65,49 @@ session uses it without the variable exported. Where that file already names
 `chatgpt-account.json` beside the other credential files. It prints the address as well, so a machine
 with no browser can finish the sign-in elsewhere through a forwarded port, and it waits five minutes.
 If a sign-in is already stored it asks before replacing it. The account's models are offered in
-`/model` as `chatgpt/<model>`. Where nothing serves the model in force, `bravebot` lists the account's
-models in the terminal and asks which one to use, remembers the answer for the next start, and opens on
+`/model` as `chatgpt/<model>`. Where nothing serves the model in force and no gateway or AWS account is
+configured, `bravebot` lists the account's models in the terminal and asks which one to use, remembers the answer for the next start, and opens on
 it. An answer that is not the number of a model, a start in a script or in an incognito session, and an
 account whose models could not be listed are refused as before, with the forms that name a model, and a
 listing that gave no model is said why. `bravebot auth logout chatgpt` forgets the copy here and ends nothing at
 OpenAI. See [ChatGPT](providers/chatgpt.md).
+
+## xAI
+
+`xai` shows an address and a code on standard error and waits for them to be used:
+
+```
+$ bravebot auth login xai
+Open this address on any device to sign in to xAI:
+https://accounts.x.ai/oauth2/device?user_code=ABCD-EFGH
+The code to enter, if the page asks for one: ABCD-EFGH
+Waiting for the code to be used. It stops working in about 30 minutes.
+signed in to xAI; the access token expires 2026-10-26T14:08:44Z. The sign-in is stored in /home/you/.bravebot/xai-account.json
+```
+
+Open the address on any device, the one you are typing on or a phone, sign in to xAI there and enter the
+code if the page asks for one. The command asks xAI whether the code has been used every few seconds, opens
+no browser, and ends when the code is used, when xAI answers that the sign-in is denied, or when it stops
+working, which the command says. Where the sign-in was denied, the code stopped working or was not used in
+time, nothing is stored and the sentence names `bravebot auth login xai` to try again. The tokens are kept in
+`xai-account.json` beside the other credential files, readable only by your account. Signing in again
+replaces them once it completes, and one that fails leaves what was stored. The refresh token, which is sent
+only to `auth.x.ai`, can replace the access token.
+
+Once the tokens are stored the account's models are offered in `/model` as `xai/<model>`, and a turn on one is
+sent to xAI in chat completions with the access token as a bearer. The refresh token, which is sent only to
+`auth.x.ai`, replaces the access token before it expires, inside the turn that needs it. Where nothing serves
+the model in force and no gateway or AWS account is configured, `bravebot` started on its own in a terminal
+lists the account's models and asks which one to
+use, remembers the answer for the next start, and opens on it, as it does for a ChatGPT account. With both
+accounts signed in it asks once, over both lists, and an account that could not be listed is said above the
+other's models. An answer that is not the number of a model, a start in a script or in an incognito session, and
+an account whose models could not be listed are refused as before, with the forms that name a model, such as
+`bravebot -i "<prompt>" --model xai/<model>`, and a listing that gave no model is said why.
+`bravebot auth logout xai` forgets the copy here and ends nothing at xAI. `bravebot auth status xai` says when
+the access token expires, that it is sent to `api.x.ai` alone and that the refresh token is sent to `auth.x.ai`
+alone, and `bravebot doctor` names
+the sign-in and says what would end each token. See [xAI](providers/xai.md).
 
 ## Gateway
 
@@ -132,7 +176,7 @@ bravebot auth status leo
 ```
 
 prints whether Leo is signed in and usable, and exits 0 only if it is, so a script can test it.
-`bedrock`, `gateway [id]` and `chatgpt` ask about the others. `gateway openai` says whether a
+`bedrock`, `gateway [id]`, `chatgpt` and `xai` ask about the others. `gateway openai` says whether a
 session would send a key for `openai`, and a key stored for it with no block naming it is reported
 as not signed in. With no way named it asks about all of them and exits 0 if any is usable. See [the
 reference](../reference/cli.md#auth).
@@ -140,7 +184,7 @@ reference](../reference/cli.md#auth).
 ## In an incognito session
 
 In an [incognito session](../using/incognito.md), `leo`,
-`import`, `gateway` and `chatgpt` are refused, since each keeps something in bravebot's own directory.
+`import`, `gateway`, `chatgpt` and `xai` are refused, since each keeps something in bravebot's own directory.
 `bedrock` is allowed: the AWS CLI keeps that session, and a session in this mode signs in to it as
 well. It writes nothing to settings, so `BRAVEBOT_USE_BEDROCK=1` still has to be exported. Signing
-out of Leo, forgetting a gateway key and signing out of ChatGPT are allowed.
+out of Leo, forgetting a gateway key and signing out of ChatGPT or xAI are allowed.

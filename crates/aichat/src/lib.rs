@@ -140,6 +140,7 @@ impl fmt::Display for ChatError {
                 }
                 f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
             }
+            Self::Account(failure @ AccountFailure::Xai(_)) => write!(f, "xAI account: {failure}"),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
@@ -282,12 +283,13 @@ pub trait AccountAccess {
     fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure>;
 }
 
-/// Why a ChatGPT account's request was not sent, or was refused.
+/// Why a ChatGPT account's request was not sent, or was refused, or an xAI account's was not.
 ///
 /// Each is a step, or a code compared with a closed list, and no text from a reply, so a sentence
-/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). The
-/// sentence for each is in the message catalog and is chosen by the layer that shows the failure,
-/// since this crate has none: it names the condition and says nothing to a person.
+/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8),
+/// [XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)). The sentence for each is in the message
+/// catalog and is chosen by the layer that shows the failure, since this crate has none: it names
+/// the condition and says nothing to a person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountFailure {
     /// Nothing is stored.
@@ -322,6 +324,54 @@ pub enum AccountFailure {
     Unusable,
     /// The token could not be renewed, and the reason is the class of the reply.
     Renewal(RenewalFailure),
+    /// The xAI account failed, in one of the ways [`XaiFailure`] names. Kept apart from the ChatGPT
+    /// account's, since its sentences name another service and another command.
+    Xai(XaiFailure),
+}
+
+/// Why an xAI account's request was not sent, or was refused
+/// ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
+///
+/// Chosen from the step that failed or from a status, and never from a reply's text: the service
+/// answers a token it does not accept with a 400, and an error body can carry an identifier, so the
+/// body of a refusal is not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XaiFailure {
+    /// Nothing is stored.
+    NotSignedIn,
+    /// The authorization server said the refresh token is no longer valid, and the stored sign-in
+    /// was removed.
+    Ended,
+    /// The serving host refused the access token it was sent with a 400, a 401 or a 403, and refused
+    /// the new one it was then sent with a 401 ([XAI-18](../../../docs/specs/xai-sign-in.md#XAI-18)).
+    Rejected,
+    /// The serving host refused the request with a 403 after the access token was replaced, so the
+    /// token is not one it could not validate. No refusal for a plan was observed, and the failure is
+    /// decided from the status alone ([XAI-18](../../../docs/specs/xai-sign-in.md#XAI-18)). Signing in
+    /// again does not change a refusal that a new token did not, so no command is named.
+    NotPermitted,
+    /// The sign-in file could not be read, or the claim on it could not be taken.
+    Unusable,
+    /// The token could not be renewed, and the reason is the class of the reply.
+    Renewal(RenewalFailure),
+}
+
+impl XaiFailure {
+    /// A fixed name for a front end to word the failure from, one for each value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NotSignedIn => "xai-not-signed-in",
+            Self::Ended => "xai-ended",
+            Self::Rejected => "xai-token-refused",
+            Self::NotPermitted => "xai-not-permitted",
+            Self::Unusable => "xai-unusable",
+            Self::Renewal(RenewalFailure::Refused) => "xai-renewal-refused",
+            Self::Renewal(RenewalFailure::RateLimited) => "xai-renewal-rate-limited",
+            Self::Renewal(RenewalFailure::Unavailable) => "xai-renewal-unavailable",
+            Self::Renewal(RenewalFailure::Incomplete) => "xai-renewal-incomplete",
+            Self::Renewal(RenewalFailure::Transport) => "xai-renewal-transport",
+        }
+    }
 }
 
 /// The class of a failed renewal, in the categories the other services' failures have.
@@ -350,6 +400,7 @@ impl AccountFailure {
             Self::Renewal(RenewalFailure::Unavailable) => "renewal-unavailable",
             Self::Renewal(RenewalFailure::Incomplete) => "renewal-incomplete",
             Self::Renewal(RenewalFailure::Transport) => "renewal-transport",
+            Self::Xai(failure) => failure.name(),
         }
     }
 
@@ -455,6 +506,10 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Whether a redirect in answer is a failure and nothing is sent to the address it names, as it
+    /// is for a request to a host this program compiled in
+    /// ([`AichatClient::refusing_redirects`]).
+    redirects_refused: bool,
     /// The headers the block asked for, resolved by the caller.
     ///
     /// Resolved elsewhere for the reason the token is: a value may name a variable, and this crate
@@ -515,8 +570,23 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            redirects_refused: false,
             headers: Vec::new(),
         });
+        self
+    }
+
+    /// Answer a redirect with the status it came with and send nothing to the address it names, with
+    /// the token on the socket the request is addressed to alone.
+    ///
+    /// For a gateway whose host is a constant of this program and whose token is the person's own
+    /// sign-in ([XAI-16](../../../docs/specs/xai-sign-in.md#XAI-16)): a redirect re-sends the request, and
+    /// the conversation with it, to a place a reply named. A configured gateway keeps following
+    /// redirects, since its host is the person's own. Does nothing where no gateway is set.
+    pub fn refusing_redirects(mut self) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.redirects_refused = true;
+        }
         self
     }
 
@@ -697,9 +767,16 @@ impl<'a> AichatClient<'a> {
             if let Some(gap) = gateway.provider.patience.idle_timeout {
                 http = http.idle_within(gap);
             }
+            if gateway.redirects_refused {
+                http = http.refusing_redirects();
+            }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 let (name, value) = gateway.provider.credential_header(token);
-                http = http.header(name, value);
+                http = if gateway.redirects_refused {
+                    http.socket_header(name, value)
+                } else {
+                    http.header(name, value)
+                };
             }
             // After the credential, and never over it: a name this request already set is refused
             // where the block is read, because `Request::header` appends and a second copy of one

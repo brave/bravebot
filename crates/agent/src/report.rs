@@ -1669,6 +1669,45 @@ mod tests {
         }
     }
 
+    /// XAI-15: a summary the xAI account could not make, and a move to the fallback model off it, are
+    /// told in the sentence of the xAI failure and not in the category's name, and not in ChatGPT's. A
+    /// reporter that fell back to `Why::Category` for the xAI value would say "unauthorized", which names
+    /// no command, and one that used ChatGPT's wording would send a person to sign in to ChatGPT.
+    #[test]
+    fn a_failure_of_the_xai_account_is_told_in_its_own_sentence_in_a_summary_and_a_fallback() {
+        use crate::backend::BackendError;
+        use crate::compact::CompactError;
+        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure, XaiFailure};
+
+        for failure in [
+            XaiFailure::NotSignedIn,
+            XaiFailure::Rejected,
+            XaiFailure::NotPermitted,
+            XaiFailure::Renewal(RenewalFailure::RateLimited),
+        ] {
+            let said = crate::xai::said_of_failure(failure);
+            let error = CompactError::Chat(BackendError::from(ChatError::Account(
+                AccountFailure::Xai(failure),
+            )));
+            assert_eq!(why_a_summary_failed(&error), said, "{failure:?}");
+
+            let mut reporter = RecordingReporter::default();
+            reporter.summary_failed(Why::of_summary(&error));
+            assert_eq!(
+                reporter.narration,
+                [t!(compact_failed_and_continuing, problem = said.clone())],
+                "{failure:?}"
+            );
+            let moved = fell_back_in_the_terminals_words(
+                "xai/grok-4.5",
+                "xai/grok-4.6",
+                Why::Account(AccountFailure::Xai(failure)),
+            );
+            assert!(moved.contains(&said), "{failure:?}: {moved}");
+            assert!(!moved.contains("ChatGPT"), "{failure:?}: {moved}");
+        }
+    }
+
     /// Some work has nothing to name, and an empty pair of brackets reads as a bug rather than
     /// as an absent target.
     #[test]

@@ -1244,6 +1244,7 @@ pub(super) fn close_the_rounds<S: Sink, R: Reporter>(
     // A ChatGPT sign-in renewed by a call that is not a round's request, such as the goal check or a
     // processor, and not said yet (CHATGPT-7).
     crate::chatgpt::say_an_unsaved_renewal(reporter);
+    crate::xai::say_an_unsaved_renewal(reporter);
     state.spent.wall = began.elapsed();
     reporter.spent(crate::outcome::Spent {
         timing: state.spent.finish(),

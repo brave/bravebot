@@ -24,12 +24,14 @@ use std::time::{Duration, Instant};
 mod chatgpt_run;
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
+mod terminal;
 
-use chatgpt_run::{Scratch, Shown, environment, sign_in_with};
+use chatgpt_run::{Scratch, environment, sign_in_with};
 use chatgpt_stand_in::{
     ACCESS_TWO, Asked, MODEL, NOT_ELIGIBLE, REFRESH_ONE, REFRESH_TWO, Refresh, Serving, StandIn,
     USAGE_LIMIT, now,
 };
+use terminal::{Ran, Terminal, in_a_sized_terminal};
 
 /// A home that is signed in and holds nothing else: no gateway, no Bedrock block, no Leo batch, no
 /// settings and no remembered model.
@@ -37,27 +39,6 @@ fn signed_in_home(name: &str) -> Scratch {
     let home = Scratch::new(name);
     home.store_sign_in(ACCESS_TWO, REFRESH_TWO, now() + 3600);
     home
-}
-
-/// The command that runs the built binary with `arguments` in a terminal of a size, which the
-/// interface that draws measures once at its start. `script` is the terminal, and the shell it runs
-/// sets the size.
-fn in_a_sized_terminal(arguments: &[&str]) -> Command {
-    let quoted: Vec<String> = arguments
-        .iter()
-        .map(|argument| format!("'{}'", argument.replace('\'', r"'\''")))
-        .collect();
-    let line = format!(
-        "/bin/stty cols 120 rows 40; exec '{}' {}",
-        env!("CARGO_BIN_EXE_bravebot"),
-        quoted.join(" ")
-    );
-    let mut command = Command::new("/usr/bin/script");
-    #[cfg(target_os = "macos")]
-    command.args(["-q", "/dev/null", "/bin/sh", "-c", &line]);
-    #[cfg(target_os = "linux")]
-    command.args(["-qec", &line, "/dev/null"]);
-    command
 }
 
 /// The environment of a run with Brave's own hosts, which only the sign-in can replace, and no way
@@ -81,81 +62,6 @@ fn turns(stand_in: &StandIn) -> Vec<Asked> {
         .into_iter()
         .filter(|asked| asked.path == "/v1/responses")
         .collect()
-}
-
-/// What a run showed, and the status it ended with, or `None` where it was still running when it
-/// was stopped.
-struct Ran {
-    shown: String,
-    code: Option<i32>,
-}
-
-/// A run of the built binary in a terminal, which a person types lines at.
-struct Terminal {
-    child: std::process::Child,
-    shown: Shown,
-    typed: Option<std::process::ChildStdin>,
-}
-
-impl Terminal {
-    fn start(mut command: Command) -> Self {
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("script runs the built binary in a terminal");
-        let shown = Shown::read(child.stdout.take().expect("the terminal"));
-        let typed = child.stdin.take();
-        Self {
-            child,
-            shown,
-            typed,
-        }
-    }
-
-    /// Whether the terminal has shown `words` before `bound` passes.
-    fn shows(&self, words: &str, bound: Duration) -> bool {
-        let stop = Instant::now() + bound;
-        while Instant::now() < stop {
-            if self.shown.text().contains(words) {
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        }
-        false
-    }
-
-    /// Type `line` and a return.
-    fn type_line(&mut self, line: &str) {
-        let typed = self.typed.as_mut().expect("the input is still open");
-        writeln!(typed, "{line}").expect("a line typed");
-    }
-
-    /// The end of the input, which ends a session in lines.
-    fn end_input(&mut self) {
-        self.typed = None;
-    }
-
-    /// What the run showed once it ended, or when `bound` passed and it was stopped.
-    fn finish(mut self, bound: Duration) -> Ran {
-        let stop = Instant::now() + bound;
-        let code = loop {
-            if let Some(status) = self.child.try_wait().expect("the terminal") {
-                break status.code();
-            }
-            if Instant::now() >= stop {
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        Ran {
-            shown: self.shown.finished(),
-            code,
-        }
-    }
 }
 
 /// Run the built binary with `arguments` in `home`, in a terminal, until the stand-in has taken a

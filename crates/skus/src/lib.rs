@@ -37,8 +37,8 @@
 
 #![deny(unsafe_code)]
 
-// The seam that points the ChatGPT sign-in at a stand-in exists for tests, and a release build that
-// turned it on, by `--all-features` or a manifest, would let a variable choose where a token goes.
+// The seam that points the ChatGPT and xAI sign-ins at a stand-in exists for tests, and a release build
+// that turned it on, by `--all-features` or a manifest, would let a variable choose where a token goes.
 // Rust has no `cfg` for the release profile, so the refusal reads the two settings that profile has
 // and a test build does not: no debug assertions, and a panic that aborts. A release with
 // `debug-assertions = true` aborts on a panic, and `cargo test --release` unwinds and has no assertions,
@@ -51,11 +51,13 @@ compile_error!(
 
 pub mod chatgpt;
 pub mod device;
+pub mod oauth;
 pub mod profile;
 pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod testutil;
+pub mod xai;
 
 pub use device::{DeviceError, Registration};
 pub use profile::{Channel, LeoOrder, ProfileError, find_leo_order};

@@ -1,5 +1,5 @@
-//! CHATGPT-2: the `test-hosts` seam, which points the ChatGPT account at a server of a test's own,
-//! is on in no build that ships.
+//! CHATGPT-2 and XAI-1: the `test-hosts` seam, which points the ChatGPT account and the xAI sign-in
+//! at a server of a test's own, is on in no build that ships.
 //!
 //! A build with the seam reads a variable that names where a token goes. So every Cargo file and
 //! every command that builds or releases the program is read for a way to turn the seam on, and a
@@ -12,6 +12,7 @@
 //! tests that hold each reader to the shapes it has to see are beside it.
 //!
 //! [CHATGPT-2]: ../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2
+//! [XAI-1]: ../../../docs/specs/xai-sign-in.md#XAI-1
 
 mod shipped;
 
@@ -647,7 +648,7 @@ fn names_a_test_seam(text: &str) -> bool {
 
 /// What the variable that names a stand-in is called, in the form `squeezed` gives it, which is also
 /// the part of its name no other variable has. A command that sets it names the seam as a flag does.
-const SEAM_VARIABLE_WORDS: [&str; 1] = ["chatgpt-stand-in"];
+const SEAM_VARIABLE_WORDS: [&str; 2] = ["chatgpt-stand-in", "xai-stand-in"];
 
 /// The logical lines of `text` that ask for every feature, which enables each seam for every crate
 /// the build selects: `--all-features`, cargo-deny's `all-features = true` and the spellings
@@ -1083,6 +1084,18 @@ fn the_command_reader_sees_a_seam_and_every_feature_however_a_command_spells_the
             "cargo build --features 'test-' 'hosts'",
             "the name quoted in two pieces",
         ),
+        (
+            "BRAVEBOT_TEST_CHATGPT_STAND_IN=http://127.0.0.1:1 bravebot auth login chatgpt",
+            "the variable that names the ChatGPT stand-in",
+        ),
+        (
+            "BRAVEBOT_TEST_XAI_STAND_IN=http://127.0.0.1:1 bravebot auth login xai",
+            "the variable that names the xAI stand-in",
+        ),
+        (
+            "env BRAVEBOT_TEST_XAI_\\\nSTAND_IN=x bravebot",
+            "the xAI variable split by a continuation",
+        ),
     ] {
         assert!(
             names_a_test_seam(command),
@@ -1481,7 +1494,7 @@ fn functions_taking(code: &str, word: &str) -> Vec<String> {
 /// makes that so is who may name a host, and that is pinned here as the callers of what can. `Hosts`
 /// is the sign-in's destinations: the compiled-in ones are made by one constructor, a stand-in's by
 /// `Hosts::at`, which exists only with the seam, and the functions that take a `Hosts` are those of
-/// the sign-in's own module. The account's serving host is the base address of a `Provider`, which
+/// the sign-in's own module and of the module of the renewer. The account's serving host is the base address of a `Provider`, which
 /// `Provider::chatgpt_account` builds from a constant, and `ResponsesClient::for_account` and
 /// `list_from_account` send the access token to whatever provider they are given, so each has one
 /// caller, and the argument at that call is the account's provider, which one function of the agent
@@ -1490,6 +1503,7 @@ fn functions_taking(code: &str, word: &str) -> Vec<String> {
 #[test]
 fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the_seam() {
     let chatgpt_agent = "crates/agent/src/chatgpt.rs".to_string();
+    let xai_agent = "crates/agent/src/xai.rs".to_string();
     let backend = "crates/agent/src/backend.rs".to_string();
     let chatgpt_command = "crates/cli/src/chatgpt.rs".to_string();
     // What is called, and the files and counts allowed to call it.
@@ -1497,13 +1511,21 @@ fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the
         // The constructor that is not a constant exists with the seam, and nothing a release
         // compiles calls it.
         ("Hosts::at(", vec![]),
-        // The compiled-in hosts are asked for by the renewer's source and by the command.
+        // The compiled-in hosts are asked for by each renewer's source and by each command.
         (
             "Hosts::compiled_in",
-            vec![(chatgpt_agent.clone(), 1), (chatgpt_command.clone(), 1)],
+            vec![
+                (chatgpt_agent.clone(), 1),
+                (xai_agent.clone(), 1),
+                (chatgpt_command.clone(), 1),
+                ("crates/cli/src/xai.rs".to_string(), 1),
+            ],
         ),
-        // The one renewer of the process.
-        ("Renewer::new(", vec![(chatgpt_agent.clone(), 1)]),
+        // The one renewer of the process for each account.
+        (
+            "Renewer::new(",
+            vec![(chatgpt_agent.clone(), 1), (xai_agent.clone(), 1)],
+        ),
         // The account's own client and its listing, the two calls that send the access token.
         ("ResponsesClient::for_account(", vec![(backend.clone(), 1)]),
         ("list_from_account(", vec![(chatgpt_agent.clone(), 1)]),
@@ -1555,6 +1577,7 @@ fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the
         .into_iter()
         .filter(|(file, code)| {
             relative(file).starts_with("crates/skus/src/chatgpt/")
+                || relative(file).starts_with("crates/skus/src/oauth/")
                 || code.contains("bravebot_skus::chatgpt")
         })
         .flat_map(|(file, code)| {
@@ -1567,9 +1590,12 @@ fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the
     taking.sort();
     let skus =
         |file: &str, name: &str| (format!("crates/skus/src/chatgpt/{file}"), name.to_string());
+    let oauth =
+        |file: &str, name: &str| (format!("crates/skus/src/oauth/{file}"), name.to_string());
     assert_eq!(
         taking,
         [
+            skus("account.rs", "renew"),
             skus("authorize.rs", "url"),
             skus("exchange.rs", "exchange"),
             skus("exchange.rs", "refresh"),
@@ -1577,8 +1603,9 @@ fn only_the_agent_names_the_host_the_account_is_sent_to_and_no_release_calls_the
             skus("id_token.rs", "verify"),
             skus("mod.rs", "run"),
             skus("mod.rs", "sign_in"),
-            skus("renew.rs", "at"),
-            skus("renew.rs", "new"),
+            oauth("mod.rs", "renew"),
+            oauth("renew.rs", "at"),
+            oauth("renew.rs", "new"),
         ],
         "a function takes the sign-in's destinations that CHATGPT-2 does not name"
     );
@@ -1749,6 +1776,7 @@ fn the_bodies_that_make_a_host_and_every_reader_of_the_stand_in_variable_and_the
         release_callers(".access_token()"),
         [
             ("crates/agent/src/chatgpt.rs".to_string(), 1),
+            ("crates/agent/src/xai.rs".to_string(), 1),
             ("crates/aichat/src/responses.rs".to_string(), 1),
         ]
     );
@@ -1756,19 +1784,189 @@ fn the_bodies_that_make_a_host_and_every_reader_of_the_stand_in_variable_and_the
         release_callers("fn access_token("),
         [
             ("crates/agent/src/chatgpt.rs".to_string(), 1),
+            ("crates/agent/src/xai.rs".to_string(), 2),
             ("crates/aichat/src/lib.rs".to_string(), 1),
-            ("crates/skus/src/chatgpt/renew.rs".to_string(), 1),
+            ("crates/skus/src/oauth/renew.rs".to_string(), 1),
         ]
     );
     assert_eq!(
         release_callers("Renewer::access_token"),
-        [("crates/agent/src/chatgpt.rs".to_string(), 1)]
+        [
+            ("crates/agent/src/chatgpt.rs".to_string(), 1),
+            ("crates/agent/src/xai.rs".to_string(), 1),
+        ]
     );
     // The token that goes to the listing is the one the renewer made, as text, and no other.
     let listings = release_call_arguments("list_from_account(");
     assert_eq!(
         listings[0].get(2).map(String::as_str),
         Some("token.expose()")
+    );
+}
+
+/// XAI-1: the xAI sign-in sends its tokens to the two endpoints of one issuer, and the access token
+/// goes to one serving host. What makes the hosts is pinned where a release compiles it. The bodies of
+/// `Hosts::compiled_in`, `xai_serving_host` and `Provider::xai_account` are compared to the text the
+/// clause is written about, so an environment read that is not behind the gate, or a host that is not
+/// one of the three constants, is a change to a text this test holds. The variable that names a
+/// stand-in is a literal in two gated constants and an identifier in four places, and in nothing else
+/// a release compiles. The functions of the sign-in that take the destinations are those the clause
+/// names.
+#[test]
+fn the_xai_hosts_are_three_constants_and_the_variable_that_names_a_stand_in_is_read_in_two_gated_places()
+ {
+    let sources = release_sources();
+    let xai: Vec<(String, String)> = sources
+        .iter()
+        .map(|(file, code)| (relative(file), code.clone()))
+        .filter(|(file, _)| file.starts_with("crates/skus/src/xai/"))
+        .collect();
+    let module = xai
+        .iter()
+        .find(|(file, _)| file == "crates/skus/src/xai/mod.rs")
+        .map(|(_, code)| code.clone())
+        .expect("the xAI module is a release source");
+
+    assert_eq!(
+        item_text(&module, "pub fn compiled_in()"),
+        format!(
+            "pub fn compiled_in() -> Self {{ {SEAM_GATE} if let Some(base) = \
+             std::env::var(XAI_STAND_IN) .ok() .filter(|base| !base.is_empty()) \
+             {{ return Self::at(&base); }} \
+             Self {{ device: \"https://auth.x.ai/oauth2/device/code\".to_string(), \
+             token: \"https://auth.x.ai/oauth2/token\".to_string(), }} }}"
+        ),
+        "xai::Hosts::compiled_in is not the body XAI-1 is written about"
+    );
+    let provider = sources
+        .iter()
+        .find(|(file, _)| relative(file) == "crates/config/src/provider.rs")
+        .map(|(_, code)| code.clone())
+        .expect("the provider module is a release source");
+    assert_eq!(
+        item_text(&provider, "fn xai_serving_host()"),
+        format!(
+            "fn xai_serving_host() -> String {{ {SEAM_GATE} if let Some(base) = \
+             std::env::var(XAI_STAND_IN) .ok() .filter(|base| !base.is_empty()) \
+             {{ return format!(\"{{base}}/v1\"); }} XAI_SERVING_HOST.to_string() }}"
+        ),
+        "xai_serving_host is not the body XAI-1 is written about"
+    );
+    assert_eq!(
+        item_text(&provider, "pub fn xai_account()"),
+        "pub fn xai_account() -> Self { let entry = serde_json::json!({ \"name\": \"xAI\", \
+         \"options\": {\"baseURL\": xai_serving_host()}, }); \
+         let serde_json::Value::Object(entry) = entry else { unreachable!(\"a JSON object literal\"); }; \
+         match Self::one(XAI_ID, &entry) { Some(account) => account, \
+         None => unreachable!(\"an entry that states its endpoint is reachable\"), } }",
+        "Provider::xai_account is not the body XAI-1 is written about"
+    );
+    let (_, constant) = declared_under(&provider, "const XAI_SERVING_HOST");
+    assert_eq!(
+        constant,
+        "const XAI_SERVING_HOST: &str = \"https://api.x.ai/v1\";"
+    );
+    assert_eq!(
+        release_callers("BRAVEBOT_TEST_XAI_STAND_IN"),
+        [
+            ("crates/config/src/provider.rs".to_string(), 1),
+            ("crates/skus/src/xai/mod.rs".to_string(), 1),
+        ],
+        "a source a release compiles holds the name of the variable that names a stand-in"
+    );
+    for (code, constant) in [
+        (&module, "pub const XAI_STAND_IN:"),
+        (&provider, "pub const XAI_STAND_IN:"),
+    ] {
+        let (above, _) = declared_under(code, constant);
+        assert_eq!(above, SEAM_GATE, "{constant} is not under the gate");
+    }
+    assert_eq!(
+        identifier_uses("XAI_STAND_IN"),
+        [
+            ("crates/config/src/provider.rs".to_string(), 2),
+            ("crates/skus/src/xai/mod.rs".to_string(), 2),
+        ]
+    );
+
+    // The functions that take the destinations are the sign-in's own.
+    let mut taking: Vec<(String, String)> = xai
+        .iter()
+        .flat_map(|(file, code)| {
+            functions_taking(code, "Hosts")
+                .into_iter()
+                .map(move |name| (file.clone(), name))
+        })
+        .collect();
+    taking.sort();
+    let own = |file: &str, name: &str| (format!("crates/skus/src/xai/{file}"), name.to_string());
+    assert_eq!(
+        taking,
+        [
+            own("account.rs", "renew"),
+            own("exchange.rs", "code"),
+            own("exchange.rs", "poll"),
+            own("exchange.rs", "refresh"),
+            own("mod.rs", "run"),
+            own("mod.rs", "sign_in"),
+        ],
+        "a function takes the xAI sign-in's destinations that XAI-1 does not name"
+    );
+}
+
+/// XAI-1 and XAI-16: the access token is put in a request in one place, to a provider built from
+/// constants and held by one function, and the places that ask the renewer for it are the agent's own.
+/// The provider is made in one place and read in two, the roster's listing and the build of the
+/// client. The client that is given it follows no redirect, and the one function that presents the
+/// token is called by the two dispatches of a request and no other. A second place that builds the account's provider, hands the
+/// client another one, or presents the token is a place that can say where it goes, and this fails
+/// until the clause says why.
+#[test]
+fn the_xai_token_is_presented_through_one_client_given_the_provider_of_constants() {
+    assert_eq!(
+        release_callers("Provider::xai_account"),
+        [("crates/agent/src/xai.rs".to_string(), 1)],
+        "the xAI account's provider is built outside the agent's one holder"
+    );
+    assert_eq!(
+        release_callers("serving_provider()"),
+        [
+            ("crates/agent/src/backend.rs".to_string(), 1),
+            ("crates/agent/src/xai.rs".to_string(), 2),
+        ],
+        "the provider the token is sent with is read outside the client and the roster that present it"
+    );
+    // Both clients a gateway's requests are made with are built from a provider in this one function
+    // each: the configured gateway's, and the account's, which is the one of constants.
+    let mut gateways: Vec<String> = release_call_arguments(".for_gateway(")
+        .into_iter()
+        .map(|arguments| arguments.first().cloned().unwrap_or_default())
+        .collect();
+    gateways.sort();
+    assert_eq!(
+        gateways,
+        ["crate::xai::serving_provider()", "provider"],
+        "a gateway client is built from a provider other than the two XAI-16 names"
+    );
+    let backend = release_sources()
+        .into_iter()
+        .find(|(file, _)| relative(file) == "crates/agent/src/backend.rs")
+        .map(|(_, code)| code)
+        .expect("the backend is a release source");
+    let client = item_text(&backend, "fn xai_client<");
+    assert!(
+        client.contains(".refusing_redirects()"),
+        "the account's client follows a redirect: {client}"
+    );
+    assert_eq!(
+        release_callers("xai::presenting("),
+        [("crates/agent/src/backend.rs".to_string(), 2)],
+        "the access token is presented outside the two dispatches of a request"
+    );
+    assert_eq!(
+        release_callers("xai_client("),
+        [("crates/agent/src/backend.rs".to_string(), 2)],
+        "the account's client is built outside the two dispatches of a request"
     );
 }
 

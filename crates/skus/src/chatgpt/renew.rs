@@ -1,285 +1,33 @@
 //! Replacing an access token before it expires
 //! ([CHATGPT-7](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)).
 //!
-//! The stored sign-in is read, and where its access token is within a minute of its expiry the
-//! refresh token is presented to the token endpoint under the claim on the file, the reply is
-//! written, and only then is the new access token handed out. Every process that signs in or
-//! renews takes the same claim and reads the file again once it holds it, so two of them never
-//! present one refresh token, which a server that replaces it on use would kill for the second.
+//! The renewer is the one [`crate::oauth`] states for any sign-in, given the ChatGPT account and the
+//! refresh of [`super::exchange`]. The stored sign-in is read, and where its access token is within
+//! a minute of its expiry the refresh token is presented to the token endpoint under the claim on the
+//! file, the reply is written, and only then is the new access token handed out. Every process that
+//! signs in or renews takes the same claim and reads the file again once it holds it, so two of them
+//! never present one refresh token, which a server that replaces it on use would kill for the second.
 //!
-//! The file is written here whatever the session is doing: this crate knows no mode that declines
+//! The file is written there whatever the session is doing: this crate knows no mode that declines
 //! a write, and a refresh that was not written would end the sign-in at the next process
-//! ([CHATGPT-14](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-14)).
+//! ([CHATGPT-14](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-14)). The tests below run that
+//! renewer against the ChatGPT account and a stand-in token endpoint.
 
-use super::account::{self, Account, AccountError};
-use super::encoding::{now, same};
-use super::{Class, Hosts, exchange};
-use crate::Secret;
-use std::path::PathBuf;
+use super::account::ChatGpt;
 
-/// How close to its expiry an access token may be and still be sent.
-const MARGIN: u64 = 60;
-
-/// Why no access token could be had. Each is a step and, for a failed request, a class, and none
-/// holds text from a reply ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
-#[derive(Debug)]
-pub enum TokenError {
-    /// Nothing is stored, and this renewer has not found a sign-in end.
-    NotSignedIn,
-    /// The authorization server says the refresh token is no longer valid. The stored copy was
-    /// removed where it was the one refused. Every later ask of the same renewer says so as well,
-    /// until a sign-in is stored again.
-    Ended,
-    /// The refresh failed in another way and no token in hand could be sent.
-    Refresh(Class),
-    /// The file could not be read, or the claim on it could not be taken.
-    Store(AccountError),
-}
-
-impl std::fmt::Display for TokenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotSignedIn => f.write_str("not signed in"),
-            Self::Ended => f.write_str("sign-in ended"),
-            Self::Refresh(class) => write!(f, "refresh {class}"),
-            Self::Store(failure) => write!(f, "store {failure}"),
-        }
-    }
-}
-
-impl std::error::Error for TokenError {}
-
-/// An access token to send, and what could not be stored of the renewal that made it.
-///
-/// No equality, which the token does not have: see [`Secret`].
-#[derive(Debug)]
-pub struct Access {
-    pub token: Secret,
-    /// Set where a renewed token could not be written. The token is good, and this process holds
-    /// the only copy of the refresh token that renews it until a later write succeeds.
-    pub unwritten: Option<AccountError>,
-}
-
-/// Tokens a renewal made and the file could not take.
-struct Unwritten {
-    /// The refresh token the file held when it was last read: the one this process replaced. The
-    /// memory is written over the file only while the file still holds it.
-    replaced: Secret,
-    account: Account,
-}
-
-/// Hands out access tokens for the stored sign-in, replacing one that is about to expire.
-pub struct Renewer {
-    hosts: Hosts,
-    agent: ureq::Agent,
-    path: PathBuf,
-    unwritten: Option<Unwritten>,
-    /// A refresh was refused as the refresh token no longer being valid and the file was removed.
-    /// A missing file does not say why it is missing, so this is what tells a later ask that the
-    /// sign-in ended, where the file alone would say none was made. Forgotten where a sign-in is
-    /// found stored again.
-    ended: bool,
-    /// Seconds since 1970 where an expiry is made and compared, which is 0 for a clock set before
-    /// that. The system clock outside a test.
-    now: fn() -> u64,
-}
-
-impl Renewer {
-    /// A renewer for the sign-in kept where [`account::path`] says. `transport` is what the caller
-    /// has decided its clients trust and go through, as for [`super::sign_in`].
-    pub fn new(
-        hosts: Hosts,
-        transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
-    ) -> Result<Self, AccountError> {
-        Ok(Self::at(hosts, transport, account::path()?))
-    }
-
-    pub(super) fn at(
-        hosts: Hosts,
-        transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
-        path: PathBuf,
-    ) -> Self {
-        Self {
-            hosts,
-            agent: exchange::agent(transport),
-            path,
-            unwritten: None,
-            ended: false,
-            now,
-        }
-    }
-
-    /// The access token to send a request with: the stored one where its expiry is more than a
-    /// minute away, and otherwise a new one.
-    pub fn access_token(&mut self) -> Result<Access, TokenError> {
-        self.obtain(None)
-    }
-
-    /// A token other than `refused`, which the serving host turned away before its expiry. It is
-    /// the stored one where another process already replaced it, and a new one otherwise. The
-    /// caller sends the request once more with it, and does not call this a second time for the
-    /// same request.
-    pub fn replace_refused(&mut self, refused: &Secret) -> Result<Access, TokenError> {
-        self.obtain(Some(refused))
-    }
-
-    /// The stored sign-in, read from the file. One found there is not the sign-in that ended, so
-    /// finding it forgets the end.
-    fn read(&mut self) -> Result<Option<Account>, TokenError> {
-        let stored = account::load_at(&self.path).map_err(TokenError::Store)?;
-        if stored.is_some() {
-            self.ended = false;
-        }
-        Ok(stored)
-    }
-
-    /// What a file holding no sign-in means: that this process found it end, or that none is stored.
-    fn missing(&self) -> TokenError {
-        if self.ended {
-            TokenError::Ended
-        } else {
-            TokenError::NotSignedIn
-        }
-    }
-
-    fn obtain(&mut self, refused: Option<&Secret>) -> Result<Access, TokenError> {
-        // Nothing in memory and nothing to replace: no claim is needed to read a good token.
-        if self.unwritten.is_none() {
-            let stored = self.read()?.ok_or_else(|| self.missing())?;
-            if !needs_replacing(&stored, refused, (self.now)()) {
-                return Ok(Access {
-                    token: stored.access_token,
-                    unwritten: None,
-                });
-            }
-        }
-
-        let _claim = account::claim(&self.path).map_err(TokenError::Store)?;
-        // Read again with the claim held: another process may have replaced the token meanwhile.
-        let mut stored = self.read()?;
-        let mut failed_write = None;
-        if let Some(held) = self.unwritten.take() {
-            let still_ours = stored
-                .as_ref()
-                .is_some_and(|file| same_secret(&file.refresh_token, &held.replaced));
-            if still_ours {
-                match account::write_held(&self.path, &held.account) {
-                    Ok(()) => stored = Some(held.account.clone()),
-                    Err(failure) => failed_write = Some(failure),
-                }
-                if failed_write.is_some() {
-                    self.unwritten = Some(held);
-                }
-            }
-            // Where the file holds another token, another process replaced it or the sign-in is
-            // gone, and what memory holds is dropped with `held`.
-        }
-        let current = match (&self.unwritten, stored.as_ref()) {
-            (Some(held), _) => held.account.clone(),
-            (None, Some(file)) => file.clone(),
-            (None, None) => return Err(self.missing()),
-        };
-        if !needs_replacing(&current, refused, (self.now)()) {
-            return Ok(Access {
-                token: current.access_token,
-                unwritten: failed_write,
-            });
-        }
-
-        match exchange::refresh(
-            &self.agent,
-            &self.hosts,
-            &current.client_id,
-            &current.refresh_token,
-        ) {
-            Ok(renewed) => {
-                let next = Account {
-                    access_token: renewed.access,
-                    refresh_token: renewed
-                        .refresh
-                        .unwrap_or_else(|| current.refresh_token.clone()),
-                    expires_at: (self.now)().saturating_add(renewed.lifetime),
-                    client_id: current.client_id.clone(),
-                    host_id: current.host_id.clone(),
-                };
-                match account::write_held(&self.path, &next) {
-                    Ok(()) => {
-                        self.unwritten = None;
-                        Ok(Access {
-                            token: next.access_token,
-                            unwritten: None,
-                        })
-                    }
-                    Err(failure) => {
-                        let replaced = match (self.unwritten.take(), stored) {
-                            (Some(held), _) => held.replaced,
-                            (None, Some(file)) => file.refresh_token,
-                            (None, None) => current.refresh_token.clone(),
-                        };
-                        let token = next.access_token.clone();
-                        self.unwritten = Some(Unwritten {
-                            replaced,
-                            account: next,
-                        });
-                        Ok(Access {
-                            token,
-                            unwritten: Some(failure),
-                        })
-                    }
-                }
-            }
-            Err(exchange::Refused::Ended) => {
-                // Memory holds a token that was just refused, so it goes.
-                self.unwritten = None;
-                // The file was read with the claim held, and memory was written over it or dropped
-                // before that, so it holds the token that was refused or the one this process
-                // replaced, which the server killed when it gave the refused one. Either way it is
-                // a sign-in that cannot work.
-                //
-                // The sign-in has ended whether or not the file could be removed. A failed removal
-                // is not the answer: the next request meets the same refusal and tries again.
-                let _ = account::remove_held(&self.path);
-                // Kept for the rest of the process: the file is gone now, and the next ask, which
-                // may be the turn's after a picker's listing found the end, must not take that for
-                // a sign-in nobody made.
-                self.ended = true;
-                Err(TokenError::Ended)
-            }
-            Err(exchange::Refused::Failed(class)) => {
-                // A token the host refused is not sent again. One that has merely not been
-                // replaced, or that another process made after the refusal, is good until it
-                // expires.
-                let refused_now =
-                    refused.is_some_and(|refused| same_secret(&current.access_token, refused));
-                if !refused_now && current.expires_at > (self.now)() {
-                    Ok(Access {
-                        token: current.access_token,
-                        unwritten: failed_write,
-                    })
-                } else {
-                    Err(TokenError::Refresh(class))
-                }
-            }
-        }
-    }
-}
-
-/// Whether a request cannot be built from this account's access token: it is within the margin of
-/// its expiry, or it is the one the serving host refused.
-fn needs_replacing(account: &Account, refused: Option<&Secret>, now: u64) -> bool {
-    refused.is_some_and(|refused| same_secret(&account.access_token, refused))
-        || account.expires_at <= now.saturating_add(MARGIN)
-}
-
-fn same_secret(a: &Secret, b: &Secret) -> bool {
-    same(a.expose().as_bytes(), b.expose().as_bytes())
-}
+/// Hands out access tokens for the stored ChatGPT sign-in, replacing one that is about to expire.
+pub type Renewer = crate::oauth::Renewer<ChatGpt>;
 
 #[cfg(test)]
 mod tests {
-    use super::super::stand_in::{Received, Reply, named, serve};
+    use super::super::account::{self, Account};
+    use super::super::{Class, Hosts};
     use super::*;
-    use std::path::Path;
+    use crate::Secret;
+    use crate::oauth::encoding::{now, now_at};
+    use crate::oauth::stand_in::{Received, Reply, named, serve};
+    use crate::oauth::{AccountError, TokenError};
+    use std::path::{Path, PathBuf};
 
     const CLIENT: &str = "issued-client";
 
@@ -415,7 +163,6 @@ mod tests {
     /// start under a correct clock finds it.
     #[test]
     fn a_renewal_under_a_clock_before_1970_stores_an_expiry_the_next_start_renews_again() {
-        use super::super::encoding::now_at;
         use std::time::{Duration, UNIX_EPOCH};
 
         fn before_1970() -> u64 {
@@ -429,8 +176,7 @@ mod tests {
             reply("newer", Some("r2"), 1800),
         ]);
 
-        let mut under_that_clock = renewer(&server.base, &path);
-        under_that_clock.now = before_1970;
+        let mut under_that_clock = renewer(&server.base, &path).clocked(before_1970);
         let unexpired = under_that_clock.access_token().expect("a token");
         assert_eq!(
             unexpired.token.expose(),
@@ -788,7 +534,7 @@ mod tests {
         let file = on_disk(&path);
         assert_eq!(file.access_token.expose(), "theirs");
         assert_eq!(file.refresh_token.expose(), "r9");
-        assert!(renewer.unwritten.is_none());
+        assert!(!renewer.holds_unwritten_tokens());
         assert_eq!(server.finish().len(), 1);
     }
 
@@ -812,8 +558,113 @@ mod tests {
 
         assert!(matches!(outcome, Err(TokenError::Ended)), "{outcome:?}");
         assert_eq!(named(&asked[1].form(), "refresh_token"), "r1");
-        assert!(renewer.unwritten.is_none());
+        assert!(!renewer.holds_unwritten_tokens());
         assert!(!path.exists());
+    }
+
+    /// The claim of a holder that is slow and alive, aged past the minute after which a claim is taken
+    /// to belong to a process that died, so a second process breaks it.
+    fn an_aged_claim(path: &Path) {
+        std::fs::File::create(path.with_file_name("chatgpt-account.lock"))
+            .expect("a claim")
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(120))
+            .expect("an aged claim");
+    }
+
+    /// CHATGPT-7: a refresh refused as ended removes the file only while it holds a refresh token this
+    /// process knows to be spent. The holder whose claim was broken for its age writes the tokens it was
+    /// given while the process that broke it is refused for the one the holder already spent, so the
+    /// file is read again before it is removed, and the token found is the one used, with nothing asked
+    /// of the endpoint for it. This is the shared renewer under the ChatGPT account. The regression it
+    /// rejects is the removal of a sign-in another process had just renewed.
+    #[test]
+    fn a_refusal_of_a_spent_refresh_token_does_not_remove_what_another_process_wrote() {
+        let path = scratch("race");
+        account::save_at(&path, &stored("old", "r0", -5)).expect("a stored account");
+        an_aged_claim(&path);
+        let server = serve(vec![
+            Reply::json(400, "{\"error\":\"invalid_grant\"}").after({
+                let path = path.clone();
+                move || {
+                    account::write_held(&path, &stored("from-the-holder", "r1", 3000))
+                        .expect("the holder's write");
+                }
+            }),
+        ]);
+
+        let outcome = renewer(&server.base, &path).access_token();
+        let asked = server.finish();
+
+        assert_eq!(
+            outcome.expect("the holder's token").token.expose(),
+            "from-the-holder"
+        );
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert_eq!(named(&asked[0].form(), "refresh_token"), "r0");
+        let file = on_disk(&path);
+        assert_eq!(file.access_token.expose(), "from-the-holder");
+        assert_eq!(file.refresh_token.expose(), "r1");
+    }
+
+    /// CHATGPT-7: where the sign-in another process wrote is itself due, it is replaced once with its
+    /// own refresh token and no more than once, and a second process that keeps replacing it is not
+    /// chased: the second refusal, with the file changed again, removes nothing and is told as a refresh
+    /// that failed. The regressions it rejects are a refresh that presents the token the file held
+    /// before the other process wrote, and a loop that asks until the file stops changing.
+    #[test]
+    fn a_sign_in_another_process_wrote_that_is_due_is_replaced_once_and_not_chased() {
+        let path = scratch("race-due");
+        account::save_at(&path, &stored("old", "r0", -5)).expect("a stored account");
+        let server = serve(vec![
+            Reply::json(400, "{\"error\":\"invalid_grant\"}").after({
+                let path = path.clone();
+                move || {
+                    account::write_held(&path, &stored("due-too", "r1", -5)).expect("a write");
+                }
+            }),
+            reply("new", Some("r2"), 3600),
+        ]);
+
+        let outcome = renewer(&server.base, &path).access_token();
+        let asked = server.finish();
+
+        assert_eq!(outcome.expect("a token").token.expose(), "new");
+        let presented: Vec<String> = asked
+            .iter()
+            .map(|each| named(&each.form(), "refresh_token").to_string())
+            .collect();
+        assert_eq!(presented, ["r0", "r1"]);
+        assert_eq!(on_disk(&path).refresh_token.expose(), "r2");
+
+        let path = scratch("race-chased");
+        account::save_at(&path, &stored("old", "r0", -5)).expect("a stored account");
+        let server = serve(vec![
+            Reply::json(400, "{\"error\":\"invalid_grant\"}").after({
+                let path = path.clone();
+                move || {
+                    account::write_held(&path, &stored("due-too", "r1", -5)).expect("a write");
+                }
+            }),
+            Reply::json(400, "{\"error\":\"invalid_grant\"}").after({
+                let path = path.clone();
+                move || {
+                    account::write_held(&path, &stored("due-as-well", "r2", -5)).expect("a write");
+                }
+            }),
+        ]);
+
+        let outcome = renewer(&server.base, &path).access_token();
+
+        assert!(
+            matches!(outcome, Err(TokenError::Refresh(Class::Refused))),
+            "{outcome:?}"
+        );
+        assert_eq!(server.finish().len(), 2, "the file was chased");
+        assert_eq!(
+            on_disk(&path).refresh_token.expose(),
+            "r2",
+            "a file another process wrote was removed"
+        );
     }
 
     /// A failure is named by its step and, for a request, its class, and by nothing a reply said:
@@ -828,7 +679,7 @@ mod tests {
                 "refresh rate-limited",
             ),
             (
-                TokenError::Store(AccountError::Malformed(account::Defect::Empty)),
+                TokenError::Store(AccountError::Malformed(crate::oauth::Defect::Empty)),
                 "store malformed (Empty)",
             ),
         ];

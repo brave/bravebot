@@ -35,10 +35,26 @@ pub(super) fn list_models(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<Vec<bravebot_aichat::models::Model>, String> {
-    // The account is asked only for a turn on one of its own models: every other caller needs the
+    // An account is asked only for a turn on one of its own models: every other caller needs the
     // row of the model in force, and a session on a Brave or a gateway model has no business
     // sending a stored sign-in's token to the serving host at each start and each turn.
-    roster(config, chosen, config.runs_on_chatgpt_account(chosen)).map(|roster| roster.models)
+    roster(
+        config,
+        chosen,
+        Accounts {
+            chatgpt: config.runs_on_chatgpt_account(chosen),
+            xai: config.runs_on_xai_account(chosen),
+        },
+    )
+    .map(|roster| roster.models)
+}
+
+/// Which accounts a roster asks for its rows: a stored sign-in's token goes to the serving host of each
+/// that is asked.
+#[derive(Clone, Copy)]
+struct Accounts {
+    chatgpt: bool,
+    xai: bool,
 }
 
 /// The rows a picker offers, and what a person is told where the rows of a service they use are not
@@ -52,26 +68,45 @@ pub(super) struct PickerRoster {
     pub(super) problems: Vec<String>,
 }
 
-/// [`list_models`] for the picker, which offers the account's models whatever is in force
-/// ([CHATGPT-9](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+/// [`list_models`] for the picker, which offers the accounts' models whatever is in force
+/// ([CHATGPT-9](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9),
+/// [XAI-19](../../../../docs/specs/xai-sign-in.md#XAI-19)).
 pub(super) fn list_models_for_picker(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<PickerRoster, String> {
-    roster(config, chosen, true)
+    roster(
+        config,
+        chosen,
+        Accounts {
+            chatgpt: true,
+            xai: true,
+        },
+    )
 }
 
-/// The rosters of every service, with the ChatGPT account's where `account` says to ask it.
-fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<PickerRoster, String> {
+/// The rosters of every service, with the accounts' where `accounts` says to ask them.
+fn roster(
+    config: &Config,
+    chosen: Option<&str>,
+    accounts: Accounts,
+) -> Result<PickerRoster, String> {
     let (mut configured, mut problems) = configured_rows(config, chosen);
 
     // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
     // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
     // names and is said, so a person who signed in does not take them for what the account reaches.
-    if account {
+    if accounts.chatgpt {
         let asked = ask_the_account(config);
         problems.extend(account_problem_said(&asked));
         configured.extend(account_rows(asked, model_in_force(chosen, config)));
+    }
+    // The xAI account joins the same way, and is said in the same place where its listing could not
+    // be had ([XAI-19](../../../../docs/specs/xai-sign-in.md#XAI-19)).
+    if accounts.xai {
+        let asked = ask_the_xai_account(config);
+        problems.extend(xai_problem_said(&asked));
+        configured.extend(xai_rows(asked, model_in_force(chosen, config)));
     }
     let rostered = |models| PickerRoster {
         models: requestable(config, models),
@@ -298,6 +333,53 @@ pub(super) fn account_problem_said(
     }
 }
 
+/// What the xAI account offers, asked of the serving host with the stored sign-in
+/// ([XAI-19](../../../../docs/specs/xai-sign-in.md#XAI-19)).
+///
+/// The one place this crate asks. A unit test never reaches the host, which is compiled in and would
+/// be sent a stored sign-in's token from a machine that has one: it gets the answer it scripted on its
+/// thread, or an account nobody signed in to, and can read how often it was asked.
+fn ask_the_xai_account(config: &Config) -> bravebot_agent::xai::AccountModels {
+    #[cfg(test)]
+    {
+        let _ = config;
+        scripted_xai::ask()
+    }
+    #[cfg(not(test))]
+    {
+        bravebot_agent::xai::account_models(config, &mut Trail::new())
+    }
+}
+
+/// The rows the xAI account adds to a roster, in the order a fetched gateway roster is met in.
+///
+/// Split from the request so the joining is testable without a server. A listing that could not be had
+/// adds nothing, since no list built into this program stands in for it.
+pub(super) fn xai_rows(
+    account: bravebot_agent::xai::AccountModels,
+    chosen: &str,
+) -> Vec<bravebot_aichat::models::Model> {
+    match account {
+        bravebot_agent::xai::AccountModels::Offered(rows) => in_reading_order(rows, chosen),
+        bravebot_agent::xai::AccountModels::Absent
+        | bravebot_agent::xai::AccountModels::Unlisted => Vec::new(),
+    }
+}
+
+/// What a picker says where the xAI account's models could not be had, or `None` where there is
+/// nothing to say: a person who never signed in is told nothing, and a listing that was read, empty or
+/// not, is not a failure. The note names the commands that work as typed: signing in again, and naming
+/// a model.
+pub(super) fn xai_problem_said(account: &bravebot_agent::xai::AccountModels) -> Option<String> {
+    match account {
+        bravebot_agent::xai::AccountModels::Unlisted => {
+            Some(t!(session_xai_models_unreadable).into())
+        }
+        bravebot_agent::xai::AccountModels::Absent
+        | bravebot_agent::xai::AccountModels::Offered(_) => None,
+    }
+}
+
 /// The rows of the ChatGPT account that a start nothing serves offers to choose a model from
 /// ([BACKEND-39](../../../../docs/specs/backends.md#BACKEND-39)): the account's rows as the picker
 /// lists them, in the picker's order and without the models the machine-level layer refuses. Where
@@ -333,6 +415,31 @@ pub fn account_models_to_start_on(
 /// that goes on to its refusal.
 pub fn configured_models_to_start_on(config: &Config) -> Vec<bravebot_aichat::models::Model> {
     requestable(config, configured_rows(config, None).0)
+}
+
+/// The rows of the xAI account that a start nothing serves offers to choose a model from
+/// ([BACKEND-39](../../../../docs/specs/backends.md#BACKEND-39)), as
+/// [`account_models_to_start_on`] offers the ChatGPT account's: the rows the listing gave, in the
+/// picker's order and without the models the machine-level layer refuses. Where there is none, the
+/// listing that gave none, so the start can say why.
+///
+/// No list is built into this program for the account, so a listing that could not be had is no row
+/// here as it is none in the picker. A sign-in that ended while the listing was asked for, and a listing
+/// that was read and is empty, are no rows at all.
+pub fn xai_models_to_start_on(
+    config: &Config,
+) -> Result<Vec<bravebot_aichat::models::Model>, bravebot_agent::xai::AccountModels> {
+    match ask_the_xai_account(config) {
+        listed @ bravebot_agent::xai::AccountModels::Offered(_) => {
+            match requestable(config, xai_rows(listed, &config.default_model)) {
+                rows if rows.is_empty() => {
+                    Err(bravebot_agent::xai::AccountModels::Offered(Vec::new()))
+                }
+                rows => Ok(rows),
+            }
+        }
+        none => Err(none),
+    }
 }
 
 /// The roster without the models the machine-level layer refuses (BACKEND-48).
@@ -585,13 +692,20 @@ pub(super) fn note_a_refused_level(session: &mut Session, refused: bool) {
 /// watching and no transcript to put a line in. A listing that cannot be fetched leaves the default
 /// in place for the same reason it does in a session, and leaves the level to go out: neither is
 /// the roster saying otherwise.
+///
+/// An xAI account model is the exception that is not left to the listing: no level is sent to the
+/// account whichever model is named ([XAI-16](../../../../docs/specs/xai-sign-in.md#XAI-16)), so it reads
+/// none, and that holds for a model the listing offers, one it lists and the rule leaves out, an alias
+/// and an id nobody listed, and where the listing could not be read. The run says so in each case,
+/// which is what [`bravebot_agent::backend::refused_a_level`] answers for a name of the account.
 pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
+    let withheld = bravebot_agent::backend::refused_a_level(config, model);
     let Ok(models) = list_models(config, Some(model)) else {
-        return true;
+        return !withheld;
     };
     config.adopt_window(advertised_window(&models, Some(model)));
     config.adopt_inputs(model, advertised_inputs(&models, Some(model)));
-    reads_effort(&models, model)
+    reads_effort(&models, model) && !withheld
 }
 
 /// The model other than the session's that answers a turn, whose window is the budget it compacts
@@ -810,6 +924,45 @@ pub(super) fn model_picked(
     // account's, which the person is told where it is not the one they chose.
     say_if_kept_for_account(session);
     session.choose_model(chosen.key, config);
+}
+
+/// What a unit test scripts for the xAI account's listing, and how often it was asked for.
+#[cfg(test)]
+pub(super) mod scripted_xai {
+    use bravebot_agent::xai::AccountModels;
+    use bravebot_aichat::models::Model;
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static ANSWER: RefCell<Option<Result<Vec<Model>, ()>>> = const { RefCell::new(None) };
+        static ASKED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// Offer `models` to whatever asks on this thread, and forget how often it was asked.
+    pub(in crate::app) fn offer(models: Vec<Model>) {
+        ANSWER.with(|scripted| *scripted.borrow_mut() = Some(Ok(models)));
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// Answer that the listing could not be had.
+    pub(in crate::app) fn fail_to_list() {
+        ANSWER.with(|scripted| *scripted.borrow_mut() = Some(Err(())));
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// How often the account was asked about on this thread since the last script.
+    pub(in crate::app) fn asked() -> usize {
+        ASKED.with(Cell::get)
+    }
+
+    pub(super) fn ask() -> AccountModels {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        ANSWER.with(|scripted| match scripted.borrow().as_ref() {
+            Some(Ok(models)) => AccountModels::Offered(models.clone()),
+            Some(Err(())) => AccountModels::Unlisted,
+            None => AccountModels::Absent,
+        })
+    }
 }
 
 /// What a unit test scripts for the account's listing, and how often it was asked for.

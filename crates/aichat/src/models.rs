@@ -602,6 +602,119 @@ fn account_row(
     }
 }
 
+/// What the serving host of an xAI account answers a listing with
+/// ([XAI-14](../../../docs/specs/xai-sign-in.md#XAI-14)): the OpenAI shape, an object whose `data`
+/// key holds the rows.
+///
+/// Each row is held as the value it arrived as, so that a row in a form this code did not expect, such
+/// as `null`, a string or a number, costs that row its place and no more: a listing that fails to
+/// decode offers nothing. A row says more than is read (`owned_by`, `aliases`, prices,
+/// `capabilities`), and the two fields read are `id`, which the rule that keeps a row reads, and
+/// `context_length`, the window of a text model, which the image and video rows may not have.
+#[derive(Debug, Deserialize)]
+struct XaiListing {
+    data: Vec<serde_json::Value>,
+}
+
+/// The models an xAI account may use, from the serving host's listing
+/// ([XAI-14](../../../docs/specs/xai-sign-in.md#XAI-14)).
+///
+/// `provider` is [`bravebot_config::provider::Provider::xai_account`], or a service standing in for
+/// it in a test, and `token` is the account's access token. The token goes to the listing's address
+/// on the socket the request is addressed to, and a redirect in answer is a failure: the host was
+/// compiled in, and a hop is a place a reply named. The body of a refusal is not read, so a refusal is
+/// told by its status alone.
+///
+/// A row is offered when its id passes [`xai_chat_model`]. Nothing is capped. A listing that is read
+/// and has no such row offers nothing, and one that cannot be read is an error, for which no list is
+/// offered in its place.
+pub fn list_from_xai_account<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    provider: &bravebot_config::provider::Provider,
+    token: &str,
+    egress: &Egress,
+) -> Result<Vec<Model>, ChatError> {
+    let url = provider.models_url();
+    let (name, value) = provider.credential_header(token);
+    let request = Request::get(&url)
+        .header("accept", "application/json")
+        .socket_header(name, value)
+        .refusing_redirects();
+
+    let listed: XaiListing = read_listing(policy, request, &url, egress)?;
+    Ok(offered_by_xai(provider, &listed.data))
+}
+
+/// Words in an id that say the model is another kind than the family it begins as: the route refuses a
+/// multi-agent request, and an image or a video model is asked for at another route. `image` and
+/// `video` are there beside `imagine`, since an id such as `grok-2-image-1212` begins as a text model
+/// does and is not one.
+const XAI_NOT_CHAT: &[&str] = &["multi-agent", "imagine", "image", "video"];
+
+/// Whether an id from the account's listing is one that is offered
+/// ([XAI-14](../../../docs/specs/xai-sign-in.md#XAI-14)).
+///
+/// A written rule on the id and nothing else, since no field of the listing separates the models the
+/// chat route answers from the ones it refuses: the multi-agent row has a window, as the text models
+/// do. An id is kept when it is `grok-` and then a digit or `build-`, which is how the text family is
+/// named, and holds none of the words of [`XAI_NOT_CHAT`]. The ids the listing gave on 2026-10-26 are
+/// `grok-4.20-0309-non-reasoning`, `grok-4.20-0309-reasoning`, `grok-4.3`, `grok-4.5`, `grok-4.6`,
+/// `grok-4.7` and `grok-build-0.1`, which answered, and `grok-4.20-multi-agent-0309` and six
+/// `grok-imagine-*`, which the route refused.
+///
+/// An id that matches neither is not offered, and is still reached by naming it (`xai/<id>`); one that
+/// passes and is refused at the first request is refused as any request is. A release changes the
+/// rule, and no reply, model or settings file does.
+fn xai_chat_model(id: &str) -> bool {
+    let Some(rest) = id.strip_prefix("grok-") else {
+        return false;
+    };
+    let text_family = rest.starts_with(|c: char| c.is_ascii_digit()) || rest.starts_with("build-");
+    text_family && !XAI_NOT_CHAT.iter().any(|kind| id.contains(kind))
+}
+
+/// The picker rows an account's listing becomes, in the order it listed them.
+///
+/// Separated from the request so the rule is testable without a server. Every key is qualified by the
+/// account's id, which is what a choice is remembered as and what later selects the account rather
+/// than a gateway offering a model of the same name. One row to a name, since a second row for the
+/// same key would be one nobody could tell from the first.
+///
+/// A row reads no effort level: the service was not asked with one, so none is sent
+/// ([XAI-16](../../../docs/specs/xai-sign-in.md#XAI-16)), and what a picker says of the level is that.
+fn offered_by_xai(
+    provider: &bravebot_config::provider::Provider,
+    listed: &[serde_json::Value],
+) -> Vec<Model> {
+    let mut seen = std::collections::HashSet::new();
+    listed
+        .iter()
+        .filter_map(|row| {
+            let id = row
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| xai_chat_model(id))?;
+            if !seen.insert(id.to_string()) {
+                return None;
+            }
+            Some(Model {
+                key: format!("{}/{id}", provider.id),
+                display_name: id.to_string(),
+                premium: false,
+                provider: Some(provider.display_name().to_string()),
+                conversation_tokens: Some(
+                    row.get("context_length")
+                        .and_then(serde_json::Value::as_u64)
+                        .filter(|window| *window > 0)
+                        .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
+                ),
+                reads_effort: false,
+                advertised: Advertised::default(),
+            })
+        })
+        .collect()
+}
+
 /// The envelope a gateway's roster arrives in.
 #[derive(Debug, Deserialize)]
 struct GatewayListing {
@@ -1632,6 +1745,210 @@ mod tests {
                 "chatgpt/gpt-6-sol",
                 "chatgpt/gpt-6.1-sol",
             ]
+        );
+    }
+
+    /// The listing `GET /models` answered an account with a SuperGrok sign-in on 2026-10-26, as far as
+    /// this program reads it: the fourteen ids in the order the service gave them, and for each what the
+    /// listing said that is read, the window. The values are the ones read from the service, the image
+    /// rows' included, and the video rows state none. The prices the rows carry are left out, since none is
+    /// read. One account on one day: another account or a later day may differ.
+    const OBSERVED_XAI_LISTING: &str = r#"{"object": "list", "data": [
+        {"id": "grok-4.20-0309-non-reasoning", "object": "model", "owned_by": "xai", "context_length": 1000000},
+        {"id": "grok-4.20-0309-reasoning", "object": "model", "owned_by": "xai", "context_length": 1000000},
+        {"id": "grok-4.20-multi-agent-0309", "object": "model", "owned_by": "xai", "context_length": 1000000},
+        {"id": "grok-4.3", "object": "model", "owned_by": "xai", "context_length": 1000000,
+         "capabilities": {"reasoning_effort": ["none", "low", "medium", "high", "xhigh"],
+                          "default_reasoning_effort": "low"}},
+        {"id": "grok-4.5", "object": "model", "owned_by": "xai", "context_length": 500000,
+         "capabilities": {"reasoning_effort": ["low", "medium", "high", "xhigh"],
+                          "default_reasoning_effort": "high"}},
+        {"id": "grok-4.6", "object": "model", "owned_by": "xai", "context_length": 500000,
+         "capabilities": {"reasoning_effort": ["low", "medium", "high", "xhigh"],
+                          "default_reasoning_effort": "high"}},
+        {"id": "grok-4.7", "object": "model", "owned_by": "xai", "context_length": 500000,
+         "capabilities": {"reasoning_effort": ["low", "medium", "high", "xhigh"],
+                          "default_reasoning_effort": "high"}},
+        {"id": "grok-build-0.1", "object": "model", "owned_by": "xai", "context_length": 256000,
+         "aliases": ["grok-code-fast-1", "grok-code-fast", "grok-code-fast-1-0825"]},
+        {"id": "grok-imagine-image", "object": "model", "owned_by": "xai", "context_length": 16000, "image_price": 1},
+        {"id": "grok-imagine-image-2.0", "object": "model", "owned_by": "xai", "context_length": 64000, "image_price": 1},
+        {"id": "grok-imagine-image-quality", "object": "model", "owned_by": "xai", "context_length": 16000, "image_price": 1},
+        {"id": "grok-imagine-video", "object": "model", "owned_by": "xai"},
+        {"id": "grok-imagine-video-1.5", "object": "model", "owned_by": "xai"},
+        {"id": "grok-imagine-video-1.5-lite", "object": "model", "owned_by": "xai"}
+    ]}"#;
+
+    fn from_xai(body: &str) -> Vec<Model> {
+        let listed: XaiListing = serde_json::from_str(body).expect("the test body parses");
+        offered_by_xai(
+            &bravebot_config::provider::Provider::xai_account(),
+            &listed.data,
+        )
+    }
+
+    /// XAI-14: of the fourteen ids the listing gave an account on 2026-10-26, the seven the chat route
+    /// answered are offered, in the order the service listed them, and the six image and video models
+    /// and the multi-agent model it refused are not. The fixture is that listing. A reader that offered
+    /// every row would offer seven that fail when picked, one that dropped only the `imagine` ids would
+    /// still offer the multi-agent model, and one that kept only the `grok-4` ids would lose
+    /// `grok-build-0.1`.
+    #[test]
+    fn the_rule_keeps_the_seven_chat_models_of_the_observed_listing_and_drops_the_other_seven() {
+        let models = from_xai(OBSERVED_XAI_LISTING);
+
+        let keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "xai/grok-4.20-0309-non-reasoning",
+                "xai/grok-4.20-0309-reasoning",
+                "xai/grok-4.3",
+                "xai/grok-4.5",
+                "xai/grok-4.6",
+                "xai/grok-4.7",
+                "xai/grok-build-0.1",
+            ]
+        );
+        for model in &models {
+            assert_eq!(model.provider.as_deref(), Some("xAI"), "{}", model.key);
+            assert!(
+                !model.premium,
+                "{}: the subscription is not Leo's",
+                model.key
+            );
+            assert_eq!(model.display_name, model.key["xai/".len()..]);
+        }
+    }
+
+    /// XAI-14: the rule reads the id alone. An id is kept where it is `grok-` and then a digit or
+    /// `build-`, and holds none of `imagine`, `image`, `video` and `multi-agent`. Each row of the table is an id a
+    /// plausible rule would get the other way: a prefix test on `grok-4` alone, a test for `imagine`
+    /// alone, a case-insensitive match, an alias, an id of another maker, and a name that is nothing.
+    #[test]
+    fn an_id_is_kept_where_it_begins_as_a_text_model_does_and_holds_no_word_of_another_kind() {
+        for (id, kept) in [
+            ("grok-4.5", true),
+            ("grok-5", true),
+            ("grok-3-mini", true),
+            ("grok-build-0.2", true),
+            ("grok-4.20-multi-agent-0309", false),
+            ("grok-5-multi-agent", false),
+            ("grok-imagine-image", false),
+            ("grok-4-imagine-video", false),
+            ("grok-2-image-1212", false),
+            ("grok-3-video", false),
+            ("grok-code-fast-1", false),
+            ("Grok-4.5", false),
+            ("grok-", false),
+            ("grok", false),
+            ("gpt-5", false),
+            ("xai/grok-4.5", false),
+            ("", false),
+        ] {
+            assert_eq!(xai_chat_model(id), kept, "{id:?}");
+        }
+    }
+
+    /// XAI-14: the window a row states is the budget a turn compacts against, and a row stating none, a
+    /// figure that is not a whole number or zero leaves the assumed one, since a roster that failed to
+    /// decode would offer nothing and a window above the real one removes compaction.
+    #[test]
+    fn a_window_the_xai_listing_states_is_taken_and_a_missing_or_malformed_one_is_the_assumed_one()
+    {
+        let models = from_xai(
+            r#"{"data": [
+                {"id": "grok-4.5", "context_length": 500000},
+                {"id": "grok-4.6"},
+                {"id": "grok-4.7", "context_length": 0},
+                {"id": "grok-4.3", "context_length": "large"},
+                {"id": "grok-build-0.1", "context_length": 1.5}
+            ]}"#,
+        );
+
+        assert_eq!(models[0].conversation_tokens, Some(500_000));
+        for model in &models[1..] {
+            assert_eq!(
+                model.conversation_tokens,
+                Some(bravebot_config::provider::CONTEXT_WINDOW),
+                "{}",
+                model.key
+            );
+        }
+    }
+
+    /// XAI-14: a row in a form the reader does not expect costs that row its place and keeps the rest,
+    /// and an id listed twice is one row, since a second row for a key could not be told from the first.
+    #[test]
+    fn an_xai_row_in_an_unexpected_form_is_dropped_alone_and_a_name_listed_twice_is_one_row() {
+        let models = from_xai(
+            r#"{"data": [
+                {"id": 5},
+                {"id": null},
+                {},
+                {"id": ""},
+                {"id": "grok-4.5"},
+                {"id": ["grok-4.6"]},
+                {"id": "grok-4.5"},
+                {"id": "grok-4.7"}
+            ]}"#,
+        );
+
+        let keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
+        assert_eq!(keys, ["xai/grok-4.5", "xai/grok-4.7"]);
+    }
+
+    /// XAI-14: a row that is not an object at all, such as `null`, a string, a number, a list or a
+    /// boolean, costs that row its place beside rows that are good, and the listing is still read. The
+    /// regression it rejects is a listing read as a list of objects, which fails to decode for one
+    /// malformed row and offers nothing for the account, with the picker saying the listing could not
+    /// be read.
+    #[test]
+    fn a_row_that_is_not_an_object_costs_that_row_and_not_the_listing() {
+        let models = from_xai(
+            r#"{"data": [
+                null,
+                {"id": "grok-4.5", "context_length": 500000},
+                "grok-4.6",
+                7,
+                {"id": "grok-4.7"},
+                [{"id": "grok-4.3"}],
+                true,
+                {"id": "grok-build-0.1", "context_length": 256000}
+            ]}"#,
+        );
+
+        let keys: Vec<&str> = models.iter().map(|model| model.key.as_str()).collect();
+        assert_eq!(keys, ["xai/grok-4.5", "xai/grok-4.7", "xai/grok-build-0.1"]);
+        assert_eq!(models[0].conversation_tokens, Some(500_000));
+        assert_eq!(models[2].conversation_tokens, Some(256_000));
+    }
+
+    /// XAI-14 and XAI-16: no row of the account reads an effort level, whatever the listing says of
+    /// `reasoning_effort`, since the service was not asked with a level and the listing's own words for
+    /// the levels are not the ones this program sends. A reader that took the capability for the field
+    /// BACKEND-22 reads would show a level as in force that is not sent.
+    #[test]
+    fn no_row_of_the_xai_account_reads_an_effort_level_whatever_its_capabilities_say() {
+        let models = from_xai(OBSERVED_XAI_LISTING);
+
+        let with_levels: Vec<&str> = [
+            "xai/grok-4.3",
+            "xai/grok-4.5",
+            "xai/grok-4.6",
+            "xai/grok-4.7",
+        ]
+        .into_iter()
+        .collect();
+        for key in with_levels {
+            let row = models.iter().find(|model| model.key == key).expect(key);
+            assert!(!row.reads_effort, "{key}");
+        }
+        assert!(models.iter().all(|model| !model.reads_effort));
+        assert!(
+            models
+                .iter()
+                .all(|model| model.advertised == Advertised::default())
         );
     }
 }

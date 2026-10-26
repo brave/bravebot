@@ -5,7 +5,7 @@ import { FailureSentence } from './FailureSentence'
 
 /**
  * A failure, titled from the category the agent sent and never from the words in the detail.
- * Where the failure was one of a ChatGPT account's, the sentence the bridge sent for it is the
+ * Where the failure was one of a ChatGPT or an xAI account's, the sentence the bridge sent for it is the
  * wording instead, so the words of that failure are the bridge's and not a second table here. The
  * command it names arrives as `accountCommand` and is drawn as code.
  *

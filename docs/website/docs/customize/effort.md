@@ -25,6 +25,10 @@ chose. A request that asks for no level, such as a summary or a goal check, send
 window offers no way to choose a level, so its sessions send none. A model of the account that refuses a
 level is sent none from then on, as any model is. A level chosen on any other service applies at once.
 
+**An xAI account is sent no level.** A model of the [xAI account](providers/xai.md) reads none, because the
+service was not asked with one, so a level chosen in a session does nothing for it, and the terminal says so
+where a level is in force.
+
 **Nothing infers a level.** Until you choose one the request carries no such field at all and each
 service applies its own default. Taking the row for no level removes the record rather than writing an
 empty one, which puts you back where you were before you ever chose. A word bravebot does not define

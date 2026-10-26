@@ -3673,9 +3673,33 @@ mod tests {
         use bravebot_agent::backend::BackendError;
         use bravebot_agent::{Category, Diagnosis};
         use bravebot_aichat::responses::protocol::Refusal;
-        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure};
+        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure, XaiFailure};
 
         let sentences = [
+            (
+                AccountFailure::Xai(XaiFailure::NotSignedIn),
+                "not signed in to xAI. Run `bravebot auth login xai` to sign in",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Ended),
+                "the xAI sign-in has ended. Run `bravebot auth login xai` to sign in again",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Rejected),
+                "xAI refused the xAI sign-in's access token, and a new one as well. Run `bravebot auth login xai` to sign in again",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::NotPermitted),
+                "xAI refused the request for this account, and signing in again will not change that. Check the plan at xAI, or choose another model",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Unusable),
+                "the stored xAI sign-in could not be read. Run `bravebot auth status xai` to see why",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::RateLimited)),
+                "the xAI sign-in could not be renewed: xAI is limiting requests; try again later",
+            ),
             (
                 AccountFailure::NotSignedIn,
                 "not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
