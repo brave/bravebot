@@ -906,6 +906,46 @@ mod tests {
         assert!(picker.chosen().is_none());
     }
 
+    /// A picker that has not been given its rows draws a line saying so, and the line goes when they
+    /// arrive. The regression it rejects is an empty box with no explanation, which reads as a
+    /// server with no models, and a loading line left on screen over rows that have arrived.
+    #[test]
+    fn a_picker_waiting_for_its_rows_says_so_and_stops_saying_it_when_they_arrive() {
+        let (answer, listing) = mpsc::channel();
+        let mut picker = Picker::loading(None, listing);
+
+        let waiting = rendered(&picker);
+        assert!(waiting.contains(t!(model_picker_loading)), "{waiting}");
+        assert!(
+            !waiting.contains(t!(model_picker_nothing_matches)),
+            "{waiting}"
+        );
+
+        answer
+            .send(Ok((offered(), Vec::new())))
+            .expect("the picker dropped its listing");
+        assert_eq!(picker.settle(), Arrival::Rows(Vec::new()));
+
+        let arrived = rendered(&picker);
+        assert!(!arrived.contains(t!(model_picker_loading)), "{arrived}");
+        assert!(arrived.contains("Llama 3 8B"), "{arrived}");
+    }
+
+    /// A search that matches nothing in a list that has arrived says so, and does not say the list is
+    /// loading.
+    #[test]
+    fn a_search_matching_nothing_in_a_list_that_arrived_does_not_say_it_is_loading() {
+        let mut picker = Picker::new(offered(), None);
+        typing(&mut picker, "nothing named this");
+
+        let output = rendered(&picker);
+        assert!(
+            output.contains(t!(model_picker_nothing_matches)),
+            "{output}"
+        );
+        assert!(!output.contains(t!(model_picker_loading)), "{output}");
+    }
+
     fn rendered_at(picker: &Picker, width: u16, height: u16) -> String {
         screen_at(picker, width, height).concat()
     }

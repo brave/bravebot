@@ -424,6 +424,15 @@ pub(super) struct RetainedTurn {
     pub(super) began: bravebot_agent::conversation::Mark,
 }
 
+/// Take the rows of a model picker opened during a turn, if they have arrived.
+///
+/// What taking them notes is recorded as said while working, as the command that opened the picker
+/// was, so a stop does not count it as the turn having done something. Run on every frame of the
+/// turn.
+pub(super) fn settle_picking_during_a_turn(session: &mut Session) -> bool {
+    session.picking_is_loading() && session.answer_while_working(Session::settle_picking)
+}
+
 /// Run a turn on a worker thread, redrawing while it works.
 ///
 /// The turn itself blocks on network requests, so running it here would freeze the indicator on
@@ -693,11 +702,8 @@ pub(super) fn run_turn_animated(
         // Each frame, so an inhibitor that exits by itself while this runs is said and `/caffeinate`
         // turned off then, not at the next pass of the outer loop (CMD-12).
         session.keep_awake();
-        // The rows of a model picker opened during the turn, taken as they arrive. What it notes
-        // is said while working, as the command that opened the picker was.
-        if session.picking_is_loading() {
-            session.answer_while_working(Session::settle_picking);
-        }
+        // The rows of a model picker opened during the turn, taken as they arrive.
+        settle_picking_during_a_turn(session);
         redraw(terminal, session)?;
 
         // Input is polled here rather than in the outer loop, which is blocked for the duration

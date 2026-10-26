@@ -4940,6 +4940,69 @@ mod tests {
         assert_eq!(said, ["a gateway could not be listed"]);
     }
 
+    /// The step a turn takes on every frame for a model picker opened under it takes the rows when
+    /// they arrive, and records what it says as said while working. The regressions it rejects are
+    /// a step that does nothing, which leaves the picker on "loading" for the rest of the turn, and
+    /// one that notes without recording, which makes a stop count the note as the turn's work. The
+    /// call from `run_turn_animated`, which needs a terminal, is reasoned only.
+    #[test]
+    fn the_step_a_turn_takes_each_frame_settles_a_loading_picker_and_records_what_it_says() {
+        use crate::picking::Picking;
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        let mut session = a_turn_running_on("first");
+        open_model_picker_awaiting(&mut session, &config, listing);
+
+        assert!(
+            !settle_picking_during_a_turn(&mut session),
+            "the step reported rows before any arrived"
+        );
+        assert!(session.picking_is_loading());
+
+        answer
+            .send(Ok((
+                vec![listed("opus-arn", None)],
+                vec!["a gateway could not be listed".to_string()],
+            )))
+            .expect("the picker dropped its listing");
+
+        assert!(settle_picking_during_a_turn(&mut session));
+        assert!(!session.picking_is_loading());
+        let Some(Picking::Model(picker)) = session.picking() else {
+            panic!("the picker closed on arrival");
+        };
+        assert_eq!(picker.matching().len(), 1);
+        assert!(
+            said_under_the_turn(&session).contains(&"a gateway could not be listed"),
+            "the sentence was not recorded as said while working"
+        );
+        assert!(
+            !settle_picking_during_a_turn(&mut session),
+            "the step reported the same arrival twice"
+        );
+    }
+
+    /// A listing that fails after the picker opened under a turn closes it and says why, recorded as
+    /// said while working.
+    #[test]
+    fn a_listing_that_fails_under_a_turn_closes_the_picker_and_is_recorded_as_said_while_working() {
+        let config = a_config_with_a_named_roster();
+        let (answer, listing) = std::sync::mpsc::channel();
+        let mut session = a_turn_running_on("first");
+        open_model_picker_awaiting(&mut session, &config, listing);
+        answer
+            .send(Err("no route to host".to_string()))
+            .expect("the picker dropped its listing");
+
+        assert!(settle_picking_during_a_turn(&mut session));
+
+        assert!(session.picking().is_none(), "the picker stayed open");
+        assert_eq!(
+            said_under_the_turn(&session).last().copied(),
+            Some(t!(session_models_unavailable, problem = "no route to host").as_str())
+        );
+    }
+
     /// A listing that fails after the picker opened closes it, says why and leaves the model as it
     /// was; a listing thread that ends without answering does the same. The regression it rejects is
     /// a picker left open on "loading" for good.
