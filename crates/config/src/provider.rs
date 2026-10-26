@@ -962,10 +962,13 @@ impl Provider {
             // A service at the host compiled in for a known id refuses a request with no key, so a
             // block naming none is a credential missing, not one that is not wanted.
             // A header named for the credential is how such a block authenticates, so it is one.
+            // `authorization` counts under every protocol: an `anthropic` block written with its
+            // own `Authorization: Bearer ...` header worked before this rule and keeps working.
+            let credential_name = self.credential_header("").0;
             let authenticates_by_header = self
                 .headers
                 .iter()
-                .any(|held| held.name == self.credential_header("").0);
+                .any(|held| held.name == credential_name || held.name == "authorization");
             return if self.endpoint_compiled_in && !authenticates_by_header {
                 (Credential::Absent, None)
             } else {
@@ -1019,7 +1022,7 @@ impl Provider {
         if let Some(position) = self
             .headers
             .iter()
-            .position(|held| held.name == credential_name)
+            .position(|held| held.name == credential_name || held.name == "authorization")
         {
             let header = self.headers.remove(position);
             self.headers_refused
@@ -2742,6 +2745,11 @@ mod tests {
             by_header.credential(|_| None),
             Credential::NotNeeded
         ));
+        // An anthropic block written before this rule with its own bearer header keeps working.
+        let bearer = one(r#"{"provider": {"anthropic": {
+                "options": {"headers": {"Authorization": "Bearer a-placeholder"}}
+            }}}"#);
+        assert!(matches!(bearer.credential(|_| None), Credential::NotNeeded));
         let local = one(r#"{"provider": {"openai": {
                 "options": {"baseURL": "http://localhost:8080/v1"}
             }}}"#);
