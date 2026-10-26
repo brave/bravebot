@@ -7309,6 +7309,7 @@ mod tests {
     /// The characters of the box drawn as a recognised word, in the order they appear. The caret
     /// is a coloured space, so spaces are left out.
     fn recognised_in_the_box(session: &Session) -> String {
+        let _held = theme::exclusive();
         input_cells_at(session, 90, 24)
             .into_iter()
             .filter(|(symbol, colour)| symbol != " " && *colour == theme::brand_primary())
