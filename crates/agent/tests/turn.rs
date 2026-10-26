@@ -69304,6 +69304,7 @@ fn leaving_bypass_with_the_key_ends_the_reach_to_a_sibling_directory() {
 /// there, a write in a workspace the person has not trusted, and a read with
 /// `permissions.readsStayInWorkspace` set. The control in each turn is a path beside the session,
 /// which is reached, so a refusal that came from the turn failing is not taken for the rule.
+#[cfg(unix)]
 #[test]
 fn under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing() {
     if cannot_confine_here() {

@@ -13102,6 +13102,7 @@ fn two_directories_whose_names_differ_only_in_a_non_utf8_byte_are_two_reaches() 
 /// root, the home directory, `~/.ssh`, the state directory, a link into one of them, a wildcard
 /// and a control character. A reach that looked at the spelling alone would pass the link; one
 /// that dropped a refusal would pass its row.
+#[cfg(unix)]
 #[test]
 fn a_path_a_request_would_be_refused_is_not_reached_under_bypass() {
     let places = BypassPlaces::new("refused");
