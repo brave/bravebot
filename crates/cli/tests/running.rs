@@ -9042,9 +9042,10 @@ fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request(
 
 /// CHATGPT-11 and CRED-25: `doctor` names a stored ChatGPT sign-in as a held credential at its
 /// tier, with what would end it and the instant the access token expires, and prints nothing the
-/// file holds beyond that instant. Nothing stored is nothing said, a sign-in whose instant has
-/// passed is still signed in, and a file that cannot be used is named with its remedy and ends the
-/// run in failure, since the sign-in it held has stopped being used.
+/// file holds beyond that instant. It names nothing that outlives a revocation, since revoking the
+/// refresh token was seen to end an access token minted before it. Nothing stored is nothing said,
+/// a sign-in whose instant has passed is still signed in, and a file that cannot be used is named
+/// with its remedy and ends the run in failure, since the sign-in it held has stopped being used.
 #[test]
 fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     // A model keyed by a variable, so a report that finds nothing else wrong ends in success and the
@@ -9098,10 +9099,20 @@ fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     );
     assert!(account.contains("held: a permanent secret"), "{account}");
     assert!(account.contains("a bearer secret"), "{account}");
+    // Revoking the refresh token was seen to end an access token minted before it, so the sign-in
+    // has no line saying one outlives a revocation, and none of the words that said it was unknown.
     assert!(
-        account.contains("whether revoking the sign-in reaches it has not been observed"),
-        "{account}"
+        !stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with("outlives ")),
+        "the sign-in is reported as leaving something working after a revocation: {stdout}"
     );
+    for old in ["may run to its own expiry", "has not been observed"] {
+        assert!(
+            !account.contains(old),
+            "the sign-in is still reported as unobserved: {account}"
+        );
+    }
 
     let lapsed = scratch("cli-running-doctor-chatgpt-lapsed")
         .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1));

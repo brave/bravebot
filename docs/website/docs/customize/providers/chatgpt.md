@@ -141,10 +141,11 @@ A token OpenAI turns away early is replaced once and the request sent again.
 
 If OpenAI refuses the refresh token as no longer valid, the stored copy is removed and the turn says the
 sign-in has ended: run `bravebot auth login chatgpt` again. bravebot reads that from the error code the
-OAuth standard names for it, which this server sent for a refresh token it did not know. A sign-in OpenAI
-ends in another way, by age, by revocation or by reuse, was not tried, so one that comes in another code
-leaves the file in place and each turn is told the renewal failed until you sign in again. OpenAI's
-documentation lists five other codes for a refresh token that cannot be used, which bravebot does not read.
+OAuth standard names for it, which this server sent for a refresh token it did not know and for one revoked
+at its revocation endpoint. A sign-in OpenAI ends by age or by reuse was not tried, so one that comes in
+another code leaves the file in place and each turn is told the renewal failed until you sign in again.
+OpenAI's documentation lists five other codes for a refresh token that cannot be used, which bravebot does
+not read.
 If the renewed tokens could not be saved, the turn says so once, and they last until bravebot exits. A
 sign-in is used in an incognito session as in any other, and a renewal is still written to the file there.
 
@@ -182,8 +183,9 @@ bravebot auth logout chatgpt
 removes the stored copy, and is allowed in an incognito session. It ends nothing at OpenAI. OpenAI's
 documentation describes a revocation call a client can make at sign-out, which bravebot does not make.
 bravebot's record is that signing out of the ChatGPT account, or removing bravebot's access in the account's
-settings, ends the sign-in there. That has not been observed, and an access token already issued may run
-to its own expiry.
+settings, ends the sign-in there. Neither has been observed. Revoking one account's refresh token with the
+revocation call was seen to end an access token issued from it before: the token was refused within seconds
+after the call ([What has been observed](#what-has-been-observed)). That was one test on one account.
 
 ## What is kept
 
@@ -216,6 +218,10 @@ token, the listing's fields, and the events of a text turn, a tool call and a re
   effort level inside one session cost one miss at each change.
 - OpenAI refused an effort level of `ultra` on a model whose listing row offers it and on one whose row does
   not. bravebot does not send that level.
+- A call to OpenAI's revocation endpoint with a refresh token was answered 200 with an empty body. Within
+  seconds after it, an access token issued from that refresh token before the call, and not yet expired, was
+  refused with 401, an access token of another sign-in was still accepted, and a refresh with the revoked
+  refresh token was refused as `invalid_grant`. That was one revocation of one account's sign-in.
 
 Still read only from another program's source, opencode's, and not observed against the service.
 [What the documents state](#what-the-documents-state) says what OpenAI's own documents add to some of them:
@@ -231,9 +237,10 @@ Still read only from another program's source, opencode's, and not observed agai
   code of a 400. OpenAI's documentation gives the seven with their statuses and names no `error` event, and
   no request provoked an event of either kind.
 
-Not observed: whether an access token issued before a sign-out keeps working, and what an account with no
-subscription reaches. OpenAI's documentation lists the codes of a refused refresh without a status, and does
-not say what an expired or revoked access token returns.
+Not observed: whether signing out of the account, or removing bravebot's access in its settings, ends the
+sign-in and the access tokens issued from it, and what an account with no subscription reaches. OpenAI's
+documentation lists the codes of a refused refresh without a status, and does not say what an expired or
+revoked access token returns.
 
 ## What the documents state
 

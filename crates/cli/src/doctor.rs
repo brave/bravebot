@@ -1655,11 +1655,11 @@ fn whether_anybody_asked(attempt: bravebot_config::Attempt) -> &'static str {
 pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<&'static str> {
     match held {
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
-        bravebot_config::Held::ChatgptAccount => Some(t!(doctor_outlives_chatgpt_account)),
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch => None,
+        | bravebot_config::Held::SubscriptionBatch
+        | bravebot_config::Held::ChatgptAccount => None,
     }
 }
 

@@ -792,8 +792,8 @@ impl<'a> Held<'a> {
             // Three drops, on the same conditions as an AWS session and for the same reasons: the
             // token is presented by this program, nothing here asks OpenAI to narrow it to a run,
             // and the refresh token replaces it without anybody being asked. Not attempted rather
-            // than refused: the sign-in has only run against a stand-in server, so no refusal of a
-            // narrower or bound form has been seen from OpenAI.
+            // than refused: nothing here asks OpenAI for a narrower or bound form, so no refusal of
+            // one has been seen.
             Self::ChatgptAccount => &[
                 GateDrop {
                     condition: Condition::NothingDecidesEachUse,
@@ -882,12 +882,14 @@ impl<'a> Held<'a> {
     /// batch from the order rather than from this one, so it is the order that has something under
     /// it, and the order is not a credential this program holds.
     ///
-    /// True for the ChatGPT sign-in, because an access token already minted from the refresh token
-    /// is a bearer token that runs to its own expiry unless OpenAI checks it against the revocation
-    /// on every use. Whether it does is not recorded anywhere: no revocation has been made against
-    /// a real sign-in, and the report says so rather than telling somebody that nothing survives.
+    /// False for the ChatGPT sign-in, on one observation. Revoking a refresh token at OpenAI's
+    /// revocation endpoint was followed, within seconds, by a refusal with 401 of an access token
+    /// minted from it before the revocation and not yet expired, while another sign-in's access
+    /// token was still accepted. That was one revocation of one account's sign-in. It shows
+    /// nothing of other accounts, of a longer delay, or of ending the sign-in by signing out or in
+    /// the account's settings.
     pub fn outlives_revocation(self) -> bool {
-        matches!(self, Self::AwsAccessKey | Self::ChatgptAccount)
+        matches!(self, Self::AwsAccessKey)
     }
 
     /// Whether this derived credential is bound to its presenter or a bearer secret, which CRED-26
@@ -2707,17 +2709,17 @@ mod tests {
     }
 
     /// CRED-25 and CHATGPT-6: the ChatGPT sign-in is a permanent secret this program renews by
-    /// itself, so it stands at Held with the walk an AWS session has, and it is the one derived
-    /// credential whose revocation is recorded as possibly leaving something minted from it
-    /// working. Held to each of those, since a record that put it at Granted would call a token
-    /// the refresh token replaces unaided a bounded one, and one that said nothing survives would
-    /// send somebody who signed out at OpenAI away believing the access token had stopped.
+    /// itself, so it stands at Held with the walk an AWS session has. Revoking its refresh token
+    /// was seen to end an access token minted before it, so the record does not say anything
+    /// outlives a revocation. Held to each of those, since a record that put it at Granted would
+    /// call a token the refresh token replaces unaided a bounded one, and one that still said an
+    /// access token may run to its own expiry would state as unknown what one test showed.
     ///
     /// It is not in what a configuration holds: the file is a fact about the machine, so a
     /// configuration that reaches the Brave backend and one that reaches only Bedrock hold the
     /// same set, which is not the set with the sign-in in it.
     #[test]
-    fn a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation() {
+    fn a_chatgpt_sign_in_is_held_renewed_unaided_and_not_recorded_as_outliving_revocation() {
         assert_eq!(Held::ChatgptAccount.tier(), Tier::Held);
         let conditions: Vec<Condition> = Held::ChatgptAccount
             .walk()
@@ -2732,7 +2734,7 @@ mod tests {
                 Condition::RenewableWithoutAuthority,
             ]
         );
-        assert!(Held::ChatgptAccount.outlives_revocation());
+        assert!(!Held::ChatgptAccount.outlives_revocation());
         assert_eq!(Held::ChatgptAccount.noticed_within(), None);
 
         let brave = Config::from_lookup(complete_env).expect("configured");

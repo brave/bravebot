@@ -510,11 +510,12 @@ Each token is a credential at a tier, in the terms of [credential-protection.md]
   renews without further authority is permanent whatever its stated lifetime.
 - **What would end each is recorded:** signing out of the ChatGPT account, or removing this program's
   access in the account's settings, at OpenAI. This program cannot do either for the person.
-  `bravebot auth logout chatgpt` removes the copy here and ends nothing at OpenAI. Whether an access token
-  minted before a revocation survives it is a fact the exchange records, and none has: one minted before a
-  refresh was seen to work after it, but a revocation was not made. The record says an access token already
-  issued may run to its own expiry, and `doctor` says so with the words that this has not been observed, not
-  that nothing survives.
+  `bravebot auth logout chatgpt` removes the copy here and ends nothing at OpenAI. Revoking a refresh token at
+  the revocation endpoint was followed, within seconds, by a refusal with 401 of an access token minted from
+  it before the revocation and not yet expired ([What the exchange has to record](#what-the-exchange-has-to-record)).
+  That was one revocation of one account's sign-in. The record therefore does not say that anything outlives
+  a revocation, and `doctor` prints no line for it. It says nothing of other accounts, of a longer delay, or
+  of signing out of the account or removing this program's access in its settings.
 - **Neither is bound to its presenter.** Nothing asks the authorization server for a sender-constrained
   form, so the record says bearer, with the answer `NotAttempted`, until the exchange records whether one
   is offered. The discovery document advertises none
@@ -544,7 +545,7 @@ while the arrangement is understood.
 `verified-by: bravebot_skus::chatgpt::account::no_file_is_no_sign_in`
 `verified-by: bravebot_skus::chatgpt::account::a_file_that_cannot_be_used_is_an_error_naming_its_defect_and_not_an_absent_sign_in`
 `verified-by: bravebot_skus::chatgpt::account::a_refusal_of_a_malformed_file_quotes_none_of_it`
-`verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
+`verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_not_recorded_as_outliving_revocation`
 `verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
 `verified-by: bravebot_skus::chatgpt::account::the_file_is_readable_by_its_owner_alone_and_so_is_its_replacement`
 `verified-by: bravebot_skus::chatgpt::account::a_write_that_stops_part_way_leaves_the_last_good_file_and_no_temporary`
@@ -1376,9 +1377,9 @@ line holds no token, claim, identifier, email or account name.
 `bravebot doctor` names the account as a held credential at its tier and says what would end it, and the
 expiry. Where the file holds a sign-in it prints a `chatgpt` line with the instant the access token
 expires, then the account every held credential is given ([CRED-25](credential-protection.md#CRED-25)): what
-would end it, the tier, the binding, what revoking would not reach and the gate each drop failed. Where nothing
-is stored it prints nothing about the sign-in, as it prints nothing for a gateway block that names no
-credential. Where the file cannot be read it prints the line with the remedy and the run ends in failure, as a
+would end it, the tier, the binding, what revoking would not reach where the record names something, which it
+does not for this account, and the gate each drop failed. Where nothing is stored it prints nothing about the
+sign-in, as it prints nothing for a gateway block that names no credential. Where the file cannot be read it prints the line with the remedy and the run ends in failure, as a
 file of gateway keys that cannot be read does, since the sign-in it held has stopped being used. The list
 `auth login` prints says **signed in** on this way's line where the file holds a sign-in. Signing in again over
 one asks first and replaces the tokens only on a yes. An answer of no leaves the file as it is and opens no
@@ -1568,6 +1569,14 @@ program" where it was the program:
   its expiry, ended the turn with the sentence that the sign-in has ended and removed the file, and
   `auth status` then said not signed in and exited 1. An access token the serving host refused with a 401,
   under an unexpired clock, was replaced once, the request was sent again and the turn succeeded.
+- A `POST` to the revocation endpoint of the discovery document,
+  `https://auth.openai.com/api/accounts/oauth/revoke`, form encoded with `token` a refresh token,
+  `token_type_hint` `refresh_token` and `client_id`, was answered 200 with an empty body, no `content-type`
+  header and no redirect.
+- Within seconds after that revocation, an access token minted from the revoked refresh token before the
+  revocation, whose expiry had not passed, was refused with 401 on the listing. An access token of another
+  sign-in was still accepted, with 200, and a refresh presenting the revoked refresh token was refused with 400
+  and `invalid_grant`. This was one revocation of one account's sign-in.
 - The serving host refused a malformed bearer on `/responses` and on `/models` with 401 and an `error` object
   holding `message`, `type` `invalid_request_error`, `param` `null` and `code` `invalid_jwt`, and the body for
   `/responses` adds a `status` of 401. An empty bearer was refused with 401 and
@@ -1705,9 +1714,9 @@ code or a reply to a request that carried one:
 - It lists a `revocation_endpoint` on `auth.openai.com`, at the path `/api/accounts/oauth/revoke`, and lists
   no introspection endpoint. It has no field that names a sender-constrained token form: no DPoP field and
   no mutual-TLS field. Its discovery document therefore advertises a way to
-  revoke and advertises no sender-constrained form. The revocation endpoint shows nothing of what revoking
-  does to an access token already issued. An absent advertisement does not show that a request for a
-  sender-constrained form is refused, and none was made.
+  revoke and advertises no sender-constrained form. The document shows nothing of what revoking does to an
+  access token already issued, and the list above records what a call to the endpoint did. An absent
+  advertisement does not show that a request for a sender-constrained form is refused, and none was made.
 - The address `/.well-known/oauth-authorization-server` on `auth.openai.com`, where RFC 8414 puts the
   metadata of an authorization server, is answered 200 as `text/html`, about 57 KB, with a page that holds
   no metadata.
@@ -1825,8 +1834,8 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
 **Not observed, and stated by no source in full:**
 
 - What an account with no subscription reaches. The plan of the account tried is not recorded.
-- Whether an access token minted before a revocation survives it. The discovery document lists a
-  revocation endpoint, which says nothing of a token already issued.
+- Whether signing out of the account, or removing this program's access in its settings, ends the sign-in and
+  the access tokens minted from it. What was observed is a call to the revocation endpoint, on one account.
 - Whether the service issues a sender-constrained form to a request for one. The discovery document
   advertises no sender-constrained form, which does not show that a request for one is refused.
 - Whether the listing is dependable for another account or on another date. A listing that includes a model
@@ -2003,13 +2012,13 @@ These are the places where another spec states something about this service, eac
   renewals, and for each way the account's models could not be listed. The window keeps no table of its
   own. The twelve names are listed in `ui/docs/phase-0-rpc-protocol.md`.
 - The code that says a refresh token is no longer valid is RFC 6749's. This server sent it for a refresh
-  token it did not know, and no refresh token that had ended by age, by revocation or by reuse was presented,
-  so one of those may come in another code. A server that ends a sign-in with another code leaves the file in
-  place, and each later turn tries the dead refresh token and is told the refresh failed, until the person
-  signs in again. OpenAI's documentation lists `invalid_grant` on refresh and five more codes for an
-  unusable refresh token: `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
-  `refresh_token_invalidated` and `refresh_token_reused`. The renewal reads only `invalid_grant`, and only
-  at a 400 or 401, which the documentation gives for no code. A refresh refused with any of the five, or
+  token it did not know and for one revoked at the revocation endpoint. No refresh token that had ended by age
+  or by reuse was presented, so one of those may come in another code. A server that ends a sign-in with
+  another code leaves the file in place, and each later turn tries the dead refresh token and is told the
+  refresh failed, until the person signs in again. OpenAI's documentation lists `invalid_grant` on refresh
+  and five more codes for an unusable refresh token: `invalid_refresh_token`, `token_expired`,
+  `refresh_token_expired`, `refresh_token_invalidated` and `refresh_token_reused`. The renewal reads only
+  `invalid_grant`, and only at a 400 or 401, which the documentation gives for no code. A refresh refused with any of the five, or
   with `invalid_grant` at another status, is the case this entry describes. The documentation lists
   `invalid_client` for a fault in the client's configuration, which the renewal treats as any other refusal.
 - A code exchange whose reply holds no ID token ends the sign-in, so a server that stopped sending one, or
@@ -2062,8 +2071,8 @@ These are the places where another spec states something about this service, eac
   token. This program makes no such call. `auth logout chatgpt` removes the copy here and ends nothing at
   OpenAI ([CHATGPT-11](#CHATGPT-11)). [CHATGPT-6](#CHATGPT-6) records two ways to end the credential at
   OpenAI, and the program does neither for the person. The documented revocation call is a third way that
-  CHATGPT-6 does not record. The documentation says nothing of an access token already issued, so whether
-  one survives a revocation is not observed.
+  CHATGPT-6 does not record. The endpoint answered a call with 200 and an empty body, and the list above
+  records what the call did to an access token minted before it.
 - Four more statements of the documentation describe what this program does otherwise. "Errors and recovery"
   says a valid ID token without `chatgpt.tokens.use.direct` is to be kept, with ChatGPT plan usage marked
   disabled and a way offered to enable it or to use another billing path. A reply without the scope ends the

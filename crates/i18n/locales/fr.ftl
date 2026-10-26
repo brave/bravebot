@@ -464,8 +464,6 @@ doctor-noticed-aws-session =
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
-doctor-outlives-chatgpt-account =
-    un jeton d'accès qu'OpenAI a déjà émis à partir du jeton d'actualisation, qui peut courir jusqu'à sa propre expiration : on n'a pas observé si la révocation de la connexion l'atteint
 doctor-binding = liaison
 doctor-binding-sender-constrained =
     liée à l'émetteur de la requête : l'émetteur vérifie qui la présente, donc une copie prise sur cette machine ne sert à rien ailleurs

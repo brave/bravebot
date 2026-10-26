@@ -1099,7 +1099,7 @@ writing a second one.
 `verified-by: bravebot_cli::doctor::every_held_credential_has_its_own_account_of_what_would_end_it`
 `verified-by: bravebot_cli::doctor::a_gateway_token_is_accounted_for_at_the_gateway_that_would_end_it`
 `verified-by: bravebot_cli::doctor::what_survives_revoking_is_reported_for_exactly_the_credentials_that_have_one`
-`verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
+`verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_not_recorded_as_outliving_revocation`
 `verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
 `verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
