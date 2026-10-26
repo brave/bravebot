@@ -3235,8 +3235,9 @@ mod tests {
         );
     }
 
-    /// MOUSE-20. Rejects: a target on the rows under the section, on the plan, or on the border
-    /// column, and a section whose heading or totals row is not one.
+    /// MOUSE-20. Rejects: a Files target on the rows under the section or on the plan, whose rows
+    /// belong to their tasks (MOUSE-32), on the border column, and a section whose heading or
+    /// totals row is not one.
     #[test]
     fn only_the_files_heading_and_its_totals_row_are_click_targets() {
         let tasks: Vec<(String, Status)> = (0..6)
@@ -3258,10 +3259,10 @@ mod tests {
         assert_eq!(at(heading - 1, inside), None, "{drawn:#?}");
         assert_eq!(at(heading + 2, inside), None, "{drawn:#?}");
         assert_eq!(at(heading + 3, inside), None, "the plan's heading");
-        assert_ne!(
+        assert_eq!(
             at(heading + 4, inside),
-            Some(Target::Files),
-            "a row of the plan"
+            Some(Target::Task(0)),
+            "the first row of the plan is the first task's, not the section's"
         );
         assert_eq!(
             at(heading, area.x),
