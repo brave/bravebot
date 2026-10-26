@@ -8944,6 +8944,23 @@ fn auth_status_gateway_naming_no_credential_is_signed_in() {
     );
 }
 
+/// BACKEND-16: a block of a known id naming no credential and no endpoint is not signed in, since
+/// the host it reaches refuses a request without a key.
+#[test]
+fn auth_status_known_gateway_naming_no_credential_is_not_signed_in() {
+    let scratch = Scratch::new("cli-running-auth-status-known-no-key")
+        .with_settings(r#"{"provider": {"openai": {}}}"#);
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openai"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openai: not signed in: none found")
+            && stdout.contains("bravebot auth login gateway openai"),
+        "{stdout}"
+    );
+}
+
 /// CLI-23: a file of gateway keys that cannot be read is not reported as a missing key, which
 /// storing another would not fix.
 #[test]

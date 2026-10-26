@@ -3552,6 +3552,18 @@ mod tests {
         );
     }
 
+    /// BACKEND-16: a block of a known id naming no credential and no endpoint is reached at a host
+    /// that refuses every request without a key, so the request is refused here rather than sent.
+    #[test]
+    fn a_known_gateway_naming_no_credential_refuses_the_request() {
+        let config = with_providers(r#"{"provider": {"openai": {"models": {"gpt-4o-mini": {}}}}}"#);
+        let (provider, _) = config.provider_for("gpt-4o-mini").expect("offered");
+        assert!(matches!(
+            gateway_token(provider, |_| None),
+            Err(BackendError::NoGatewayToken { .. })
+        ));
+    }
+
     /// BACKEND-60: a header value may be a whole-value `{env:NAME}` reference, read from the
     /// environment at the point a request needs it, on BACKEND-16's footing for a credential.
     ///

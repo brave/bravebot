@@ -579,13 +579,22 @@ key stored for its id is the person saying this gateway wants none, so its reque
 sent, because storing one is somebody saying the gateway wants one. A block that does name somewhere
 for a credential to live, and finds nothing there, is a stale or missing token and is still refused.
 
+**A known name reached at its compiled-in host is the exception to that exception.** A block whose id
+is one [BACKEND-17](#BACKEND-17) compiles an endpoint in for, and which states no `baseURL`, is
+reached at a service that refuses every request without a key, so its naming no credential and finding
+no stored key is a credential that is missing, not one that is not wanted. It is refused with the
+remedy named, `auth status` says it is not signed in and `doctor` says none was found. A block stating
+a `baseURL` of its own keeps the rule above, so a local service reached under a known id still needs
+no key, and so does a block that carries the credential in a header it names in `headers`.
+
 **Why the distinction is where it is.** The reason above holds for the second case and not the first:
 a gateway that wants no credential answers an unauthenticated request, so nothing fails at the far end
 for a reason nothing local could explain, and a refusal names a remedy that does not exist. Requiring
 a value instead would require a field of a block that does not have one, which BACKEND-13 rules out,
 and a dummy `apiKey` teaches people to write fake credentials into a file they paste into issues.
-Deciding it by endpoint rather than by what the block says would refuse the same local service reached
-across a LAN or through a reverse proxy. BACKEND-5 is unaffected: such a gateway is reachable, so
+Deciding it by endpoint alone would refuse the same local service reached
+across a LAN or through a reverse proxy; the exception above reads the id and the absence of a stated
+endpoint, which such a service does not match. BACKEND-5 is unaffected: such a gateway is reachable, so
 offering its models is not offering rows that fail when picked.
 
 `verified-by: bravebot_config::provider::a_named_variable_holds_the_token_before_the_file_does`
@@ -598,6 +607,10 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_config::provider::a_token_written_into_the_file_is_still_read`
 `verified-by: bravebot_config::provider::a_provider_with_nothing_holding_a_token_has_none`
 `verified-by: bravebot_config::provider::a_provider_naming_no_credential_needs_none`
+`verified-by: bravebot_config::provider::a_known_id_at_its_compiled_in_host_naming_no_credential_is_missing_one`
+`verified-by: bravebot_agent::backend::a_known_gateway_naming_no_credential_refuses_the_request`
+`verified-by: bravebot_cli::doctor::a_known_gateway_naming_no_credential_is_reported_as_missing_one`
+`verified-by: bravebot_cli::running::auth_status_known_gateway_naming_no_credential_is_not_signed_in`
 `verified-by: bravebot_agent::backend::a_gateway_with_nothing_holding_a_token_refuses_the_request`
 `verified-by: bravebot_agent::backend::a_gateway_naming_no_credential_sends_unauthenticated`
 `verified-by: bravebot_aichat::lib::a_gateway_needing_no_credential_sends_no_authorization_header`
@@ -3683,18 +3696,15 @@ clause was written for.
   to one more source in one of them than in the other, and which behaviour a person meets depends on
   which name they blanked.
 
-- **A gateway that wants a credential and was told of none is refused by the service rather than
-  here.** BACKEND-16 reads a block naming no credential as the person saying none is wanted, so a
-  block naming a service that does want one, and naming none, sends an unauthenticated request and
-  gets that service's own rejection where a local refusal named the remedy. What the block says is
-  the only statement available about whether a credential is wanted; the endpoint does not answer it,
-  a private deployment behind a name this system knows being free to want none and a local service
-  being reachable at one of those names. Deciding by endpoint would buy the better message for the
-  names BACKEND-17 compiles in and pay for it by refusing every gateway outside them that wants
-  nothing. A block whose `apiKey` is written blank, or whose `env` lists only blank names, names no
+- **A gateway outside the known names that wants a credential and was told of none is refused by the
+  service rather than here.** BACKEND-16 reads a block naming no credential as the person saying none
+  is wanted, except for a known name at its compiled-in host, which is refused locally. A block stating
+  its own `baseURL` is read by what it says, since the endpoint does not answer whether a credential
+  is wanted: a private deployment behind a known name, or a local service reached at one, may want
+  none. A block whose `apiKey` is written blank, or whose `env` lists only blank names, names no
   credential by that same reading, since a blank in this file is read as nothing having been written
-  there. A placeholder somebody meant to fill in later is therefore read as them saying none is
-  wanted, and the refusal that would have pointed at it does not happen.
+  there. A placeholder somebody meant to fill in later at a stated endpoint is therefore read as them
+  saying none is wanted, and the refusal that would have pointed at it does not happen.
 
 - **A credential is resolved by running the AWS CLI.** Reaching Bedrock needs short-lived keys that
   expire during a session, and the tool that holds them is the one the person already signs in
