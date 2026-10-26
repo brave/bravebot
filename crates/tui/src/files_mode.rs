@@ -354,9 +354,10 @@ fn heading(files: &[File], earlier: bool, width: usize) -> (Line<'static>, std::
     let close_width = spans_width(std::slice::from_ref(&close));
     if earlier {
         let used = spans_width(&spans);
-        let note = format!("  {}", t!(files_earlier_not_kept));
-        let room = width.saturating_sub(used + close_width);
-        spans.push(Span::styled(crate::status::cut(&note, room), dim()));
+        // `cut` trims the text it is given, so the gap before the note is added after it.
+        let room = width.saturating_sub(used + close_width + 2);
+        let note = crate::status::cut(t!(files_earlier_not_kept), room);
+        spans.push(Span::styled(format!("  {note}"), dim()));
     }
     let used = spans_width(&spans);
     let gap = width.saturating_sub(used + close_width);
@@ -1695,6 +1696,29 @@ mod tests {
             !session.files_open(),
             "a click on the control did not end the state"
         );
+    }
+
+    /// FILES-10: the note about earlier edits is two spaces from the totals, whole or cut.
+    #[test]
+    fn the_note_about_earlier_edits_is_set_apart_from_the_totals() {
+        let mut session = Session::new("none");
+        prompt(&mut session, "before the resume");
+        session
+            .transcript
+            .push(Entry::recalled_tool("Update(old.rs)", ""));
+        prompt(&mut session, "after the resume");
+        wrote(&mut session, write("new.rs", "x\n", "y\n"));
+        let files = session.written_files();
+        let start = t!(files_earlier_not_kept)
+            .chars()
+            .take(5)
+            .collect::<String>();
+        for width in [120, 60] {
+            let (line, _) = heading(&files, true, width);
+            let text = line.to_string();
+            let at = text.find(&start).expect("the note is drawn");
+            assert!(text[..at].ends_with("  "), "{text:?}");
+        }
     }
 
     /// MOUSE-18: a click on the heading's words, which is the same row as the control, leaves the
