@@ -970,6 +970,8 @@ auth-logout-import =
     un import ne garde aucun identifiant : il a écrit des entrées dans le fichier de réglages, et les y retirer l'annule
 auth-gateway-key-argument =
     une clé n'est jamais un argument de la ligne de commande, que d'autres programmes peuvent lire et que le shell garde : lancez bravebot auth login gateway { $id } et tapez la clé quand elle est demandée
+auth-gateway-extra-word =
+    { $command } prend un identifiant et rien après : un mot à cet endroit n'est pas répété, car ce peut être une clé
 auth-gateway-not-while-incognito =
     une session incognito n'écrit rien sur le disque, et enregistrer une clé est une écriture : lancez bravebot auth login gateway sans --incognito
 auth-gateway-none-configured =

@@ -283,6 +283,18 @@ fn unexpected(way: Way, argument: &str) -> ExitCode {
     )
 }
 
+/// The refusal of a word after a gateway's id. Not repeated, as for `login`: it is most likely
+/// the key.
+fn unexpected_gateway_word(verb: &str) -> ExitCode {
+    fail(
+        Ending::Argument,
+        t!(
+            auth_gateway_extra_word,
+            command = format!("bravebot auth {verb} gateway")
+        ),
+    )
+}
+
 /// Sign in to every AWS account the configuration names, where it has no usable session.
 ///
 /// The sign-in a session would make before its first turn (BACKEND-9), made now, so the URL and
@@ -828,6 +840,9 @@ fn status(args: &[String]) -> ExitCode {
             t!(cli_unknown_option, flag = printable(option_name(flag))),
         );
     }
+    if way == Way::Gateway && rest.len() > takes {
+        return unexpected_gateway_word("status");
+    }
     if let Some(extra) = rest.get(takes) {
         return fail(
             Ending::Argument,
@@ -1106,7 +1121,7 @@ fn logout(args: &[String]) -> ExitCode {
                 t!(cli_unknown_option, flag = printable(option_name(flag))),
             );
         }
-        (Way::Gateway, [_, extra, ..]) => Some(extra),
+        (Way::Gateway, [_, _, ..]) => return unexpected_gateway_word("logout"),
         (Way::Gateway, _) => None,
         (_, extra) => extra.first(),
     };
