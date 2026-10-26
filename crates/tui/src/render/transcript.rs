@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::render::QUARANTINE_BAR;
+    use crate::render::{LEFT_OPEN_MARKER, QUARANTINE_BAR};
     use bravebot_agent::diff::Change;
     use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
     use bravebot_core::todo::{Row, Status};
@@ -1406,6 +1406,44 @@ mod tests {
                 (run, block, 1),
                 (write, position(&lines, "… 5 more lines") + 1, 2)
             ]
+        );
+    }
+
+    /// A finished entry's open tasks are drawn through `entry_extras`, the transcript's own call
+    /// site for `todo_lines`, not through `todo_lines` directly. A row the model left pending or
+    /// in progress has to be drawn hollow and dim there, not filled, running and bold, or the
+    /// wiring at that call site could revert without any test here catching it (#2897).
+    #[test]
+    fn a_finished_entrys_open_task_is_drawn_left_open_at_its_call_site() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        session.transcript.push(Entry::user("run it"));
+
+        let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
+        call.todos = vec![Row {
+            content: "still to do".to_string(),
+            marker: "■",
+            status: Status::Active,
+        }];
+        session.transcript.push(call);
+
+        let (lines, ..) = with_prompts(&session, 90, 24);
+        let row = &lines[position(&lines, "still to do")];
+
+        assert_eq!(
+            row.spans[1].content,
+            format!("{LEFT_OPEN_MARKER} "),
+            "the row kept the filled mark of work being done: {row:?}"
+        );
+        assert_eq!(
+            row.spans[1].style,
+            dim(),
+            "the marker kept the running colour: {row:?}"
+        );
+        assert_eq!(
+            row.spans[2].style,
+            dim(),
+            "the text kept the bold a row being worked on is drawn with: {row:?}"
         );
     }
 }
