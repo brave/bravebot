@@ -4,6 +4,11 @@ title: Slash commands
 status: normative
 governs:
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/app/models.rs
   - crates/tui/src/app/session_commands.rs
@@ -15,10 +20,15 @@ governs:
   - crates/tui/src/away.rs
   - crates/tui/src/init_command.rs
   - crates/tui/src/review_command.rs
+  - crates/tui/src/commit_message_command.rs
+  - crates/tui/src/help_command.rs
   - crates/tui/src/prompt_files.rs
 guards:
   - symbol: commands
-documented-by: docs/website/docs/reference/commands.md
+documented-by:
+  - docs/website/docs/reference/commands.md
+  - docs/website/docs/customize/model.md
+  - docs/website/docs/customize/effort.md
 ---
 
 ## Scope
@@ -35,7 +45,10 @@ conversation never sees, and where its answer is drawn is [watching.md](watching
 a different surface entirely and is [shell-mode.md](shell-mode.md). `/copy` has no other spec to
 belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what it holds is CMD-12. `/init` starts an ordinary turn, but the words that turn is given and
 when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
-it may not do are CMD-18. `/request` shows the request a turn built, which is
+it may not do are CMD-18. `/help` is the same kind of turn, given a question and
+the name of the skill that carries the documentation, which is CMD-24, and `/changelog` shows text
+this program carries and starts no turn, which is CMD-25. `/todos` prints the plan the session holds
+and starts no turn, which is CMD-28. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
@@ -45,6 +58,11 @@ still a prompt like any other sentence, and the planner is what fetches the skil
 [skills.md](skills.md) owns what a skill is and what each source is trusted for, and
 [tools/load-skill.md](tools/load-skill.md) owns the fetch. CMD-7 says why no skill becomes a
 command, and CMD-9 says what the box offers.
+
+**An MCP server's prompts are offered here, and are never commands.** A prompt of a server this
+session reached is a row of the list a slash opens, beside the skills. A line that starts with its
+word is sent as the prompt it is, and the turn it starts fetches the prompt. CMD-26 says what a
+line may hold and what the person is told, and [mcp.md](mcp.md) says what is labelled and why.
 
 **Prompt files are looked up, and are never commands.** A slash word that names a file in the
 person's own `~/.bravebot/prompts` is replaced in the box by the file's text, for the person to read
@@ -86,6 +104,28 @@ talk to the planner, so it is claimed as narrowly as possible: asking how a comm
 stay a question. Prefix matching would have made `/add-dirs are useful` open a directory called
 `s are useful`.
 
+**`exit` and `quit` typed with no slash are not commands, and a line that is only one of them is
+sent as the prompt it is, with a note under the box.** The first Enter on a trimmed line equal to
+either word in any case sends it as it would any other prompt, and asks nothing of the person first.
+While the turn it begins runs, the row under the box says that the line was sent as a prompt, that
+Ctrl-C stops it and that `/exit` leaves. The note is drawn for a line the person typed in the box,
+sent at once or queued behind a running turn and sent when that turn ends. A turn that a loop's tick,
+a watch, a goal or a command begins carries no note, and neither does a line with anything else in it,
+which includes two of these words sent together by Ctrl-Enter. In shell mode the line is a command
+line (CMD-3) and runs at the first Enter, with no turn to say anything under. The row names Ctrl-C
+first because a turn is running and the first press stops it ([INPUT-4](terminal-input.md#INPUT-4)).
+`/exit` typed while the turn runs waits for the turn to end like every command in the second row of
+the table in [CMD-8](#CMD-8). The row is short enough that any one permission mode name is still
+drawn beside it on a terminal eighty columns wide.
+
+**Why.** Other terminal agents leave on the bare word, so a person who types it may expect to leave,
+and a turn that starts with nothing on the screen saying the line went to the model reads as an
+interface that did not understand. Claiming the word would take it out of the language a person can
+use to talk to the planner, and a question about leaving would stop being a question, so it stays a
+prompt and the row says so. Holding the first Enter would add a step in front of a line that sends
+at once, which no other prompt has. The line is the text of the person's own box, and what it
+decides is only whether the note is drawn.
+
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_the_command_is_a_prompt`
 `verified-by: bravebot_tui::app::an_argument_is_taken_only_after_the_whole_command_word`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_add_dir_command_is_still_a_prompt`
@@ -118,6 +158,19 @@ stay a question. Prefix matching would have made `/add-dirs are useful` open a d
 `verified-by: bravebot_tui::app::a_prompt_containing_the_caffeinate_command_is_still_a_prompt`
 `verified-by: bravebot_tui::app::a_longer_word_starting_with_caffeinate_is_a_prompt`
 `verified-by: bravebot_tui::app::init_with_words_after_it_is_a_prompt`
+`verified-by: bravebot_tui::app::a_lone_leave_word_is_sent_at_the_first_enter`
+`verified-by: bravebot_tui::app::a_line_that_holds_more_than_a_leave_word_is_sent_without_the_mark`
+`verified-by: bravebot_tui::app::the_keys_the_note_on_a_sent_leave_word_names_stop_the_turn_and_leave`
+`verified-by: bravebot_tui::app::the_exit_command_leaves_on_the_first_enter_and_marks_nothing`
+`verified-by: bravebot_tui::app::a_bare_leave_word_in_shell_mode_is_run_as_the_command_line_it_is`
+`verified-by: bravebot_tui::state::a_turn_begun_on_a_lone_leave_word_is_marked_and_one_on_any_other_line_is_not`
+`verified-by: bravebot_tui::state::the_prompt_after_a_marked_turn_does_not_inherit_the_mark`
+`verified-by: bravebot_tui::state::a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark`
+`verified-by: bravebot_tui::state::a_lone_leave_word_that_waited_in_the_queue_is_marked_when_its_turn_begins`
+`verified-by: bravebot_tui::state::leave_words_hurried_together_are_not_marked_and_one_hurried_alone_is`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_a_sent_leave_word_went_to_the_model_as_a_prompt`
+`verified-by: bravebot_tui::render::the_row_under_the_box_says_nothing_of_a_prompt_that_is_more_than_a_leave_word`
+`verified-by: bravebot_tui::render::the_note_on_a_sent_leave_word_leaves_the_permission_mode_on_an_eighty_column_row`
 
 
 <a id="CMD-3"></a>
@@ -271,6 +324,10 @@ this table, and the definition it runs is an argument on the line, compared agai
 session resolved and never added here, however many definitions a machine holds
 ([addressing-a-definition.md](addressing-a-definition.md)).
 
+A prompt of an MCP server (CMD-26) does not add to the set either. Its word is offered as a skill's
+is and written into the box as a prompt, and what runs it is the turn the sent line starts, so no
+dispatch in the box reads a word a server chose.
+
 A prompt file (CMD-17) does not add to the set either. A name is looked up in one directory when
 Enter is pressed on a line that starts with it, and is never listed, drawn as a row, or allowed to
 claim a word the table holds.
@@ -285,27 +342,92 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/panel`; `/caffeinate`; `/request`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
-A command that reads or ends something goes ahead of every line already waiting, and a line behind
+A command that reads or ends something, or that changes only how the screen is drawn, what the
+box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
 it stays where it was. The exception is a line of the same command already waiting, which it waits
 behind: `/loop stop` typed after a waiting `/loop 5m check the deploy` would find no loop to stop
 and the loop would start after it, so two lines of one command are carried out in the order they
-were typed. A command that changes something, `/rename`, `/note`, `/issue`, `/pr`, `/forget-trust`,
-`/sandbox`, `/model`, `/theme`, `/effort`, `/config`, `/advisor` or `/style`, is carried out as it is typed only when nothing is waiting, and otherwise waits
-behind what is, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
-session `/clear` leaves, and `/forget-trust` ahead of a waiting `/cd` would forget the directory
-`/cd` leaves. A command carried out as it is typed comes off the box and is not remembered, as at
-rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
+were typed. `/loop` waits behind a waiting `/after` as well, since that takes the slot a loop takes.
+A command that changes what the session keeps, `/rename`, `/note`, `/issue`, `/pr`,
+`/forget-trust`, `/sandbox`, `/model`, `/effort`, `/advisor` or `/style`, is carried out as it is
+typed unless a line waiting ahead of it could change what it acts on, and otherwise waits behind
+that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
+session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
+leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
+Which lines could change what a command acts on depends on the command. A waiting `/sandbox` line in
+any form sets the mode the next turn is built with and nothing else
+([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
+`/note` typed behind a waiting `/sandbox off` is carried out as it is typed, and `/sandbox strict`
+typed behind it waits, since the mode typed last is the one the person means to end in. `/issue` and
+`/pr` act on the link the record holds ([PANEL-12](info-panel.md#PANEL-12)), which only a line that
+starts another record, switches to one or leaves this one changes: `/clear`, `/handoff`, `/branch`,
+`/resume`, `/bg` and `/exit`. Behind any other waiting line, a prompt and a command line included,
+they are carried out as they are typed. `/model`, `/effort` and `/advisor` act on what a request is
+built with. A prompt reads it, and so does every command that sends a request or leaves for another
+session, and the three hold one another back, since the level a model reads depends on the model. A
+command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/reach`, `/branch`, `/add-dir`,
+`/cd` and `/mcp` read none of it and change none of it, nor does a waiting `/rename`, `/note`,
+`/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the three are
+carried out as they are typed. `/rename` and `/note` act on the name and the notes the record holds. A
+note is stamped with the turn count it is typed at, and a rename gives up every rewind point and is
+undone by the commands that put one back, so a line that begins a turn changes what they act on:
+every prompt, every command that sends a request or begins a turn, `/clear`, `/undo`, `/rewind`,
+`/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` hold them back, and
+they name it. A command line adds to the conversation and saves the record with the notes and the name
+it already holds, and `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`,
+`/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` write neither, so behind any of those, and
+behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
+they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
+the running turn is. `/style` acts on the pick that every turn reads when it is built and on the
+person's own style files its name is looked up among, which a program cannot write. A file is read
+only where its path does not land in the reach the workspace holds: the root, the directories added,
+the checkouts the session kept and the paths programs were let reach. A prompt, every command that
+begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/branch`, `/handoff`, `/resume`, `/bg`
+and `/exit` hold it back, since each moves or ends that reach or leaves for another session, and it
+names the line. A command line and `/compact`, `/btw`, `/recap`, `/memory`, `/undo`, `/rewind`,
+`/hunks`, `/mcp`, `/after`, `/rename`, `/note`, `/forget-trust`, `/issue`, `/pr`, `/sandbox`,
+`/model`, `/effort` and `/advisor` do not, so behind any of those it is carried out as it is typed:
+`/undo`, `/rewind` and `/hunks` put back files the workspace resolves and move no reach, `/mcp`
+starts or ends a server confined so that it cannot write under `~/.bravebot`, and `/after` arms a
+prompt that goes out when its delay is up and sends nothing now, so a style typed after it is the
+one the turn it sends is built with. The project's own style names are the list held when the line
+was typed and the turn reads the pick under its own trust map, so a rewind that changes the map or
+the files under the root does not change which names `/style` takes. `/forget-trust` acts on the answer kept about the working directory
+and the git worktree around it ([TRUST-24](trust-map.md#TRUST-24)). A prompt and a command line can
+run a program that makes the `.git` entry that moves which root is around the directory, a line that
+starts a session here reads the answer, and one that moves the directory or leaves the session
+changes what is withdrawn, so all of those hold it back, as do `/branch`, which replaces the
+session's record and its reach and has not been read against the answer, and `/mcp`, `/undo`,
+`/rewind` and `/hunks`, which have not been shown unable to make or remove the `.git` entry. A rewind
+removes what a file tool wrote, which may be a `.git` entry written into an added directory that
+holds the working directory, and a server `/mcp` starts may write the directory its declaration
+names. Behind
+`/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after`, `/rename`, `/note`, `/style`,
+`/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed:
+`/after` arms a prompt that goes out when its delay is up and runs nothing now, so the turn it sends
+runs under the answer as `/forget-trust` left it whichever of the two is carried out first.
+`/add-dir` and `/reach` start no program and move neither the working directory nor the root. The first
+opens or closes a directory and a rule in the session's own trust map, and the second writes the
+reach record or the workspace's list of paths programs may reach, and neither writes a file the
+answer is kept in or makes a `.git` entry, so `/forget-trust` withdraws the same answers before them
+as after them. A
+command carried out as it is typed comes off the box and is not remembered, as at rest. What it says goes into the transcript as it is said, so it scrolls with the turn's own
 entries and the rest of the history, and it stays there once the turn has ended. Ctrl-Enter on one stops nothing: the command is already done,
 and stopping the turn would send the prompts waiting behind it, which nobody asked to hurry.
 
 A command that waits is taken off the box and joins the lines waiting for the turn to end, exactly
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
 waiting. It says why it waits, in a line held under the turn as a command's answer is: it acts on
-what the turn holds or starts a turn of its own, or it waits behind the lines typed before it so that it lands where
-it was typed, or, for `/sandbox off`, it asks first and the turn has the screen until it ends. What it waits for is different. It is never offered to the turn in flight, so nothing about
+what the turn holds or starts a turn of its own, or it waits behind a line typed before it so that it lands where
+it was typed, or, for `/sandbox off`, it asks first and the turn has the screen until it ends. A command that waits behind a line
+names the first line waiting that holds it back: a command as it was typed, such as `/clear`, and
+`the prompt before it` or `the shell line before it` where that line is not a command. Its mark
+under the box says the same in place of `carried out after this`, as `after /clear`, where the
+row has the width for it, and is left as it was for a command that waits for the turn on its own
+account, since the lines ahead of that one are not why. What it waits for is different. It is never offered to the turn in flight, so nothing about
 it reaches the planner, and when the queue reaches it, it is carried out rather than sent. The queue
 is drained in the order the lines were typed, so a command behind a prompt waits for that prompt's
 turn.
@@ -359,7 +481,11 @@ does not read:
   moment it is picked, since the next request is the one that has to fit.
 - **`/theme` and `/effort`.** A theme changes only how the screen is drawn. A turn is sent with the
   level in force when it begins and does not read it again, so a level set mid-turn is the next
-  turn's.
+  turn's. A ChatGPT account is sent the level its session began with, so a level set there applies
+  from the next session ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)).
+- **`/language`.** It saves the language the interface is read in from the next start, and the
+  catalog is chosen once, so nothing the turn holds or the screen draws changes
+  ([LOCALE-8](localization.md#LOCALE-8)).
 - **`/config`.** It picks the style the box edits in. The turn does not read it. The keys that stop
   the turn do, so with vi's style chosen Escape reaches the turn only once the box has no use for
   it ([INPUT-24](terminal-input.md#INPUT-24)).
@@ -446,12 +572,38 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_rename_with_no_name_mid_turn_keeps_the_running_turns_rewind_point`
 `verified-by: bravebot_tui::app::a_link_set_mid_turn_is_set_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_command_that_changes_something_waits_behind_what_was_typed_first`
+`verified-by: bravebot_tui::app::a_note_typed_behind_a_waiting_sandbox_off_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::every_settings_command_but_sandbox_is_carried_out_behind_a_waiting_sandbox_off`
+`verified-by: bravebot_tui::app::a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it`
+`verified-by: bravebot_tui::app::a_link_typed_behind_a_line_that_keeps_the_record_is_set_when_typed`
+`verified-by: bravebot_tui::app::a_link_typed_behind_a_line_that_replaces_the_record_waits_behind_it`
+`verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_no_request_is_set_when_typed`
+`verified-by: bravebot_tui::app::a_model_level_or_advisor_typed_behind_a_line_that_builds_a_request_waits_behind_it`
+`verified-by: bravebot_tui::app::a_choice_names_the_first_waiting_line_that_could_change_it`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
+`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_style_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_cannot_change_it_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_forgotten_answer_typed_behind_a_line_that_could_change_it_waits_behind_it`
+`verified-by: bravebot_tui::app::opening_or_closing_a_directory_does_not_change_what_forgetting_trust_withdraws`
+`verified-by: bravebot_agent::reach::a_reach_leaves_the_answer_kept_about_the_directory_as_it_was`
+`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_leaves_the_record_alone_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_note_or_a_name_typed_behind_a_line_that_could_change_the_record_waits_behind_it`
+`verified-by: bravebot_session::sessions::a_save_for_a_command_line_keeps_the_name_and_the_notes_given_before_it`
+`verified-by: bravebot_tui::app::a_theme_or_config_typed_behind_a_waiting_line_is_carried_out_when_typed`
+`verified-by: bravebot_tui::app::a_language_typed_behind_a_waiting_line_is_carried_out_when_typed`
+`verified-by: bravebot_tui::render::a_command_waiting_behind_a_line_names_that_line_on_its_mark`
+`verified-by: bravebot_tui::render::a_command_that_waits_for_the_turn_does_not_name_the_line_ahead_of_it`
+`verified-by: bravebot_tui::render::a_command_does_not_name_a_line_typed_after_it`
+`verified-by: bravebot_tui::render::a_mark_with_no_room_for_the_line_it_waits_behind_says_where_the_line_goes`
+`verified-by: bravebot_tui::app::a_command_names_the_first_waiting_line_that_holds_it_back`
 `verified-by: bravebot_tui::app::export_typed_mid_turn_writes_the_transcript_as_it_stands`
 `verified-by: bravebot_tui::app::export_typed_mid_turn_refuses_a_path_outside_the_working_directory`
 `verified-by: bravebot_tui::app::every_command_carried_out_mid_turn_answers_in_the_transcript`
 `verified-by: bravebot_tui::app::ctrl_enter_on_a_rename_mid_turn_hurries_nothing`
 `verified-by: bravebot_tui::app::trust_forgotten_mid_turn_is_forgotten_as_it_is_typed`
 `verified-by: bravebot_tui::app::an_effort_named_mid_turn_is_set_as_it_is_typed`
+`verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
 `verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
 `verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_waits_and_says_why`
@@ -496,15 +648,20 @@ A slash word at the start of the line is offered the commands it could still bec
 them, the skills whose names start with it, including a word that is a command in full, since a
 longer skill name may extend it (`/pr` lists `pr-fix`). A slash word after other words is offered
 the skills alone, since there a command is a prompt (CMD-2). The skills are the ones a turn starting
-now would advertise to the planner, read the same way, and each row says when to use the skill and
-where it was found: the project, the person's own directory, or this program. They are read when a line
+now would advertise to the planner, read the same way, and those its file keeps from the planner,
+which no turn advertises and which the box lists because it is where a person finds the name to type
+([SKILL-20](skills.md#SKILL-20)). Each row says when to use the skill and where it was found: the
+project, the person's own directory, or this program, and a skill kept from the planner says that too.
+They are read when a line
 first holds a slash word and let go when it holds none (CMD-10 also needs the names of a finished
 word), so a skill written while the box sat idle is offered at the next line with a slash.
 
 Tab, or Enter on a half-typed name, replaces the word with `/name ` and nothing else; Enter on a
 name typed in full sends the line, unless the arrows moved onto another row first. Either way the line is a prompt, sent as it reads. The planner
 is told that a prompt naming a skill as `/name` is the person asking for it, and it loads that
-skill the way it loads any other. The arrows walk down the commands and on into the skills.
+skill the way it loads any other. A skill its file keeps from the planner is the exception: the turn
+supplies it for the line that names it and the planner makes no call ([SKILL-20](skills.md#SKILL-20)).
+The arrows walk down the commands and on into the skills.
 
 Nothing is offered in shell mode, while work runs (the commands alone are, CMD-8), or after the
 word of a command line, which is CMD-3 and CMD-5 holding for skills as they hold for commands. A
@@ -526,6 +683,7 @@ would read them on every letter.
 `verified-by: bravebot_tui::app::a_skill_is_completed_mid_sentence_and_sent_as_a_prompt`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_skill_and_sends_a_whole_one`
 `verified-by: bravebot_tui::app::the_arrows_walk_from_the_commands_onto_the_skills`
+`verified-by: bravebot_tui::app::enter_takes_a_skill_row_the_arrows_moved_onto_instead_of_the_typed_command`
 `verified-by: bravebot_tui::app::a_command_word_typed_in_full_still_offers_the_skills_extending_it`
 `verified-by: bravebot_tui::app::the_skills_are_resolved_once_a_line_and_let_go_after_it`
 `verified-by: bravebot_tui::app::no_skill_is_offered_in_a_command_line_or_inside_a_command`
@@ -538,6 +696,8 @@ would read them on every letter.
 `verified-by: bravebot_agent::skills::the_set_an_interface_resolves_is_the_one_a_turn_would`
 `verified-by: bravebot_agent::skills::each_skill_records_which_of_the_three_places_it_came_from`
 `verified-by: bravebot_agent::preamble::a_turn_offered_skills_is_told_a_slash_name_is_the_user_asking_for_one`
+`verified-by: bravebot_tui::render::a_skill_row_says_when_only_the_person_can_have_it_loaded`
+`verified-by: bravebot_tui::skills::a_skill_kept_from_the_planner_is_offered_marked_beside_one_that_is_not`
 
 <a id="CMD-10"></a>
 ### CMD-10: a recognised slash word is drawn in its own colour, and shows what it takes
@@ -645,9 +805,11 @@ The inhibitor is a fixed argument vector, and only idle sleep is held off:
 | Windows | `powershell -NoProfile -NonInteractive -EncodedCommand <script>`, the script calling `SetThreadExecutionState(ES_CONTINUOUS \| ES_SYSTEM_REQUIRED)` and then reading its standard input to the end |
 | every other platform | `systemd-inhibit --what=idle --who=bravebot --why=/caffeinate --mode=block <cat>`, `<cat>` being the absolute path of `cat` |
 
-`<cat>` is found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says, because `systemd-inhibit` starts it
-and would otherwise look the name up on the `PATH` it inherited. When no `cat` is found that way the
-inhibitor does not start.
+`<cat>` is found as [SANDBOX-30](sandboxing.md#SANDBOX-30) says and passed as an absolute path,
+because a lookup of the bare name by `systemd-inhibit` would not judge where a link in a searched
+entry leads. When no `cat` is found that way the inhibitor does not start. Whichever platform's
+program it is, it is started with only the `PATH` entries that lookup searches, so a program it
+looks up by name is found only among them.
 
 Each one's standard input is a pipe this process holds, and each ends the hold when this process
 ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
@@ -681,6 +843,7 @@ did not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_holds_idle_sleep_and_starts_the_cat_it_was_found_at_byte_for_byte`
 `verified-by: bravebot_tui::caffeinate::the_inhibitor_runs_the_installed_cat_and_never_one_a_stage_may_have_written`
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
+`verified-by: bravebot_tui::caffeinate::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
 
 ## Drafting the project's instructions
@@ -1017,6 +1180,267 @@ apart from the parser drifts from it.
 `verified-by: bravebot_tui::app::the_limit_review_and_reach_hints_show_forms_their_parsers_take`
 `verified-by: bravebot_tui::app::tab_finishes_a_mode_started_after_the_sandbox_command`
 
+<a id="CMD-23"></a>
+### CMD-23: `/commit-message` puts a draft in the box, and the diff and the draft reach no planner
+
+`/commit-message [--staged | --range <a>..<b>] [format]` reads the changes named and has a model
+write one commit message for them. No argument and `--staged` are what is in the index and not in
+`HEAD`, and `--range` is the changes between two commits, written `a..b` or `a...b`
+([GIT-15](tools/read-git.md#GIT-15)). Each name is a branch, tag, hash or `HEAD~2`, with no leading
+`-` and no `..` inside it. The two flags count only as the first word, so `/commit-message use
+Conventional Commits` is the staged changes in that format. Words after the source are the person's
+own and go to the processor as the format they want. A range that is not two such names is a usage
+note and nothing is read or sent.
+
+The driver reads the diff with the reader `read_git` uses, under a policy of its own that holds
+`FileRead` and the network and no conversation, and hands it to a processor
+([PROC-14](processors.md#PROC-14)). It is not a turn: nothing joins the transcript, the
+conversation is neither read nor written, and the request carries no tool.
+
+The draft goes to one place, the input box, as text the person reads, edits and sends. What is put
+in the box is a fixed line, a blank line and the draft, so the line the person sends starts with a
+word the driver wrote and a draft that spells `/clear` is a prompt like any other sentence
+([CMD-1](#CMD-1)). Characters a terminal draws as nothing are taken out of the draft first, and the
+number is said ([PASTE-10](pasting.md#PASTE-10)). Whatever was in the box is kept as the draft that
+Up brings back. Nothing runs on the draft: the next Enter sends it as an ordinary prompt, so the
+planner reads it only as words the person chose to send, and a commit follows only from the planner
+being asked for one, through `run`, with the person asked about it as for any program.
+
+Nothing is drafted, and the line says which of these held, where the repository is not one
+`read_git` opens ([GIT-2](tools/read-git.md#GIT-2)), where the reader shows no file, where the diff
+holds what looks like a credential ([CRED-15](credential-protection.md#CRED-15)), where the model
+could not be used ([PROC-13](processors.md#PROC-13)) or where the answer marks no message. A diff cut
+at the reader's cap is drafted from what was read and the line says so. Typed during a turn the
+line waits for the turn to end (CMD-8).
+
+**Why.** A message is written from a diff the planner may not be allowed to read, and the answer to
+that elsewhere is a processor. The draft is derived from that diff, so its integrity is the diff's,
+and the one place it is released is a surface the person edits and a key the person presses. A
+credential in a diff is refused where the planner's own read would ask, because nobody is at a
+prompt to agree.
+
+`verified-by: bravebot_agent::commit_message::a_range_is_two_written_out_revisions`
+`verified-by: bravebot_tui::app::the_commit_message_command_carries_its_source_and_is_not_sent_as_a_prompt`
+`verified-by: bravebot_tui::app::the_commit_message_command_starts_no_request_for_a_range_it_cannot_use`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_commit_message_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_commit_message_command_waits_for_a_running_turn`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::app::a_draft_that_spells_a_command_is_sent_as_a_prompt_and_not_carried_out`
+`verified-by: bravebot_tui::app::a_draft_has_the_characters_a_terminal_draws_as_nothing_taken_out`
+`verified-by: bravebot_tui::app::a_draft_arriving_over_typed_text_keeps_the_text_as_a_draft`
+`verified-by: bravebot_tui::app::a_stopped_or_failed_draft_leaves_the_box_alone`
+`verified-by: bravebot_tui::commit_message_command::a_bare_command_drafts_from_the_staged_changes`
+`verified-by: bravebot_tui::commit_message_command::a_range_names_its_source_and_the_rest_is_the_format`
+`verified-by: bravebot_tui::commit_message_command::a_flag_only_counts_as_the_first_word`
+`verified-by: bravebot_tui::commit_message_command::a_range_that_is_not_two_plain_revisions_is_refused`
+`verified-by: bravebot_tui::commit_message_command::the_box_begins_with_the_leading_words_whatever_the_draft_says`
+`verified-by: bravebot_agent::commit_message::a_range_is_drafted_from_its_diff_and_the_request_holds_no_tool`
+`verified-by: bravebot_agent::commit_message::an_index_that_matches_head_sends_nothing`
+`verified-by: bravebot_agent::commit_message::a_repository_the_map_does_not_trust_is_not_read_or_sent`
+`verified-by: bravebot_agent::commit_message::a_diff_holding_a_credential_is_not_sent`
+`verified-by: bravebot_agent::commit_message::an_answer_with_no_marker_is_no_draft`
+
+## Answering from what this program carries
+
+<a id="CMD-24"></a>
+### CMD-24: `/help` asks the planner to answer a question from the documentation this program carries
+
+`/help <question>` starts an ordinary turn whose prompt is a fixed text written in this program
+around the question: load the built-in skill `bravebot-help` with `load_skill` and answer from the
+pages it lists, not from memory ([SKILL-17](skills.md#SKILL-17)). The question is the argument as
+CMD-5 takes it and is carried into the prompt as typed. The prompt is what the transcript shows as
+sent, and typed during a turn the line waits (CMD-8).
+
+With no question the command says what it takes and no turn starts. `/help` followed by words is
+the command, a longer word that starts with it is a prompt, and so is a sentence that mentions it
+(CMD-2).
+
+The fixed words of the prompt name no path with `@`, so sending them vouches for nothing. The
+question is the person's own line, so an `@` in it is read as it is in any line they type
+([NAME-1](naming-files.md#NAME-1)). The turn is marked as one the driver wrote the prompt of, so it is
+not offered a later look at its own line ([SCHED-6](tools/schedule-next.md#SCHED-6)). The pages are
+this program's own text and are trusted for that reason ([SKILL-12](skills.md#SKILL-12)). The turn
+reads what any turn may read and the prompt adds no reach. Nothing the driver does branches on the
+question or on the answer. A skill named `bravebot-help` that a turn would offer from another source
+shadows the built-in ([SKILL-12](skills.md#SKILL-12)), and the turn then loads that one. A prompt file
+or skill named `help` is shadowed by the command (CMD-17).
+
+**Why.** The planner loads the skill on its own when the description fits the question
+([SKILL-13](skills.md#SKILL-13)), and a person's wording may not fit it. The command names the
+skill in the prompt, so the question is answered from the documentation of the running version
+whatever the wording. The question goes into the driver's sentence and not the other way round, so
+the typed line itself is never sent (CMD-4).
+
+`verified-by: bravebot_tui::app::the_help_command_starts_a_turn_with_the_drivers_own_prompt_around_the_question`
+`verified-by: bravebot_tui::app::the_help_command_with_no_question_says_what_it_takes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::a_help_question_typed_while_a_turn_runs_waits_and_then_starts_its_own_turn`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_help_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::a_help_turn_is_the_drivers_prompt_and_is_offered_no_later_look`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+`verified-by: bravebot_tui::help_command::the_prompt_names_the_help_skill_and_carries_the_question_as_typed`
+`verified-by: bravebot_tui::help_command::the_prompt_names_no_path_for_the_person_to_vouch_for`
+`verified-by: by-construction (the command returns Action::Submit like any typed line, and the one place a submitted line is run reads it as the person's; nothing in the command marks the question as anything else)`
+
+<a id="CMD-25"></a>
+### CMD-25: `/changelog` shows the release notes this program carries, and starts no turn
+
+`/changelog` puts the notes of the version that is running in the transcript, from the changelog
+compiled into this program. Nothing is read, fetched or sent, and no turn starts. The notes are the
+lines under that version's heading, each markdown link drawn as its text, under a heading that names
+the version.
+
+Where the changelog has no heading for the running version, the notes shown are the newest
+release's and the heading says whose they are and which version runs, so they are not taken for the
+running version's. A version matches only as a whole, so `0.1` is not the release `0.17.0`. A program
+that carries no release says so.
+
+The command takes no argument, so `/changelog` followed by words is a prompt (CMD-2). It touches
+nothing a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt
+file or skill named `changelog` is shadowed by the command (CMD-17).
+
+**Why.** The release notes are written for the people who run a version, and the version that
+runs is what a person asking has in mind. The text is carried in the program, so the notes match
+the build with no network and no checkout, and a model is not needed to read out a file.
+
+`verified-by: bravebot_tui::app::the_changelog_command_shows_notes_and_starts_no_turn`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_changelog_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_changelog_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::state::the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text`
+`verified-by: bravebot_tui::state::the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows`
+`verified-by: bravebot_tui::state::a_changelog_with_no_release_says_so`
+`verified-by: bravebot_tui::help_command::a_link_is_drawn_as_its_text_and_the_rest_of_the_line_is_untouched`
+`verified-by: bravebot_tui::help_command::brackets_that_are_not_a_link_are_kept`
+`verified-by: bravebot_tui::help_command::an_address_that_is_not_closed_takes_nothing_after_it`
+`verified-by: bravebot_tui::help_command::a_backtick_left_open_does_not_hide_the_links_on_the_next_line`
+`verified-by: bravebot_tui::help_command::an_address_with_parentheses_of_its_own_is_one_address`
+`verified-by: bravebot_tui::help_command::an_image_and_a_link_in_a_code_span_are_kept_and_a_link_after_them_is_not`
+`verified-by: bravebot_tui::help_command::a_release_is_the_lines_under_its_heading_up_to_the_next_heading`
+`verified-by: bravebot_tui::help_command::only_a_line_that_begins_with_the_heading_mark_starts_a_release`
+`verified-by: bravebot_tui::help_command::a_release_is_found_by_its_whole_version_and_else_the_newest_is_given`
+`verified-by: bravebot_tui::help_command::the_carried_changelog_lists_releases_newest_first_and_the_newest_has_notes`
+
+## Running a prompt of an MCP server
+
+<a id="CMD-26"></a>
+### CMD-26: a line that starts with the word of an MCP server's prompt runs it, and is sent as the line it is
+
+The prompts of the servers a session reached are rows of the list a slash opens, among the skills
+(CMD-9) and in name order with them. A row is `/mcp__<alias>__<word>`, says which server it came
+from and what the server said about the prompt, and once the word is typed in full the box draws
+what it takes after the caret, each required argument as `name=<value>` and each optional one in
+brackets. A row is offered, and the word drawn as recognised (CMD-10), only where it begins the
+line, since that is the one place a line runs it. Taking a row writes the word and each argument
+the prompt cannot run without as a space and `name=`, so the person gives values and retypes no
+name the row drew, and nothing else: an optional argument is left to be added, and a prompt that
+needs none gets the word and a space. No row is offered while work runs, in shell mode, or for a
+server turned off.
+
+A line whose first word is `/mcp__<alias>__<word>`, where the alias is one of a server this session
+reached and the word is one a tool may be named, runs that prompt. What follows the word is its
+arguments: `name=value` pairs separated by spaces, with a value that holds spaces in double
+quotes, where `\"` and `\\` stand for a quote and a backslash. A word that is not a pair, an
+argument given twice, a name an argument may not have and a quote that does not close are said, and
+the line stays in the box and is not sent, at rest and mid-turn alike. A word that two reached
+servers' aliases both begin names neither, since either could be the one meant and the arguments go
+to one of them: it is said and the line is not sent. A line that begins this way and names no
+server this session reached, or whose word is not one a tool may be named, is a prompt like any
+other sentence (CMD-2).
+
+The line is sent as the prompt it is, and the turn it starts fetches the prompt, which
+[mcp.md](mcp.md) says how to label. Nothing in the line is compared with what a server listed: the alias is
+compared with the servers the person declared, and the word and the arguments are the person's own
+and are the whole of the request. A name a taken row wrote is a word of the line like any other,
+so a line reads the same whether it was typed or taken. Only a line the person wrote runs a prompt. A line this program
+composed to carry a goal on does not, and a prompt file whose text would run a prompt of a server
+this session reached is refused as one opening with a command is (CMD-17). A line that reaches a
+turn without parsing, as a `/loop`'s prompt can, is sent as the sentence it is and the person is
+told the prompt was not fetched.
+
+**Why.** A server's words are its own, so the rows follow the rule skills do (CMD-7): the word is
+one a tool may be named, so it cannot read as a sentence, and the row says where it came from. The
+line is sent rather than dispatched because the keystroke is the person's endorsement of one fetch
+and nothing else. It does not vouch for what the server says, which reaches the planner as a
+reference and never as text. A prompt that was a command would have a path that carries a server's
+word into a dispatch that decides something.
+
+`verified-by: bravebot_tui::app::a_servers_prompt_is_offered_at_the_start_of_a_line`
+`verified-by: bravebot_tui::app::a_servers_prompt_is_not_offered_after_other_words`
+`verified-by: bravebot_tui::app::taking_a_prompt_row_writes_its_word_and_required_argument_names_and_sends_nothing`
+`verified-by: bravebot_tui::skills::taking_a_row_writes_the_names_of_the_arguments_a_prompt_cannot_run_without`
+`verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::a_line_running_a_prompt_with_words_that_are_not_arguments_is_not_queued`
+`verified-by: bravebot_tui::app::a_line_the_person_wrote_carries_its_prompt_to_the_turn`
+`verified-by: bravebot_tui::render::a_servers_prompt_row_names_its_server_and_what_it_takes`
+`verified-by: bravebot_tui::render::a_servers_prompt_is_drawn_as_recognised_only_from_the_first_word`
+`verified-by: bravebot_tui::app::a_line_naming_two_servers_or_no_argument_name_is_said_and_not_sent`
+`verified-by: bravebot_tui::app::a_prompt_file_whose_text_would_run_a_servers_prompt_is_refused`
+`verified-by: bravebot_agent::mcp::a_typed_line_names_a_prompt_only_of_a_server_this_session_reached`
+`verified-by: bravebot_agent::mcp::arguments_are_pairs_and_a_quoted_value_may_hold_spaces`
+`verified-by: bravebot_agent::mcp::a_quoted_value_unescapes_a_quote_and_a_backslash_and_nothing_else`
+`verified-by: bravebot_agent::mcp::words_that_are_not_arguments_are_refused_naming_the_word`
+
+<a id="CMD-27"></a>
+### CMD-27: `/mode <skill>` keeps a skill applied to every turn, and `/mode off` leaves it
+
+`/mode` alone says which skill is the session's mode, or that there is none, and lists the names it
+could take. `/mode <skill>` takes one by its whole name, among the skills a turn starting now would
+resolve, read the way the box offers them ([CMD-9](#CMD-9)): through the trust map and the rules, so
+a skill from a project nobody vouched for is not named, offered or taken. A name that matches none,
+a prefix, another case and a name with a space after it, keeps the mode that was there and says so.
+`/mode off` leaves the mode. The name is stored in the session's record ([SKILL-21](skills.md#SKILL-21))
+and shown in the border of the box while the mode stands, so a person who has forgotten it is told by
+the place they type in.
+
+The command's word is written in this program like every other ([CMD-7](#CMD-7)): no skill becomes a
+command, and a skill called `mode` is not offered as a row. A command typed in full is offered first, so Enter on
+`/mode` runs it although `/model` shares its letters. Only a line a person typed sets or clears
+a mode. A mid-turn `/mode` waits for the turn to end, which is the kind CMD-8 gives every command it
+does not name: the turn in flight was built without the change.
+
+**Why.** The same words the skill rows carry are the ones a person is choosing between, so a
+mode needs no second list. Taking only a name the driver enumerated keeps the mode a choice among
+sources already trusted for skills, and not a way to name a file.
+
+`verified-by: bravebot_tui::app::the_mode_command_puts_a_skill_in_force_by_its_whole_name_and_off_leaves_it`
+`verified-by: bravebot_tui::app::the_mode_command_takes_a_name_or_nothing`
+`verified-by: bravebot_tui::app::enter_on_mode_typed_in_full_runs_mode_and_not_model`
+`verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
+`verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+
+<a id="CMD-28"></a>
+### CMD-28: `/todos` prints the whole plan, and starts no turn
+
+`/todos` puts the session's plan in the transcript, every task with its status, as
+[VIEW-37](terminal-transcript.md#VIEW-37) draws it. The plan is the one the info panel draws
+([PANEL-10](info-panel.md#PANEL-10)): the last list the planner reported, and while a turn runs the
+list that turn has reported so far. A task that is neither completed nor cancelled is drawn with
+the mark and ink the panel gives it when the command is typed: filled while a turn is running, and
+hollow and dim while none is, when the whole row matches the panel's. A session with no plan says
+so in a note and prints no heading. Nothing is read, fetched or sent, no turn starts, and the printed plan is not kept with
+the session as the plan of any turn.
+
+The command takes no argument, so `/todos` followed by words is a prompt (CMD-2). It touches nothing
+a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt file or
+skill named `todos` is shadowed by the command (CMD-17).
+
+The `todos` key ([INPUT-32](terminal-input.md#INPUT-32)) does what the command does: the same plan, said
+in the same way, at the box, and while a turn runs.
+
+**Why.** The panel draws the rows it has room for, each cut to its width, and the plan the planner
+is working to is what a person most often wants to read whole. The session already holds it, so no
+model is needed to read it out.
+
+`verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::app::the_todos_command_says_so_when_there_is_no_plan`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_todos_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
+`verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
+
 ## Known costs
 
 - **The list is one row per command and per skill, and a screen with no room for it loses the
@@ -1029,3 +1453,41 @@ apart from the parser drifts from it.
   typeable in full, and typing a letter or two narrows the list back onto the screen; what a
   short terminal costs is the discovery the list exists for. Bounding it would mean a window that
   scrolls with the cursor, which is a second scroller beside the transcript's.
+- **A lone `exit` or `quit` typed while a turn runs is queued as a prompt, and the note under the
+  box is drawn only when a turn begins on it (CMD-2).** Where Enter queues the line behind a running
+  turn, nothing starts on it yet, the line is drawn above the box as waiting, and the person can stop
+  the turn with Ctrl-C. A line the running turn takes in as an interjection begins no turn of its own,
+  so it has no note.
+- **The row for a sent `exit` or `quit` is 47 columns, and a terminal narrower than that cuts it at
+  the last column, which loses the way out (CMD-2).** It is the row's right-hand note, and the parts
+  of the line are fitted against the width it leaves. On a row eighty columns wide that is 31
+  columns, which holds the longest permission mode name alone and a shorter one beside a vi mode.
+  Where the parts do not fit, the whole left side is cleared while the note is up.
+- **The row for a sent `exit` or `quit` is up only while the turn runs (CMD-2).** A turn that
+  answers at once takes the note down with it, and a person who looked away has nothing under the
+  box to say the word was a prompt. The transcript still shows the line and the reply.
+- **`/changelog` shows one release, and a long release scrolls its heading off the screen
+  (CMD-25).** The release is the running version's, or the newest where this build has none of its
+  own. Between releases the top section holds the notes of changes not yet released, headed with the
+  last release's version, so a build made from the commits after a release shows them under that
+  version's number. The notes are rows of the transcript, which shows its end, so a
+  release with more rows than the terminal has leaves the heading above the rows drawn and a person
+  scrolls up to it. The program
+  carries every earlier release's notes and no command shows one, so a person upgrading across several
+  versions reads the earlier ones on the releases page.
+- **A server's prompts are the ones it offered when it started (CMD-26).** A prompt it adds later
+  is not a row until the server is started again, since the client does not read the server's
+  notice that its lists changed, which #1561 tracks. A server that moved after a redirect keeps the
+  list it started with, so a row can name a prompt the server at its new address does not have, and
+  running it reports that.
+- **Where two aliases both begin a prompt's word, no spelling names either server's (CMD-26).**
+  With `a` and `a__b` both reached, `/mcp__a__b__c` is the prompt `c` of `a__b` or the prompt
+  `b__c` of `a`, and the line is refused rather than sent to one of them. Aliases a person declares
+  are rarely nested this way.
+- **A prompt takes named arguments only (CMD-26).** `/mcp__weather__forecast Paris` is refused
+  rather than read as the first argument, because reading a value as an argument's means taking
+  that argument's name from the server's listing when the line is read, and nothing here decides
+  from what a server listed. Taking the row writes each required name as `name=`, so only values
+  are typed, and a line typed out by hand names its arguments. Once a name is written the line
+  holds more than the word, so the box draws no hint for the optional arguments; the row showed
+  them.

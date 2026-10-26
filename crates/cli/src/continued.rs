@@ -7,7 +7,9 @@ use bravebot_agent::turn::Outcome;
 use bravebot_core::trust::TrustStore;
 use bravebot_i18n::t;
 use bravebot_session::rewind::RewindStack;
-use bravebot_session::sessions::{Continuation, Front, Handle, Record, Standing, TurnSnapshot};
+use bravebot_session::sessions::{
+    Continuation, Front, Handle, Record, Split, Standing, TurnSnapshot,
+};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -20,13 +22,30 @@ pub enum Resume {
     Latest,
 }
 
-/// The record a run was asked to continue, or why nothing can be.
+/// A record a run continues, held for as long as the run takes, so that no other process writes it
+/// meanwhile (SESSION-38).
+///
+/// Reads as the record, and is what [`keep`] writes the turn back through.
+pub struct Continuing {
+    record: Record,
+    handle: Handle,
+}
+
+impl std::ops::Deref for Continuing {
+    type Target = Record;
+
+    fn deref(&self) -> &Record {
+        &self.record
+    }
+}
+
+/// The record a run was asked to continue, held, or why nothing can be.
 ///
 /// Refused rather than answered by starting a fresh conversation: a script that asked to carry on
 /// and was given an empty context would answer the follow-up as though nothing had come before it.
 /// A manifest run has no conversation to carry on from, and a session another process is running is
-/// written by that process, so neither is read (SESSION-10, BG-9).
-pub fn find(directory: &Path, asked: &Resume) -> Result<Record, String> {
+/// written by that process, so neither is read (SESSION-10, BG-9, SESSION-38).
+pub fn find(directory: &Path, asked: &Resume) -> Result<Continuing, String> {
     let id = match asked {
         Resume::Id(id) => id.clone(),
         Resume::Latest => bravebot_session::sessions::most_recent(directory)
@@ -34,14 +53,18 @@ pub fn find(directory: &Path, asked: &Resume) -> Result<Record, String> {
             .ok_or_else(|| t!(cli_nothing_to_continue).to_string())?,
     };
     let record = bravebot_session::sessions::load(directory, &id)
-        .ok_or_else(|| t!(cli_no_such_session, id = id.as_str()).to_string())?;
+        .ok_or_else(|| t!(cli_no_such_session, id = id.as_str()))?;
     if record.manifest.is_some() {
         return Err(bravebot_tui::resume::manifest_note().to_string());
     }
     if crate::background::is_running(&record.id) {
         return Err(crate::background::held_by_a_background_session(&record.id));
     }
-    Ok(record)
+    // Held from here to the end of the run, which is before anything is sent: a process that
+    // writes the record while the turn runs would have it replaced by the turn's copy.
+    let handle = Handle::resuming(directory, &record, Front::Terminal, bravebot_stamp::BUILD)
+        .map_err(|held| held.refusal())?;
+    Ok(Continuing { record, handle })
 }
 
 /// The points the continued turn can be rewound to: the record's own, and one opened for this turn
@@ -69,6 +92,7 @@ pub fn rewind_points(
             conversation: conversation.snapshot(),
             turns: record.turns,
             tokens: record.tokens,
+            split: record.split,
             spend: record.spend.clone(),
             timing: record.timing.clone(),
             cached: None,
@@ -122,16 +146,14 @@ pub struct Finished<'a> {
 /// every other writer under the state directory.
 pub fn keep(
     root: &Path,
-    previous: Option<(Record, RewindStack)>,
+    previous: Option<(Continuing, RewindStack)>,
     turn: Finished<'_>,
 ) -> Option<String> {
     let snapshot = turn.conversation.snapshot();
     let ends = turn.conversation.recounted().len();
     match previous {
-        Some((record, rewind)) => {
+        Some((Continuing { record, mut handle }, rewind)) => {
             let turn_number = record.turns + 1;
-            let mut handle =
-                Handle::resuming(root, &record, Front::Terminal, bravebot_stamp::BUILD);
             handle.set_agent(turn.agent.map(str::to_string));
             let written = handle.save_continuation(
                 record,
@@ -139,6 +161,7 @@ pub fn keep(
                     conversation: &snapshot,
                     prompt: turn.prompt,
                     tokens: turn.outcome.tokens,
+                    split: Split::of(turn.outcome.tokens, turn.outcome.output_tokens),
                     model: &turn.outcome.model,
                     trust: turn.trust,
                     begins: turn.begins,
@@ -171,6 +194,7 @@ pub fn keep(
                     history: Some(&history),
                     turns: 1,
                     tokens: turn.outcome.tokens,
+                    split: Split::of(turn.outcome.tokens, turn.outcome.output_tokens),
                     spend: &BTreeMap::from([(1, turn.outcome.tokens)]),
                     timing: &BTreeMap::from([(1, turn.outcome.timing)]),
                     model: Some(&turn.outcome.model),

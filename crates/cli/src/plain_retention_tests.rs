@@ -41,6 +41,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         in_force: config.default_model.clone(),
         reads_effort: false,
         effort: None,
+        account: bravebot_agent::chatgpt::AccountSession::begin_with(None),
         complained: None,
         home: None,
         profile: None,
@@ -101,6 +102,40 @@ fn failed_plain_turn_excludes_replacement_from_the_next_request() {
             Some(bravebot_core::label::Integrity::Untrusted)
         );
     }
+}
+
+/// CHATGPT-10: every prompt of a plain session, which is what a background session runs, is built
+/// in the session, so its requests to the ChatGPT account carry one identifier, and another session
+/// carries its own. The regression it rejects is a task built with an identifier for the prompt.
+#[test]
+fn every_prompt_of_a_plain_session_is_built_in_it_and_another_session_has_its_own() {
+    let directory = Scratch::new("plain-account-session");
+    let workspace = Workspace::new(directory.path()).unwrap();
+    let config = Config::from_lookup(|key| match key {
+        "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+        "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+        "BRAVE_AI_CHAT_ENDPOINT" => Some("http://127.0.0.1:9/never-asked".into()),
+        _ => None,
+    })
+    .unwrap();
+    let session = running(&config, &workspace, TrustStore::new(workspace.root()));
+    let another = running(&config, &workspace, TrustStore::new(workspace.root()));
+
+    let first = session.task("one");
+    let second = session.task("two");
+
+    assert_eq!(
+        first.account_session().identifier(),
+        second.account_session().identifier()
+    );
+    assert_eq!(
+        first.account_session().identifier(),
+        session.account.identifier()
+    );
+    assert_ne!(
+        another.task("three").account_session().identifier(),
+        first.account_session().identifier()
+    );
 }
 
 #[path = "../../agent/test-support/answers.rs"]

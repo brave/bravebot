@@ -18,14 +18,21 @@ use bravebot_session::sessions::Handle;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use super::directories::{
+    Changed, add_directory, change_directory, close_directory, removal_trail, remove_checkout,
+};
+use super::opening::{Answers, Beginning, clear_session, opening_trust, switch_session};
+use super::records::{
+    carry_out_hunks, list_rewind_points, rewind, rewind_point, save_compacted, with_standing,
+};
+use super::side_requests::{
+    compact_animated, goal_check_animated, handoff_answered, handoff_refusal,
+};
+use super::turns::{Continued, Wrote, next_after_a_turn, run_turn_animated};
 use super::{
-    Answers, BACKGROUND_LOSES, Beginning, Changed, Continued, Ended, RunSettings, Suggesting,
-    Switch, Wrote, add_directory, branch_session, carry_out_hunks, change_directory, clear_session,
-    close_directory, compact_animated, goal_check_animated, handed_to_the_background,
-    handoff_answered, handoff_refusal, left_behind, list_rewind_points, next_after_a_turn,
-    opened_scratch, opening_trust, record_to_resume, removal_trail, remove_checkout, rewind,
-    rewind_point, run_command, run_turn_animated, save_compacted, status_report, suggest_next,
-    switch_session, with_standing,
+    BACKGROUND_LOSES, Ended, RunSettings, Suggesting, Switch, branch_session,
+    handed_to_the_background, left_behind, opened_scratch, record_to_resume, run_command,
+    status_report, suggest_next,
 };
 use crate::state::{Attached, AttachedImage, Servers, Session};
 
@@ -134,6 +141,13 @@ impl Held<'_> {
         } else {
             match turns.parse::<usize>() {
                 Ok(steps) if steps > 0 => self.rewind_steps(steps),
+                // A run of digits too large for `usize` is a number past what any session
+                // remembers, not a non-number: `rewind_steps` only ever compares `steps`
+                // against how many points the stack holds, so the furthest-back value takes
+                // the same "no further" path `/rewind 4` over three turns does.
+                Err(e) if *e.kind() == std::num::IntErrorKind::PosOverflow => {
+                    self.rewind_steps(usize::MAX)
+                }
                 _ => self.session.note(t!(session_rewind_needs_a_number)),
             }
         }
@@ -397,6 +411,9 @@ impl Held<'_> {
             .with_home(bravebot_agent::home::directory())
             .with_profile(bravebot_agent::home::profile())
             .with_cache(bravebot_agent::home::cache())
+            // No request is made here, and a task is in the session of the person that typed it all
+            // the same, so one that came to make a request would not be a session of its own.
+            .in_account_session(self.session.account_session().clone())
             .remembering(Some(self.stored.id().to_string()))
             .with_permissions(self.answers.rules.permissions.clone())
             .with_permission_mode(permission_mode.clone())
@@ -456,6 +473,7 @@ impl Held<'_> {
             std::mem::take(self.conversation),
             &self.answers.trust,
             focus,
+            self.workspace,
         )?;
         *self.conversation = shortened;
         save_compacted(
@@ -639,6 +657,30 @@ impl Held<'_> {
         None
     }
 
+    pub(super) fn commit_message(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+        asked: &crate::commit_message_command::Asked,
+    ) -> io::Result<()> {
+        // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
+        // predates.
+        self.session.rewind.close();
+        let (done, events) = super::commit_message_animated(
+            terminal,
+            self.session,
+            config,
+            &self.answers.trust,
+            asked,
+            self.workspace,
+        )?;
+        if self.session.turns > 0 {
+            self.stored.append_audit(self.session.turns, &events);
+        }
+        super::commit_message_answered(self.session, done);
+        Ok(())
+    }
+
     pub(super) fn handoff(
         &mut self,
         terminal: &mut Tty,
@@ -661,7 +703,7 @@ impl Held<'_> {
                 &mut self.answers.trust,
                 "",
                 false,
-                Some(goal),
+                Some(super::Writing::Brief(goal)),
                 &[],
                 &[],
                 self.workspace,
@@ -669,6 +711,43 @@ impl Held<'_> {
             self.stored.append_audit(self.session.turns, &events);
             handoff_answered(self.session, goal, done);
         }
+        Ok(())
+    }
+
+    /// Rewrite the line in the box to be more specific, and put the rewrite in the box (INPUT-48).
+    ///
+    /// Asked beside the work, as a brief is: the conversation is read and not written to, the cost
+    /// is charged to the session and the request's trail is kept. Nothing is sent to the turn loop,
+    /// since what comes back is a line the person reads and edits before Enter makes it a turn.
+    pub(super) fn enhance(
+        &mut self,
+        terminal: &mut Tty,
+        config: &Config,
+        line: &str,
+        draft: &str,
+    ) -> io::Result<()> {
+        // Closed for the reason an aside closes it: the request is charged to a turn the snapshot
+        // predates.
+        self.session.rewind.close();
+        let (done, events) = super::ask_animated(
+            terminal,
+            self.session,
+            config,
+            self.conversation,
+            &mut self.answers.trust,
+            "",
+            false,
+            Some(super::Writing::Enhancement(draft)),
+            &[],
+            &[],
+            self.workspace,
+        )?;
+        // Nothing yet where no turn has been had, as for a question beside the work: a session
+        // opened and abandoned leaves no record.
+        if self.session.turns > 0 {
+            self.stored.append_audit(self.session.turns, &events);
+        }
+        super::enhance_answered(self.session, line, done);
         Ok(())
     }
 

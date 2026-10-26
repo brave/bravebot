@@ -26,7 +26,7 @@ A session started with `--dangerously-skip-permissions` is the one exception: th
 at all, and the map is the one a yes would have written. That mode already approves vouching for
 every unvouched file the planner reads, so the tree becomes trusted a file at a time either way. A
 resume still takes the map from its own record even there. See
-[modes](permissions.md#answering-in-advance-modes).
+[modes](permission-modes.md).
 
 ## Nothing is trusted until it is granted
 
@@ -335,7 +335,7 @@ fork, and the session `/clear` begins each open a new one, and the directory bel
 they followed is removed rather than handed on. A resume can come days later, and bytes surviving that
 gap would be a cache nothing evicts.
 
-An [undo](../using/sessions.md) does not reach in here. A file a turn wrote in this directory is
+An [undo](../using/rewind.md) does not reach in here. A file a turn wrote in this directory is
 neither restored nor removed, and it is not named among the paths the rewind could not put back. What a
 turn keeps so that it can be undone is a bounded amount shared by every file that turn wrote, and an
 intermediate file is exactly the size of thing that bound is set to stay clear of: keeping one would
@@ -373,7 +373,7 @@ supply or change it.
 Where a yes cannot be kept, the question says so and the yes trusts that session only. That is the
 case at your home directory, a directory holding it or a filesystem root, where the filesystem cannot
 say when the directory was made, and in an
-[incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+[incognito session](../using/incognito.md).
 
 A later session started in that directory is not asked, and says so as it opens. In the terminal:
 

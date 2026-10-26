@@ -46,6 +46,7 @@ jobs:
       installers: ${{ steps.affected.outputs.installers }}
       docs: ${{ steps.affected.outputs.docs }}
       npm: ${{ steps.affected.outputs.npm }}
+      fuzz: ${{ steps.affected.outputs.fuzz }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,6 +88,17 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # The lints the tree has hundreds of sites of cannot be denied yet. This holds each to the
+      # number the base has, per crate, by running clippy at both. The base commit is the pull
+      # request's own, fetched because the checkout is the merge commit alone.
+      - name: No new sites of the lints held to the base
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          make check-lint-increase
 
       # nextest runs the test binaries side by side, where `cargo test` runs them one after another
       # and waits on each one's slowest test. Each test is a process of its own, so the locks a test
@@ -188,8 +200,9 @@ jobs:
   #
   # Linting, not running. Most of the suite needs a Windows host, and it spawns a POSIX shell and
   # drives a pty; whether those are made to work is the question of whether Windows is supported at
-  # all, which is #88. The desktop app's pair is run on a Windows host in windows-desktop below, and
-  # the confinement backend in sandbox-windows below.
+  # all, which is #88. The desktop app's pair is run on a Windows host in windows-desktop below, the
+  # confinement backend in sandbox-windows below, and the tests over awkward file names in
+  # names-windows below.
   windows:
     name: Lint the Windows target
     runs-on: ubuntu-latest
@@ -422,6 +435,56 @@ jobs:
 
       - name: Build
         run: cargo build --all --locked
+
+  # The fuzz targets in fuzz/, which build with a nightly toolchain and AddressSanitizer in a
+  # workspace of their own, so no job above compiles them. `make check-fuzz` lints them, builds
+  # them, replays the committed seeds and the reproducers of fixed crashes, and runs each target
+  # for a short time. On a pull request, only where fuzz/, the root manifest or a crate the targets
+  # build changed.
+  fuzz:
+    name: Fuzz build and replay
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.fuzz != 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The date of the nightly is written once, in the Makefile.
+      - name: Read the fuzz toolchain
+        id: toolchain
+        run: echo "version=$(make -s fuzz-toolchain)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust ${{ steps.toolchain.outputs.version }}
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          components: rustfmt, clippy, rust-src
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          workspaces: fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-fuzz
+        run: make fuzz-install
+
+      - name: Lint, build, replay and run the fuzz targets
+        run: make check-fuzz
+
+      # The short run starts from a seed of its own each time, so it can find a defect the code
+      # already had. A crash, a timeout and an out-of-memory stop each leave a file here.
+      - name: Keep what a target stopped on
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts-${{ github.run_attempt }}
+          path: fuzz/artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
 
   # On a pull request, only where what is linked or how it is built could have changed: a
   # manifest, the lockfile, a build script or the Dockerfile. Nothing in the tree is gated on an
@@ -811,6 +874,71 @@ jobs:
           export TMP="$(cygpath -w "$RUNNER_TEMP/confine")"
           export TEMP="$TMP"
           cargo test -p bravebot-agent --locked --no-fail-fast --test confine
+
+  # The tests that ask the volume whether two awkward names are two files, run on the volume that
+  # holds names apart that no other host does (#2869, TRUST-2). On every other host `two_files`
+  # makes pairs of the names that host holds, so a key step that joins two files NTFS holds apart
+  # but ext4 and APFS do not would pass here and nowhere else. `held_names()` leaves out the names
+  # a Windows host cannot hold as written, so the floor `least_pairs()` sets is the one a Windows
+  # host reaches.
+  #
+  # Only the tests over those names run: the rest of the agent's suite spawns a POSIX shell or
+  # drives a pty, and whether it is made to pass here is #88. Each filter is a test's whole name,
+  # and the step reads how many ran, because a filter that matches nothing, after a rename,
+  # passes. A pair test added over `held_names()` belongs in the list. Target as in the windows
+  # job above.
+  names-windows:
+    name: Awkward names on Windows
+    runs-on: windows-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable-x86_64-pc-windows-gnu
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test the pairs of names the volume holds apart
+        # The temporary directory is the runner's, which is a long-form path where the default
+        # `TEMP` is the 8.3 short form, so a root a test builds and the root the workspace
+        # canonicalises it to spell the same directory.
+        run: |
+          mkdir -p "$RUNNER_TEMP/names"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/names")"
+          export TEMP="$TMP"
+          tests=(
+            two_names_the_volume_holds_apart_are_two_rules_unless_they_are_one_group
+            two_names_the_volume_holds_apart_have_two_keys_and_are_not_one_writer_unless_they_are_one_group
+            a_listing_has_two_entries_for_two_files_and_each_is_trusted_by_its_own_rule
+            a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it
+          )
+          cargo test -p bravebot-agent --locked --test workspace -- --exact "${tests[@]}" \
+            | tee "$RUNNER_TEMP/workspace.log"
+          grep -q "test result: ok. ${#tests[@]} passed" "$RUNNER_TEMP/workspace.log"
+
+      - name: Test the names a mention offers
+        run: |
+          mkdir -p "$RUNNER_TEMP/names"
+          export TMP="$(cygpath -w "$RUNNER_TEMP/names")"
+          export TEMP="$TMP"
+          cargo test -p bravebot-mentions --locked --lib -- --exact \
+            tests::every_awkward_name_is_offered_and_read_back_as_the_file_it_is \
+            | tee "$RUNNER_TEMP/mentions.log"
+          grep -q 'test result: ok. 1 passed' "$RUNNER_TEMP/mentions.log"
 
   # The installers a release ships, built as a release builds them from the cross-built helpers,
   # and each installed on a runner of its own architecture by the job after this one. Beside each

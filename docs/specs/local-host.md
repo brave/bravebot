@@ -91,13 +91,14 @@ Each run of the host has an instance ID, drawn from the seed the standard librar
 <a id="HOST-6"></a>
 ### HOST-6: a session is closed when its work has ended
 
-`session.close` stops the session's turn or run, refuses what it waits on, and answers `{"state": "closing"}` at once. The host sends `session.closed` (with `saved: "unknown"`) once every thread that worked for the session has returned and dropped what it held, and not before. Until then the session is `closing`, still counts as working, and keeps its owner, because a turn can still write its record. A thread that panics has ended.
+`session.close` stops the session's turn or run, refuses what it waits on, and answers `{"state": "closing"}` at once. The host sends `session.closed` (with `saved: "unknown"`) once every thread that worked for the session has returned and dropped what it held, and not before. Until then the session is `closing`, still counts as working, and keeps its owner, because a turn can still write its record. A thread that panics has ended. The hook that ends a session that began ([HOOK-10](hooks.md#HOOK-10)) is one of those threads, and runs after the session's turn has ended, so `session.closed` follows it.
 
 `closed` says that the work has ended. It does not say that the last save succeeded, and no save outcome is reported. A closed or closing session is not found by any later request.
 
 `verified-by: bravebot_ui_bridge::host_process::a_session_is_reported_closed_only_after_its_turn_has_ended`
 `verified-by: bravebot_ui_bridge::workers::a_session_is_not_idle_while_a_worker_runs`
 `verified-by: bravebot_ui_bridge::workers::a_worker_that_panics_counts_as_ended`
+`verified-by: bravebot_ui_bridge::host_process::a_hosted_session_is_reported_closed_only_after_its_end_hook_has_run`
 `verified-by: bravebot_ui_bridge::workers::a_worker_counts_as_ended_only_after_what_it_held_is_dropped`
 `verified-by: bravebot_ui_bridge::workers::idle_means_every_worker_has_ended`
 `verified-by: bravebot_ui_bridge::closing_tests::a_closed_session_is_not_closed_while_its_worker_runs`

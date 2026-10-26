@@ -12,7 +12,6 @@ use bravebot_core::{Pipeline, Stage};
 use std::path::PathBuf;
 use std::time::Duration;
 
-#[allow(dead_code)]
 #[path = "../test-support/pipelines.rs"]
 mod pipelines;
 
@@ -34,7 +33,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("bravebot-exec-{name}"));
+        let path =
+            std::env::temp_dir().join(format!("bravebot-exec-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create scratch");
         Self { path }
@@ -264,7 +264,9 @@ fn a_stage_runs_in_the_directory_it_was_given() {
     .expect("pwd runs");
     // The scratch path may be reached through a symlink, so the tail is what is compared.
     assert!(
-        ran.stdout.trim().ends_with("bravebot-exec-cwd"),
+        ran.stdout
+            .trim()
+            .ends_with(&format!("bravebot-exec-{}-cwd", std::process::id())),
         "ran somewhere else: {}",
         ran.stdout.trim()
     );
@@ -579,6 +581,68 @@ fn no_stage_of_a_pipeline_sees_a_gateways_environment_token() {
     assert!(
         !ran.stdout.contains("a-live-gateway-token"),
         "a later stage was handed the gateway's token"
+    );
+}
+
+/// RUN-12: an assignment in front of a program does not bring a withheld name back. The line is
+/// the planner's, so a name it assigns is not one the person chose to hand over, whether the name
+/// is the one this process holds or another the block lists. The regression it rejects: removing
+/// the names before the line's assignments are applied, which hands the assigned value on.
+#[cfg(unix)]
+#[test]
+fn a_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-gateway-assigned");
+    let _guard = with_a_gateway_token(&scratch);
+
+    let ran = line(
+        "ACME_GATEWAY_TOKEN=the-lines-own ACME_GATEWAY_FALLBACK=also env",
+        &scratch.path,
+    );
+
+    assert!(ran.succeeded(), "{}", ran.stdout);
+    for name in ["ACME_GATEWAY_TOKEN", "ACME_GATEWAY_FALLBACK"] {
+        assert_eq!(
+            value_of(&ran.stdout, name),
+            None,
+            "an assignment of {name} reached the program: {}",
+            ran.stdout
+        );
+    }
+    assert!(
+        !ran.stdout.contains("a-live-gateway-token"),
+        "the value this process holds reached the program"
+    );
+}
+
+/// The same for a background job, which starts its own commands.
+#[cfg(unix)]
+#[test]
+fn a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step() {
+    let scratch = Scratch::new("scrub-gateway-background-assigned");
+    let _guard = with_a_gateway_token(&scratch);
+    let resolved = script(&scratch.path, "show-env", "#!/bin/sh\nenv\n");
+    let pipeline = Pipeline::new(vec![Stage::new("show-env", Vec::new())]);
+    let mut steps = pipelines::steps_of(&pipeline, &[resolved]).expect("the steps");
+    steps[0].environment = vec![("ACME_GATEWAY_TOKEN".into(), "the-lines-own".into())];
+
+    let mut job = past_text_file_busy(|| exec::start_steps(&steps, &scratch.path, None, None))
+        .expect("it starts");
+    for _ in 0..100 {
+        if job.ended() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let printed = job.printed();
+    assert!(
+        printed.contains("PATH="),
+        "the job printed no environment at all: {printed}"
+    );
+    assert_eq!(
+        value_of(&printed, "ACME_GATEWAY_TOKEN"),
+        None,
+        "an assignment of a withheld name reached a background job: {printed}"
     );
 }
 
@@ -2500,6 +2564,146 @@ fn a_wait_for_more_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn()
     assert!(
         waited < std::time::Duration::from_secs(5),
         "a wait went on waiting after the person asked to stop a job: {waited:?}"
+    );
+}
+
+/// A job that prints more often than a round takes ends every wait that output ends at its next
+/// line, so waiting for it to finish costs a look per line. A wait for the exit is not told about
+/// output at all: it lasts as long as the job does, however much the job prints on the way and
+/// however much of it the caller has not been handed when the wait begins.
+#[test]
+fn waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing() {
+    let scratch = Scratch::new("wait-for-exit-chatty");
+    // Six lines half a second apart, so the job runs for at least three seconds and has something
+    // unseen to say at every moment of them.
+    let resolved = script(
+        &scratch.path,
+        "chatty",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 6 ]; do echo \"line $i\"; i=$((i + 1)); sleep 0.5; done\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("chatty", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !job.printed().contains("line 0") && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    // Asserted rather than assumed: the caller has been handed nothing, so output it has not seen
+    // is already there when the wait begins, and that is half of what the wait must ignore.
+    let mut seen = exec::Seen::default();
+    assert!(
+        job.has_more(&seen),
+        "the job had printed nothing unseen by the time the wait began, so nothing below is a test \
+         of a wait that output does not end"
+    );
+
+    let began = std::time::Instant::now();
+    job.wait_for_exit(std::time::Duration::from_secs(60), &Cancel::new(), &[]);
+    let waited = began.elapsed();
+
+    // Whether the job had exited when the wait returned, which no host's load changes: a wait
+    // ended by output returns while the loop above still has lines to print.
+    assert!(
+        job.ended(),
+        "a wait for the exit came back while the job was still printing: {waited:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(30),
+        "a wait for the exit ran to its bound though the job ended after a few seconds: {waited:?}"
+    );
+    let whole = job.since(&mut seen);
+    assert!(
+        whole.contains("line 0") && whole.contains("line 5"),
+        "what the job printed while it was waited for was not all handed over: {whole:?}"
+    );
+}
+
+/// The bound is the wait's own, and it ends a wait for the exit as it ends any other. A job still
+/// running and still printing when it runs out is reported as running rather than waited on
+/// further, which is what makes the longest a caller can be held the number it asked for.
+#[test]
+fn waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing() {
+    let scratch = Scratch::new("wait-for-exit-bound");
+    // Thirty seconds of a line every fifth of a second: long enough that a wait ignoring its bound
+    // comes back far past it, and noisy enough that a wait ended by output comes back at once.
+    let resolved = script(
+        &scratch.path,
+        "endless",
+        "#!/bin/sh\ni=0\nwhile [ $i -lt 150 ]; do echo tick; i=$((i + 1)); sleep 0.2; done\n",
+    );
+
+    let pipeline = Pipeline::new(vec![Stage::new("endless", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let bound = std::time::Duration::from_secs(2);
+    let began = std::time::Instant::now();
+    job.wait_for_exit(bound, &Cancel::new(), &[]);
+    let waited = began.elapsed();
+
+    assert!(
+        waited >= bound,
+        "a wait for the exit came back before its bound on a job that had not ended: {waited:?}"
+    );
+    assert!(
+        waited < std::time::Duration::from_secs(15),
+        "a wait for the exit went on past its bound: {waited:?}"
+    );
+    assert!(
+        !job.ended(),
+        "a job with half a minute left to run was reported ended"
+    );
+}
+
+/// The token is checked every pass of a wait for the exit as it is of one for output: a person who
+/// has changed their mind should not sit through up to ten minutes of somebody else's build.
+#[test]
+fn a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound() {
+    let scratch = Scratch::new("wait-for-exit-cancelled");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let began = std::time::Instant::now();
+    job.wait_for_exit(std::time::Duration::from_secs(600), &cancel, &[]);
+    let waited = began.elapsed();
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a cancelled wait for the exit went on waiting: {waited:?}"
+    );
+}
+
+/// A stop the person asks for on any job of the turn is carried out at the turn's next step, which
+/// a wait for the exit holds back for as long as the job runs. So it ends that wait too.
+#[test]
+fn a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn() {
+    let scratch = Scratch::new("wait-for-exit-job-stopped");
+    let resolved = script(&scratch.path, "quiet", "#!/bin/sh\nsleep 30\n");
+
+    let pipeline = Pipeline::new(vec![Stage::new("quiet", Vec::new())]);
+    let mut job = start(&pipeline, &[resolved], &scratch.path).expect("it starts");
+
+    let stop = JobStop::new();
+    let asking = stop.clone();
+    let asker = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        asking.request();
+    });
+    let began = std::time::Instant::now();
+    job.wait_for_exit(
+        std::time::Duration::from_secs(600),
+        &Cancel::new(),
+        &[JobStop::new(), stop],
+    );
+    let waited = began.elapsed();
+    asker.join().expect("the request was made");
+
+    assert!(
+        waited < std::time::Duration::from_secs(5),
+        "a wait for the exit went on after the person asked to stop a job: {waited:?}"
     );
 }
 

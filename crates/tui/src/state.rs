@@ -13,50 +13,63 @@ use bravebot_session::sessions::{Aside, RewindPoint};
 use std::time::{Duration, Instant};
 
 mod accounts;
+mod attachments;
 mod completion;
 mod editing;
 mod entry;
+mod files;
+mod queue;
 mod scroller;
 mod settings;
 mod standing;
 mod vi;
 mod watching;
 
+use attachments::{previews_restaged, put_back_to_names, put_back_to_words};
 use editing::Kill;
 use entry::JOB_ROW_LINES;
-use vi::{Change, Inserting, Marked, TypedOver};
+use vi::{Change, Inserting, Marked, TypedOver, Yanked};
 
 #[cfg(test)]
 use accounts::apportion;
 #[cfg(test)]
+use attachments::preview_of_dropped;
+#[cfg(test)]
 use entry::DELEGATE_KEPT;
+#[cfg(test)]
+use queue::GIVE_WAY_AFTER;
+#[cfg(test)]
+use vi::UNDO_DEPTH;
 
 pub use accounts::Occupancy;
+pub use attachments::{Attached, AttachedImage, Commanded, PastedText, without_text_files};
 pub use completion::Offered;
 pub use entry::{
-    DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Watched,
+    DELEGATE_SHOWN, Delegate, Entries, Entry, JobState, JobView, Kept, Output, Speaker, Tone,
+    Watched,
 };
+pub use queue::{Bound, Queued};
 pub use scroller::{Laid, Scroller};
-pub use watching::Watching;
+pub use vi::Spelled;
+pub use watching::{WatchScope, Watching};
 
-/// How many newlines a paste carries before it is folded behind a marker.
+/// How many bytes of the model's thinking are kept for the screen, counted from the end.
 ///
-/// Counted in newlines rather than in lines so that three lines with nothing after the last of
-/// them is the first paste to fold: the third newline is the point where the box was going to grow
-/// past what a prompt is meant to look like.
-const FOLD_AT_NEWLINES: usize = 3;
+/// The thinking is split into lines and drawn again on every frame, so this bounds that work
+/// however long the model thinks.
+const THINKING_KEPT: usize = 4096;
 
-/// How many changes back `u` reaches, which is vim's `undolevels` as it ships.
-///
-/// Each step is a copy of the line as it stood, so this is what bounds what undo holds: a thousand
-/// copies of a prompt, where a prompt is sentences rather than a file.
-const UNDO_DEPTH: usize = 1000;
+/// Past this many characters the banner over a link's text says how many and asks for a scroll and a
+/// review, since that is more than the box shows (LINK-4).
+pub(crate) const LONG_LINK_PROMPT: usize = 1000;
 
-/// How long the turn's command runs before a prompt waiting for the turn moves it to the background.
+/// How many of the last lines a running command printed are kept to draw, and how many bytes of them.
 ///
-/// Long enough that a command about to finish returns its output to the turn instead of a job to
-/// ask about.
-const GIVE_WAY_AFTER: Duration = Duration::from_secs(10);
+/// A frame draws all of what is kept, and a command can print without end, or print one line that
+/// never ends. The end is what a person watching a command wants to see, and the whole of it is
+/// drawn when the command ends.
+pub const COMMAND_LINES: usize = 200;
+pub const COMMAND_BYTES: usize = 32 * 1024;
 
 /// How many rows one mouse wheel event moves the view by where nothing says otherwise.
 ///
@@ -82,17 +95,13 @@ fn normalised(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-/// How many lines a paste is, as a person reading it would count them.
-///
-/// A trailing newline ends the last line rather than starting another, so text copied with the end
-/// of its last line does not claim an empty line that nobody can see.
-fn lines_in(text: &str) -> usize {
-    let newlines = text.matches('\n').count();
-    if text.ends_with('\n') {
-        newlines
-    } else {
-        newlines + 1
-    }
+/// Why a line cannot be rewritten by the enhance key (INPUT-48).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Unenhanceable {
+    /// It names a picture or a dropped file, which a rewrite of words would lose.
+    HoldsAttachment,
+    /// It is longer than a rewrite is offered at.
+    TooLong,
 }
 
 /// One replayed line.
@@ -148,103 +157,6 @@ fn recalled_entry(line: &bravebot_agent::conversation::Said) -> Option<Entry> {
     })
 }
 
-/// A line typed while a turn was running, waiting for it to end.
-///
-/// Settled when it was queued rather than when it is sent, because what it names is what the box
-/// held at that moment. A file the user took off the line afterwards was never part of this
-/// prompt, and one they added belongs to whatever they type next.
-#[derive(Debug, Clone)]
-pub struct Queued {
-    /// The line, as it was typed.
-    pub prompt: String,
-    /// Files it named, settled at the moment it was queued.
-    attached: Vec<Attached>,
-    /// Pictures it named, settled at the same moment and for the same reason.
-    pasted: Vec<AttachedImage>,
-    /// What the line is waiting to become.
-    ///
-    /// Decided by the caller, since which words are commands and which mode the box was in are
-    /// the input box's to know and not this type's.
-    waiting: Waiting,
-    recall: crate::history::Ticket,
-    /// Whether Ctrl-Enter asked for this prompt to go now, with the others it asked for.
-    ///
-    /// On the line rather than the session, because what the press asked for is the lines waiting
-    /// when it was made: one typed after it was not part of that, and one taken back with Up is no
-    /// longer anywhere to be sent.
-    hurried: bool,
-}
-
-/// Where a waiting line is going, which is what its row under the box says.
-///
-/// What a person watching a turn needs before deciding whether to stop it: whether the line they
-/// sent is about to be read, is waiting for the turn to end, or is carried out rather than sent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Bound {
-    /// A prompt the turn in flight takes at its next round boundary.
-    IntoThisTurn,
-    /// A prompt that waits for what is running to end and then becomes a turn of its own.
-    ItsOwnTurn,
-    /// A prompt behind one of those, which the turn that one begins takes at its first round
-    /// boundary, since only the prompt that begins a turn leaves the buffer the turn reads.
-    IntoTheNextTurn,
-    /// A command, carried out when the queue reaches it.
-    CarriedOut,
-    /// A command line, run through the shell when the queue reaches it.
-    ///
-    /// Apart from [`Bound::CarriedOut`] because the two go to different places, and a command line
-    /// drawn as anything else would read as words on their way to the model.
-    Run,
-}
-
-/// What a queued line is waiting to become when the turn in flight ends.
-///
-/// Two of the three are never offered to the turn, because the only thing that could do with a
-/// line there is the planner, and neither a command nor a command line is something the planner is
-/// asked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Waiting {
-    /// A prompt: offered to the turn in flight as an interjection, and a turn of its own if the
-    /// turn ends before it is taken.
-    Prompt,
-    /// A command: carried out when the queue reaches it, exactly as Enter on it at rest would
-    /// have carried it out.
-    Command,
-    /// A command line, typed with shell mode armed: run through the shell when the queue reaches
-    /// it, exactly as Enter on it at rest would have run it.
-    Shell,
-    /// A command line typed `!!`: run like [`Waiting::Shell`], with its output drawn and never
-    /// recorded.
-    ShellPrivate,
-}
-
-impl Waiting {
-    /// Whether the line is one the planner may be given.
-    fn is_sent(self) -> bool {
-        self == Waiting::Prompt
-    }
-}
-
-/// A command line on its way to being carried out, and the pictures it named.
-///
-/// The two travel together because what becomes of a picture depends on the command: three of them
-/// hand their argument to a planner and a picture goes with it, and for the rest there is nowhere
-/// for one to go. Which is which is the caller's to know, so the box hands over both and says
-/// nothing about it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Commanded {
-    /// The line, exactly as it was typed, markers and all.
-    pub line: String,
-    /// The pictures pasted into it, in the order the markers number them.
-    pub pasted: Vec<AttachedImage>,
-    /// The files dropped onto it, in the order the markers number them.
-    ///
-    /// Beside the pictures rather than folded into them, because the two reach a request by
-    /// different routes: a picture is bytes that never touched the filesystem, and a dropped file is
-    /// a path something has to read through a gate.
-    pub attached: Vec<Attached>,
-}
-
 /// What the session is doing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -285,204 +197,6 @@ impl Finished {
     pub fn failed(self) -> bool {
         matches!(self.ending, bravebot_agent::Ending::Failed(_))
     }
-}
-
-/// What a yank or a delete took, and whether it was whole lines.
-///
-/// The distinction is what `p` needs: a yanked word goes back beside the caret, and a yanked line goes
-/// back as a line of its own. Without it, `yy` then `p` would splice a sentence into the middle of
-/// another one.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Yanked {
-    text: String,
-    lines: bool,
-}
-
-/// A binding vi spells with a letter, which the key handler answers as though the key had arrived.
-///
-/// These reach past the line: at the ends of the input the row keys walk the prompt history and then
-/// scroll the transcript, and the search is a mode standing over the whole box. So the letter is
-/// translated and the existing arms answer it, rather than a second copy of that ladder being written
-/// for three letters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Spelled {
-    /// `k`, which is Up.
-    Up,
-    /// `j`, which is Down.
-    Down,
-    /// `/`, which is the chord that searches the prompts already sent.
-    SearchPrompts,
-}
-
-/// A thumbnail of a dropped picture, read for the screen and for nothing else.
-///
-/// The file is one the person just dragged onto the window, so the path is their gesture's and
-/// not a model's. A PDF, a text file, a file too big to be an attachment, or one that will not
-/// decode has no thumbnail. The turn reads the file again under its own policy, exactly as
-/// before; this read decides nothing and sends nothing, and happens off the interface's thread.
-fn preview_of_dropped(found: &crate::dropped::Dropped) -> Option<crate::preview::Preview> {
-    let bravebot_filetype::by_name::Kind::Attachment(media) = found.kind else {
-        return None;
-    };
-    if !media.starts_with("image/") {
-        return None;
-    }
-    Some(crate::preview::Preview::start(
-        crate::preview::Source::File(std::path::PathBuf::from(&found.path)),
-        crate::preview::Fit::Thumbnail,
-    ))
-}
-
-/// Thumbnails for pictures and files going back into the box, each started again from what was
-/// staged.
-///
-/// A line that is sent clears its previews, and a drawable picture cannot be cloned into the sent
-/// set, so a line that returns to the box (a stopped turn, an unqueue) has its thumbnails made
-/// again. Display only, as the first ones were.
-fn previews_restaged(
-    pasted: &[AttachedImage],
-    attached: &[Attached],
-) -> Vec<(String, crate::preview::Preview)> {
-    let pictures = pasted.iter().map(|picture| {
-        (
-            picture.marker.clone(),
-            crate::preview::Preview::start(
-                crate::preview::Source::Bytes(picture.bytes.clone()),
-                crate::preview::Fit::Thumbnail,
-            ),
-        )
-    });
-    let files = attached.iter().filter_map(|file| {
-        let dropped = crate::dropped::Dropped {
-            path: file.shown.clone(),
-            kind: file.kind,
-        };
-        preview_of_dropped(&dropped).map(|preview| (file.marker.clone(), preview))
-    });
-    pictures.chain(files).collect()
-}
-
-/// A file dropped on the box, and the marker standing for it in the line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Attached {
-    /// What the user sees in the line, such as `[Image #1]`.
-    pub marker: String,
-    /// The name to give the task, already checked against what the workspace can open.
-    pub name: String,
-    /// The path as the user's filesystem names it, for showing them what they attached.
-    pub shown: String,
-    pub kind: bravebot_filetype::by_name::Kind,
-}
-
-/// A picture pasted into the line being typed.
-///
-/// Separate from [`Attached`] because the two arrive by different routes and only one of them has
-/// a path: a dropped file is read out of the workspace, where the trust map has something to say
-/// about it, and a paste is bytes that never touched the filesystem. They share the marker
-/// numbering, and nothing else.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachedImage {
-    /// The text standing for it in the prompt, as `[Image #1]`.
-    ///
-    /// Held rather than derived from a position, because the line is edited around it: the picture
-    /// belongs to the words the marker sits in, and finding it again by counting would go wrong the
-    /// first time somebody rewrote the sentence.
-    pub marker: String,
-    pub media_type: &'static str,
-    pub bytes: Vec<u8>,
-}
-
-impl AttachedImage {
-    /// What stands in the line where the picture cannot travel with it.
-    ///
-    /// Not from the catalog, and deliberately: the planner reads this, so it is part of what the
-    /// model is given rather than something a person is being told. Same reasoning as the marker
-    /// in [`Session::attach`], and the catalog says so at the top of itself.
-    ///
-    /// Why it cannot travel is the caller's to say, because a picture misses a turn already running
-    /// for one reason and a command for another, and the one thing this must not do is guess.
-    fn in_words(&self, why: &str) -> String {
-        format!(
-            "({} was pasted here, but it cannot be shown to you: {why}. Ask for it again if you \
-             need to see it.)",
-            self.marker
-        )
-    }
-}
-
-/// A line with every marker in it standing for one of `carried` replaced by what it says instead.
-///
-/// One place, because a picture misses a request for more than one reason and the sentence that
-/// takes its place reads the same however it was missed. `why` is the reason, which is the caller's:
-/// see [`AttachedImage::in_words`].
-fn put_back_to_words(line: &str, carried: &[AttachedImage], why: &str) -> String {
-    let mut settled = line.to_string();
-    for picture in carried {
-        settled = settled.replace(&picture.marker, &picture.in_words(why));
-    }
-    settled
-}
-
-/// A line with every marker in it standing for one of `dropped` replaced by that file's name.
-///
-/// What a file becomes wherever the thing being built cannot be handed the file itself. A name is
-/// enough for that: the planner reads it and goes to the file through the same gate it reads any
-/// other file through, which is what a file dropped onto a line queued mid-turn and a prompt
-/// recalled from the history both already rely on (`dropping.md` DROP-8, DROP-9).
-///
-/// Unlike a picture there is no sentence to write, because the name is the honest answer rather than
-/// a report that the honest answer is missing.
-fn put_back_to_names(line: &str, dropped: &[Attached]) -> String {
-    let mut settled = line.to_string();
-    for file in dropped {
-        settled = settled.replace(&file.marker, &file.name);
-    }
-    settled
-}
-
-/// The same command with the text files it named put back to their names.
-///
-/// What a command whose argument reaches a planner outside any turn is sent as, which is `/btw` and
-/// `/manifest`. A picture and a PDF are read and carried as bytes, because bytes are what the
-/// request can hold. A text file's contents would be a context message, and both of those planners
-/// are precommitted to a context holding the task and the driver's own words and nothing read out
-/// of the tree, so what a text file becomes here is its name.
-///
-/// Nothing is said about it, unlike a picture the command cannot carry: the name is what the file
-/// is, so the planner is given something it can act on and the person reads the question they asked
-/// with the file named in it. A picture is the case where no such name exists, which is why that one
-/// is spoken of and this one is not.
-///
-/// A free function, and beside [`put_back_to_names`] rather than on the session, because it reads
-/// the line and writes nothing: there is nothing here for the box to be told.
-pub fn without_text_files(commanded: Commanded) -> Commanded {
-    let (text, carried) = commanded
-        .attached
-        .into_iter()
-        .partition::<Vec<_>, _>(|file| file.kind == bravebot_filetype::by_name::Kind::Text);
-    Commanded {
-        line: put_back_to_names(&commanded.line, &text),
-        pasted: commanded.pasted,
-        attached: carried,
-    }
-}
-
-/// A paragraph pasted into the line, standing behind the marker written in its place.
-///
-/// Several lines of text in the box push everything else off the screen, and what they push off is
-/// the reply the paste was about. So a paste of any length reads as one row, and the row says how
-/// many lines are behind it.
-///
-/// The marker is the handle, as it is for a picture, and it is the only part of this a user can
-/// see: deleting it is how the paste is taken back. Unlike a picture it is put back before the
-/// prompt is sent, because here the marker stands for the words themselves rather than for
-/// something travelling beside them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PastedText {
-    /// The text standing for it in the line, as `[Pasted text #1 +12 lines]`.
-    pub marker: String,
-    /// What was pasted, with its line endings already normalised.
-    pub text: String,
 }
 
 /// How many lines of results a session holds for the key that expands them.
@@ -608,6 +322,17 @@ pub struct Session {
     /// by [`Session::propose_handoff`], and dropped the moment the box is replaced or found empty,
     /// so a prompt typed after the brief was wiped out is never the one that starts a session.
     handoff: bool,
+    /// The line the box held before the enhancement now in it replaced it, which the box puts back
+    /// on Escape or Ctrl-C (INPUT-48).
+    ///
+    /// Like `handoff`, a mode over the line and not part of it: set only by
+    /// [`Session::propose_enhancement`], and dropped the moment the box is replaced or found empty,
+    /// so a line typed after the enhancement was wiped out never has an older one put back over it.
+    /// The line as the box held it, so a paste folded behind a marker comes back behind it.
+    enhanced: Option<String>,
+    /// How many characters the text a link put in the box was, while the box still holds it
+    /// (LINK-4).
+    link_prompt: Option<usize>,
     /// The prompt a new session is to begin with, once the session [`Session::hand_over`] named has
     /// been set up, and the next pass of the loop sends it.
     handed_over: Option<String>,
@@ -644,6 +369,9 @@ pub struct Session {
     wheel_rows: u16,
     /// Whether the mouse is captured, from `tui.mouse`. On unless the settings turned it off.
     mouse: bool,
+    /// How long a question the planner puts waits with no key pressed before it is closed without
+    /// an answer, from `askIdleSeconds` (ASK-9). `None` waits for as long as it takes.
+    ask_idle: Option<Duration>,
     /// Which vi mode the box is in, where vi is the style.
     ///
     /// Every session opens in INSERT, where a typed character is a typed character. Opening in NORMAL
@@ -739,13 +467,23 @@ pub struct Session {
     pub status: Status,
     /// Whether the audit trail is shown alongside replies.
     pub show_trail: bool,
+    /// Whether the model's thinking is drawn as it arrives. For this session only, and a matter of
+    /// what is drawn: nothing the model is asked or sent depends on it.
+    show_thinking: bool,
     /// Whether the person has the info panel open, which the frame then draws only where it fits.
     panel: bool,
+    /// The info panel's files state, while it is open (FILES-3).
+    ///
+    /// Beside `panel` rather than in place of it, so that ending the state puts the panel back as it
+    /// was: closed if it was closed.
+    files: Option<crate::files_mode::State>,
     /// The width the person has dragged the info panel to, which the frame clamps to the terminal
     /// it is drawn on without changing this.
     panel_width: u16,
     /// Whether a drag that began on the panel's border is still held (PANEL-6).
     panel_drag: bool,
+    /// Where the last mouse report put the pointer, as a row and a column.
+    pointer: Option<(u16, u16)>,
     /// Whether `/caffeinate` is on, and the hold it keeps while work is pending.
     pub(crate) caffeinate: crate::caffeinate::KeepAwake,
     /// When a recap is owed to a person who has been away (CMD-20).
@@ -754,6 +492,9 @@ pub struct Session {
     prompt_files: Option<std::path::PathBuf>,
     /// What the info panel says this session is.
     identity: Identity,
+    /// The GitHub repository a `#<number>` in a reply links into: the one the checkout's `origin`
+    /// names, where it is on GitHub (VIEW-32).
+    repository: Option<crate::issue_link::Repository>,
     /// Scroll offset from the bottom, in lines.
     pub scroll: u16,
     /// The scroller, while it is open.
@@ -880,6 +621,9 @@ pub struct Session {
     unplaced_todos: std::collections::BTreeMap<usize, Vec<bravebot_core::todo::Row>>,
     /// Tokens spent across the whole session.
     pub tokens: u64,
+    /// How many of [`Session::tokens`] the model read and how many it wrote, for the charges that
+    /// reported the split. A charge that did not is in the total and in neither of these.
+    split: bravebot_session::sessions::Split,
     /// What each turn cost, by turn number, and what was spent before the first turn under zero.
     ///
     /// The session total answers "what has this cost me"; this answers "where did it go", which is
@@ -953,6 +697,8 @@ pub struct Session {
     /// Kept after the button comes up, so a user can see what they copied rather than watching
     /// it vanish at the moment it is taken.
     pub selection: Option<crate::select::Selection>,
+    /// The last press of the left button, which says whether the next one is a double click.
+    pub last_click: Option<crate::select::Click>,
     /// How much the last copy took, until the next click or the next prompt.
     pub copied: Option<usize>,
     /// What the turn that just finished cost, until the next one starts.
@@ -981,6 +727,14 @@ pub struct Session {
     /// press is what reads it. Cleared by any key that is not itself an interrupt, so a person who
     /// went off and did something else is asked again rather than leaving on one press later.
     pub offered_to_leave: bool,
+    /// Whether the turn in flight began on a line the person typed that is only `exit` or `quit`
+    /// (CMD-2).
+    ///
+    /// Those words leave in other terminal agents and are a prompt here, so the row under the box
+    /// says the line went to the model and which keys stop the turn and leave. Set from the person's
+    /// own line by the two calls that take one from the box or the queue, and cleared by every turn
+    /// that begins, so the next one is judged on its own. Read only while the turn runs.
+    pub leave_word_sent: bool,
     /// Whether the key being answered arrived on its own rather than in a run with others.
     ///
     /// Set from the reader before each key is dispatched, and `true` on a session nobody has read
@@ -1032,6 +786,11 @@ pub struct Session {
     /// ask the model until the report arrives, so without it the screen names nothing at all for
     /// the whole wait.
     waiting_on: Option<bravebot_agent::report::DelegateId>,
+    /// The agents this session has started and where each stands, one for each delegate entry of
+    /// the transcript and in the same order. The rules for it are
+    /// [`bravebot_agent::roster::Roster`]'s, which the desktop bridge uses as well, and
+    /// [`Session::sync_delegates`] copies the result onto the entries.
+    roster: bravebot_agent::roster::Roster,
     /// The points this session can be put back to.
     pub rewind: bravebot_session::rewind::RewindStack,
     /// What the last `/hunks` listed, so a number typed after it names the hunk it was read beside.
@@ -1089,7 +848,7 @@ pub struct Session {
     /// Not in [`bravebot_session::sessions::Standing`], so nothing about it is written down. A schedule that
     /// outlived the session that set it would start sending prompts at somebody who resumed a
     /// conversation to read it.
-    looping: Option<crate::loops::Running>,
+    looping: crate::loops::Loops,
     /// The condition this session is working towards, where the person set one.
     ///
     /// Private for the reason the loop is: the condition, the rounds spent and the last verdict
@@ -1132,7 +891,8 @@ pub struct Session {
     /// that outlived its session would start sending prompts at somebody who opened a
     /// conversation to read it, about a file that moved while nobody was here.
     watches: watch::Watches,
-    /// Set when `/init` hands back its prompt, so the turn that sends it says the driver wrote it.
+    /// Set when `/init`, `/review` or `/help` hands back its prompt, so the turn that sends it says
+    /// the driver wrote it.
     driver_prompt_pending: bool,
     /// The same prompts, resolved, for the turn in flight to take between rounds.
     ///
@@ -1161,6 +921,23 @@ pub struct Session {
     /// Held as it arrived. What is drawn from it is [`Session::reply_so_far`], since a model
     /// that has nowhere else to put its working writes it in here.
     streaming: String,
+    /// What the model has thought in the round now being written, as far back as is kept.
+    ///
+    /// Apart from `streaming` and from the transcript: it is no part of the reply, is never
+    /// written to the session record or sent in a later request, and goes when the round does. The
+    /// end of it only, since a model can think for minutes and every frame draws what is held.
+    /// Held whether or not it is being shown, so turning it on mid-round shows what has come so far.
+    thinking: String,
+    /// What the command running right now has printed, as far as it has got and as far back as is
+    /// kept (SHELL-7).
+    ///
+    /// Apart from the transcript for the reason `streaming` is: it is drawn at the tail and replaced
+    /// by the entry the command's result makes, so the handover draws nothing twice. The end of it
+    /// only, since a command can print without end and every frame draws what is held. Held as it
+    /// arrived, and drawn through the same step as the entry that replaces it.
+    command_output: String,
+    /// How many lines of what the command printed came before the first of `command_output`.
+    command_earlier: usize,
     /// Where in the transcript the commands carried out during the turn in flight put what they
     /// said, oldest first.
     ///
@@ -1185,10 +962,10 @@ pub struct Session {
     /// Answers the user has already given this session, keyed by the question.
     ///
     /// A repeated question is answered from here rather than put to them again, since a planner
-    /// that loops back over the same decision should not make the user restate it. Kept in the
-    /// interface rather than the kernel: it is a convenience for the person, not a rule about
-    /// labels, and the key is trusted text by the time it reaches here.
-    pub answers: Vec<(String, bravebot_core::ask::Answer)>,
+    /// that loops back over the same decision should not make the user restate it. The memo is the
+    /// one every front end keeps; which session it belongs to is this interface's to say, and
+    /// the key is trusted text by the time it reaches here.
+    pub answers: bravebot_core::ask::AnswerMemo,
     /// Pictures pasted into the line being typed, each with the text standing in for it.
     ///
     /// The marker is the handle. A paste writes `[Image #1]` where the caret was and the picture
@@ -1258,6 +1035,22 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// Whether the model in force is one of the ChatGPT account's, as the configuration names it.
+    ///
+    /// What decides whether the level a turn sends is the one chosen or the one the session began
+    /// with, since the account is sent one level for a whole session, or none where its model has
+    /// refused a level.
+    model_is_account: bool,
+    /// What this session carries into its requests to the ChatGPT account: the identifier they carry
+    /// and the effort level the session began with
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Begun with the session, once its level is settled, and again where a new one begins, with
+    /// `/clear` or a handoff, at the level then chosen. A session picked up with `/resume` is a new
+    /// `Session`, so it begins one too, and nothing of it is written to the record. `/branch` moves
+    /// onto a copy of the conversation in this same session, so the copy goes on with the identifier
+    /// its source had, and the source is not asked anything more.
+    account: bravebot_agent::chatgpt::AccountSession,
     /// The model `/advisor` named for this session's planner to consult, resolved.
     ///
     /// Kept for the session only: the `advisorModel` setting is the saved route, and a turn that
@@ -1272,6 +1065,12 @@ pub struct Session {
     ///
     /// Kept for the session only, as `advisor` is.
     style: Option<bravebot_agent::styles::Style>,
+    /// The skill `/mode` put in force, which every turn applies until it is left (SKILL-21).
+    ///
+    /// The name alone: each turn reads the skill again, so a file that moved or is no longer
+    /// trusted is not applied from what was read when the mode was chosen. Recorded with the
+    /// session, so a resume puts it back.
+    skill_mode: Option<String>,
     /// The names of the project's styles the trust map vouched for when `/style` was last typed.
     ///
     /// A pick of one of them is taken on this list, and the turn reads the file again under its own
@@ -1354,6 +1153,8 @@ impl Session {
             stashed: None,
             shell: false,
             handoff: false,
+            enhanced: None,
+            link_prompt: None,
             handed_over: None,
             shell_private: false,
             shortcuts: false,
@@ -1366,6 +1167,7 @@ impl Session {
             bindings: crate::keybindings::Keybindings::default(),
             wheel_rows: WHEEL_ROWS,
             mouse: true,
+            ask_idle: None,
             mode: crate::vim::Mode::default(),
             half_typed: None,
             count: None,
@@ -1384,13 +1186,17 @@ impl Session {
             ordinary_run_open: false,
             status: Status::Idle,
             show_trail: false,
+            show_thinking: false,
             panel: false,
+            files: None,
             panel_width: crate::panel::WIDTH,
             panel_drag: false,
+            pointer: None,
             caffeinate: Default::default(),
             away: Default::default(),
             prompt_files: None,
             identity: Identity::default(),
+            repository: None,
             scroll: 0,
             scroller: None,
             last_request: None,
@@ -1426,6 +1232,7 @@ impl Session {
             turn_places: Default::default(),
             unplaced_todos: Default::default(),
             tokens: 0,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             occupancy: Occupancy::Unmeasured,
@@ -1438,11 +1245,13 @@ impl Session {
             cached_prompt_tokens: None,
             history: crate::history::History::new(),
             selection: None,
+            last_click: None,
             copied: None,
             finished: None,
             cleared_by_interrupt: false,
             expandable_lines: 0,
             offered_to_leave: false,
+            leave_word_sent: false,
             key_arrived_alone: true,
             image_on_clipboard: false,
             written: 0,
@@ -1453,13 +1262,14 @@ impl Session {
             checking: None,
             hook: None,
             waiting_on: None,
+            roster: bravebot_agent::roster::Roster::new(),
             running: None,
             movable: None,
             queued: Vec::new(),
             turn_in_flight: false,
             stopping: false,
             ctrl_enter_arrives: false,
-            looping: None,
+            looping: crate::loops::Loops::default(),
             watches: watch::Watches::new(),
             driver_prompt_pending: false,
             goal: None,
@@ -1473,10 +1283,13 @@ impl Session {
             pending: crate::remote_confirm::Interjections::new(),
             held: std::collections::VecDeque::new(),
             streaming: String::new(),
+            thinking: String::new(),
+            command_output: String::new(),
+            command_earlier: 0,
             said_while_working: Vec::new(),
             composing: None,
             attributed_to: None,
-            answers: Vec::new(),
+            answers: bravebot_core::ask::AnswerMemo::default(),
             pasted: Vec::new(),
             previews: Vec::new(),
             sent_pasted: Vec::new(),
@@ -1489,9 +1302,12 @@ impl Session {
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
+            model_is_account: false,
+            account: bravebot_agent::chatgpt::AccountSession::begin(),
             advisor: None,
             spend_limit: bravebot_agent::SpendLimit::default(),
             style: None,
+            skill_mode: None,
             completion: 0,
             workspace: std::path::PathBuf::new(),
             reference_sources: Vec::new(),
@@ -1554,7 +1370,7 @@ impl Session {
             return Some(if running == 0 {
                 t!(indicator_stopping).to_string()
             } else {
-                t!(indicator_stopping_delegates, count = running).to_string()
+                t!(indicator_stopping_delegates, count = running)
             });
         }
 
@@ -1564,9 +1380,11 @@ impl Session {
         // the driver's literal and the program is the person's own file, so no byte read out of
         // anything untrusted is drawn.
         if let Some((moment, program)) = &self.hook {
-            return Some(
-                t!(indicator_hook, moment = *moment, program = program.as_str()).to_string(),
-            );
+            return Some(t!(
+                indicator_hook,
+                moment = *moment,
+                program = program.as_str()
+            ));
         }
 
         // A check next, and ahead of every phase: it is a whole model call inside the tool call
@@ -1577,7 +1395,7 @@ impl Session {
         if let Some(checking) = self.checking {
             use bravebot_core::vetting::Checking;
             return Some(match checking {
-                Checking::Lines(lines) => t!(indicator_checking, lines = lines).to_string(),
+                Checking::Lines(lines) => t!(indicator_checking, lines = lines),
                 Checking::Picture => t!(indicator_checking_picture).to_string(),
                 Checking::Pdf => t!(indicator_checking_pdf).to_string(),
             });
@@ -1588,14 +1406,14 @@ impl Session {
         // would leave a person looking at a count that stands still and nothing else. Named by the
         // word its line will carry once it starts, which the turn chose from the same table.
         if let Some(call) = self.composing {
-            return Some(t!(indicator_composing, call = call).to_string());
+            return Some(t!(indicator_composing, call = call));
         }
 
         // The turn has asked for everything it needs from the model and is waiting for a delegate
         // to finish. Nothing else on this row says so, and a screen that names nothing while a
         // delegate works reads as a turn that has stopped (DELEGATE-17).
         if let Some(id) = self.waiting_on {
-            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()).to_string());
+            return Some(t!(indicator_waiting_on_delegate, delegate = id.to_string()));
         }
 
         // Only the phases that say something a person cannot see elsewhere. Planning is the
@@ -1744,9 +1562,15 @@ impl Session {
     /// Deliberately not touching the input line, so a prompt half-typed when the user cleared is
     /// still there to send.
     pub fn clear(&mut self) {
+        // The service ties requests together by this, and a new conversation shares nothing with the
+        // one that is gone.
+        self.begin_account_session();
         // A new conversation has sent nothing yet, so Up starts from nothing of its own.
         self.history.forget_session();
         self.transcript.clear();
+        self.roster.clear();
+        // The edits it listed were in the transcript that is gone (FILES-10).
+        self.files = None;
         self.expandable_lines = 0;
         self.last_request = None;
         self.turns = 0;
@@ -1755,7 +1579,7 @@ impl Session {
         self.recall.clear();
         // ASK-8: kept, a question in the new conversation would be answered from the one that was
         // thrown away, and the person asked nothing.
-        self.answers.clear();
+        self.answers.forget();
         self.turn_places.clear();
         self.unplaced_todos.clear();
         self.hunks_listed = None;
@@ -1763,6 +1587,7 @@ impl Session {
         // new conversation has never reached.
         self.turn_start = TurnStart::default();
         self.tokens = 0;
+        self.split = Default::default();
         self.spend_limit.forget_credits();
         self.spend.clear();
         self.timing.clear();
@@ -1792,8 +1617,10 @@ impl Session {
         // nothing written about it looks like one that is live and has found nothing. Silent where
         // there was no loop, and after the transcript was emptied, so the line is the new
         // conversation's first.
-        if self.looping.take().is_some() {
-            self.note(t!(loop_cleared));
+        match self.looping.stop_all() {
+            0 => {}
+            1 => self.note(t!(loop_cleared)),
+            count => self.note(t!(loop_cleared_all, count = count)),
         }
         // The goal goes the same way, and for a sharper version of the same reason: a condition
         // judged against an exchange that has been thrown away is judged against nothing, and the
@@ -1878,6 +1705,7 @@ impl Session {
         if self.attributed_to.is_none() {
             self.waiting_on = None;
             self.streaming.clear();
+            self.thinking.clear();
         }
         self.drop_composing();
     }
@@ -1949,6 +1777,45 @@ impl Session {
         self.streaming.push_str(text);
     }
 
+    /// Add what the model has thought since the last frame.
+    ///
+    /// Dropped for a delegate for the reason its half-written reply is: there is one model
+    /// thinking at a time, and a delegate's thought drawn at the turn's tail reads as the planner's.
+    /// Only the end is kept, however long the model thinks.
+    pub fn thinking(&mut self, text: &str) {
+        if text.is_empty() || self.attributed_to.is_some() {
+            return;
+        }
+        self.thinking.push_str(text);
+        if let Some(excess) = self.thinking.len().checked_sub(THINKING_KEPT) {
+            let mut cut = excess;
+            while !self.thinking.is_char_boundary(cut) {
+                cut += 1;
+            }
+            self.thinking.drain(..cut);
+        }
+    }
+
+    /// The thinking to draw at the tail: what the model has thought this round, while it is being
+    /// shown, and nothing otherwise.
+    pub fn thinking_so_far(&self) -> &str {
+        if self.show_thinking {
+            self.thinking.trim()
+        } else {
+            ""
+        }
+    }
+
+    /// Show the model's thinking as it arrives, or stop showing it, and say which.
+    pub fn toggle_thinking(&mut self) {
+        self.show_thinking = !self.show_thinking;
+        self.note(if self.show_thinking {
+            t!(thinking_on)
+        } else {
+            t!(thinking_off)
+        });
+    }
+
     /// Record the call the model is writing, or that an attempt thrown away took it back.
     ///
     /// A delegate's is dropped for the reason its half-written reply is: there is one model
@@ -2004,6 +1871,7 @@ impl Session {
         // has been showing, now on their way into the transcript, so leaving the tail up would
         // draw them twice; and a round that said nothing has nothing to leave up either.
         self.streaming.clear();
+        self.thinking.clear();
         self.drop_composing();
         let text = text.into();
         let text = crate::reasoning::spoken(&text);
@@ -2176,29 +2044,6 @@ impl Session {
         true
     }
 
-    /// Move the turn's command in flight to the background for a prompt waiting to go into the
-    /// turn, once the command has run for [`GIVE_WAY_AFTER`].
-    ///
-    /// The turn takes a waiting prompt only between rounds, and a round lasts as long as its
-    /// slowest command, which can be minutes. Nothing happens for a command or a command line
-    /// waiting, since those wait for the turn to end, nor for a turn being stopped, which takes
-    /// nothing more.
-    ///
-    /// Whether a command was moved.
-    pub fn give_way_to_the_queue(&mut self, now: Instant) -> bool {
-        let waiting = self.a_turn_is_running()
-            && !self.stopping
-            && self.queued.iter().any(|line| line.waiting.is_sent());
-        match self.movable {
-            Some((_, since))
-                if waiting && now.saturating_duration_since(since) >= GIVE_WAY_AFTER =>
-            {
-                self.move_to_background()
-            }
-            _ => false,
-        }
-    }
-
     /// Replace a line that names a prompt file with the file's text, for the person to read and send.
     ///
     /// Returns whether the key was spent here. A line no file answers to, and a line with a row of
@@ -2217,6 +2062,28 @@ impl Session {
         match expand(&directory, &line) {
             Expansion::NotOne => false,
             Expansion::Expanded(text) => {
+                // A file's text that would run a prompt of a server once sent is refused as one
+                // that opens with a command is: nothing carries out a line from a file (CMD-26).
+                let runs_a_prompt = self
+                    .servers
+                    .session
+                    .as_ref()
+                    .is_some_and(|servers| servers.prompt_request(&text).is_some());
+                if runs_a_prompt {
+                    let name = line
+                        .trim_start_matches('/')
+                        .split_whitespace()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    let path = directory.join(format!("{name}.md")).display().to_string();
+                    self.note(t!(
+                        prompt_file_begins_with_a_command,
+                        name = name,
+                        path = path
+                    ));
+                    return true;
+                }
                 self.put_in_the_box(text);
                 true
             }
@@ -2236,6 +2103,34 @@ impl Session {
                 true
             }
         }
+    }
+
+    /// Refuse a line that runs a prompt of an MCP server when the words after its name are not
+    /// `name=value` pairs, saying which word. The line stays as typed and nothing is sent (CMD-26).
+    ///
+    /// Returns whether the key was spent here. A line that names no server's prompt, one whose
+    /// arguments parse, and one with a row of the list highlighted are left for the arms that
+    /// follow.
+    pub fn refuse_unparsable_server_prompt(&mut self) -> bool {
+        use bravebot_agent::mcp::Unparsed;
+        if self.shell || self.completion != 0 {
+            return false;
+        }
+        let Some(servers) = self.servers.session.clone() else {
+            return false;
+        };
+        let line = self.unfolded(self.input.trim());
+        let Some(Err(why)) = servers.prompt_request(&line) else {
+            return false;
+        };
+        self.note(match why {
+            Unparsed::NotAPair(word) => t!(mcp_prompt_not_a_pair, word = word),
+            Unparsed::BadName(word) => t!(mcp_prompt_bad_name, word = word),
+            Unparsed::Twice(name) => t!(mcp_prompt_twice, name = name),
+            Unparsed::Quote(name) => t!(mcp_prompt_quote, name = name),
+            Unparsed::Ambiguous(word) => t!(mcp_prompt_ambiguous, word = word),
+        });
+        true
     }
 
     /// The worker appended the submitted prompt at this recounted position.
@@ -2427,6 +2322,19 @@ impl Session {
         self.copied = None;
     }
 
+    /// Begin a selection that takes in the whole word or row under the press, as a double or
+    /// triple click does.
+    pub fn begin_selection_by(&mut self, row: u16, column: u16, unit: crate::select::Unit) {
+        self.begin_selection(row, column);
+        self.selection = self.selection.map(|selection| selection.by(unit));
+    }
+
+    /// Whether a press at `row` and `column` lands in the pane the selection held belongs to.
+    pub fn selection_holds(&self, row: u16, column: u16) -> bool {
+        self.selection
+            .is_some_and(|selection| selection.holds(row, column))
+    }
+
     /// Follow the pointer with the loose end of the selection.
     pub fn extend_selection(&mut self, row: u16, column: u16) {
         if let Some(selection) = &mut self.selection {
@@ -2457,382 +2365,6 @@ impl Session {
             .filter(|text| !text.trim().is_empty())
     }
 
-    /// Insert pasted text into the input.
-    ///
-    /// Kept apart from typing because a paste is one act, not a stream of keys. Pasted text
-    /// routinely ends in a newline, and a terminal that delivers a paste as keystrokes turns
-    /// that into Enter: a prompt copied from somewhere else used to send itself before its
-    /// author had read it back. Nothing here submits.
-    ///
-    /// Line endings are normalised so text copied from anywhere lands as the same thing. The
-    /// newlines are kept rather than flattened, since a pasted paragraph was written with them
-    /// and the box draws them.
-    pub fn paste(&mut self, text: &str) {
-        // Every path that writes text in whole comes through here (a paste, a dropped file, an
-        // image marker), so this is the one place that opens the ordinary box's step for all of
-        // them: one step for whichever of the three it was, not one for each insertion folding or
-        // a marker makes underneath it.
-        self.begin_an_ordinary_edit();
-        self.abandon_the_selection();
-        self.history.leave();
-        // The list stands over a line that arrived under it as it does over a recalled one.
-        self.shortcuts = false;
-        let text = normalised(text);
-        self.input.insert_str(self.caret, &text);
-        self.caret += text.len();
-        // Back to the top of whatever is now offered, for the reason [`Session::type_char`] goes
-        // back: the list is a function of the line, and this changed the line. A cursor left where
-        // an arrow put it would stand for a row of the list that was on the screen before the
-        // paste, and a row nobody walked to is read as a choice all the same, so Enter on a name
-        // the user had finished typing completes it away into whichever entry the stale index now
-        // lands on. Clamping when the cursor is read cannot stand in for this: the stale index is
-        // usually inside the narrowed list rather than past its end.
-        self.completion = 0;
-    }
-
-    /// Take text the user pasted, folding a long one behind a marker.
-    ///
-    /// [`Session::paste`] writes whatever it is given, which is what the markers themselves are
-    /// written with, so the folding lives here: a paste is the one thing that arrives long enough
-    /// to be worth hiding, and everything else that reaches the line is already a row or less.
-    ///
-    /// Long is counted in newlines rather than in rows the box would draw, because a wrapped line
-    /// is one line the user pasted and folding on the width would fold differently in a narrow
-    /// window. Two of them read fine in the box; the third is where a paste starts taking the
-    /// screen, so that is where it is put away.
-    ///
-    /// Shell mode is left alone, and has to be: the line there is the command, and a command that
-    /// is not what the user is looking at is the one thing that mode may never do.
-    ///
-    /// Characters a terminal draws as nothing are taken out first, in shell mode too, and the
-    /// number removed is said. That comes before the fold so the words a marker stands for are the
-    /// words that were checked, and before the shell test because a command is the line where
-    /// text nobody can see matters most (`pasting.md` PASTE-10).
-    pub fn paste_text(&mut self, text: &str) {
-        let (text, removed) = crate::invisible::without_invisible(&normalised(text));
-        if removed > 0 {
-            self.note(t!(paste_invisible_removed, count = removed));
-        }
-        if self.shell || text.matches('\n').count() < FOLD_AT_NEWLINES {
-            self.paste(&text);
-            return;
-        }
-
-        // Numbered off the counter a dropped file and a pasted picture use, so no two markers in
-        // one line can carry the same number and a number is never reused.
-        self.attachments_made += 1;
-        let marker = t!(
-            paste_folded,
-            number = self.attachments_made,
-            lines = lines_in(&text)
-        );
-        self.paste(&marker);
-        self.pasted_text.push(PastedText { marker, text });
-    }
-
-    /// A line with every paste marker in it put back to the text it stands for.
-    ///
-    /// Every marker, not the ones a count says should be there: a user who deleted one meant to
-    /// drop that paste, and one who copied a marker to somewhere else in the line meant the words
-    /// twice.
-    ///
-    /// Called where the line leaves the box, so the words are what is sent, what the transcript
-    /// keeps and what the history remembers. The box is the only place a marker belongs: it is
-    /// there to keep a stack trace from taking the screen while somebody is typing around it, and
-    /// a marker that outlived the line would be a handle on words this session is the only one
-    /// holding.
-    pub fn unfolded(&self, line: &str) -> String {
-        let mut line = line.to_string();
-        for pasted in &self.pasted_text {
-            line = line.replace(&pasted.marker, &pasted.text);
-        }
-        line
-    }
-
-    /// A line with every paste in it put back behind the marker that stood for it.
-    ///
-    /// The inverse, for a line coming back to the box after a turn was stopped. What returns is
-    /// the line as it was typed, because the box is where a long paste takes the screen and
-    /// somebody who has just stopped a turn is about to edit the prompt, not read it.
-    pub fn folded(&self, line: &str) -> String {
-        let mut line = line.to_string();
-        for pasted in &self.pasted_text {
-            line = line.replace(&pasted.text, &pasted.marker);
-        }
-        line
-    }
-
-    /// A line in the form worth remembering, with every marker settled.
-    ///
-    /// A marker stands for something staged beside the line, and nothing staged outlives the
-    /// session that staged it. Remembered as it stands, a marker comes back naming nothing: a
-    /// picture nobody can produce, a file nothing read.
-    ///
-    /// A dropped file becomes its name, which is a path a person recognises and one the planner
-    /// can go and read through the gate it reads anything through. That is what a file dropped
-    /// onto a line queued mid-turn already becomes.
-    ///
-    /// A picture becomes nothing at all, along with the space beside it, because there is no
-    /// durable text that stands for a screenshot and the words around it are what the person
-    /// meant. Somebody recalling that prompt pastes the picture they mean now.
-    fn recallable(&self, line: &str) -> String {
-        let mut line = line.to_string();
-        for attached in &self.attached {
-            line = line.replace(&attached.marker, &attached.name);
-        }
-        for pasted in &self.pasted {
-            line = line.replace(&format!("{} ", pasted.marker), "");
-            line = line.replace(&format!(" {}", pasted.marker), "");
-            line = line.replace(&pasted.marker, "");
-        }
-        line
-    }
-
-    /// Take a paste that turned out to be a drop, or say it was not one.
-    ///
-    /// A recognised file becomes a marker in the line and an attachment behind it. Anything else,
-    /// an unsupported type or a path naming no file at all, has its path written out, which is
-    /// what dropping a file did before any of this existed.
-    ///
-    /// In shell mode every file has its path written out, quoted as one word, and nothing is
-    /// staged, so the command the shell is given names the file and no record is left behind the
-    /// line. A drop whose names hold a control character, or one a terminal draws as nothing,
-    /// writes nothing and says why (`dropping.md` DROP-6).
-    ///
-    /// Returns whether the text was a drop at all. A paste that was not one is left to
-    /// [`Session::paste`], untouched.
-    pub fn drop_files(&mut self, text: &str) -> bool {
-        let exists = |path: &str| std::path::Path::new(path).is_file();
-        if !crate::dropped::is_drop(text, exists) {
-            return false;
-        }
-
-        // The line in shell mode is a command and nothing else, and the shell is handed it as it
-        // stands. A marker there would reach it as text, so nothing is staged and the path is
-        // written as one word, which is what a terminal does when a file is dropped into a shell.
-        if self.shell {
-            let paths = crate::dropped::paths(text);
-            // Taking the characters out would name another file, and leaving them in would let
-            // the line run something the box does not show. A control character is in the same
-            // case: the box rewrites a carriage return as a newline.
-            if paths.iter().any(|path| {
-                path.chars().any(char::is_control)
-                    || crate::invisible::without_invisible(path).1 > 0
-            }) {
-                self.note(t!(drop_name_not_written));
-                return true;
-            }
-            let words: Vec<String> = paths
-                .iter()
-                .map(|path| crate::dropped::shell_word(path))
-                .collect();
-            self.paste(&format!("{} ", words.join(" ")));
-            return true;
-        }
-
-        let taken = crate::dropped::dropped_with(text, exists);
-        let mut written = Vec::new();
-
-        for path in crate::dropped::paths(text) {
-            match taken
-                .iter()
-                .find(|found| found.path == path)
-                .and_then(|found| {
-                    crate::dropped::name_for(&self.workspace, &found.path).map(|name| (found, name))
-                }) {
-                Some((found, name)) => {
-                    self.attachments_made += 1;
-                    let marker = format!("[{} #{}]", found.kind.noun(), self.attachments_made);
-                    if let Some(preview) = preview_of_dropped(found) {
-                        self.previews.push((marker.clone(), preview));
-                    }
-                    self.attached.push(Attached {
-                        marker: marker.clone(),
-                        name,
-                        shown: found.path.clone(),
-                        kind: found.kind,
-                    });
-                    written.push(marker);
-                }
-                // Out of reach, or a type nothing here takes. The path is what a drop always
-                // produced, and it is still useful: the user can read it and say what they meant.
-                None => written.push(path),
-            }
-        }
-
-        // A trailing space, which is what a terminal does when a file is dropped into a shell:
-        // whatever is typed next, or dropped next, does not run into the marker.
-        self.paste(&format!("{} ", written.join(" ")));
-        true
-    }
-
-    /// The attachments the line still names, in the order they appear in it.
-    ///
-    /// Read back out of the line rather than taken wholesale, so deleting a marker takes its
-    /// attachment off. That is the only way a user has to change their mind, since the marker is
-    /// the only part of it they can see.
-    pub fn attachments_named(&self, line: &str) -> Vec<Attached> {
-        self.named_in(line).cloned().collect()
-    }
-
-    /// What the line being typed carries, for drawing under the box.
-    ///
-    /// The same question the turn is built from asks, so the row and the turn can never disagree
-    /// about which files a line is carrying. Drawn from what a drop staged instead, a file whose
-    /// marker the person had rubbed out kept its row, which is the one place they can see whether
-    /// rubbing it out worked.
-    pub fn attached_to_the_line(&self) -> impl Iterator<Item = &Attached> {
-        self.named_in(&self.input)
-    }
-
-    /// Everything a drop staged, whether or not the line still names it.
-    pub fn attached(&self) -> &[Attached] {
-        &self.attached
-    }
-
-    /// The attachments a line names, without cloning them.
-    fn named_in<'a>(&'a self, line: &'a str) -> impl Iterator<Item = &'a Attached> {
-        self.attached
-            .iter()
-            .filter(move |attached| line.contains(&attached.marker))
-    }
-
-    /// What the line carried when it was sent, for the task being built from it.
-    pub fn sent_attachments(&self) -> &[Attached] {
-        &self.sent
-    }
-
-    /// Attach a pasted picture, writing the text that stands for it where the caret is.
-    ///
-    /// The marker is what makes a picture something a person can see and edit. Without one the
-    /// prompt would say nothing about what came with it, and a user would be left counting pastes
-    /// to work out what the planner was about to be shown.
-    ///
-    /// Numbered off the same counter a dropped file uses, so a paste and a drop can never both
-    /// call themselves `[Image #1]`, and so a number is never reused: renumbering on a deletion
-    /// would change the marker sitting in the line the user is looking at.
-    pub fn attach(&mut self, image: crate::clipboard::Image) {
-        self.attachments_made += 1;
-        // Not from a catalog, and deliberately. Unlike a folded paste, which is put back to its
-        // words before the turn is built, this marker is sent as it stands: the planner reads
-        // "[Image #2]" and counts to the picture that answers it. Translating it would change
-        // what the model is given, which is the one thing a change of language must not do.
-        let noun = bravebot_filetype::by_name::Kind::Attachment(image.media_type).noun();
-        let marker = format!("[{noun} #{}]", self.attachments_made);
-        self.paste(&marker);
-        // The bytes are the user's own paste, taken from their clipboard a moment ago. A picture
-        // that will not decode, or a terminal that draws none, just has no thumbnail.
-        self.previews.push((
-            marker.clone(),
-            crate::preview::Preview::start(
-                crate::preview::Source::Bytes(image.bytes.clone()),
-                crate::preview::Fit::Thumbnail,
-            ),
-        ));
-        self.pasted.push(AttachedImage {
-            marker,
-            media_type: image.media_type,
-            bytes: image.bytes,
-        });
-    }
-
-    /// The pictures the line still names, in the order they appear in it.
-    ///
-    /// Read back out of the line for the reason [`Session::attachments_named`] is: deleting the
-    /// marker is the only way a user has to take a picture back off.
-    pub fn pasted_named(&self, line: &str) -> Vec<AttachedImage> {
-        self.pasted
-            .iter()
-            .filter(|pasted| line.contains(&pasted.marker))
-            .cloned()
-            .collect()
-    }
-
-    /// The thumbnails of the pictures the line still names, in the order the line names them.
-    pub fn previews_on_the_line(&self) -> Vec<&crate::preview::Thumb> {
-        let mut named: Vec<(usize, &crate::preview::Thumb)> = self
-            .previews
-            .iter()
-            .filter_map(|(marker, preview)| {
-                let at = self.input.find(marker.as_str())?;
-                Some((at, preview.thumb()?))
-            })
-            .collect();
-        named.sort_by_key(|(at, _)| *at);
-        named.into_iter().map(|(_, thumb)| thumb).collect()
-    }
-
-    /// Take the thumbnails that finished since the last look. True when one did, so the screen is
-    /// drawn again: nobody presses a key for a decode to end.
-    pub fn settle_previews(&mut self) -> bool {
-        let mut changed = false;
-        for (_, preview) in &mut self.previews {
-            changed |= preview.settle();
-        }
-        changed
-    }
-
-    /// Stage a thumbnail directly, for a test that has no terminal to ask.
-    #[cfg(test)]
-    pub(crate) fn stage_preview(&mut self, marker: &str, thumb: crate::preview::Thumb) {
-        self.previews
-            .push((marker.to_string(), crate::preview::Preview::ready(thumb)));
-    }
-
-    /// How many pictures the line being typed still refers to, for the line beneath the box.
-    pub fn pasted_count(&self) -> usize {
-        self.pasted_named(&self.input).len()
-    }
-
-    /// What the line carried when it was sent, for the task being built from it.
-    pub fn sent_pasted(&self) -> &[AttachedImage] {
-        &self.sent_pasted
-    }
-
-    /// Every marker standing in the line for something carried beside it.
-    fn markers(&self) -> impl Iterator<Item = &str> {
-        self.attached
-            .iter()
-            .map(|attached| attached.marker.as_str())
-            .chain(self.pasted.iter().map(|pasted| pasted.marker.as_str()))
-            .chain(self.pasted_text.iter().map(|pasted| pasted.marker.as_str()))
-    }
-
-    /// Where every marker in the line starts and ends.
-    ///
-    /// Found by looking the line up rather than by remembering a position, because the line is
-    /// edited around a marker and a remembered offset would be wrong the first time somebody
-    /// rewrote the sentence in front of it.
-    fn marker_spans(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.markers().flat_map(|marker| {
-            self.input
-                .match_indices(marker)
-                .map(|(at, found)| (at, at + found.len()))
-        })
-    }
-
-    /// The marker the caret would move back into, if it is against one.
-    ///
-    /// A caret at the very start of a marker is not against it from this side: what sits before
-    /// that caret is ordinary text, and moving over it or deleting it is an ordinary press.
-    fn marker_before_caret(&self) -> Option<(usize, usize)> {
-        self.marker_spans()
-            .find(|&(start, end)| start < self.caret && self.caret <= end)
-    }
-
-    /// The marker the caret is on, meaning the one the next forward press would move over.
-    ///
-    /// A caret at the end of a marker is past it, and what lies ahead is the text after it.
-    pub fn marker_at_caret(&self) -> Option<(usize, usize)> {
-        self.marker_at(self.caret)
-    }
-
-    /// The marker `at` is on, on the same terms: the start of one is on it and its end is past it.
-    fn marker_at(&self, at: usize) -> Option<(usize, usize)> {
-        self.marker_spans()
-            .find(|&(start, end)| start <= at && at < end)
-    }
-
     /// Settle a turn that was stopped: either un-sent whole, or recorded as having stopped.
     ///
     /// The text returns to the box so a user who changed their mind can adjust it rather than
@@ -2856,6 +2388,7 @@ impl Session {
         // them, so they come down with the stop as they do at every other ending a round has.
         // Left up they are an answer drawn above a prompt that has gone back to the box.
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
 
         self.forget_cancelled_prompt();
@@ -2938,10 +2471,7 @@ impl Session {
         if self.status != Status::Idle || !self.input.trim().is_empty() {
             return;
         }
-        self.history.leave();
-        self.set_input(prompt);
-        self.shell = false;
-        self.completion = 0;
+        self.replace_the_box(prompt, false);
     }
 
     /// Put the brief `/handoff` wrote in the box for the person to read and edit.
@@ -2954,13 +2484,27 @@ impl Session {
         if self.status != Status::Idle {
             return;
         }
-        if !self.input.trim().is_empty() {
-            self.history.keep_draft(self.input.clone());
-        }
-        self.history.leave();
-        self.set_input(brief);
-        self.shell = false;
+        self.replace_the_box(brief, true);
         self.handoff = true;
+    }
+
+    /// Put the commit message `/commit-message` drafted in the box for the person to read, edit and
+    /// send (CMD-23).
+    ///
+    /// A line already in the box is kept as the draft Up brings back, so a draft arriving after the
+    /// person started typing something else costs them nothing. The text goes in after the leading
+    /// words the driver wrote, and with what a terminal draws as nothing taken out, as a paste's is
+    /// (PASTE-10): the draft was written about files nobody may have vouched for. Enter on it is an
+    /// ordinary press, so nothing here sends and nothing here runs.
+    pub fn propose_commit_message(&mut self, message: &str) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let (message, removed) = crate::invisible::without_invisible(&normalised(message));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        self.replace_the_box(crate::commit_message_command::box_text(&message), true);
     }
 
     /// Whether Enter on the box starts a new session from it.
@@ -2975,7 +2519,35 @@ impl Session {
     pub fn drop_a_wiped_handoff(&mut self) {
         if self.input.trim().is_empty() {
             self.handoff = false;
+            self.link_prompt = None;
         }
+    }
+
+    /// Put the words a `bravebot://open` link carried in the box, as a paste puts them, and keep that
+    /// they came from a link (LINK-4).
+    ///
+    /// What a terminal draws as nothing comes out and is counted, as from a paste. Unlike a paste a long
+    /// one is not folded. Nothing here sends. The count is of the text as it was after that, which is
+    /// what the person is asked to read.
+    pub fn prefill_from_link(&mut self, text: &str) {
+        let (cleaned, removed) = crate::invisible::without_invisible(&normalised(text));
+        if removed > 0 {
+            self.note(t!(paste_invisible_removed, count = removed));
+        }
+        if cleaned.trim().is_empty() {
+            return;
+        }
+        // Written whole rather than folded behind a marker, which `paste_text` does for a long
+        // paste: the point of the banner is that the person reads what is in the box, and a marker
+        // would hide the words a page chose behind a label that Enter then expands.
+        self.paste(&cleaned);
+        self.link_prompt = Some(cleaned.chars().count());
+    }
+
+    /// The length of the text a link put in the box, while the box holds anything: the banner under
+    /// the line is drawn for as long as this answers (LINK-4).
+    pub fn link_prompt(&self) -> Option<usize> {
+        self.link_prompt.filter(|_| !self.input.trim().is_empty())
     }
 
     /// Take the brief as the person left it, to start a new session from.
@@ -2990,6 +2562,92 @@ impl Session {
         let text = self.unfolded(&typed);
         self.take_line(&typed);
         Some(text)
+    }
+
+    /// The words the enhance key would rewrite, or why the line is not words it can (INPUT-48).
+    ///
+    /// A folded paste is put back to the words it stands for, as it is where the line leaves the box
+    /// for the planner. A line that names a picture or a dropped file is refused, because the rewrite
+    /// is words and the marker standing for the file is not: a rewrite that dropped it would lose the
+    /// attachment, and one that kept it would send a file its writer had not chosen to keep. A line
+    /// longer than a rewrite is offered at is refused too, since the request would be paid for and
+    /// the answer, which keeps what the line says, could not be used.
+    pub fn draft_to_enhance(&self) -> Result<String, Unenhanceable> {
+        if !self.pasted_named(&self.input).is_empty()
+            || !self.attachments_named(&self.input).is_empty()
+        {
+            return Err(Unenhanceable::HoldsAttachment);
+        }
+        let draft = self.unfolded(self.input.trim());
+        if draft.chars().count() > bravebot_agent::aside::ENHANCE_LIMIT {
+            return Err(Unenhanceable::TooLong);
+        }
+        Ok(draft)
+    }
+
+    /// What an answer to the request for an enhancement offers, with what draws as nothing taken out
+    /// and counted, as it is from a paste (`pasting.md` PASTE-10), or `None` where nothing usable is
+    /// left (INPUT-48).
+    ///
+    /// Taken out before the answer is counted, so one made of nothing but those characters is empty
+    /// and not offered: the person is about to read this line and send it as their own, and what
+    /// they cannot see they cannot have meant.
+    pub fn clean_enhancement(&mut self, shown: &str) -> Option<String> {
+        let (text, removed) = crate::invisible::without_invisible(&normalised(shown));
+        if removed > 0 {
+            self.note(t!(enhance_invisible_removed, count = removed));
+        }
+        bravebot_agent::aside::enhancement(&text)
+    }
+
+    /// Put the enhancement of `line` in the box for the person to read and edit (INPUT-48).
+    ///
+    /// `line` is what the box held when the request went out. A box that holds something else by now
+    /// has been typed into since, and what is there is what the person is looking at, so nothing is
+    /// written over it and `false` comes back. Where it holds `line`, that line is kept as the one
+    /// [`Session::restore_unenhanced`] puts back.
+    pub fn propose_enhancement(&mut self, line: &str, text: String) -> bool {
+        if self.status != Status::Idle || self.input != line {
+            return false;
+        }
+        // The oldest line, so enhancing an enhancement and pressing Escape lands on what the person
+        // wrote and not on the rewrite before this one.
+        let original = self.enhanced.clone().unwrap_or_else(|| line.to_string());
+        self.replace_the_box(text, false);
+        self.enhanced = Some(original);
+        true
+    }
+
+    /// Whether the line in the box is an enhancement, which Escape and Ctrl-C put the original back
+    /// over and Enter sends as a prompt and never as a command.
+    pub fn enhanced_pending(&self) -> bool {
+        self.enhanced.is_some() && !self.input.trim().is_empty()
+    }
+
+    /// End an enhancement the box was holding, where the box has since been emptied.
+    ///
+    /// Asked before each key and each paste, for the reason [`Session::drop_a_wiped_handoff`] is: the
+    /// one edit that leaves the box empty is the one that decides the next thing typed is a new line
+    /// and not the enhancement being edited.
+    pub fn drop_a_wiped_enhancement(&mut self) {
+        if self.input.trim().is_empty() {
+            self.enhanced = None;
+        }
+    }
+
+    /// Put back the line the enhancement in the box replaced (INPUT-48).
+    ///
+    /// What is in the box now is kept as the draft Up brings back, as clearing it does, so an edit
+    /// made to the enhancement is not lost with it. Once the original is back the box holds an
+    /// ordinary line, and the next Escape clears it as it clears any.
+    pub fn restore_unenhanced(&mut self) {
+        if self.status != Status::Idle {
+            return;
+        }
+        let Some(original) = self.enhanced.take() else {
+            return;
+        };
+        self.replace_the_box(original, true);
     }
 
     /// Hold the prompt the session beginning now is to open with.
@@ -3112,13 +2770,102 @@ impl Session {
     pub fn begin_command(&mut self) {
         self.status = Status::Running;
         self.started = Some(Instant::now());
+        self.command_output.clear();
+        self.command_earlier = 0;
         self.back_to_the_tail();
     }
 
     /// Note that it finished, whatever came of it.
+    ///
+    /// What it printed so far goes with it. What the command's result releases is drawn by
+    /// [`Session::printed`] in its place, and a command that released nothing leaves nothing of it.
     pub fn finish_command(&mut self) {
         self.status = Status::Idle;
         self.started = None;
+        self.command_output.clear();
+        self.command_earlier = 0;
+    }
+
+    /// Note that it ended because it was stopped or ran out of time, and keep what it had printed.
+    ///
+    /// The rows become an entry, since a person stops a command from what it has printed and would
+    /// lose the reason with them. The entry is for the screen alone: the command released nothing,
+    /// so nothing of it is recorded in the conversation (SHELL-7). Where the rows held only the end
+    /// of it, the entry begins with the line saying how many came before. Whether anything was
+    /// kept, so the caller can say it was not sent.
+    pub fn finish_stopped_command(&mut self) -> bool {
+        let kept = self
+            .command_so_far()
+            .map(|(text, earlier)| (text.trim_end().to_string(), earlier))
+            .filter(|(text, _)| !text.is_empty());
+        self.finish_command();
+        let Some((text, earlier)) = kept else {
+            return false;
+        };
+        let text = match earlier {
+            0 => text,
+            count => format!("{}\n{text}", t!(transcript_earlier_lines, count = count)),
+        };
+        self.transcript.push(Entry::output(text));
+        self.back_to_the_tail();
+        true
+    }
+
+    /// Add what the running command has printed since the last frame to what is drawn of it.
+    ///
+    /// The view does not move for it, as it does not for [`Session::streaming`]: a chunk lands
+    /// several times a second for as long as the command prints, and putting the view back for each
+    /// would leave nobody able to scroll back while it runs. A view at the tail follows what
+    /// arrives, since `scroll` is 0 there.
+    ///
+    /// Only the end is kept, [`COMMAND_LINES`] lines and [`COMMAND_BYTES`] bytes of it, a last line
+    /// with no newline yet being one of the lines. The lines before it are counted so the drawing
+    /// can say so. The released text that replaces it when the command ends is whole.
+    ///
+    /// Looked at from the end, and a piece that fills what is kept alone is cut before anything is
+    /// looked at in it: this runs between frames, and a command that prints faster than they are
+    /// drawn hands it a great deal at once.
+    pub fn command_printing(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let mut text = text;
+        if text.len() > COMMAND_BYTES {
+            let mut from = text.len() - COMMAND_BYTES;
+            while !text.is_char_boundary(from) {
+                from += 1;
+            }
+            self.command_earlier +=
+                self.command_output.matches('\n').count() + text[..from].matches('\n').count();
+            self.command_output.clear();
+            text = &text[from..];
+        }
+        self.command_output.push_str(text);
+
+        let newlines_kept = match self.command_output.ends_with('\n') {
+            true => COMMAND_LINES,
+            false => COMMAND_LINES - 1,
+        };
+        let mut cut = self
+            .command_output
+            .rmatch_indices('\n')
+            .nth(newlines_kept)
+            .map_or(0, |(at, _)| at + 1);
+        let over = (self.command_output.len() - cut).saturating_sub(COMMAND_BYTES);
+        if over > 0 {
+            cut += over;
+            while !self.command_output.is_char_boundary(cut) {
+                cut += 1;
+            }
+        }
+        self.command_earlier += self.command_output[..cut].matches('\n').count();
+        self.command_output.drain(..cut);
+    }
+
+    /// What the running command has printed, and how many lines came before it, or `None` while it
+    /// has printed nothing.
+    pub fn command_so_far(&self) -> Option<(&str, usize)> {
+        (!self.command_output.is_empty()).then_some((&self.command_output, self.command_earlier))
     }
 
     /// Show what a command printed, or that it printed nothing.
@@ -3167,236 +2914,11 @@ impl Session {
         // nowhere. Pictures settle the same way and at the same moment, since a marker rubbed out
         // means the same thing whether the thing behind it was dropped or pasted.
         let taken = self.take_line(&typed);
-        Some(self.begin_turn(prompt, taken, vec![recall]))
-    }
-
-    /// Take the current line as a command to carry out now.
-    ///
-    /// The line comes off the box with everything it named, the way [`Session::submit`] takes a
-    /// prompt: the box is about to be empty, and a picture or a dropped file left staged behind an
-    /// empty box is one no line can name again. What becomes of them is the caller's, since the
-    /// caller is what knows which command this is.
-    ///
-    /// Both are read back out of the line and then cleared, which is what makes deleting a marker
-    /// the way to change your mind on a command line as much as on a prompt (`dropping.md` DROP-6).
-    ///
-    /// A folded paste is put back to its words here, unlike a picture or a dropped file. That marker
-    /// is a handle on text only the session holding it can undo, so it goes no further than the box
-    /// whatever the command does with its argument.
-    pub fn take_command(&mut self) -> Commanded {
-        let typed = self.input.clone();
-        let pasted = self.pasted_named(&typed);
-        let attached = self.attachments_named(&typed);
-        let line = self.unfolded(&typed);
-        self.settle_staged();
-        // Not through [`Session::clear_input`], which keeps a line typed mid-turn: a command carried
-        // out while a turn runs (CMD-8) leaves the box as one carried out at rest does.
-        self.history.leave();
-        self.set_input(String::new());
-        self.shell = false;
-        Commanded {
-            line,
-            pasted,
-            attached,
-        }
-    }
-
-    /// The same command with everything it named put back to words and names.
-    ///
-    /// What a command that has nowhere to put either is carried out as. It is carried out rather than
-    /// sent, so unless its argument goes to a planner there is no request for a picture to travel in:
-    /// a marker left in the line would name a screenshot nothing came with, which is the same thing
-    /// [`Session::resolved`] keeps a queued prompt from doing. What a command does with its argument
-    /// is not something the box knows, so which commands those are is the caller's to say.
-    ///
-    /// A dropped file becomes its name, which is what it becomes everywhere the file itself cannot
-    /// travel. A picture becomes words saying it was pasted and cannot be shown, and the person is
-    /// told, because a picture is the one thing no name stands in for.
-    pub fn without_what_it_cannot_carry(&mut self, commanded: Commanded) -> Commanded {
-        if !commanded.pasted.is_empty() {
-            self.note(t!(paste_not_with_a_command));
-        }
-        Commanded {
-            line: put_back_to_words(
-                &put_back_to_names(&commanded.line, &commanded.attached),
-                &commanded.pasted,
-                "a picture cannot join that command",
-            ),
-            pasted: Vec::new(),
-            attached: Vec::new(),
-        }
-    }
-
-    /// Take the current line as a prompt to send when the turn in flight has finished.
-    ///
-    /// The line leaves the box exactly as it would on sending, and is remembered in the history
-    /// the same way, because from the person's side they have sent it. What has not happened yet
-    /// is the turn, so nothing goes into the transcript until this one's own turn begins.
-    ///
-    /// Only while a turn is running. With none there is nothing to wait for and
-    /// [`Session::submit`] is what Enter means.
-    pub fn queue(&mut self) -> bool {
-        self.queue_line(Waiting::Prompt)
-    }
-
-    /// Take the current line as a command to carry out when the turn in flight has finished.
-    ///
-    /// The same wait a prompt gets, and for the same reason: the person pressed Enter, so the line
-    /// leaves the box and is remembered, and what has not happened yet is the turn. The difference is
-    /// at the far end. A prompt that was waiting becomes a turn of its own; a command that was waiting
-    /// is dispatched, which is what pressing Enter on it at rest would have done.
-    ///
-    /// Which words are commands is the caller's to say. This only promises what a line marked one is
-    /// spared: it is never put where the running turn can reach it, so nothing about it is sent
-    /// anywhere, and nothing about it is in the conversation while it waits.
-    pub fn queue_command(&mut self) -> bool {
-        self.queue_line(Waiting::Command)
-    }
-
-    /// The commands waiting for the turn to end, as they were typed and in that order.
-    pub fn commands_waiting(&self) -> impl Iterator<Item = &str> {
-        self.queued
-            .iter()
-            .filter(|line| line.waiting == Waiting::Command)
-            .map(|line| line.prompt.as_str())
-    }
-
-    /// Take the current line as a command line to run when the turn in flight has finished.
-    ///
-    /// The same wait the other two get, for the same reason, and what is different is again at the
-    /// far end: this line is run through the shell, which is what pressing Enter on it at rest
-    /// would have done with it.
-    ///
-    /// Shell mode is how a person said the line was for a shell, and a turn running changes
-    /// nothing about that: a turn can begin without anybody pressing anything, from a loop's tick
-    /// or a watch firing, so the mode is armed mid-turn over a line that was typed to be run. What
-    /// this may never do is hand it to the turn, since the planner would then be sent a command
-    /// line as a sentence somebody said.
-    ///
-    /// Leaves shell mode, exactly as running one at rest does: the mode lasts one command, and one
-    /// still armed over an emptied box would claim whatever is typed next.
-    pub fn queue_shell(&mut self) -> bool {
-        let waiting = match self.shell_private() {
-            true => Waiting::ShellPrivate,
-            false => Waiting::Shell,
-        };
-        if !self.shell || !self.queue_line(waiting) {
-            return false;
-        }
-        self.shell = false;
-        true
-    }
-
-    fn queue_line(&mut self, waiting: Waiting) -> bool {
-        if self.status != Status::Working {
-            return false;
-        }
-        let typed = self.input.trim().to_string();
-        if typed.is_empty() {
-            return false;
-        }
-        // Resolved before the line is taken, because taking it clears what the markers stand for.
-        let resolved = self.resolved(&typed);
-        let prompt = self.unfolded(&typed);
-        let recall = self.remember(&prompt);
-        let (attached, pasted) = self.take_line(&typed);
-        // Into the turn's reach the moment it is typed, rather than when the turn next asks. The
-        // turn asks between rounds and a round can be a long wait; put there now, the line is
-        // taken at the first boundary after it was sent, which is the soonest anything could act
-        // on it.
-        //
-        // The resolved copy lives only there. What is kept here is what the person typed, because
-        // that is what the screen and the history are for, and a second copy of the resolved line
-        // would be one for the two to disagree over.
-        //
-        // A prompt and nothing else. That buffer is the one thing that reaches the planner from
-        // here, and handing it a command is how one used to be answered as a question about
-        // itself, while handing it a command line is how `echo pwned` used to reach the planner as
-        // something a person had said. Both wait in the queue below and nowhere else.
-        //
-        // Behind a copy being held back it is held too: the turn taking it ahead of the older one
-        // would send what was typed last first.
-        if waiting.is_sent() {
-            if self.held.is_empty() {
-                self.pending.push(resolved);
-            } else {
-                self.held.push_back(resolved);
-            }
-        }
-        self.queued.push(Queued {
-            prompt,
-            attached,
-            pasted,
-            waiting,
-            recall,
-            hurried: false,
-        });
-        self.scroll = 0;
-        true
-    }
-
-    /// Ask for every prompt waiting to go now, as one turn, once the turn in flight has stopped.
-    ///
-    /// `true` where there is a turn to stop and anything waiting behind it, which is when the caller
-    /// stops it. A command or a command line waiting counts, since stopping the turn is what lets the
-    /// queue reach it, but only a prompt is marked: only a prompt is sent, and the others are carried
-    /// out one at a time as they always are.
-    pub fn hurry(&mut self) -> bool {
-        if !self.a_turn_is_running() || self.queued.is_empty() {
-            return false;
-        }
-        for line in &mut self.queued {
-            line.hurried |= line.waiting.is_sent();
-        }
-        true
-    }
-
-    /// Whether Ctrl-Enter would stop the turn in flight and send what is waiting, which is when the
-    /// row under the queue says so.
-    ///
-    /// Not once a stop has been asked for: the queue goes when the turn has stopped all the same, so
-    /// the key would stop a turn already stopping.
-    pub fn offers_to_send_now(&self) -> bool {
-        self.ctrl_enter_arrives
-            && self.a_turn_is_running()
-            && !self.stopping
-            && !self.queued.is_empty()
-    }
-
-    /// Where the line waiting at `at` is going, for the row under the box to say.
-    ///
-    /// A prompt goes into the turn in flight only where that turn will ask for it. An aside is
-    /// handed a queue of its own and takes nothing, and a turn being stopped takes nothing at the
-    /// boundary it stops at, so the first prompt waiting behind either becomes a turn of its own and
-    /// the ones after it go into that turn.
-    pub fn where_it_goes(&self, at: usize) -> Bound {
-        match self.queued[at].waiting {
-            Waiting::Command => Bound::CarriedOut,
-            Waiting::Shell | Waiting::ShellPrivate => Bound::Run,
-            Waiting::Prompt if self.a_turn_is_running() && !self.stopping && !self.is_held(at) => {
-                Bound::IntoThisTurn
-            }
-            Waiting::Prompt if self.queued[..at].iter().any(|line| line.waiting.is_sent()) => {
-                Bound::IntoTheNextTurn
-            }
-            Waiting::Prompt => Bound::ItsOwnTurn,
-        }
-    }
-
-    /// Whether the prompt waiting at `at` is one whose copy is held back from the turn in flight.
-    fn is_held(&self, at: usize) -> bool {
-        let sent = |line: &&Queued| line.waiting.is_sent();
-        let total = self.queued.iter().filter(sent).count();
-        let before = self.queued[..at].iter().filter(sent).count();
-        before >= total.saturating_sub(self.held.len())
-    }
-
-    /// Record that the person asked for what is running to stop.
-    ///
-    /// At the press, rather than when the turn reports that it stopped, because a turn can take a
-    /// while to get there and a prompt sent in between would otherwise be drawn as going into it.
-    pub fn stop_asked(&mut self) {
-        self.stopping = true;
+        let begun = self.begin_turn(prompt, taken, vec![recall]);
+        // Read from the line as the box held it, which the person typed, and it decides only whether
+        // the row under the box says the word went to the model (CMD-2).
+        self.leave_word_sent = crate::command_table::is_a_lone_leave_word(&typed);
+        Some(begun)
     }
 
     /// Whether what the session is working on is a turn, rather than a compaction, an aside or
@@ -3405,182 +2927,15 @@ impl Session {
         self.status == Status::Working && self.turn_in_flight
     }
 
-    /// The buffer the running turn takes interjections from.
-    ///
-    /// Handed to the worker when a turn starts. Cloning shares the buffer rather than copying it,
-    /// which is the point: what the interface adds is what the turn takes.
-    pub fn interjections(&self) -> crate::remote_confirm::Interjections {
-        self.pending.clone()
-    }
-
-    /// A queued line with every marker in it put back to words.
-    ///
-    /// What a mid-turn prompt is given to the planner as. A turn already running cannot be handed
-    /// a file or a picture: routing was precommitted before it read anything, and a file admitted
-    /// now would be context this turn never fixed the shape of. So what travels is text, and each
-    /// marker becomes the most honest sentence available about what stood there.
-    ///
-    /// A paste becomes the words themselves, exactly as [`Session::unfolded`] makes it: the marker
-    /// was only ever a way of drawing a long paste short.
-    ///
-    /// A file and a picture cannot become their contents, so they become their names. A named file
-    /// is one the planner can go and read, through the same gate it reads anything else through,
-    /// and a person who dropped a file mid-turn is telling it which file to look at. A picture has
-    /// no such recourse and says so: better a planner that knows a screenshot was meant for it and
-    /// cannot see it than one that is handed `[Image #2]` and left counting.
-    fn resolved(&self, line: &str) -> String {
-        let mut resolved = self.unfolded(line);
-        for attached in self.named_in(line) {
-            resolved = resolved.replace(&attached.marker, &attached.name);
-        }
-        put_back_to_words(
-            &resolved,
-            &self.pasted_named(line),
-            "a picture cannot join a turn already running",
-        )
-    }
-
-    /// Record that the prompt queued longest ago has reached the planner mid-turn.
-    ///
-    /// Called when the turn says it took one, rather than when the line was put where the turn
-    /// could reach it: until it is taken the prompt is still waiting, and it belongs above the box
-    /// where a waiting prompt is drawn. This is the moment it becomes part of the conversation, so
-    /// this is the moment it joins the transcript, which reads in the order things happened.
-    ///
-    /// The oldest prompt rather than the oldest line, because neither a command nor a command line
-    /// was ever offered to the turn: what the turn just took is the oldest line that had a copy in
-    /// the buffer, and either of those queued ahead of it has one waiting there still.
-    ///
-    /// Nothing about the view moves for it, for the reason [`Session::back_to_the_tail`] gives: the
-    /// prompt was sent rounds ago, and the turn taking it is the turn's doing rather than a press.
-    pub fn interjected(&mut self) {
-        let Some(taken) = self.queued.iter().position(|line| line.waiting.is_sent()) else {
-            return;
-        };
-        let gone = self.queued.remove(taken);
-        self.transcript.push(Entry::user(gone.prompt));
-    }
-
-    /// Begin the turn for the prompt queued longest ago, if the session is free to start one.
-    ///
-    /// What a prompt still waiting when the turn ended does, which is what every queued prompt used
-    /// to do. It becomes a turn of its own, and as its own turn it gets what a turn gets: routing
-    /// precommitted from it, and the files and pictures it named carried with it. That is why one
-    /// left over is better off here than interjected, and why nothing but the person hurries it.
-    ///
-    /// Where they did, with Ctrl-Enter, the prompts it marked go together as one turn, one to a
-    /// line, carrying everything each of them named: what Up and Enter would have sent, without the
-    /// box in between. Only as far as the first line that is not one of them, so what was typed first
-    /// still happens first.
-    ///
-    /// A command or a command line at the head of the queue stops this, rather than being sent: the
-    /// queue is drained in the order it was typed, and [`Session::take_queued_command`] and
-    /// [`Session::take_queued_shell`] are what take those.
-    pub fn send_queued(&mut self) -> Option<String> {
-        if self.status != Status::Idle
-            || self
-                .queued
-                .first()
-                .is_none_or(|next| !next.waiting.is_sent())
-        {
-            return None;
-        }
-        let together = self
-            .queued
-            .iter()
-            .take_while(|line| line.waiting.is_sent() && line.hurried)
-            .count()
-            .max(1);
-        let mut prompts = Vec::new();
-        let mut attached = Vec::new();
-        let mut pasted = Vec::new();
-        let mut recall = Vec::new();
-        // The copies of the prompts still waiting, in queue order, with those of the ones going now
-        // in front of them.
-        let mut copies: std::collections::VecDeque<String> = self.pending.drain().into();
-        copies.extend(self.held.drain(..));
-        let hurried = self.queued[0].hurried;
-        for next in self.queued.drain(..together) {
-            // The copy left for the running turn goes: this prompt is becoming part of a turn of its
-            // own, and a copy still in the buffer would reach the planner a second time, as an
-            // interjection into the very turn this line started.
-            copies.pop_front();
-            prompts.push(next.prompt);
-            attached.extend(next.attached);
-            pasted.extend(next.pasted);
-            recall.push(next.recall);
-        }
-        // What waits behind a hurried batch goes after whatever stops it, a command or a turn of
-        // its own, so the turn begun now may not take it. Behind a prompt sent alone, the rest is
-        // for that turn to take, as it always was.
-        if hurried {
-            self.held = copies;
-        } else {
-            for copy in copies {
-                self.pending.push(copy);
-            }
-        }
-        Some(self.begin_turn(prompts.join("\n"), (attached, pasted), recall))
-    }
-
-    /// Take the command waiting longest, if the session is free to carry one out.
-    ///
-    /// The line as it was typed, with everything it named, for the caller to dispatch exactly as it
-    /// dispatches one typed at rest: waiting changes nothing about what a command can carry, so the
-    /// same caller settles the same markers for the same commands. Nothing here decides what any
-    /// command does and nothing here is written down: a command is not part of the conversation, and
-    /// it was not while it waited either.
-    ///
-    /// Only from the head of the queue, so the order somebody typed things in is the order they
-    /// happen in: a command behind a prompt waits for that prompt's turn, the same way the prompt
-    /// waited for the turn that was running when it was typed.
-    pub fn take_queued_command(&mut self) -> Option<Commanded> {
-        if self.status != Status::Idle || self.queued.first()?.waiting != Waiting::Command {
-            return None;
-        }
-        let taken = self.queued.remove(0);
-        Some(Commanded {
-            line: taken.prompt,
-            pasted: taken.pasted,
-            attached: taken.attached,
-        })
-    }
-
-    /// Take the command line waiting longest, if the session is free to run one.
-    ///
-    /// The line as it was typed, for the caller to run exactly as it runs one typed at rest. It
-    /// joins the transcript here, the way one submitted at rest joins it as it is submitted: this
-    /// is the moment it stops waiting and starts being run, and nothing about it was in the
-    /// transcript while it waited.
-    ///
-    /// Only from the head of the queue, for the reason [`Session::take_queued_command`] takes only
-    /// from there: what somebody typed first happens first.
-    pub fn take_queued_shell(&mut self) -> Option<String> {
-        self.take_queued_shell_of(Waiting::Shell)
-    }
-
-    /// Take the command line waiting longest, as [`Session::take_queued_shell`] does, where it was
-    /// typed `!!` and so is run with its output kept out of the conversation.
-    pub fn take_queued_private_shell(&mut self) -> Option<String> {
-        self.take_queued_shell_of(Waiting::ShellPrivate)
-    }
-
-    fn take_queued_shell_of(&mut self, waiting: Waiting) -> Option<String> {
-        if self.status != Status::Idle || self.queued.first()?.waiting != waiting {
-            return None;
-        }
-        let line = self.queued.remove(0).prompt;
-        self.transcript.push(Entry::shell(line.clone()));
-        // Through [`Session::back_to_the_tail`], so an open view stays where its reader put it. The
-        // queue giving this line up is the turn ending rather than a press: the line was typed
-        // rounds ago and nothing closes a view when a turn ends.
-        self.back_to_the_tail();
-        Some(line)
-    }
-
-    /// The loop repeating a prompt, where one is running.
+    /// The oldest loop repeating a prompt, where one is running: the only one in a session that
+    /// holds one, and some loop at all exactly when any is live.
     pub fn looping(&self) -> Option<&crate::loops::Running> {
-        self.looping.as_ref()
+        self.looping.oldest()
+    }
+
+    /// Every loop repeating a prompt, numbered and oldest first.
+    pub fn loops(&self) -> &crate::loops::Loops {
+        &self.looping
     }
 
     /// Start repeating a prompt, and give back the first tick to send now.
@@ -3606,8 +2961,11 @@ impl Session {
             self.note(t!(loop_busy));
             return None;
         }
-        if self.looping.is_some() {
-            self.note(t!(loop_replaced));
+        // Refused rather than replacing one: the person typed every loop that is live, and the
+        // cost of one more is the cost of another turn on every tick.
+        if self.looping.is_full() {
+            self.note(t!(loop_full, count = crate::loops::MAX_LIVE));
+            return None;
         }
         // The other half of the rule `start_goal` states: one thing at a time, whichever of the
         // two was asked for second.
@@ -3619,29 +2977,9 @@ impl Session {
         // turn that silently took somebody's loop off would be ending work they are waiting on.
         self.end_watches_for_another_kind();
 
-        match request.adjusted {
-            Some(crate::loops::Held::Raised(every)) => {
-                self.note(t!(loop_interval_raised, every = crate::loops::spell(every)))
-            }
-            Some(crate::loops::Held::Capped(every)) => {
-                self.note(t!(loop_interval_capped, every = crate::loops::spell(every)))
-            }
-            None => {}
-        }
-        match request.pacing {
-            crate::loops::Pacing::Every(every) => {
-                self.note(t!(loop_started_every, every = crate::loops::spell(every)))
-            }
-            crate::loops::Pacing::SelfPaced => self.note(t!(loop_started_self_paced)),
-        }
-
-        // Said before the first tick goes, because it is about every tick after it: somebody who
-        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
-        // the ones that read a sentence in its place.
+        let (adjusted, pacing) = (request.adjusted, request.pacing);
+        let pasted_a_picture = !pasted.is_empty();
         let mut running = crate::loops::Running::begin(request);
-        if !pasted.is_empty() {
-            self.note(t!(paste_with_the_first_tick));
-        }
         if !pasted.is_empty() || !attached.is_empty() {
             // Nothing is said about a dropped file, because a later tick is sent its name and a name
             // is something the turn can act on: it reads the file through the gate it reads any other
@@ -3653,8 +2991,38 @@ impl Session {
             );
             running = running.carrying(pasted, attached, settled);
         }
-        self.looping = Some(running);
-        self.dispatch_tick()
+        // Numbered before anything is said about it, so what is said is the number it has.
+        let number = self.looping.start(running);
+
+        match adjusted {
+            Some(crate::loops::Held::Raised(every)) => {
+                self.note(t!(loop_interval_raised, every = crate::loops::spell(every)))
+            }
+            Some(crate::loops::Held::Capped(every)) => {
+                self.note(t!(loop_interval_capped, every = crate::loops::spell(every)))
+            }
+            None => {}
+        }
+        match pacing {
+            crate::loops::Pacing::Every(every) => self.note(t!(
+                loop_started_every,
+                number = number,
+                every = crate::loops::spell(every)
+            )),
+            crate::loops::Pacing::SelfPaced => {
+                self.note(t!(loop_started_self_paced, number = number))
+            }
+            // Not started here: `/after` sends nothing now, and [`Session::start_after`] says so.
+            crate::loops::Pacing::Once(_) => {}
+        }
+
+        // Said before the first tick goes, because it is about every tick after it: somebody who
+        // pasted a screenshot into a loop is owed the difference between the turn that sees it and
+        // the ones that read a sentence in its place.
+        if pasted_a_picture {
+            self.note(t!(paste_with_the_first_tick));
+        }
+        self.dispatch_tick_of(number)
     }
 
     /// Start a turn on a person's task, addressed to the definition they named.
@@ -3700,12 +3068,71 @@ impl Session {
         )
     }
 
+    /// Begin the turn `/help` is (CMD-24).
+    pub fn start_help(&mut self, question: &str) -> String {
+        self.driver_prompt_pending = true;
+        self.begin_turn(
+            crate::help_command::prompt(question),
+            (Vec::new(), Vec::new()),
+            Vec::new(),
+        )
+    }
+
+    /// Put the release notes `/changelog` shows in the transcript (CMD-25).
+    ///
+    /// `release` is what the build carries for `running`, which is the newest release's where the
+    /// changelog has no heading for that version, and `None` where it carries no release at all.
+    pub fn report_changelog(
+        &mut self,
+        running: &str,
+        release: Option<crate::help_command::Release<'_>>,
+    ) {
+        let Some(release) = release else {
+            self.note(t!(changelog_none));
+            return;
+        };
+        let (heading, notes) = crate::help_command::shown(&release, running);
+        self.note(format!("{heading}\n{notes}"));
+    }
+
+    /// Put the whole plan in the transcript, as `/todos` does, or say there is none (VIEW-37).
+    ///
+    /// The rows as they stand, whether the turn that wrote them is still running or not, and
+    /// whether a turn is running now, which decides how a row still to do is drawn (PANEL-10). Both
+    /// are kept as of the press. Nothing here reads a task's text: the heading counts statuses, and
+    /// the rows go to the entry to be drawn.
+    pub fn report_plan(&mut self) {
+        let rows = self.plan().to_vec();
+        if rows.is_empty() {
+            self.note(t!(todos_none));
+            return;
+        }
+        let counted = |status| rows.iter().filter(|row| row.status == status).count();
+        let done = counted(bravebot_core::todo::Status::Done);
+        let cancelled = counted(bravebot_core::todo::Status::Cancelled);
+        // As the planner's own result says it, which counts the cancelled rows apart.
+        let heading = if cancelled == 0 {
+            t!(todos_heading, done = done, total = rows.len())
+        } else {
+            t!(
+                todos_heading_cancelled,
+                done = done,
+                total = rows.len(),
+                cancelled = cancelled
+            )
+        };
+        let left_open = !self.a_turn_is_running();
+        self.transcript
+            .push(Entry::printed_plan(heading, rows, left_open));
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
     pub fn driver_prompt_is_pending(&self) -> bool {
         self.driver_prompt_pending
     }
 
-    /// Whether the turn starting now sends a prompt the driver wrote, as `/init` and `/review` do.
+    /// Whether the turn starting now sends a prompt the driver wrote, as `/init`, `/review` and
+    /// `/help` do.
     /// Taken once.
     pub fn take_driver_prompt(&mut self) -> bool {
         std::mem::take(&mut self.driver_prompt_pending)
@@ -3791,7 +3218,7 @@ impl Session {
         // whose ticks were each held open by a goal is neither of the two things a person asked
         // for: the interval stops meaning anything, and the condition is judged against a turn
         // that was going to be repeated anyway.
-        if self.looping.take().is_some() {
+        if self.looping.stop_all() > 0 {
             self.note(t!(goal_replaces_loop));
         }
         self.end_watches_for_another_kind();
@@ -4113,96 +3540,6 @@ impl Session {
         }
     }
 
-    /// Take every waiting prompt back out of the queue and into the box.
-    ///
-    /// All of them, in the order they were typed, one to a line, and the half-written line already
-    /// in the box stays below them: it was typed after they were, and it is where the caret goes,
-    /// so somebody carries on where they left off. What each of them named comes back with it, the
-    /// way a stashed line's markers do, since a marker with nothing behind it would send a prompt
-    /// pointing at a file that is no longer staged.
-    ///
-    /// The prompts stay in the history. From the person's side they were sent, and taking them back
-    /// does not unsay them.
-    pub fn unqueue(&mut self) -> bool {
-        if self.queued.is_empty() {
-            return false;
-        }
-        // From the back, which is the end this key takes from, and only as far as the turn has not
-        // already reached. A prompt comes back only if its copy was still there to drop: a line the
-        // planner has been given cannot be unsaid, and offering it back to the box would leave the
-        // person editing a prompt that had already gone. The two threads move independently, so a
-        // line can be taken between the key press and this loop.
-        //
-        // Before anything is disturbed, so that finding nothing left to take leaves the box exactly
-        // as it was rather than half rewritten.
-        //
-        // A command and a command line come back whatever the turn has reached, because there is
-        // nothing to take back from: neither was ever offered to the turn, so no copy of either is
-        // anywhere for the planner to have been given. What makes a prompt unreclaimable is that it
-        // has already gone.
-        let mut reclaimed = Vec::new();
-        while let Some(waiting) = self.queued.last().map(|line| line.waiting) {
-            if waiting.is_sent() && self.held.pop_back().is_none() && !self.pending.forget_last() {
-                break;
-            }
-            reclaimed.push(self.queued.pop().expect("the queue was not empty"));
-        }
-        if reclaimed.is_empty() {
-            return false;
-        }
-
-        // The box is about to be rewritten, so the things standing over it that belong to the line
-        // it held go, exactly as they do for anything else that writes a whole line.
-        self.history.leave();
-        self.completion = 0;
-
-        let mut lines = Vec::new();
-        let mut attached = Vec::new();
-        let mut pasted = Vec::new();
-        for waiting in reclaimed.into_iter().rev() {
-            lines.push(waiting.prompt);
-            attached.extend(waiting.attached);
-            pasted.extend(waiting.pasted);
-        }
-        if !self.input.is_empty() {
-            lines.push(std::mem::take(&mut self.input));
-        }
-        // Only what the reclaimed lines named: what the box already held still has its own.
-        let restaged = previews_restaged(&pasted, &attached);
-        self.previews.extend(restaged);
-        attached.append(&mut self.attached);
-        self.attached = attached;
-        pasted.append(&mut self.pasted);
-        self.pasted = pasted;
-        self.set_input(lines.join("\n"));
-        true
-    }
-
-    /// Clear the line and settle what it named.
-    ///
-    /// Everything still named goes; a marker the user deleted is an attachment they took off, and
-    /// it goes nowhere. Pictures settle the same way and at the same moment, since a marker rubbed
-    /// out means the same thing whether the thing behind it was dropped or pasted.
-    fn take_line(&mut self, prompt: &str) -> (Vec<Attached>, Vec<AttachedImage>) {
-        let attached = self.attachments_named(prompt);
-        let pasted = self.pasted_named(prompt);
-        self.settle_staged();
-        self.set_input(String::new());
-        (attached, pasted)
-    }
-
-    /// Drop what was staged, except what the line put away still names.
-    ///
-    /// A stashed line holds only its words, and what its markers stand for stays staged beside it
-    /// (INPUT-17). Sending some other line must not take that with it, or the line comes back
-    /// carrying markers that name nothing.
-    fn settle_staged(&mut self) {
-        let stashed = self.stashed.as_deref().unwrap_or("");
-        self.attached.retain(|a| stashed.contains(&a.marker));
-        self.pasted.retain(|p| stashed.contains(&p.marker));
-        self.previews.retain(|(marker, _)| stashed.contains(marker));
-    }
-
     /// Start a turn for a prompt, whether it was sent just now or waited for its turn.
     ///
     /// Four of the five ways in here are nobody's press: a prompt the queue gives up when the turn
@@ -4227,6 +3564,10 @@ impl Session {
         self.hunks_listed = None;
         self.prompt_at = None;
         self.said_while_working.clear();
+        // Set again by the call that took a line from the box, after this returns. A tick, a watch,
+        // a goal sending the work back and a command's own prompt are not a lone word the person
+        // typed, so the mark left by the last turn must not describe them.
+        self.leave_word_sent = false;
         self.recall = recall;
         (self.sent, self.sent_pasted) = taken;
         self.turn_places
@@ -4285,7 +3626,12 @@ impl Session {
         self.started = None;
         self.clear_in_progress();
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
+        // A delegate does not outlive its turn (DELEGATE-17), so one the driver did not report
+        // finished did not finish.
+        self.roster.turn_ended();
+        self.sync_delegates();
         // The driver says which jobs the turn stopped before it says the turn is over. A worker
         // that ended without saying so stopped them all the same, since none outlives its turn,
         // except where the session keeps them: those are still running (RUN-15).
@@ -4421,6 +3767,13 @@ impl Session {
         self.timing.entry(self.turns).or_default().inference_ms += took;
     }
 
+    /// [`Session::end_aside`] for a model call that reported its usage, so that the cost is
+    /// charged with how it divides into what was read and what was written.
+    pub fn end_aside_of(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.end_aside(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
+    }
+
     /// Leave a manifest run the session started, adding what it cost to the session's total.
     ///
     /// [`Session::end_aside`] in every respect but the breakdown, and charged to the same turn for
@@ -4464,6 +3817,7 @@ impl Session {
         // said it, which the planner has not: what an aside wrote is the aside's, and the row it
         // becomes is where it is drawn.
         self.streaming.clear();
+        self.thinking.clear();
         self.composing = None;
         // Read before the timer is cleared.
         let took = u64::try_from(self.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -4476,6 +3830,18 @@ impl Session {
 
     pub fn note(&mut self, message: impl Into<String>) {
         self.transcript.push(Entry::system(message));
+    }
+
+    /// A note saying something a person asked for was done, drawn as finished and not in the ink
+    /// every other note shares (VIEW-8).
+    pub fn note_done(&mut self, message: impl Into<String>) {
+        self.transcript.push(Entry::done(message));
+    }
+
+    /// A note saying something a person asked for was not done, and why, drawn as failed and not in
+    /// the ink every other note shares (VIEW-8).
+    pub fn note_refused(&mut self, message: impl Into<String>) {
+        self.transcript.push(Entry::refused(message));
     }
 
     /// Carry out a command while a turn is working, keeping where in the transcript it said things.
@@ -4580,19 +3946,12 @@ impl Session {
         self.note(message);
     }
 
-    /// What the user said last time this exact question was asked, if they were asked it.
-    pub fn recall_answer(&self, key: &str) -> Option<bravebot_core::ask::Answer> {
-        self.answers
-            .iter()
-            .find(|(asked, _)| asked == key)
-            .map(|(_, answer)| answer.clone())
-    }
-
-    /// Remember an answer, replacing any earlier one for the same question.
-    pub fn remember_answer(&mut self, key: String, answer: bravebot_core::ask::Answer) {
-        match self.answers.iter_mut().find(|(asked, _)| *asked == key) {
-            Some(slot) => slot.1 = answer,
-            None => self.answers.push((key, answer)),
+    /// Say on the transcript that a question was closed on the clock, where `answers` hold one
+    /// (ASK-9), so a person who comes back can see that it was put and nobody answered.
+    pub fn note_closed_on_the_clock(&mut self, answers: &[bravebot_core::ask::Answer]) {
+        let closed = answers.contains(&bravebot_core::ask::Answer::TimedOut);
+        if let (true, Some(idle)) = (closed, self.ask_idle) {
+            self.note(t!(session_question_timed_out, seconds = idle.as_secs()));
         }
     }
 
@@ -4663,16 +4022,6 @@ impl Session {
         self.status == Status::Quitting
     }
 }
-
-/// The byte offset `column` characters into `line`, or its end where it is shorter.
-///
-/// What keeps the caret roughly where it looked while moving between lines of unequal length.
-fn along(line: &str, column: usize) -> usize {
-    line.char_indices()
-        .nth(column)
-        .map_or(line.len(), |(index, _)| index)
-}
-
 /// What a checkout takes on disk: whole kilobytes, rounded up, under a megabyte, megabytes under a
 /// gigabyte and gigabytes from there.
 fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
@@ -4749,6 +4098,23 @@ mod tests {
             });
             session.reporting_for(Some(id));
             id
+        }
+
+        /// One model thinks at a time, and a delegate's thought drawn at the turn's tail reads as
+        /// the planner's.
+        #[test]
+        fn a_delegates_thinking_is_not_the_turns() {
+            let mut session = session();
+            session.type_char('a');
+            session.submit();
+            session.toggle_thinking();
+            spawn(&mut session, "explore", "look around");
+            session.thinking("a delegate's");
+            assert_eq!(
+                session.thinking_so_far(),
+                "",
+                "a delegate's thought was the turn's"
+            );
         }
 
         /// One model writes at a time, and a delegate's call named beside the turn's spinner reads
@@ -4905,6 +4271,7 @@ mod tests {
                 height: 10,
                 rows: 40,
                 expandable: vec![(32, 38, 0)],
+                delegates: Vec::new(),
                 ..Laid::default()
             };
 
@@ -5166,14 +4533,20 @@ mod tests {
             );
         }
 
-        /// The rows are grouped by kind, so a delegate starting arrives ahead of every command in
-        /// the list. A person reading what a command printed was moved onto that delegate by an
-        /// event they did not ask for.
+        /// A delegate is a row of the agents list and not of the outputs list, so one starting
+        /// while somebody reads what a command printed has no place in that list to move. A
+        /// position shifted for a row the list does not hold moved them onto another command.
         #[test]
         fn a_new_delegate_does_not_take_the_screen_from_a_command_being_read() {
             let mut session = Session::new("none");
             ran(&mut session, "cargo test", false);
-            assert!(session.watch(), "a command was not something to look at");
+            ran(&mut session, "cargo build", false);
+            assert!(
+                session.watch_outputs(),
+                "a command was not something to look at"
+            );
+            session.watch_previous();
+            session.open_watched();
 
             spawn(&mut session, "reader", "find the parser");
             assert_eq!(
@@ -5192,7 +4565,7 @@ mod tests {
             let mut session = Session::new("none");
             ran(&mut session, "cargo test", false);
             ran(&mut session, "cargo build", false);
-            session.watch();
+            session.watch_outputs();
             session.watch_previous();
 
             spawn(&mut session, "reader", "find the parser");
@@ -5785,10 +5158,17 @@ mod tests {
         #[test]
         fn a_command_this_session_ran_is_something_the_view_can_open() {
             let mut session = Session::new("none");
-            assert!(!session.watch(), "the key opened on nothing");
+            assert!(!session.watch_outputs(), "the entry opened on nothing");
 
             ran(&mut session, "cargo test", false);
-            assert!(session.watch(), "a command was not something to look at");
+            assert!(
+                !session.watch(),
+                "the watch key opened on a command, which is not an agent"
+            );
+            assert!(
+                session.watch_outputs(),
+                "a command was not something to look at"
+            );
             assert!(matches!(session.watched(), Some(Watched::Output(_))));
             assert_eq!(
                 session.watched_output().map(|o| o.command.as_str()),
@@ -5796,18 +5176,35 @@ mod tests {
             );
         }
 
-        /// One list rather than two. Which kind of work a row is is a property of the row, not a
-        /// reason for a second key to learn.
+        /// WATCH-7. The list the watch key opens holds agents and no command, so a session that
+        /// ran a command and a delegate lists the delegate alone. A list built from every kind of
+        /// row puts the build that passed beside the agent that did the work.
         #[test]
-        fn the_list_holds_delegates_and_commands_together() {
+        fn the_watch_list_holds_the_delegate_and_not_the_command() {
+            let mut session = Session::new("none");
+            ran(&mut session, "cargo test", true);
+            spawn(&mut session, "reader", "find the parser");
+
+            let rows = session.watchable();
+
+            assert_eq!(rows.len(), 1, "the list held a row besides the delegate");
+            assert!(matches!(rows[0], Watched::Delegate(_)));
+        }
+
+        /// Two lists rather than one: the delegates and asides are opened by the watch key and
+        /// the commands by their own entry, so neither list holds a row of the other kind.
+        #[test]
+        fn the_two_lists_hold_their_own_kinds_of_row() {
             let mut session = Session::new("none");
             spawn(&mut session, "reader", "find the parser");
             ran(&mut session, "cargo test", true);
 
-            let rows = session.watchable();
-            assert_eq!(rows.len(), 2);
-            assert!(matches!(rows[0], Watched::Delegate(_)));
-            assert!(matches!(rows[1], Watched::Output(_)));
+            let agents = session.watchable_in(WatchScope::Agents);
+            assert_eq!(agents.len(), 1);
+            assert!(matches!(agents[0], Watched::Delegate(_)));
+            let outputs = session.watchable_in(WatchScope::Outputs);
+            assert_eq!(outputs.len(), 1);
+            assert!(matches!(outputs[0], Watched::Output(_)));
         }
 
         /// Delegates first and commands after them, so a row's place does not move under somebody
@@ -6383,22 +5780,25 @@ mod tests {
             assert!(!dropped.is_requested());
         }
 
-        /// Stepping through the list reaches both kinds, since it is one list and the keys that
-        /// move in it do not ask what a row is.
+        /// Stepping through the outputs list reaches every command, since the keys that move in
+        /// it do not ask what a row is.
         #[test]
-        fn stepping_through_the_list_reaches_a_command_after_a_delegate() {
+        fn stepping_through_the_outputs_list_reaches_every_command() {
             let mut session = Session::new("none");
-            spawn(&mut session, "reader", "find the parser");
+            ran(&mut session, "cargo build", true);
             ran(&mut session, "cargo test", true);
 
-            session.watch();
+            session.watch_outputs();
             assert!(
                 session.listing_delegates(),
                 "two rows did not open the list"
             );
-            while !matches!(session.watched(), Some(Watched::Output(_))) {
+            while session
+                .watched_output()
+                .is_none_or(|output| output.command != "cargo build")
+            {
                 let before = session.list_highlight();
-                session.watch_next();
+                session.watch_previous();
                 assert_ne!(before, session.list_highlight(), "the list stopped moving");
             }
             session.open_watched();
@@ -6506,8 +5906,8 @@ mod tests {
         }
 
         /// Asides come first because they are the only rows that outlive the session that made
-        /// them: a resumed list is asides alone, and everything the session goes on to do appends
-        /// after them rather than under somebody reading one.
+        /// them: a resumed list is asides alone, and the delegates the session goes on to spawn
+        /// append after them rather than under somebody reading one.
         #[test]
         fn an_aside_keeps_its_place_when_a_delegate_is_spawned_after_it() {
             let mut session = Session::new("none");
@@ -6518,9 +5918,9 @@ mod tests {
             ran(&mut session, "cargo test", true);
 
             let rows = session.watchable();
+            assert_eq!(rows.len(), 2);
             assert!(matches!(rows[0], Watched::Aside(_)));
             assert!(matches!(rows[1], Watched::Delegate(_)));
-            assert!(matches!(rows[2], Watched::Output(_)));
             assert_eq!(
                 session.list_highlight(),
                 before,
@@ -6679,6 +6079,73 @@ mod tests {
                 held[0].note.as_deref(),
                 Some("a reader delegate answered after 2 rounds")
             );
+        }
+
+        fn spawn_numbered(session: &mut Session, number: u32, task: &str) -> DelegateId {
+            let id = DelegateId::nth(number);
+            session.delegate_started(bravebot_agent::report::Delegation {
+                stop: Default::default(),
+                id,
+                kind: "reader".to_string(),
+                task: task.to_string(),
+            });
+            id
+        }
+
+        /// Several delegates run at once and end in any order, so a finish marks the delegate it
+        /// names. A finish paired with the first one still working marks the wrong block.
+        #[test]
+        fn a_finish_marks_the_delegate_it_names_when_another_started_first_is_still_working() {
+            let mut session = Session::new("none");
+            let first = spawn_numbered(&mut session, 1, "first");
+            let second = spawn_numbered(&mut session, 2, "second");
+            session.delegate_finished(second, "second answered".to_string(), true, None);
+
+            let held = session.delegates();
+            assert!(
+                held[0].is_running(),
+                "the delegate that was not named ended"
+            );
+            assert!(held[1].failed());
+            assert_eq!(held[1].note.as_deref(), Some("second answered"));
+            session.delegate_finished(first, "first answered".to_string(), false, None);
+            let held = session.delegates();
+            assert!(!held[0].is_running() && !held[0].failed());
+        }
+
+        /// Numbers count from one in every turn, so a finish names the delegate that is still
+        /// working. One matched to the first delegate with the number rewrites an earlier turn's.
+        #[test]
+        fn a_number_used_again_finishes_the_delegate_still_working_and_leaves_the_earlier_one() {
+            let mut session = Session::new("none");
+            let earlier = spawn_numbered(&mut session, 1, "earlier turn");
+            session.delegate_finished(earlier, "earlier answered".to_string(), false, None);
+            let later = spawn_numbered(&mut session, 1, "later turn");
+            session.delegate_finished(later, "later failed".to_string(), true, None);
+
+            let held = session.delegates();
+            assert_eq!(held[0].note.as_deref(), Some("earlier answered"));
+            assert!(!held[0].failed(), "the earlier delegate was rewritten");
+            assert_eq!(held[1].note.as_deref(), Some("later failed"));
+            assert!(held[1].failed());
+        }
+
+        /// A delegate does not outlive its turn (DELEGATE-17), so one the driver never reported
+        /// finished did not finish, and one that did is left as it ended.
+        #[test]
+        fn a_turn_ending_marks_a_delegate_still_working_as_failed() {
+            let mut session = Session::new("none");
+            session.set_input("do the thing".to_string());
+            session.submit();
+            let ended = spawn_numbered(&mut session, 1, "ended");
+            spawn_numbered(&mut session, 2, "never reported");
+            session.delegate_finished(ended, "answered".to_string(), false, None);
+            session.complete("done", Vec::new(), 10);
+
+            let held = session.delegates();
+            assert!(!held[0].is_running() && !held[0].failed());
+            assert!(!held[1].is_running(), "a delegate outlived its turn");
+            assert!(held[1].failed());
         }
 
         /// The turn's own lines come back once the driver says the delegate is done, or every
@@ -7523,64 +6990,55 @@ mod tests {
         assert_eq!(session.top_row(), 120, "the view stopped at the old end");
     }
 
-    /// A question nobody has been asked has no answer to recall, which is what makes the memo
-    /// safe to consult for every question in a series.
-    #[test]
-    fn a_question_never_asked_has_no_remembered_answer() {
-        let session = Session::new(".");
-        assert_eq!(session.recall_answer("pick one: Cache: Which?"), None);
-    }
-
-    /// The key is the whole question, so two that differ anywhere are two questions and the
-    /// second is put to the person rather than answered with the first one's reply.
-    #[test]
-    fn a_different_question_is_not_answered_from_an_earlier_one() {
-        let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        assert_eq!(session.recall_answer("pick one: Branch: Which?"), None);
-    }
-
-    /// Answering again replaces rather than accumulates, or the memo would grow a second entry
-    /// for the same question and recall would keep returning the stale one.
-    #[test]
-    fn answering_the_same_question_again_replaces_what_was_remembered() {
-        let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("q".into(), Answer::Chosen(vec![1]));
-        assert_eq!(session.answers.len(), 1);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Chosen(vec![1])));
-    }
-
     /// ASK-8: an answer is remembered for the session, and `/clear` begins another. A question the
     /// new conversation puts is asked, not answered from the one that was thrown away.
     #[test]
     fn clearing_the_conversation_forgets_the_answers_to_the_planners_questions() {
         let mut session = Session::new(".");
-        session.remember_answer("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
-        session.remember_answer("skip: Branch: Which?".into(), Answer::Declined);
+        session
+            .answers
+            .remember("pick one: Cache: Which?".into(), Answer::Chosen(vec![0]));
+        session
+            .answers
+            .remember("skip: Branch: Which?".into(), Answer::Declined);
 
         session.clear();
 
         assert_eq!(
-            session.recall_answer("pick one: Cache: Which?"),
+            session.answers.recall("pick one: Cache: Which?"),
             None,
             "a chosen answer outlived /clear"
         );
         assert_eq!(
-            session.recall_answer("skip: Branch: Which?"),
+            session.answers.recall("skip: Branch: Which?"),
             None,
             "a declined question outlived /clear"
         );
     }
 
-    /// A decline is an answer, so it is remembered as one. Treating it as absence would put a
-    /// question the person deliberately passed over back in front of them.
+    /// ASK-9: the time is the person's, and it closes the planner's questions only. A plan, a spend
+    /// limit and a repeated call are the driver's own, so they wait for the person with the setting
+    /// in force. Rejects: the time applied to every question the interface puts.
     #[test]
-    fn a_skipped_question_is_remembered_as_skipped() {
+    fn only_the_planners_own_questions_are_closed_on_the_clock() {
+        use bravebot_core::ask::Asking;
+        let planners = Asking {
+            closes_when_idle: true,
+            ..Default::default()
+        };
+        let drivers = Asking::default();
+
         let mut session = Session::new(".");
-        session.remember_answer("q".into(), Answer::Declined);
-        assert_eq!(session.recall_answer("q"), Some(Answer::Declined));
+        assert_eq!(session.ask_idle_for(&planners), None);
+
+        session.adopt_ask_idle(Some(90));
+        assert_eq!(
+            session.ask_idle_for(&planners),
+            Some(Duration::from_secs(90))
+        );
+        assert_eq!(session.ask_idle_for(&drivers), None);
     }
+
     use bravebot_core::label::Label;
 
     fn session() -> Session {
@@ -8254,6 +7712,54 @@ mod tests {
         assert_eq!(entry.prompt, "one\ntwo\nthree\n");
     }
 
+    /// DROP-8, INPUT-10: a turn already running cannot be handed a picture, so a prompt sent into it
+    /// with one pasted reaches the planner as the sentence saying a picture was pasted and cannot be
+    /// shown, with the reason. The marker alone would stand for nothing the planner can use, and a
+    /// file's name, which the planner can go and read, would be the wrong stand-in for a picture.
+    /// The queued line keeps the marker, because that is what was on the person's screen.
+    #[test]
+    fn a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence() {
+        let mut s = session();
+        s.type_char('x');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for c in "look at ".chars() {
+            s.type_char(c);
+        }
+        s.attach(picture(b"pixels"));
+        assert!(s.queue(), "the prompt was not queued");
+
+        assert_eq!(
+            reaching.take().as_deref(),
+            Some(
+                "look at ([Image #1] was pasted here, but it cannot be shown to you: a picture \
+                 cannot join a turn already running. Ask for it again if you need to see it.)"
+            )
+        );
+        assert_eq!(s.queued[0].prompt, "look at [Image #1]");
+    }
+
+    /// INPUT-10: a folded paste in a line sent mid-turn reaches the running turn as the words that
+    /// were pasted. Sent as the marker, the planner would be given `[Pasted text #1 +3 lines]` in
+    /// place of everything the person pasted.
+    #[test]
+    fn a_folded_paste_in_a_line_sent_mid_turn_reaches_the_planner_as_its_words() {
+        let mut s = session();
+        s.type_char('x');
+        s.submit().expect("submitted");
+        let reaching = s.interjections();
+        for c in "what is ".chars() {
+            s.type_char(c);
+        }
+        s.paste_text("one\ntwo\nthree\n");
+        assert!(s.queue(), "the prompt was not queued");
+
+        assert_eq!(
+            reaching.take().as_deref(),
+            Some("what is one\ntwo\nthree\n")
+        );
+    }
+
     /// A prompt coming back for editing comes back as it was typed. Returned as its words, the
     /// stack trace somebody folded away fills the box they are about to edit.
     #[test]
@@ -8672,6 +8178,24 @@ mod tests {
         assert!(!finished.failed());
     }
 
+    /// VIEW-13: the row says how long the turn took, so the figure is the session's clock at the
+    /// turn's end and not a placeholder.
+    #[test]
+    fn a_completed_turn_is_reported_with_how_long_it_took() {
+        let mut s = Session::new("none");
+        s.set_input("do the thing".to_string());
+        s.submit();
+        s.started = Some(Instant::now() - Duration::from_secs(75));
+        s.complete("done", Vec::new(), 4_200);
+
+        let finished = s.finished.expect("a finished turn");
+        assert!(
+            finished.took >= Duration::from_secs(75),
+            "the turn's duration was lost: {:?}",
+            finished.took
+        );
+    }
+
     /// A tick beside a turn that did not finish would be the wrong thing to say about it.
     #[test]
     fn a_failed_turn_is_reported_as_failed() {
@@ -8980,6 +8504,47 @@ mod tests {
             s.take_queued_command().is_none(),
             "a tick was left waiting as a command"
         );
+    }
+
+    /// The line goes once, no earlier than the delay, as the prompt typed and never as a command, and
+    /// nothing is scheduled afterwards. Wrong implementations send at once, send before the delay is
+    /// up, run `/exit` as a command, or leave a loop behind that sends it again.
+    #[test]
+    fn an_after_line_is_sent_once_when_its_delay_is_up_and_leaves_no_schedule() {
+        let mut s = session();
+        s.start_after(match crate::loops::parse_after("5m /exit") {
+            crate::loops::Delayed::Start(request) => request,
+            _ => panic!("unread"),
+        });
+        assert_eq!(s.status, Status::Idle, "a turn started at once");
+        assert!(s.looping().is_some());
+
+        let early = Instant::now() + Duration::from_secs(5 * 60 - 5);
+        assert_eq!(s.loop_tick_at(early), None, "sent before the delay");
+
+        let due = Instant::now() + Duration::from_secs(5 * 60 + 1);
+        assert_eq!(s.loop_tick_at(due).as_deref(), Some("/exit"));
+        assert!(!s.is_quitting(), "the line ran as a command");
+
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert!(s.looping().is_none(), "a schedule was left behind");
+        let much_later = Instant::now() + Duration::from_secs(3 * 60 * 60);
+        assert_eq!(s.loop_tick_at(much_later), None, "it was sent again");
+    }
+
+    /// A prompt typed while one is waiting is not what it waits for, and does not use it up.
+    #[test]
+    fn a_prompt_typed_while_an_after_line_waits_does_not_use_it_up() {
+        let mut s = session();
+        s.start_after(match crate::loops::parse_after("5m later") {
+            crate::loops::Delayed::Start(request) => request,
+            _ => panic!("unread"),
+        });
+        s.begin_turn("now".to_string(), (Vec::new(), Vec::new()), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert!(s.looping().is_some(), "an unrelated turn ended it");
     }
 
     /// What a watch is armed with, for the tests below: a look that saw something, so the watch
@@ -9435,6 +9000,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// `/changelog` names the notes for the version that runs, with each link written as its text.
+    /// Notes with their addresses left in, or under another version's name, would be read as what
+    /// this build changed.
+    #[test]
+    fn the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text() {
+        let mut s = session();
+        s.report_changelog(
+            "0.17.0",
+            Some(crate::help_command::Release {
+                version: "0.17.0",
+                notes: " - Fixed a hang. ([#2122](https://github.com/brave/bravebot/issues/2122))",
+            }),
+        );
+        assert_eq!(
+            s.transcript.last().expect("the notes").text,
+            format!(
+                "{}\n - Fixed a hang. (#2122)",
+                t!(changelog_heading, version = "0.17.0")
+            )
+        );
+    }
+
+    /// A build whose version has no notes shows the newest release's and says so. Headed as the
+    /// running version's, they would be taken for what this build changed.
+    #[test]
+    fn the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows() {
+        let mut s = session();
+        s.report_changelog(
+            "0.18.0",
+            Some(crate::help_command::Release {
+                version: "0.17.0",
+                notes: " - Fixed a hang.",
+            }),
+        );
+        assert!(s.transcript.last().expect("the notes").text.starts_with(
+            &t!(changelog_newest, running = "0.18.0", version = "0.17.0").to_string()
+        ));
+    }
+
+    /// A build that carries no release says so rather than drawing an empty heading.
+    #[test]
+    fn a_changelog_with_no_release_says_so() {
+        let mut s = session();
+        s.report_changelog("0.17.0", None);
+        assert_eq!(
+            s.transcript.last().expect("a note").text,
+            t!(changelog_none)
+        );
+    }
+
     fn a_request() -> bravebot_agent::request_view::RequestView {
         use bravebot_agent::request_view::{Provenance, RequestView, Span};
         RequestView {
@@ -9829,7 +9444,7 @@ mod tests {
     #[test]
     fn a_due_tick_is_held_for_a_running_turn_and_a_queued_prompt_and_then_goes() {
         let mut s = session();
-        s.looping = Some(a_loop_that_is_due());
+        s.looping.start(a_loop_that_is_due());
 
         for c in "their own question".chars() {
             s.type_char(c);
@@ -9853,6 +9468,117 @@ mod tests {
             s.loop_tick().is_some(),
             "a due tick was never sent once the session was free"
         );
+    }
+
+    /// CMD-2. Only a line that is the word and nothing else is told it went to the model as a prompt:
+    /// in any case and with spaces around it, since `Exit ` means what `exit` does, and not a
+    /// question about leaving, which a note saying the word was a prompt would misdescribe. A mark
+    /// taken from a line that merely contains the word shows the note on ordinary prompts.
+    #[test]
+    fn a_turn_begun_on_a_lone_leave_word_is_marked_and_one_on_any_other_line_is_not() {
+        for line in ["exit", "quit", "Exit", "QUIT", "  exit  ", "qUiT "] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line.trim()));
+            assert!(s.leave_word_sent, "{line:?} began a turn with no mark");
+        }
+        for line in [
+            "exit now",
+            "how do I exit",
+            "exits",
+            "quit?",
+            "exit quit",
+            "e xit",
+        ] {
+            let mut s = session();
+            for c in line.chars() {
+                s.type_char(c);
+            }
+            assert_eq!(s.submit().as_deref(), Some(line));
+            assert!(!s.leave_word_sent, "{line:?} began a turn with a mark");
+        }
+    }
+
+    /// The mark belongs to the turn the word began, so the prompt after it is judged on its own. Left
+    /// set, the row would go on saying a prompt that is no leave word went to the model as one.
+    #[test]
+    fn the_prompt_after_a_marked_turn_does_not_inherit_the_mark() {
+        let mut s = session();
+        for c in "exit".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.leave_word_sent, "the word was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        for c in "list the files".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+
+        assert!(!s.leave_word_sent, "the next prompt inherited the mark");
+    }
+
+    /// A tick starts a turn on a prompt nobody typed in the box. The mark from the turn before is
+    /// not about it, and nothing a person typed sets one for it.
+    #[test]
+    fn a_turn_that_begins_without_a_line_from_the_box_takes_down_the_mark() {
+        let mut s = session();
+        s.looping.start(a_loop_that_is_due());
+        for c in "exit".chars() {
+            s.type_char(c);
+        }
+        s.submit().expect("submitted");
+        assert!(s.leave_word_sent, "the word was not marked");
+        s.complete("done", Vec::new(), 0);
+
+        assert!(s.loop_tick().is_some(), "the due tick was not sent");
+
+        assert!(!s.leave_word_sent, "the tick's turn kept the word's mark");
+    }
+
+    /// A word typed while a turn runs is queued and sent when that turn ends, with nobody pressing
+    /// Enter for it, and the person who typed `quit` is owed the same note as one who sent it at
+    /// rest. It is not owed one while the turn it waits behind is the one running.
+    #[test]
+    fn a_lone_leave_word_that_waited_in_the_queue_is_marked_when_its_turn_begins() {
+        let mut s = session();
+        s.type_char('a');
+        s.submit().expect("submitted");
+        queue_lines(&mut s, &["quit"]);
+        assert!(
+            !s.leave_word_sent,
+            "the running turn took the mark of a waiting line"
+        );
+        s.complete("done", Vec::new(), 0);
+
+        assert_eq!(s.send_queued().as_deref(), Some("quit"));
+
+        assert!(
+            s.leave_word_sent,
+            "the queued word began a turn with no mark"
+        );
+    }
+
+    /// Hurried prompts go as one turn, one to a line, so two leave words sent together are a line
+    /// that holds more than the word and a note about one word would misdescribe it. A single hurried
+    /// word is still the word.
+    #[test]
+    fn leave_words_hurried_together_are_not_marked_and_one_hurried_alone_is() {
+        for (lines, marked) in [(&["quit", "exit"][..], false), (&["quit"][..], true)] {
+            let mut s = session();
+            s.type_char('a');
+            s.submit().expect("submitted");
+            queue_lines(&mut s, lines);
+            assert!(s.hurry(), "there was a turn to stop and something waiting");
+            stop(&mut s, "a");
+
+            s.send_queued().expect("the hurried prompts were not sent");
+
+            assert_eq!(s.leave_word_sent, marked, "{lines:?}");
+        }
     }
 
     fn caffeinated() -> Session {
@@ -9889,7 +9615,7 @@ mod tests {
         s.keep_awake();
         assert!(s.caffeinate.holding(), "a pending wakeup held nothing");
 
-        s.stop_loop();
+        s.stop_loops();
         s.keep_awake();
         assert!(
             !s.caffeinate.holding(),
@@ -9957,22 +9683,28 @@ mod tests {
         }
         let mut s = session();
         s.start_loop(crate::loops::request("watch"), Vec::new(), Vec::new());
-        assert_eq!(last_note(&s), "loop 1");
+        assert_eq!(last_note(&s), "loop 1, tick 1");
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 2, after 1 tick that found nothing");
+        assert_eq!(
+            last_note(&s),
+            "loop 1, tick 2, after 1 tick that found nothing"
+        );
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, true)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 3, after 2 ticks that found nothing");
+        assert_eq!(
+            last_note(&s),
+            "loop 1, tick 3, after 2 ticks that found nothing"
+        );
 
         s.complete("done", Vec::new(), 0);
         s.loop_turn_ended(Some(crate::loops::Wakeup::asked(60, false)));
         s.dispatch_tick();
-        assert_eq!(last_note(&s), "loop 4");
+        assert_eq!(last_note(&s), "loop 1, tick 4");
     }
 
     /// A turn that says the loop is finished ends it at once and the screen names that ending,
@@ -9994,7 +9726,7 @@ mod tests {
             .clone();
         assert_eq!(
             note,
-            "that turn said the loop is finished, so the loop has stopped"
+            "that turn said the loop is finished, so loop 1 has stopped"
         );
     }
 
@@ -10083,7 +9815,7 @@ mod tests {
         assert!(
             s.transcript
                 .iter()
-                .any(|entry| entry.text == t!(loop_aged_out)),
+                .any(|entry| entry.text == t!(loop_aged_out, number = 1)),
             "the ending was not announced"
         );
     }
@@ -10091,11 +9823,11 @@ mod tests {
     #[test]
     fn stopping_a_loop_says_so_and_says_nothing_when_there_was_none() {
         let mut s = session();
-        assert!(!s.stop_loop());
+        assert!(!s.stop_loops());
         assert!(s.transcript.is_empty());
 
         s.start_loop(crate::loops::request("5m watch"), Vec::new(), Vec::new());
-        assert!(s.stop_loop());
+        assert!(s.stop_loops());
         assert!(s.looping().is_none());
     }
 
@@ -10168,6 +9900,322 @@ mod tests {
         s.report_loop();
         assert_eq!(s.transcript.len(), 1);
         assert_eq!(s.transcript[0].text, t!(loop_none));
+    }
+
+    fn said(s: &Session) -> Vec<String> {
+        s.transcript
+            .iter()
+            .filter(|entry| entry.speaker == Speaker::System)
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    /// Two loops over two lines, each started by the person, both live. Settled between ticks, so
+    /// neither has a tick in flight.
+    fn two_loops() -> Session {
+        let mut s = session();
+        s.start_loop(
+            crate::loops::request("5m check the deploy"),
+            Vec::new(),
+            Vec::new(),
+        );
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.start_loop(
+            crate::loops::request("1h check the pull request"),
+            Vec::new(),
+            Vec::new(),
+        );
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s
+    }
+
+    /// LOOP-1: starting a second loop leaves the first running, each with the line its own
+    /// person typed, and says which number each one is.
+    #[test]
+    fn a_second_loop_leaves_the_first_running_and_has_a_number_of_its_own() {
+        let s = two_loops();
+        let lines: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            lines,
+            [(1, "check the deploy"), (2, "check the pull request")]
+        );
+        let said = said(&s);
+        assert!(
+            said.iter()
+                .any(|note| note.starts_with("loop 2: repeating every 1h")),
+            "{said:?}"
+        );
+    }
+
+    /// LOOP-16: a sixth is refused and nothing is dropped to make room.
+    #[test]
+    fn a_loop_past_the_cap_is_refused_and_no_loop_is_dropped() {
+        let mut s = session();
+        for n in 0..crate::loops::MAX_LIVE {
+            s.start_loop(
+                crate::loops::request(&format!("5m watch {n}")),
+                Vec::new(),
+                Vec::new(),
+            );
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+
+        let sent = s.start_loop(
+            crate::loops::request("5m one too many"),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert_eq!(sent, None);
+        assert_eq!(s.status, Status::Idle, "a refused loop began a turn");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        assert_eq!(s.looping().expect("a loop").prompt(), "watch 0");
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-18: an `/after` line joins the loops under a number of its own and counts towards the
+    /// cap. A wrong implementation replaces the loop that is running, or lets a sixth line in.
+    #[test]
+    fn an_after_line_joins_the_loops_with_a_number_and_counts_towards_the_cap() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let after = |s: &mut Session, line: &str| match crate::loops::parse_after(line) {
+            crate::loops::Delayed::Start(request) => s.start_after(request),
+            _ => panic!("unread"),
+        };
+
+        after(&mut s, "5m tail the log");
+        let held: Vec<(usize, &str)> = s
+            .loops()
+            .iter()
+            .map(|running| (running.number(), running.prompt()))
+            .collect();
+        assert_eq!(
+            held,
+            [
+                (1, "check the deploy"),
+                (2, "check the pull request"),
+                (3, "tail the log")
+            ]
+        );
+        assert_eq!(
+            said(&s),
+            [t!(after_started, number = 3, delay = "5m").to_string()]
+        );
+
+        for n in 0..crate::loops::MAX_LIVE - 3 {
+            after(&mut s, &format!("5m later {n}"));
+        }
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        s.transcript.clear();
+        after(&mut s, "5m one too many");
+        assert_eq!(s.loops().len(), crate::loops::MAX_LIVE);
+        assert_eq!(
+            said(&s),
+            [t!(loop_full, count = crate::loops::MAX_LIVE).to_string()]
+        );
+    }
+
+    /// LOOP-15: a number ends that loop and no other, and the others keep their numbers.
+    #[test]
+    fn stopping_a_loop_by_number_ends_only_that_one() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(s.stop_loop(Some(1)));
+        let left: Vec<usize> = s.loops().iter().map(|running| running.number()).collect();
+        assert_eq!(left, [2]);
+        assert_eq!(
+            said(&s),
+            [t!(loop_stopped_numbered, number = 1).to_string()]
+        );
+    }
+
+    /// A number is not handed out twice, so `/loop stop 1` typed after loop 1 ended cannot end a
+    /// loop that began afterwards.
+    #[test]
+    fn a_number_that_was_used_is_not_given_to_a_later_loop() {
+        let mut s = two_loops();
+        assert!(s.stop_loop(Some(1)));
+        s.start_loop(crate::loops::request("5m a third"), Vec::new(), Vec::new());
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        s.transcript.clear();
+
+        assert!(!s.stop_loop(Some(1)));
+        assert_eq!(s.loops().len(), 2, "a stale number ended a live loop");
+        assert_eq!(said(&s), [t!(loop_no_such, number = 1).to_string()]);
+        let numbers: Vec<usize> = s.loops().iter().map(|running| running.number()).collect();
+        assert_eq!(numbers, [2, 3]);
+    }
+
+    /// Where several are live a bare `stop` does not pick one: it ends nothing and says what it
+    /// needs. With one live it still ends it.
+    #[test]
+    fn a_bare_stop_with_several_loops_ends_none_of_them() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(!s.stop_loop(None));
+        assert_eq!(s.loops().len(), 2);
+        assert_eq!(said(&s), [t!(loop_stop_which, count = 2).to_string()]);
+
+        assert!(s.stop_loop(Some(2)));
+        s.transcript.clear();
+        assert!(s.stop_loop(None));
+        assert!(s.looping().is_none());
+        assert_eq!(said(&s), [t!(loop_stopped).to_string()]);
+    }
+
+    /// What Ctrl-C and a stopped turn reach: every loop, in one sentence.
+    #[test]
+    fn stopping_every_loop_says_how_many_went() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        assert!(s.stop_loops());
+        assert!(s.looping().is_none());
+        assert_eq!(said(&s), [t!(loop_stopped_all, count = 2).to_string()]);
+    }
+
+    /// LOOP-17: due ticks go one at a time, soonest first, and a tick in flight is never
+    /// interrupted by another loop's.
+    #[test]
+    fn due_ticks_go_one_at_a_time_soonest_first() {
+        let mut s = session();
+        // Loop 1 is every hour and loop 2 every five minutes, so by an hour and a minute both are
+        // due and the younger loop became due first.
+        for line in ["1h check the pull request", "5m check the deploy"] {
+            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        let later = Instant::now() + Duration::from_secs(3_660);
+
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+        assert_eq!(s.status, Status::Working);
+        assert_eq!(
+            s.loop_tick_at(later),
+            None,
+            "a second tick went in a busy session"
+        );
+        assert!(s.loops().in_flight().is_some_and(|r| r.number() == 2));
+
+        // Loop 2 ended and is armed another five minutes out, which is still before loop 1's hour,
+        // so it is the one that goes: the order is by moment and not by number or by turns.
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+    }
+
+    /// The end of a tick arms the loop that sent it and leaves the others' clocks alone.
+    #[test]
+    fn a_turn_ending_arms_only_the_loop_whose_tick_it_was() {
+        let mut s = session();
+        for line in ["1h check the pull request", "5m check the deploy"] {
+            s.start_loop(crate::loops::request(line), Vec::new(), Vec::new());
+            s.complete("done", Vec::new(), 0);
+            s.loop_turn_ended(None);
+        }
+        let hour_loop_before = s.loops().oldest().expect("loop 1").until(Instant::now());
+
+        // The tick that goes is loop 2's, the younger loop, because its five minutes are up first.
+        let later = Instant::now() + Duration::from_secs(301);
+        assert_eq!(s.loop_tick_at(later).as_deref(), Some("check the deploy"));
+        s.complete("done", Vec::new(), 0);
+        s.loop_turn_ended(None);
+
+        let hour = s.loops().oldest().expect("loop 1");
+        let five = s.loops().iter().nth(1).expect("loop 2");
+        assert!(
+            !five.ticking(),
+            "the loop whose tick ended is still in flight"
+        );
+        assert!(
+            five.until(Instant::now()).is_some(),
+            "loop 2 was not re-armed"
+        );
+        assert!(
+            hour.until(Instant::now()) <= hour_loop_before,
+            "loop 1 was re-armed by loop 2's tick"
+        );
+        assert_eq!((hour.ticks(), five.ticks()), (1, 2));
+    }
+
+    /// LOOP-13: each tick says which loop it is, by the number `/loop stop` takes, as well as which
+    /// tick, so a tick count is never read as a loop's number.
+    #[test]
+    fn a_tick_names_its_loop_by_the_number_stop_takes() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let later = Instant::now() + Duration::from_secs(3_660);
+        s.loop_tick_at(later);
+        assert_eq!(said(&s), [t!(loop_tick, number = 1, count = 2).to_string()]);
+    }
+
+    /// LOOP-13: the bare command lists every loop under its number.
+    #[test]
+    fn the_report_lists_every_loop_with_its_number() {
+        let mut s = two_loops();
+        s.transcript.clear();
+
+        s.report_loop();
+        let said = said(&s);
+        assert_eq!(said.len(), 3, "{said:?}");
+        assert!(
+            said[0].starts_with("loop 1, repeating: check the deploy"),
+            "{said:?}"
+        );
+        assert!(
+            said[1].starts_with("loop 2, repeating: check the pull request"),
+            "{said:?}"
+        );
+        assert_eq!(said[2], t!(loop_ends_with));
+    }
+
+    /// LOOP-11: a goal and a clear each end every loop, and say once that they did.
+    #[test]
+    fn a_goal_and_a_clear_end_every_loop() {
+        let mut s = two_loops();
+        s.start_goal("cargo test exits 0".to_string());
+        assert!(s.looping().is_none());
+        assert!(said(&s).contains(&t!(goal_replaces_loop).to_string()));
+
+        let mut s = two_loops();
+        s.transcript.clear();
+        s.clear();
+        assert!(s.looping().is_none());
+        assert!(said(&s).contains(&t!(loop_cleared_all, count = 2).to_string()));
+    }
+
+    /// LOOP-11: a loop ages out with its own note, naming it.
+    #[test]
+    fn every_loop_past_its_age_ends_and_says_which() {
+        let mut s = two_loops();
+        s.transcript.clear();
+        let at = Instant::now() + crate::loops::MAX_AGE;
+        assert_eq!(s.loop_tick_at(at), None);
+        assert!(s.looping().is_none(), "both began before the week was up");
+        let said = said(&s);
+        assert!(
+            said.contains(&t!(loop_aged_out, number = 1).to_string()),
+            "{said:?}"
+        );
+        assert!(
+            said.contains(&t!(loop_aged_out, number = 2).to_string()),
+            "{said:?}"
+        );
     }
 
     /// A goal is a stopping condition. Arming one that also started work would send a line
@@ -10850,6 +10898,7 @@ mod tests {
             conversation: bravebot_agent::Conversation::new().snapshot(),
             turns,
             tokens: 10,
+            split: Default::default(),
             spend: std::collections::BTreeMap::new(),
             timing: std::collections::BTreeMap::new(),
             cached: None,
@@ -12484,8 +12533,9 @@ mod tests {
     }
 
     /// A list left up over a line that arrived under it belongs to a press two prompts ago. Every
-    /// path that writes a whole line takes it down, and these two are the ones a person reaches
-    /// while a turn is in flight: asking for the keys, then recalling a prompt or stopping the turn.
+    /// path that writes a whole line takes it down: recalling a prompt, stopping a turn, yanking
+    /// killed or vi-deleted text back, a stashed line coming back, the queue coming back, and a
+    /// line handed back by an editor.
     #[test]
     fn a_line_that_arrives_under_the_list_takes_the_list_down() {
         let mut recalled = session();
@@ -12511,6 +12561,76 @@ mod tests {
         stopped.restore("first".to_string());
         assert_eq!(stopped.input, "first");
         assert!(!stopped.shortcuts, "the list stands over a stopped prompt");
+
+        // Ctrl-Y, with an empty box and the list up: the kill it puts back is the line that
+        // arrives, exactly as a paste or a recalled prompt would (#2147).
+        let mut yanked = session();
+        for c in "first".chars() {
+            yanked.type_char(c);
+        }
+        yanked.delete_word_before();
+        assert_eq!(yanked.input, "", "the kill left something behind");
+        yanked.type_char('?');
+        assert!(yanked.shortcuts, "the list did not come up");
+
+        yanked.yank();
+        assert_eq!(yanked.input, "first");
+        assert!(!yanked.shortcuts, "the list stands over a yanked line");
+
+        // A stashed line coming back.
+        let mut stashed = session();
+        for c in "first".chars() {
+            stashed.type_char(c);
+        }
+        assert!(stashed.stash(), "the line was not stashed");
+        assert_eq!(stashed.input, "");
+        stashed.type_char('?');
+        assert!(stashed.shortcuts, "the list did not come up");
+
+        assert!(stashed.stash(), "the stashed line did not come back");
+        assert_eq!(stashed.input, "first");
+        assert!(
+            !stashed.shortcuts,
+            "the list stands over a stashed line coming back"
+        );
+
+        // The queue coming back.
+        let mut queued = session();
+        for c in "first".chars() {
+            queued.type_char(c);
+        }
+        queued.submit().expect("submitted");
+        for c in "second".chars() {
+            queued.type_char(c);
+        }
+        assert!(queued.queue(), "the line was not queued");
+        assert_eq!(queued.input, "");
+        queued.type_char('?');
+        assert!(queued.shortcuts, "the list did not come up");
+
+        assert!(queued.unqueue(), "nothing came back out of the queue");
+        assert_eq!(queued.input, "second");
+        assert!(
+            !queued.shortcuts,
+            "the list stands over the queue coming back"
+        );
+
+        // A line handed back by an editor.
+        let mut edited = session();
+        for c in "first".chars() {
+            edited.type_char(c);
+        }
+        edited.submit().expect("submitted");
+        edited.status = Status::Idle;
+        edited.type_char('?');
+        assert!(edited.shortcuts, "the list did not come up");
+
+        edited.take_edited("edited line");
+        assert_eq!(edited.input, "edited line");
+        assert!(
+            !edited.shortcuts,
+            "the list stands over a line handed back by an editor"
+        );
     }
 
     mod todos {
@@ -13346,6 +13466,36 @@ mod tests {
             assert!(s.checking.is_none(), "a check outlived the turn");
         }
 
+        /// The thinking is kept whether or not it is shown, shown only while asked for, and ends
+        /// with the round. A delegate's is not the turn's, and only the end of a long one is kept,
+        /// whole characters of it.
+        #[test]
+        fn thinking_is_held_shown_on_request_and_ends_with_the_round() {
+            let mut s = working();
+            s.thinking("first ");
+            s.thinking("second");
+            assert_eq!(s.thinking_so_far(), "", "shown without being asked for");
+            s.toggle_thinking();
+            assert_eq!(s.thinking_so_far(), "first second");
+
+            s.set_phase(Phase::Planning);
+            assert_eq!(s.thinking_so_far(), "", "the next round saw the last one's");
+
+            s.thinking("again");
+            s.narrate("an answer");
+            assert_eq!(s.thinking_so_far(), "", "the round's words left it up");
+
+            let long = "é".repeat(THINKING_KEPT);
+            s.thinking(&long);
+            s.thinking("end");
+            let kept = s.thinking_so_far();
+            assert!(
+                kept.ends_with("éend") && kept.len() <= THINKING_KEPT,
+                "{}",
+                kept.len()
+            );
+        }
+
         /// A stop takes the word from everything else on the row and gives it up with the turn it
         /// was asked of, however that turn ends. What runs next, an aside or another turn, is not
         /// being stopped, and a word that outlived the turn would say it was.
@@ -14101,6 +14251,120 @@ mod tests {
                 s.spend_by_turn().values().sum::<u64>(),
                 s.tokens,
                 "the breakdown and the total disagreed"
+            );
+        }
+
+        /// A person asking what a session cost wants to know how much of it the model wrote, and the
+        /// two figures have to add up from every charge that reported them. A charge that reports
+        /// nothing is in the total alone, so it must not be counted as read.
+        #[test]
+        fn a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total() {
+            let mut s = session();
+            let split = |s: &Session| (s.split().read, s.split().written);
+
+            s.type_char('a');
+            s.submit();
+            s.complete("first", Vec::new(), 400);
+            s.charged_split(400, 100);
+            assert_eq!(split(&s), (300, 100));
+
+            s.type_char('b');
+            s.submit();
+            s.complete("second", Vec::new(), 1_600);
+            s.charged_split(1_600, 1_000);
+            assert_eq!(
+                split(&s),
+                (900, 1_100),
+                "the second charge replaced the first"
+            );
+
+            s.begin_aside();
+            s.end_aside(250);
+            assert_eq!(s.tokens, 2_250);
+            assert_eq!(
+                split(&s),
+                (900, 1_100),
+                "a charge that reported no split was counted as read or written"
+            );
+        }
+
+        /// A `/compact` reports its usage, so what it wrote is counted as written and not as read.
+        #[test]
+        fn an_aside_that_reports_its_usage_is_charged_with_its_split() {
+            let mut s = session();
+
+            s.begin_aside();
+            s.end_aside_of(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            assert_eq!(s.tokens, 250);
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 200,
+                    written: 50
+                }
+            );
+        }
+
+        /// Restoring a total describes a different set of tokens than the ones counted so far, so a
+        /// split counted before it must not stay beside it: read and written would then add up to
+        /// more than the total they divide.
+        #[test]
+        fn restoring_the_spend_leaves_no_split_from_before_it() {
+            let mut s = session();
+            s.begin_aside();
+            s.end_aside_of(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            s.restore_spend(100, std::collections::BTreeMap::from([(1, 100)]));
+
+            assert_eq!(s.tokens, 100);
+            assert_eq!(s.split(), bravebot_session::sessions::Split::default());
+        }
+
+        /// Clearing begins a new session, and the split of what the old one spent is not this one's.
+        #[test]
+        fn clearing_forgets_the_split() {
+            let mut s = session();
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 400);
+            s.charged_split(400, 100);
+
+            s.clear();
+
+            assert_eq!(s.split(), bravebot_session::sessions::Split::default());
+        }
+
+        /// A session picked up from a record carries on counting from the split the record kept, as
+        /// it does from its total.
+        #[test]
+        fn a_resumed_session_carries_on_counting_the_split_it_was_written_with() {
+            let mut s = session();
+            s.restore_spend(1_000, std::collections::BTreeMap::from([(1, 1_000)]));
+            s.restore_split(bravebot_session::sessions::Split {
+                read: 700,
+                written: 300,
+            });
+
+            s.type_char('a');
+            s.submit();
+            s.complete("reply", Vec::new(), 100);
+            s.charged_split(100, 40);
+
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 760,
+                    written: 340
+                }
             );
         }
 
@@ -16009,6 +16273,48 @@ mod tests {
             "  one\n  two\n  three\nfour",
             "the count is how many rows move rather than how far one moves"
         );
+    }
+
+    /// The extents that name no quantity take no count: there is no second end of the line to reach
+    /// for `D`, no second thing the keys of `iw` named, and no second selection for an operator
+    /// pressed over one, so the count is spent and the instruction acts on what the bare one does.
+    /// A copy always goes somewhere, so a count on `P` is how many.
+    #[test]
+    fn an_extent_that_names_no_quantity_takes_no_count() {
+        assert_eq!(edited("one two\nthree", 3, "D"), "one\nthree");
+        assert_eq!(
+            edited("one two\nthree", 3, "3D"),
+            "one\nthree",
+            "the count reached the next row"
+        );
+        assert_eq!(edited("one two three", 5, "diw"), "one  three");
+        assert_eq!(
+            edited("one two three", 5, "d3iw"),
+            "one  three",
+            "the count took more than the one word"
+        );
+        assert_eq!(edited("one two three", 5, "c3iwX"), "one X three");
+        assert_eq!(edited("one two three", 0, "vld"), "e two three");
+        for (keys, line) in [
+            ("v3d", "ne two three"),
+            ("vl3d", "e two three"),
+            ("v3x", "ne two three"),
+            ("v3cXY", "XYne two three"),
+            ("v3~", "One two three"),
+            ("v3U", "One two three"),
+            ("v3y", "one two three"),
+        ] {
+            assert_eq!(edited("one two three", 0, keys), line, "{keys}");
+        }
+        for (keys, line) in [
+            ("v3D", "two\nthree"),
+            ("v3X", "two\nthree"),
+            ("v3Cz", "z\ntwo\nthree"),
+        ] {
+            assert_eq!(edited("one\ntwo\nthree", 0, keys), line, "{keys}");
+        }
+        assert_eq!(edited("one\ntwo", 1, "v3Y3p"), "one\none\none\none\ntwo");
+        assert_eq!(edited("ab", 1, "yl3P"), "abbbb");
     }
 
     /// A counted change is one change and one step to undo, because the count is part of one

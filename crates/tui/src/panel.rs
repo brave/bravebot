@@ -86,7 +86,7 @@ fn wrapped(text: &str, width: usize) -> Vec<String> {
 
 /// `text` in one row of at most `width` columns, cut from the left with an ellipsis where it is
 /// longer: the end of a directory and of a branch is the part that tells two of them apart.
-fn ending(text: &str, width: usize) -> String {
+pub(crate) fn ending(text: &str, width: usize) -> String {
     use unicode_width::UnicodeWidthChar;
     if crate::wrap::display_width(text) <= width {
         return text.to_string();
@@ -217,7 +217,7 @@ pub fn continued_rows(session: &Session, area: Rect) -> Vec<u16> {
 /// Draw the panel over `area`, its border on the left, each shortened address a link to the
 /// address it stands for.
 pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
-    let (rows, links, _) = laid_out(session, area.width, area.height);
+    let (rows, links, ..) = laid_out(session, area.width, area.height);
     Clear.render(area, buffer);
     Paragraph::new(rows)
         .block(Block::default().borders(Borders::LEFT).border_style(dim()))
@@ -234,19 +234,110 @@ pub fn draw(buffer: &mut Buffer, area: Rect, session: &Session) {
     }
 }
 
-/// The rows [`lines`] gives, where among them the links are, and which of them continue on the
-/// row below.
-fn laid_out(
-    session: &Session,
-    width: u16,
-    height: u16,
-) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
+/// The rows of the panel, where the links are, which rows continue on the row below, and which rows
+/// a click acts on.
+type Body = (Vec<Line<'static>>, Vec<Link>, Vec<usize>, Vec<Place>);
+
+/// What a click on a row of the panel acts on (MOUSE-11, MOUSE-18, MOUSE-20).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// The model row: the same question `/model` asks.
+    Model,
+    /// The effort row: the same question `/effort` asks.
+    Effort,
+    /// The context reading: the same question `/context` asks.
+    Context,
+    /// A started MCP server's row: the same question a bare `/mcp` asks.
+    Servers,
+    /// A file's row in the list of the files state: the highlight the keys move (MOUSE-18).
+    File(usize),
+    /// The `x` in the heading row of the files state: the end of the state, as `q` is (MOUSE-18).
+    CloseFiles,
+    /// The control for the previous edit in the bar of the files state: the key that goes to it.
+    PreviousEdit,
+    /// The control for the next edit in the bar of the files state.
+    NextEdit,
+    /// The heading of the Files section and the row under it: the same question `/diff` asks
+    /// (MOUSE-20).
+    Files,
+    /// The row that names the key hiding the panel: the same thing that key does (MOUSE-21).
+    Hide,
+}
+
+/// Where a click acts on the panel: a row, and the cells of it that count, or all of them where
+/// `columns` is `None`. Columns are counted from the first one inside the border.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Place {
+    pub row: usize,
+    pub columns: Option<std::ops::Range<usize>>,
+    pub target: Target,
+}
+
+impl Place {
+    /// A target that every cell of the row belongs to.
+    pub fn on_row(row: usize, target: Target) -> Self {
+        Place {
+            row,
+            columns: None,
+            target,
+        }
+    }
+
+    /// A target that the cells `columns` of the row belong to.
+    pub fn on_cells(row: usize, columns: std::ops::Range<usize>, target: Target) -> Self {
+        Place {
+            row,
+            columns: Some(columns),
+            target,
+        }
+    }
+}
+
+/// The target a press on screen cell (`row`, `column`) of a panel drawn over `area` lands on, if any.
+///
+/// Read from the rows [`draw`] draws, so a row that is not drawn, or is cut for want of room, is
+/// not a target. The border column is the panel's handle and is never one (PANEL-6).
+pub fn target_at(session: &Session, area: Rect, row: u16, column: u16) -> Option<Target> {
+    if column <= area.x || column >= area.right() || row < area.y {
+        return None;
+    }
+    let at = usize::from(row - area.y);
+    // The border is the first column of the area.
+    let cell = usize::from(column - area.x - 1);
+    laid_out(session, area.width, area.height)
+        .3
+        .into_iter()
+        .find_map(|place| {
+            let on_it = place.row == at
+                && place
+                    .columns
+                    .as_ref()
+                    .is_none_or(|columns| columns.contains(&cell));
+            on_it.then_some(place.target)
+        })
+}
+
+/// The rows [`lines`] gives, where among them the links are, which of them continue on the row
+/// below, and which rows a click acts on.
+fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     let height = usize::from(height);
     if height == 0 {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    }
+    // None of the ordinary sections is drawn beside the files state (FILES-4).
+    if let Some(state) = session.files_state() {
+        let files = session.written_files();
+        let (rows, targets) = crate::files_mode::rows(
+            &files,
+            state,
+            session.has_earlier_calls(),
+            width,
+            height as u16,
+        );
+        return (rows, Vec::new(), Vec::new(), targets);
     }
     let text = text_width(width);
-    let (mut body, mut links, mut continued) = head(session, text);
+    let (mut body, mut links, mut continued, mut targets) = head(session, text);
 
     let languages = session.language_servers().programs();
     if !languages.is_empty() {
@@ -257,7 +348,7 @@ fn laid_out(
         section(&mut body, t!(panel_language_servers).to_string(), rows);
     }
     if !session.servers.started.is_empty() {
-        let rows = session
+        let rows: Vec<_> = session
             .servers
             .started
             .iter()
@@ -268,29 +359,67 @@ fn laid_out(
                 )
             })
             .collect();
+        let count = rows.len();
         section(&mut body, t!(panel_mcp_servers).to_string(), rows);
+        let first = body.len() - count;
+        targets.extend((first..first + count).map(|row| Place::on_row(row, Target::Servers)));
+    }
+
+    // Left out until a file has been written, and ahead of the plan so that the plan takes the rows
+    // it leaves (FILES-1).
+    let (count, added, removed) = session.written_totals();
+    if count > 0 {
+        let mut total = vec![Span::raw(format!(
+            " {}",
+            t!(panel_files_total, count = count)
+        ))];
+        for (sign, count, colour) in [("+", added, theme::ok()), ("-", removed, theme::fail())] {
+            if count > 0 {
+                total.push(Span::styled(
+                    format!(" {sign}{count}"),
+                    Style::default().fg(colour),
+                ));
+            }
+        }
+        section(
+            &mut body,
+            t!(panel_files).to_string(),
+            vec![Line::from(total)],
+        );
+        // The heading and the row under it, which are the last two rows so far.
+        let totals = body.len() - 1;
+        targets.extend([totals - 1, totals].map(|row| Place::on_row(row, Target::Files)));
     }
 
     let plan = session.plan();
     // The blank row and the heading come out of the room before the rows do.
     let room = (height - 1).saturating_sub(body.len() + 2);
     if !plan.is_empty() && room > 0 {
-        section(
-            &mut body,
-            t!(panel_plan).to_string(),
-            plan_rows(plan, text, room),
-        );
+        let (cut, names_the_key) = choose_rows(plan, room);
+        let mut rows = plan_rows(plan, &cut, !session.a_turn_is_running(), text);
+        if names_the_key {
+            rows.push(row(
+                crate::status::cut(
+                    &t!(panel_todos, chord = session.bindings().todos_name()),
+                    text,
+                ),
+                dim(),
+            ));
+        }
+        section(&mut body, t!(panel_plan).to_string(), rows);
     }
 
     body.truncate(height - 1);
     body.resize(height - 1, Line::raw(""));
     body.push(row(
-        t!(panel_hide, chord = session.bindings().panel_name()).to_string(),
+        t!(panel_hide, chord = session.bindings().panel_name()),
         dim(),
     ));
     links.retain(|link| link.row < height - 1);
     continued.retain(|row| *row < height - 1);
-    (body, links, continued)
+    targets.retain(|place| place.row < height - 1);
+    targets.push(Place::on_row(height - 1, Target::Hide));
+    (body, links, continued, targets)
 }
 
 /// Whether a frame `columns` by `rows` draws the panel with its Context section whole.
@@ -299,8 +428,10 @@ fn laid_out(
 /// too short for the sections above it, the panel cuts the Context section, and the line keeps
 /// both rather than leave the reading on neither.
 pub fn shows_context(session: &Session, columns: u16, rows: u16) -> bool {
-    // The hint line takes one row and the key that hides the panel another.
+    // The hint line takes one row and the key that hides the panel another. The files state has no
+    // Context section, so the line keeps both figures there (FILES-4).
     drawn(session, columns)
+        && !session.files_open()
         && head(session, text_width(session.panel_columns(columns)))
             .0
             .len()
@@ -316,7 +447,8 @@ fn text_width(width: u16) -> usize {
 /// The Session, Goal, Links and Context sections, each left out where it has nothing to say but for
 /// the context, which always has a reading, where in them the links are, and which rows continue on
 /// the row below.
-fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<usize>) {
+fn head(session: &Session, text: usize) -> Body {
+    let mut targets = Vec::new();
     let mut body: Vec<Line<'static>> = Vec::new();
     let mut links = Vec::new();
     let mut continued = Vec::new();
@@ -378,20 +510,28 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
     }
 
     let mut model = Vec::new();
+    // Where each row will land once the section is placed, which `section` decides.
+    let mut model_targets = Vec::new();
     if let Some(chosen) = session.model_label() {
+        model_targets.push((model.len(), Target::Model));
         model.push(row(
             ending(&crate::render::printable(chosen), text),
             Style::default(),
         ));
     }
     if let Some(level) = session.effort_in_force() {
-        model.push(row(
-            t!(panel_effort, level = level.as_str()).to_string(),
-            dim(),
-        ));
+        model_targets.push((model.len(), Target::Effort));
+        model.push(row(t!(panel_effort, level = level.as_str()), dim()));
     }
     if !model.is_empty() {
+        let count = model.len();
         section(&mut body, t!(panel_model).to_string(), model);
+        let first = body.len() - count;
+        targets.extend(
+            model_targets
+                .into_iter()
+                .map(|(row, target)| Place::on_row(first + row, target)),
+        );
     }
 
     if let Some(goal) = session.goal() {
@@ -439,7 +579,7 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
     let spent = session.spent_tokens();
     if spent > 0 {
         context.push(row(
-            t!(panel_spent, tokens = crate::status::tokens(spent)).to_string(),
+            t!(panel_spent, tokens = crate::status::tokens(spent)),
             dim(),
         ));
     }
@@ -453,8 +593,7 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
                 t!(
                     panel_cache_read,
                     tokens = crate::status::tokens(cached.read_tokens)
-                )
-                .to_string(),
+                ),
                 dim(),
             ));
         }
@@ -463,71 +602,181 @@ fn head(session: &Session, text: usize) -> (Vec<Line<'static>>, Vec<Link>, Vec<u
                 t!(
                     panel_cache_written,
                     tokens = crate::status::tokens(cached.written_tokens)
-                )
-                .to_string(),
+                ),
                 dim(),
             ));
         }
     }
+    let count = context.len();
     section(&mut body, t!(panel_context).to_string(), context);
-    (body, links, continued)
+    targets.push(Place::on_row(body.len() - count, Target::Context));
+    (body, links, continued, targets)
 }
 
-/// The plan in at most `room` rows, the task being worked on among them.
+/// The fewest rows the plan has for the row that names the key that prints it whole to be drawn.
+/// With fewer, the rows of the plan and the row that counts what it left out take them.
+const LEAST_ROOM_TO_NAME_THE_KEY: usize = 3;
+
+/// The rows of `plan` drawn where `room` rows are the plan's, and whether the last of those rows
+/// names the key that prints the plan whole.
 ///
-/// Where the rows do not all fit, the visible part starts at the task in progress if it would
-/// otherwise fall below the cut, since what is being done now is what somebody glancing at the
-/// panel is looking for. The last row counts the rows left out above the visible part apart from
-/// those below it, so a count is never read as work still to come when it is work already past.
-fn plan_rows(plan: &[bravebot_core::todo::Row], width: usize, room: usize) -> Vec<Line<'static>> {
-    let (start, shown) = if plan.len() <= room {
-        (0, plan.len())
-    } else {
-        let shown = room - 1;
-        let active = plan
-            .iter()
-            .position(|row| row.status == bravebot_core::todo::Status::Active)
-            .unwrap_or(0);
-        let start = if active < shown {
-            0
+/// Without the key row the plan has the room, less the row that counts what was left out where it
+/// does not fit. The key row takes one more, and is drawn only where it takes the place of nothing a
+/// person would look for. It is left out where the room has fewer than
+/// [`LEAST_ROOM_TO_NAME_THE_KEY`] rows, where the plan fills the room exactly, and where it would
+/// take the place of a row still to do: the room less the key row holds the whole plan, or holds
+/// every row still to do and the row that counts the rest.
+///
+/// Decided from the statuses alone, by the same choice that draws the rows.
+fn choose_rows(plan: &[bravebot_core::todo::Row], room: usize) -> (Cut, bool) {
+    if room >= LEAST_ROOM_TO_NAME_THE_KEY && plan.len() != room {
+        let beside_the_key = if plan.len() < room {
+            cut_to(plan, plan.len())
         } else {
-            active.min(plan.len() - shown)
+            cut_to(plan, room - 2)
         };
-        (start, shown)
+        if beside_the_key.to_do == 0 {
+            return (beside_the_key, true);
+        }
+    }
+    (cut_for(plan, room), false)
+}
+
+/// The mark of a row that no turn is working on and that was neither finished nor dropped.
+///
+/// Hollow where the mark of a row being worked on is filled, so the two differ under `NO_COLOR`
+/// too, where the ink of a row is the terminal's own.
+pub(crate) const LEFT_OPEN_MARKER: &str = "□";
+
+/// Which rows of a plan that does not fit are drawn, and how many of each kind are not.
+#[derive(Default)]
+struct Cut {
+    /// The positions in the plan of the rows drawn, in the plan's order.
+    shown: Vec<usize>,
+    /// Rows still to do or in progress that were left out.
+    to_do: usize,
+    done: usize,
+    cancelled: usize,
+}
+
+/// The `capacity` rows of `plan` to draw, chosen from each row's status and from nothing else.
+///
+/// The rows still outstanding come first, the one in progress before the pending ones, each in the
+/// plan's order. Where capacity is left over it goes to the finished rows, those nearest the first
+/// outstanding row first and the earlier of two as near, or nearest the end of a plan with none, so
+/// that what was last done is shown beside what comes next. The rows chosen are drawn in the plan's
+/// order.
+///
+/// The text of a task is the planner's and decides nothing here. A status the driver does not
+/// recognise reads as outstanding ([TODO-2](../../../docs/specs/tools/todo-write.md#TODO-2)), so
+/// its row is drawn first and counted among those still to do.
+fn cut_to(plan: &[bravebot_core::todo::Row], capacity: usize) -> Cut {
+    use bravebot_core::todo::Status;
+    let mut outstanding: Vec<usize> = (0..plan.len()).filter(|&at| !plan[at].struck()).collect();
+    let anchor = outstanding.first().copied().unwrap_or(plan.len());
+    // Stable, so each group keeps the plan's order.
+    outstanding.sort_by_key(|&at| plan[at].status != Status::Active);
+    outstanding.truncate(capacity);
+    let spare = capacity - outstanding.len();
+    let mut finished: Vec<usize> = (0..plan.len()).filter(|&at| plan[at].struck()).collect();
+    finished.sort_by_key(|&at| (at.abs_diff(anchor), at));
+    let mut shown = outstanding;
+    shown.extend(finished.into_iter().take(spare));
+    shown.sort_unstable();
+
+    let mut cut = Cut {
+        shown,
+        ..Cut::default()
     };
-    let mut lines: Vec<Line<'static>> = plan[start..start + shown]
+    for (at, row) in plan.iter().enumerate() {
+        if cut.shown.binary_search(&at).is_ok() {
+            continue;
+        }
+        match row.status {
+            Status::Pending | Status::Active => cut.to_do += 1,
+            Status::Done => cut.done += 1,
+            Status::Cancelled => cut.cancelled += 1,
+        }
+    }
+    cut
+}
+
+/// The rows of `plan` drawn in `room` rows with no row for the key: all of them where they fit, and
+/// otherwise as many as the room holds beside the row that counts the rest.
+fn cut_for(plan: &[bravebot_core::todo::Row], room: usize) -> Cut {
+    if plan.len() <= room {
+        cut_to(plan, plan.len())
+    } else {
+        cut_to(plan, room - 1)
+    }
+}
+
+/// The row that says what a plan left out, or `None` where it left nothing out.
+///
+/// Each kind is counted in words of its own, the rows still to do first, so a count of finished
+/// work is not read as work to come. A row cut to the width of a narrow panel loses the finished
+/// counts before it loses the unfinished one.
+fn left_out_row(cut: &Cut, width: usize) -> Option<Line<'static>> {
+    let mut counts = Vec::new();
+    if cut.to_do > 0 {
+        counts.push(t!(panel_hidden_to_do, count = cut.to_do));
+    }
+    if cut.done > 0 {
+        counts.push(t!(panel_hidden_done, count = cut.done));
+    }
+    if cut.cancelled > 0 {
+        counts.push(t!(panel_hidden_cancelled, count = cut.cancelled));
+    }
+    (!counts.is_empty()).then(|| row(crate::status::cut(&counts.join(", "), width), dim()))
+}
+
+/// The rows of `plan` that `cut` chose, and the row that says what it left out.
+///
+/// `left_open` is whether no turn is running: a row still outstanding is then drawn hollow and
+/// dim, so that after a turn ends it does not read as work being done.
+fn plan_rows(
+    plan: &[bravebot_core::todo::Row],
+    cut: &Cut,
+    left_open: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = cut
+        .shown
         .iter()
+        .map(|&at| &plan[at])
         .map(|task| {
-            let (marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
-                (dim(), dim().add_modifier(Modifier::CROSSED_OUT))
+            let (glyph, marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
+                (
+                    task.marker,
+                    dim(),
+                    dim().add_modifier(Modifier::CROSSED_OUT),
+                )
             } else if task.struck() {
                 (
+                    task.marker,
                     Style::default().fg(theme::ok()),
                     dim().add_modifier(Modifier::CROSSED_OUT),
                 )
+            } else if left_open {
+                (LEFT_OPEN_MARKER, dim(), dim())
             } else {
-                (Style::default().fg(theme::running()), Style::default())
+                (
+                    task.marker,
+                    Style::default().fg(theme::running()),
+                    Style::default(),
+                )
             };
             let content = crate::status::cut(
                 &crate::render::printable(&task.content),
                 width.saturating_sub(2),
             );
             Line::from(vec![
-                Span::styled(format!(" {} ", task.marker), marker),
+                Span::styled(format!(" {glyph} "), marker),
                 Span::styled(content, text),
             ])
         })
         .collect();
-    let later = plan.len() - start - shown;
-    let count = match (start, later) {
-        (0, 0) => None,
-        (0, later) => Some(t!(panel_more, count = later)),
-        (earlier, 0) => Some(t!(panel_earlier, count = earlier)),
-        (earlier, later) => Some(t!(panel_earlier_and_more, earlier = earlier, later = later)),
-    };
-    if let Some(count) = count {
-        lines.push(row(count.to_string(), dim()));
-    }
+    lines.extend(left_out_row(cut, width));
     lines
 }
 
@@ -590,6 +839,119 @@ mod tests {
             "the panel did not open at {width} columns"
         );
         session
+    }
+
+    /// MOUSE-11. Rejects: a target on the heading above the rows, one on the border column, one on
+    /// a row cut for want of room, and an effort row for a model that reads none.
+    #[test]
+    fn only_the_drawn_model_and_effort_rows_are_click_targets() {
+        let mut session = Session::new("none");
+        session.choose_model("claude-sonnet".to_string(), &model_config());
+        session.note_model_reads_effort(true);
+        session.choose_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let at = |needle: &str| {
+            rows.iter()
+                .position(|line| line.to_string().contains(needle))
+                .expect(needle) as u16
+        };
+        let model = at("claude-sonnet");
+        let effort = at(&t!(panel_effort, level = "xhigh").to_string());
+        let inside = area.x + 3;
+
+        assert_eq!(
+            target_at(&session, area, area.y + model, inside),
+            Some(Target::Model)
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + effort, inside),
+            Some(Target::Effort)
+        );
+        assert_eq!(target_at(&session, area, area.y + model - 1, inside), None);
+        assert_eq!(target_at(&session, area, area.y + model, area.x), None);
+        // Cut to fewer rows than the model's, it is not drawn and so is not a target.
+        let short = Rect::new(area.x, 0, WIDTH, model);
+        assert_eq!(target_at(&session, short, short.y + model, inside), None);
+
+        session.note_model_reads_effort(false);
+        assert_eq!(target_at(&session, area, area.y + effort, inside), None);
+    }
+
+    /// MOUSE-12. Rejects: a target on the Context heading or on the rows below the reading, and
+    /// one on a reading cut for want of room.
+    #[test]
+    fn only_the_context_reading_is_a_context_click_target() {
+        let session = Session::new("none");
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let reading = rows
+            .iter()
+            .position(|line| {
+                line.to_string()
+                    .contains(&crate::render::context_reading(&session))
+            })
+            .expect("reading") as u16;
+        let inside = area.x + 3;
+
+        assert_eq!(
+            target_at(&session, area, area.y + reading, inside),
+            Some(Target::Context)
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + reading - 1, inside),
+            None
+        );
+        assert_eq!(
+            target_at(&session, area, area.y + reading + 1, inside),
+            None
+        );
+        let short = Rect::new(area.x, 0, WIDTH, reading);
+        assert_eq!(target_at(&session, short, short.y + reading, inside), None);
+    }
+
+    /// MOUSE-13. Rejects: a target on the MCP heading or the rows around the servers, and one on
+    /// a language server's row, which `/mcp` does not list.
+    #[test]
+    fn only_a_started_mcp_servers_rows_are_click_targets() {
+        let mut session = Session::new("none");
+        session.servers.started = vec!["notes".to_string(), "docs".to_string()];
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let rows = lines(&session, area.width, area.height);
+        let at = |needle: &str| {
+            rows.iter()
+                .position(|line| line.to_string().contains(needle))
+                .expect(needle) as u16
+        };
+        let inside = area.x + 3;
+        let target = |row: u16| target_at(&session, area, area.y + row, inside);
+
+        let heading = at(t!(panel_mcp_servers));
+        assert_eq!(target(heading), None);
+        assert_eq!(target(at("notes")), Some(Target::Servers));
+        assert_eq!(target(at("docs")), Some(Target::Servers));
+        assert_eq!(target(at("notes").max(at("docs")) + 1), None);
+        let short = Rect::new(area.x, 0, WIDTH, at("notes"));
+        assert_eq!(
+            target_at(&session, short, short.y + at("notes"), inside),
+            None
+        );
+    }
+
+    /// MOUSE-21. Rejects: a target on any row but the last, which names the key, and one on the
+    /// border column.
+    #[test]
+    fn only_the_hide_row_is_a_hide_target() {
+        let session = Session::new("none");
+        let area = Rect::new(84, 0, WIDTH, 40);
+        let inside = area.x + 3;
+        let target = |row: u16| target_at(&session, area, area.y + row, inside);
+        assert_eq!(target(area.height - 1), Some(Target::Hide));
+        assert_eq!(target(area.height - 2), None);
+        assert_eq!(
+            target_at(&session, area, area.y + area.height - 1, area.x),
+            None
+        );
     }
 
     fn model_config() -> bravebot_config::Config {
@@ -1041,6 +1403,27 @@ mod tests {
         );
     }
 
+    /// The panel stops above the hint line, so the note the line draws at its right edge is at the
+    /// terminal's right edge, under the panel, and not at the right edge of the transcript's columns.
+    #[test]
+    fn the_hint_line_runs_under_the_panel_to_the_right_edge() {
+        let mut session = opened_at(100);
+        session.offered_to_leave = true;
+        let rows = screen(&mut session, 100, 30);
+        let note = "ctrl-c again to exit";
+        let hint = &rows[29];
+        assert_eq!(
+            hint.trim_end().chars().count(),
+            100 - 2,
+            "the note does not end at the right edge of the terminal: {hint:?}"
+        );
+        assert!(hint.trim_end().ends_with(note), "{hint:?}");
+        assert!(
+            rows[28].chars().nth(usize::from(100 - WIDTH)) == Some('│'),
+            "the panel's border is gone above the hint line: {rows:#?}"
+        );
+    }
+
     /// The panel speaks in the interface's own voice, so a reply or anything a tool returned drawn
     /// in it would read as the interface saying it.
     #[test]
@@ -1124,6 +1507,40 @@ mod tests {
             "an effort the model does not read was drawn: {unread:#?}"
         );
         assert!(unread.contains(&"claude-sonnet".to_string()), "{unread:#?}");
+    }
+
+    /// CHATGPT-10: on a model of the ChatGPT account the effort row is the level the account is
+    /// sent, which is the one the session began with, and the level chosen since is drawn on no row.
+    ///
+    /// Rejects: the chosen level drawn as the one in force, which would tell the person a request
+    /// carries a level it does not, and the row drawn from the session's choice by a panel that
+    /// asks the choice itself and not the level in force.
+    #[test]
+    fn the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at() {
+        use bravebot_aichat::protocol::Effort;
+        let mut session = Session::new("none");
+        session.choose_effort(Some(Effort::Low));
+        session.begin_account_session();
+        session.choose_effort(Some(Effort::High));
+        session.note_model_is_account(true);
+
+        let drawn = texts(&lines(&session, WIDTH, 30));
+
+        assert!(
+            drawn.contains(&t!(panel_effort, level = "low").to_string()),
+            "the level the session began at was not drawn: {drawn:#?}"
+        );
+        assert!(
+            !drawn.contains(&t!(panel_effort, level = "high").to_string()),
+            "the level chosen since was drawn as the one in force: {drawn:#?}"
+        );
+
+        session.note_model_is_account(false);
+        let elsewhere = texts(&lines(&session, WIDTH, 30));
+        assert!(
+            elsewhere.contains(&t!(panel_effort, level = "high").to_string()),
+            "a model that is not the account's was not drawn at the level chosen: {elsewhere:#?}"
+        );
     }
 
     /// PANEL-9. A tier set to an inference-profile ARN is drawn by the name the `/model` picker
@@ -1786,6 +2203,136 @@ mod tests {
         );
     }
 
+    /// A session with the plan `rows` and two files written, one of which lost a line.
+    fn with_two_files_written(rows: &[(&str, Status)]) -> Session {
+        let mut session = working_on(plan(rows));
+        for (path, before, after) in [("a.rs", "x\n", "x\ny\nz\n"), ("b.rs", "p\nq\n", "p\n")] {
+            let diff = bravebot_agent::diff::Diff::compute(before, after);
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", path)
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: path.into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+        }
+        session
+    }
+
+    /// FILES-1, PANEL-9: the Files section is left out until a file has been written, and then has
+    /// the totals and no row of its own beyond them. It comes out of the plan's room, as a server
+    /// section does.
+    #[test]
+    fn the_files_section_has_the_totals_and_leaves_the_plan_its_rows() {
+        let tasks: Vec<(String, Status)> = (0..20)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let without_files = working_on(plan(&rows));
+        let without = texts(&lines(&without_files, WIDTH, 20));
+        assert!(
+            !without.iter().any(|row| *row == *t!(panel_files)),
+            "a Files section was drawn before anything was written: {without:#?}"
+        );
+
+        let session = with_two_files_written(&rows);
+        let with = texts(&lines(&session, WIDTH, 20));
+        let heading = with
+            .iter()
+            .position(|row| *row == *t!(panel_files))
+            .unwrap_or_else(|| panic!("no Files heading: {with:#?}"));
+        assert_eq!(with[heading + 1].trim(), "2 files +2 -1", "{with:#?}");
+        assert_eq!(
+            with[heading + 2].trim(),
+            "",
+            "a row follows the totals: {with:#?}"
+        );
+        assert!(
+            !with.iter().any(|row| row.contains("/diff")),
+            "the section names the command: {with:#?}"
+        );
+        let plan_heading = with
+            .iter()
+            .position(|row| *row == *t!(panel_plan))
+            .unwrap_or_else(|| panic!("the plan was dropped: {with:#?}"));
+        assert_eq!(
+            plan_heading,
+            heading + 3,
+            "the plan does not follow the section"
+        );
+        let shown = |drawn: &[String]| drawn.iter().filter(|row| row.contains("task ")).count();
+        assert_eq!(with.len(), 20, "the panel is not the height it was given");
+        assert_eq!(
+            shown(&without) - shown(&with),
+            3,
+            "a blank row, a heading and a row came out of the plan's room: {with:#?}"
+        );
+    }
+
+    /// MOUSE-20. Rejects: a target on the rows under the section, on the plan, or on the border
+    /// column, and a section whose heading or totals row is not one.
+    #[test]
+    fn only_the_files_heading_and_its_totals_row_are_click_targets() {
+        let tasks: Vec<(String, Status)> = (0..6)
+            .map(|n| (format!("task {n}"), Status::Pending))
+            .collect();
+        let rows: Vec<(&str, Status)> = tasks.iter().map(|(t, s)| (t.as_str(), *s)).collect();
+        let session = with_two_files_written(&rows);
+        let area = Rect::new(84, 0, WIDTH, 30);
+        let drawn = texts(&lines(&session, area.width, area.height));
+        let heading = drawn
+            .iter()
+            .position(|row| *row == *t!(panel_files))
+            .expect("the Files heading") as u16;
+        let inside = area.x + 3;
+        let at = |row: u16, column: u16| target_at(&session, area, area.y + row, column);
+
+        assert_eq!(at(heading, inside), Some(Target::Files));
+        assert_eq!(at(heading + 1, inside), Some(Target::Files));
+        assert_eq!(at(heading - 1, inside), None, "{drawn:#?}");
+        assert_eq!(at(heading + 2, inside), None, "{drawn:#?}");
+        assert_eq!(at(heading + 3, inside), None, "the plan's heading");
+        assert_eq!(at(heading + 4, inside), None, "a row of the plan");
+        assert_eq!(
+            at(heading, area.x),
+            None,
+            "the border column is the resize handle"
+        );
+
+        // A heading or a totals row that the height of the panel cuts is not a target. The last row
+        // of the panel names the key that hides it, so a panel `n` rows tall draws `n - 1`.
+        let target = |height: u16, row: u16| {
+            let area = Rect::new(84, 0, WIDTH, height);
+            target_at(&session, area, row, inside)
+        };
+        assert_eq!(target(heading + 2, heading), Some(Target::Files));
+        assert_eq!(
+            target(heading + 2, heading + 1),
+            Some(Target::Hide),
+            "the totals row is cut"
+        );
+        assert_eq!(
+            target(heading + 1, heading),
+            Some(Target::Hide),
+            "the heading is cut"
+        );
+
+        // A session that has written nothing has no section to click.
+        let bare = working_on(plan(&rows));
+        for row in 0..area.height {
+            assert_ne!(
+                target_at(&bare, area, area.y + row, inside),
+                Some(Target::Files),
+                "row {row}"
+            );
+        }
+    }
+
     /// An MCP server's alias is whatever the settings file called it, so it is drawn as every other
     /// typed string is, with its control characters pictured and a long one cut from the left.
     #[test]
@@ -1942,59 +2489,1359 @@ mod tests {
         );
     }
 
-    /// The task being worked on is what somebody glancing at the panel looks for, so a plan cut
-    /// to the room keeps it in view. The rows left out above it are counted apart from those below
-    /// it, so a count of finished work is not read as work still to come.
+    /// The rows under the plan's heading, which is the last section, and nothing of the other
+    /// sections, whose figures move from one turn to the next.
+    fn plan_part(session: &Session, rows: usize) -> Vec<Line<'static>> {
+        let all = lines(session, WIDTH, 24);
+        let heading = texts(&all)
+            .iter()
+            .position(|row| *row == t!(panel_plan))
+            .expect("a plan heading");
+        let mut part: Vec<Line<'static>> = all[heading + 1..]
+            .iter()
+            .take_while(|line| !line.to_string().trim().is_empty())
+            .cloned()
+            .collect();
+        // The row that names the key is not one of the plan's.
+        let key = t!(panel_todos, chord = session.bindings().todos_name()).to_string();
+        if part
+            .last()
+            .is_some_and(|line| line.to_string().trim() == key)
+        {
+            part.pop();
+        }
+        assert_eq!(
+            part.len(),
+            rows,
+            "the plan is not drawn whole: {:#?}",
+            texts(&all)
+        );
+        part
+    }
+
+    fn plan_row(part: &[Line<'static>], needle: &str) -> Line<'static> {
+        part.iter()
+            .find(|line| line.to_string().contains(needle))
+            .unwrap_or_else(|| panic!("no plan row holds {needle}: {:#?}", texts(part)))
+            .clone()
+    }
+
+    const MIXED: [(&str, Status); 4] = [
+        ("finished it", Status::Done),
+        ("dropped it", Status::Cancelled),
+        ("working on it", Status::Active),
+        ("still to do", Status::Pending),
+    ];
+
+    /// A row still open after the turn that wrote the list has ended reads as work nobody is
+    /// doing, which is what the answer beside it says. The mark has to differ as well as the ink,
+    /// since `NO_COLOR` leaves the ink the terminal's own.
+    ///
+    /// Asserted against the same rows drawn while their turn runs, rather than against a colour
+    /// named here, so a theme change that keeps the two apart does not fail it. Finished and
+    /// dropped rows are drawn as they were, and a turn that starts is working on the plan again
+    /// before it has reported a list.
     #[test]
-    fn a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it() {
-        let drawn_with = |tasks: usize| {
-            let rows: Vec<(String, Status)> = (1..=tasks)
-                .map(|n| {
-                    let status = match n {
-                        1..=15 => Status::Done,
-                        16 => Status::Active,
-                        _ => Status::Pending,
-                    };
-                    (format!("task {n}"), status)
+    fn a_row_a_turn_left_open_is_drawn_apart_from_work_being_done() {
+        let _held = crate::theme::exclusive();
+        let mut session = working_on(plan(&MIXED));
+        let live = plan_part(&session, 4);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 4);
+
+        for needle in ["working on it", "still to do"] {
+            let (before, after) = (plan_row(&live, needle), plan_row(&left, needle));
+            assert_ne!(
+                after.spans[0].content, before.spans[0].content,
+                "{needle} keeps the mark of work being done after its turn ended"
+            );
+            assert_ne!(
+                after.spans[0].style.fg, before.spans[0].style.fg,
+                "{needle} keeps the ink of work being done after its turn ended"
+            );
+            assert_ne!(
+                after.spans[1].style, before.spans[1].style,
+                "{needle} keeps the text of work being done after its turn ended"
+            );
+            assert!(
+                !after.spans[1]
+                    .style
+                    .add_modifier
+                    .contains(Modifier::CROSSED_OUT),
+                "{needle} is struck through, so it reads as no longer outstanding"
+            );
+        }
+        for needle in ["finished it", "dropped it"] {
+            assert_eq!(
+                plan_row(&left, needle),
+                plan_row(&live, needle),
+                "{needle} was drawn differently once the turn ended"
+            );
+        }
+
+        // The next turn has reported nothing yet, and it is the one that may be working on them.
+        session.type_char('b');
+        session.submit();
+        assert!(session.a_turn_is_running(), "no turn was running");
+        assert_eq!(
+            plan_part(&session, 4),
+            live,
+            "the rows are not drawn as work being done while a turn runs"
+        );
+    }
+
+    /// A compaction or an aside shares the working status with a turn and does no work on the
+    /// plan, so the rows it leaves outstanding stay left open while it runs.
+    #[test]
+    fn a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open() {
+        let _held = crate::theme::exclusive();
+        let mut session = working_on(plan(&MIXED));
+        let live = plan_part(&session, 4);
+        session.complete("done", Vec::new(), 0);
+        let left = plan_part(&session, 4);
+
+        session.begin_aside();
+        assert!(!session.a_turn_is_running(), "the aside is a turn");
+        assert_eq!(
+            plan_part(&session, 4),
+            left,
+            "an aside drew the open rows as work being done"
+        );
+        assert_ne!(
+            left, live,
+            "the fixture draws a turn's rows and its absence alike"
+        );
+    }
+
+    /// A plan of `Status` runs, each row's text its place in the plan: `plan_of(&[(Done, 2),
+    /// (Pending, 1)])` is `task 1` and `task 2` done and `task 3` pending.
+    fn plan_of(runs: &[(Status, usize)]) -> Vec<(String, Status)> {
+        runs.iter()
+            .flat_map(|(status, count)| std::iter::repeat_n(*status, *count))
+            .enumerate()
+            .map(|(at, status)| (format!("task {}", at + 1), status))
+            .collect()
+    }
+
+    /// The panel drawn `height` rows tall for a session whose plan is `rows`, which a turn is
+    /// working on.
+    fn panel_for(rows: &[(String, Status)], height: u16) -> Vec<String> {
+        let borrowed: Vec<(&str, Status)> = rows
+            .iter()
+            .map(|(text, status)| (text.as_str(), *status))
+            .collect();
+        let drawn = texts(&lines(&working_on(plan(&borrowed)), WIDTH, height));
+        assert_eq!(
+            drawn.len(),
+            usize::from(height),
+            "the panel is not the height it was given: {drawn:#?}"
+        );
+        drawn
+    }
+
+    /// The numbers of the tasks a drawn panel holds, in the order it draws them.
+    fn tasks_in(drawn: &[String]) -> Vec<usize> {
+        drawn
+            .iter()
+            .filter_map(|row| {
+                row.find("task ")
+                    .map(|at| row[at + 5..].parse().expect("a number"))
+            })
+            .collect()
+    }
+
+    /// The row that says what the plan left out, which is the only row of the panel that begins
+    /// with a plus.
+    fn left_out_in(drawn: &[String]) -> Option<&str> {
+        drawn
+            .iter()
+            .map(String::as_str)
+            .find(|row| row.starts_with('+'))
+    }
+
+    /// A panel of fifteen rows leaves the plan ten: the context section takes two, the blank and
+    /// the heading two more, and the key that hides the panel one. Eight of the ten are tasks when
+    /// the plan does not fit, since one row names the key that prints the plan whole and one says
+    /// what was left out.
+    const HEIGHT_FOR_EIGHT_TASKS: u16 = 15;
+
+    /// The height of a panel whose plan has `room` rows: the context section takes two, the blank
+    /// and the heading two more, and the key that hides the panel one.
+    fn height_for_room(room: u16) -> u16 {
+        room + 5
+    }
+
+    /// A plan whose unfinished rows are at its end must show them. In a plan of eight rows done and
+    /// two pending, a panel with room for fewer than ten rows draws both pending rows and the row
+    /// that counts the finished ones it left out, at every room from three rows up. One or two
+    /// rows of room cannot hold both pending rows and the count, so the count names the pending
+    /// rows it left out. The key that prints the plan whole is named from four rows up, where it
+    /// takes the place of neither pending row.
+    ///
+    /// Rejects: a window that starts at the first row, or at the task in progress with the first
+    /// row as the fallback, which draws only finished rows; and a key row that takes the place of
+    /// a pending row at three rows of room.
+    #[test]
+    fn a_long_plan_shows_the_rows_still_to_do_before_the_finished_ones() {
+        let rows = plan_of(&[(Status::Done, 8), (Status::Pending, 2)]);
+        let key = t!(panel_todos, chord = "alt-a").to_string();
+        // The room, the tasks drawn, the row that counts what was left out, and whether the last
+        // row names the key.
+        let from = |first: usize| (first..=10).collect::<Vec<_>>();
+        let table: [(u16, Vec<usize>, Option<&str>, bool); 11] = [
+            (1, vec![], Some("+2 to do, +8 done"), false),
+            (2, vec![9], Some("+1 to do, +8 done"), false),
+            (3, from(9), Some("+8 done"), false),
+            (4, from(9), Some("+8 done"), true),
+            (5, from(8), Some("+7 done"), true),
+            (6, from(7), Some("+6 done"), true),
+            (7, from(6), Some("+5 done"), true),
+            (8, from(5), Some("+4 done"), true),
+            (9, from(4), Some("+3 done"), true),
+            (10, from(1), None, false),
+            (11, from(1), None, true),
+        ];
+        for (room, shown, left_out, names_the_key) in table {
+            let drawn = panel_for(&rows, height_for_room(room));
+            let at = format!("{room} rows of room: {drawn:#?}");
+            assert_eq!(tasks_in(&drawn), shown, "{at}");
+            assert_eq!(left_out_in(&drawn), left_out, "{at}");
+            assert_eq!(drawn.contains(&key), names_the_key, "{at}");
+        }
+
+        // A panel with the room to spare draws the whole plan and counts nothing.
+        let drawn = panel_for(&rows, 30);
+        assert_eq!(tasks_in(&drawn), (1..=10).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+    }
+
+    /// The key row never takes the place of a row still to do: at every room from three rows up,
+    /// in plans with every number of rows still to do, pending or in progress and in either order,
+    /// the rows still to do drawn are as many as the room holds beside the row that counts the
+    /// rest, whether or not the key is named.
+    ///
+    /// Rejects: a key row drawn wherever the room has three rows, which hides a row still to do that
+    /// the room holds without it, and a choice of whether to draw it that counts only the pending
+    /// rows, which draws it over a task in progress.
+    #[test]
+    fn the_key_row_never_takes_the_place_of_a_row_still_to_do() {
+        use Status::{Active, Done, Pending};
+        // Rows still to do after the finished ones: only pending rows, only rows in progress, and a
+        // mix with the row in progress between pending rows.
+        type Shape = fn(usize) -> Vec<(Status, usize)>;
+        let shapes: [Shape; 3] = [
+            |n| vec![(Pending, n)],
+            |n| vec![(Active, n.min(2)), (Pending, n - n.min(2))],
+            |n| vec![(Pending, n / 2), (Active, 1), (Pending, n - n / 2 - 1)],
+        ];
+        for shape in shapes {
+            for to_do in 1..=12usize {
+                for finished in [0usize, 3, 20] {
+                    let mut runs = vec![(Done, finished)];
+                    runs.extend(shape(to_do));
+                    runs.retain(|(_, count)| *count > 0);
+                    let rows = plan_of(&runs);
+                    let outstanding: Vec<usize> = rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, status))| *status != Done)
+                        .map(|(at, _)| at + 1)
+                        .collect();
+                    assert_eq!(outstanding.len(), to_do, "{runs:?}");
+                    for room in 3..=14u16 {
+                        let drawn = panel_for(&rows, height_for_room(room));
+                        let room = usize::from(room);
+                        let shown = tasks_in(&drawn)
+                            .into_iter()
+                            .filter(|task| outstanding.contains(task))
+                            .count();
+                        // Without the key row the plan has the room less the row that counts what
+                        // it left out, where it does not fit whole.
+                        let held = if rows.len() > room { room - 1 } else { room };
+                        assert_eq!(
+                            shown,
+                            outstanding.len().min(held),
+                            "{runs:?}, {room} rows of room: {drawn:#?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The rows shown stay in the order of the plan, not the order they were chosen in. The plan
+    /// has a pending row ahead of the task in progress, and the choice takes the task in progress
+    /// first.
+    ///
+    /// Rejects: drawing the rows in the order they are chosen, which puts the task in progress
+    /// above the pending row that comes first in the plan.
+    #[test]
+    fn the_rows_shown_keep_the_order_of_the_plan() {
+        let mut rows = plan_of(&[(Status::Done, 12)]);
+        for (at, status) in [
+            (0, Status::Pending),
+            (2, Status::Active),
+            (3, Status::Pending),
+            (7, Status::Pending),
+        ] {
+            rows[at].1 = status;
+        }
+
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 4);
+        assert_eq!(tasks_in(&drawn), [1, 3, 4, 8], "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), Some("+8 done"), "{drawn:#?}");
+    }
+
+    /// Where there are more rows still to do than room, the task in progress is kept and the
+    /// pending rows after it are the ones left out, and the row says they are still to do. The
+    /// room has no row for the key that prints the plan whole, which would take a row still to do.
+    ///
+    /// Rejects: taking the first rows that are not finished, which drops a task in progress that
+    /// comes after enough pending rows, counting what it left out as `done`, and a key row that
+    /// takes the place of a row still to do.
+    #[test]
+    fn the_task_in_progress_is_kept_when_there_are_more_rows_still_to_do_than_room() {
+        let rows = plan_of(&[
+            (Status::Done, 3),
+            (Status::Pending, 5),
+            (Status::Active, 1),
+            (Status::Pending, 5),
+        ]);
+
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 5);
+        // Four rows and the row that counts: the task in progress and the first three pending
+        // rows.
+        assert_eq!(tasks_in(&drawn), [4, 5, 6, 9], "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(
+                format!(
+                    "{}, {}",
+                    t!(panel_hidden_to_do, count = 7),
+                    t!(panel_hidden_done, count = 3)
+                )
+                .as_str()
+            ),
+            "{drawn:#?}"
+        );
+        assert!(
+            !drawn.iter().any(|row| row.contains("whole plan")),
+            "the key row took a row still to do: {drawn:#?}"
+        );
+    }
+
+    /// Each kind of row the panel leaves out is counted in words of its own, the rows still to do
+    /// first, so that a figure for finished work is not read as work to come and a dropped row is
+    /// not counted as finished.
+    ///
+    /// Rejects: one count of every row left out, which says nothing of what they were, and a count
+    /// that adds the cancelled rows to the done ones.
+    #[test]
+    fn the_row_that_counts_what_was_left_out_names_each_kind_in_words_of_its_own() {
+        let said = |to_do: usize, done: usize, cancelled: usize| {
+            let mut parts = Vec::new();
+            if to_do > 0 {
+                parts.push(t!(panel_hidden_to_do, count = to_do));
+            }
+            if done > 0 {
+                parts.push(t!(panel_hidden_done, count = done));
+            }
+            if cancelled > 0 {
+                parts.push(t!(panel_hidden_cancelled, count = cancelled));
+            }
+            parts.join(", ")
+        };
+
+        // Only finished rows are left out.
+        let rows = plan_of(&[(Status::Done, 9), (Status::Active, 1), (Status::Pending, 2)]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(said(0, 4, 0).as_str()),
+            "{drawn:#?}"
+        );
+
+        // Cancelled rows are told apart from done ones.
+        let rows = plan_of(&[
+            (Status::Cancelled, 4),
+            (Status::Done, 1),
+            (Status::Active, 1),
+            (Status::Pending, 7),
+        ]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (6..=13).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(said(0, 1, 4).as_str()),
+            "{drawn:#?}"
+        );
+
+        // All three kinds, with the rows still to do first.
+        let rows = plan_of(&[
+            (Status::Done, 3),
+            (Status::Cancelled, 2),
+            (Status::Active, 1),
+            (Status::Pending, 6),
+        ]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 4);
+        assert_eq!(tasks_in(&drawn), [6, 7, 8, 9, 10], "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(said(2, 3, 2).as_str()),
+            "{drawn:#?}"
+        );
+        assert!(
+            said(2, 3, 2).find("to do") < said(2, 3, 2).find("done"),
+            "the rows still to do are not counted first"
+        );
+
+        // A panel too narrow for all three cuts the finished counts and keeps the first.
+        let narrow = lines(
+            &working_on(plan(
+                &rows
+                    .iter()
+                    .map(|(text, status)| (text.as_str(), *status))
+                    .collect::<Vec<_>>(),
+            )),
+            NARROWEST_PANEL,
+            HEIGHT_FOR_EIGHT_TASKS - 4,
+        );
+        let narrow = texts(&narrow);
+        let counted = left_out_in(&narrow).expect("a row that counts");
+        assert!(
+            counted.starts_with(&t!(panel_hidden_to_do, count = 2).to_string())
+                && crate::wrap::display_width(counted) <= usize::from(NARROWEST_PANEL) - 2,
+            "{counted:?}"
+        );
+    }
+
+    /// Rows left over after the rows still to do go to the finished rows nearest the first of
+    /// them, drawn in the plan's order, so what was last done is beside what comes next. Of two
+    /// rows as near, the earlier is taken first. A plan with nothing left to do shows its last
+    /// rows.
+    ///
+    /// Rejects: filling from the top of the plan, or from the end, a tie that goes to the later
+    /// row, and a plan with nothing left to do drawn from its first row.
+    #[test]
+    fn room_left_over_goes_to_the_finished_rows_nearest_the_first_one_still_to_do() {
+        let mut rows = plan_of(&[(Status::Done, 12)]);
+        rows[6].1 = Status::Active;
+        rows[7].1 = Status::Pending;
+
+        // Six rows of room hold four tasks beside the row that counts and the row that names the
+        // key: the two rows to do and two finished ones. The row before them is nearest. Rows 5 and
+        // 9 are two places away and one is left, so the tie shows: the earlier.
+        let drawn = panel_for(&rows, height_for_room(6));
+        assert_eq!(tasks_in(&drawn), [5, 6, 7, 8], "{drawn:#?}");
+
+        // One row more takes the later of the two as well.
+        let drawn = panel_for(&rows, height_for_room(7));
+        assert_eq!(tasks_in(&drawn), [5, 6, 7, 8, 9], "{drawn:#?}");
+
+        let finished = plan_of(&[(Status::Done, 20)]);
+        let drawn = panel_for(&finished, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            tasks_in(&drawn),
+            (13..=20).collect::<Vec<_>>(),
+            "{drawn:#?}"
+        );
+        assert_eq!(left_out_in(&drawn), Some("+12 done"), "{drawn:#?}");
+    }
+
+    /// The panel draws a plan of any size: none at all, one row, twelve rows, fifty rows, and the
+    /// fewest rows that leave the plan any room.
+    ///
+    /// Rejects: a heading over no rows, a count row on a plan that fits, a plan longer than the
+    /// room that overruns the panel or pushes off the key that hides it, and a panel with no room
+    /// for the plan that draws the heading anyway.
+    #[test]
+    fn the_panel_draws_a_plan_of_none_one_twelve_and_fifty_rows_and_at_the_least_height() {
+        let heading = t!(panel_plan).to_string();
+        let hide =
+            |session: &Session| t!(panel_hide, chord = session.bindings().panel_name()).to_string();
+        let session = Session::new("none");
+
+        // No plan: no heading.
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        assert!(!drawn.contains(&heading), "{drawn:#?}");
+
+        // One row: the heading, the row and nothing counted.
+        let drawn = panel_for(&plan_of(&[(Status::Active, 1)]), 14);
+        assert!(drawn.contains(&heading), "{drawn:#?}");
+        assert_eq!(tasks_in(&drawn), [1], "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+
+        // Twelve rows that do not fit.
+        let twelve = plan_of(&[(Status::Done, 6), (Status::Active, 1), (Status::Pending, 5)]);
+        let drawn = panel_for(&twelve, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (5..=12).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), Some("+4 done"), "{drawn:#?}");
+        // And twelve that do.
+        let drawn = panel_for(&twelve, 30);
+        assert_eq!(tasks_in(&drawn), (1..=12).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+        // A plan that fills the room to the last row is drawn whole, with no row to count.
+        let nine = plan_of(&[(Status::Done, 7), (Status::Active, 1), (Status::Pending, 1)]);
+        let drawn = panel_for(&nine, HEIGHT_FOR_EIGHT_TASKS - 1);
+        assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+
+        // Fifty rows with five still to do, on a panel that holds eight tasks beside the key row:
+        // the five and the three finished rows before them, and the key row after the count.
+        let few_to_do = plan_of(&[
+            (Status::Done, 45),
+            (Status::Active, 1),
+            (Status::Pending, 4),
+        ]);
+        let drawn = panel_for(&few_to_do, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            tasks_in(&drawn),
+            (43..=50).collect::<Vec<_>>(),
+            "{drawn:#?}"
+        );
+        assert_eq!(left_out_in(&drawn), Some("+42 done"), "{drawn:#?}");
+        assert_eq!(
+            drawn[drawn.len() - 2],
+            t!(panel_todos, chord = session.bindings().todos_name()),
+            "{drawn:#?}"
+        );
+
+        // Fifty rows with ten still to do, which leave the panel no row for the key.
+        let fifty = plan_of(&[
+            (Status::Done, 40),
+            (Status::Active, 1),
+            (Status::Pending, 9),
+        ]);
+        let drawn = panel_for(&fifty, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            tasks_in(&drawn),
+            (41..=49).collect::<Vec<_>>(),
+            "{drawn:#?}"
+        );
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(
+                format!(
+                    "{}, {}",
+                    t!(panel_hidden_to_do, count = 1),
+                    t!(panel_hidden_done, count = 40)
+                )
+                .as_str()
+            ),
+            "{drawn:#?}"
+        );
+        assert_eq!(drawn.last(), Some(&hide(&session)), "{drawn:#?}");
+
+        // The least height with room for the plan: its heading and one row, which says what the
+        // plan holds since there is no room for any of its rows.
+        let drawn = panel_for(&fifty, 6);
+        assert_eq!(tasks_in(&drawn), Vec::<usize>::new(), "{drawn:#?}");
+        let at = drawn
+            .iter()
+            .position(|row| *row == heading)
+            .expect("a heading");
+        assert_eq!(
+            drawn[at + 1],
+            format!(
+                "{}, {}",
+                t!(panel_hidden_to_do, count = 10),
+                t!(panel_hidden_done, count = 40)
+            ),
+            "{drawn:#?}"
+        );
+        // One row fewer leaves the plan none, and it is not drawn at all.
+        let drawn = panel_for(&fifty, 5);
+        assert!(!drawn.contains(&heading), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+        for height in [1, 2] {
+            let drawn = panel_for(&fifty, height);
+            assert!(!drawn.contains(&heading), "{drawn:#?}");
+        }
+    }
+
+    /// Which rows are drawn and what is counted depend on each row's status and never on its text.
+    /// The text of every row here says the opposite of the status it carries.
+    ///
+    /// Rejects: a choice or a count made from the words or the mark in a task's text, which the
+    /// planner writes and a page it read may have dictated.
+    #[test]
+    fn the_rows_drawn_and_counted_follow_the_status_and_never_the_text() {
+        let claiming = [
+            ("\u{2713} completed", Status::Pending),
+            ("done:", Status::Pending),
+            ("pending", Status::Done),
+            ("TODO: not started", Status::Done),
+            ("in_progress now", Status::Cancelled),
+            ("\u{25a0}", Status::Done),
+            ("cancelled", Status::Active),
+            ("completed", Status::Pending),
+            ("[x] done", Status::Pending),
+            ("pending", Status::Done),
+            ("in progress", Status::Done),
+            ("(pending)", Status::Cancelled),
+        ];
+        let rows: Vec<(String, Status)> = claiming
+            .iter()
+            .enumerate()
+            .map(|(at, (claim, status))| (format!("{claim} task {}", at + 1), *status))
+            .collect();
+
+        // Rows 1, 2, 7, 8 and 9 are still to do, and the three finished rows nearest the first of
+        // them are rows 3, 4 and 5. The rows left out are 6, 10 and 11, done, and 12, cancelled.
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), [1, 2, 3, 4, 5, 7, 8, 9], "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(
+                format!(
+                    "{}, {}",
+                    t!(panel_hidden_done, count = 3),
+                    t!(panel_hidden_cancelled, count = 1)
+                )
+                .as_str()
+            ),
+            "{drawn:#?}"
+        );
+    }
+
+    /// The rows `/todos` leaves under its heading in the transcript laid out `width` columns wide,
+    /// as the transcript lays them out and not as the rows were built.
+    fn printed(session: &mut Session, width: u16) -> Vec<String> {
+        let plan = session.plan().to_vec();
+        let counted = |status| plan.iter().filter(|task| task.status == status).count();
+        let (done, cancelled) = (counted(Status::Done), counted(Status::Cancelled));
+        // The cancelled tasks are counted apart, as the planner's own result counts them.
+        let heading = if cancelled == 0 {
+            t!(todos_heading, done = done, total = plan.len())
+        } else {
+            t!(
+                todos_heading_cancelled,
+                done = done,
+                total = plan.len(),
+                cancelled = cancelled
+            )
+        };
+        session.report_plan();
+        session.note_layout(crate::state::Laid {
+            width,
+            height: 40,
+            ..crate::state::Laid::default()
+        });
+        let drawn: Vec<String> = crate::render::as_text(session)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let at = drawn
+            .iter()
+            .rposition(|row| row.trim() == heading)
+            .unwrap_or_else(|| panic!("no heading {heading:?}: {drawn:#?}"));
+        drawn[at + 1..].to_vec()
+    }
+
+    /// One task of a printed plan as its rows say it.
+    #[derive(Debug, PartialEq)]
+    struct PrintedTask {
+        /// The mark in the margin of its first row.
+        mark: char,
+        /// What the margin says beside the mark, which may be cut, or nothing.
+        status: String,
+        /// The text of its rows with the margin taken off and the spaces and breaks taken out, so
+        /// a break anywhere in the text, between words or inside one, leaves the same string.
+        text: String,
+    }
+
+    /// The tasks a plan printed `width` columns wide says. A row whose margin is blank belongs to
+    /// the task above it, and one whose margin holds anything begins a task.
+    fn printed_tasks(rows: &[String], width: u16) -> Vec<PrintedTask> {
+        let margin = crate::render::printed_margin(usize::from(width));
+        let mut tasks: Vec<PrintedTask> = Vec::new();
+        for row in rows.iter().filter(|row| !row.trim().is_empty()) {
+            let before: String = row.chars().take(margin).collect();
+            let after: String = row.chars().skip(margin).collect();
+            let text: String = after.split_whitespace().collect();
+            if before.trim().is_empty() {
+                tasks.last_mut().expect("a first row").text.push_str(&text);
+                continue;
+            }
+            let mut beside = before.trim_start().chars();
+            tasks.push(PrintedTask {
+                mark: beside.next().expect("a mark"),
+                status: beside.collect::<String>().trim().to_string(),
+                text,
+            });
+        }
+        tasks
+    }
+
+    /// The status word and the text of each task of a plan printed with its margin whole.
+    fn tasks_printed(rows: &[String]) -> Vec<(String, String)> {
+        let whole = crate::render::printed_margin(usize::MAX) + 2;
+        printed_tasks(rows, u16::try_from(whole).expect("a width"))
+            .into_iter()
+            .map(|task| (task.status, task.text))
+            .collect()
+    }
+
+    /// The status word a printed plan says for `status`.
+    fn status_in_words(status: Status) -> &'static str {
+        match status {
+            Status::Done => t!(todos_status_done),
+            Status::Active => t!(todos_status_active),
+            Status::Pending => t!(todos_status_pending),
+            Status::Cancelled => t!(todos_status_cancelled),
+        }
+    }
+
+    /// A printed plan wide enough for its whole margin draws every task: in the plan's order, with
+    /// its mark, its status in words and its text wrapped to the width and not cut. The long word
+    /// in task `n` is `12 + 3n` columns, so at every width tried some task has a word wider than
+    /// the room for text, and the test asserts that, so it breaks inside the word.
+    ///
+    /// Rejects: a printed plan that keeps only the rows the panel has room for, that cuts a long
+    /// task to the width as the panel does, that leaves a status out or names another, and that
+    /// loses text where a word is wider than the row.
+    #[test]
+    fn the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut() {
+        let tasks: Vec<(String, Status)> = (1..=50)
+            .map(|n| {
+                (
+                    format!(
+                        "task {n} is written to be longer than any row it is drawn in, \
+                         and stays whole: unbroken{}word",
+                        "x".repeat(3 * n)
+                    ),
+                    [
+                        Status::Done,
+                        Status::Active,
+                        Status::Pending,
+                        Status::Cancelled,
+                    ][n % 4],
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, Status)> = tasks
+            .iter()
+            .map(|(text, status)| (text.as_str(), *status))
+            .collect();
+        let longest_word = |text: &str| {
+            text.split_whitespace()
+                .map(crate::wrap::display_width)
+                .max()
+                .unwrap_or(0)
+        };
+        // The margin is whole from the width that leaves the text its two columns.
+        let whole = crate::render::printed_margin(usize::MAX) + 2;
+        for width in [whole, whole + 1, 40, 80, 120] {
+            let room = width - crate::render::printed_margin(width);
+            assert!(
+                tasks.iter().any(|(text, _)| longest_word(text) > room),
+                "no word is wider than the {room} columns of text at {width} columns, so no word breaks"
+            );
+            let width = u16::try_from(width).expect("a width");
+            let mut session = working_on(plan(&borrowed));
+            let rows = printed(&mut session, width);
+            assert!(
+                rows.iter().all(|row| !row.contains('…')),
+                "a row was cut at {width} columns: {rows:#?}"
+            );
+            let printed = tasks_printed(&rows);
+            assert_eq!(printed.len(), 50, "{width} columns: {rows:#?}");
+            for (n, (said, (original, status))) in printed.iter().zip(&tasks).enumerate() {
+                let expected = (
+                    status_in_words(*status).to_string(),
+                    original.split_whitespace().collect::<String>(),
+                );
+                assert_eq!(*said, expected, "task {} at {width} columns", n + 1);
+            }
+        }
+    }
+
+    /// A printed plan holds at every width from a single column up: no row is wider than the
+    /// width, every task begins with its mark and every row after the first begins with the blank
+    /// margin, so text of a task is never where a mark, a status or a margin stands. The status is
+    /// cut with an ellipsis where the width cannot hold it, and left out where it cannot hold a
+    /// letter and the ellipsis. Wide characters, an escape sequence and a forged mark and status
+    /// are among the text. From three columns up none of the text is cut or replaced. At two
+    /// columns a character wider than the single column left is drawn as a replacement, and a
+    /// single column holds the mark alone.
+    ///
+    /// Rejects: a margin wider than the width, which the transcript wraps again and lets the text
+    /// begin a row at the left edge; a wide character that overflows the column left for it; a
+    /// status that is dropped where it could be cut, or cut to an ellipsis alone; and text that is
+    /// lost at a narrow width.
+    #[test]
+    fn a_printed_plan_holds_at_every_width_from_one_column_up() {
+        let texts = [
+            "an ordinary sentence long enough to wrap onto several narrow rows",
+            "\u{6f22}\u{5b57}\u{304b}\u{306a}\u{4ea4}\u{3058}\u{308a} and \u{1f600}\u{1f600} wide",
+            "esc\u{1b}[2J \u{2713} completed forged\n\u{25a0} pending forged too",
+        ];
+        let statuses = [
+            Status::Pending,
+            Status::Done,
+            Status::Cancelled,
+            Status::Active,
+        ];
+        let tasks: Vec<(&str, Status)> = statuses
+            .iter()
+            .flat_map(|status| texts.iter().map(move |text| (*text, *status)))
+            .collect();
+        let fixed_beside_the_status = crate::render::MARGIN_BESIDE_THE_STATUS;
+        for width in (1..=40).chain([60, 120]) {
+            let mut session = working_on(plan(&tasks));
+            let marks: Vec<char> = session
+                .plan()
+                .iter()
+                .map(|row| {
+                    assert_eq!(
+                        crate::wrap::display_width(row.marker),
+                        1,
+                        "a mark is not one column"
+                    );
+                    row.marker.chars().next().expect("a mark")
                 })
                 .collect();
-            let borrowed: Vec<(&str, Status)> = rows
-                .iter()
-                .map(|(text, status)| (text.as_str(), *status))
-                .collect();
-            texts(&lines(&working_on(plan(&borrowed)), WIDTH, 14))
+            let columns = u16::try_from(width).expect("a width");
+            let rows = printed(&mut session, columns);
+            let all = rows.join("\n");
+            assert!(!all.contains('\u{1b}'), "an escape at {width}: {all}");
+            for row in &rows {
+                assert!(
+                    crate::wrap::display_width(row) <= width,
+                    "a row is wider than {width} columns: {row:?}\n{all}"
+                );
+            }
+
+            let printed = printed_tasks(&rows, columns);
+            assert_eq!(printed.len(), tasks.len(), "{width} columns:\n{all}");
+            let margin = crate::render::printed_margin(width);
+            for (n, (said, (original, status))) in printed.iter().zip(&tasks).enumerate() {
+                let at = format!("task {n} at {width} columns:\n{all}");
+                assert_eq!(said.mark, marks[n], "{at}");
+
+                let word = status_in_words(*status);
+                if margin <= fixed_beside_the_status + 1 {
+                    assert_eq!(said.status, "", "{at}");
+                } else if said.status == word {
+                    // Whole where the margin holds it.
+                } else {
+                    let cut = said.status.strip_suffix('…').unwrap_or(&said.status);
+                    assert!(
+                        !cut.is_empty() && word.starts_with(cut) && said.status.ends_with('…'),
+                        "the status is neither whole nor cut: {at}"
+                    );
+                }
+
+                let shown: String = crate::render::printable(original)
+                    .split_whitespace()
+                    .collect();
+                let expected: String = match width {
+                    1 => String::new(),
+                    2 => shown
+                        .chars()
+                        .map(|c| {
+                            if crate::wrap::display_width(&c.to_string()) > 1 {
+                                '\u{fffd}'
+                            } else {
+                                c
+                            }
+                        })
+                        .collect(),
+                    _ => shown,
+                };
+                assert_eq!(said.text, expected, "{at}");
+            }
+        }
+    }
+
+    /// A colour and the modifiers a cell or a span is drawn in.
+    type Ink = (ratatui::style::Color, Modifier);
+
+    /// The colour and modifiers a span of the panel is drawn in.
+    fn ink_of(span: &Span<'static>) -> Ink {
+        (
+            span.style.fg.unwrap_or(ratatui::style::Color::Reset),
+            span.style.add_modifier,
+        )
+    }
+
+    /// The row of a printed plan on the screen that holds both `text` and its status `word`, which
+    /// no other drawing of the plan holds: the mark and the ink of the mark and of the text.
+    fn printed_row(buffer: &Buffer, text: &str, word: &str) -> (String, Ink, Ink) {
+        let width = buffer.area.width;
+        for y in (0..buffer.area.height).rev() {
+            let row: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
+            let Some(at) = row.find(text).filter(|_| row.contains(word)) else {
+                continue;
+            };
+            let column = |chars: usize| u16::try_from(chars).expect("a column");
+            let text_at = column(row[..at].chars().count());
+            let mark_at = column(row.chars().take_while(|c| *c == ' ').count());
+            let ink = |x: u16| (buffer[(x, y)].fg, buffer[(x, y)].modifier);
+            return (
+                buffer[(mark_at, y)].symbol().to_string(),
+                ink(mark_at),
+                ink(text_at),
+            );
+        }
+        panic!("no row of the screen holds {text} and {word}");
+    }
+
+    /// A printed plan draws a row that is neither completed nor cancelled as the panel does: as
+    /// work being done when a turn is running as it is printed, and left open, hollow and dim, when
+    /// none is. The status word is the planner's either way, and the printed plan keeps the
+    /// drawing it had when it was printed after the turn ends.
+    ///
+    /// Asserted against the panel's own rows in the same state, so a change to how the panel draws
+    /// them is followed here: the mark and its ink while a turn runs, and the mark and the text as
+    /// well once it has ended. The text of a row being worked on is bold, as the plan under a turn
+    /// draws it. Rows that are completed or cancelled are drawn alike in both.
+    ///
+    /// Rejects: a printed plan that draws every open row as work being done whether or not a turn
+    /// is running, one that reads whether a turn is running as it draws, which rewrites the
+    /// printout when the turn ends, an open row drawn struck through, and a status word taken from
+    /// how the row is drawn.
+    #[test]
+    fn a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn() {
+        let _held = crate::theme::exclusive();
+        assert_eq!(
+            crate::wrap::display_width(LEFT_OPEN_MARKER),
+            1,
+            "the hollow mark is not one column, which the margin reserves"
+        );
+        let open = [("working on it", "in progress"), ("still to do", "pending")];
+        let closed = [("finished it", "completed"), ("dropped it", "cancelled")];
+
+        // Printed while a turn runs, and again once it has ended.
+        let mut running = working_on(plan(&MIXED));
+        let panel_running = plan_part(&running, 4);
+        running.report_plan();
+        let while_running = frame(&mut running, 80, 40);
+
+        let mut ended = working_on(plan(&MIXED));
+        ended.complete("done", Vec::new(), 0);
+        let panel_ended = plan_part(&ended, 4);
+        ended.report_plan();
+        let after = frame(&mut ended, 80, 40);
+
+        for (text, word) in open {
+            let (mark, mark_ink, text_ink) = printed_row(&while_running, text, word);
+            let panel_row = plan_row(&panel_running, text);
+            let at = format!("{text} printed while a turn runs");
+            assert_eq!(mark, panel_row.spans[0].content.trim(), "{at}");
+            assert_eq!(mark_ink, ink_of(&panel_row.spans[0]), "{at}");
+            // The text is bold as the plan under a turn draws it, and the panel's is not.
+            assert!(text_ink.1.contains(Modifier::BOLD), "{at}: {text_ink:?}");
+            assert!(!text_ink.1.contains(Modifier::CROSSED_OUT), "{at}");
+
+            let (left_mark, left_mark_ink, left_text_ink) = printed_row(&after, text, word);
+            let panel_row = plan_row(&panel_ended, text);
+            let at = format!("{text} printed after the turn");
+            assert_eq!(left_mark, LEFT_OPEN_MARKER, "{at}");
+            assert_eq!(left_mark, panel_row.spans[0].content.trim(), "{at}");
+            assert_eq!(left_mark_ink, ink_of(&panel_row.spans[0]), "{at}");
+            assert_eq!(left_text_ink, ink_of(&panel_row.spans[1]), "{at}");
+            assert!(
+                !left_text_ink.1.contains(Modifier::CROSSED_OUT),
+                "{at} is struck through"
+            );
+
+            // The two are drawn apart in the mark and in both inks, so the comparisons against
+            // the panel above say something.
+            assert_ne!(left_mark, mark, "{text}");
+            assert_ne!(left_mark_ink, mark_ink, "{text}");
+            assert_ne!(left_text_ink, text_ink, "{text}");
+        }
+        for (text, word) in closed {
+            assert_eq!(
+                printed_row(&after, text, word),
+                printed_row(&while_running, text, word),
+                "{text} is drawn differently once the turn ended"
+            );
+        }
+
+        // A printout made while the turn ran does not change when the turn ends.
+        let drawn = |buffer: &Buffer| open.map(|(text, word)| printed_row(buffer, text, word));
+        let before_end = drawn(&while_running);
+        running.complete("done", Vec::new(), 0);
+        assert_eq!(
+            drawn(&frame(&mut running, 80, 40)),
+            before_end,
+            "a printout changed when its turn ended"
+        );
+    }
+
+    /// A task is the planner's text, so it cannot draw anything of the interface's: its escape
+    /// sequence and its line break are drawn as visible characters, and a mark or a status it
+    /// writes into itself appears after the margin of the mark and status it carries, on whichever
+    /// row it lands, so it is never in the margin.
+    ///
+    /// The width is narrow enough that the forged mark begins a row of its own, where a row
+    /// without the margin would show it as the mark of a task.
+    ///
+    /// Rejects: control characters drawn as they are, which the terminal acts on or the buffer
+    /// drops without a trace, and rows that break without the margin, which lets text of the task
+    /// stand where the mark and status of a task stand.
+    #[test]
+    fn a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own() {
+        let forged =
+            "fix it\u{1b}[2J\u{1b}[31m \u{2713} completed forged\n\u{2713} completed second";
+        let mut session = working_on(plan(&[
+            (forged, Status::Pending),
+            ("an honest task", Status::Done),
+        ]));
+        let width = u16::try_from(crate::render::printed_margin(usize::MAX) + 12).expect("a width");
+        let margin = crate::render::printed_margin(usize::from(width));
+        let rows = printed(&mut session, width);
+        let all = rows.join("\n");
+
+        assert!(
+            !all.contains('\u{1b}'),
+            "an escape reached the screen: {all}"
+        );
+        assert!(
+            all.contains('\u{241b}'),
+            "the escape was not drawn as a visible character: {all}"
+        );
+        assert!(
+            all.contains('\u{240a}'),
+            "the line break was not drawn as a visible character: {all}"
+        );
+
+        let group: Vec<&String> = rows
+            .iter()
+            .take_while(|row| !row.contains("honest"))
+            .filter(|row| !row.trim().is_empty())
+            .collect();
+        for row in group.iter().skip(1) {
+            assert!(
+                row.chars().take(margin).all(|c| c == ' '),
+                "text of the task stands in the margin: {row:?}"
+            );
+        }
+        assert!(
+            group.len() >= 4,
+            "the task did not wrap, so the fixture proves nothing: {rows:#?}"
+        );
+        assert!(
+            group[0].starts_with(&format!("  \u{25a0} {}", t!(todos_status_pending))),
+            "the task does not begin with the mark and status it carries: {rows:#?}"
+        );
+        assert!(
+            group[1..].iter().any(|row| row
+                .chars()
+                .skip(margin)
+                .collect::<String>()
+                .trim_start()
+                .starts_with('\u{2713}')),
+            "no row begins with the forged mark, so the fixture proves nothing: {rows:#?}"
+        );
+        // Only the two tasks have a mark of their own.
+        let marks = rows
+            .iter()
+            .filter(|row| {
+                row.trim_start()
+                    .starts_with(['\u{2713}', '\u{25a0}', '\u{2717}'])
+            })
+            .filter(|row| row.chars().take(margin).any(|c| c != ' '))
+            .count();
+        assert_eq!(marks, 2, "{rows:#?}");
+    }
+
+    /// The rows of a printed plan are the rows the screen draws: none is wider than the
+    /// transcript, so the transcript does not wrap it again, at the widths where it would have
+    /// wrapped a margin of the whole width.
+    ///
+    /// Rejects: a margin wider than the transcript, which the paragraph wraps into a row that
+    /// starts at the left edge with the text of the task.
+    #[test]
+    fn a_printed_plan_is_drawn_on_the_screen_as_it_is_laid_out() {
+        let task = "a long task in plain words that has to wrap onto more rows than one";
+        for width in [12u16, 18, 24, 30] {
+            let mut session = working_on(plan(&[(task, Status::Active), ("short", Status::Done)]));
+            let laid = printed(&mut session, width);
+            let screen = screen(&mut session, width, 60);
+            for row in laid.iter().filter(|row| !row.trim().is_empty()) {
+                assert!(
+                    screen
+                        .iter()
+                        .any(|drawn| drawn.trim_end() == row.trim_end()),
+                    "{row:?} is not a row of the screen at {width} columns: {screen:#?}"
+                );
+            }
+        }
+    }
+
+    /// A printed plan is the plan as it stood when it was printed. The planner reporting another
+    /// does not rewrite it, and the next `/todos` prints the new one under it.
+    ///
+    /// Rejects: an entry that reads the session's plan as it draws, which would print the later
+    /// plan in both places.
+    #[test]
+    fn a_printed_plan_stays_as_it_was_when_the_plan_changes() {
+        let mut session = working_on(plan(&[("first draft", Status::Active)]));
+        session.report_plan();
+        session.set_todos(plan(&[("second draft", Status::Active)]));
+        screen(&mut session, 80, 40);
+        let drawn = crate::render::as_text(&session);
+        assert!(drawn.contains("first draft"), "{drawn}");
+        assert!(!drawn.contains("second draft"), "{drawn}");
+
+        session.report_plan();
+        screen(&mut session, 80, 40);
+        let drawn = crate::render::as_text(&session);
+        let (first, second) = (drawn.find("first draft"), drawn.find("second draft"));
+        assert!(first.is_some(), "the first plan is gone: {drawn}");
+        assert!(second.is_some(), "the second plan was not printed: {drawn}");
+        assert!(first < second, "{drawn}");
+    }
+
+    /// The plan's last row names the key that prints it whole, the chord in force, as the panel's
+    /// last row names the key that hides it. It is drawn where the plan has three rows of room or
+    /// more, does not fill them exactly and has every row still to do drawn beside it, and below
+    /// the row that says what was left out where rows were.
+    ///
+    /// Rejects: no row at all, the default named after the key was moved, a row that takes the
+    /// place of a task a plan that fits had, a row that crowds out the row that counts what was
+    /// left out or the plan's own rows where there are only one or two to give, and one that is
+    /// left out at three rows, where a task, the count and the key all fit.
+    #[test]
+    fn the_last_row_of_the_plan_names_the_key_that_prints_it_whole() {
+        let key = |session: &Session| {
+            t!(panel_todos, chord = session.bindings().todos_name()).to_string()
         };
-        let shown = |drawn: &[String]| -> Vec<String> {
-            drawn
+        let heading = t!(panel_plan).to_string();
+        let under_the_heading = |drawn: &[String]| -> Vec<String> {
+            let at = drawn
                 .iter()
-                .filter_map(|row| row.find("task ").map(|at| row[at..].to_string()))
+                .position(|row| *row == heading)
+                .expect("a heading");
+            drawn[at + 1..]
+                .iter()
+                .take_while(|row| !row.is_empty() && !row.contains("hide panel"))
+                .cloned()
                 .collect()
         };
 
-        // Fourteen rows: the context section takes two, the blank and the heading two more, the
-        // key that hides the panel one, and the count one, which leaves eight tasks.
-        let both = drawn_with(30);
-        assert_eq!(both.len(), 14, "the panel is not the height it was given");
-        assert_eq!(
-            shown(&both),
-            (16..=23).map(|n| format!("task {n}")).collect::<Vec<_>>(),
-            "the rows shown do not start at the task in progress: {both:#?}"
+        // A plan with room to spare ends in the key.
+        let session = working_on(plan(&[("one", Status::Active), ("two", Status::Pending)]));
+        let drawn = texts(&lines(&session, WIDTH, 20));
+        let part = under_the_heading(&drawn);
+        assert_eq!(part.len(), 3, "{drawn:#?}");
+        assert_eq!(part.last(), Some(&key(&session)), "{drawn:#?}");
+        assert_eq!(key(&session), "alt-a whole plan");
+
+        // A plan cut to the room ends in the key, below the row that says what was left out.
+        let rows = plan_of(&[(Status::Done, 20), (Status::Active, 1)]);
+        let session = working_on(plan(
+            &rows
+                .iter()
+                .map(|(text, status)| (text.as_str(), *status))
+                .collect::<Vec<_>>(),
+        ));
+        let drawn = texts(&lines(&session, WIDTH, HEIGHT_FOR_EIGHT_TASKS));
+        let part = under_the_heading(&drawn);
+        assert_eq!(part.len(), 10, "{drawn:#?}");
+        assert_eq!(part.last(), Some(&key(&session)), "{drawn:#?}");
+        assert!(part[8].starts_with('+'), "{drawn:#?}");
+
+        // Three rows of room are the least that name the key: the one task still to do, the row
+        // that counts the eight finished tasks it leaves out, and the key.
+        let rows = plan_of(&[(Status::Done, 8), (Status::Pending, 1)]);
+        let session = working_on(plan(
+            &rows
+                .iter()
+                .map(|(text, status)| (text.as_str(), *status))
+                .collect::<Vec<_>>(),
+        ));
+        let drawn = texts(&lines(&session, WIDTH, height_for_room(3)));
+        let part = under_the_heading(&drawn);
+        assert_eq!(tasks_in(&drawn), [9], "{drawn:#?}");
+        assert_eq!(part.len(), 3, "{drawn:#?}");
+        assert_eq!(part[1], "+8 done", "{drawn:#?}");
+        assert_eq!(part[2], key(&session), "{drawn:#?}");
+
+        // A plan that fills the room exactly keeps every task and names no key, and one with no
+        // room for three rows names no key and keeps what it counts.
+        let nine = plan_of(&[(Status::Done, 8), (Status::Active, 1)]);
+        let drawn = panel_for(&nine, HEIGHT_FOR_EIGHT_TASKS - 1);
+        assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
+        assert!(
+            !drawn.contains(&key(&working_on(Vec::new()))),
+            "the key took a task's row: {drawn:#?}"
+        );
+        for height in [6, 7] {
+            let drawn = panel_for(&nine, height);
+            assert!(
+                !drawn.contains(&key(&working_on(Vec::new()))),
+                "a plan with one or two rows to give named the key: {drawn:#?}"
+            );
+            assert!(left_out_in(&drawn).is_some(), "{drawn:#?}");
+        }
+
+        // A plan with every task finished, which the key row could take a task from without
+        // taking a row still to do, names no key either where there is room for a task and the
+        // count and no more.
+        let finished = plan_of(&[(Status::Done, 12)]);
+        for (height, tasks) in [(6, 0), (7, 1)] {
+            let drawn = panel_for(&finished, height);
+            assert_eq!(tasks_in(&drawn).len(), tasks, "{drawn:#?}");
+            assert!(
+                !drawn.contains(&key(&working_on(Vec::new()))),
+                "a plan with {tasks} rows of room named the key: {drawn:#?}"
+            );
+        }
+
+        // The chord in force is the one named.
+        let mut session = working_on(plan(&[("one", Status::Active)]));
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("todos".to_string(), "alt-y".to_string());
+        session.adopt_keybindings(&moved);
+        let drawn = texts(&lines(&session, WIDTH, 20));
+        assert!(
+            drawn.contains(&"alt-y whole plan".to_string()),
+            "{drawn:#?}"
         );
         assert!(
-            both.contains(&t!(panel_earlier_and_more, earlier = 15, later = 7).to_string()),
-            "the rows above and below are not counted apart: {both:#?}"
+            !drawn.iter().any(|row| row.contains("alt-a")),
+            "the default is named after the key was moved: {drawn:#?}"
+        );
+    }
+
+    /// The row that names the key is cut to the width of the panel with an ellipsis, as the row
+    /// that counts is, so a chord longer than the panel is wide does not run past its edge.
+    ///
+    /// Rejects: a key row drawn at its whole length, which a panel 24 columns wide clips in the
+    /// middle of a word.
+    #[test]
+    fn the_row_naming_the_key_is_cut_to_the_width_of_a_narrow_panel() {
+        let mut session = working_on(plan(&[("one", Status::Active), ("two", Status::Pending)]));
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("todos".to_string(), "ctrl-alt-pgdn".to_string());
+        session.adopt_keybindings(&moved);
+        let whole = t!(panel_todos, chord = "ctrl-alt-pgdn").to_string();
+        assert_eq!(session.bindings().todos_name(), "ctrl-alt-pgdn");
+
+        let narrowest = lines(&session, NARROWEST_PANEL, 20);
+        let drawn = narrowest
+            .iter()
+            .find(|line| line.to_string().contains("ctrl-alt-pgdn"))
+            .expect("a row naming the key");
+        let room = usize::from(NARROWEST_PANEL) - usize::from(INSET);
+        assert!(
+            drawn.width() <= room + 1 && drawn.to_string().trim().ends_with('…'),
+            "the row is not cut to the panel: {:?}",
+            drawn.to_string()
+        );
+        assert!(
+            whole.starts_with(drawn.to_string().trim().trim_end_matches('…')),
+            "the cut row is not the start of the whole one: {:?}",
+            drawn.to_string()
         );
 
-        let above = drawn_with(20);
-        assert_eq!(
-            shown(&above),
-            (13..=20).map(|n| format!("task {n}")).collect::<Vec<_>>(),
-            "the last rows of the plan are not the ones shown: {above:#?}"
+        // A panel wide enough for the whole row draws it whole.
+        let wide = texts(&lines(&session, WIDTH, 20));
+        assert!(wide.contains(&whole), "{wide:#?}");
+    }
+
+    /// The key prints the same whole plan the command does, with every task, its status and none
+    /// of its text cut, at a width the panel could not draw it in.
+    ///
+    /// Rejects: a key that prints some other form of the plan, such as the rows the panel has room
+    /// for, and one that cuts a task to the width.
+    #[test]
+    fn the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it() {
+        let rows: Vec<(String, Status)> = (1..=12)
+            .map(|n| {
+                (
+                    format!(
+                        "task {n} is written to be longer than the panel is wide: {}",
+                        "word ".repeat(n)
+                    ),
+                    [
+                        Status::Done,
+                        Status::Active,
+                        Status::Pending,
+                        Status::Cancelled,
+                    ][n % 4],
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, Status)> = rows
+            .iter()
+            .map(|(text, status)| (text.as_str(), *status))
+            .collect();
+        let finished = |plan| {
+            let mut session = working_on(plan);
+            session.complete("done", Vec::new(), 0);
+            session
+        };
+        let alt_a = ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char('a'),
+            ratatui::crossterm::event::KeyModifiers::ALT,
         );
-        assert!(
-            above.contains(&t!(panel_earlier, count = 12).to_string()),
-            "rows left out above are counted as more to come: {above:#?}"
+
+        let mut keyed = finished(plan(&borrowed));
+        crate::app::handle_key(&mut keyed, alt_a);
+        let mut typed = finished(plan(&borrowed));
+        for c in "/todos".chars() {
+            crate::app::handle_key(
+                &mut typed,
+                ratatui::crossterm::event::KeyEvent::new(
+                    ratatui::crossterm::event::KeyCode::Char(c),
+                    ratatui::crossterm::event::KeyModifiers::NONE,
+                ),
+            );
+        }
+        crate::app::handle_key(
+            &mut typed,
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Enter,
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
         );
+
+        for width in [40, 100] {
+            screen(&mut keyed, width, 60);
+            screen(&mut typed, width, 60);
+            let (by_key, by_command) = (
+                crate::render::as_text(&keyed),
+                crate::render::as_text(&typed),
+            );
+            // The typed command is a line of its own above its plan, which the key has no line
+            // for, so each is compared from its heading down.
+            let from_heading = |text: &str| -> String {
+                assert_eq!(text.matches("plan:").count(), 1, "{text}");
+                text[text.find("plan:").expect("a heading")..].to_string()
+            };
+            assert_eq!(
+                from_heading(&by_key),
+                from_heading(&by_command),
+                "the key and the command printed different plans at {width} columns"
+            );
+            let all: Vec<String> = by_key.lines().map(str::to_string).collect();
+            let at = all
+                .iter()
+                .rposition(|row| row.trim().starts_with("plan:"))
+                .expect("a heading");
+            assert!(all.iter().all(|row| !row.contains('…')), "{by_key}");
+            let printed = tasks_printed(&all[at + 1..]);
+            assert_eq!(printed.len(), 12, "{by_key}");
+            for ((said, text), (original, status)) in printed.iter().zip(&rows) {
+                let word = match status {
+                    Status::Done => t!(todos_status_done),
+                    Status::Active => t!(todos_status_active),
+                    Status::Pending => t!(todos_status_pending),
+                    Status::Cancelled => t!(todos_status_cancelled),
+                };
+                assert_eq!(said, word, "{original}");
+                assert_eq!(
+                    *text,
+                    original.split_whitespace().collect::<String>(),
+                    "{original} lost text at {width} columns"
+                );
+            }
+        }
     }
 
     fn mouse(
@@ -2092,5 +3939,81 @@ mod tests {
             "text in the panel did not select"
         );
         assert_eq!(actions.last(), Some(&Action::Copy));
+    }
+
+    /// Move the pointer to `row` and `column` with no button held, as a terminal reports it, and
+    /// say what shape the session then asks for.
+    fn shape_at(session: &mut Session, row: u16, column: u16) -> crate::pointer::Shape {
+        let moved = mouse(
+            ratatui::crossterm::event::MouseEventKind::Moved,
+            row,
+            column,
+        );
+        crate::app::handle_mouse(session, moved);
+        session.pointer_shape()
+    }
+
+    /// The border is the panel's left column from its first row to its last, so a pointer one
+    /// column to either side, or on the hint line under it, is not told it can drag.
+    #[test]
+    fn the_resize_pointer_is_over_the_border_column_and_nowhere_else() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let panel = session.laid.panes.last().expect("panel").1;
+        let (first, last, below) = (panel.top(), panel.bottom() - 1, panel.bottom());
+        let border = panel.left();
+        assert_eq!(shape_at(&mut session, first, border), ResizeColumns);
+        assert_eq!(shape_at(&mut session, last, border), ResizeColumns);
+        assert_eq!(shape_at(&mut session, below, border), Default, "below it");
+        assert_eq!(shape_at(&mut session, 5, border - 1), Default, "left of it");
+        assert_eq!(
+            shape_at(&mut session, 5, border + 1),
+            Default,
+            "right of it"
+        );
+    }
+
+    /// A drag keeps the resize pointer while the pointer is nowhere near where the border was when
+    /// the frame was drawn, and when it ends the pointer is the resize one only if it rests on the
+    /// border where the next frame put it. A shape taken from hovering alone drops in the first, and
+    /// one taken from the drag alone is wrong in the second.
+    #[test]
+    fn a_drag_holds_the_resize_pointer_and_its_end_follows_the_border() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        use ratatui::crossterm::event::{MouseButton::Left, MouseEventKind::*};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let step = |session: &mut Session, kind, column| {
+            crate::app::handle_mouse(session, mouse(kind, 5, column));
+            session.pointer_shape()
+        };
+        assert_eq!(step(&mut session, Down(Left), 84), ResizeColumns);
+        assert_eq!(
+            step(&mut session, Drag(Left), 70),
+            ResizeColumns,
+            "the drag ended the shape before the border had been drawn where the pointer is"
+        );
+        screen(&mut session, 120, 30);
+        assert_eq!(
+            step(&mut session, Up(Left), 70),
+            ResizeColumns,
+            "at rest on the border"
+        );
+        assert_eq!(step(&mut session, Moved, 40), Default, "moved off it");
+    }
+
+    /// A panel closed while the pointer rests on its border leaves the pointer over nothing, with
+    /// no report of the pointer to say so.
+    #[test]
+    fn a_panel_closed_under_the_pointer_gives_the_resize_pointer_back() {
+        use crate::pointer::Shape::{Default, ResizeColumns};
+        let mut session = opened_at(120);
+        screen(&mut session, 120, 30);
+        let border = session.laid.panes.last().expect("panel").1.left();
+        assert_eq!(shape_at(&mut session, 5, border), ResizeColumns);
+        session.toggle_panel();
+        screen(&mut session, 120, 30);
+        assert_eq!(session.pointer_shape(), Default);
     }
 }

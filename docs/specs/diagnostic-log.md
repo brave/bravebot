@@ -115,20 +115,40 @@ decision, whatever the log was meant for.
 ### DIAG-7: a failed request, a retry and a server that did not start are recorded
 
 A request that failed names its host, the kind of failure, the status where there was one and how
-long it took. A decision to send a request again names which attempt it is and the wait before it.
-Starting a language server or an MCP server, and an MCP handshake, are recorded as having worked or
-as the kind of failure, and a language server's exit as an orderly one or a kill. At the default
-level only failures are written, and a request a person stopped is not one.
+long it took, counted from when the request began. A reply that fails while it is still being read,
+by a reset, a cut stream or a deadline passing, is a request that failed, whichever way the reply
+is read, and names the status it began with. A decision to send a request again names which attempt it is and the wait before it.
+Starting a language server or an MCP server, and an MCP handshake over either transport, are
+recorded as having worked or as the kind of failure, and a language server's exit as an orderly one
+or a kill. At the default level only failures are written, and a request a person stopped is not
+one, nor is a read that fails after the person stopped it.
 
 **Why.** These are the questions a bug report starts with: could it reach the service, was it
 retried, did the server it needs start. Each is a fact about the program and none needs content.
 
+**Known costs.** A reply a caller gave up on without a stop, because it had already failed on a
+frame it read, can still be waiting on its connection, and when that gives out the log holds a
+second failure for a request that was already reported. A request a person stopped is not written
+however its read then ends, including a connection that failed after the stop. A refusal whose body
+failed while [NET-12](network-egress.md#NET-12) read it is written twice, as the body failing and as the
+status that is the failure.
+
 `verified-by: bravebot_net::lib::a_failed_request_is_logged_as_host_status_and_kind_only`
 `verified-by: bravebot_net::lib::a_stopped_request_is_not_a_failure_to_log`
+`verified-by: bravebot_net::lib::a_read_that_is_repeated_is_not_written_as_a_body_that_failed`
+`verified-by: bravebot_net::egress::a_request_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_net::egress::a_reply_that_runs_past_its_deadline_is_written_as_out_of_time`
+`verified-by: bravebot_net::egress::a_body_failure_is_timed_from_when_the_request_began`
+`verified-by: bravebot_net::egress::a_body_that_fails_after_the_request_was_stopped_is_not_written`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_aichat::client::a_reply_cut_off_part_way_is_written_to_the_diagnostic_log_as_well_as_its_retries`
 `verified-by: bravebot_aichat::client::a_retry_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_bedrock::lib::a_retry_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::stdio::a_launch_that_failed_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_mcp::stdio::a_handshake_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_mcp::http_log::a_handshake_is_written_to_the_diagnostic_log_when_it_works`
+`verified-by: bravebot_mcp::http_log::a_handshake_that_failed_is_written_as_the_kind_of_failure_at_the_default_level`
+`verified-by: bravebot_mcp::http_log::a_handshake_that_works_writes_nothing_at_the_default_level`
 `verified-by: bravebot_lsp::server::a_missing_server_binary_is_written_to_the_diagnostic_log`
 `verified-by: bravebot_lsp::server::a_servers_launch_and_exit_are_written_to_the_diagnostic_log`
 

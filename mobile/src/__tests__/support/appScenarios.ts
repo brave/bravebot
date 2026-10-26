@@ -27,6 +27,7 @@ export function changelogRequest(): Row {
   return approval(3, 1, 'confirm', {
     request: 1,
     path: 'CHANGELOG.md',
+    shownPath: 'CHANGELOG.md',
     intent: 'edit',
     untrusted: false,
     existing: true,
@@ -84,15 +85,18 @@ export function runRequest(id: number, turn: number, request: number): Row {
         resolved: '/opt/homebrew/bin/npm',
         startedAs: '/opt/homebrew/bin/npm',
         binary: '/opt/homebrew/Cellar/node/24.1.0/bin/node',
+        shownBinary: '/opt/homebrew/Cellar/node/24.1.0/bin/node',
         args: ['test', '--', '--runInBand'],
         display: 'npm test -- --runInBand',
       },
     ],
     directory: '/Users/test/storefront',
+    shownDirectory: '/Users/test/storefront',
     writes: [],
+    shownWrites: [],
     stdin: null,
     releasesPrivate: false,
-    confinement: { heading: 'Limited to', directories: ['/Users/test/storefront'], sentences: ['Cannot reach the network.', 'Can write only inside the project.'] },
+    confinement: { heading: 'Limited to', directories: ['/Users/test/storefront'], shownDirectories: ['/Users/test/storefront'], sentences: ['Cannot reach the network.', 'Can write only inside the project.'] },
     requestedScopes: [],
     ambient: [],
     canBeRemembered: true,
@@ -183,7 +187,7 @@ export function longRunningSession(): FakeSession {
 
 /** A new session, asking for project trust first, then playing the turn a suggested prompt starts. */
 export function newSession(workspace: string, id: string): FakeSession {
-  const session = new FakeSession({ id, workspace, trust: { directory: `/Users/test/${workspace}`, keeping: null } })
+  const session = new FakeSession({ id, workspace, trust: { directory: `/Users/test/${workspace}`, shownDirectory: `/Users/test/${workspace}`, keeping: null, shownKeeping: null } })
   session.on.answerTrust = () => {
     session.startupTrust = null
     session.emit({ status: 'idle' })

@@ -34,7 +34,10 @@ Three columns, each side one resizable and foldable:
   the tree it would index, saying where that runs build tooling), whether to **run a plan**
   (as the task and every step), whether the model may **read a file that holds a
   credential** (as the file and what the scan found, without the value), and a **series of
-  questions** the planner wants to put to you: choices to pick from, or your own words. The
+  questions** the planner wants to put to you: choices to pick from, or your own words. A series
+  is put one question at a time under its position ("the agent is asking (2 of 3)", the terminal picker's
+  sentence, which the bridge sends with each question), each with a **Skip**
+  that moves on to the next, and the answers are sent together once the last is settled. The
   turn blocks until one is answered. Window close and app shutdown refuse outstanding
   questions. For the last of the nine that means *no answers at all* rather than a decline per question: a decline
   somebody made and a question that never reached them must not look alike.
@@ -79,10 +82,17 @@ no message box, because a run has no conversation to continue. **New chat here**
 a chat in the run's project. Runs started in the terminal are listed and read the same way.
 
 Drafts and reading positions survive conversation switches and restarts. A running
-conversation can continue in the background. Drafting during a run does not send
-anything: **Queue message** explicitly queues a follow-up. Stop or an error pauses
-the queue; **Resume queue** is required to continue it. Automatic bot-memory
-maintenance reserves the session until it finishes.
+conversation can continue in the background. Enter while a turn runs sends the message into that
+turn, and the agent reads it at the turn's next round, as in the terminal
+([INPUT-46](../../docs/specs/terminal-input.md#INPUT-46)). The message is drawn under the box as
+**Sent to this turn** and joins the transcript when the agent has it. One the turn ends without
+reading goes as a turn of its own. Words only go into a running turn: a dropped file is written as
+its name and a pasted picture as a sentence saying it cannot be shown. **Queue for after** (or
+Alt+Enter) holds a message until the turn ends instead, and each queued message starts a turn of
+its own with the files it names. A message with a file chosen by the attach button, and any message
+sent while a bot's memory is being updated, is queued. Stop or an error pauses the queue;
+**Resume queue** is required to continue it. Automatic bot-memory maintenance reserves the session
+until it finishes.
 
 Conversation actions include pin, archive and restore. Archiving asks for confirmation first; restoring does not. An archived conversation also offers **Delete conversation**, which asks first and then removes the record from disk; it cannot be undone. Code blocks offer copy and wrap
 controls; local file references can open previews. **New activity** returns to the latest
@@ -176,6 +186,12 @@ and recently chosen models appear near the top. Pricing is not supplied by the c
 
 Refresh retries discovery if a provider is unavailable; the configured default remains
 selectable. Choosing a model does not change the agent's global default.
+
+Where the models of a service could not be listed, the picker says so above the list, one sentence
+for each service, in the picker's status type. The bridge words each sentence. A sentence that names
+a command to run, such as the one that signs in to ChatGPT again, has that command drawn as code. The
+bridge sends it beside the sentence (`warningCommands`, in the order of `warnings`), so the picker does
+not read a sentence to find it. A warning that names no command is a plain line.
 
 ### Turn notices, usage and audit
 
@@ -478,8 +494,9 @@ change to a repository this app does not modify.
 Two more things are honestly imperfect and worth knowing:
 
 - **The turn compaction happens in runs without the briefing.** It can fire on the first round.
-  Nothing can inject mid-turn, so the summary the agent writes is what carries the gist through;
-  the mitigation is keeping a purpose short enough that re-reading it is cheap.
+  Nothing the briefing says can reach the turn once it is running, so the summary the agent writes is
+  what carries the gist through; the mitigation is keeping a purpose short enough that re-reading it
+  is cheap.
 - **A bot whose memory was poisoned loses it rather than reading it back.** The memory arrives under
   whatever the trust map says about its path, so a write that turned the path untrusted means the
   next read is quarantined and the bot carries on without what it knew. That is the gate doing its
@@ -539,7 +556,8 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
 | `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
-| `Enter` | | In the message box: send, or queue the message while a turn is running. With the file list open on a half-typed `@` name, complete it instead |
+| `Enter` | | In the message box: send, or send the message into the turn that is running. With the file list open on a half-typed `@` name, complete it instead |
+| `Alt+Enter` | | In the message box while a turn runs: hold the message until the turn ends |
 | `Tab` | | In the message box, on an `@` name: complete it to the highlighted file or directory |
 | `↑` / `↓` | | In the message box, with the file list open: move through it |
 | `Shift+Enter` | | In the message box: insert a new line |
@@ -826,5 +844,18 @@ processor remarks directly above the diff, labelled untrusted, with any omitted-
 
 The context line reports an unmeasured, measured or unavailable last-request size and
 whether earlier messages were summarised. This is distinct from total billed usage.
-Turn errors use stable categories with specific recovery guidance. Cancellation remains a
-separate outcome, and request-attempt counts and HTTP status appear only when known.
+Turn errors use stable categories with specific recovery guidance. A failure of the ChatGPT
+account says the bridge's own sentence for the step that failed in place of the category's
+guidance, one sentence with the command it names drawn as code, on the error card and on the card
+of a run that stopped. Cancellation remains a separate outcome, and request-attempt counts and HTTP
+status appear only when known.
+
+A **narration** is a line of the transcript between a turn's tool calls, set in italics beside a file
+icon, with its line breaks kept. It is what the model said between two calls, the goal and plan a
+manifest run narrates, or a notice the bridge wrote: that a summary of the conversation could not be
+made, or that the turn moved to the fallback model. The bridge words a notice about a failure of the
+ChatGPT account itself, as one sentence in sentence case. The command such a sentence names arrives
+beside it as `command` and is drawn as code. A failure of any other service is narrated in the
+terminal's words, which are not in sentence case, name the failure's category and name no command, so
+the row mixes the two styles. What the model said is drawn as text whatever it holds: a word in it that
+looks like a command is not drawn as code, since only the bridge sends a `command`.

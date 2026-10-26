@@ -1,6 +1,6 @@
 ---
 sidebar_position: 1
-slug: /
+slug: /overview
 title: Overview
 description: What Brave Bot is, what makes it different, and where to start.
 ---
@@ -70,7 +70,8 @@ it reads.
 
 ## Start here
 
-- **[Quickstart](quickstart.md)**: install it, run a first task, and understand what it asks you.
+- **[Install](install.md)**: install it, keep it current, check a download, and remove it.
+- **[Quickstart](quickstart.md)**: run a first task and understand what it asks you.
 - **[How Brave Bot works](how-it-works.md)**: the planner, the driver, labels and processors.
 - **[Trusted directories](security/trust.md)**: the question at startup, and what your answer buys.
 - **[CLI reference](reference/cli.md)**: every flag and subcommand.

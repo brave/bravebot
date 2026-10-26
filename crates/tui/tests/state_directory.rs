@@ -113,11 +113,74 @@ fn a_recorded_choice_is_readable_only_by_its_owner() {
     store::save_theme("nord");
     store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
     store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
+    assert!(store::save_language(Some("fr")));
 
-    for file in ["model", "theme", "effort", "editor-mode"] {
+    for file in ["model", "theme", "effort", "editor-mode", "language"] {
         assert_eq!(scratch.mode_of(file), 0o600, "{file}");
     }
     assert_eq!(scratch.mode_of(""), 0o700, "the directory holding them");
+}
+
+/// A choice that cannot be written, because something else stands where its file belongs, must not
+/// leave the file it staged beside it. A directory in the way makes the rename fail after the
+/// staged file was written, which is the case a fixed `<name>.tmp` left behind for good.
+#[test]
+fn a_choice_that_cannot_be_written_leaves_no_staged_file() {
+    let scratch = Scratch::new("blocked");
+    let dir = scratch.own_directory();
+    for file in [
+        "model",
+        "theme",
+        "effort",
+        "history",
+        "language",
+        "editor-mode",
+        "vetting",
+        "panel",
+        "panel-width",
+        "caffeinate",
+    ] {
+        std::fs::create_dir_all(dir.join(file).join("held")).expect("block the name");
+    }
+
+    store::save_model("claude-sonnet-4-5");
+    store::save_theme("nord");
+    store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+    store::save_history(&[Entry::sent("one", None)]);
+    assert!(!store::save_language(Some("fr")));
+    store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
+    store::save_vetting(true);
+    store::save_panel(true);
+    store::save_panel_width(40);
+    store::save_caffeinate_confirmed();
+
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .expect("listed")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        [
+            "caffeinate",
+            "editor-mode",
+            "effort",
+            "history",
+            "history.lock",
+            "language",
+            "model",
+            "panel",
+            "panel-width",
+            "theme",
+            "vetting"
+        ]
+    );
 }
 
 /// A machine that has already run an older build has the directory and its files at whatever the
@@ -182,6 +245,7 @@ fn writing_a_session_narrows_the_state_directory() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,

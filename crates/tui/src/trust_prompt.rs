@@ -271,49 +271,36 @@ fn ask_one_from<B: Backend>(
             return Answer::Decline;
         }
 
-        match read() {
-            // A paste answers nothing, and neither do words another program typed: both arrive as
-            // one event whatever they carry, and nothing in either is a key somebody pressed.
-            Ok((taken, arrived_alone)) => {
-                if withdraws_the_offer(&taken) {
-                    offered_to_leave = false;
-                }
-                match input::key_of(&taken) {
-                    // Presses only: the interface asks for disambiguated keys, so a release arrives
-                    // too, and answering twice grants standing permission on one keystroke.
-                    Some(key) if key.kind != event::KeyEventKind::Press => continue,
-                    Some(key) => {
-                        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
-                            Response::Answer(answer) => return answer,
-                            Response::Scroll(by) => {
-                                scroll = drawn.moved(scroll, by);
-                                continue;
-                            }
-                            Response::Page(by) => {
-                                scroll =
-                                    drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
-                                continue;
-                            }
-                            // Kept rather than dropped. What this refused to answer on was a run of keys
-                            // another program wrote, and words that vanish leave a person with no account
-                            // of what just happened: the question stayed up and their virtualenv
-                            // activated, with nothing on the screen joining the two. Carried to the box,
-                            // where they can read it and decide (#403).
-                            Response::Nothing if !arrived_alone => {
-                                carried.extend(input::text_of(&key));
-                                continue;
-                            }
-                            Response::Offer => {
-                                offered_to_leave = true;
-                                continue;
-                            }
-                            Response::Nothing => continue,
-                        }
-                    }
-                    None => continue,
-                }
+        // A paste answers nothing, and neither do words another program typed: both arrive as one
+        // event whatever they carry, and nothing in either is a key somebody pressed.
+        let Ok((taken, arrived_alone)) = read() else {
+            return Answer::Decline;
+        };
+        if withdraws_the_offer(&taken) {
+            offered_to_leave = false;
+        }
+        let Some(key) = input::key_of(&taken) else {
+            continue;
+        };
+        // Presses only: the interface asks for disambiguated keys, so a release arrives too, and
+        // answering twice grants standing permission on one keystroke.
+        if key.kind != event::KeyEventKind::Press {
+            continue;
+        }
+        match answer_for(key, offered_to_leave, arrived_alone, drawn.answerable) {
+            Response::Answer(answer) => return answer,
+            Response::Scroll(by) => scroll = drawn.moved(scroll, by),
+            Response::Page(by) => {
+                scroll = drawn.moved(scroll, by.saturating_mul(i32::from(drawn.page)));
             }
-            Err(_) => return Answer::Decline,
+            // Kept rather than dropped. What this refused to answer on was a run of keys
+            // another program wrote, and words that vanish leave a person with no account
+            // of what just happened: the question stayed up and their virtualenv
+            // activated, with nothing on the screen joining the two. Carried to the box,
+            // where they can read it and decide (#403).
+            Response::Nothing if !arrived_alone => carried.extend(input::text_of(&key)),
+            Response::Offer => offered_to_leave = true,
+            Response::Nothing => {}
         }
     }
 }
@@ -465,7 +452,7 @@ fn draw(
     let question = vec![
         asking(
             t!(trust_directory_question),
-            &directory.display().to_string(),
+            &bravebot_agent::confirm::shown_path(directory),
         ),
         // What a yes grants beyond the files stays above what scrolls with the question, so it is
         // on the screen whenever a yes can be taken (RUN-5).
@@ -510,7 +497,7 @@ fn draw(
                 Style::default().fg(theme::muted()),
             )));
             lines.push(Line::from(Span::styled(
-                path.display().to_string(),
+                bravebot_agent::confirm::shown_path(path),
                 Style::default().add_modifier(Modifier::BOLD),
             )));
             kept = from..u32::from(rows_of(&lines, width));
@@ -562,7 +549,10 @@ fn draw_named(
     scroll: u16,
 ) -> Drawn {
     let question = vec![
-        asking(t!(named_directory_question), directory),
+        asking(
+            t!(named_directory_question),
+            &bravebot_agent::confirm::shown_name(directory),
+        ),
         Line::raw(""),
     ];
     let lines = vec![
@@ -634,11 +624,11 @@ fn draw_granted(
     // is what explains where a line the person never wrote came from.
     for rule in rules {
         lines.push(Line::from(Span::styled(
-            format!("  {}", rule.rule),
+            format!("  {}", bravebot_agent::confirm::shown_text(&rule.rule)),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            format!("    {}", rule.path.display()),
+            format!("    {}", bravebot_agent::confirm::shown_path(&rule.path)),
             Style::default().fg(theme::muted()),
         )));
         let rows = u32::from(rows_of(&lines[lines.len() - 2..], width));
@@ -705,7 +695,7 @@ fn withheld(why: &str) -> Line<'static> {
     ))
 }
 
-/// What is being asked, and the path it is being asked about.
+/// What is being asked, and the path it is being asked about, already spelled for a person.
 ///
 /// The path is the whole of what an answer is about, so it is drawn rather than summarised.
 fn asking(question: &str, directory: &str) -> Line<'static> {
@@ -1851,6 +1841,142 @@ mod tests {
         assert!(output.contains("/home/me/.ssh"), "no path: {output}");
         assert!(output.contains("open it"));
         assert!(output.contains("leave it closed"));
+    }
+
+    /// PROMPT-1: both directory questions draw the path they ask about with a name that would draw
+    /// as nothing, or as another name, quoted and spelled. A settings file chose the name in the
+    /// named question, so the person reading it cannot tell `/srv/shared ` from `/srv/shared`
+    /// unless the box says so.
+    #[test]
+    fn the_directory_questions_mark_a_name_that_would_draw_as_another() {
+        let named = |directory: &str| rendered(|frame| draw_named_at_rest(frame, directory));
+        let working = |directory: &str| rendered(|frame| draw_at_rest(frame, Path::new(directory)));
+        for (draw_it, plain) in [
+            (&named as &dyn Fn(&str) -> String, named("/srv/shared")),
+            (&working, working("/srv/shared")),
+        ] {
+            assert!(plain.contains("/srv/shared"), "{plain}");
+            for (name, spelled) in [
+                ("/srv/shared ", "\"/srv/shared\u{2423}\""),
+                ("/srv/sh\u{202e}ared", "\"/srv/sh\\u{202e}ared\""),
+            ] {
+                let drawn = draw_it(name);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the file a yes is kept in, and the file each proposed rule came from, are drawn
+    /// with a name that would draw as nothing, or as another name, quoted and spelled. The first is
+    /// under the person's state directory and the second under the checkout, so a directory name
+    /// neither of them typed reaches each row.
+    #[test]
+    fn the_trust_rows_name_a_file_with_a_name_that_would_draw_as_another() {
+        let tall = |draw_it: &dyn Fn(&mut ratatui::Frame)| {
+            let mut terminal = Terminal::new(TestBackend::new(100, 60)).expect("terminal");
+            terminal.draw(draw_it).expect("draw");
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let kept = |directory: &str| {
+            let file = std::path::PathBuf::from(format!("{directory}/trust.json"));
+            tall(&|frame| {
+                draw(
+                    frame,
+                    Path::new("/work"),
+                    Some(file.as_path()),
+                    false,
+                    0,
+                    &mut false,
+                );
+            })
+        };
+        let from = |directory: &str| {
+            let file = format!("{directory}/settings.json");
+            let rules = proposed(&[(file.as_str(), "Edit(src/**)")]);
+            tall(&|frame| draw_granted_at_rest(frame, &rules))
+        };
+        for (draw_it, plain) in [
+            (&kept as &dyn Fn(&str) -> String, kept("/home/me/state")),
+            (&from, from("/home/me/state")),
+        ] {
+            assert!(plain.contains("/home/me/state/"), "{plain}");
+            for (directory, spelled) in [
+                ("/home/me/sta\u{202e}te", "\"/home/me/sta\\u{202e}te/"),
+                ("/home/me/sta\u{200b}te", "\"/home/me/sta\\u{200b}te/"),
+            ] {
+                let drawn = draw_it(directory);
+                assert_ne!(drawn, plain, "{directory:?}");
+                assert!(drawn.contains(spelled), "{directory:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the text of a proposed rule is drawn with a character that would draw as nothing,
+    /// or as another one, spelled and the rule quoted, so a yes cannot grant `Read(/work/notes.md)`
+    /// under a row that reads like it. A rule that needs no spelling is drawn as it was written,
+    /// and one rule spelled does not change how the others in the list are drawn.
+    #[test]
+    fn a_proposed_rule_holding_an_invisible_character_is_drawn_spelled() {
+        let drawn = |rule: &str| {
+            let rules = proposed(&[
+                ("/work/.bravebot/settings.json", "Edit(src/**)"),
+                ("/work/.bravebot/settings.json", rule),
+            ]);
+            let mut terminal = Terminal::new(TestBackend::new(100, 40)).expect("terminal");
+            terminal
+                .draw(|frame| draw_granted_at_rest(frame, &rules))
+                .expect("draw");
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        let plain = drawn("Read(/work/notes.md)");
+        assert!(plain.contains("Edit(src/**)"), "{plain}");
+        assert!(plain.contains("Read(/work/notes.md)"), "{plain}");
+        // A rule is not a path: a space before a `/` is between two words and is not marked.
+        let spaced = drawn("Bash(cat /etc/hosts)");
+        assert!(spaced.contains("Bash(cat /etc/hosts)"), "{spaced}");
+        assert!(
+            !spaced.contains('"') && !spaced.contains('\u{2423}'),
+            "a rule with a space beside a separator was spelled: {spaced}"
+        );
+        assert!(
+            !plain.contains('"'),
+            "a rule that needs no spelling was quoted: {plain}"
+        );
+        for (rule, spelled) in [
+            (
+                "Read(/work/not\u{200b}es.md)",
+                "\"Read(/work/not\\u{200b}es.md)\"",
+            ),
+            (
+                "Read(/work/notes\u{202e}dm.)",
+                "\"Read(/work/notes\\u{202e}dm.)\"",
+            ),
+            (
+                "Read(/work/notes.md)\u{3000}",
+                "\"Read(/work/notes.md)\\u{3000}\"",
+            ),
+        ] {
+            let drawn = drawn(rule);
+            assert_ne!(drawn, plain, "{rule:?}");
+            assert!(drawn.contains(spelled), "{rule:?}\n{drawn}");
+            assert!(
+                drawn.contains("Edit(src/**)") && !drawn.contains("\"Edit(src/**)"),
+                "the other rule in the list was changed: {drawn}"
+            );
+        }
     }
 
     /// Opening a directory grants two things at once, reach and trust, and neither is on the

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
+import { ASSISTANT_BUBBLE, COMPOSER_NAME } from './drive-support.mjs'
 
 const tolerance = Number(process.env.PERF_TOLERANCE) || 1
 const SESSIONS = 1000
@@ -146,17 +147,17 @@ try {
   record(`window: longest task, ${SESSIONS} sessions`, longest, `<= ${BUDGET.openLongTask} ms`, longest <= BUDGET.openLongTask)
 
   await page.locator('.session').filter({ hasText: 'A long conversation' }).first().click()
-  const entry = page.getByRole('textbox', { name: 'Message the agent' })
+  const entry = page.getByRole('textbox', { name: COMPOSER_NAME })
   await entry.waitFor()
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
 
   // Three decision cards, left pending: a confirm with a diff, a run, and a question.
   const emit = (event, data) => app.evaluate((_, v) => globalThis.perf.emit(v.event, v.data), { event, data })
-  await emit('confirm.request', { request: 1, path: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 2, removed: 1, exact: true, changes: [
+  await emit('confirm.request', { request: 1, path: 'src/store.ts', shownPath: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 2, removed: 1, exact: true, changes: [
     { kind: 'kept', text: 'export class Store {' }, { kind: 'removed', text: '  private lock = new Mutex()' }, { kind: 'added', text: '  private readLock = new RwLock()' }, { kind: 'added', text: '  private writeLock = new Mutex()' }, { kind: 'kept', text: '}' },
   ] })
-  await emit('run.request', { request: 2, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [], summary: 'Run the store tests' })
-  await emit('ask.request', { request: 3, prompts: [{ header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock' }] })
+  await emit('run.request', { request: 2, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', shownBinary: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, shownDirectory: directory, releasesPrivate: false, ambient: [], vouches: [], summary: 'Run the store tests' })
+  await emit('ask.request', { request: 3, prompts: [{ header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock', place: null, last: true }] })
   await page.locator('.confirm.ask').waitFor()
   const count = await page.evaluate(() => document.querySelectorAll('.entries [data-entry-id]').length)
   console.log(`fixture: ${ENTRIES} entries loaded, ${count} rows in the DOM`)

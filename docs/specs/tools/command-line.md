@@ -8,6 +8,8 @@ governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -709,6 +711,12 @@ settled: an entry records the tree the answer was given in, so an answer given a
 for `sub/` and for no other directory, including the root. The carrying is what this clause grants;
 a standing answer is not.
 
+A directory that no longer exists is refused with a message saying so, a carried one as a named one,
+before the line is compiled and before anyone is asked, and a carried one is reset to the workspace
+root. The directory is checked again immediately before the first stage is spawned, because an
+approval can wait for hours, and a directory removed in that time is reported as removed rather than
+as a program that could not be started.
+
 The carrying lasts a turn. It is not written into the session record, so the next turn starts at the
 root again. That is short of what this clause describes, and is left to the change that gives a
 session somewhere to keep one ([RUN-9](run.md#RUN-9)).
@@ -720,6 +728,8 @@ session somewhere to keep one ([RUN-9](run.md#RUN-9)).
 `verified-by: bravebot_agent::turn::a_directory_that_is_not_a_string_is_refused`
 `verified-by: bravebot_agent::turn::what_is_reported_about_a_line_says_which_directory_it_ran_in`
 `verified-by: bravebot_agent::turn::a_refused_run_directory_does_not_persist`
+`verified-by: bravebot_agent::turn::a_carried_directory_that_was_removed_is_refused_before_asking`
+`verified-by: bravebot_agent::turn::a_directory_removed_during_the_approval_is_reported_as_removed`
 `verified-by: bravebot_agent::turn::a_vouched_line_is_asked_about_again_when_a_directory_is_named`
 
 <a id="CMDLINE-13"></a>

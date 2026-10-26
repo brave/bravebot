@@ -4,6 +4,9 @@
 //! Asked before any session exists, and read by no model: the names reach a question the person
 //! answers, and the one written becomes the `model` field of later requests on that answer. Choosing
 //! which name to offer from them is therefore not a planner branching on fetched bytes.
+//!
+//! The bounded request is shared with [`crate::lm_studio`] and [`crate::llama_server`], which ask
+//! the same way of the two other servers the import offers (IMPORT-12).
 
 use bravebot_config::import::Installed;
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -18,7 +21,7 @@ use std::time::Duration;
 ///
 /// A few hundred bytes name one model, so this is thousands of them, and a larger body is not a
 /// listing this is worth parsing for.
-const LISTING_BYTES: usize = 1024 * 1024;
+pub(crate) const LISTING_BYTES: usize = 1024 * 1024;
 
 /// How long a start waits on the server.
 ///
@@ -43,9 +46,9 @@ const TIMEOUTS: Timeouts = Timeouts {
 /// A model that is not loaded, or an answer to that request that cannot be read, leaves `window`
 /// `None` and says nothing.
 pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
-    let bytes = fetch(host, "api/tags", sink)?;
+    let bytes = fetch(host, "api/tags", "ollama", sink)?;
     let listing: Listing = serde_json::from_slice(&bytes).ok()?;
-    let loaded: Vec<Running> = fetch(host, "api/ps", sink)
+    let loaded: Vec<Running> = fetch(host, "api/ps", "ollama", sink)
         .and_then(|bytes| serde_json::from_slice::<Processes>(&bytes).ok())
         .map(|processes| processes.models)
         .unwrap_or_default();
@@ -67,14 +70,14 @@ pub fn installed<S: Sink>(host: &str, sink: &mut S) -> Option<Vec<Installed>> {
     )
 }
 
-/// The body of one `GET {host}/{path}`, bounded and held to the address, or `None` where it did not
-/// come back as a body within [`LISTING_BYTES`].
-fn fetch<S: Sink>(host: &str, path: &str, sink: &mut S) -> Option<Vec<u8>> {
+/// The body of one `GET {host}/{path}` to the server `name`, bounded and held to the address, or
+/// `None` where it did not come back as a body within [`LISTING_BYTES`].
+pub(crate) fn fetch<S: Sink>(host: &str, path: &str, name: &str, sink: &mut S) -> Option<Vec<u8>> {
     let url = format!("{host}/{path}");
-    // The one destination is the address `OLLAMA_HOST` or the default names, which the caller has
+    // The one destination is the address the variable or the default names, which the caller has
     // already found to be this machine. Nothing fetched chooses it.
     let mut routing = Routing::new();
-    routing.insert_trusted("ollama", url.as_str());
+    routing.insert_trusted(name, url.as_str());
     let mut policy = Policy::begin(
         routing,
         ReleasePlan::new(),
@@ -91,7 +94,7 @@ fn fetch<S: Sink>(host: &str, path: &str, sink: &mut S) -> Option<Vec<u8>> {
         .ok()?;
     let label = response.body.label();
     let (bytes, _) = policy
-        .decode_transport("ollama models", label)
+        .decode_transport(&format!("{name} models"), label)
         .decode(response.body);
     (bytes.len() <= LISTING_BYTES).then_some(bytes)
 }
@@ -134,46 +137,11 @@ struct Listed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::stand_in::{http, serve, serve_paths};
     use bravebot_core::event::RecordingSink;
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpListener;
     use std::thread;
     use std::time::Instant;
-
-    /// A server on this machine answering one connection with `response`, and its base URL.
-    fn serve(response: Vec<u8>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().expect("addr").port();
-        thread::spawn(move || {
-            if let Ok((stream, _)) = listener.accept() {
-                answer(stream, &response);
-            }
-        });
-        format!("http://127.0.0.1:{port}")
-    }
-
-    fn answer(mut stream: TcpStream, response: &[u8]) {
-        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap_or(0) > 0 {
-            if line == "\r\n" || line == "\n" {
-                break;
-            }
-            line.clear();
-        }
-        let _ = stream.write_all(response);
-        let _ = stream.flush();
-    }
-
-    fn http(status: &str, body: &[u8]) -> Vec<u8> {
-        let mut response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        )
-        .into_bytes();
-        response.extend_from_slice(body);
-        response
-    }
 
     const LISTING: &str = r#"{"models":[
         {"name":"qwen3-coder:30b","model":"qwen3-coder:30b","modified_at":"2026-09-16T14:07:58.84902-04:00",
@@ -212,36 +180,6 @@ mod tests {
                 },
             ]
         );
-    }
-
-    /// A server on this machine answering each request by its path from `routes`, and a 404 for any
-    /// other, until the test ends. Returns its base URL.
-    fn serve_paths(routes: Vec<(&'static str, Vec<u8>)>) -> String {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().expect("addr").port();
-        thread::spawn(move || {
-            while let Ok((mut stream, _)) = listener.accept() {
-                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-                let mut request = String::new();
-                let _ = reader.read_line(&mut request);
-                let mut line = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                    if line == "\r\n" || line == "\n" {
-                        break;
-                    }
-                    line.clear();
-                }
-                let path = request.split_whitespace().nth(1).unwrap_or("");
-                let response = routes
-                    .iter()
-                    .find(|(route, _)| *route == path)
-                    .map(|(_, response)| response.clone())
-                    .unwrap_or_else(|| http("404 Not Found", b"{}"));
-                let _ = stream.write_all(&response);
-                let _ = stream.flush();
-            }
-        });
-        format!("http://127.0.0.1:{port}")
     }
 
     /// IMPORT-10: a model that is loaded carries the window it was loaded with, matched by name, so

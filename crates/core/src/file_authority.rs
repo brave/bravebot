@@ -20,6 +20,9 @@ struct State {
     // equivalent spelling of it, is one entry.
     active: BTreeSet<String>,
     revision: u64,
+    // How many `run` lines have started. A program opens files by itself, so no path it rewrites
+    // is named to the authority, and this is the only record that one may have been.
+    programs: u64,
     // One latest revision per distinct path for outstanding preview approvals.
     versions: BTreeMap<String, u64>,
 }
@@ -64,6 +67,14 @@ impl State {
     }
 }
 
+/// What the authority knew of one path at one moment: its revision, and how many `run` lines had
+/// started. Numbers only; two stamps are compared for equality and nothing else is read from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Stamp {
+    revision: u64,
+    programs: u64,
+}
+
 #[derive(Debug)]
 struct Shared {
     access: RwLock<()>,
@@ -89,6 +100,7 @@ impl FileAuthority {
                     trust,
                     active: BTreeSet::new(),
                     revision: 0,
+                    programs: 0,
                     versions: BTreeMap::new(),
                 }),
             }),
@@ -252,6 +264,38 @@ impl FileAuthority {
     /// Changes even when a write leaves the effective label unchanged.
     pub fn revision(&self) -> u64 {
         self.state().revision
+    }
+
+    /// Record that a `run` line is starting, which may rewrite any file its programs can reach.
+    ///
+    /// Moves no revision: a revision moving would quarantine the output of every command running
+    /// beside this one, on a decision that changed nothing about the trust map. A path a line
+    /// names as a destination is revised on its own, by [`FileCapture::begin`]; this is for the
+    /// files a program opens without the line naming them.
+    pub fn note_program_started(&self) {
+        let mut state = self.state();
+        state.programs = state.programs.wrapping_add(1);
+    }
+
+    /// How many `run` lines have started, for a caller that wants to know whether another has
+    /// since.
+    pub fn programs_started(&self) -> u64 {
+        self.state().programs
+    }
+
+    /// What is known of `path` now: its revision and how many `run` lines have started.
+    ///
+    /// Taken under one lock, so the two numbers describe the same moment. A file is the same file
+    /// it was only while both are as they were: its revision moves when the authority is told of a
+    /// write to it, and the count moves when a program starts that may have written it without
+    /// anybody being told.
+    pub fn stamp_of(&self, path: &str) -> Stamp {
+        let state = self.state();
+        let key = state.trust.key(&self.spelled(path));
+        Stamp {
+            revision: state.revision_of(&key),
+            programs: state.programs,
+        }
     }
 
     /// A poisoned boundary cannot validate an earlier command proof.
@@ -430,8 +474,8 @@ mod tests {
     /// the trust of the one file written into it.
     ///
     /// Through the effect a live write completes, which is the route every write in the workspace
-    /// takes. `Policy::reconcile_after_write` is the other route, over a snapshot, and is pinned
-    /// in `policy`.
+    /// takes. The rows of TRUST-4's table that agree with the tree are pinned in `policy`, through
+    /// the same effect.
     #[test]
     fn a_completed_write_records_the_file_and_no_directory_above_it() {
         for (tree, written) in [

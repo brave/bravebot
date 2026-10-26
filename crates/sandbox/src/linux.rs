@@ -83,7 +83,10 @@ const SYS_LANDLOCK_CREATE_RULESET: libc::c_long = 444;
 /// Passing a null attribute pointer with `LANDLOCK_CREATE_RULESET_VERSION` returns the
 /// version without creating a ruleset. A negative result means Landlock is absent.
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "Landlock has no libc wrapper, so the syscall is issued directly"
+)]
 fn landlock_abi_version() -> libc::c_long {
     const LANDLOCK_CREATE_RULESET_VERSION: libc::c_ulong = 1;
     // Landlock has no libc wrapper, so the syscall is issued directly.
@@ -420,12 +423,11 @@ impl LandlockSandbox {
         })?;
         let policy = trimmed.as_ref().unwrap_or(policy);
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the program the caller asked to run confined, started inside the \
-                          policy's confinement"
-        )]
-        let mut command = Command::new(program);
+        let mut command = crate::programs::start(
+            &crate::programs::Resolved::to_confine(program),
+            crate::programs::Inherits::All,
+            crate::programs::SearchPath::Inherited,
+        );
         command.args(args);
         if let Some(directory) = &policy.starting_in {
             command.current_dir(directory);
@@ -446,7 +448,10 @@ impl LandlockSandbox {
         // ruleset is installed in the child between fork and exec.
         // `pre_exec` is unsafe by definition: its closure runs in the forked child, where
         // only async-signal-safe work is allowed.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "`pre_exec` is unsafe, and its closure runs only async-signal-safe calls in the forked child"
+        )]
         // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         unsafe {
             command.pre_exec(move || {
@@ -954,6 +959,82 @@ mod tests {
         );
     }
 
+    /// A stage that can write where the proxy's socket is can unlink it and put a link to another
+    /// socket of the account in its place, and nothing is relayed through the forwarder to
+    /// that socket: the listener it leads to is connected to and receives no byte, and the stage
+    /// is answered with nothing. The stage's write row over the socket's directory stands for the
+    /// temporary directory, which holds the socket where the account has no runtime directory,
+    /// and for a row the person named.
+    ///
+    /// The regression it rejects: a forwarder that connects to whatever its path leads to and
+    /// relays, which gives a stage held to a host list the session bus, an agent or a container
+    /// runtime the forwarder can reach and the stage's own ruleset refuses it.
+    #[test]
+    fn a_stage_that_replaces_the_proxys_socket_with_a_link_is_not_relayed_to_what_it_leads_to() {
+        if !can_make_a_namespace() {
+            return;
+        }
+        let sandbox = LandlockSandbox;
+        // Dropping the proxy connects to its socket's name to wake the thread that listens on
+        // it, and the stage makes that name lead elsewhere, so the proxy is never dropped.
+        let proxy = std::mem::ManuallyDrop::new(
+            Proxy::start(ProxyConfig::new(HostList::default())).expect("a proxy"),
+        );
+        let socket = proxy.socket_path().expect("a unix socket").to_path_buf();
+        let directory = socket.parent().expect("a directory").to_path_buf();
+        let port = proxy.addr().port();
+        let elsewhere = crate::testutil::a_directory_for_sockets(&[]);
+        let (listening_at, listener) = crate::testutil::listening_in(&elsewhere);
+        let policy = loadable_policy()
+            .allow_subprocesses()
+            .allow_network_egress_only_to(port)
+            .with_egress_through(socket.clone())
+            .allow_write(&directory);
+
+        let printed = printed_by_bash(
+            &sandbox,
+            &policy,
+            &format!(
+                "rm -f '{socket}' && ln -s '{target}' '{socket}' && echo replaced; \
+                 exec 3<>/dev/tcp/127.0.0.1/{port} || {{ echo no-forwarder; exit 0; }}; \
+                 printf 'CONNECT unlisted.example:443 HTTP/1.1\\r\\n\\r\\n' >&3; \
+                 read -r -t 5 answer <&3; echo \"answer:$answer\"; exit 0",
+                socket = socket.display(),
+                target = listening_at.display(),
+            ),
+        );
+        let asked = proxy.decisions();
+        let reached = listener.accept();
+        let mut sent = Vec::new();
+        if let Ok((stream, _)) = &reached {
+            use std::io::Read as _;
+            stream.set_nonblocking(true).expect("a stream to poll");
+            let _ = (&*stream).read_to_end(&mut sent);
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+
+        assert!(
+            printed.lines().any(|line| line == "replaced"),
+            "the stage could not replace the socket, so nothing was tested: {printed}"
+        );
+        assert!(!printed.contains("no-forwarder"), "{printed}");
+        assert!(
+            printed.lines().any(|line| line == "answer:"),
+            "the stage was answered: {printed}"
+        );
+        assert!(
+            reached.is_ok(),
+            "the forwarder never connected to what the link leads to, so nothing was tested"
+        );
+        assert!(
+            sent.is_empty(),
+            "the listener the link leads to was sent {} bytes",
+            sent.len()
+        );
+        assert!(asked.is_empty(), "the proxy was asked for {asked:?}");
+    }
+
     /// Until subprocess denial is implemented, asking for it must be an error rather than
     /// a sandbox that quietly permits fork/exec.
     #[test]
@@ -1335,6 +1416,7 @@ mod tests {
         let held_back = [
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
+            ".bravebot/chatgpt-account.json",
             ".bravebot/mcp.json",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",

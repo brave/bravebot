@@ -5,10 +5,14 @@ status: normative
 governs:
   - crates/tui/src/update.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/opening.rs
   - crates/config/src/install.rs
   - npm/bin/bravebot.js
   - install.sh
-documented-by: docs/website/docs/quickstart.md
+  - install.ps1
+documented-by:
+  - docs/website/docs/quickstart.md
+  - docs/website/docs/install.md
 ---
 
 ## Scope
@@ -39,22 +43,26 @@ question keeps the first thing on the screen the question that grants standing p
 <a id="UPDATE-2"></a>
 ### UPDATE-2: only an installation there is a command for is told anything
 
-Four are: the npm package, which its launcher names when it starts the binary, an install made
-by the install script, which is the binary that script recorded, and the Homebrew cask and the
-WinGet package, which are a binary that resolves into a directory only that package manager makes:
-`Caskroom/bravebot/` for the cask, `WinGet/Packages/Brave.Bravebot_*/` for WinGet. Any other copy, one built from
-source above all, is told nothing and asks nothing.
+Five are: the npm package, which its launcher names when it starts the binary, an install made
+by the install script, which is the binary that script recorded, an install made by the PowerShell
+install script, which is the binary that script recorded in a file of its own, and the Homebrew
+cask and the WinGet package, which are a binary that resolves into a directory only that package
+manager makes: `Caskroom/bravebot/` for the cask, `WinGet/Packages/Brave.Bravebot_*/` for WinGet.
+Any other copy, one built from source above all, is told nothing and asks nothing.
 
 **Why.** The line exists for the command in it. Telling somebody a release is out without a line
 that would install it is noise, and a build from source is updated by the tree it was built from.
 The recorded path has to be the binary that is running, since a checkout on a machine that also
 has a script install is not a script install: the command would replace the other copy rather
-than theirs. A package manager's directory wins over a script record naming the same path: the record can
+than theirs. Each script's record counts for that script alone, so a copy only `install.sh` recorded
+is never offered the PowerShell line and the other way round. A package manager's directory wins over a script record naming the same path: the record can
 only be stale there. Another cask's directory, or one that only resembles the name, is not this
 package's.
 
 `verified-by: bravebot_config::install::the_launcher_saying_npm_is_what_makes_it_an_npm_install`
 `verified-by: bravebot_config::install::the_binary_the_script_recorded_is_a_script_install`
+`verified-by: bravebot_config::install::the_binary_the_powershell_script_recorded_is_a_powershell_install`
+`verified-by: bravebot_config::install::each_script_is_recognised_by_its_own_record`
 `verified-by: bravebot_config::install::a_binary_other_than_the_recorded_one_is_not_a_script_install`
 `verified-by: bravebot_config::install::an_installation_nothing_recorded_is_left_alone`
 `verified-by: bravebot_config::install::a_binary_under_a_package_managers_directory_is_that_managers_install`
@@ -67,20 +75,22 @@ One fixed line per installation, composed from nothing: not from the answer, not
 not from the environment.
 
 **Why.** This is a line somebody pastes into a shell, so no part of it may come from anywhere a
-value arrives from. Offering the wrong one of the four is its own harm and not a smaller one: the
-npm command against a script install puts a second copy on the machine and updates neither. A
-package manager's own line is the same: `brew upgrade --cask bravebot` and `winget upgrade
-Brave.Bravebot`, which update only what that manager installed.
+value arrives from. Offering the wrong one of the five is its own harm and not a smaller one: the
+npm command against a script install puts a second copy on the machine and updates neither, and the
+shell script's line is one a Windows shell cannot run. A package manager's own line is the same:
+`brew upgrade --cask bravebot` and `winget upgrade Brave.Bravebot`, which update only what that
+manager installed.
 
-The same four literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
+The same five literals answer `bravebot update` ([CLI-29](cli.md#CLI-29)), which is why they and
 the installation they are chosen by sit in the configuration surface rather than beside the
 startup line: a presentation crate may not reach another one
-([LAYER-1](layering.md#LAYER-1)), and two copies of the four would be four commands to keep in step.
+([LAYER-1](layering.md#LAYER-1)), and two copies of the five would be five commands to keep in step.
 
 `verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
 `verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`
+`verified-by: bravebot_tui::update::a_powershell_install_is_given_the_powershell_script_again`
 `verified-by: bravebot_tui::update::a_package_manager_install_is_given_its_managers_upgrade_command`
-`verified-by: by-construction (each command is one of four literals chosen by matching on the installation, so no value composes one)`
+`verified-by: by-construction (each command is one of five literals chosen by matching on the installation, so no value composes one)`
 
 <a id="UPDATE-4"></a>
 ### UPDATE-4: a version is three numbers, compared as numbers
@@ -204,14 +214,21 @@ yesterday untrue either, so the line a person was shown this morning is still sh
 <a id="UPDATE-10"></a>
 ### UPDATE-10: the install script's record names the install and is where the next one goes
 
-The script writes down the path it installed, and a later run with no directory named installs
-over that binary.
+Each install script writes down the path it installed, in a file of its own, `installed-by` for
+`install.sh` and `installed-by-powershell` for `install.ps1`, and a later run of that script with no
+directory named installs over that binary. A directory named wins, and is what the record names
+afterwards. The PowerShell script's record is the path and a newline in UTF-8 with no byte order
+mark, since the program reads the first line as the path and a mark would be part of it.
 
 **Why.** One record answers both questions, and it has to: an update that landed in a different
 directory would leave two copies on the machine and update whichever the PATH does not reach,
-while a copy the record does not name is one this program will not offer a command for.
+while a copy the record does not name is one this program will not offer a command for. The two
+scripts keep separate records because each names the line that replaces what it wrote, and a
+record both could write would offer one script's line for the other's copy.
 
-`verified-by: by-construction (the script writes the destination path into the record after moving the binary, and takes the directory from that record when none is given)`
+`verified-by: bravebot_cli::installer_powershell::a_later_run_installs_where_the_record_names_unless_a_directory_is_given`
+`verified-by: bravebot_cli::installer_powershell::the_record_is_the_path_of_the_executable_and_a_newline`
+`verified-by: by-construction (install.sh writes the destination path into the record after moving the binary, and takes the directory from that record when none is given)`
 
 <a id="UPDATE-11"></a>
 ### UPDATE-11: a person can turn the check off, and then nothing about it happens
@@ -264,9 +281,7 @@ not touch UPDATE-5. It governs only this check: the installer's checksum and sig
   version npm does not serve yet. Each installation asks the registry it came from, so neither is
   offered a command that cannot work.
 
-- **Nothing runs the install script.** UPDATE-10 is by-construction for the reason every clause in
+- **Nothing runs `install.sh`.** For `install.sh`, UPDATE-10 is by-construction, for the reason every clause in
   [releases.md](releases.md) is: it is shell a person fetches over the network, and a test that
-  ran it would install something.
-
-- **Windows is npm only.** The install script is for macOS and Linux, so a Windows copy is told
-  about a release only through the launcher that npm installs.
+  ran it would install something. `install.ps1` is run, with the network and the signature check
+  replaced by stand-ins, by `crates/cli/tests/installer_powershell.rs`.

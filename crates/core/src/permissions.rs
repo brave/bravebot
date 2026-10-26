@@ -217,6 +217,11 @@ impl Rule {
     /// A rule nobody can act on is dropped rather than guessed at, and the text says which it was
     /// so `doctor` can name it. Guessing would be worse than ignoring: a misread deny rule reads
     /// as protection that is not there.
+    ///
+    /// The line is trimmed, and so is the specifier of every family but `Read` and `Edit`. A path
+    /// specifier with whitespace at an end is not read at all: the whitespace is part of a file's
+    /// name where a path is bytes and as likely padding inside the brackets, and a rule read either
+    /// way would be about a file the person may not have meant ([`Unreadable::WhitespaceAtAnEnd`]).
     pub fn parse(text: &str, anchors: &Anchors) -> Result<Self, Rejected> {
         // A rejection names the entry in the spelling the file used, not the trimmed text that was
         // read. Two lines that differ only in surrounding space are two entries somebody has to
@@ -252,13 +257,29 @@ impl Rule {
             None => (text, None),
             Some((name, rest)) => match rest.strip_suffix(')') {
                 None => return Err(Rejected::new(text, Unreadable::UnclosedBracket)),
-                Some(specifier) => (name.trim_end(), Some(specifier.trim())),
+                Some(specifier) => (name.trim_end(), Some(specifier)),
             },
         };
 
         let Some(subject) = Subject::parse(name) else {
             return Err(Rejected::new(text, Unreadable::UnknownFamily));
         };
+
+        let written = specifier;
+        let specifier = specifier.map(str::trim);
+
+        // Whitespace at an end of a path specifier is part of a file's name where a path is bytes
+        // (TRUST-2), and it is as likely padding inside the brackets. Read as the name, a deny rule
+        // typed with padding covers a file nobody meant and the file it was for is left open. Read
+        // as padding, a rule about a file named with whitespace covers the file without it. Neither
+        // is a reading to guess at, so the rule is not read. The other families are words, where
+        // padding says nothing.
+        if subject.takes_a_path()
+            && specifier.is_some_and(|s| !s.is_empty())
+            && written != specifier
+        {
+            return Err(Rejected::new(text, Unreadable::WhitespaceAtAnEnd));
+        }
 
         let pattern = match specifier {
             // A bare family name, and `(*)`, are the same rule and cover every use of it.
@@ -497,8 +518,9 @@ impl Rule {
 
 /// A rule that was not one, and what was wrong with it.
 ///
-/// Carries the text so a report can name it. The text came from the user's own settings file, so
-/// there is nothing untrusted in it.
+/// Carries the text so a report can name it. The text is whatever a settings file spelled, and the
+/// project and local layers are a checkout's, so it can hold control characters. A front end that
+/// writes it straight to a terminal pictures them first (LAYER-3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejected {
     pub text: String,
@@ -524,6 +546,10 @@ pub enum Unreadable {
     UnknownFamily,
     /// `Read()`, which says nothing that `Read` alone does not.
     EmptyBrackets,
+    /// A path specifier with whitespace at its start or end, as `Read(./a.md )` or `Read( .env )`.
+    /// The whitespace is part of the name of a file that has it and is as likely padding, so
+    /// neither reading is safe for a rule that refuses.
+    WhitespaceAtAnEnd,
     /// A path rule in a run with no home or settings directory to resolve it against.
     Unanchored,
     /// A `WebFetch` rule whose specifier does not begin `domain:`.
@@ -1947,6 +1973,145 @@ mod tests {
                 "a rule about `.env` or `secrets` decided {other:?}"
             );
         }
+    }
+
+    /// A path specifier with whitespace at either end is not read, in any list and for both families
+    /// that take a path (TRUST-2, PERM-11). Whitespace there is part of the name of a file that has
+    /// it and as likely padding inside the brackets: read as the name, a deny rule typed with padding
+    /// covers a file nobody meant, and trimmed, a rule about a file named with whitespace covers the
+    /// file without it, an allow rule granting that file. The shapes are the names the awkward-names
+    /// test cannot spell and the padded forms of a wildcard, an anchor and a tree, which a trimmed
+    /// specifier reads as the blanket or anchored rule they were meant for.
+    #[test]
+    fn a_path_specifier_with_whitespace_at_an_end_is_reported_and_decides_nothing() {
+        for whitespace in [" ", "\t", "\n", "\u{a0}", "\u{3000}"] {
+            for family in ["Read", "Edit"] {
+                for specifier in [
+                    format!("./a.md{whitespace}"),
+                    format!("a.md{whitespace}"),
+                    format!("{whitespace}a.md"),
+                    format!("{whitespace}.env{whitespace}"),
+                    format!("./{whitespace}"),
+                    format!("secrets/**{whitespace}"),
+                    format!("{whitespace}*{whitespace}"),
+                    format!("{whitespace}**"),
+                    format!("{whitespace}~/.ssh/**"),
+                    format!("{whitespace}//etc/**"),
+                ] {
+                    let written = format!("{family}({specifier})");
+                    let rejected = Rule::parse(&written, &anchors()).expect_err(&written);
+                    assert_eq!(
+                        rejected.reason,
+                        Unreadable::WhitespaceAtAnEnd,
+                        "{written:?} was not reported for its whitespace"
+                    );
+                    assert_eq!(rejected.text, written);
+
+                    let owned = vec![written.clone()];
+                    let none: Vec<String> = Vec::new();
+                    for (deny, ask, allow) in [
+                        (&owned, &none, &none),
+                        (&none, &owned, &none),
+                        (&none, &none, &owned),
+                    ] {
+                        let (permissions, rejected) =
+                            Permissions::parse(deny, ask, allow, &anchors());
+                        assert_eq!(rejected.len(), 1, "{written:?} was not reported");
+                        assert!(permissions.is_empty(), "{written:?} was kept");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whitespace between the first and last character of a path specifier is part of a name and
+    /// nothing is wrong with it: a file called `my notes.md` has a rule, in every list. A name that
+    /// starts with whitespace is written from `./` or `**/`, which put something in front of it, and
+    /// is as much a name as the one without it.
+    #[test]
+    fn whitespace_inside_a_path_specifier_is_part_of_the_name() {
+        for whitespace in [" ", "\t", "\u{a0}", "\u{3000}"] {
+            for (written, named, without) in [
+                (
+                    format!("Read(./my{whitespace}notes.md)"),
+                    format!("my{whitespace}notes.md"),
+                    "mynotes.md",
+                ),
+                (
+                    format!("Read(./{whitespace}a.md)"),
+                    format!("{whitespace}a.md"),
+                    "a.md",
+                ),
+                (
+                    format!("Read(**/{whitespace}a.md)"),
+                    format!("d/{whitespace}a.md"),
+                    "d/a.md",
+                ),
+            ] {
+                for (ruling, permissions) in [
+                    (Ruling::Deny, rules(&[written.as_str()], &[], &[])),
+                    (Ruling::Ask, rules(&[], &[written.as_str()], &[])),
+                    (Ruling::Allow, rules(&[], &[], &[written.as_str()])),
+                ] {
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, &named),
+                        Decision::Ruled(ruling),
+                        "{written:?} ({ruling:?}) did not decide {named:?}"
+                    );
+                    assert_eq!(
+                        permissions.for_path(Subject::Read, without),
+                        Decision::Unmatched,
+                        "{written:?} ({ruling:?}) decided the name without the whitespace"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Brackets that hold nothing but whitespace say nothing that the bare family does not, so they
+    /// are reported as empty brackets whatever whitespace is in them, as `Read()` is, and not as a
+    /// path with whitespace at an end.
+    #[test]
+    fn brackets_holding_only_whitespace_are_empty_in_every_family() {
+        for family in ["Read", "Edit", "Bash", "WebFetch", "Mcp"] {
+            for blank in ["", " ", "\t", "\n", "\u{a0}", "\u{3000}"] {
+                let written = format!("{family}({blank})");
+                let rejected = Rule::parse(&written, &anchors()).expect_err(&written);
+                assert_eq!(
+                    rejected.reason,
+                    Unreadable::EmptyBrackets,
+                    "{written:?} was not reported as empty"
+                );
+                assert_eq!(rejected.text, written);
+            }
+        }
+    }
+
+    /// Only a path is bytes. A command is words, a host is a name in lower case and a tool is an
+    /// alias, so padding inside their brackets is dropped and the rule says what it says without it.
+    #[test]
+    fn padding_inside_the_brackets_of_a_command_host_or_tool_rule_is_dropped() {
+        let permissions = rules(
+            &["Bash( git push )", "WebFetch( domain:denied.test )"],
+            &["Mcp( weather:get_alerts )"],
+            &["Mcp(\tnews\u{a0})"],
+        );
+        assert_eq!(
+            permissions.for_command(&["git", "push"]),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_host("denied.test"),
+            Decision::Ruled(Ruling::Deny)
+        );
+        assert_eq!(
+            permissions.for_mcp("weather", "get_alerts"),
+            Decision::Ruled(Ruling::Ask)
+        );
+        assert_eq!(
+            permissions.for_mcp("news", "lookup"),
+            Decision::Ruled(Ruling::Allow)
+        );
     }
 
     /// A volume that folds case compares the two forms and the two cases together.

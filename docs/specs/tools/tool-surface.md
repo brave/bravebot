@@ -8,7 +8,7 @@ governs:
 guards:
   - symbol: Produced::problem
     sites:
-      - crates/agent/src/tools.rs: 240
+      - crates/agent/src/tools.rs: 250
       - crates/agent/src/tools/message.rs: 14
   - symbol: Produced::refused_with_a_note
     sites:
@@ -38,17 +38,18 @@ may be untrusted. No argument is both, and nothing at run time reclassifies one.
 | [`read_git`](read-git.md) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | the answer, or a reference |
 | [`lsp`](lsp.md) | `operation`, `path`, `line`, `character`, `query` | none | locations, with their text shown or referenced |
 | [`write_file`](write-file.md) | `path`, `path_ref`, `contents_ref` | `contents` | confirmation |
-| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | confirmation |
+| [`edit_file`](edit-file.md) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | confirmation |
 | [`apply_checkout`](../checkouts.md#CHECKOUT-14) | `checkout`, `paths` | none | the files brought back, one confirmation each |
 | [`spawn_processor`](spawn-processor.md) | `reads`, `about` | `instruction` | a reference |
 | [`spawn_agent`](spawn-agent.md) | `kind`, `mcp_servers` | `task`, `each` | one report per delegate |
 | [`run`](run.md) | every stage's program and arguments, `directory`, `background`, `deadline_seconds`, `stdin_ref` | standard input | a reference |
 | [`read_output`](read-output.md) | the reference naming the result, `offset`, `pattern` | none | the bytes, if a person allows it |
 | [`vet_content`](vet-content.md) | the reference naming the slot | none | the bytes, if a person allows it |
-| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds` | none | what it has printed since the last look |
+| [`job_output`](run.md#RUN-15) | `job`, `kill`, `wait_seconds`, `until_exit` | none | what it has printed since the last look |
 | [`fetch_url`](fetch-url.md) | `url` | none | a reference |
 | [`download_url`](download-url.md) | `url`, `path` | none | the path and the byte count |
 | [`load_skill`](load-skill.md) | `name` | none | the skill's text |
+| [`search_skills`](search-skills.md) | `query` | none | matching skills' names and descriptions, or a count of further matches |
 | [`load_tool`](../mcp-servers.md#SERVERS-16) | `name` | none | confirmation that the tool is offered from the next request |
 | [`todo_write`](todo-write.md) | none | `todos` | confirmation |
 | [`schedule_next`](schedule-next.md) | `delay_seconds`, `noop` | `reason` | the wait that will happen |
@@ -165,6 +166,7 @@ was for, so a session reads as a list of commands.
 `verified-by: bravebot_agent::tools::every_tool_offered_asks_why_it_is_being_called`
 `verified-by: bravebot_agent::turn::each_call_is_announced_and_summarised_with_its_own_reason`
 `verified-by: bravebot_agent::tools::a_held_call_is_drawn_with_the_reason_the_planner_gave`
+`verified-by: bravebot_agent::tools::a_held_call_to_a_servers_tool_is_drawn_with_its_target`
 
 <a id="TOOL-6"></a>
 ### TOOL-6: what a tool says names only the tools the same turn is offered

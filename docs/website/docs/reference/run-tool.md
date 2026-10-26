@@ -126,17 +126,17 @@ behind.
 ## The answers, and how long each one lasts
 
 ```
-  y run it    a always this session    r remember it    f any number    n don't    ctrl-c stop the turn
+  y run it    a always this session    r remember it    s read pull requests and issues in brave/bravebot    n don't    ctrl-c stop the turn
 ```
 
-The `f` key appears only for a line of the form `gh pr view 1081 --repo brave/bravebot`, described below.
+The `s` key appears only for a line of the form `gh pr view 1081 --repo brave/bravebot`, described below.
 
 | Key | Lasts | Grants |
 |---|---|---|
 | `y` | this call | the line runs once |
 | `a` | this session | the line runs unasked, **and** what it prints becomes readable |
 | `r` | past the session | the line runs unasked, and what it prints stays quarantined |
-| `f` | past the session | as `r`, for the same sub-command on the same repository with any whole number |
+| `s` | past the session | as `r`, for `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view` on the same repository with any whole number |
 | `n` | nothing | the line does not run |
 
 `a` is [vouching](../security/permissions.md#vouching-for-a-command), and it is the only answer that
@@ -155,13 +155,15 @@ every one of those is the same and the name still resolves to the same binary. S
 somewhere else makes a different line. Nothing in the record can mean "any text", so only one answer here can
 reach a second line, and only as follows.
 
-**`f` frees one number.** For `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view`, written
-as `gh pr view 1081 --repo brave/bravebot`, the prompt offers `f` beside `r`. It records
-`gh pr view <number> --repo brave/bravebot`, so another whole number on the same sub-command and
-repository is not asked about. Those four were checked by hand against what `gh` does and are listed in
-the source. Another repository, `gh pr view abc`, any other flag such as `--web` or `--json`, and any
+**`s` saves a scope.** For a line like `gh pr view 1081 --repo brave/bravebot`, the prompt offers `s`
+beside `r`, and asks in words: "Read pull requests and issues in brave/bravebot". Answering it saves one
+entry in the same file as `r`, holding `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view` on
+that repository with the number free, so another whole number of any of the four is not asked about.
+Those four were checked by hand against what `gh` does and are listed in the source. The entry lists
+as one item in `/status`, and deleting its line from the file takes all four back. Another repository,
+`gh pr view abc`, any other flag such as `--web` or `--json`, any sub-command that writes, and any
 line not in the list are asked about as before. The same lines `r` is withheld from are withheld from
-`f`.
+`s`.
 
 A record is read only where a prompt could have been drawn. A [one-shot run](../using/headless.md) reads
 none, and puts a covered line where it puts every other one. A tick of a
@@ -395,8 +397,8 @@ Without those a planner reads one quarantined result as proof that programs are 
 running them, which is not what happened: the label is about who answered for the command.
 Who answers `read_output` is said once, in the tool's own description, which is rebuilt for each
 request from the current mode and screening, so a mode change mid-turn shows on the next request.
-[Bypassing with no screening](../security/permissions.md#bypassing) tells the planner that the output
-comes back as text it can read, since nobody is shown it. Screening ([`--vet`](../security/permissions.md#bypassing))
+[Bypassing with no screening](../security/permission-modes.md#bypassing) tells the planner that the output
+comes back as text it can read, since nobody is shown it. Screening ([`--vet`](../security/permission-modes.md#bypassing))
 changes it in any mode: a check's word answers first, so the planner is told the output comes back as
 text it can read or that it was kept back. Otherwise the planner is told you see the output and decide.
 The description names neither the mode nor the check. A run's result carries only the reference, the
@@ -425,7 +427,7 @@ printed, and the whole of it stays available as a reference, which
 ## Reading the output in the same result
 
 `read: true` asks for what the line printed in the result that ran it. When you
-[bypass permissions](../security/permissions.md#bypassing) and have not asked for screening,
+[bypass permissions](../security/permission-modes.md#bypassing) and have not asked for screening,
 `read_output` is always answered yes and nobody is shown anything, so the answer is given at once: the
 output comes back as text the planner may read, with the same label and the same entry in the audit
 trail that `read_output` would have written, and the reference it was kept under beside it. That saves
@@ -494,7 +496,7 @@ list` are ordinary requests, and no rule matching variable names can tell one of
 exfiltration, so `AWS_PROFILE`, `GITHUB_TOKEN` and `NPM_TOKEN` are left where they are. What the run
 prompt tells you about the remainder is the truth: a run has the access your own shell has. Name
 anything of your own you want withheld in
-[`run.scrubEnv`](../customize/configuration.md#runscrubenv), where an entry may be a pattern such as
+[`run.scrubEnv`](../security/sandbox.md#runscrubenv), where an entry may be a pattern such as
 `AWS_*`.
 
 :::note

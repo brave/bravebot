@@ -10,10 +10,11 @@
 //! would draw over a screen.
 
 use crate::protocol::{
-    Listing, RpcNotification, RpcRequest, RpcResponse, ToolResult, call_params, initialize_params,
-    paged,
+    Listing, PromptListing, PromptResult, RpcNotification, RpcRequest, RpcResponse, ToolResult,
+    call_params, declares_prompts, declares_tools_list_changed, get_prompt_params,
+    initialize_params, is_tools_list_changed, paged, paged_prompts,
 };
-use crate::{McpError, McpResult, malformed, named};
+use crate::{McpError, McpResult, log_step, malformed, named};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
@@ -42,6 +43,13 @@ pub struct StdioServer {
     bound: Duration,
     /// Set when a request ran out of time and the process was stopped.
     stopped: bool,
+    /// Whether the handshake said the server has prompts, which is what a request for them waits
+    /// on (MCP-10).
+    prompts: bool,
+    /// Whether the handshake said the server notifies when its tools change (MCP-12).
+    announces_tools: bool,
+    /// Set when the server announced a change that has not been taken yet.
+    tools_changed: bool,
 }
 
 /// How many lines the reader holds ahead of a request that is waiting for one.
@@ -91,25 +99,6 @@ impl Drop for StdioServer {
         // A server that ignores a closed stdin would otherwise linger.
         let _ = self.child.kill();
         let _ = self.child.wait();
-    }
-}
-
-/// Writes how a handshake step ended to the diagnostic log: that it did, or which kind of failure.
-/// Never the server's name or anything it sent, since both are text someone else chose.
-fn log_step<T>(step: &'static str, outcome: &McpResult<T>) {
-    match outcome {
-        Ok(_) => bravebot_diag::info(step, &[("outcome", bravebot_diag::Field::word("ok"))]),
-        Err(error) => {
-            let kind = match error {
-                McpError::Confinement(_) => "confinement",
-                McpError::Denied(_) => "denied",
-                McpError::Transport(_) => "transport",
-                McpError::Server { .. } => "server",
-                McpError::ToolFailed { .. } => "tool_failed",
-                McpError::TimedOut { .. } => "timed_out",
-            };
-            bravebot_diag::error(step, &[("kind", bravebot_diag::Field::word(kind))]);
-        }
     }
 }
 
@@ -189,6 +178,9 @@ impl StdioServer {
             name: name.into(),
             bound: Duration::from_secs(bravebot_config::mcp::TOOL_SECS),
             stopped: false,
+            prompts: false,
+            announces_tools: false,
+            tools_changed: false,
         })
     }
 
@@ -260,6 +252,7 @@ impl StdioServer {
             if line.trim().is_empty() {
                 continue;
             }
+            self.tools_changed |= self.announces_tools && is_tools_list_changed(&line);
 
             let response: RpcResponse = match serde_json::from_str(&line) {
                 Ok(r) => r,
@@ -304,7 +297,11 @@ impl StdioServer {
                 "initialize",
                 Some(initialize_params(client_name, client_version)),
             )
-            .and_then(|_| self.notify("notifications/initialized"));
+            .and_then(|initialized| {
+                self.prompts = declares_prompts(&initialized);
+                self.announces_tools = declares_tools_list_changed(&initialized);
+                self.notify("notifications/initialized")
+            });
         log_step("mcp.initialize", &done);
         done
     }
@@ -315,6 +312,62 @@ impl StdioServer {
         let listed = paged(|params| self.send_request("tools/list", params));
         log_step("mcp.list_tools", &listed);
         Ok(listed?.listing(&self.name))
+    }
+
+    /// Whether the server has announced that its tools changed since this was last asked, which
+    /// is only ever so for a server that declared it would (MCP-12).
+    ///
+    /// What the server has written while nothing was waiting for a reply is read here, so an
+    /// announcement made between two turns is found without a request being made.
+    pub fn take_tools_changed(&mut self) -> bool {
+        while let Ok(line) = self.lines.try_recv() {
+            if let Ok(line) = line {
+                self.tools_changed |= self.announces_tools && is_tools_list_changed(&line);
+            }
+        }
+        std::mem::take(&mut self.tools_changed)
+    }
+
+    /// List the prompts this server offers, as the text a person is shown in a menu. None where the
+    /// handshake did not say the server has any, and nothing is asked of it then. MCP-10.
+    pub fn list_prompts(&mut self) -> McpResult<PromptListing> {
+        if !self.prompts {
+            return Ok(PromptListing::none(&self.name));
+        }
+        let listed = paged_prompts(|params| self.send_request("prompts/list", params));
+        log_step("mcp.list_prompts", &listed);
+        Ok(listed?.listing(&self.name))
+    }
+
+    /// Get a prompt's text, given the arguments a person typed for it.
+    ///
+    /// The text is labelled untrusted-private exactly as a tool's result is (MCP-11), and it is
+    /// asked for only of a server that said it has prompts, since a server that does not may never
+    /// answer a method it does not have and a request that is not answered stops the process.
+    pub fn get_prompt<S: Sink>(
+        &mut self,
+        policy: &mut Policy<'_, S>,
+        name: &str,
+        arguments: &[(String, String)],
+    ) -> McpResult<Labelled<String>> {
+        policy
+            .before_capability(self.capability())
+            .map_err(McpError::Denied)?;
+        if !self.prompts {
+            return Err(McpError::Transport("the server offers no prompts".into()));
+        }
+
+        let result = self.send_request("prompts/get", Some(get_prompt_params(name, arguments)))?;
+        let parsed: PromptResult =
+            serde_json::from_value(result).map_err(|e| malformed("prompt result", &e))?;
+        if !parsed.carries_text() {
+            return Err(McpError::Transport("the prompt returned no text".into()));
+        }
+
+        let label = policy
+            .observe(self.capability())
+            .map_err(McpError::Denied)?;
+        Ok(Labelled::new(parsed.text(), label))
     }
 
     /// Call a tool.

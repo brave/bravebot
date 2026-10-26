@@ -13,7 +13,7 @@ function screen(status: Status, trust: Record<string, unknown> | null) {
   )
 }
 
-const QUESTION = { directory: '/work', keeping: null }
+const QUESTION = { directory: '/work', shownDirectory: '/work', keeping: null, shownKeeping: null }
 
 describe('the startup trust card', () => {
   it('is shown while the view says it is waiting', async () => {
@@ -87,13 +87,13 @@ describe('announcing a question of a kind the app does not know', () => {
 
 describe('what a yes to the trust question does', () => {
   it('names the file a yes is kept in, as the protocol says the client must', async () => {
-    const tree = await screen('awaiting_trust', { directory: '/work', keeping: '/Users/me/.bravebot/trust.json' })
+    const tree = await screen('awaiting_trust', { directory: '/work', shownDirectory: '/work', keeping: '/Users/me/.bravebot/trust.json', shownKeeping: '/Users/me/.bravebot/trust.json' })
     expect(allText(tree)).toContain('/Users/me/.bravebot/trust.json')
     expect(allText(tree)).toContain('applies to later sessions')
   })
 
   it('says the answer is not kept where the bridge sends no file', async () => {
-    const tree = await screen('awaiting_trust', { directory: '/work', keeping: null })
+    const tree = await screen('awaiting_trust', QUESTION)
     expect(allText(tree)).toContain('This answer is not kept')
   })
 })

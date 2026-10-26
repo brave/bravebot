@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/delegate.rs
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/one_shot.rs
   - crates/cli/src/workspace.rs
@@ -22,7 +23,9 @@ guards:
   - symbol: Session::starting_in_bypass
   - symbol: Session::make_bypass_unreachable
   - symbol: Session::cycle_permission_mode
-documented-by: docs/website/docs/security/permissions.md
+documented-by:
+  - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
 ---
 
 ## Scope
@@ -194,12 +197,14 @@ host is a name a program chose and a yes would open the network to it for every 
 `onUnlisted: ask` behaves as `refuse` here ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
 
 **A program's write is answered in advance.** Under the sandbox mode `workspace-write` on macOS and Linux,
-the stages of the lead session's `run` are given at the start every path a `request_path` for
-writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so a run does not fail on a
-sibling directory before the planner can ask. The refusals of that request hold: the home directory
-and the directories above it as wholes, `~/.ssh`, `~/.bravebot`, the credential locations, the
-places where a write becomes code that runs later (a shell's startup files, a per-user job, git's own
-configuration) and the person's `denyRead` and `denyWrite`. This widens `workspace-write`'s writes, which
+in a workspace the person has trusted, the stages of the lead session's `run` are given at the start
+every path a `request_path` for writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so
+a run does not fail on a sibling directory before the planner can ask. A workspace that is not trusted
+accepts no request ([PATHREQ-5](tools/request-path.md#PATHREQ-5)), so its stages are given none. The
+refusals of that request hold: the home directory and the directories above it as wholes, `~/.ssh`,
+`~/.bravebot`, the credential locations, the places where a write becomes code that runs later (a
+shell's startup files, a per-user job, git's own configuration) and the person's `denyRead` and
+`denyWrite`. This widens `workspace-write`'s writes, which
 is the one way the permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 The mode never changes which sandbox mode is in force, so `strict` keeps the per-path request, and
 bypass does not approve a line that asks to start with no profile
@@ -266,6 +271,7 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
 `verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::turn::under_read_only_the_file_tools_write_nothing_in_any_permission_mode`
@@ -299,6 +305,8 @@ the wrong mode everywhere else, and it is named `--dangerously-skip-permissions`
 `verified-by: bravebot_agent::turn::only_bypassing_answers_an_edit_that_leaves_a_file_holding_a_credential`
 `verified-by: bravebot_agent::manifest::bypassing_answers_a_credential_a_plan_writes`
 `verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
+`verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
+`verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
 
 ## Choosing one
 

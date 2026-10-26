@@ -20,7 +20,7 @@
 use crate::diff::Diff;
 use bravebot_core::Pipeline;
 use bravebot_core::ask::{Answer, Asking};
-use bravebot_core::remembered::RememberedLine;
+use bravebot_core::remembered::{RememberedLine, Scope, scopes};
 use bravebot_core::vetting::Verdict;
 use bravebot_i18n::t;
 use bravebot_sandbox::scope::Requested;
@@ -122,6 +122,17 @@ pub struct WriteRequest {
     /// The one thing the driver can say about whether the file changed since: it compares no
     /// bytes, and the person judges from the difference they are shown.
     pub written_since_checkout: bool,
+    /// Whether the prompt may offer to open the body in the person's editor and write what they
+    /// save ([WRITE-7]).
+    ///
+    /// True exactly where the body is the planner's own `contents` and carries the integrity of a
+    /// context nothing untrusted has been shown to. A body that came from a quarantined reference
+    /// is never offered: the text a person saved from it would still be made of bytes nobody read,
+    /// and trusting it would promote them. A front end that cannot hand the person an editor
+    /// ignores this, and an answer carrying an edit where this is false writes nothing.
+    ///
+    /// [WRITE-7]: ../../../docs/specs/tools/write-file.md
+    pub may_edit: bool,
 }
 
 /// What a processor said about the document it produced, released for the screen an approval is
@@ -163,12 +174,14 @@ impl WriteRequest {
         match (before, after) {
             (_, None) | (Some(Lf), Some(Lf)) | (None, Some(Lf)) => None,
             (Some(kept), Some(now)) if kept == now => {
-                Some(t!(write_line_endings_kept, ending = name(now)).to_string())
+                Some(t!(write_line_endings_kept, ending = name(now)))
             }
-            (Some(was), Some(now)) => {
-                Some(t!(write_line_endings_changed, from = name(was), to = name(now)).to_string())
-            }
-            (None, Some(now)) => Some(t!(write_line_endings_new, ending = name(now)).to_string()),
+            (Some(was), Some(now)) => Some(t!(
+                write_line_endings_changed,
+                from = name(was),
+                to = name(now)
+            )),
+            (None, Some(now)) => Some(t!(write_line_endings_new, ending = name(now))),
         }
     }
 
@@ -186,11 +199,11 @@ impl WriteRequest {
         match self.intent {
             Intent::Create => {
                 let lines = self.diff.added();
-                format!("create {} ({lines} lines)", self.path)
+                format!("create {} ({lines} lines)", shown_name(&self.path))
             }
             _ => format!(
                 "{verb} {} (+{} -{})",
-                self.path,
+                shown_name(&self.path),
                 self.diff.added(),
                 self.diff.removed()
             ),
@@ -200,10 +213,10 @@ impl WriteRequest {
 
 /// A pipeline the model has asked to run.
 ///
-/// Carries the [`Pipeline`] itself rather than a rendering of it, because the whole point of an
-/// argv vector is that the boundaries between arguments are real: a reviewer is shown each
-/// argument as its own thing, and nothing has to trust a rendering to have got the boundaries
-/// right.
+/// Carries the [`Plan`](bravebot_core::command::Plan) itself rather than a rendering of it, because
+/// the whole point of an argv vector is that the boundaries between arguments are real: a reviewer
+/// is shown each argument as its own thing, and nothing has to trust a rendering to have got the
+/// boundaries right.
 ///
 /// There is no `needs_approval` field, and there is no variant of this that skips the prompt.
 /// Every run asks. See [`bravebot_core::policy::Policy::plan_needs_approval`] for why that has no
@@ -325,7 +338,6 @@ pub fn authority_sentence(authority: bravebot_core::ambient::Authority, named: &
         Authority::AgentSocket => t!(run_authority_agent, named = named),
         Authority::MetadataService => t!(run_authority_metadata, named = named),
     }
-    .to_string()
 }
 
 /// What one stage of a confined plan carries beyond the session's directories.
@@ -413,7 +425,6 @@ impl Confined {
             Scope::Docker => t!(run_carries_docker, program = program),
             Scope::Signing => t!(run_carries_signing, program = program),
         }
-        .to_string()
     }
 
     /// The sentence that introduces the directories, for a front end to draw above them.
@@ -434,16 +445,13 @@ impl Confined {
             sentences.push(t!(run_network_closed).to_string());
         }
         if !self.filesystem.is_empty() {
-            sentences.push(
-                t!(
-                    run_filesystem_rules,
-                    allow_read = self.filesystem.allow_read,
-                    deny_read = self.filesystem.deny_read,
-                    allow_write = self.filesystem.allow_write,
-                    deny_write = self.filesystem.deny_write
-                )
-                .to_string(),
-            );
+            sentences.push(t!(
+                run_filesystem_rules,
+                allow_read = self.filesystem.allow_read,
+                deny_read = self.filesystem.deny_read,
+                allow_write = self.filesystem.allow_write,
+                deny_write = self.filesystem.deny_write
+            ));
         }
         for (program, request) in &self.requested {
             let sentence = match request {
@@ -606,6 +614,13 @@ impl RunRequest {
     /// arguments, and `git clean -fd` is a different proposition in two different trees.
     pub fn directory(&self) -> String {
         self.plan.directory.display().to_string()
+    }
+
+    /// [`RunRequest::directory`] spelled as [`shown_path`] spells a path, which is what every front
+    /// end draws: a directory ending in whitespace, or holding a byte that is not text, does not
+    /// draw as another. The plan keeps the directory as a path and nothing is decided from this.
+    pub fn shown_directory(&self) -> String {
+        shown_path(&self.plan.directory)
     }
     /// Whether approving this would hand the user's own data to a program.
     ///
@@ -781,20 +796,16 @@ impl RunRequest {
         self.record.is_some() && !self.unconfined
     }
 
-    /// Whether the prompt may also offer to record this line with its number left free: it may
-    /// record at all, and the line is one the table in
-    /// [`bravebot_core::remembered::families`] lists.
-    pub fn offers_a_family(&self) -> bool {
-        self.may_record() && RememberedLine::family_of(&self.plan).is_some()
-    }
-
-    /// The line as the family answer would record it, drawn with its number free, where the
-    /// prompt offers that answer.
-    pub fn family_display(&self) -> Option<String> {
-        if !self.offers_a_family() {
+    /// The scope the prompt may also offer to record: it may record at all, and the line is one
+    /// the table in [`bravebot_core::remembered::scopes`] lists.
+    ///
+    /// `None` everywhere else, and the key is not drawn. What the prompt names and what a keypress
+    /// records are both worked out from the plan here, so neither rests on the other.
+    pub fn offered_scope(&self) -> Option<Scope> {
+        if !self.may_record() {
             return None;
         }
-        RememberedLine::family_of(&self.plan).map(|line| line.display())
+        scopes::offered_for(&self.plan)
     }
 
     /// A short description for a prompt line.
@@ -802,7 +813,7 @@ impl RunRequest {
         format!(
             "run {} in {}",
             tally(self.plan.steps().len(), "step", "steps"),
-            self.directory()
+            self.shown_directory()
         )
     }
 
@@ -842,7 +853,9 @@ impl RunRequest {
 pub struct OutputRequest {
     /// The command that produced it, as it was approved.
     pub command: String,
-    /// What it printed, in full.
+    /// What it printed, in full, with each character that draws as nothing written out as a
+    /// visible token ([`bravebot_core::invisible::spelled`]). The planner's copy is the slot's own
+    /// bytes and is not this.
     pub output: String,
     /// The label it was released under, in the same short form the trail uses (LABEL-10).
     pub label: String,
@@ -853,6 +866,9 @@ pub struct OutputRequest {
     /// count is made in the policy layer, on the still-labelled content, in the same reshape
     /// that produced the rows above.
     pub lines: usize,
+    /// How many characters of it draw as nothing, which are the tokens `output` holds. Counted in
+    /// the same reshape that wrote them out, for the reason `lines` is.
+    pub hidden: usize,
     /// The reference the planner named, for the account given afterwards.
     pub reference: String,
     /// What a check said about the same bytes, or that it did not complete.
@@ -897,7 +913,9 @@ pub struct VetRequest {
     pub origin: String,
     /// What the planner said it expects the slot to hold, in its own words.
     pub expects: String,
-    /// The content, in full. Empty for a picture, which is shown as a file to open instead.
+    /// The content, in full, with each character that draws as nothing written out as a visible
+    /// token ([`bravebot_core::invisible::spelled`]). Empty for a picture, which is shown as a
+    /// file to open instead.
     pub content: String,
     /// The label the content was released under, in the same short form the trail uses
     /// (LABEL-10). `None` for a picture, which is opened in the person's own viewer and has no
@@ -906,6 +924,8 @@ pub struct VetRequest {
     /// How many lines that is, counted before the bytes were released, as
     /// [`OutputRequest::lines`] is.
     pub lines: usize,
+    /// How many characters of it draw as nothing, as [`OutputRequest::hidden`] is.
+    pub hidden: usize,
     /// What the check said, or that it did not complete.
     pub verdict: Verdict,
     /// The check's own sentence about why, where it wrote one.
@@ -979,6 +999,13 @@ pub struct FetchRequest {
     /// a person skimming it and reaches another, so what a person is answering about is put in
     /// front of them separately from the string it came out of.
     pub host: String,
+    /// The host the person approved this fetch for, where `host` is somewhere a redirect led it.
+    ///
+    /// `None` for the question about a URL the planner proposed. Set when the egress gate stopped
+    /// a hop for leaving the approved host and the person is asked about that one (FETCH-4), so
+    /// every front end words it as a redirect and not as a fresh fetch. `host` is then a server's
+    /// own bytes, drawn for the person to read, and `url` is the one that was approved.
+    pub redirected_from: Option<String>,
 }
 
 impl FetchRequest {
@@ -1062,38 +1089,129 @@ impl ServerRequest {
 /// A file name as a person is shown it, so a name that would draw as nothing, or as another name,
 /// is drawn as what it is.
 ///
-/// A name that is empty, has whitespace at either end, or holds a character that draws as nothing
-/// (a zero-width character, a bidirectional control, a no-break space) comes back quoted with each
-/// such character spelled `\u{..}`, a space at an edge as `␣`, and a control character as its
-/// picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged, so the plain case reads as it always did. Every
-/// front end that names a path in a prompt draws it through this, so the three cannot disagree
-/// about which names are marked.
+/// A name that is empty, has a space at either end of it or of a directory in it, or holds a
+/// character that draws as nothing (a zero-width character, a bidirectional control, a tag
+/// character, a no-break space) or as a blank cell (the blank braille pattern) comes back quoted
+/// with each such character spelled `\u{..}`, a space at an edge as `␣`, and a control character
+/// as its picture (DEL as its own, a C1 control as `\u{..}`). Any other name comes back unchanged,
+/// so the plain case reads as it always did. Every front end that names a path in a prompt draws
+/// it through this, so the three cannot disagree about which names are marked.
 pub fn shown_name(name: &str) -> String {
+    shown(&name.chars().map(Piece::Char).collect::<Vec<_>>(), true)
+}
+
+/// Text that is not a file name, such as the text of a rule, as a person is shown it.
+///
+/// Spelled as [`shown_name`] spells a name, except that a space is never marked: a space beside a
+/// `/` in `Bash(cat /etc/hosts)` is between two words, and only a name can end in one. The text is
+/// quoted only where it holds a character that draws as nothing, as a blank cell or as a control.
+pub fn shown_text(text: &str) -> String {
+    shown(&text.chars().map(Piece::Char).collect::<Vec<_>>(), false)
+}
+
+/// [`shown_name`] over a path held as one, for the prompts and lists that draw a path rather than
+/// a name the planner wrote.
+///
+/// A byte of the path that is not part of a UTF-8 character is spelled `\xNN` and the name is
+/// quoted, so two paths that differ only in such bytes are not drawn alike. The path stays a `Path`
+/// everywhere a grant or a rule is made from it: this is for display and decides nothing.
+pub fn shown_path(path: &std::path::Path) -> String {
+    let mut pieces = Vec::new();
+    for chunk in path.as_os_str().as_encoded_bytes().utf8_chunks() {
+        pieces.extend(chunk.valid().chars().map(Piece::Char));
+        pieces.extend(chunk.invalid().iter().copied().map(Piece::Byte));
+    }
+    shown(&pieces, true)
+}
+
+/// The file a step runs, and the path that starts it where that is another, each spelled as
+/// [`shown_path`] spells a path.
+///
+/// What a run prompt draws under the step. The same text as [`bravebot_core::command::Step::binary`]
+/// for a path that needs no spelling, so the plain case reads as it always did.
+pub fn shown_binary(step: &bravebot_core::command::Step) -> String {
+    // Drawn rows only: the other fields are not part of the file a step runs, and naming them keeps
+    // a field a later change adds to a step from being missed here.
+    let bravebot_core::command::Step {
+        program: _,
+        resolved,
+        started_as,
+        args: _,
+        environment: _,
+        routes: _,
+    } = step;
+    shown_through(started_as, resolved)
+}
+
+/// A command a yes would vouch for, drawn as [`bravebot_core::programs::Command::display`] draws it
+/// with the program spelled as [`shown_binary`] spells a step's. The arguments are quoted as they
+/// always were.
+pub fn shown_command(command: &bravebot_core::programs::Command) -> String {
+    let program = shown_through(&command.started_as, &command.program);
+    bravebot_core::command::Stage::new(program, command.args.clone()).display()
+}
+
+/// `file`, and `started_as` before it with an arrow where the program is started through another
+/// path, each spelled as [`shown_path`] spells a path.
+fn shown_through(started_as: &std::path::Path, file: &std::path::Path) -> String {
+    if started_as == file {
+        shown_path(file)
+    } else {
+        format!("{} -> {}", shown_path(started_as), shown_path(file))
+    }
+}
+
+/// One thing a name holds: a character, or a byte that is not part of one.
+#[derive(Clone, Copy)]
+enum Piece {
+    Char(char),
+    Byte(u8),
+}
+
+/// `pieces` spelled for a person. `names` is whether they are a name, whose edges and empty text
+/// are marked, and not other text.
+fn shown(pieces: &[Piece], names: bool) -> String {
     let invisible = |c: char| {
         c.is_control()
             || (c.is_whitespace() && c != ' ')
-            || matches!(
-                c,
-                '\u{ad}' | '\u{61c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}'
-                    | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{feff}'
-            )
+            || bravebot_core::invisible::draws_as_nothing(c)
+            || bravebot_core::invisible::draws_as_blank(c)
     };
-    let edge = name.starts_with(char::is_whitespace) || name.ends_with(char::is_whitespace);
-    if !name.is_empty() && !edge && !name.chars().any(invisible) {
-        return name.to_string();
+    // The start and end of the name and of each directory in it, which is where a space stops
+    // being between two words and becomes part of what a name ends in.
+    let edge = |at: Option<usize>| match at.and_then(|at| pieces.get(at)) {
+        None => true,
+        Some(Piece::Char(c)) => std::path::is_separator(*c),
+        Some(Piece::Byte(_)) => false,
+    };
+    let spaced_at_an_edge = |at: usize| names && (edge(at.checked_sub(1)) || edge(Some(at + 1)));
+    let plain = (!names || !pieces.is_empty())
+        && !pieces.iter().enumerate().any(|(at, piece)| match *piece {
+            Piece::Byte(_) => true,
+            Piece::Char(' ') => spaced_at_an_edge(at),
+            Piece::Char(c) => invisible(c),
+        });
+    let mut out = String::new();
+    if plain {
+        for piece in pieces {
+            if let Piece::Char(c) = *piece {
+                out.push(c);
+            }
+        }
+        return out;
     }
-    let last = name.chars().count().saturating_sub(1);
-    let mut out = String::from("\"");
-    for (at, c) in name.chars().enumerate() {
-        match c {
-            ' ' if at == 0 || at == last => out.push('\u{2423}'),
-            '"' => out.push_str("\\\""),
-            '\u{7f}' => out.push('\u{2421}'),
-            c if (c as u32) < 0x20 => {
+    out.push('"');
+    for (at, piece) in pieces.iter().enumerate() {
+        match *piece {
+            Piece::Byte(byte) => out.push_str(&format!("\\x{byte:02x}")),
+            Piece::Char(' ') if spaced_at_an_edge(at) => out.push('\u{2423}'),
+            Piece::Char('"') => out.push_str("\\\""),
+            Piece::Char('\u{7f}') => out.push('\u{2421}'),
+            Piece::Char(c) if (c as u32) < 0x20 => {
                 out.push(char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'));
             }
-            c if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
-            c => out.push(c),
+            Piece::Char(c) if invisible(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            Piece::Char(c) => out.push(c),
         }
     }
     out.push('"');
@@ -1173,7 +1291,7 @@ impl ExposureRequest {
     pub fn summary(&self) -> String {
         format!(
             "let the model read {}, which holds {}",
-            self.path,
+            shown_name(&self.path),
             tally(self.credentials.len(), "credential", "credentials")
         )
     }
@@ -1402,15 +1520,15 @@ pub struct RunDecision {
     /// lifetimes, and one field could not carry both: this one stops the asking and leaves every
     /// label where it was, while `remember` also says what the command prints may be read.
     pub record: bool,
-    /// Whether the person asked for this line to stop being asked about past the session with its
-    /// number free ([RUN-20]).
+    /// Whether the person asked for the scope this line is in to stop being asked about past the
+    /// session ([RUN-20]).
     ///
     /// A third field rather than a variant of `record`, so a front end that sets `record` keeps
     /// meaning exactly the line. Never set together with `record`: the acting layer takes `record`
     /// first.
     ///
     /// [RUN-20]: ../../../docs/specs/tools/run.md
-    pub record_family: bool,
+    pub record_scope: bool,
     /// Whether the person asked for the credential scopes the planner requested for this line to be
     /// remembered for the stages they were added to, and for how long ([SANDBOX-27]).
     ///
@@ -1450,7 +1568,7 @@ impl RunDecision {
     pub fn note(&self) -> Option<&str> {
         let standing = self.remember
             || self.record
-            || self.record_family
+            || self.record_scope
             || self.remember_reach.is_some()
             || self.key.is_some();
         self.note.as_deref().filter(|_| !standing)
@@ -1473,7 +1591,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
@@ -1486,7 +1604,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: true,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
@@ -1503,21 +1621,21 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: true,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
         }
     }
 
-    /// Run it, and record this line with its number left free, so every session in this directory
-    /// runs the same sub-command on the same repository with any number unasked.
-    pub fn approve_and_record_family() -> Self {
+    /// Run it, and record the scope this line is in, so every session in this directory runs each
+    /// sub-command of that group on the same repository with any number unasked.
+    pub fn approve_and_record_scope() -> Self {
         Self {
             decision: Decision::Approve,
             remember: false,
             record: false,
-            record_family: true,
+            record_scope: true,
             remember_reach: None,
             key: None,
             note: None,
@@ -1536,7 +1654,7 @@ impl RunDecision {
             decision: Decision::Approve,
             remember: false,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: Some(lasting),
             key: None,
             note: None,
@@ -1549,7 +1667,7 @@ impl RunDecision {
             decision: Decision::Reject,
             remember: false,
             record: false,
-            record_family: false,
+            record_scope: false,
             remember_reach: None,
             key: None,
             note: None,
@@ -1560,22 +1678,23 @@ impl RunDecision {
         self.decision == Decision::Approve
     }
 
-    /// The line this answer asks to have recorded for `plan`, where it asks for one.
-    ///
-    /// The exact line for `record`, which outranks the other. The family for `record_family`, and
-    /// only where the table lists the plan: for any other plan that answer records nothing. The
-    /// caller still asks the policy whether the plan may be remembered at all.
+    /// The line this answer asks to have recorded for `plan`, where it asks for one: the exact
+    /// line, for `record`. The caller still asks the policy whether the plan may be remembered at
+    /// all.
     pub fn line_to_record(&self, plan: &bravebot_core::command::Plan) -> Option<RememberedLine> {
-        if !self.approved() {
+        (self.approved() && self.record).then(|| RememberedLine::of(plan))
+    }
+
+    /// The scope this answer asks to have recorded for `plan`, where it asks for one.
+    ///
+    /// `record` outranks `record_scope`, so a front end that sets both gets the exact line and no
+    /// scope. Only where the table lists the plan: for any other plan this answer records nothing.
+    /// The caller still asks the policy whether the plan may be remembered at all.
+    pub fn scope_to_record(&self, plan: &bravebot_core::command::Plan) -> Option<Scope> {
+        if !self.approved() || self.record || !self.record_scope {
             return None;
         }
-        if self.record {
-            Some(RememberedLine::of(plan))
-        } else if self.record_family {
-            RememberedLine::family_of(plan)
-        } else {
-            None
-        }
+        scopes::offered_for(plan)
     }
 }
 
@@ -1598,6 +1717,11 @@ pub struct WriteDecision {
     ///
     /// [PROMPT-12]: ../../../docs/specs/prompting.md
     pub note: Option<String>,
+    /// The body as the person saved it from their editor, where that is their answer ([WRITE-7]).
+    /// Read through [`WriteDecision::edited`].
+    ///
+    /// [WRITE-7]: ../../../docs/specs/tools/write-file.md
+    pub edited: Option<String>,
 }
 
 impl WriteDecision {
@@ -1621,6 +1745,31 @@ impl WriteDecision {
             .filter(|_| !self.remember && !self.record)
     }
 
+    /// The body the person saved from their editor instead of answering, where they did
+    /// ([WRITE-7]).
+    ///
+    /// Not an approval: the write is put to them again with this as its body, so nothing is written
+    /// from it until a later answer says yes.
+    ///
+    /// [WRITE-7]: ../../../docs/specs/tools/write-file.md
+    pub fn edited(&self) -> Option<&str> {
+        self.edited.as_deref()
+    }
+
+    /// Hand back the body the person saved from their editor.
+    ///
+    /// Refuses, so a driver that does not read [`WriteDecision::edited`] writes nothing from it,
+    /// and carries no standing answer and no note.
+    pub fn edit(body: String) -> Self {
+        Self {
+            decision: Decision::Reject,
+            remember: false,
+            record: false,
+            note: None,
+            edited: Some(body),
+        }
+    }
+
     /// Write it this once.
     pub fn approve() -> Self {
         Self {
@@ -1628,6 +1777,7 @@ impl WriteDecision {
             remember: false,
             record: false,
             note: None,
+            edited: None,
         }
     }
 
@@ -1638,6 +1788,7 @@ impl WriteDecision {
             remember: true,
             record: false,
             note: None,
+            edited: None,
         }
     }
 
@@ -1648,6 +1799,7 @@ impl WriteDecision {
             remember: false,
             record: true,
             note: None,
+            edited: None,
         }
     }
 
@@ -1658,6 +1810,7 @@ impl WriteDecision {
             remember: false,
             record: false,
             note: None,
+            edited: None,
         }
     }
 
@@ -2909,6 +3062,13 @@ mod tests {
             ("a\u{200b}b", "\"a\\u{200b}b\""),
             ("a\u{202e}b", "\"a\\u{202e}b\""),
             ("a\u{2066}b", "\"a\\u{2066}b\""),
+            ("a\u{e0041}b", "\"a\\u{e0041}b\""),
+            ("a\u{fe0f}b", "\"a\\u{fe0f}b\""),
+            ("a\u{3164}b", "\"a\\u{3164}b\""),
+            ("\u{2800}", "\"\\u{2800}\""),
+            ("a\u{2800}b", "\"a\\u{2800}b\""),
+            ("\u{2801}", "\u{2801}"),
+            ("a\u{34f}b", "\"a\\u{34f}b\""),
             ("a\u{1b}b", "\"a\u{241b}b\""),
             ("a\u{7f}b", "\"a\u{2421}b\""),
             ("a\u{85}b", "\"a\\u{85}b\""),
@@ -2917,6 +3077,159 @@ mod tests {
             assert_eq!(shown_name(name), shown, "{name:?}");
         }
         assert_ne!(shown_name("note.md "), shown_name("note.md"));
+    }
+
+    /// PROMPT-1: the one-line description of a write and of a credential read names the file the
+    /// way a prompt does. The question in lines and a window's accessible text draw the description
+    /// and nothing else, so a name that would draw as another name is spelled in it.
+    #[test]
+    fn a_description_of_a_write_or_a_credential_read_spells_the_name() {
+        for (intent, plain, spelled) in [
+            (
+                Intent::Create,
+                "create note.md (1 lines)",
+                "create \"note.md\u{2423}\" (1 lines)",
+            ),
+            (
+                Intent::Overwrite,
+                "overwrite note.md (+1 -0)",
+                "overwrite \"note.md\u{2423}\" (+1 -0)",
+            ),
+            (
+                Intent::Edit,
+                "edit note.md (+1 -0)",
+                "edit \"note.md\u{2423}\" (+1 -0)",
+            ),
+        ] {
+            let write = |path: &str| WriteRequest {
+                path: path.to_string(),
+                intent,
+                ..a_write()
+            };
+            assert_eq!(write("note.md").summary(), plain);
+            assert_eq!(write("note.md ").summary(), spelled);
+        }
+        let exposure = |path: &str| ExposureRequest {
+            path: path.to_string(),
+            credentials: vec!["an API key at line 1".to_string()],
+        };
+        assert_eq!(
+            exposure("note.md").summary(),
+            "let the model read note.md, which holds 1 credential"
+        );
+        assert_eq!(
+            exposure("a\u{202e}b").summary(),
+            "let the model read \"a\\u{202e}b\", which holds 1 credential"
+        );
+    }
+
+    /// PROMPT-1: a path is spelled as a name is, whole.
+    #[test]
+    fn a_path_is_shown_as_the_name_it_spells() {
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/include")),
+            "/opt/include"
+        );
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/include ")),
+            "\"/opt/include\u{2423}\""
+        );
+        assert_eq!(
+            shown_path(std::path::Path::new("/opt/in\u{202e}clude")),
+            "\"/opt/in\\u{202e}clude\""
+        );
+    }
+
+    /// PROMPT-1: a space at the end of a directory inside a path is spelled as one at the end of the
+    /// whole name is, so `/work/state /file` cannot read as `/work/state/file`. A space between two
+    /// words, and a name with no space at an edge, is left as it is.
+    #[test]
+    fn a_directory_in_a_path_that_starts_or_ends_in_a_space_is_shown_as_what_it_is() {
+        for (name, shown) in [
+            ("/work/state/file", "/work/state/file"),
+            ("/work/my state/file", "/work/my state/file"),
+            ("/work/state /file", "\"/work/state\u{2423}/file\""),
+            ("/work/ state/file", "\"/work/\u{2423}state/file\""),
+            ("/work/ /file", "\"/work/\u{2423}/file\""),
+            ("state /", "\"state\u{2423}/\""),
+            ("/work/state /file ", "\"/work/state\u{2423}/file\u{2423}\""),
+        ] {
+            assert_eq!(shown_name(name), shown, "{name:?}");
+            assert_eq!(shown_path(std::path::Path::new(name)), shown, "{name:?}");
+        }
+        assert_ne!(
+            shown_name("/work/state /file"),
+            shown_name("/work/state/file")
+        );
+    }
+
+    /// PROMPT-1: a backslash is a directory separator only where the host says it is, so a Unix
+    /// name that holds one is not marked for the space after it.
+    #[cfg(unix)]
+    #[test]
+    fn a_space_after_a_backslash_is_part_of_the_name_where_a_backslash_is_not_a_separator() {
+        assert_eq!(shown_name("a\\ b"), "a\\ b");
+    }
+
+    /// PROMPT-1: the text of a rule is spelled where it holds a character that draws as nothing, and
+    /// a space beside a `/` is not marked, since it is between two words and not the end of a name.
+    #[test]
+    fn a_space_in_the_text_of_a_rule_is_not_marked_as_the_edge_of_a_name() {
+        for plain in [
+            "Bash(cat /etc/hosts)",
+            "Bash(cat /etc/hosts /tmp/x)",
+            "Read(/work/notes.md)",
+            "Bash(ls )",
+            "",
+        ] {
+            assert_eq!(shown_text(plain), plain);
+        }
+        assert_eq!(
+            shown_text("Bash(cat /etc/ho\u{200b}sts)"),
+            "\"Bash(cat /etc/ho\\u{200b}sts)\""
+        );
+        assert_eq!(shown_text("Read( /a)\u{3000}"), "\"Read( /a)\\u{3000}\"");
+        // The same text as a name is marked, which is what a rule is not.
+        assert_eq!(
+            shown_name("Bash(cat /etc/hosts)"),
+            "\"Bash(cat\u{2423}/etc/hosts)\""
+        );
+    }
+
+    /// PROMPT-1, PATH-003: a path holding a byte that is not UTF-8 is drawn with that byte spelled,
+    /// so it is not drawn as the name its replacement-character rendering spells, and two paths that
+    /// differ only in such bytes are not drawn alike. A character that is valid UTF-8 is drawn as
+    /// itself next to one that is not.
+    #[cfg(unix)]
+    #[test]
+    fn a_byte_that_is_not_text_is_shown_as_the_byte_and_not_as_another_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let shown = |bytes: &[u8]| shown_path(std::path::Path::new(OsStr::from_bytes(bytes)));
+        assert_eq!(shown(b"tool-\xff"), "\"tool-\\xff\"");
+        assert_eq!(shown(b"tool-\xfe"), "\"tool-\\xfe\"");
+        assert_eq!(shown("tool-\u{fffd}".as_bytes()), "tool-\u{fffd}");
+        assert_eq!(
+            shown(b"/work/caf\xc3\xa9-\xe9/x"),
+            "\"/work/caf\u{e9}-\\xe9/x\""
+        );
+        assert_eq!(shown(b"a\xc3"), "\"a\\xc3\"");
+        assert_eq!(shown(b"\xf0\x9f\x98"), "\"\\xf0\\x9f\\x98\"");
+        assert_eq!(
+            shown(b"/work/state /f\xff"),
+            "\"/work/state\u{2423}/f\\xff\""
+        );
+        let drawn = [
+            shown(b"tool-\xff"),
+            shown(b"tool-\xfe"),
+            shown(b"tool-"),
+            shown("tool-\u{fffd}".as_bytes()),
+        ];
+        for (at, one) in drawn.iter().enumerate() {
+            for other in &drawn[at + 1..] {
+                assert_ne!(one, other);
+            }
+        }
     }
 
     /// PROMPT-12: a note is one line, cut to a length, and nothing where there is nothing in it.
@@ -2967,7 +3280,7 @@ mod tests {
         for standing in [
             RunDecision::approve_always(),
             RunDecision::approve_and_record(),
-            RunDecision::approve_and_record_family(),
+            RunDecision::approve_and_record_scope(),
             RunDecision::approve_and_keep_reach(crate::reach::Lasting::ThisSession),
             RunDecision::approve_with_key(KeyAnswer::SshDefault),
         ] {
@@ -2980,6 +3293,27 @@ mod tests {
             CallDecision::approve_and_stand().with_note(words).note(),
             None
         );
+    }
+
+    /// WRITE-7: the text a person saved from their editor is no approval, so a caller that never
+    /// reads it refuses, and it carries no standing answer and no note, since neither belongs to a
+    /// question that is about to be put again.
+    #[test]
+    fn a_saved_body_refuses_and_carries_nothing_else() {
+        let saved = WriteDecision::edit("the person's text\n".to_string());
+        assert_eq!(saved.edited(), Some("the person's text\n"));
+        assert!(!saved.approved());
+        assert!(!saved.remember && !saved.record);
+        assert_eq!(saved.note(), None);
+
+        for other in [
+            WriteDecision::approve(),
+            WriteDecision::approve_always(),
+            WriteDecision::approve_and_record(),
+            WriteDecision::reject(),
+        ] {
+            assert_eq!(other.edited(), None);
+        }
     }
 
     fn gh_plan(args: &[&str]) -> bravebot_core::command::Plan {
@@ -3005,40 +3339,52 @@ mod tests {
         gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot"])
     }
 
-    /// RUN-20: the family answer records the family, the exact answer records the line, and
-    /// neither records anything for a refusal.
+    /// RUN-20: the scope answer records the scope and not the line, the exact answer records the
+    /// line and not the scope, and neither records anything for a refusal.
     #[test]
-    fn each_answer_records_the_line_it_names() {
+    fn each_answer_records_what_it_names() {
         let plan = a_listed_line();
         assert_eq!(
             RunDecision::approve_and_record().line_to_record(&plan),
             Some(RememberedLine::of(&plan))
         );
-        let family = RunDecision::approve_and_record_family()
-            .line_to_record(&plan)
-            .expect("a listed line has a family");
-        assert!(family.is_family());
-        assert_eq!(family, RememberedLine::family_of(&plan).unwrap());
-        assert_eq!(RunDecision::approve().line_to_record(&plan), None);
-        assert_eq!(RunDecision::approve_always().line_to_record(&plan), None);
+        assert_eq!(
+            RunDecision::approve_and_record().scope_to_record(&plan),
+            None
+        );
+        let scope = RunDecision::approve_and_record_scope()
+            .scope_to_record(&plan)
+            .expect("a listed line is in a scope");
+        assert_eq!(scope.lines.len(), 4);
+        assert_eq!(Some(&scope), scopes::offered_for(&plan).as_ref());
+        assert_eq!(
+            RunDecision::approve_and_record_scope().line_to_record(&plan),
+            None,
+            "the scope answer also recorded the exact line"
+        );
+        for neither in [RunDecision::approve(), RunDecision::approve_always()] {
+            assert_eq!(neither.line_to_record(&plan), None);
+            assert_eq!(neither.scope_to_record(&plan), None);
+        }
         let refused = RunDecision {
             decision: Decision::Reject,
-            ..RunDecision::approve_and_record_family()
+            ..RunDecision::approve_and_record_scope()
         };
         assert_eq!(refused.line_to_record(&plan), None);
+        assert_eq!(refused.scope_to_record(&plan), None);
     }
 
-    /// RUN-20: the family answer for a line the table does not list records nothing, so a front
-    /// end that sends it for any line cannot widen the record.
+    /// RUN-20: the scope answer for a line the table does not list records nothing, so a front end
+    /// that sends it for any line cannot widen the record.
     #[test]
-    fn the_family_answer_for_an_unlisted_line_records_nothing() {
+    fn the_scope_answer_for_an_unlisted_line_records_nothing() {
         for plan in [
             gh_plan(&["pr", "view", "1081", "--repo", "brave/bravebot", "--web"]),
             gh_plan(&["pr", "merge", "1081", "--repo", "brave/bravebot"]),
             gh_plan(&["pr", "view", "abc", "--repo", "brave/bravebot"]),
         ] {
             assert_eq!(
-                RunDecision::approve_and_record_family().line_to_record(&plan),
+                RunDecision::approve_and_record_scope().scope_to_record(&plan),
                 None
             );
         }
@@ -3050,16 +3396,17 @@ mod tests {
         let plan = a_listed_line();
         let both = RunDecision {
             record: true,
-            record_family: true,
+            record_scope: true,
             ..RunDecision::approve()
         };
         assert_eq!(both.line_to_record(&plan), Some(RememberedLine::of(&plan)));
+        assert_eq!(both.scope_to_record(&plan), None);
     }
 
-    /// RUN-20: the prompt offers the family key only where it offers to record at all and the
-    /// table lists the line.
+    /// RUN-20: the prompt offers the scope key only where it offers to record at all and the table
+    /// lists the line, and what it offers is the scope the acting layer will record.
     #[test]
-    fn the_prompt_offers_the_family_key_for_a_listed_line_it_may_record() {
+    fn the_prompt_offers_the_scope_key_for_a_listed_line_it_may_record() {
         let request = |plan, record: Option<&str>| RunRequest {
             plan,
             record: record.map(std::path::PathBuf::from),
@@ -3074,16 +3421,16 @@ mod tests {
             a_listed_line(),
             Some("/home/.bravebot/remembered/work.jsonl"),
         );
-        assert!(offered.offers_a_family());
         assert_eq!(
-            offered.family_display().as_deref(),
-            Some("/usr/bin/gh pr view <number> --repo brave/bravebot")
+            offered.offered_scope(),
+            scopes::offered_for(&a_listed_line())
         );
-        assert!(!request(a_listed_line(), None).offers_a_family());
-        assert_eq!(request(a_listed_line(), None).family_display(), None);
+        assert!(offered.offered_scope().is_some());
+        assert_eq!(request(a_listed_line(), None).offered_scope(), None);
         let unlisted = gh_plan(&["pr", "merge", "1", "--repo", "brave/bravebot"]);
-        assert!(
-            !request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offers_a_family()
+        assert_eq!(
+            request(unlisted, Some("/home/.bravebot/remembered/work.jsonl")).offered_scope(),
+            None
         );
     }
 
@@ -3116,6 +3463,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -3181,6 +3529,7 @@ mod tests {
             command: "git log".to_string(),
             output: "one line\n".to_string(),
             lines: 1,
+            hidden: 0,
             reference: "output_1".to_string(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3713,6 +4062,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 

@@ -524,7 +524,10 @@ fn numbered(index: usize, step: &Step) -> String {
 /// It is finished before the second begins, and the second's routing comes from the plan the
 /// first produced, which is what "the routing lock happens before anything is fetched" means
 /// when written as code.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's collaborators, which run_recording takes with the trust map lent instead of owned"
+)]
 pub fn run<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -547,7 +550,10 @@ pub fn run<S: Sink, C: Confirmer, R: Reporter>(
 /// stopped: `dropping.md` DROP-2 has a dropped file trusted for the rest of the session, and
 /// [`crate::attached::read`] writes that rule back on failure for the same reason. Every ordinary
 /// ending also leaves the current file decisions, including downgrades from completed writes.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's collaborators and a lent trust map, which run_accounted receives with the accounting added"
+)]
 pub fn run_recording<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -594,7 +600,10 @@ impl Accounting {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the run's collaborators and trust map, plus the accounting that run_recording owns and publishes"
+)]
 fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -667,6 +676,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     let result = execute(
         config,
         egress,
+        task.account_session(),
         workspace,
         crate::findings::Recording {
             home: task.home.as_deref(),
@@ -784,7 +794,10 @@ impl Attempt {
 }
 
 /// Phase 1, in two calls, then phases 2 and 3.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the planning calls' collaborators, plus the attempt and accounting that run_accounted owns across the run"
+)]
 fn plan<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
@@ -865,6 +878,7 @@ fn plan<S: Sink, R: Reporter>(
     let shape_wire = ask(
         config,
         egress,
+        task.account_session(),
         &mut policy,
         reporter,
         subscription.as_deref_mut(),
@@ -892,6 +906,7 @@ fn plan<S: Sink, R: Reporter>(
     let proposal_wire = ask(
         config,
         egress,
+        task.account_session(),
         &mut policy,
         reporter,
         subscription,
@@ -987,10 +1002,14 @@ fn plan<S: Sink, R: Reporter>(
 /// `read_trusted_content`, which hands over the bytes because they are trusted and refuses
 /// outright otherwise. Everything a caller does with the result is a decision taken from this
 /// text, which is why it may not be read any other way.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a planning call's collaborators, model choice, round, system prompt and history, passed by plan for each call"
+)]
 fn ask<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
     subscription: Option<&mut crate::ImportedSubscription>,
@@ -1018,8 +1037,9 @@ fn ask<S: Sink, R: Reporter>(
     let written_before = accounting.spent.output_tokens;
     let asked_at = std::time::Instant::now();
     let completion = {
-        let mut client =
-            crate::backend::Backend::select(config, egress, chosen).with_cancel(cancel.clone());
+        let mut client = crate::backend::Backend::select(config, egress, chosen)
+            .with_cancel(cancel.clone())
+            .in_session(session);
         if let Some(subscription) = subscription {
             client = client.with_subscription(subscription);
         }
@@ -1054,10 +1074,14 @@ fn ask<S: Sink, R: Reporter>(
 /// No model call decides anything here. The only one made at all is a transform's, and what it
 /// produces goes straight into the slot the plan named, at the label taint gave that slot before
 /// the call was made.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the driver's collaborators, the frozen plan and the run state, with run_accounted as its one caller"
+)]
 fn execute<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     workspace: &Workspace,
     recording: crate::findings::Recording<'_>,
     planned: Planned,
@@ -1159,7 +1183,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let mut filled = false;
     let mut answer: Option<Labelled<String>> = None;
     let mut shown = String::new();
-    let mut chat = Chat::new(config, egress)
+    let mut chat = Chat::new(config, egress, session)
         .spending(subscription)
         .on(chosen_model)
         .stoppable_by(cancel);
@@ -1229,7 +1253,12 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
                     answer = Some(answered.value);
                 }
                 attempt.stepped(index, step, &done.note);
-                reporter.tool_finished(activity.with_changes(done.changes).done(done.note));
+                reporter.tool_finished(
+                    activity
+                        .with_changes(done.changes)
+                        .with_written(done.written)
+                        .done(done.note),
+                );
             }
             Err(failure) => {
                 // A step that fails ends the run. There is no next step to try instead: the
@@ -1301,6 +1330,8 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
 struct Done {
     note: String,
     changes: Vec<crate::diff::Change>,
+    /// What the kernel counted for the diff behind `changes`, where the step wrote a file.
+    written: Option<crate::report::Written>,
     /// What this step answered the user with, where it was the one that answered.
     answer: Option<Answered>,
 }
@@ -1359,7 +1390,10 @@ fn slot_to_fill(step: &Step) -> Result<SlotId, String> {
 }
 
 /// Run one step. Errors are fatal to the run and say why.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, slots, chat and run state one step needs, passed by execute for each step of the plan"
+)]
 fn run_step<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -1687,7 +1721,10 @@ fn locked_filter<S: Sink>(
 /// The same shape a turn's write has, and for the same reasons: the person sees the exact path
 /// and the exact body before any endorsement exists, and the endorsement is minted for what they
 /// saw. What differs is where the path came from, which here is the routing lock.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the policy, workspace, slots, confirmer and mode one write needs, with the step and its index"
+)]
 fn write<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     workspace: &Workspace,
@@ -1811,8 +1848,16 @@ fn write<S: Sink, C: Confirmer>(
     );
     // What the step would change, compared inside the kernel and released once, exactly as a
     // turn's write does it.
-    let reviewed =
-        crate::tools::review_a_write(policy, "write_file", intent, &replaced, &body, replaced_age);
+    let landed = crate::tools::landing_of(workspace, &path);
+    let reviewed = crate::tools::review_a_write(
+        policy,
+        "write_file",
+        intent,
+        &replaced,
+        &body,
+        replaced_age,
+        &landed,
+    );
 
     if crate::tools::write_needs_approval(policy, workspace, &path, body_label, Destination::Named)
         || !to_approve.is_empty()
@@ -1842,6 +1887,7 @@ fn write<S: Sink, C: Confirmer>(
             protected: crate::tools::write_is_protected(workspace, &path),
             may_always: standing.may_always,
             record: standing.record.clone(),
+            may_edit: false,
         };
         // Read as the question is put, exactly as a turn's write reads it.
         let mode = permission_mode.get();
@@ -1851,6 +1897,7 @@ fn write<S: Sink, C: Confirmer>(
                 .then(|| mode.name()),
         );
         if !answer.approved() {
+            policy.refuse_unapproved_write(&format!("step {}: write_file", index + 1));
             return Err(format!("the user did not approve writing {path}"));
         }
         standing.keep(policy, answer);
@@ -1866,10 +1913,16 @@ fn write<S: Sink, C: Confirmer>(
         )
         .map_err(|e| e.to_string())?;
 
-    let crate::tools::Reviewed { note, changes, .. } = reviewed;
+    let crate::tools::Reviewed {
+        note,
+        changes,
+        written,
+        ..
+    } = reviewed;
     Ok(Done {
         note: crate::tools::carried_note(note, &scanned),
         changes,
+        written,
         ..Done::default()
     })
 }

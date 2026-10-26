@@ -2,13 +2,14 @@
  * One hook, as the agent read it. `firesForNothing` is its answer about an entry naming a tool on a
  * moment that has no tool call, and is not worked out again here: what a hook is has one reader.
  */
-export interface Hook { on: 'turn-started' | 'tool-finished' | 'turn-finished' | 'prompt-shown'; tool: string | null; run: string[]; timeout: number | null; firesForNothing: boolean }
+export interface Hook { on: 'turn-started' | 'tool-finished' | 'turn-finished' | 'prompt-shown' | 'checkout-made' | 'compacted' | 'session-started' | 'session-ended'; tool: string | null; run: string[]; timeout: number | null; firesForNothing: boolean }
 /** `entire` is false where the agent passed over part of the file, so composing it back from
  * `hooks` alone would drop what it did not read. */
 export interface HooksDocument { path: string; text: string | null; entire: boolean; timeoutSeconds: TimeoutRange; hooks: Hook[] }
-/** The whole numbers of seconds the agent accepts for a hook's `timeout`, as it reported them. The
- * range is the agent's; a form that held its own copy would disagree with the reader the day one changed. */
-export interface TimeoutRange { min: number; max: number }
+/** The whole numbers of seconds the agent accepts for a hook's `timeout`, as it reported them, and
+ * the bound it holds an entry to on each moment when none is stated. The range and the bounds are the
+ * agent's; a form that held its own copy would disagree with the reader the day one changed. */
+export interface TimeoutRange { min: number; max: number; defaultFor: Record<Hook['on'], number> }
 /** A refusal that only ever narrows: `value` is null where nothing named it, `path` the weakest file that did. */
 export interface Refusal { value: boolean | null; path: string | null; managed: boolean }
 /** What the settings in force say about the two refusing keys and the run limits. A null limit is the agent's built-in figure. */

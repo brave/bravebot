@@ -9,6 +9,15 @@
 
 const range = (count) => [...Array(count).keys()]
 const pad = (n) => String(n).padStart(2, '0')
+// How the agent writes out a character that draws as nothing, in the content of an output or vetting
+// request: a tag character with the letter it stands for, and a zero-width space. The card draws
+// the request's text as it comes, so these are in the rows the person is deciding about.
+const TAG_A = '\u2039U+E0041 A\u203A'
+const ZERO_WIDTH = '\u2039U+200B\u203A'
+// The sentence the agent words from its catalog for a count of two and of one, which the card draws
+// as it comes and holds no copy of.
+const TWO_HIDDEN = '2 characters in this text draw as nothing. Each is written out below as \u2039U+XXXX\u203A, and a tag character also as the letter it stands for. The model reads them as they are.'
+const ONE_HIDDEN = '1 character in this text draws as nothing. It is written out below as \u2039U+XXXX\u203A, and a tag character also as the letter it stands for. The model reads it as it is.'
 const filler = (words) => range(words).map((n) => ['the', 'checker', 'read', 'this', 'and', 'found', 'nothing', 'that', 'gives', 'orders'][n % 10]).join(' ')
 
 export const CASES = {
@@ -16,7 +25,7 @@ export const CASES = {
     kind: 'confirm',
     event: 'confirm.request',
     request: {
-      request: 101, path: 'docs/zqc04-notes.txt', intent: 'edit', untrusted: false, existing: true, added: 81, removed: 0, exact: true,
+      request: 101, path: 'docs/zqc04-notes.txt', shownPath: 'docs/zqc04-notes.txt', intent: 'edit', untrusted: false, existing: true, added: 81, removed: 0, exact: true,
       lineEndings: 'zqc05 the file keeps its CRLF line endings',
       remark: { preview: ['zqc06 changed blue to green'], lines: 1, label: 'zqc07 from the isolated processor' },
       credentials: range(24).map((n) => `api key at line ${n + 1}: sk-…${pad(n)}${n === 0 ? ' zqc01' : n === 23 ? ' zqc02' : ''}`),
@@ -30,11 +39,11 @@ export const CASES = {
     event: 'run.request',
     request: {
       request: 102,
-      stages: range(30).map((n) => ({ program: 'grep', resolved: '/usr/bin/grep', args: [`zqr${pad(n + 1)}`], display: `grep zqr${pad(n + 1)}` })),
-      directory: '/work/zqr36', releasesPrivate: false, canBeRemembered: true,
-      line: 'grep zqr31 notes.md', writes: ['/work/project/zqr32.txt'], stdin: 'zqr33',
+      stages: range(30).map((n) => ({ program: 'grep', resolved: '/usr/bin/grep', shownBinary: '/usr/bin/grep', args: [`zqr${pad(n + 1)}`], display: `grep zqr${pad(n + 1)}` })),
+      directory: '/work/zqr36', shownDirectory: '/work/zqr36', releasesPrivate: false, canBeRemembered: true,
+      line: 'grep zqr31 notes.md', writes: ['/work/project/zqr32.txt'], shownWrites: ['/work/project/zqr32.txt'], stdin: 'zqr33',
       ambient: [{ authority: 'agent-socket', named: 'zqr34' }], requestedScopes: ['zqr35'],
-      confinement: { heading: 'confined to:', directories: ['/work/zqr37'], sentences: ['zqr38 each stage brings nothing more'] },
+      confinement: { heading: 'confined to:', directories: ['/work/zqr37'], shownDirectories: ['/work/zqr37'], sentences: ['zqr38 each stage brings nothing more'] },
       vouches: [{ program: 'grep', args: ['zqr99'], display: 'grep zqr99' }], summary: 'search the notes',
     },
     tokens: ['zqr01', 'zqr30', 'zqr31', 'zqr32', 'zqr33', 'zqr34', 'zqr35', 'zqr36', 'zqr37', 'zqr38'],
@@ -44,22 +53,22 @@ export const CASES = {
     kind: 'output',
     event: 'output.request',
     request: {
-      request: 103, command: 'cat zqo03.md', reference: 'output-1', lines: 120, summary: 'the notes',
-      output: ['zqo02 is the first line of the output', ...range(119).map((n) => `line ${n + 2} of the output`)].join('\n'),
+      request: 103, command: 'cat zqo03.md', reference: 'output-1', lines: 120, summary: 'the notes', hidden: 2, hiddenNote: TWO_HIDDEN,
+      output: [`zqo02 is the first line of the output ${TAG_A}${ZERO_WIDTH}`, ...range(119).map((n) => `line ${n + 2} of the output`)].join('\n'),
       vetting: { verdict: 'safe', reason: `zqo01 ${filler(80)}` },
     },
-    tokens: ['zqo01', 'zqo02', 'zqo03'],
+    tokens: ['zqo01', 'zqo02', 'zqo03', TAG_A, ZERO_WIDTH],
     standing: [],
   },
   vet: {
     kind: 'vet',
     event: 'vet.request',
     request: {
-      request: 104, origin: 'zqv03.md', expects: 'zqv04 release notes', lines: 120,
-      content: ['zqv02 is the first line of the content', ...range(119).map((n) => `line ${n + 2} of the content`)].join('\n'),
+      request: 104, origin: 'zqv03.md', expects: 'zqv04 release notes', lines: 120, hidden: 1, hiddenNote: ONE_HIDDEN,
+      content: [`zqv02 is the first line of the content ${TAG_A}`, ...range(119).map((n) => `line ${n + 2} of the content`)].join('\n'),
       vetting: { verdict: 'safe', reason: `zqv01 ${filler(80)}` },
     },
-    tokens: ['zqv01', 'zqv02', 'zqv03', 'zqv04'],
+    tokens: ['zqv01', 'zqv02', 'zqv03', 'zqv04', TAG_A],
     standing: [],
   },
   'vet-picture': {
@@ -119,7 +128,7 @@ export const CASES = {
     kind: 'exposure',
     event: 'exposure.request',
     request: {
-      request: 110, path: 'zqe41.env', summary: 'send the env file',
+      request: 110, path: 'zqe41.env', shownPath: 'zqe41.env', summary: 'send the env file',
       credentials: range(40).map((n) => `api key at line ${n + 1}: sk-…${pad(n)}${n === 0 ? ' zqe01' : n === 39 ? ' zqe40' : ''}`),
     },
     tokens: ['zqe01', 'zqe40', 'zqe41'],
@@ -182,7 +191,7 @@ export const CASES = {
     event: 'ask.request',
     request: {
       request: 115,
-      prompts: [{ header: 'Branch', question: 'Which branch should the notes go on?', rows: [{ index: 0, label: 'main', detail: null }, { index: 1, label: 'release', detail: null }], multiple: false, key: 'branch' }],
+      prompts: [{ header: 'Branch', question: 'Which branch should the notes go on?', rows: [{ index: 0, label: 'main', detail: null }, { index: 1, label: 'release', detail: null }], multiple: false, key: 'branch', place: null, last: true }],
     },
     tokens: [],
     standing: [],

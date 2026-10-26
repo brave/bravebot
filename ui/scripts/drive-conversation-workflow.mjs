@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture.mjs'
+import { COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-conversation-regression')
 mkdirSync(output, { recursive: true })
 const { profile, directory } = makeProfile({ copy: true })
@@ -22,7 +23,7 @@ try {
   await page.getByRole('button', {name: 'Open project', exact: true}).waitFor()
   const first = () => page.locator('.session').filter({hasText: 'Review the sample project'})
   const second = () => page.locator('.session').filter({hasText: 'Plan the next iteration'})
-  const composer = page.getByRole('textbox', {name: 'Message the agent'})
+  const composer = page.getByRole('textbox', {name: COMPOSER_NAME})
   await first().click()
   await composer.fill('Draft one')
   await second().click()
@@ -30,9 +31,10 @@ try {
   await first().click()
   assert.equal(await composer.inputValue(), 'Draft one')
   await page.getByRole('button', {name: 'Send', exact: true}).click()
-  await emit('ask.request', {request: 1, prompts: [{header: 'Color', question: 'Which color?', rows: [{index: 0, label: 'Blue', detail: 'Cool'}], multiple: false, key: 'color'}]})
+  await emit('ask.request', {request: 1, prompts: [{header: 'Color', question: 'Which color?', rows: [{index: 0, label: 'Blue', detail: 'Cool'}], multiple: false, key: 'color', place: null, last: true}]})
   await composer.fill('Queued follow-up')
-  await composer.press('Enter')
+  // Enter would send it into the running turn; Alt+Enter holds it for after.
+  await composer.press('Alt+Enter')
   await second().click()
   await first().getByText('Waiting for your answer', {exact: false}).waitFor()
   await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === 'Draft two', null, {timeout: 3000}).catch(() => {})

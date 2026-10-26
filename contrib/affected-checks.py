@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "npm", "deps")
+AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "npm", "deps", "fuzz")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -37,15 +37,49 @@ NOTHING = frozenset()
 DECIDES = ("Makefile", "contrib/affected-checks.py")
 DECIDES_UNDER = (".github/workflows/",)
 
+# Files the guard of the cli crate's tests that reads every build command reads and pins a command
+# in: it counts the lines that ask for every feature in each, so a change to one can change what
+# that test finds whatever else the change is. They add the Rust checks to what their own area
+# needs.
+READ_BY_THE_SEAM_GUARD = frozenset({
+    ".envrc.example",
+    ".githooks/pre-commit",
+    "Dockerfile.cross",
+    "agents/pr_worktree.py",
+    "agents/pr_worktree_selftest.py",
+    "agents/skills/maintenance/maintenance.py",
+    "deny.toml",
+    "docs/development/fuzzing.md",
+    "docs/development/releasing.md",
+    "docs/website/docs/development.md",
+    "docs/website/package.json",
+    "fuzz/Cargo.lock",
+    "fuzz/Cargo.toml",
+    "mobile/package.json",
+    "package.json",
+    "packages/agent-client/README.md",
+    "packages/agent-client/package.json",
+    "ui/README.md",
+    "ui/docs/development.md",
+    "ui/docs/testing.md",
+    "ui/docs/v0.9.0-implementation.md",
+    "ui/package.json",
+    "ui/pnpm-lock.yaml",
+    "ui/scripts/build-bridge.sh",
+    "ui/src/renderer/App.tsx",
+})
+
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = (
-    "docs/specs/layering.md", "docs/specs/credential-protection.md", "docs/specs/sandboxing.md",
-)
+READ_BY_RUST = ("CHANGELOG.md",)
+
+# Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
+READ_BY_RUST_UNDER = ("docs/specs/",)
 
 # Outside crates/, run by the installer tests themselves rather than read as data: a change to
 # one is a change to what those tests exercise, whatever else reads it.
 READ_BY_INSTALLER_TESTS = {
     "install.sh": frozenset({"rust"}),
+    "install.ps1": frozenset({"rust"}),
     "npm/scripts/stage-platform-package.js": frozenset({"npm", "rust"}),
 }
 
@@ -78,7 +112,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "CHANGELOG.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
+    "README.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -86,11 +120,16 @@ QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
 # The crates the desktop app spawns, which it builds, with everything they name, before it runs.
 DESKTOP = ("ui-bridge", "ui-files")
 
+# The package that fuzzes the crates its manifest names, and everything those name. It is a
+# workspace of its own, so no rule below reaches it through crates/.
+FUZZ_MANIFEST = "fuzz/Cargo.toml"
+
 # The local gates, the ones taking seconds first. Cross-building has none, since the container
-# gates cover what it checks short of linking every target.
+# gates cover what it checks short of linking every target. The fuzz targets have none either:
+# they need a nightly toolchain and cargo-fuzz, so `make check-fuzz` is run by name.
 ALWAYS = (
     "check-scripts", "check-spec", "check-security", "check-locales", "check-versions",
-    "check-narration", "check-reviewdog",
+    "check-narration", "check-pr-body", "check-reviewdog",
 )
 HOST = {
     "rust": ("check",),
@@ -103,16 +142,31 @@ HOST = {
 CONTAINERS = {"rust": ("check-msrv", "check-windows", "check-linux")}
 
 
-def classify(path, desktop):
-    """The areas a change to `path` could affect, where `desktop` is desktop_crates()."""
+def classify(path, desktop, fuzz):
+    """The areas a change to `path` could affect, where `desktop` is desktop_crates() and `fuzz`
+    is fuzz_crates()."""
+    found = classify_by_area(path, desktop, fuzz)
+    if path in READ_BY_THE_SEAM_GUARD:
+        found = found | {"rust"}
+    return found
+
+
+def classify_by_area(path, desktop, fuzz):
+    """The areas `path` belongs to by what it is, before a test that reads it is counted."""
     if path in DECIDES or path.startswith(DECIDES_UNDER):
         return EVERYTHING
-    if path in ("Cargo.toml", "Cargo.lock"):
+    if path == "Cargo.toml":
+        # Every crate the fuzz package builds takes its version and dependencies from here, so
+        # its lockfile goes stale with this one. Cargo.lock below is not read by that build.
+        return frozenset({"rust", "ui", "build", "deps", "fuzz"})
+    if path == "Cargo.lock":
         return frozenset({"rust", "ui", "build", "deps"})
     if path in ("deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
+    if path == "contrib/check-lint-increase.py":
+        return frozenset({"rust"})
     if path == "Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
@@ -120,12 +174,20 @@ def classify(path, desktop):
         found = {"rust"}
         if parts[1] in desktop:
             found.add("ui")
+        if parts[1] in fuzz:
+            found.add("fuzz")
         if parts[2:] == ["Cargo.toml"]:
             found |= {"build", "deps"}
         elif parts[2:] == ["build.rs"]:
             found.add("build")
         return frozenset(found)
-    if path in READ_BY_RUST:
+    if path.startswith("fuzz/"):
+        # Nothing in the root workspace reads it, so the Rust jobs have nothing to check. Its
+        # manifest and lockfile are what the dependency policy reads of it.
+        if path in ("fuzz/Cargo.toml", "fuzz/Cargo.lock"):
+            return frozenset({"fuzz", "deps"})
+        return frozenset({"fuzz"})
+    if path in READ_BY_RUST or path.startswith(READ_BY_RUST_UNDER):
         return frozenset({"rust"})
     if path in READ_BY_INSTALLER_TESTS:
         return READ_BY_INSTALLER_TESTS[path]
@@ -172,14 +234,19 @@ def names(text, package):
     ) is not None
 
 
-def desktop_crates(root):
-    """The directories under crates/ the desktop app builds, by name."""
+def crate_manifests(root):
+    """Each crate's package name and manifest text, by its directory under crates/."""
     manifests = {}
     for manifest in sorted((root / "crates").glob("*/Cargo.toml")):
         text = manifest.read_text(encoding="utf-8")
         found = PACKAGE_NAME.search(text)
         manifests[manifest.parent.name] = (found.group(1) if found else None, text)
-    reached, todo = set(), [crate for crate in DESKTOP if crate in manifests]
+    return manifests
+
+
+def reaching(manifests, start):
+    """The crates in `start` and every crate any of them names, by directory."""
+    reached, todo = set(), list(start)
     while todo:
         crate = todo.pop()
         if crate in reached:
@@ -191,6 +258,26 @@ def desktop_crates(root):
             if package and other not in reached and names(text, package)
         )
     return reached
+
+
+def desktop_crates(root):
+    """The directories under crates/ the desktop app builds, by name."""
+    manifests = crate_manifests(root)
+    return reaching(manifests, [crate for crate in DESKTOP if crate in manifests])
+
+
+def fuzz_crates(root):
+    """The directories under crates/ the fuzz package builds, by name: the crates its manifest
+    names, with everything they name."""
+    try:
+        text = (root / FUZZ_MANIFEST).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return set()
+    manifests = crate_manifests(root)
+    return reaching(
+        manifests,
+        [crate for crate, (package, _) in manifests.items() if package and names(text, package)],
+    )
 
 
 def git(root, *args, env=None):
@@ -232,11 +319,11 @@ def branch_paths(root, base, env=None):
     return sorted(set(changed(root, fork, env=env)) | set(untracked))
 
 
-def needed(paths, desktop):
+def needed(paths, desktop, fuzz):
     """Each area some path needs, with the first path that needs it."""
     because = {}
     for path in paths:
-        for area in classify(path, desktop):
+        for area in classify(path, desktop, fuzz):
             because.setdefault(area, path)
     return because
 
@@ -257,7 +344,7 @@ def github_output(root, env=None):
     if paths is None:
         because = {area: "any checkout that is not a pull request's merge" for area in AREAS}
     else:
-        because = needed(paths, desktop_crates(root))
+        because = needed(paths, desktop_crates(root), fuzz_crates(root))
         print(f"{len(paths)} paths changed")
     explain(because, sys.stdout)
     # Written once, after everything is known, so a failure part way leaves no area false.
@@ -284,15 +371,19 @@ def local(root, base, containers):
         print(f"affected-checks: cannot diff against {base}: {failed.stderr.strip()}",
               file=sys.stderr)
         return 1
-    because = needed(paths, desktop_crates(root))
+    because = needed(paths, desktop_crates(root), fuzz_crates(root))
     print(f"affected-checks: {len(paths)} paths changed against {base}", file=sys.stderr)
     explain(because, sys.stderr)
+    if "fuzz" in because and not containers:
+        print("affected-checks: the fuzz job is not run here: make check-fuzz runs it, and needs the "
+              "nightly toolchain and cargo-fuzz", file=sys.stderr)
     chosen = targets(because, CONTAINERS) if containers else list(ALWAYS) + targets(because, HOST)
     print(" ".join(chosen))
     return 0
 
 
 FIXTURE_DESKTOP = frozenset({"core", "ui-bridge"})
+FIXTURE_FUZZ = frozenset({"agent", "core"})
 
 CASES = (
     ("contrib/affected-checks.py", EVERYTHING),
@@ -302,25 +393,36 @@ CASES = (
     ("crates/README.md", EVERYTHING),
     ("somewhere-new/file.txt", EVERYTHING),
     ("Cargo.lock", {"rust", "ui", "build", "deps"}),
-    ("Cargo.toml", {"rust", "ui", "build", "deps"}),
-    ("deny.toml", {"deps"}),
+    ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz"}),
+    ("deny.toml", {"deps", "rust"}),
     ("contrib/check-deny-reasons.py", {"deps"}),
-    ("Dockerfile.cross", {"build"}),
+    ("Dockerfile.cross", {"build", "rust"}),
     ("crates/tui/src/render.rs", {"rust"}),
-    ("crates/core/src/policy.rs", {"rust", "ui"}),
+    ("crates/core/src/policy.rs", {"rust", "ui", "fuzz"}),
+    ("crates/agent/src/regex.rs", {"rust", "fuzz"}),
+    ("crates/agent/Cargo.toml", {"rust", "build", "deps", "fuzz"}),
     ("crates/tui/Cargo.toml", {"rust", "build", "deps"}),
+    ("fuzz/src/lib.rs", {"fuzz"}),
+    ("fuzz/fuzz_targets/regex.rs", {"fuzz"}),
+    ("fuzz/seeds/regex/0a1b", {"fuzz"}),
+    ("fuzz/dictionaries/regex.dict", {"fuzz"}),
+    ("fuzz/Cargo.toml", {"fuzz", "deps", "rust"}),
+    ("fuzz/Cargo.lock", {"fuzz", "deps", "rust"}),
+    ("docs/development/fuzzing.md", {"rust"}),
     ("crates/config/build.rs", {"rust", "build"}),
     ("docs/specs/layering.md", {"rust"}),
     ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/sandboxing.md", {"rust"}),
-    ("docs/specs/routing.md", NOTHING),
+    ("CHANGELOG.md", {"rust"}),
+    ("docs/specs/routing.md", {"rust"}),
+    ("docs/specs/tools/read-file.md", {"rust"}),
     ("docs/website/docs/intro.md", {"docs"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
     ("docs/website/pnpm-workspace.yaml", {"docs", "npm"}),
     ("ui/src/App.tsx", {"ui"}),
-    ("ui/package.json", {"ui", "npm"}),
-    ("ui/pnpm-lock.yaml", {"ui", "npm"}),
+    ("ui/package.json", {"ui", "npm", "rust"}),
+    ("ui/pnpm-lock.yaml", {"ui", "npm", "rust"}),
     ("ui/pnpm-workspace.yaml", {"ui", "npm"}),
     ("ui/scripts/windows-installer.mjs", {"ui", "build", "installers"}),
     ("ui/scripts/check-windows-install.mjs", {"ui", "build", "installers"}),
@@ -334,14 +436,16 @@ CASES = (
     ("packages/agent-client/pnpm-workspace.yaml", {"ui", "mobile", "npm"}),
     ("mobile/src/App.tsx", {"mobile"}),
     ("mobile/ios/Bravebot.xcodeproj/project.pbxproj", {"mobile"}),
-    ("mobile/package.json", {"mobile", "npm"}),
+    ("mobile/package.json", {"mobile", "npm", "rust"}),
     ("mobile/pnpm-lock.yaml", {"mobile", "npm"}),
     ("mobile/pnpm-workspace.yaml", {"mobile", "npm"}),
     ("contrib/check-pnpm-lockfiles.py", {"npm"}),
+    ("contrib/check-lint-increase.py", {"rust"}),
     ("extension/tools.js", {"rust", "ui"}),
     ("extension/tests/tools.test.mjs", {"rust", "ui"}),
     ("npm/scripts/stage-platform-package.js", {"npm", "rust"}),
     ("install.sh", {"rust"}),
+    ("install.ps1", {"rust"}),
     ("package-lock.json", {"npm"}),
     ("pnpm-lock.yaml", {"npm"}),
     ("pnpm-workspace.yaml", {"npm"}),
@@ -368,6 +472,14 @@ FIXTURE_MANIFESTS = {
     "deep": '[package]\nname = "x-deep"\n',
     "apart": '[package]\nname = "x-apart"\n\n[dependencies]\nx-files = { path = "../ui-files" }\n',
 }
+
+# The fuzz package names two crates, one of which names a third, and has a target called after a
+# crate it does not depend on.
+FIXTURE_FUZZ_MANIFEST = (
+    '[package]\nname = "x-fuzz"\n\n[dependencies]\n'
+    'x-inline = { path = "../crates/inline" }\nx-dotted.workspace = true\n\n'
+    '[[bin]]\nname = "x-apart"\npath = "fuzz_targets/apart.rs"\n'
+)
 
 STRING = re.compile(r'"([^"\\\n]+)"')
 CONDITION = re.compile(r"needs\.changes\.outputs\.(\w+)(\s*!=\s*'false')?")
@@ -410,12 +522,15 @@ def selftest():
     checks = []
 
     for path, wanted in CASES:
-        got = classify(path, FIXTURE_DESKTOP)
+        got = classify(path, FIXTURE_DESKTOP, FIXTURE_FUZZ)
         checks.append((f"{path} needs {sorted(wanted)}", got == frozenset(wanted), sorted(got)))
 
     real = desktop_crates(ROOT)
+    real_fuzz = fuzz_crates(ROOT)
     for crate in (*DESKTOP, "core"):
         checks.append((f"the desktop app builds {crate}", crate in real, sorted(real)))
+    for crate in ("agent", "aichat", "bedrock", "core"):
+        checks.append((f"the fuzz package builds {crate}", crate in real_fuzz, sorted(real_fuzz)))
 
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
@@ -423,15 +538,23 @@ def selftest():
             (root / "crates" / crate).mkdir(parents=True)
             (root / "crates" / crate / "Cargo.toml").write_text(text, encoding="utf-8")
         got = desktop_crates(root)
+        without = fuzz_crates(root)
+        (root / "fuzz").mkdir()
+        (root / "fuzz" / "Cargo.toml").write_text(FIXTURE_FUZZ_MANIFEST, encoding="utf-8")
+        fuzzed = fuzz_crates(root)
     wanted = set(FIXTURE_MANIFESTS) - {"apart"}
     checks.append(("every way a manifest names a crate reaches it", got == wanted, sorted(got)))
+    checks.append(("no fuzz package reaches no crate", without == set(), sorted(without)))
+    checks.append(("the fuzz package reaches what its manifest names and what those name, and "
+                   "not a crate only a target is called after",
+                   fuzzed == {"inline", "deep", "dotted"}, sorted(fuzzed)))
 
     # A test reading a file outside crates/ makes that file Rust's, and the one way to find such
     # a read without running anything is the name it reads by.
     named = named_by_rust(ROOT)
     for path, source in sorted(named.items()):
         if path not in NAMED_NOT_READ:
-            got = classify(path, real)
+            got = classify(path, real, real_fuzz)
             checks.append((f"{path}, named in {source}, needs rust", "rust" in got, sorted(got)))
     for path in sorted(set(NAMED_NOT_READ) - set(named)):
         checks.append((f"{path} is still named by a crate, as NAMED_NOT_READ says", False, None))
@@ -441,11 +564,11 @@ def selftest():
         env, run, write = fixture_git(root)
         run("init", "-q", "-b", "main")
         write("crates/tui/src/moved.rs", "fn moved() {}\n")
-        write("docs/specs/routing.md", "old\n")
+        write("docs/development/checks.md", "old\n")
         run("add", ".")
         run("commit", "-q", "-m", "base")
         run("checkout", "-q", "-b", "prose")
-        write("docs/specs/routing.md", "new\n")
+        write("docs/development/checks.md", "new\n")
         run("commit", "-q", "-am", "prose only")
         run("checkout", "-q", "-b", "move", "main")
         run("mv", "crates/tui/src/moved.rs", "docs/moved.rs")
@@ -459,7 +582,7 @@ def selftest():
         for branch, wanted in (("prose", NOTHING), ("move", {"rust"})):
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge", branch)
-            got = frozenset(needed(pull_request_paths(root, pull_request), NOTHING))
+            got = frozenset(needed(pull_request_paths(root, pull_request), NOTHING, NOTHING))
             checks.append((f"a pull request of {branch} needs {sorted(wanted)}",
                            got == frozenset(wanted), sorted(got)))
 
@@ -484,14 +607,14 @@ def selftest():
         unmerged = pull_request_paths(root, pull_request)
         checks.append(("a checkout that is not a merge answers nothing", unmerged is None, unmerged))
 
-        write("docs/specs/routing.md", "edited, not committed\n")
+        write("docs/development/checks.md", "edited, not committed\n")
         write("ui/new.ts", "untracked\n")
         got = branch_paths(root, "main", env=env)
-        wanted = ["docs/specs/routing.md", "ui/new.ts"]
+        wanted = ["docs/development/checks.md", "ui/new.ts"]
         checks.append(("a branch is its commits, its edits and its new files, not the base's",
                        got == wanted, got))
 
-    for area in set(AREAS) - {"build", "installers"}:
+    for area in set(AREAS) - {"build", "installers", "fuzz"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)
         checks.append((f"a local run needing {area} runs a gate for it", bool(runs), runs))
     containers = targets({"rust"}, CONTAINERS)

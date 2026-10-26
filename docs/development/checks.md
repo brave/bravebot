@@ -19,15 +19,53 @@ pre-commit hook that refuses a commit failing either. The hook skips a commit th
 but files under `docs/` or `agents/`, Markdown, `LICENSE` or `CODEOWNERS`, which nothing compiled
 reads; a commit that stages anything else, or nothing, runs both.
 
+The workspace manifest holds a `[workspace.lints.clippy]` table of lints that code in this tree has no
+violation of: `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `unused_async`, `large_futures`,
+`future_not_send`, `let_underscore_future`, `rc_mutex`, `mutex_atomic` and
+`allow_attributes_without_reason`. Each crate opts in with
+`[lints]` and `workspace = true`, and `crates/cli/tests/workspace_lints.rs` fails a member that does
+not. A lint is added to the table once the tree has none of it. A test target that unwraps starts with
+`#![allow(clippy::unwrap_used, reason = "...")]` (`#![cfg_attr(test, allow(...))]` in a crate root whose
+unit tests unwrap), because `allow-unwrap-in-tests` in `clippy.toml` exempts a `#[test]` function and
+a `#[cfg(test)]` module and not a helper in `tests/` or under `cfg(all(test, unix))`.
+
+Lints the tree has hundreds of sites of are held to the base instead: `make check-lint-increase`
+runs clippy over the libraries and binaries at the merge base and at the branch, and fails when a lint
+reports more sites in a crate than it did. Mark a site that is right with
+`#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
+requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.
+
+Every `#[allow]` and `#[expect]` ends its list with `reason = "..."`. clippy reads only the code the
+host compiles, so an `#[allow(unsafe_code)]` with no reason in a `#[cfg(windows)]` function passes
+on macOS and fails the Windows lint after the push. `crates/cli/tests/allow_reasons.rs` reads every
+source file under `crates/` as text, so a missing reason fails `make check` on any host. The code
+the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
+the same rule.
+
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
-[SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A start that stays has
-`#[allow(clippy::disallowed_methods, reason = "...")]` beside it, and the reason says who chose the
-program. A reviewer reads that line in the diff, and `make check-security` fails one with no reason.
+[SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
+with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program
+inherits (`Inherits`) and the `PATH` it is given (`SearchPath`). The lookup or one of the named
+constructors of `Resolved` (`own_executable`, `written_in_source`, `named_by_person`,
+`found_earlier`, `to_confine`) builds the first, and the other two have no default, so the diff that
+starts a program shows who chose it, what it inherits and where the names it starts are looked up.
+`#[allow(clippy::disallowed_methods, reason = "...")]` is for the few files that cannot call `start`:
+`start` itself, `CreateProcessW` and a build script. `make check-security` fails a mark with no
+reason, a mark that covers more than one start, and a mark in a production file, or a second one in
+a file, that `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` does not
+list.
 
 Then run the tests the diff is under, scoped as tightly as the diff is: `cargo test -p bravebot-tui
 --lib` for the interface, `cargo test -p bravebot-agent --test workspace` for one test binary. A
 commit still has to be a state that stands up, and a change nothing covers is a change to be
 suspicious of.
+
+A test that builds a path under `std::env::temp_dir()` puts `std::process::id()` in the name, or a
+counter or timestamp, or takes its directory from `tempfile`. Every process on a machine shares that
+directory, so a fixed name is deleted by another run of the same test, which is a second session or the
+same binary started again, and each fails for a reason that is not in the code under test.
+`crates/cli/tests/temp_names.rs` fails a name that has none of these. A name that has to be fixed is
+marked `// shared-temp-name: <why>` on its line or the line above.
 
 ## Before pushing
 
@@ -35,9 +73,9 @@ Choose how much to run:
 
 | Command | Coverage |
 |---|---|
-| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client, the mobile app's types and tests, and reviewdog. No Docker. |
+| `make check-all-local` | Script selftests, host formatting, Clippy and Rust tests, specs, security rules, locales, versions, narration, pull request body, toolchain age, docs, pnpm lockfiles, dependency policy, desktop UI, the TypeScript session client, the mobile app's types and tests, and reviewdog. No Docker. |
 | `make check-all` | Everything in `check-all-local`, plus Docker checks for minimum Rust, Windows Clippy and Linux. |
-| `make check-affected` | Script selftests, specs, security rules, locales, versions, narration and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
+| `make check-affected` | Script selftests, specs, security rules, locales, versions, narration, pull request body and reviewdog, plus each host check this branch's changes need, chosen the way CI chooses its jobs. No Docker. |
 | `make check-affected-containers` | The Docker checks this branch's changes need: minimum Rust, Windows Clippy and Linux for a change to Rust, and none otherwise. |
 
 Before a PR, run the checks relevant to your change and state which command passed.
@@ -46,6 +84,11 @@ If you use `check-all-local`, leave the platform checks to CI and say they were 
 locally. You can also run an individual target, such as `make check-reviewdog`, or check
 formatting with `cargo fmt --all -- --check`.
 
+`make check-affected` selects every job a changed path could reach, so it can run far more than a
+narrow change needs. Where a page here names narrower checks for a kind of change, run those and say
+in the pull request that the rest was left to CI.
+[localization.md](localization.md#checking-a-translation) does this for a change to the catalogs.
+
 If the checkout has no backend credentials, use
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-all-local` (or `check-all`) to allow
 the Rust build.
@@ -53,11 +96,12 @@ the Rust build.
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
 touches and says which of Rust, the desktop app, the cross-builds, the Windows installers, the
-website, the pnpm lockfiles and the dependency policy they could affect. On a pull request the
+website, the pnpm lockfiles, the dependency policy and the fuzz targets they could affect. On a pull request the
 Windows installers are built and installed only for a change to the scripts that make them; main
 and every tag build and install them whatever changed. The specs, security, locales, versions and narration
-jobs take seconds and run on every change. A change to a crate needs the desktop jobs when the desktop app
-builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
+jobs take seconds and run on every change, and the narration job also reads the body's `Not covered:` line. A change to a crate needs the desktop jobs when the desktop app
+builds that crate, which is any crate the two bridge crates name, however far down, and needs the fuzz job when
+the fuzz package builds it, which is any crate its manifest names, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
 the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
 the classifier, any run that is not a pull request, and a run where the classifier itself failed.
@@ -70,7 +114,8 @@ stops on one that is in neither that list nor `NAMED_NOT_READ`.
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
 measured from as well. The branch is its commits, its uncommitted edits and its untracked files. It prints each area and the path that needs it before
 running the checks it names, keeps going past a failed check, and stops without running any when
-the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole.
+the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole. For a change the fuzz job
+needs it prints that and runs nothing, since `make check-fuzz` needs a nightly toolchain and cargo-fuzz.
 
 `make check-all` requires Docker for the platform checks. A missing prerequisite fails
 the target; it does not count as a pass. Add `-k`, for example `make -k check-all-local`,
@@ -130,6 +175,10 @@ These are local checks, not a promise that every CI environment passes. Windows 
 cross-compiles without running Windows tests. Docker Desktop cannot exercise Landlock;
 CI's native Linux tests cover that gap. Release cross-builds remain separate.
 
+Most tests that touch the state directory point `HOME` at a scratch directory, and `BRAVEBOT_HOME`
+answers before `HOME`, so unset it in the shell that runs the tests: with it set, a test reaches the
+directory it names, which is yours.
+
 `make check` runs the whole suite and takes minutes. It is what to run before pushing a branch and
 what CI runs, not what to run between two edits to the same file, and never twice to confirm the
 same thing. Reaching for it out of caution is not free: it is the difference between a review that
@@ -168,6 +217,22 @@ and says so in [../../agents/renumbered-clauses.txt](../../agents/renumbered-cla
 hand-written line per clause that moved, naming the id and heading it carries now: nothing
 generates that file, and the check fails on a line that has stopped being true of the tree.
 
+The review of the governed code is the [check-spec skill](../../agents/skills/check-spec/SKILL.md),
+which needs a model and is not part of `make check-spec`. A full run starts one reviewer for every six
+clauses, and each reads the governed source again, so the skill keeps `docs/check-spec-reviewed`: one
+line per clause with its verdict, the main commit the verdict was reached at, and a hash of what the
+reviewer was given besides the code (the clause, the paths its spec governs, the symbols it guards and
+their uses in files nobody watches, the spec's text outside its clauses, and the reviewer's
+instructions). A repeat run reviews a clause only as far as that has changed. It starts no reviewer
+for a clause when none of the code its spec watches changed since the recorded commit, gives a
+reviewer the earlier verdict and the diff when under half of those lines changed, and reviews the
+clause in full from half, when the hash changed, or when it has no line. `/check-spec full`, or
+`check-spec.py --full`, ignores the file and reviews every clause in full. That is the run to make on
+a schedule, since a review of a diff sees only the lines that changed. `record-reviewed.py` writes
+the file, for a tree that is main and no other, and does not commit it. `make check-spec` fails a
+line of it that is not a well formed record, since a run that cannot read the file reviews every
+clause in full.
+
 `make check-security` decides the things `check-spec` structurally cannot: whether two documents
 agree about how many exceptions to the rule are admitted, whether every crate keeping a network
 client of its own is one the egress register admits and no comment claims a dependency a manifest
@@ -188,21 +253,26 @@ branch and a tag can share, whether the check contexts a merge is held to are wr
 name jobs that exist, and cover every job whose purpose is running a check, and whether every
 method of the agent's confirmer, every remembered set the front ends hold in `Answers` and every
 question the terminal's trust prompts ask has a row in the register of kept answers in
-`docs/specs/prompting.md`, with each cell filled and each test it names one that exists. CI runs it
-too, so a pull request that moves a workflow step or a build image onto a movable tag, that puts an
-install back beside the publish credential, that points a checkout at a name instead of a ref, that
-gives a crate a network client the egress register does not admit, that drops the entry pinning a
-constructor, that adds a check nothing holds a merge to, or that adds a confirmer method, a
-remembered set or a trust question the register does not account for, fails rather than holding
-only for whoever remembers to run this. The register also has a table beneath it saying, for each
-answer, what a second checkout, a new session, a replaced file, another directory, a changed
+`docs/specs/prompting.md`, with each cell filled and each test it names one that exists, and whether
+the functions that build the key a name is filed under, or fold or decompose it (`normalise`,
+`TrustStore::key`, `FileAuthority::key`, the permission rule's `key_of` and the helpers
+`docs/specs/trust-map.md` lists) call a `trim`, a case fold, a Unicode normalisation or a lossy
+conversion, each of which can give two files the volume holds apart one key, unless that spec lists
+the construct with the files it joins and why. CI runs it too, so a pull request that moves a
+workflow step or a build image onto a movable tag, that puts an install back beside the publish
+credential, that points a checkout at a name instead of a ref, that gives a crate a network client
+the egress register does not admit, that drops the entry pinning a constructor, that adds a check
+nothing holds a merge to, or that adds a confirmer method, a remembered set or a trust question the
+register does not account for, or that puts a `trim` in the step that keys a name, fails rather than
+holding only for whoever remembers to run this. The register also has a table beneath it saying, for
+each answer, what a second checkout, a new session, a replaced file, another directory, a changed
 invocation, a changed declaration and an answer wider than its prompt do to it: this check fails a
-row, a cell or a cited test that is missing, and a case in `crates/agent/src/kept_answers.rs` that no
-cell cites. It is the deterministic half of the
+row, a cell or a cited test that is missing, and a case in `crates/agent/src/kept_answers.rs` that
+no cell cites. It is the deterministic half of the
 [security-audit skill](../../agents/skills/security-audit/SKILL.md); the lanes that read code are the
 other half, and a person runs those. Run it before a commit that touches a label,
 `.github/workflows`, a Dockerfile, the Makefile's containers, a crate's manifest, the required
-check contexts, the trust specs, the confirmer, the remembered answers
+check contexts, the trust specs, a function that keys a name, the confirmer, the remembered answers
 (`crates/agent/src/answers.rs`), the cases that change the world under them
 (`crates/agent/src/kept_answers.rs`), or `docs/specs/prompting.md`. Claude Code runs the mechanical
 half itself when a task ends on a branch that changes a file where an answer is kept
@@ -210,12 +280,18 @@ half itself when a task ends on a branch that changes a file where an answer is 
 
 `make check-maintenance` lists candidates for cleanup: `pub` items, module-level Python definitions
 and TypeScript exports named nowhere but where they are defined or only from tests, allowances
-silencing the dead-code lint, blocks of lines and string literals repeated across files, and files
-and functions past a length. rustc warns about none of the first kind in a library crate, and no
-check compares one file with another. The scan reads no code and exits zero whatever it lists, so
-nothing runs it in CI. It is the deterministic half of the
-[maintenance skill](../../agents/skills/maintenance/SKILL.md), whose reviewers read each candidate
-and draft an issue for the ones worth fixing.
+silencing a lint about dead code or about a function that is too large, blocks of lines and string
+literals repeated across files, files and functions past a length, functions nested deeply or taking
+several booleans, files that use many other modules, public functions no test names, files holding
+a lot of shared mutable state, commented-out code, and functions returning string errors. rustc
+warns about none of the first kind in a library crate, and no check compares one file with another.
+The scan reads no code and exits zero whatever it lists, so nothing runs it in CI. It is the
+deterministic half of the [maintenance skill](../../agents/skills/maintenance/SKILL.md), whose
+reviewers read each candidate and draft an issue for the ones worth fixing. The skill also runs
+clippy's opinionated lints over the code that ships, which `make check-maintenance` does not, since
+it compiles. `docs/maintenance-reviewed` holds what reviewers decided, so a later run reaches
+candidates it has not read. [smells.md](../../agents/skills/maintenance/smells.md) says which smell
+each lane covers and which a lint already refuses.
 
 Wherever this page says a check fails a pull request, what does the failing is not the job going
 red. A job reports. What holds a merge is branch protection's list of required contexts, which is
@@ -262,6 +338,18 @@ base with `upstream/main`, or `origin/main` without one, or `BASE=<ref>`, and re
 only where `PR_TITLE` and `PR_BODY` are set. It carries a `--selftest`, which `make check-narration`
 runs first.
 
+`make check-pr-body` fails a pull request opened by `netzenbot` whose body has no `Not covered:` line, or has a case under
+it that names no issue, which is the rule in [commits.md](commits.md) about cases a change leaves
+undone. The line is `none`, or a bullet per case each naming `#N` or `brave/bravebot#N`. CI runs it
+as the second step of the narration workflow, so it is read again when the body is edited, and it
+fails a body that is empty. The pull request's author arrives as `PR_AUTHOR`. Only `netzenbot`'s
+pull requests are held to the line, and a run that cannot name the author holds the body to it. Text inside a fenced code block or an
+HTML comment is not read, and a number is not looked up, so it does not show that the issue exists. Locally it reads a draft where `PR_BODY` is set, as in
+`PR_BODY="$(cat body.md)" make check-pr-body`, and otherwise runs its `--selftest` alone. The script
+is [../../contrib/check-pr-body.py](../../contrib/check-pr-body.py), which
+`agents/skills/pr-fix/pr-fix.py` loads as well, so the two readers of the body shape cannot disagree
+about the line.
+
 `make check-npm` lints the pnpm lockfiles, as CI does, and runs the tests under `npm/tests`. They
 hold the release origin the script that builds the platform packages downloads from to this
 repository whatever the environment says, hold each platform package to its asset and to the
@@ -271,11 +359,22 @@ things in the tree that run clauses of [../specs/releases.md](../specs/releases.
 run this target for a change to the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, a dependency from anywhere but
-crates.io, and a regex engine. It also fails an exception in `deny.toml` that has no `reason`,
-which [../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
+crates.io, and a regex engine. It reads the graph of the fuzz package as well as the root one,
+since `fuzz/` is a workspace of its own, and that package's lockfile does not follow the root one
+on its own ([fuzzing.md](fuzzing.md#the-lockfile)). It also fails an exception in `deny.toml` that has no
+`reason`, or a licence exception with no comment, since cargo-deny takes no `reason` on one, which
+[../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
 cargo-deny is built. CI runs this same target on a pull request that touches a manifest, the
 lockfile or `deny.toml`, on main, and once a day, since an advisory arrives without a commit.
 `make check-reviewdog` is the [security scan](security-scan.md).
+
+`make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
+of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the
+`Makefile`, and cargo-fuzz (`make fuzz-install`), so `make check-all` and `make check-affected` leave it out.
+CI's `Fuzz build and replay` job runs it on a pull request where `fuzz/`, the root manifest or a crate
+the targets build changed, and on every push to `main` and every tag. The Fuzz workflow runs each target for an hour every week
+([fuzzing.md](fuzzing.md#the-weekly-run)). Run it for a change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
+target. [fuzzing.md](fuzzing.md) lists the targets and says what to do with a crash.
 
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every
 target including the tests. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a
@@ -283,7 +382,8 @@ check: the cross-build produces the shipped binary and lints nothing, and compil
 at all, so a Windows arm that does not build or that trips a lint reaches main with CI green. It
 cross-compiles, which clippy allows because it stops before linking, so no Windows host is
 involved and the suite is not run on one. CI's `Desktop on Windows` job runs the file helper's
-suite and the walkthrough on a Windows runner, which no local target does. Worth running for
+suite and the walkthrough on a Windows runner, and CI's `Awkward names on Windows` job runs the
+pair tests over file names there, which no local target does. Worth running for
 anything with a platform branch in it, and for any test that has one: a `#[cfg(unix)]` left off a
 test is invisible from every platform that has `unix`.
 
@@ -330,13 +430,20 @@ sandbox is the cause. A test that fails under `run` and has no such skip is a bu
 [Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite a hundred
 times against one build, on Linux at four threads and at sixteen and on macOS and Windows at cargo's
 default, and names every test whose outcome changed, with the rate, the platform and the panic it
-produced. Each one gets an issue titled `Flaky test: <name>`, filed by a separate job that holds the issue
-grant and compiles nothing, except from the Windows leg, which
-files nothing because the suite is not expected to pass there yet (#88). A test that already has an
-issue gets nothing further, so the list of open flakes is the search rather than
-a job summary somebody has to remember to read. Search the issues before treating a failure as a
+produced. Each one gets an issue titled `Flaky test: <name>` and labelled `flaky-test`
+([labelling-issues.md](labelling-issues.md#flaky-tests)), filed by a separate job that holds the
+issue grant and compiles nothing, except from the Windows leg, which files nothing because the
+suite is not expected to pass there yet (#88). A test that already has an issue gets nothing
+further, so the list of open flakes is the search rather than a job summary somebody has to
+remember to read. Search the issues before treating a failure as a
 known flake, and run `contrib/measure-flakes.py --runs 30` to ask this machine over a shorter sweep.
 Neither fails a build over a rate.
+
+A passing test is not evidence that it would fail if the code were wrong. The
+[Mutation testing](../../.github/workflows/mutation-testing.yml) workflow runs cargo-mutants over
+`bravebot-core` every Sunday, in six shards, and its job summary lists the functions with the most
+changes no test noticed. That list is where to find a test to write. It gates nothing, and
+[contrib/README.md](../../contrib/README.md#measure-mutantspy) says how to run it on one file.
 
 **A test missing from that list is not thereby clean.** A hundred runs can only account for a test
 that loses more than about three in a hundred, and the job measures quiet hosted runners, while

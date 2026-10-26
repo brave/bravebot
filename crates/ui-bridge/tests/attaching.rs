@@ -1,7 +1,14 @@
 //! `turn.send` carries a pasted picture as `images` and a dropped picture or PDF as `attachments`
 //! (PASTE-2, PASTE-3, DROP-10).
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "undo_endpoint.rs is shared by several test binaries, and attaching does not use tool"
+)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../../session/test-support/profile.rs"]
@@ -263,7 +270,14 @@ fn a_pasted_picture_is_still_in_the_conversation_after_the_session_is_reopened()
         .expect("the record's id")
         .to_string();
 
-    let mut reopened = Window::with_settings(window.settings.clone());
+    let settings = window.settings.clone();
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(settings);
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
     let session = opened["session"].as_str().unwrap().to_string();
     // The record carries the trust map its person answered with, so the reopened session asks no
@@ -481,4 +495,82 @@ fn a_window_asks_the_bridge_whether_a_paste_fits_and_is_told_the_terminals_note(
         let refused = window.dispatch("pastes.check", params).unwrap_err();
         assert_eq!(refused.code, ErrorCode::BadRequest);
     }
+}
+
+/// SESSION-38. A record another window holds is refused by `session.open` as a bad request, in the
+/// words the terminal uses, and opens once the window that held it has closed the session.
+#[test]
+fn a_record_another_window_holds_is_not_opened() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("held");
+    let (config, _requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+    let done = window.turn(&session, "write this down", json!({}));
+    server.join().unwrap();
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+
+    let mut other = Window::with_settings(window.settings.clone());
+    let refused = other
+        .dispatch("session.open", json!({"directory": project, "id": id}))
+        .expect_err("a record another window holds was opened");
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert!(
+        refused.message.contains(&id) && refused.message.contains("bravebot --fork"),
+        "the refusal does not name the session and how to copy it: {}",
+        refused.message
+    );
+
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    let opened = other.call("session.open", json!({"directory": project, "id": id}));
+    assert!(opened["session"].is_string(), "{opened}");
+}
+
+/// SESSION-38. A session opened again while a thread still works for the one this bridge closed
+/// waits for that thread and is opened, where a record another process holds is refused.
+#[test]
+fn a_session_opened_again_waits_for_what_is_still_writing_its_record() {
+    use bravebot_session::sessions::{Front, Handle, load};
+    use std::time::{Duration, Instant};
+
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("closing");
+    let (config, _requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+    let done = window.turn(&session, "write this down", json!({}));
+    server.join().unwrap();
+    let id = done.data["id"]
+        .as_str()
+        .expect("the record's id")
+        .to_string();
+
+    let workers = window.bridge.close(&session).expect("an open session");
+    workers.wait_until_idle();
+    // What the closed session's turn may still be doing, stood in for by a thread that holds the
+    // record a moment longer.
+    let record = load(&project, &id).expect("the record");
+    let holder = Handle::resuming(&project, &record, Front::Terminal, "test")
+        .expect("the closed session no longer holds the record");
+    workers.spawn(move || {
+        std::thread::sleep(Duration::from_millis(400));
+        drop(holder);
+    });
+
+    let began = Instant::now();
+    let opened = window.call("session.open", json!({"directory": project, "id": id}));
+    assert!(opened["session"].is_string(), "{opened}");
+    assert!(
+        began.elapsed() >= Duration::from_millis(300),
+        "the session was opened before what held its record had ended"
+    );
 }

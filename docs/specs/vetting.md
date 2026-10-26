@@ -310,6 +310,7 @@ somebody who was never asked either question.
 `verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
+`verified-by: bravebot_agent::turn::a_second_check_is_sent_nothing_the_first_one_said`
 
 <a id="CHECK-10"></a>
 ### CHECK-10: every prompt that would promote quarantined content runs a check first
@@ -335,6 +336,10 @@ the trust map's rule is the largest grant of them. The planner does not ask for 
 but a server wrote every word on it, and a yes puts those words in front of the planner for every
 turn after.
 
+The two prompts that show a slot's bytes write out each character in them that draws as nothing and
+say how many there are, so a person decides on what the planner would read
+([prompting.md](prompting.md)).
+
 The one exemption is [permission-modes.md](permission-modes.md#MODE-4)'s bypassing mode, which draws
 no prompt at all. A check is still made for the two promotion prompts where that run asked for
 auto-vetting, because there the word answers in the absent person's place and an unscreened promotion
@@ -353,6 +358,8 @@ in is `inconclusive`, which claims nothing.
 `verified-by: bravebot_agent::turn::screening_an_unattended_run_keeps_back_output_a_check_objected_to`
 `verified-by: bravebot_core::policy::a_check_before_a_vouch_carries_the_file_and_claims_no_expectation`
 `verified-by: bravebot_core::policy::a_check_before_a_tool_list_reads_the_list_it_is_about`
+`verified-by: bravebot_agent::mcp::screening_asked_for_makes_no_check_of_a_servers_list_under_bypass`
+`verified-by: bravebot_agent::turn::screening_asked_for_makes_no_check_before_a_vouch_under_bypass`
 
 <a id="CHECK-11"></a>
 ### CHECK-11: auto-vetting is off until somebody turns it on, and there are three ways in

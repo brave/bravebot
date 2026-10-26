@@ -2,6 +2,8 @@ import type { BridgeEvent } from '../shared/protocol'
 import * as t from './transcript'
 import { receiveTurn } from './turn-details'
 import type { Live } from './live'
+import { leftOver, taken } from './interjecting'
+import { keepEnd } from './thinking'
 
 /** Fold one event into the live session. */
 export function apply(
@@ -24,16 +26,20 @@ export function apply(
       case 'watch.ended':
         return { ...old, entries: [...old.entries, t.narrated(`Watch ${message.data.number} ended: ${message.data.reason}${message.data.message ? `. ${message.data.message}` : ''}`)] }
       case 'turn.started':
-        return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0,
           sandboxMode: message.data.sandbox ?? old.sandboxMode,
           entries: t.beginTurn(old.entries, message.data.turn) }
+      case 'turn.interjected':
+        return taken(old)
       case 'audit':
         return old
-      // A phase opens a round, so a call written in the last one is over.
+      // A phase opens a round, so a call written, and a thought had, in the last one are over.
       case 'phase':
-        return { ...old, phase: message.data.phase, composing: null }
+        return { ...old, phase: message.data.phase, composing: null, thinking: '' }
       case 'composing':
         return { ...old, composing: message.data.call }
+      case 'thinking':
+        return { ...old, thinking: keepEnd(old.thinking + message.data.text), thinkingSeen: true }
       // The phase is left alone: it is what the word goes back to once the check is over.
       case 'check.started':
         return { ...old, checking: message.data }
@@ -44,12 +50,15 @@ export function apply(
         return { ...old, hook: message.data }
       case 'hook.finished':
         return { ...old, hook: null }
+      // The whole list, which replaces the window's: the bridge ends a delegate before it ends a turn.
+      case 'agents':
+        return { ...old, agents: message.data.agents, agentCounts: { started: message.data.started, working: message.data.working } }
       case 'tokens':
         return { ...old, tokens: message.data.written }
       case 'narration':
-        return { ...old, composing: null, entries: [...old.entries, t.narrated(message.data.text)] }
+        return { ...old, composing: null, thinking: '', entries: [...old.entries, t.narrated(message.data.text, message.data.command)] }
       case 'tool.started':
-        return { ...old, composing: null, entries: [...old.entries, t.started(message.data)] }
+        return { ...old, composing: null, thinking: '', entries: [...old.entries, t.started(message.data)] }
       case 'tool.finished':
         return { ...old, entries: t.finish(old.entries, message.data) }
       case 'landed':
@@ -96,15 +105,15 @@ export function apply(
         return { ...old, phase: null, entries: [...old.entries, t.mcpStarted(message.data)] }
       // A run is not a turn, so it adds no turn marker and no reply to the conversation.
       case 'manifest.started':
-        return { ...old, running: true, phase: null, checking: null, hook: null, tokens: 0,
+        return { ...old, running: true, phase: null, checking: null, hook: null, thinking: '', tokens: 0,
           sandboxMode: message.data.sandbox ?? old.sandboxMode }
       case 'manifest.done':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, outcome: 'complete',
+        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', outcome: 'complete',
           entries: [...old.entries, t.planReplied(message.data.reply, message.data.record)] }
       case 'manifest.error':
         refresh()
-        return { ...old, running: false, phase: null, checking: null, hook: null, queuePaused: true,
+        return { ...old, running: false, phase: null, checking: null, hook: null, thinking: '', queuePaused: true,
           entries: [...t.interruptPending(old.entries), t.planEnded(message.data)] }
       case 'vouch.request':
         return { ...old, entries: [...old.entries, t.askedVouch(message.data)] }
@@ -116,7 +125,7 @@ export function apply(
         // takes from the front — so a briefing put at the top of the session is the first thing
         // gone. Saying the bot is no longer grounded is what makes the next prompt carry it again.
         const compacted = message.data.archived > old.archived
-        return {
+        return leftOver({
           ...old,
           contextTokens: message.data.contextTokens,
           summary: { ...old.summary, id: message.data.id ?? old.summary.id },
@@ -127,17 +136,20 @@ export function apply(
           checking: null,
           hook: null,
           composing: null,
+          thinking: '',
           entries: [...t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt), t.replied(message.data.reply, message.data.turn)],
           awaitingOrdinal: null,
           archived: message.data.archived,
           rewind: message.data.rewind ?? [],
           bot: old.bot && compacted ? { ...old.bot, grounded: false } : old.bot,
-        }
+        }, true)
       }
       case 'turn.error': {
         refresh()
         const { kind, message: detail } = message.data
-        return {
+        // A turn the person stopped read nothing more, and what they sent into it goes on. One that
+        // failed leaves it waiting in the queue it paused, for them to resume or remove.
+        return leftOver({
           ...old,
           contextTokens: message.data.contextTokens,
           summary: { ...old.summary, id: message.data.id ?? old.summary.id },
@@ -146,11 +158,12 @@ export function apply(
           checking: null,
           hook: null,
           composing: null,
-          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
+          thinking: '',
+          entries: [...t.interruptPending(t.number(old.entries, old.awaitingOrdinal ?? '', message.data.prompt)), { ...t.errored(`${kind}: ${detail}`), category: kind === 'cancelled' ? 'cancelled' : message.data.category, accountMessage: message.data.accountMessage, accountCommand: message.data.accountCommand, attempts: message.data.attempts, status: message.data.status, cutOff: message.data.cutOff, turn: message.data.turn }],
           awaitingOrdinal: null,
           queuePaused: true,
           rewind: message.data.rewind ?? [],
-        }
+        }, kind === 'cancelled')
       }
       default:
         return old

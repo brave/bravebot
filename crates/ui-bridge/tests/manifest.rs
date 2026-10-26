@@ -7,6 +7,10 @@
 //! with a body the plan fixed, so whether the plan ran is read off the disk.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -758,6 +762,45 @@ fn a_run_that_cannot_be_what_was_asked_for_is_refused() {
     assert_eq!(rounds.try_iter().count(), 0, "a refused run asked a model");
 }
 
+/// CHATGPT-8: a run that failed on the ChatGPT account reaches the window with the window's own
+/// sentence for the step that failed as `accountMessage`, and the command it names as
+/// `accountCommand`, beside the category it has always carried. The home holds no sign-in, so the
+/// run fails before any request is sent. A failure of the model service is told by its category
+/// alone, since its words are the service's.
+///
+/// The faults this rejects: a run that says its category and nothing of the account, and the
+/// terminal's lower case wording sent to the window.
+#[test]
+fn a_run_that_failed_on_the_chatgpt_account_says_the_windows_sentence_and_its_command() {
+    let scratch = Scratch::new("bridge-manifest-account-failed");
+    let (endpoint, _rounds) = a_planner_with_one_write();
+    let mut front = FrontEnd::start(&scratch, &endpoint);
+    let session = front.session(&scratch, true);
+
+    let started = front.call(
+        "manifest.run",
+        json!({"session": session, "task": TASK, "model": "chatgpt/gpt-6-sol"}),
+    );
+    assert_eq!(started["run"], 1, "{started}");
+    let ended = front.question_or_the_end();
+
+    assert_eq!(ended["event"], "manifest.error", "{ended}");
+    let data = &ended["data"];
+    assert_eq!(data["category"], "unauthorized", "{ended}");
+    assert_eq!(data["account"], "not-signed-in", "{ended}");
+    assert_eq!(
+        data["accountMessage"],
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{ended}"
+    );
+    assert_eq!(
+        data["accountCommand"], "bravebot auth login chatgpt",
+        "{ended}"
+    );
+    assert_eq!(data["declined"], false, "{ended}");
+    assert_eq!(scratch.written(), None, "a run that failed wrote a file");
+}
+
 /// A run's record is listed as a run and a session's is not, so a front end can tell which rows
 /// can be continued.
 #[test]
@@ -925,6 +968,8 @@ fn only_a_run_is_read_as_a_run() {
 
     let read = front.record("manifest.read", &scratch, &conversation);
     assert_eq!(read["error"]["code"], "bad_request", "{read}");
+    // The session that wrote the record is closed, since one process holds a record at a time.
+    front.call("session.close", json!({"session": session}));
     let opened = front.record("session.open", &scratch, &conversation);
     assert!(
         opened.get("ok").is_some(),
@@ -1030,6 +1075,8 @@ fn ordinary_manifest_endings_keep_file_trust_in_the_bridge() {
                 .any(|rule| rule["path"] == TARGET && rule["integrity"] == "untrusted"),
             "{turn}"
         );
+        // The session that wrote the record is closed, since one process holds a record at a time.
+        front.call("session.close", json!({"session":session}));
         let opened = front.record("session.open", &scratch, id);
         let resumed = opened["ok"]["session"].as_str().expect("resumed session");
         front.send(

@@ -93,7 +93,7 @@ back to the turn's model, so an intended cost control cannot be silently bypasse
 answered by a different model than the one named says so, so a misspelt name is not silent.
 
 **`effort` chooses how hard that model is asked to think.** It takes the same five words as
-[`/effort`](configuration.md#choosing-how-hard-to-think): `low`, `medium`, `high`, `xhigh`
+[`/effort`](effort.md): `low`, `medium`, `high`, `xhigh`
 and `max`. A checker that greps logs can ask for `low` while a worker doing a refactor asks for
 `high`, whatever the session is set to. Where `effort` is omitted the delegate asks for the level
 the turn that spawned it runs at, so a level you chose with `/effort` reaches your delegates. The key
@@ -263,6 +263,12 @@ Any other value loads the definition working in your working tree, and the turn 
 .bravebot/agents/migrator.md is loaded without a checkout: its isolation line says none, and only checkout and worktree ask for one
 ```
 
+The planner can also ask for the changes in your working tree to be carried in, with
+`isolation: checkout_with_changes` on the call, so a `checker` builds and tests what the planner
+just wrote and not the last commit. A definition cannot ask for that: the call is what knows which
+tree the session has. The delegate is told which files were carried, and the planner is told in the
+answer to the call, along with any file that was left and why.
+
 A `reader` is never given one, since it writes nothing, and the turn says that too. Where a
 checkout cannot be made, as when the delegate starting it already works in one, the session keeps
 no state directory or the working directory is not in a git repository, the delegate does not
@@ -280,6 +286,11 @@ have the fetch done once rather than by each delegate.
 
 A delegate in a checkout is not offered the `lsp` tool, because the session's language servers are
 rooted at your working directory. The answer to the spawn says so.
+
+A checkout holds tracked files only, so a delegate in one finds no installed dependencies and none
+of the files your repository ignores. A [`checkout-made` hook](hooks.md#the-nine-moments) in your own
+`hooks.json` runs a command of yours in each new checkout before its delegate starts, and is told
+the checkout and your working directory so it can install and copy. A checkout it ran in is kept.
 
 A checkout a delegate wrote in is kept, and the agent's reply names it by number with the paths the
 delegate typed for what it wrote. The agent brings those files back with

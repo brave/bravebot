@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -64,7 +65,7 @@ try {
 
   await openProject(page, app, project)
 
-  const composer = page.getByRole('textbox', { name: 'Message the agent' })
+  const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const pastedChips = page.locator('[data-test="pasted-chip"]')
   const droppedChips = page.locator('[data-test="dropped-chip"]')
   const stop = page.locator('.composer .stop')
@@ -162,7 +163,7 @@ try {
 
   // ---- sending carries what the draft still names, and a queued message keeps its own ---------
   const sentBefore = requests.length
-  await page.locator('.composer .send').click()
+  await page.locator(COMPOSER_SEND).click()
   await stop.waitFor({ state: 'visible' })
   assert.equal(await pastedChips.count() + await droppedChips.count(), 0, 'sending clears what was staged')
   await copy(blue)
@@ -218,9 +219,9 @@ try {
   await page.locator('.entries').getByText('Compare [Image #1] [Image #2]').first().waitFor()
   assert.equal(await page.locator('.entries img[src^="data:"]').count(), 0, 'a reopened transcript draws no bytes')
   const resumedBefore = requests.length
-  const reopened = page.getByRole('textbox', { name: 'Message the agent' })
+  const reopened = page.getByRole('textbox', { name: COMPOSER_NAME })
   await reopened.fill('What was in them?')
-  await page.locator('.composer .send').click()
+  await page.locator(COMPOSER_SEND).click()
   await page.locator('.composer .stop').waitFor({ state: 'hidden', timeout: 60000 })
   const resumed = requests.slice(resumedBefore).find((body) => body.includes('What was in them?'))
   assert.ok(resumed, 'the follow-up reached the model')

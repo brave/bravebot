@@ -18,6 +18,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/theme` | `[name]` | Choose which theme paints the interface |
 | `/effort` | `[level]` | Choose how hard to think before answering |
 | `/config` | | Choose how the input box edits text |
+| `/language` | `[tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir` | `<path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd` | `<path>` | Work in another directory from now on, and trust it for this session |
 | `/rename` | `<name>` | Call this conversation something else |
@@ -25,6 +26,9 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/advisor` | `[model \| off]` | Name the model the planner may consult, say which it may, or drop the choice |
 | `/limit` | `[<amount> \| off]` | Show the session's spend limit, set it in tokens or credits, or remove it |
 | `/style` | `[name \| off]` | Choose how the planner answers: list the styles, pick one, or clear the pick |
+| `/mode` | `[skill \| off]` | Keep a skill applied to every turn: list skills, pick one, or leave |
+| `/help` | `<question>` | Ask a question about bravebot, answered from its own documentation |
+| `/changelog` | | Show what changed in this version |
 | `/compact` | `[focus]` | Summarise the conversation so far, keeping the recent part |
 | `/btw` | `<question>` | Ask something beside the work, without putting it in the conversation |
 | `/recap` | | Recap where this session stands, without putting it in the conversation |
@@ -37,12 +41,17 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/forget-trust` | | Stop remembering that this directory is trusted, so later sessions here ask |
 | `/reach` | `[<where> -- <command>]` | Remember a directory or credential for a command, or list and remove them |
 | `/sandbox` | `[<mode>]` | Show the sandbox mode, or change it from the next turn |
-| `/loop` | `[[interval] <prompt> \| stop]` | Send a prompt again and again, say what is repeating, or stop it |
+| `/loop` | `[[interval] <prompt> \| stop [n]]` | Send a prompt again and again, say what is repeating, or stop it |
+| `/after` | `<delay> <prompt>` | Send a prompt once, after a delay |
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
+| `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
+| `/diff` | | List the files the session wrote and show every edit to the highlighted one |
+| `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
+| `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
 | `/issue` | `[<url> \| clear]` | Say which issue this session is for, show it, or clear it |
 | `/checkouts` | `[apply <n> \| remove <n>]` | List kept checkouts, bring their files back, or remove one |
@@ -53,6 +62,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
+| `/commit-message` | `[source] [format]` | Draft a commit message from the staged changes into the box, for you to edit |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
 | `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
 | `/undo` | | Rewind one turn and put back the files it wrote |
@@ -68,6 +78,10 @@ for.
 
 A command typed in full is drawn in the prompt's colour, and once a space follows it, the argument
 it takes appears dimly after the cursor until you start typing one.
+
+`exit` and `quit` typed without the slash are prompts, not commands. A line that is only one of them
+is sent at the first Enter like any other prompt, and while the turn it starts runs, the row under
+the box says that it was sent as a prompt, that Ctrl-C stops it and that `/exit` leaves.
 
 ## `/status`
 
@@ -172,7 +186,7 @@ outlives the session and applies in every directory, except one whose own settin
 `~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
-them. See [Configuration](../customize/configuration.md#choosing-a-model).
+them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
@@ -180,8 +194,8 @@ every turn uses that model, so `/model` opens no picker and says so.
 ## `/theme [name]`
 
 Opens a picker on the palette in force. With a name, `/theme nord` applies it without opening the
-panel, and typed while a turn runs with nothing waiting it is applied at once. The bare `/theme` waits
-for the turn to end.
+panel. Typed while a turn runs it is applied at once, ahead of anything waiting, and the bare `/theme`
+opens its picker over the turn.
 
 Up and Down move the cursor, and the theme under it is put in force while it is selected, so you are
 comparing themes against your own transcript rather than against a sample. Enter keeps the one on the
@@ -189,7 +203,7 @@ cursor and Escape restores the one that was in force when the picker opened.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
-[Choosing a theme](../customize/configuration.md#choosing-a-theme) and
+[Choosing a theme](../customize/theme.md) and
 [Themes](../using/transcript.md#themes).
 
 ## `/advisor [model | off]`
@@ -255,21 +269,41 @@ a built-in style or one of your own. The file is read again at the start of each
 whose file is no longer trusted is not used and the turn says so. The `style` setting does not
 name a project's style.
 
+## `/mode [skill | off]`
+
+Keeps one skill applied to every turn until you leave it, for a skill that says how to work, such as
+a review checklist or a test-first playbook. `/mode` alone says which skill is the mode and lists
+the names it could take, `/mode tdd-playbook` puts that skill in force from the next turn, and
+`/mode off` leaves it. A name is compared whole against the skills the planner would be offered, plus
+[the ones only you can load](../customize/skills.md#a-skill-only-you-can-load): a prefix, a different
+case or a skill from a project you have not trusted is not taken, and the mode you had stays.
+
+The skill's instructions go in the system prompt of each turn, after bravebot's own words and ahead of
+your `AGENTS.md`, so your own instructions still have the last word. They are not added to the
+conversation, so a long session holds them once. The skill is read again at the start of each turn, so
+one that was edited is followed, and one that is gone or no longer trusted is not applied: the turn
+says so and goes on without it. Only the instructions apply; the skill's `model` and `effort` do not.
+
+The mode's name is shown in the bottom border of the box while it is in force, it is written to the
+session's record, and a resumed session is back in it and says so. A delegate is not given it.
+Typed while a turn runs, `/mode` waits for the turn to end.
+
 ## `/effort [level]`
 
 Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) above a row for
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
 directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
 field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
-is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
-for the turn to end.
+is the first sent at it, since the running one keeps the level it began with. On a model of a ChatGPT
+account the level is fixed for the whole session instead: the account is sent the level the session began
+with, and the choice applies from the next session. The bare `/effort` waits for the turn to end.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
 is recorded. Picking the row for none removes the record, so from the next session your own file's
 level answers again. See
-[Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
+[Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
 
@@ -288,6 +322,21 @@ gone somewhere unexpected. Whichever style you choose, the box comes back taking
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 See [`editorMode`](../customize/configuration.md#editormode) for the settings key that answers for
 somebody who has never used this panel.
+
+## `/language [tag | auto]`
+
+Says which language the interface is in and which catalogs there are, and names the choice saved with
+this command where there is one. With a tag, `/language fr` saves it for the next start. The interface
+is in one language for a whole session, so nothing on the screen changes until then. The tag saved is
+the one of the catalog that answered, so `fr_FR.UTF-8` is saved as `fr`. A tag that no catalog answers
+changes nothing and says so, with the catalogs there are. `/language auto` removes the saved choice, so
+the `language` key of your settings file and then your shell answer again. Typed while a turn runs, it is
+carried out at once.
+
+The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
+nothing, an incognito one for example, says the choice was not saved and keeps none. See
+[Choosing a language](../customize/language.md) for the order the sources are
+read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`
 
@@ -321,7 +370,7 @@ goes.
 Your permission rules do not come with you. The new directory's rules are read, and anything its
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
-[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
 the file's name from the directory you left, which here can name another file, so such a file is asked
@@ -416,20 +465,41 @@ does, so `/sandbox workspace-write` replaces a checkout's `strict`. Only you can
 or `AGENTS.md` line can. The opening screen and `/status` name the mode in force. The desktop app has
 no such command yet.
 
+## `/after <delay> <prompt>`
+
+Sends one prompt once, after a delay, and then forgets it.
+
+```
+/after 45m check whether the integration tests passed
+```
+
+The delay is the first word: a number and `s`, `m`, `h` or `d`, from five seconds to seven days. The
+rest of the line is sent unchanged, as a prompt, when the delay is up and the session is idle. It
+takes the place of a loop, so `/loop stop`, Ctrl-C, `/clear` and leaving end it, `/loop` says what is
+pending, and it is not kept in the session record.
+
 ## `/loop [interval] <prompt>`
 
-Sends one prompt again and again until you stop it, says what is repeating, or ends it.
+Sends a prompt again and again until you stop it, says what is repeating, or ends one. A session
+holds up to five loops at once, numbered in the order they began.
 
 ```
 /loop 5m check the deploy          # now, and every five minutes
 /loop check the deploy every 20m   # the same, written the other way round
 /loop watch the build              # now, and each turn says when the next is due
-/loop                              # what is repeating, and how to end it
-/loop stop                         # end it
+/loop                              # what is repeating, each loop under its number
+/loop stop                         # end the loop, when only one is running
+/loop stop 2                       # end loop 2 and leave the others
 ```
 
-`stop` is the ending whenever it is the whole of the line that would be sent, whatever its case and
-with or without a pace, so `/loop STOP` and `/loop 5m stop` end the loop too. A line that only begins
+A second `/loop` starts another loop and leaves the first running. A sixth is refused. Ticks go one
+at a time, whichever is due first, and each is announced with its loop's number. `/loop stop` with
+several running ends none of them and asks for a number. Ctrl-C, stopping a turn, `/clear` and
+setting a goal end every loop.
+
+`stop`, alone or with a number, is the ending whenever it is the whole of the line that would be sent,
+whatever its case and with or without a pace, so `/loop STOP`, `/loop 5m stop` and `/loop stop 2`
+end a loop too. A line that only begins
 with the word is a line: `/loop stop the deploy` is a loop over `stop the deploy`, and
 `/loop stop the deploy every 20m` is that line every twenty minutes. The bare command with no loop
 running says so, and so does `/loop stop`.
@@ -494,15 +564,15 @@ Six things end a loop, and each says so:
 
 | What | When |
 |---|---|
-| you ask | `/loop stop`, which ends the loop and leaves the turn in flight running |
-| you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving |
-| a turn is stopped | any turn cancelled while a loop runs, tick or not |
+| you ask | `/loop stop`, or `/loop stop <number>` where several are live, which ends the loop and leaves the turn in flight running |
+| you interrupt | Ctrl-C, reached after the turn in flight and the half-typed line, and before leaving; it ends every loop |
+| a turn is stopped | any turn cancelled while a loop runs, tick or not; it ends every loop |
 | the turn says it is finished | a self-paced tick that calls `schedule_next` with `stop`, which ends the loop with no further tick |
-| the session moves on | `/clear`, and leaving |
+| the session moves on | `/clear`, and leaving, which end every loop; so does setting a goal |
 | age | seven days after it started |
 
 **A loop, a [goal](#goal-condition) and a [watch](#watch-stop-n) are never live together**, because a
-session does one of the three at a time. Whichever of a loop and a goal was asked for second stands,
+session does one of the three at a time. Several loops may be live together, since the rule is about kinds. Whichever of a loop and a goal was asked for second stands,
 and the one it replaced is reported as stopped. Asking for either ends every live watch.
 
 **A loop is never written down.** It is not in the session record, so `--resume` restores none and it
@@ -519,6 +589,8 @@ hundred and fifty turns nobody read. `/loop stop` ends one.
 
 Keeps the session working until a condition you wrote is judged met. When a turn ends the condition
 is put to a judge, and where it is not met yet the work goes back for another turn with the reason.
+
+A one-shot run takes the same condition with [`--goal`](cli.md#--goal-condition).
 
 ```
 /goal cargo test exits 0 and the diff is committed
@@ -671,8 +743,17 @@ left to stop. Between turns nothing reads the flag, so a stop kills the job at o
 told at the next turn's first round that you stopped it. A stop still waiting when a turn ends, as when
 the model's last reply made no tool call, is carried out as the turn finishes. If a row still reads
 `being stopped` with no turn running, typing `/jobs stop` for it again carries the stop out. A kept
-job you stopped between turns keeps its own row in the watching display, and does not appear a
+job you stopped between turns keeps its own row in the `/outputs` list, and does not appear a
 second time as a plain command row.
+
+## `/outputs`
+
+Opens what the commands this session ran printed, background jobs included, one row each in the order
+they ran. Alt-L does the same and is one of the [chords you can move](../customize/configuration.md#keybindings). Over the commands, Alt-L closes the view, and over the delegates it switches to the commands. It is the same mode [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
+opens over delegates and asides, with the same keys. Each row opens on what the command printed, says
+how the run ended and whether the model read it, and a running job's row shows the lines it has
+printed since the model last looked. Where no command has run, it says so and opens nothing. Nothing
+it shows is sent to the model or written to the session's record.
 
 ## `/panel`
 
@@ -681,6 +762,42 @@ session's name, directory and branch, the goal, how full the context is with the
 the plan. It needs a terminal at least 100 columns wide, and says so on a narrower one. Whether it is
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
 has the rest.
+
+## `/diff`
+
+Draws the info panel in its files state, opening the panel if it is closed: a list of every file the
+session wrote, with the lines added and removed, and every edit to the highlighted one under it. `q`,
+Escape or Ctrl-C leave the state and put the panel back as it was. Typing `/diff` does not, since no
+character reaches the box while the state is open; a second `/diff` queued earlier, while a compaction
+or an aside ran, does leave it. Clicking the Files section of
+the panel draws it too. It needs a terminal at
+least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
+nothing. It shows what the session's own write calls changed. A change another program made is not
+in it. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+
+## `/todos`
+
+Prints the session's plan in the transcript: every task, in the plan's order, with its status in
+words beside its mark (`pending`, `in progress`, `completed` or `cancelled`) and its text wrapped
+to the width and never cut. A heading above it says how many tasks are done, and how many are
+cancelled where any are. The info panel draws only the rows it has room for, each cut to its width,
+and this is the whole plan. A session with no plan says so.
+
+The plan is the one the panel draws, and while a turn runs it is the list that turn has reported so
+far. A task that is neither completed nor cancelled is drawn with the mark and ink the panel gives it
+when you type the command: filled while a turn is running, and hollow and dim while none is, when the
+whole row matches the panel's. What is printed is the
+plan as it stood then, so a later report from the planner, or the end of the turn, does not change
+it. It is no part of the conversation: no turn starts, nothing is sent, and it is not saved with the
+session or put in an export. The text of a task is the planner's, so a control character in it is
+drawn as a visible character, and every row of it has a margin of the interface's own that the text
+cannot draw. The word takes no argument: `/todos` followed by words is a prompt. It touches nothing
+a running turn holds, so typed while a turn runs it is carried out at once. A prompt file or skill
+named `todos` is shadowed by the command.
+
+Alt-A does the same and is one of the [chords you can move](../customize/configuration.md#keybindings), the `todos`
+action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
+the chord in force, where the plan has room for it.
 
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 
@@ -710,6 +827,18 @@ It runs `/usr/bin/caffeinate` on macOS, `systemd-inhibit` on Linux and PowerShel
 `systemd-inhibit` is given the full path of `cat`, found only in directories a confined command cannot
 write. If there is no such `cat`, or the program cannot be started, or stops by itself, the transcript
 says so and `/caffeinate` turns off.
+
+## `/thinking`
+
+Shows the model's thinking as it arrives, and typed again hides it. It is off when a session opens
+and applies to this session only. While it is on, the last few lines of what the model has thought
+this round are drawn dimmed, under a heading, above the reply as it is written, and they go when the
+round's words arrive. Only a service that sends its thinking shows any: Bedrock sends it when asked,
+and Brave's endpoint or an OpenAI-compatible gateway shows what a model sends in `reasoning_content`.
+The thinking is for the screen alone: it is not saved to the session, not exported, and not sent in a
+later request, and turning it on changes nothing the model is asked. The desktop window has no
+command: a Thinking button appears in the line that says a turn is running once the session has been
+sent thinking, and shows the last eight lines of it under that line on the same terms.
 
 ## `/checkouts [apply <n> | remove <n>]`
 
@@ -746,7 +875,7 @@ and `--resume` brings none back.
 
 ## `/plan [task]`
 
-Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+Sets [plan mode](../security/permission-modes.md), as the mode key does when it
 reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
 
 ```
@@ -778,9 +907,9 @@ declined plan leaves the workspace.
 run you stopped is not written down, because there is nothing in it to read. The run is recorded as its
 own record and the session records its name, so the session still resumes as a conversation.
 
-In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
+In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
-[Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+[Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 
 ## `/memory`
 
@@ -843,6 +972,69 @@ should flag or leave alone. It sees the file only where you have vouched for it,
 without it otherwise. The command writes
 nothing and the prompt forbids changes, commits, pushes and comments. A prompt file or skill named
 `review` is shadowed by the command.
+
+## `/commit-message [source] [format]`
+
+Drafts a commit message from changes and puts it in the input box. The source is one of:
+
+| Source | Drafts from |
+|---|---|
+| none, or `--staged` | what is staged, the index against `HEAD` |
+| `--range <a>..<b>` | the changes between two commits, or `<a>...<b>` from their merge base |
+
+Words after the source are the format you want: `/commit-message --staged use Conventional
+Commits`. The two flags only count as the first word, so `/commit-message use Conventional Commits`
+drafts from the staged changes in that format. A range that is not two plain revisions is refused
+with a usage note.
+
+The planner does not see the diff. The program reads it without starting `git`, under the rules
+`read_git` is held to, and gives it to a processor that has no tools and no conversation. The
+draft comes back into the box after the line `Use this as the commit message:`, so the line you
+send always starts with those words, whatever the draft starts with. Edit it, then Enter sends it to
+the planner as your own prompt, for instance to ask for a commit with that message. Escape drops it.
+Nothing is committed by the command itself.
+
+Nothing is drafted for a repository you have not trusted, for changes that show no file, or for a diff
+that holds what looks like a credential, and the line says which. A diff longer than one read takes is
+drafted from the part that was read, and the line says so. The model is the one `processorModel` names,
+or the session's. Typed while a turn runs it waits for the turn to end.
+
+## `/help <question>`
+
+Asks the planner to answer a question about using bravebot from the documentation carried inside
+the program, so the answer comes from the version you are running and not from a checkout or the
+website: `/help how do I stop a background job`. The request names the built-in `bravebot-help`
+skill, whose pages the planner loads one at a time, only the ones the question needs. The skill also
+holds the clause headings of the specifications, for a question about exactly what bravebot does. If
+the pages it loaded do not answer the question, it says so. Without the command, the planner loads
+the same skill on its own when a question is about using bravebot.
+
+The question is sent as you typed it, inside a sentence the program wrote, and the line you typed is
+not sent. It is a line you typed, so a file you name in it with `@` is read as it is in any prompt.
+A picture pasted or a file dropped into it is written as words, as for every command that does not
+send them on.
+
+With no question, `/help` says what it takes and nothing starts. A longer word such as `/helpful`,
+and a sentence that mentions the word, is a prompt. Typed while a turn runs, the line waits for the
+turn to end.
+
+A skill named `bravebot-help` of your own, or one in a project you trusted, replaces the built-in and
+its pages, and `/help` then loads that one. A prompt file or skill named `help` is shadowed by the
+command.
+
+## `/changelog`
+
+Shows the release notes of the version you are running: a heading naming the version, then its
+entries, each link written as its text. The notes are carried inside the program, so nothing is
+fetched and no turn starts. Where the notes carry no heading for the version you run, the heading says
+it is showing the newest release's, and which version runs. Between releases the top section holds
+the notes of changes not yet released, headed with the last release's version, so a build made from
+the commits after a release shows them under that version's number.
+
+Only that one release is shown, and it is drawn in the transcript, so a release longer than the screen
+shows its end and the heading is above it. The word takes no argument: `/changelog` followed by words is a
+prompt. It touches nothing a running turn holds, so typed while a turn runs it is carried out at once.
+A prompt file or skill named `changelog` is shadowed by the command.
 
 ## `/agent <name> <task>`
 
@@ -961,7 +1153,7 @@ the answer, and no later turn reads either.
 
 The answer opens in the mode
 [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
-opens, as a row of its own before the delegates and the commands, which is the one screen it exists
+opens, as a row of its own before the delegates, which is the one screen it exists
 on. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
 is one a reader takes the planner to have had.
 
@@ -1035,7 +1227,7 @@ left comes with you, and its loop, goal and watches end. The session you left is
 turn left it and stays resumable. Servers started for this process keep running.
 
 It is refused, with a line saying why, for an id that is no session of this directory, for the
-session already open, for a [manifest run](../using/sessions.md#a-manifest-run-is-recorded-but-cannot-be-continued),
+session already open, for a [manifest run](../using/manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued),
 and for a session a running background session holds. Where this directory records no other session
 it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
@@ -1263,14 +1455,32 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/caffeinate`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
-`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/rename`, `/note`, `/issue`, `/pr`,
-`/forget-trust`, `/model`, `/theme`, `/effort`, `/config`, `/advisor`, `/style` and `/sandbox` (except `/sandbox off`, which waits) change only what the session keeps, and are carried out as you
-type them when nothing is waiting. Behind a waiting line they wait too, so `/rename` typed after a
-waiting `/clear` names the new session. What they say goes into the history as you type them,
+`/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme` and `/config` change only how the screen
+is drawn and what the box edits in, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
+`/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` (except `/sandbox off`, which waits) change what the session keeps, and are carried out as you
+type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
+waiting `/clear` names the new session, and the line they wait behind is named under the turn and on their mark under the box (`after /clear`).
+A waiting `/sandbox` line changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
+behind a waiting `/sandbox off` is written at once. `/issue` and `/pr` set a link on the session's record, which only `/clear`, `/handoff`,
+`/branch`, `/resume`, `/bg` and `/exit` replace, so they are carried out as you type them behind any other waiting line, a prompt
+included. `/rename` and `/note` act on the name and the notes the session's record holds. A prompt, a command that sends a request, `/clear`,
+`/undo`, `/rewind`, `/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` can change them, so they wait behind those. They are
+carried out as you type them behind a command line, behind `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`, `/pr`,
+`/sandbox`, `/model`, `/effort` and `/advisor`, and behind a waiting `/note` or `/rename`: a `/note` typed behind a waiting `!make` is written at once.
+`/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
+request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
+`/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
+out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn, behind `/clear`, `/cd`, `/add-dir`,
+`/reach` and `/branch`, which move or end the paths a style file under `~/.bravebot` may not be read from, and behind `/handoff`, `/resume`, `/bg` and `/exit`, which
+begin another session; behind a command line, `/compact`,
+`/btw`, `/recap`, `/memory`, `/undo`, `/rewind`, `/hunks`, `/mcp`, `/after` and the settings commands above it is carried out as you type it. `/forget-trust` withdraws the answer kept about the
+directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
+commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after` and the settings commands
+above it. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and
 a question the turn asks takes the screen until you have answered it. A list still open when the turn
@@ -1298,6 +1508,15 @@ word that is a command in full still lists the skills that extend it: `/pr` offe
 the `/pr` command. See
 [Skills](../customize/skills.md#naming-a-skill-after-a-slash).
 
+## Prompts of an MCP server
+
+A prompt a started [MCP server](../customize/mcp-servers.md#running-a-servers-prompts) offers is a
+row after a slash, `/mcp__<alias>__<name>`, beside the skills and only at the start of a line. Taking
+the row writes the names of the arguments that are not optional, as `name=`, and you type the values
+and any optional ones as `name=value` pairs. Enter sends the line as a prompt, which fetches the
+server's text. The text reaches the model as a reference and never as words, and a prompt is
+never a command.
+
 ## Prompt files
 
 A prompt you use often can be a file: `~/.bravebot/prompts/review.md` is run by typing `/review the
@@ -1317,7 +1536,8 @@ Review $1 for races, with attention to $ARGUMENTS.
 - `agent` makes the box `/agent reviewer <text>`, which runs when you press Enter on it. `description`
   is not used yet.
 - Only your own `~/.bravebot/prompts` is read, never a project's. A file cannot take a command's name,
-  and a file whose text begins with a command word is refused, so no file carries out a command.
+  and a file whose text begins with a command word or would run an MCP prompt is refused, so no file
+  carries out a command.
 - A file that is unreadable, over 64 KiB or empty is refused with a note, and the line stays as typed.
 - Names are not listed or completed.
 

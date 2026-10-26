@@ -100,9 +100,9 @@ pub struct Chat<'a> {
     ///
     /// The planner's model, deliberately: a processor is doing the turn's work on the turn's
     /// behalf, and quietly running it on something else would make the choice mean less than it
-    /// appears to. The one thing that moves a processor off it is the person's own
-    /// `processorModel` setting, which [`run`] resolves and says so when it is answered otherwise
-    /// (PROC-13).
+    /// appears to. The one thing that moves a processor off it is the model the person named for
+    /// processors, in the `processorModel` setting or with `--processor-model`, which [`run`]
+    /// resolves and says so when it is answered otherwise (PROC-13).
     pub model: Option<&'a str>,
     /// The turn's stop, where this call is part of a turn that can be stopped.
     ///
@@ -110,20 +110,31 @@ pub struct Chat<'a> {
     /// landed while a processor was reading waited out the whole of its reply, which is the
     /// longest a stop can be made to wait anywhere in a turn.
     pub cancel: Option<&'a bravebot_core::cancel::Cancel>,
+    /// The session the call is made for, whose identifier a request to the ChatGPT account carries
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Required, so a call a session makes cannot be made without saying which session: a call that
+    /// carried an identifier of its own would be a cache the session never hits.
+    pub session: crate::chatgpt::AccountSession,
 }
 
 impl<'a> Chat<'a> {
-    /// A chat on the configured default model, with no subscription and no stop.
+    /// A chat for `session` on the configured default model, with no subscription and no stop.
     ///
     /// The other fields are added with [`Chat::on`], [`Chat::stoppable_by`] and
     /// [`Chat::spending`]. This only gathers references and decides nothing.
-    pub fn new(config: &'a Config, egress: &'a Egress) -> Self {
+    pub fn new(
+        config: &'a Config,
+        egress: &'a Egress,
+        session: &crate::chatgpt::AccountSession,
+    ) -> Self {
         Self {
             config,
             egress,
             subscription: None,
             model: None,
             cancel: None,
+            session: session.clone(),
         }
     }
 
@@ -150,7 +161,8 @@ impl<'a> Chat<'a> {
 
     /// The client for one call on `model`, carrying the turn's stop and its tier.
     pub(crate) fn backend(&mut self, model: &str) -> crate::backend::Backend<'_> {
-        let mut client = crate::backend::Backend::select(self.config, self.egress, model);
+        let mut client = crate::backend::Backend::select(self.config, self.egress, model)
+            .in_session(&self.session);
         if let Some(cancel) = self.cancel {
             client = client.with_cancel(cancel.clone());
         }
@@ -173,8 +185,8 @@ pub struct Processed {
     pub note: Option<Labelled<String>>,
     /// The model the server reported using, which may differ from the one asked for.
     pub model: String,
-    /// The `processorModel` the person wrote, where the call ran on it and a different model
-    /// answered (PROC-13). `None` otherwise, including where no such setting is in force.
+    /// The processor model the person wrote, where the call ran on it and a different model
+    /// answered (PROC-13). `None` otherwise, including where the person named none.
     pub substituted: Option<String>,
     /// What the run cost, so a turn can report the whole of what it spent.
     pub usage: Usage,
@@ -186,7 +198,7 @@ pub enum ProcessorError {
     Denied(Denial),
     /// The call failed or was refused in transit.
     Chat(crate::backend::BackendError),
-    /// The model `processorModel` names cannot be used, so nothing was sent (PROC-13).
+    /// The model the person named for processors cannot be used, so nothing was sent (PROC-13).
     Model(crate::compact::SideModelRefusal),
 }
 
@@ -231,6 +243,17 @@ pub fn run<S: Sink>(
     slots: &SlotStore,
     spec: &ProcessorSpec,
 ) -> Result<Processed, ProcessorError> {
+    // `processorModel` or `--processor-model` where either names one, and the turn's own model
+    // otherwise (PROC-13). One that cannot be used refuses the call: a name chosen to cap what bulk
+    // rewriting costs is not swapped for the planner's model. Asked before the input is assembled,
+    // so a refused call leaves no entry in the trail saying content was carried to a model.
+    let configured = chat.config.processor();
+    let named = configured.is_some();
+    let model =
+        crate::compact::named_model_or_session(chat.config, chat.egress, configured, chat.model)
+            .map_err(ProcessorError::Model)?;
+    let model = model.as_ref();
+
     // Assembled inside the kernel, so the bytes are never in a variable this function could
     // examine. What comes back is wrapped and stays wrapped until the line that hands it over.
     let input = policy.compose_processor_input(spec, slots)?;
@@ -279,15 +302,7 @@ pub fn run<S: Sink>(
 
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it.
-    // `processorModel` where it names one, and the turn's own model otherwise (PROC-13). One that
-    // cannot be used refuses the call: a name chosen to cap what bulk rewriting costs is not
-    // swapped for the planner's model.
-    let configured = chat.config.processor();
-    let named = configured.is_some();
-    let model =
-        crate::compact::named_model_or_session(chat.config, chat.egress, configured, chat.model)
-            .map_err(ProcessorError::Model)?;
-    let model = model.as_ref();
+    policy.record_processor_model(spec.id(), model);
     // The content is given up once this answers, so nothing asks for a cache of it: a processor
     // is asked once, about pieces assembled for this call alone. The instructions in front of them
     // keep their mark, being the same bytes every time this spec runs.
@@ -302,7 +317,7 @@ pub fn run<S: Sink>(
 
     let produced = policy.label_processor_output(spec, completion.content, slots);
     // Compared as a delegate's model is (DELEGATE-22): against the name that was sent, and never
-    // where the name is a handle the reply resolves. Said only for the setting, since the turn's
+    // where the name is a handle the reply resolves. Said only for a model the person named, since the turn's
     // own model is reported by the turn.
     let asked = crate::backend::Backend::name_as_asked(chat.config, model);
     let substituted = (named
@@ -373,7 +388,7 @@ mod tests {
         let egress = Egress::new();
         let stop = Cancel::new();
         let mut subscription = TheTurns;
-        let mut chat = Chat::new(&config, &egress)
+        let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin())
             .spending(Some(&mut subscription))
             .stoppable_by(&stop);
 
@@ -402,7 +417,7 @@ mod tests {
         let config = brave_and_a_gateway();
         let egress = Egress::new();
         let stop = Cancel::new();
-        let mut chat = Chat::new(&config, &egress)
+        let mut chat = Chat::new(&config, &egress, &crate::chatgpt::AccountSession::begin())
             .on(Some(DEFAULT_MODEL))
             .stoppable_by(&stop);
 
@@ -417,5 +432,27 @@ mod tests {
             chat.backend(DEFAULT_MODEL),
             Backend::Aichat { .. }
         ));
+    }
+
+    /// CHATGPT-10: a side request to the ChatGPT account is made in the session the chat was made
+    /// for. Every side request builds its client here, so a client that left the session out would
+    /// leave it out of the processor, the summary, the vetting, the question beside the work, the
+    /// advisor, the goal check and the commit message, each of which would then be a cache the
+    /// session never hits.
+    #[test]
+    fn a_side_request_to_the_account_is_made_in_the_session_the_chat_was_made_for() {
+        let config = brave_and_a_gateway();
+        let egress = Egress::new();
+        let session = crate::chatgpt::AccountSession::begin();
+        let mut chat = Chat::new(&config, &egress, &session);
+
+        let Backend::Account {
+            session: Some(held),
+            ..
+        } = chat.backend("chatgpt/a-model")
+        else {
+            panic!("the account's model was not sent to the account in a session");
+        };
+        assert_eq!(held.identifier(), session.identifier());
     }
 }

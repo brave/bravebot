@@ -804,7 +804,10 @@ mod tests {
 
     /// Faces drawn by `pixels.ts` for the same seeds: the cell count, a hash over every cell's
     /// position and colour, the eyes, the gaze and the first and last cell.
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "a row of seven fields that a single test destructures, so a named type would have one use"
+    )]
     const FROM_THE_APP: &[(
         &str,
         usize,

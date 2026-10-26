@@ -12,6 +12,7 @@ SPEC_DIR = Path("docs/specs")
 README = SPEC_DIR / "README.md"
 
 CLAUSE_HEADING = re.compile(r"^###\s+([A-Z]+)-(\d+)\s*:\s*(.*)$")
+ANCHOR = re.compile(r'<a id="[^"]*"></a>')
 VERIFIED_BY = re.compile(r"verified-by:\s*([^`\n]+)")
 TEST_FN = re.compile(r"^\s*fn\s+([A-Za-z0-9_]+)\s*\(")
 EM_DASH = "—"
@@ -36,6 +37,13 @@ class Clause:
         return "\n".join(self.body)
 
     @property
+    def canonical(self):
+        """The clause as its reader has it: heading and body, with no anchor line, no trailing
+        space and no blank line at either end. An anchor in a body names the clause after this
+        one, so a clause added after it would otherwise reword this one."""
+        return "\n".join([f"{self.id}: {self.title}", *_readable(self.body)])
+
+    @property
     def withdrawn(self):
         return "withdrawn" in self.title.lower()
 
@@ -58,6 +66,7 @@ class Spec:
         self.front_lines = {}
         self.clauses = []
         self.lines = []
+        self.frame = []
         self.malformed_front_matter = False
 
     @property
@@ -121,6 +130,24 @@ class Spec:
             return "\n".join(self.lines)
         first = min(clause_lines)
         return "\n".join(self.lines[: first - 1])
+
+    @property
+    def frame_text(self):
+        """What a reviewer reads in the spec besides the clause in front of them: the text before
+        the first clause and the sections after the last, where a spec records the exceptions it
+        admits. The front matter is left out, since `governs` is the one key a verdict depends on
+        and a caller asks for it by name."""
+        return "\n".join(_readable(self.frame))
+
+
+def _readable(lines):
+    """`lines` as a reader sees them: no anchor line, no trailing space, no blank line at the ends."""
+    kept = [line.rstrip() for line in lines if not ANCHOR.fullmatch(line.strip())]
+    while kept and not kept[-1]:
+        kept.pop()
+    while kept and not kept[0]:
+        kept.pop(0)
+    return kept
 
 
 def _parse_front_matter(lines):
@@ -201,9 +228,10 @@ def load_spec(path):
     spec = Spec(path)
     text = path.read_text(encoding="utf-8")
     spec.lines = text.split("\n")
-    front, _ = _parse_front_matter(spec.lines)
+    front, front_end = _parse_front_matter(spec.lines)
     if front is None:
         spec.malformed_front_matter = True
+        front_end = 0
     else:
         spec.front = front
 
@@ -215,9 +243,12 @@ def load_spec(path):
             spec.clauses.append(current)
             continue
         if current is None:
+            if number > front_end:
+                spec.frame.append(raw)
             continue
         if raw.startswith("## ") or raw.startswith("### "):
             current = None
+            spec.frame.append(raw)
             continue
         current.body.append(raw)
         found = VERIFIED_BY.search(raw)
@@ -246,7 +277,8 @@ def crate_directories():
 class TestIndex:
     """Every `#[test]` function in the workspace, by name and by file."""
 
-    def __init__(self):
+    def __init__(self, crates=None):
+        self.crates = crate_directories() if crates is None else crates
         self.by_name = {}
         for source in sorted(Path("crates").rglob("*.rs")):
             lines = source.read_text(encoding="utf-8", errors="replace").split("\n")
@@ -276,7 +308,7 @@ class TestIndex:
             crate_dir / "tests" / f"{joined}.rs",
         ]
 
-    def resolve(self, reference, crates):
+    def resolve(self, reference):
         """Resolve one `verified-by` value.
 
         Returns (status, detail) where status is one of `ok`, `moved`, `missing`,
@@ -285,7 +317,7 @@ class TestIndex:
         parts = reference.split("::")
         if len(parts) < 2:
             return "malformed", "expected crate::module::test_name"
-        crate_dir = crates.get(parts[0])
+        crate_dir = self.crates.get(parts[0])
         if crate_dir is None:
             return "unknown-crate", parts[0]
         name = parts[-1]

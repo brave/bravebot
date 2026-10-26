@@ -75,7 +75,8 @@ struct Shared {
     wake: Box<dyn Fn() + Send>,
     sessions: HashMap<String, Session>,
     /// Sessions the bridge asked the trust question about before `session/new` had returned, with
-    /// the record a yes is kept in where the question offered to keep it.
+    /// the record a yes is kept in, as the bridge spelled it for a person, where the question
+    /// offered to keep it.
     unasked: HashMap<String, Option<String>>,
     asked: HashMap<u64, Asked>,
     next: u64,
@@ -144,6 +145,12 @@ impl Acp {
         let bridge =
             Bridge::new(Box::new(move |event| on_event(&heard, event))).with_settings(settings);
         Self { bridge, shared }
+    }
+
+    /// The editor has gone: close every session and wait up to `limit` for the work still running
+    /// for them, a `session-ended` hook included. Returns whether it had all ended.
+    pub fn finish(&mut self, limit: std::time::Duration) -> bool {
+        self.bridge.shut_down(limit)
     }
 
     fn lock(&self) -> MutexGuard<'_, Shared> {
@@ -318,22 +325,7 @@ impl Acp {
         };
         if let Some((directory, keeping)) = trust {
             let mut shared = self.lock();
-            let title = format!("Trust {}", plain(&directory));
-            // A yes is kept wherever the bridge offered to keep it, so the question says so and
-            // names the record, since nobody can endorse a record they were not shown.
-            let (allow, text) = match keeping {
-                Some(record) => (
-                    "Trust and remember",
-                    format!(
-                        "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
-                        plain(&record)
-                    ),
-                ),
-                None => (
-                    "Trust for this session",
-                    "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
-                ),
-            };
+            let (title, allow, text) = trust_question(&directory, keeping.as_deref());
             shared.ask(
                 &session.clone(),
                 Asked::Trust { session, turn },
@@ -493,6 +485,35 @@ fn pictured(text: &str) -> String {
 /// what would make the editor fetch something unasked taken out of it.
 fn plain(text: &str) -> String {
     without_loading(&pictured(text))
+}
+
+/// The trust question for a session in `directory`: its title, the answer that grants it and what a
+/// yes does.
+///
+/// `keeping` is the record a yes is kept in, spelled as the bridge spells a path for a person, and
+/// `None` where this client cannot keep one. The directory is spelled the same way, so one that
+/// ends in whitespace is not read as the one without it.
+fn trust_question(directory: &str, keeping: Option<&str>) -> (String, &'static str, String) {
+    let title = format!(
+        "Trust {}",
+        plain(&bravebot_agent::confirm::shown_name(directory))
+    );
+    // A yes is kept wherever the bridge offered to keep it, so the question says so and names the
+    // record, since nobody can endorse a record they were not shown.
+    let (allow, text) = match keeping {
+        Some(record) => (
+            "Trust and remember",
+            format!(
+                "A yes is kept: later sessions started in this directory, or below it if it is a git root, are not asked. It is written to {}. Delete the lines naming this directory from that file to be asked again.",
+                plain(record)
+            ),
+        ),
+        None => (
+            "Trust for this session",
+            "This answer cannot be kept here, so a session started in this directory later asks again.".to_string(),
+        ),
+    };
+    (title, allow, text)
 }
 
 /// Bare tags an editor still gets, because they carry no attribute to load anything from but
@@ -672,7 +693,7 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
     let data = &event.data;
     match event.name {
         "trust.request" => {
-            let keeping = data["keeping"].as_str().map(str::to_string);
+            let keeping = data["shownKeeping"].as_str().map(str::to_string);
             shared.unasked.insert(session, keeping);
         }
         "narration" => {
@@ -706,6 +727,9 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
         "tool.started" => {
             let verb = data["verb"].as_str().unwrap_or_default().to_string();
             let target = data["target"].as_str().unwrap_or_default().to_string();
+            // What the editor is shown, spelled so a file name that is blank or ends in whitespace
+            // is visible. Calls are matched on `target`, as the finished event carries it.
+            let shown = data["shownTarget"].as_str().unwrap_or(&target).to_string();
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
@@ -721,7 +745,7 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 json!({
                     "sessionUpdate": "tool_call",
                     "toolCallId": id,
-                    "title": plain(&format!("{verb} {target}")),
+                    "title": plain(&format!("{verb} {shown}")),
                     "kind": "other",
                     "status": "in_progress",
                 }),
@@ -772,6 +796,10 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 return;
             }
             let why = data["message"].as_str().unwrap_or("the turn failed");
+            // The window's own sentence where there is one, which is a failure of the ChatGPT
+            // account's and names the command that signs in again. It quotes nothing a service
+            // wrote, as the category's name does not.
+            let why = data["accountMessage"].as_str().unwrap_or(why);
             let message = format!("the turn failed: {}", plain(why));
             shared.asked.retain(|_, asked| match asked {
                 Asked::Bridge { session: of, .. } | Asked::Trust { session: of, .. } => {
@@ -913,6 +941,12 @@ fn text_of<'a>(data: &'a Value, key: &str) -> &'a str {
     data[key].as_str().unwrap_or_default()
 }
 
+/// How many characters of the text drew as nothing before the agent wrote them out, as the bridge
+/// carried it. Absent from a request an older agent sent, which drew none.
+fn hidden_of(data: &Value) -> usize {
+    data["hidden"].as_u64().map_or(0, |n| n as usize)
+}
+
 /// What a check made of the content, read from the verdict word the bridge sent. The checker's own
 /// sentence is not read, for the reason the terminal leaves it out.
 fn check_of(data: &Value) -> bravebot_approval::Check {
@@ -944,7 +978,7 @@ fn run_text(data: &Value) -> Option<String> {
         .flatten()
         .map(|stage| bravebot_approval::RunStep {
             written: text_of(stage, "display").to_string(),
-            binary: text_of(stage, "binary").to_string(),
+            binary: text_of(stage, "shownBinary").to_string(),
         })
         .collect();
     let confinement = data["confinement"].is_object().then(|| {
@@ -978,6 +1012,7 @@ fn vet_text(data: &Value) -> String {
         expects: text_of(data, "expects"),
         check: check_of(data),
         content: text_of(data, "content"),
+        hidden: hidden_of(data),
         picture: picture.map(|(path, pdf)| bravebot_approval::Picture { path, pdf }),
     })
     .join("\n")
@@ -1041,7 +1076,7 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             format!(
                 "{} {}",
                 data["intent"].as_str().unwrap_or("write"),
-                text("path")
+                bravebot_agent::confirm::shown_name(text("path"))
             ),
             "edit",
             write_text(data),
@@ -1056,17 +1091,26 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
                 data["ambient"]
                     .as_array()
                     .is_some_and(|ambient| !ambient.is_empty()),
+                data["redirectedFrom"].as_str(),
             )
             .join("\n"),
         ),
         "output" => (
             format!("read the output of {}", text("command")),
             "read",
-            bravebot_approval::output_lines(text("summary"), check_of(data), text("output"))
-                .join("\n"),
+            bravebot_approval::output_lines(
+                text("summary"),
+                check_of(data),
+                text("output"),
+                hidden_of(data),
+            )
+            .join("\n"),
         ),
         "vouch" => (
-            format!("trust {}", text("path")),
+            format!(
+                "trust {}",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::vouch_lines(
                 text("path"),
@@ -1083,7 +1127,10 @@ fn describe(stem: &str, data: &Value) -> Option<(String, &'static str, String)> 
             bravebot_approval::manifest_lines(text("task"), &strings(&data["steps"])).join("\n"),
         ),
         "exposure" => (
-            format!("read {}, which holds a credential", text("path")),
+            format!(
+                "read {}, which holds a credential",
+                bravebot_agent::confirm::shown_name(text("path"))
+            ),
             "read",
             bravebot_approval::exposure_lines(text("path"), &strings(&data["credentials"]))
                 .join("\n"),
@@ -1212,6 +1259,7 @@ mod tests {
             credentials: vec!["API_KEY on line 31".to_string()],
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let changes = request.diff.condensed(2);
         assert!(
@@ -1237,6 +1285,73 @@ mod tests {
         assert!(expected.contains("\u{241b}[2J") && !expected.contains('\u{1b}'));
     }
 
+    /// PROMPT-1: the editor reads a file the line writes and a directory it is confined to as the
+    /// terminal draws them, so a name that would draw as nothing, or as another name, is quoted
+    /// and spelled and `note.md ` is not read as `note.md`.
+    #[test]
+    fn a_run_question_spells_a_written_file_and_a_directory_that_would_draw_as_another() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage};
+        let drawn = |written: &str, directory: &str| {
+            let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+            let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w");
+            run.plan.writes = vec![written.into()];
+            run.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_text(&crate::wire::run_request(1, &run)).expect("text")
+        };
+        let drawn_lines = |written: &str, directory: &str| -> Vec<String> {
+            drawn(written, directory)
+                .lines()
+                .map(str::to_string)
+                .collect()
+        };
+        let plain = drawn_lines("note.md", "/work");
+        assert!(plain.contains(&"  note.md".to_string()), "{plain:?}");
+        assert!(plain.contains(&"  /work".to_string()), "{plain:?}");
+        for (name, spelled) in [
+            (" ", "\"\u{2423}\""),
+            ("note.md ", "\"note.md\u{2423}\""),
+            ("a\u{202e}b", "\"a\\u{202e}b\""),
+            ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ] {
+            for lines in [drawn_lines(name, "/work"), drawn_lines("note.md", name)] {
+                assert!(
+                    lines.contains(&format!("  {spelled}")),
+                    "{name:?}: {lines:?}"
+                );
+                assert!(!lines.contains(&format!("  {name}")), "{name:?}: {lines:?}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the editor is read the directory a line runs in and the file each step runs
+    /// spelled as the terminal spells them, so a binary ending in a space is not read as the one
+    /// without it.
+    #[test]
+    fn the_editor_is_read_the_directory_and_the_binary_spelled() {
+        use bravebot_agent::confirm::RunRequest;
+        use bravebot_core::command::{Pipeline, Stage, Steps};
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut run = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/w\u{202e}");
+        let Steps::Pipeline(steps) = &mut run.plan.steps else {
+            panic!("a pipeline");
+        };
+        steps[0].resolved = "/usr/bin/tee ".into();
+        steps[0].started_as = "/usr/bin/tee ".into();
+        let read = run_text(&crate::wire::run_request(1, &run)).expect("a run reads");
+        assert!(read.contains("\n  \"/usr/bin/tee\u{2423}\"\n"), "{read}");
+        assert!(read.contains("in \"/w\\u{202e}\""), "{read}");
+    }
+
     /// Run, fetch, server, call and move read to the editor as `bravebot_approval` words them from
     /// the same typed requests the terminal holds, so a field the wire drops shows as a difference.
     #[test]
@@ -1253,7 +1368,7 @@ mod tests {
                 .iter()
                 .map(|stage| bravebot_approval::RunStep {
                     written: stage.as_written(),
-                    binary: stage.binary(),
+                    binary: bravebot_agent::confirm::shown_binary(stage),
                 })
                 .collect();
             let writes: Vec<String> = run
@@ -1343,13 +1458,30 @@ mod tests {
         let fetch = FetchRequest {
             url: "http://169.254.169.254/latest".into(),
             host: "169.254.169.254".into(),
+            redirected_from: None,
         };
         let metadata = fetch.ambient_authority().is_some();
         assert!(metadata, "the fixture is not a metadata service");
         let (_, _, text) = shown("fetch", crate::wire::fetch_request(2, &fetch));
         assert_eq!(
             text,
-            bravebot_approval::fetch_lines(&fetch.host, &fetch.url, metadata).join("\n")
+            bravebot_approval::fetch_lines(&fetch.host, &fetch.url, metadata, None).join("\n")
+        );
+
+        let hop = FetchRequest {
+            redirected_from: Some("example.com".into()),
+            ..fetch
+        };
+        let (_, _, text) = shown("fetch", crate::wire::fetch_request(2, &hop));
+        assert_eq!(
+            text,
+            bravebot_approval::fetch_lines(&hop.host, &hop.url, metadata, Some("example.com"))
+                .join("\n")
+        );
+        assert_ne!(
+            text,
+            bravebot_approval::fetch_lines(&hop.host, &hop.url, metadata, None).join("\n"),
+            "the redirect row is missing from the question"
         );
 
         let server = ServerRequest {
@@ -1429,7 +1561,8 @@ mod tests {
             (
                 "run",
                 json!({"plan": "ls", "directory": "/w", "summary": "list", "stages": [
-                    {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls"}],
+                    {"display": "ls", "resolved": "/bin/ls", "binary": "/bin/ls",
+                     "shownBinary": "/bin/ls"}],
                     "writes": ["out"], "stdin": "file", "releasesPrivate": true,
                     "requestedScopes": ["aws"], "confinement": {"heading": "confined",
                     "directories": ["/w"], "sentences": ["it reads /w"]},
@@ -1510,6 +1643,188 @@ mod tests {
         assert!(describe("something-new", &json!({"summary": "do it"})).is_none());
     }
 
+    /// PROMPT-1: an editor is shown a question's title and body as words. The title names the file
+    /// for a write, a vouch and a credential read, and a name that would draw as nothing, or as
+    /// another name, is spelled in it, as it is in the terminal.
+    #[test]
+    fn the_title_of_a_question_about_a_file_spells_a_name_that_would_draw_as_another() {
+        use bravebot_agent::confirm::{ExposureRequest, Intent, VouchRequest, WriteRequest};
+        let write = |path: &str| {
+            crate::wire::write_request(
+                1,
+                &WriteRequest {
+                    written_since_checkout: false,
+                    path: path.into(),
+                    contents: "a\n".into(),
+                    existing: None,
+                    diff: bravebot_agent::diff::Diff::compute("", "a\n"),
+                    intent: Intent::Create,
+                    untrusted: false,
+                    remark: None,
+                    protected: false,
+                    credentials: Vec::new(),
+                    may_always: false,
+                    record: None,
+                    may_edit: false,
+                },
+            )
+        };
+        let vouch = |path: &str| {
+            crate::wire::vouch_request(
+                2,
+                &VouchRequest {
+                    path: path.into(),
+                    rule: format!("/work/{path}"),
+                    preview: "a".into(),
+                    label: "(U,priv)".into(),
+                    truncated: false,
+                    verdict: bravebot_core::vetting::Verdict::Safe,
+                    reason: None,
+                    reason_label: None,
+                },
+            )
+        };
+        let exposure = |path: &str| {
+            crate::wire::exposure_request(
+                3,
+                &ExposureRequest {
+                    path: path.into(),
+                    credentials: vec!["an API key at line 1".into()],
+                },
+            )
+        };
+        let titled = |stem: &str, data: Value| shown(stem, data).0;
+        assert_eq!(titled("confirm", write("note.md")), "create note.md");
+        assert_eq!(
+            titled("confirm", write("note.md ")),
+            "create \"note.md\u{2423}\""
+        );
+        assert_eq!(titled("vouch", vouch("note.md")), "trust note.md");
+        assert_eq!(
+            titled("vouch", vouch("note.md ")),
+            "trust \"note.md\u{2423}\""
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md")),
+            "read note.md, which holds a credential"
+        );
+        assert_eq!(
+            titled("exposure", exposure("note.md ")),
+            "read \"note.md\u{2423}\", which holds a credential"
+        );
+    }
+
+    /// PROMPT-1: the trust question's title names the directory spelled as the terminal spells it,
+    /// so `/work/proj ` is not read as `/work/proj`, and a directory that needs no spelling is
+    /// named as it was.
+    #[test]
+    fn the_trust_question_spells_a_directory_that_would_draw_as_another() {
+        let titled = |directory: &str| trust_question(directory, None).0;
+        assert_eq!(titled("/work/proj"), "Trust /work/proj");
+        assert_eq!(titled("/work/proj "), "Trust \"/work/proj\u{2423}\"");
+        assert_eq!(
+            titled("/work/pr\u{202e}oj"),
+            "Trust \"/work/pr\\u{202e}oj\""
+        );
+        assert_eq!(titled(" "), "Trust \"\u{2423}\"");
+    }
+
+    /// PROMPT-1: the record a yes is kept in is read from the bridge's spelling of it and not from
+    /// the path as held, so a record under a directory that ends in a space is named as another is
+    /// not. Held and spelled differ here, and the question must carry the spelled one.
+    #[test]
+    fn the_trust_question_names_the_record_as_the_bridge_spelled_it() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::new(),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        on_event(
+            &shared,
+            Event::new(
+                "trust.request",
+                "s",
+                json!({
+                    "directory": "/work/proj ",
+                    "shownDirectory": "\"/work/proj\u{2423}\"",
+                    "keeping": "/home/me/state /trusted/k.jsonl",
+                    "shownKeeping": "\"/home/me/state\u{2423}/trusted/k.jsonl\"",
+                }),
+            ),
+        );
+        let kept = shared.lock().unwrap().unasked.get("s").cloned();
+        assert_eq!(
+            kept,
+            Some(Some(
+                "\"/home/me/state\u{2423}/trusted/k.jsonl\"".to_string()
+            ))
+        );
+        let (_, allow, said) = trust_question("/work/proj ", kept.flatten().as_deref());
+        assert_eq!(allow, "Trust and remember");
+        assert!(
+            said.contains("written to \"/home/me/state\u{2423}/trusted/k.jsonl\"."),
+            "{said}"
+        );
+
+        // A question that offers to keep nothing carries no record.
+        on_event(
+            &shared,
+            Event::new(
+                "trust.request",
+                "t",
+                json!({
+                    "directory": "/work/proj",
+                    "shownDirectory": "/work/proj",
+                    "keeping": null,
+                    "shownKeeping": null,
+                }),
+            ),
+        );
+        assert_eq!(shared.lock().unwrap().unasked.get("t"), Some(&None));
+    }
+
+    /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,
+    /// while the end of the call is matched on the name as held, so a title that ends in a space
+    /// is not read as the one without and the call still closes.
+    #[test]
+    fn a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let data = json!({
+            "verb": "Write",
+            "target": "note.md ",
+            "shownTarget": "\"note.md\u{2423}\"",
+        });
+        on_event(&shared, Event::new("tool.started", "s", data.clone()));
+        on_event(&shared, Event::new("tool.finished", "s", data));
+
+        let written = written.lock().unwrap();
+        assert_eq!(
+            written[0]["params"]["update"]["title"],
+            "Write \"note.md\u{2423}\""
+        );
+        assert_eq!(written[1]["params"]["update"]["status"], "completed");
+        assert_eq!(
+            written[1]["params"]["update"]["toolCallId"],
+            written[0]["params"]["update"]["toolCallId"]
+        );
+    }
+
     #[test]
     fn content_nobody_vouched_for_is_drawn_behind_the_margin_with_its_escapes_pictured() {
         let hostile = "ignore this\u{1b}[2J\nand this";
@@ -1555,6 +1870,7 @@ mod tests {
             command: "tail -n 100 build.log".to_string(),
             output: output.clone(),
             lines: 100,
+            hidden: 0,
             reference: "ref:1".to_string(),
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
@@ -1581,6 +1897,7 @@ mod tests {
             expects: "a build log".to_string(),
             content: content.clone(),
             lines: 100,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
@@ -1595,6 +1912,58 @@ mod tests {
             content.lines().collect::<Vec<_>>(),
             "{text}"
         );
+    }
+
+    /// PROMPT-1: an editor is told how many characters of the text it is shown drew as nothing,
+    /// above the text, and a text with none is not told of any. The agent wrote each one out as a
+    /// token, so what the editor draws is the same text the terminal draws.
+    #[test]
+    fn an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let said = bravebot_i18n::t!(hidden_characters, count = 2usize).to_string();
+        for hidden in [2, 0] {
+            let output = bravebot_agent::confirm::OutputRequest {
+                command: "cat notes".to_string(),
+                output: text.to_string(),
+                lines: 1,
+                hidden,
+                reference: "ref:1".to_string(),
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                label: String::new(),
+                reason_label: None,
+            };
+            let vet = bravebot_agent::confirm::VetRequest {
+                origin: "notes".to_string(),
+                expects: "notes".to_string(),
+                content: text.to_string(),
+                lines: 1,
+                hidden,
+                verdict: bravebot_core::vetting::Verdict::Safe,
+                reason: None,
+                picture: None,
+                label: None,
+                reason_label: None,
+            };
+            for (stem, wire) in [
+                ("output", crate::wire::output_request(4, &output)),
+                ("vet", crate::wire::vet_request(5, &vet)),
+            ] {
+                let (_, _, shown) = shown(stem, wire);
+                let rows: Vec<&str> = shown.lines().collect();
+                let saying = rows.iter().position(|row| *row == said);
+                let margin = format!("{} {text}", bravebot_approval::QUARANTINE_BAR);
+                let text_at = rows.iter().position(|row| *row == margin);
+                assert!(text_at.is_some(), "`{stem}`: {shown}");
+                match hidden {
+                    0 => assert!(saying.is_none(), "`{stem}`: {shown}"),
+                    _ => assert!(
+                        saying.is_some() && saying < text_at,
+                        "`{stem}` did not say {hidden} characters drew as nothing above the text: {shown}"
+                    ),
+                }
+            }
+        }
     }
 
     /// A hundred lines with an instruction on the seventieth, past the head a prompt might show.
@@ -1726,5 +2095,102 @@ mod tests {
         assert_eq!(fenced("a"), "```\na\n```");
         assert_eq!(fenced("``` x ```"), "````\n``` x ```\n````");
         assert_eq!(fenced("`````"), "``````\n`````\n``````");
+    }
+
+    /// ACP-8: a prompt whose turn the ChatGPT account refused as a 429 with a wait ends with the
+    /// window's sentence for the refusal and nothing after it, for either refusal: no status and no
+    /// count. For the usage limit that sentence holds the wait. The failure is the value the bridge
+    /// sends for a failed turn, which carries the status in `status`, and the adapter reads the
+    /// editor's message from it.
+    ///
+    /// The regression it rejects is the status of the refusal put after the sentence, as the
+    /// terminal's line for a failed turn puts it.
+    #[test]
+    fn an_editor_is_told_the_wait_a_refusal_asked_for_and_no_status() {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_agent::turn::TurnError;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("configured");
+        // What the prompt of an editor ends with where `failure` ended its turn, and the status the
+        // bridge sent beside the sentence.
+        let ended_with = |failure: AccountFailure| -> String {
+            let data = crate::bridge::failure_fields(
+                &TurnError::from(BackendError::from(ChatError::Account(failure))),
+                &config,
+                "chatgpt/gpt-test",
+            );
+            assert_eq!(data["status"], 429, "{failure:?}: {data}");
+            let written = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&written);
+            let shared = Arc::new(Mutex::new(Shared {
+                write: Box::new(move |message| {
+                    sink.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(message);
+                }),
+                wake: Box::new(|| {}),
+                sessions: HashMap::from([(
+                    "s".to_string(),
+                    Session {
+                        prompt: Some(json!(7)),
+                        ..Session::default()
+                    },
+                )]),
+                unasked: HashMap::new(),
+                asked: HashMap::new(),
+                next: 0,
+                queued: Vec::new(),
+            }));
+
+            on_event(&shared, Event::new("turn.error", "s", data));
+
+            let written = written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let [answer] = written.as_slice() else {
+                panic!("{failure:?}: {written:?}");
+            };
+            answer["error"]["message"]
+                .as_str()
+                .expect("a failure")
+                .to_string()
+        };
+        let refused = |refusal| AccountFailure::Named {
+            refusal,
+            status: Some(429),
+            retry_after: Some(std::time::Duration::from_secs(600)),
+        };
+
+        let limit = ended_with(refused(Refusal::UsageLimit));
+        assert_eq!(
+            limit,
+            format!(
+                "the turn failed: {}",
+                crate::account_words::of_failure(refused(Refusal::UsageLimit)).sentence
+            )
+        );
+        assert!(limit.contains("about 10 minutes"), "{limit}");
+        assert!(!limit.contains("HTTP") && !limit.contains("429"), "{limit}");
+
+        let not_permitted = ended_with(refused(Refusal::NotPermitted));
+        assert_eq!(
+            not_permitted,
+            format!(
+                "the turn failed: {}",
+                crate::account_words::of_failure(refused(Refusal::NotPermitted)).sentence
+            )
+        );
+        assert!(
+            !not_permitted.contains("HTTP") && !not_permitted.contains("429"),
+            "{not_permitted}"
+        );
     }
 }

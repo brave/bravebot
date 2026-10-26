@@ -40,6 +40,21 @@ pub struct SystemPrompts {
     pub appending: Option<String>,
 }
 
+/// What the person who started a run said it may spend before it stops (TURN-14, CLI-38).
+///
+/// Counts the driver keeps itself, rounds made and tokens the backends reported, so reaching one
+/// depends on no reply and no tool result. `None` is no limit of the person's, which leaves the run
+/// to [`Task::rounds`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RunLimits {
+    /// The most rounds of tool calls the run may make. A planner that asks for another round after
+    /// that many ends the run, and the round it asked for is not run.
+    pub rounds: Option<usize>,
+    /// The most tokens the run may have spent when it is about to send a request. A request already
+    /// sent is paid for whatever it came to, so the total passes this by the round that reached it.
+    pub tokens: Option<u64>,
+}
+
 /// What a turn is asked to do.
 #[derive(Debug, Clone)]
 pub struct Task {
@@ -85,6 +100,19 @@ pub struct Task {
     /// says only that some bytes arrived, and `gh pr diff` carries whatever the author of the
     /// pull request wrote. So the planner is shown a reference, never the bytes.
     pub piped: Option<String>,
+    /// A prompt of an MCP server the person ran by typing its name at the start of the line.
+    ///
+    /// The words are the person's own, so they are carried as they are. What the server returns is
+    /// not: the turn fetches it and holds it as a reference, untrusted and private, so the planner
+    /// is shown a handle and never the text (MCP-11).
+    pub mcp_prompt: Option<crate::mcp::PromptRequest>,
+    /// Whether the lines a running turn takes were sent on a channel the person vouched for with a
+    /// flag they typed, rather than typed at a keyboard (CLI-36).
+    ///
+    /// `false` for every caller but a one-shot run reading `--input-format lines` with
+    /// `--trust-input-lines`. It changes what the audit trail says an interjection was and nothing
+    /// else: the line is the person's words either way, and may not route either way.
+    pub vouched_channel: bool,
     /// Images the user pasted, carried with the prompt they were pasted into.
     ///
     /// Trusted for the reason [`Task::prompt`] is, and by the same act: the user copied something
@@ -189,6 +217,19 @@ pub struct Task {
     /// Supplied per turn for the reason `model` is: where the choice is kept is the caller's
     /// business.
     pub effort: Option<Effort>,
+    /// The session this turn belongs to, as far as the ChatGPT account is concerned: the identifier
+    /// its requests carry and the effort level they are held to
+    /// ([CHATGPT-10](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Said by a caller that keeps a session across turns, once when the session begins, so each
+    /// turn of it is built with the same one. Left unsaid, the task is a session of its own and
+    /// begins one the first time a request asks, at the level the task asks for: a one-shot run and
+    /// a delegate are that. Every clone of a task is in the session the task is in, whether it was
+    /// made before the session began or after, so the rounds of a goal run, which are made from
+    /// clones of its first task, are one session. A caller that builds a task for each turn of a
+    /// session and does not say would give each turn an identifier of its own, so the turns of a
+    /// session would not carry the one identifier the service's cache hits were seen with.
+    account: std::sync::Arc<std::sync::OnceLock<crate::chatgpt::AccountSession>>,
     /// The schema the person running this task supplied for its reply, sent with each of the
     /// planner's requests.
     ///
@@ -205,6 +246,13 @@ pub struct Task {
     /// fine. So the interface passes `None`, and an unattended run passes
     /// [`MAX_TOOL_ROUNDS`], where nothing else can end a loop.
     pub rounds: Option<usize>,
+    /// What the person who started this run said it may spend, which ends the run where
+    /// [`Task::rounds`] takes its tools away (TURN-14).
+    ///
+    /// Empty unless a caller says otherwise, and only a caller with a flag to read them from does.
+    /// A delegate carries none: its bounds are its definition's, and what it spends reaches the
+    /// run's total when it is collected.
+    pub limits: RunLimits,
     /// The session's spend limit, which the turn asks about before a request that would go past it
     /// (TURN-8). Empty unless a caller with a person in front of it sets one, for the reason
     /// `rounds` is the caller's: only that caller can put the question.
@@ -284,6 +332,10 @@ pub struct Task {
     /// The built-in style `/style` chose, which stands in for the opening where `--system-prompt`
     /// did not (CLI-19). A person's own words win over it. Not given to a delegate.
     pub style: Option<crate::styles::Style>,
+    /// The name of the skill `/mode` made the session's mode, whose body each turn reads again and
+    /// puts in its system instructions (SKILL-21). Only a name: the body comes from the catalogue
+    /// the turn resolved, through the gate any skill goes through. Not given to a delegate.
+    pub skill_mode: Option<String>,
     /// How much this turn asks before it acts.
     ///
     /// Carried by the task because the planner has to be told about one of them: plan mode refuses
@@ -294,6 +346,14 @@ pub struct Task {
     /// The confirmer enforces it. This is the half the model is told, and the two are set from the
     /// same value by the caller.
     pub permission_mode: crate::LiveMode,
+    /// The mode this turn began in, where the caller read it before the turn started.
+    ///
+    /// `None` for a caller that sized nothing from the mode, and the turn then reads
+    /// [`Task::permission_mode`] as it opens. A caller that did, as the terminal does with the
+    /// window of a turn on the plan model (BACKEND-56), reads it once and says so here. The key
+    /// that sets the mode can be pressed between two readings, and a turn that took the other one
+    /// would run on a model the caller did not size anything for.
+    pub began_in: Option<crate::PermissionMode>,
     /// Which tick of a loop this turn is, where a caller is running one.
     ///
     /// `None` for an ordinary turn, and for a prompt the person typed in the middle of a loop.
@@ -461,6 +521,8 @@ impl Task {
             session_excerpts: Vec::new(),
             images: Vec::new(),
             piped: None,
+            mcp_prompt: None,
+            vouched_channel: false,
             home: None,
             profile: None,
             cache: None,
@@ -477,6 +539,7 @@ impl Task {
             courier: None,
             model: None,
             effort: None,
+            account: std::sync::Arc::default(),
             output_schema: None,
             tick: None,
             // No watches unless a caller says it keeps some, for the reason `rounds` is bounded
@@ -490,6 +553,7 @@ impl Task {
             // and a default cannot know whether anybody is, so the default is the one that is
             // wrong in the cheaper direction.
             rounds: Some(MAX_TOOL_ROUNDS),
+            limits: RunLimits::default(),
             spend_limit: crate::spend_limit::SpendLimit::default(),
             spent_before: 0,
             stop: None,
@@ -506,6 +570,7 @@ impl Task {
             permissions: Permissions::new(),
             // Asking, which is what a turn has always done.
             permission_mode: crate::LiveMode::default(),
+            began_in: None,
             // Asking too: nobody has said a check's word may stand in for an answer.
             auto_vetting: false,
             // Nothing said about either destination, which is a caller that read no settings
@@ -513,6 +578,7 @@ impl Task {
             attribution: bravebot_config::Attribution::default(),
             system_prompts: SystemPrompts::default(),
             style: None,
+            skill_mode: None,
             delegate: None,
             addressing: None,
             model_outranks_a_definition: false,
@@ -538,6 +604,15 @@ impl Task {
     pub fn with_file(mut self, path: impl Into<String>) -> Self {
         self.files.push(path.into());
         self
+    }
+
+    /// Whether a person typed this prompt: no delegate's task, nothing the driver composed or wrote.
+    ///
+    /// What decides whether a word of the prompt may name a skill kept from the planner
+    /// ([`crate::skills::Catalogue::named_in`]), so a kind of turn added later is held back by this
+    /// one question and not by whichever of its parts somebody remembers.
+    pub fn typed_by_a_person(&self) -> bool {
+        self.delegate.is_none() && self.composed.is_none() && !self.driver_wrote_the_prompt
     }
 
     /// Say that this prompt was composed rather than typed, and what for.
@@ -586,6 +661,19 @@ impl Task {
 
     pub fn with_piped_input(mut self, text: impl Into<String>) -> Self {
         self.piped = Some(text.into());
+        self
+    }
+
+    /// Run a prompt of an MCP server the session reached, which the turn fetches before it plans.
+    pub fn with_mcp_prompt(mut self, request: Option<crate::mcp::PromptRequest>) -> Self {
+        self.mcp_prompt = request;
+        self
+    }
+
+    /// Say that the lines handed to a running turn come from a channel the person vouched for
+    /// (CLI-36), so the trail records them as that.
+    pub fn with_vouched_channel(mut self) -> Self {
+        self.vouched_channel = true;
         self
     }
 
@@ -689,6 +777,23 @@ impl Task {
         self
     }
 
+    /// Make this turn one of `session`, whose identifier and effort level its requests to the ChatGPT
+    /// account carry.
+    ///
+    /// Said by a caller that holds a session between turns, once, when the session begins, so every
+    /// turn of it carries the same identifier.
+    pub fn in_account_session(mut self, session: crate::chatgpt::AccountSession) -> Self {
+        self.account = std::sync::Arc::new(session.into());
+        self
+    }
+
+    /// The session this turn belongs to for the ChatGPT account: the one it was given, and
+    /// otherwise a session begun for it by this first call, at the level the task asks for.
+    pub fn account_session(&self) -> &crate::chatgpt::AccountSession {
+        self.account
+            .get_or_init(|| crate::chatgpt::AccountSession::begin_with(self.effort))
+    }
+
     /// Ask for a reply that matches a schema the person supplied.
     pub fn with_output_schema(
         mut self,
@@ -704,6 +809,12 @@ impl Task {
     /// [`Task::rounds`].
     pub fn with_rounds(mut self, rounds: Option<usize>) -> Self {
         self.rounds = rounds;
+        self
+    }
+
+    /// End the run where the person who started it said it may not go on. See [`Task::limits`].
+    pub fn with_run_limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
         self
     }
 
@@ -814,6 +925,12 @@ impl Task {
         self
     }
 
+    /// Keep the skill of this name applied to the turn, as the person's `/mode` pick (SKILL-21).
+    pub fn with_skill_mode(mut self, name: Option<String>) -> Self {
+        self.skill_mode = name;
+        self
+    }
+
     /// State the words the command line put in the system prompt (CLI-19).
     pub fn with_system_prompts(mut self, system_prompts: SystemPrompts) -> Self {
         self.system_prompts = system_prompts;
@@ -853,6 +970,15 @@ impl Task {
     /// person changes while the turn runs is the one the rest of the turn follows (MODE-8).
     pub fn with_permission_mode(mut self, mode: impl Into<crate::LiveMode>) -> Self {
         self.permission_mode = mode.into();
+        self
+    }
+
+    /// Say which mode the turn began in, from a reading the caller has already taken.
+    ///
+    /// The turn takes it as the mode it started in, and reads [`Task::permission_mode`] only for
+    /// what it decides after that, so a mode chosen as the turn opens changes none of it (MODE-8).
+    pub fn beginning_in(mut self, mode: crate::PermissionMode) -> Self {
+        self.began_in = Some(mode);
         self
     }
 

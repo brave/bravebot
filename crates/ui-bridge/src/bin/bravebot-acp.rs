@@ -56,9 +56,19 @@ fn main() {
         }
     };
 
+    // As soon as this process knows it is serving, so a panic in anything that follows is covered.
+    // A build with nowhere to send reports, or a person who switched them off, gets nothing from
+    // this call (CRASH-3, CRASH-4). The directory is the one `home::writable` names, which is none
+    // under incognito mode, so nothing would start if this process ever engaged it.
+    bravebot_backtrace::start(bravebot_backtrace::Process::Acp);
+
     // Before a session is assembled, so every turn this process runs reads one answer. See
     // SANDBOX-20, SANDBOX-25 and SANDBOX-24.
     bravebot_ui_bridge::settings::settle_for_process(
+        std::env::current_dir().ok().as_deref(),
+        settings.as_deref(),
+    );
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
@@ -99,9 +109,12 @@ fn main() {
         }
     }
 
-    // EOF on stdin. Anything waiting on an answer from an editor that has gone away is refused,
-    // which is what dropping the bridge does.
-    drop(acp);
+    // EOF on stdin. Every session is closed, which refuses anything waiting on an answer from an
+    // editor that has gone away and fires `session-ended`, so the process waits a few seconds for
+    // that and for the turns still writing their records.
+    if !acp.finish(std::time::Duration::from_secs(10)) {
+        eprintln!("bravebot-acp: some sessions were still working when the process stopped");
+    }
 }
 
 /// Write one line, or give up on writing altogether. A closed stdout means the editor is gone.

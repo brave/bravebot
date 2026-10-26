@@ -21,6 +21,12 @@ delegate's number. A planner that has only delegates left ends its round with on
 outstanding, and that line stays in the transcript. The turn then waits and asks the planner again once
 the report arrives.
 
+**In the desktop window, the sidebar's Agents entry counts the agents the open conversation has
+started.** While any is working, the entry also says how many. Choosing it opens a list with one row
+for each agent: its kind, its number, what it was asked, and whether it is working, finished or did
+not finish. Nothing an agent printed is in the list, and Done returns to the conversation. An agent
+still working when its turn ends is listed as not finished.
+
 A resumed session redraws what the earlier turns did: each one keeps the prompt you sent and how it
 ended, failures and cancellations included, so reading a transcript back does not depend on
 remembering the session. A reply that opened with the model's working leaves that block off when it
@@ -36,8 +42,20 @@ The margin is on every drawn **row**, not every line of the content. A line wide
 broken to the width by the same step that draws the margin, and each row it breaks into carries a bar
 of its own.
 
+**Colour codes in output are counted and not drawn.** A program that colours its output, such as a CI
+log, writes a code before and after each coloured word. Drawn as pictures, those buried the words.
+In the output of a [shell mode](shell-mode.md) command, in a quarantined block's preview, and in the
+lines under a call the model read, the codes are left out and a row under the text says how many,
+for example `14 colour codes not drawn`. Every other control character and escape sequence, such as
+one that moves the cursor or erases a line, is still replaced by a visible picture. A prompt asking
+you to approve text, a block's heading, and a file name draw every byte, colour codes included.
+
 **What the session says in its own voice is drawn in an ink of its own**: the trust question, a
 confinement that is unavailable, a status report. It is never the ink that marks untrusted content.
+The exception is the notes `/add-dir` and `/add-dir close` write, and the notes about the
+directories a settings file names: one that says a directory was opened or closed is drawn in the
+ink for finished, and one that refuses a path or asks for one in the ink for failed, so a directory
+that was added is not read as another error.
 
 Colour is never what makes that marking hold. A colour can be imitated by the content beside it, so
 quarantine stands on the margin instead: no ink tells you whether something is quarantined, and a
@@ -81,6 +99,14 @@ off.
 the sender, and the sender draws each message it sent with the target's name and the whole text. A
 resumed session draws both again. Control characters in a name or in the text are replaced by visible
 ones.
+
+**A `#<number>` in a reply is a link to that issue or pull request** when the checkout you are in has
+an `origin` remote on `github.com`. The number is underlined, and in a terminal that draws links it
+opens `https://github.com/{owner}/{repository}/issues/{number}` with the owner and the repository of
+the remote, which GitHub sends to the pull request where the number is one. `C#1`, `page#12`, a
+number in backticks and a number in a quarantined block are left as text, and so is every number where
+`origin` is not on `github.com`. Selecting a linked number copies the number. The desktop window draws
+a number as text.
 
 ## The end of a turn
 
@@ -177,7 +203,7 @@ that same question and discarded, and a terminal that answers with nothing holds
 its full 80 milliseconds. It happens once a session, before there is a box to type into.
 :::
 
-See [Configuration](../customize/configuration.md#choosing-a-theme) for where the choice is stored
+See [Choosing a theme](../customize/theme.md) for where the choice is stored
 and how to write one of your own.
 
 ## The model picker
@@ -328,7 +354,10 @@ which the list says. A terminal too short for the list loses rows from the middl
 `x` expands the call nearest the top of the view to every line that was kept of its result, up to
 500 lines per result, instead of the few lines the transcript shows by default. Pressing `x` again
 collapses it. The extra lines are cleaned the same way the short view is: control characters are
-replaced and each line is cut to one row.
+replaced and each line is cut to one row. Clicking a call that has more to show does the same for
+that call, and clicking it again collapses it. Clicking a delegate's block opens that delegate's view, as the watch key does. A drag, a double click or a triple click still selects.
+
+In the [info panel](sessions.md#telling-sessions-apart), clicking the model row opens the `/model` picker and clicking the effort row opens the `/effort` picker, clicking the context reading runs `/context`, and clicking a started MCP server lists the servers as `/mcp` does. Clicking the Files heading or the count under it opens the files view that `/diff` draws. In that view, clicking a file in the list highlights it, clicking the `x` at the right end of its heading row leaves the view, clicking the previous or next control above its edits steps between them, and the wheel scrolls the list or the edits, whichever the pointer is over. Clicking the permission mode under the box cycles it, as the key does, and clicking the panel's last row, which names the key that hides it, hides the panel. Clicking in the text of the prompt box puts the caret there. In the `/effort`, `/config` and `/theme` pickers, clicking a row moves the cursor to it and clicking it again takes it, as Enter does.
 
 `v` opens the transcript in your editor. What goes is the rows as they are drawn, margins and all,
 so untrusted content is marked in the file exactly the way it is marked on the screen. It is written
@@ -342,7 +371,8 @@ grepping the lot.
 **Dragging with the mouse** copies from the pane the press landed in: the transcript, the info
 panel, the prompt box or the footer. The selection stops at that pane's edge, so a drag down the
 transcript does not take the panel's text on every row. A press between panes starts nothing, and
-closing the panel or resizing the terminal drops a selection held in it.
+closing the panel or resizing the terminal drops a selection held in it. Double-click selects a word, triple-click a row, and dragging on from
+either grows the selection by words or rows. Shift-click moves the end of the selection you hold. A paragraph the screen wrapped copies as one line, with a space where it was cut and no line break.
 
 **Nothing comes back.** A transcript is a record of what happened, and a record you can edit back
 into the session is not one. No later turn reads that file, and no path in your workspace gains

@@ -88,7 +88,7 @@ fn constant(id: &str, catalogs: &[Catalog], from: &[&Catalog]) -> String {
         .join(", ");
 
     format!(
-        "\n#[allow(dead_code)]\npub fn {}() -> &'static str {{\n    \
+        "\n#[allow(dead_code, reason = \"every message in the catalog is generated, used or not\")]\npub fn {}() -> &'static str {{\n    \
          const TEXT: [&str; {}] = [{table}];\n    TEXT[crate::locale() as usize]\n}}\n",
         snake_case(id),
         catalogs.len()
@@ -126,10 +126,10 @@ fn structure(id: &str, catalogs: &[Catalog], from: &[&Catalog], args: &[(String,
         .collect::<String>();
 
     let mut out = format!(
-        "\n#[allow(dead_code)]\npub struct {name}<{parameters}> {{\n{fields}}}\n\n\
-         #[allow(dead_code)]\nimpl<{bounds}> {name}<{parameters}> {{\n    \
+        "\n#[allow(dead_code, reason = \"every message in the catalog is generated, used or not\")]\npub struct {name}<{parameters}> {{\n{fields}}}\n\n\
+         #[allow(dead_code, reason = \"every message in the catalog is generated, used or not\")]\nimpl<{bounds}> {name}<{parameters}> {{\n    \
          // A locale that says the same thing without one of the arguments leaves it unread.\n    \
-         #[allow(unused_variables)]\n    \
+         #[allow(unused_variables, reason = \"a locale that says it without an argument leaves it unread\")]\n    \
          pub fn render(self) -> String {{\n        let mut out = String::new();\n"
     );
     for (arg, selects) in args {
@@ -179,6 +179,15 @@ fn render(value: &Value, language: &str, indent: usize) -> String {
     // A select whose only variant is the default decides nothing, so it reads the count for
     // display and never asks which category it is in.
     if others.is_empty() {
+        return append(&variants[*default].parts, &pad);
+    }
+
+    // Nor does a select whose variants all say the same. The reference may state the forms a
+    // translation needs and say them alike where its own language does not tell them apart.
+    if others
+        .iter()
+        .all(|variant| variant.parts == variants[*default].parts)
+    {
         return append(&variants[*default].parts, &pad);
     }
 
@@ -319,6 +328,56 @@ mod tests {
         );
     }
 
+    /// The reference may state the forms of a count and say them alike, where its language does not
+    /// tell them apart and a translation's does. What is generated for the reference is the text
+    /// once, with no choice among equal branches, and the translation keeps its own forms. A select
+    /// in which any form differs from the default is still chosen between, since a language that
+    /// has that form needs it.
+    ///
+    /// Rejects: an `if` over variants that say the same, which clippy refuses in the generated
+    /// code, a translation that loses its own forms because the reference's are alike, and a
+    /// collapse that looks at only some of the variants, which drops `y` from `[one] x`, `[few] y`,
+    /// `*[other] x` and from `[one] y`, `[few] x`, `*[other] x`.
+    #[test]
+    fn a_select_whose_forms_say_the_same_is_generated_as_that_text() {
+        const ALIKE: &str =
+            "done = { $count ->\n    [one] +{ $count } done\n   *[other] +{ $count } done\n    }\n";
+        const ALIKE_IN_FRENCH: &str = "done = { $count ->\n    [one] +{ $count } terminée\n   *[other] +{ $count } terminées\n    }\n";
+        let catalogs = vec![catalog("en-US", ALIKE), catalog("fr", ALIKE_IN_FRENCH)];
+        let generated = messages(&catalogs, &catalogs[0]);
+
+        let english = arm(&generated, "EnUs");
+        assert!(
+            !english.contains("category") && !english.contains("if "),
+            "alike forms were still chosen between:\n{english}"
+        );
+        assert!(
+            english.contains(r#"out.push_str(" done")"#),
+            "the text was not generated:\n{english}"
+        );
+        let french = arm(&generated, "Fr");
+        assert!(
+            french.contains(r#"category("fr", count.get())"#)
+                && french.contains(r#"out.push_str(" terminée")"#)
+                && french.contains(r#"out.push_str(" terminées")"#),
+            "the translation lost one of its own forms:\n{french}"
+        );
+
+        // One form that differs, first or last of the variants that are not the default, keeps the
+        // choice and the form.
+        for differing in [
+            "done = { $count ->\n    [one] x\n    [few] y\n   *[other] x\n    }\n",
+            "done = { $count ->\n    [one] y\n    [few] x\n   *[other] x\n    }\n",
+        ] {
+            let catalogs = vec![catalog("en-US", differing)];
+            let english = arm(&messages(&catalogs, &catalogs[0]), "EnUs");
+            assert!(
+                english.contains("if ") && english.contains(r#"out.push('y')"#),
+                "a form that differs was dropped from {differing:?}:\n{english}"
+            );
+        }
+    }
+
     /// A language nothing writes a plural rule for would have its select formed by another
     /// language's rule, so the build refuses it. A catalog that only has plain messages, or whose
     /// language has a rule, is let through.
@@ -363,5 +422,35 @@ mod tests {
             generated.contains(r#"["hello", "hello"]"#),
             "the omitting locale's slot is not the reference's text:\n{generated}"
         );
+    }
+
+    /// The generated code silences `dead_code` on every message and `unused_variables` on the
+    /// arguments a locale leaves unread. It is compiled with the rest of the crate, so
+    /// `clippy::allow_attributes_without_reason` reads it, once for each of the thousands of
+    /// messages. No source file holds these attributes, so the check of the source files
+    /// cannot see them, and a message with arguments and one without take different paths here.
+    #[test]
+    fn every_allow_the_generated_code_carries_gives_a_reason() {
+        let catalogs = vec![
+            catalog("en-US", &format!("greeting = hello\n{ROUNDS}")),
+            catalog("fr", ROUNDS_IN_FRENCH),
+        ];
+        let generated = messages(&catalogs, &catalogs[0]);
+
+        let allows: Vec<&str> = generated
+            .match_indices("#[allow(")
+            .map(|(at, _)| generated[at..].lines().next().expect("a line"))
+            .collect();
+        assert!(
+            allows.len() >= 4,
+            "a message and a message with arguments generate four, so the generator changed what \
+             it writes and this test reads the wrong text:\n{generated}"
+        );
+        for allow in allows {
+            assert!(
+                allow.contains(", reason = \"") && allow.ends_with("\")]"),
+                "the generated code allows a lint with no reason: {allow}"
+            );
+        }
     }
 }

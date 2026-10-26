@@ -180,7 +180,7 @@ pub(crate) fn start(words: &[String]) -> ExitCode {
             );
         }
     };
-    if let Some(ended) = crate::import::before_the_session(&mut config) {
+    if let Some(ended) = crate::import::before_the_session(&mut config, None) {
         return ended;
     }
     let Some(roster) = Roster::writable() else {
@@ -297,12 +297,11 @@ fn ensure_supervisor(roster: &Roster, program: &std::path::Path) {
 /// terminal holds open.
 #[cfg(unix)]
 fn supervisor_command(program: &std::path::Path) -> std::process::Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "this program's own executable: every caller passes \
-                      `std::env::current_exe()`"
-    )]
-    let mut command = std::process::Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
     command.arg("__bg-supervisor").current_dir("/");
     command
 }
@@ -315,12 +314,11 @@ pub(crate) fn host_command(
     directory: Option<&std::path::Path>,
     mode: Mode,
 ) -> std::process::Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "this program's own executable: every caller passes \
-                      `std::env::current_exe()`"
-    )]
-    let mut command = std::process::Command::new(program);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
     command.arg("__bg-host").arg(id).arg(mode.word());
     if let Some(directory) = directory {
         command.current_dir(directory);
@@ -388,7 +386,7 @@ pub(crate) fn mode_line(mode: Mode) -> String {
         Mode::AcceptEdits => t!(mode_accept_edits),
         Mode::Plan => t!(mode_plan),
     };
-    t!(bg_mode, mode = words).to_string()
+    t!(bg_mode, mode = words)
 }
 
 /// Whether a background session is running under `id`, the id of a session record (BG-9).
@@ -430,6 +428,21 @@ fn running(typed: &str, wake: Wake<'_>) -> Result<(Roster, Seen, bool), ExitCode
     match roster.find(typed) {
         Ok(seen) if seen.live => Ok((roster, seen, false)),
         Ok(seen) if matches!(seen.state(), State::Stopped | State::Interrupted) => {
+            // A terminal that resumed the record while the session was stopped still holds it, and
+            // a process started now would write it as well (SESSION-38). Said before anything is
+            // started, and whether or not this is a terminal.
+            if bravebot_session::sessions::is_open_elsewhere(
+                std::path::Path::new(&seen.job.directory),
+                &seen.job.id,
+            ) {
+                return Err(fail(
+                    Ending::Failed,
+                    bravebot_session::sessions::Held::Open {
+                        id: seen.job.id.clone(),
+                    }
+                    .refusal(),
+                ));
+            }
             let name = shown(&seen.job.name);
             let interrupted = seen.state() == State::Interrupted;
             if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
@@ -587,7 +600,10 @@ fn talk(roster: &Roster, seen: &Seen) -> ExitCode {
 
 /// Whether a line typed in an attached terminal leaves the session running and goes no further
 /// than this process (BG-9).
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only the unix attach loop calls it")
+)]
 fn leaves(line: &str) -> bool {
     line.trim() == "/detach"
 }
@@ -599,7 +615,10 @@ fn talk(_roster: &Roster, _seen: &Seen) -> ExitCode {
 
 /// The text in `pending` that is whole, drawn with control characters pictured except the line
 /// break, which stays one. An incomplete character at the end is kept for the next read.
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(
+    not(unix),
+    allow(dead_code, reason = "only the unix attach loop calls it")
+)]
 fn drawable(pending: &mut Vec<u8>) -> String {
     let whole = match std::str::from_utf8(pending) {
         Ok(text) => text.len(),
@@ -734,8 +753,7 @@ fn state_in_words(seen: &Seen) -> String {
                 Held::Question => t!(sessions_held_question),
                 Held::Message => t!(sessions_held_message),
             }
-        )
-        .to_string(),
+        ),
         (State::NeedsInput, None) => t!(sessions_state_needs_input_unnamed).to_string(),
         (State::Idle, _) => t!(sessions_state_idle).to_string(),
         (State::Stopped, _) => t!(sessions_state_stopped).to_string(),

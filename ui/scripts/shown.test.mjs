@@ -222,7 +222,11 @@ const CONDITIONAL = {
   },
   output: {
     request: CASES.output.request,
-    phrases: ['The planner has not seen this'],
+    phrases: ['The planner has not seen this', '2 characters in this text draw as nothing'],
+  },
+  vet: {
+    request: CASES.vet.request,
+    phrases: ['1 character in this text draws as nothing'],
   },
   // The sentences that say what a yes does come after the last token in their cards.
   exposure: { request: CASES.exposure.request, phrases: ['Keeping it back keeps this file’s text from the model'] },
@@ -238,6 +242,25 @@ test('the warnings and closing sentences no case token sits in are rows the card
       assert.equal(holding.length, 1, `${name}: "${phrase}" is drawn once\n${markup}`)
       assert.equal(holding[0].deciding, 'all', `${name}: "${phrase}" is drawn outside every row the card marks as deciding\n${markup}`)
     }
+  }
+})
+
+test('an output or vetted read the agent sent no sentence for says nothing about characters that draw as nothing', () => {
+  for (const kind of ['output', 'vet']) {
+    for (const [hidden, hiddenNote] of [[undefined, undefined], [0, null]]) {
+      const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hidden, hiddenNote }))
+      assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: a count of ${hidden} drew the sentence\n${markup}`)
+      assert.ok(!markup.includes('hidden-characters'), `${kind}: a count of ${hidden} drew the row\n${markup}`)
+    }
+  }
+})
+
+test('the sentence the agent sent is drawn as sent, with no wording of the card’s own', () => {
+  for (const kind of ['output', 'vet']) {
+    const note = 'Zq9 sentence the agent worded, in whatever language'
+    const markup = draw(ENTRY[kind]({ ...CASES[kind].request, hiddenNote: note }))
+    assert.equal(texts(markup).filter((run) => run.text === note && run.deciding === 'all').length, 1, `${kind}: the sentence is drawn once, as a deciding row\n${markup}`)
+    assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: the card put words of its own beside the agent's\n${markup}`)
   }
 })
 

@@ -24,9 +24,13 @@ governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/carry.rs
   - crates/agent/src/workspace/checkouts.rs
+  - crates/agent/src/workspace/error.rs
   - crates/agent/src/workspace/reach.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -38,6 +42,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/core/src/trust.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/checkouts_command.rs
   - crates/tui/src/status.rs
@@ -59,9 +64,12 @@ working directory, and a checkout is always one a delegate was given.
 
 Part of this file is built. It is a design, written to be agreed before the work starts, and each
 clause says how much of it is built. A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)),
-the driver makes it ([CHECKOUT-4](#CHECKOUT-4), [CHECKOUT-5](#CHECKOUT-5)), the delegate works in
-it ([CHECKOUT-7](#CHECKOUT-7)), and a checkout nothing was done in is removed
-([CHECKOUT-15](#CHECKOUT-15)), and a definition can ask for one ([CHECKOUT-2](#CHECKOUT-2)).
+and for the working directory's uncommitted changes to be carried into it
+([CHECKOUT-23](#CHECKOUT-23)), the driver makes it ([CHECKOUT-4](#CHECKOUT-4),
+[CHECKOUT-5](#CHECKOUT-5)), a person's own setup command runs in it
+([CHECKOUT-22](#CHECKOUT-22)), the delegate works in it ([CHECKOUT-7](#CHECKOUT-7)), and a
+checkout nothing was done in is removed ([CHECKOUT-15](#CHECKOUT-15)), and a definition can ask for
+one ([CHECKOUT-2](#CHECKOUT-2)).
 The driver records what was written in a checkout, and beside the report names the paths the
 planner typed and counts the writes made through a reference ([CHECKOUT-13](#CHECKOUT-13),
 [CHECKOUT-18](#CHECKOUT-18)), `/status` lists each checkout the session has
@@ -96,9 +104,10 @@ and a rewind puts back what the file tools wrote and nothing a formatter or code
 wrote ([SESSION-19](sessions.md#SESSION-19)).
 
 A spawn can ask for a checkout ([CHECKOUT-1](#CHECKOUT-1)), and so can a definition's `isolation:`
-key ([CHECKOUT-2](#CHECKOUT-2)). The planner is told the paths the delegate typed for what it wrote in a kept
-checkout ([CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session has
-([CHECKOUT-21](#CHECKOUT-21)). The planner brings the files it names back into the working
+key ([CHECKOUT-2](#CHECKOUT-2)). A spawn can have the working directory's uncommitted changes carried
+into it ([CHECKOUT-23](#CHECKOUT-23)). The planner is told the paths the delegate typed for what it
+wrote in a kept checkout ([CHECKOUT-18](#CHECKOUT-18)), and `/status` lists each checkout the session
+has ([CHECKOUT-21](#CHECKOUT-21)). The planner brings the files it names back into the working
 directory with `apply_checkout` ([CHECKOUT-14](#CHECKOUT-14)), and a checkout a delegate wrote in
 stays where it is until a person removes it with `/checkouts remove`
 ([CHECKOUT-15](#CHECKOUT-15)).
@@ -106,10 +115,11 @@ stays where it is until a person removes it with `/checkouts remove`
 ## Asking for one
 
 <a id="CHECKOUT-1"></a>
-### CHECKOUT-1: `isolation` on a spawn is routing, with one value
+### CHECKOUT-1: `isolation` on a spawn is routing, with two values
 
-`spawn_agent` takes `isolation`, whose one value is `checkout`. Any other value is refused, and no
-delegate starts. It is routing for the reason `kind` is ([AGENT-1](tools/spawn-agent.md#AGENT-1)):
+`spawn_agent` takes `isolation`, whose values are `checkout` and `checkout_with_changes`
+([CHECKOUT-23](#CHECKOUT-23)). Any other value is refused, and no delegate starts. It is routing for
+the reason `kind` is ([AGENT-1](tools/spawn-agent.md#AGENT-1)):
 it is a name from a list the driver wrote, and it decides where the delegate's effects land. A
 person could approve it on its own: "this delegate's file tools work in a new checkout of commit
 `abc1234`, and what they write reaches your working directory only as you bring it back".
@@ -133,7 +143,8 @@ A definition asking is refused where a call asking would be, in a checkout
 checkout can be made of the working directory, and no delegate starts. The refusal names the
 definition, since the call that met it may not have asked. The planner is told, beside each
 definition's description, which ones work in a checkout, since such a delegate's report is about
-the last commit and not the tree the planner may have just edited.
+the last commit and not the tree the planner may have just edited, unless the call carries the
+working directory's changes into it ([CHECKOUT-23](#CHECKOUT-23)).
 
 Where a later definition of the same name replaces an earlier one
 ([DELEGATE-20](delegation.md#DELEGATE-20)), the key is met as the kind is: either one asking gives
@@ -188,7 +199,7 @@ checkout starts its own delegates in that checkout, readers among them, and aski
 checkout there is refused.
 
 **Why not a reader.** A reader writes nothing, so a checkout of its own separates it from nobody,
-and it would be shown HEAD's tree in place of the tree the person has. A reader a delegate in a
+and a reader started without one reads the working directory as the person has it. A reader a delegate in a
 checkout starts reads that checkout, which is the tree the delegate that started it is working in.
 
 **Why one level.** A checkout made from a checkout would need its repository opened through a
@@ -202,6 +213,113 @@ share it.
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_is_refused_another`
 `verified-by: bravebot_agent::turn::a_delegate_in_a_checkout_starts_its_own_delegates_in_that_checkout`
 `verified-by: bravebot_agent::workspace::a_checkout_is_not_made_from_a_checkout`
+
+<a id="CHECKOUT-23"></a>
+### CHECKOUT-23: a spawn may ask for the working directory's uncommitted changes to be carried into the checkout
+
+`isolation: checkout_with_changes` gives the delegate a checkout as `checkout` does, then puts into
+it the changes the working directory has when the checkout is made. It is routing for the reason
+`checkout` is: a name from a list the driver wrote, deciding which tree the delegate's file tools
+and programs see. A person could approve it on its own: "this delegate works in a new checkout of
+commit `abc1234` holding the changes your working directory has now". Only a call asks. A
+definition's `isolation:` key does not, since a definition says where a delegate works and not what
+tree the session has. A call that [CHECKOUT-1](#CHECKOUT-1) or [CHECKOUT-3](#CHECKOUT-3) would refuse
+for `checkout` is refused for this.
+
+The paths are, first, every path the driver recorded a write to in the working directory by a name
+that was typed ([CHECKOUT-14](#CHECKOUT-14)), and second, where a status over the working directory
+is answered on the terms `read_git` answers one ([GIT-11](tools/read-git.md#GIT-11)), the paths it
+lists as changed. The recorded paths are carried first, so where a bound is reached the paths left
+are the ones only the status listed. Moving the working directory forgets the recorded names, which
+are relative to the root they were written under. A path the status lists as deleted that the
+working directory no longer holds as a file is taken out of the checkout. One it lists as deleted
+that the working directory still holds, as `git rm --cached` leaves one, is carried. Where the
+status is not answered only the recorded paths are carried. A name that is not UTF-8 is never
+carried: the status leaves it out and says it left something out, and a recorded name is text because
+the planner typed it. The file whose name is the lossy rendering of such a name is another file, and
+is carried as itself.
+
+No path is chosen by comparing bytes, and no file is read for what it holds: each goes from the
+working directory's file to the checkout's as bytes the driver does not hold. A file is opened
+without following a link in its last place and without waiting for a writer on a pipe, and is
+refused unless it is the file the walk down to it examined, so a link or a pipe put in its place
+meanwhile is not read.
+
+A file is carried with the label its path has in the map when its bytes are copied. The rules under
+the working directory are copied to the checkout again in the capture that copies the bytes, so a
+file another run wrote untrusted in the working directory after the checkout was made is untrusted
+in the checkout too. Deletions are made before files are written, so a directory the working
+directory replaced with a file is carried as that file.
+
+A path is not carried, and is named with the reason, where a deny rule covers reading it, where a
+link stands in its place or on the way to it in the working directory, where it is not a plain file
+or is over 16 MiB, where its name is one a checkout refuses to hold ([CHECKOUT-4](#CHECKOUT-4)) or a
+link or a directory of another kind stands in its place in the checkout, and where the checkout has
+been given 1,000 files or 64 MiB, which are counted and not listed. The checkout keeps what HEAD has
+at such a path.
+
+Each file is written as [CHECKOUT-6](#CHECKOUT-6) writes one, readable by its owner alone, and
+runnable by it where the working directory's file is. It is written beside its place and moved into
+it, so a copy that fails, or that finds the file has grown past the limit it was checked against,
+leaves what the checkout had, and the directories it made are removed again. The checkout's index is HEAD's, so git in the checkout reports each
+carried file as changed. Nothing is asked of the person and nothing is written in the working
+directory: every byte comes from a file the session may already read and goes to a checkout the
+driver made. The trail records the carry beside the checkout's making
+([CHECKOUT-19](#CHECKOUT-19)). A program the delegate runs in the checkout counts as run against the
+turn's changes ([TURN-4](turns.md#TURN-4)) where the carry put a file into the checkout or took one
+out of it, and counts in full however many paths were left as HEAD has them. Where the carry changed
+nothing, the checkout holds what `checkout` gives and a program run there does not count.
+
+The delegate is told which paths were carried, which were taken out, which were not and why, and
+whether the status was read, left something out or was not answered, in the driver's words.
+The planner is told the same in the answer to the spawn, once where every checkout of a fan-out was
+given the same and for each checkout otherwise. A path is named only where it is short and made of
+plain characters, and the rest are counted. The status is read once for a call.
+
+**Why the status as well as the record.** The record holds what the session's tools wrote. It does
+not hold what the person changed in an editor or what a formatter wrote, and a delegate checking
+the tree without them reports on a tree nobody has.
+
+**Why the status only where the tree is trusted.** A status hashes every file, which is the driver
+branching on each of them, so it is read where the map vouches for the whole tree. A name the
+driver recorded was typed by a planner holding nothing untrusted, so carrying it branches on
+nothing.
+
+**Why nothing is asked.** The checkout is the driver's own and the bytes are a session's own files,
+so the question would be one more step with nothing for the person to decide that the planner's
+request has not already put to them. What is brought back is still asked about
+([CHECKOUT-14](#CHECKOUT-14)).
+
+**Why not a copy of the working tree.** A bulk copy walks names nobody vouched for with no bound on
+size ([Roads not taken](#roads-not-taken)). This is a named, bounded set of paths, each held to the
+rules above.
+
+Built. The delegate's prompt and the answer to the spawn are made from what the carry recorded for
+each checkout, and the carry holds one capture across copying the rules and the bytes.
+
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_with_changes_holds_the_tree_the_planner_has`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_carries_only_recorded_writes_where_the_status_is_not_answered`
+`verified-by: bravebot_agent::turn::a_checkout_with_changes_leaves_a_file_a_later_rule_covers_and_says_so`
+`verified-by: bravebot_agent::turn::each_checkout_of_a_fan_out_is_given_the_changes`
+`verified-by: bravebot_agent::turn::a_spawn_asking_for_a_checkout_it_may_not_have_starts_nothing`
+`verified-by: bravebot_agent::workspace::the_changes_carried_into_a_checkout_read_as_the_working_directorys_status_does`
+`verified-by: bravebot_agent::workspace::a_file_distrusted_after_the_checkout_was_made_is_carried_untrusted`
+`verified-by: bravebot_agent::workspace::a_path_that_cannot_be_carried_is_named_with_why`
+`verified-by: bravebot_agent::workspace::a_file_whose_name_is_not_text_is_left_out_and_its_lossy_lookalike_is_carried_as_itself`
+`verified-by: bravebot_agent::workspace::a_checkout_is_given_no_more_files_than_its_bound`
+`verified-by: bravebot_agent::workspace::a_carried_script_is_runnable_by_its_owner_alone_and_nothing_else_is`
+`verified-by: bravebot_agent::workspace::moving_the_working_directory_forgets_the_writes_recorded_under_the_old_one`
+`verified-by: bravebot_agent::workspace::carry::a_file_put_in_the_place_since_the_walk_is_not_read`
+`verified-by: bravebot_agent::workspace::carry::a_walk_refuses_a_link_wherever_it_stands`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_holding_the_changes_counts_as_the_turns_own`
+`verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_a_checkout_given_none_of_the_changes_leaves_the_change_reported_as_never_built`
+`verified-by: bravebot_agent::workspace::a_directory_replaced_by_a_file_is_carried_and_a_file_replaced_by_a_directory_is_taken_out`
+`verified-by: bravebot_agent::git::a_carried_file_replaces_the_checkouts_and_is_owner_only`
+`verified-by: bravebot_agent::git::a_carried_file_is_refused_where_something_else_stands_in_its_way`
+`verified-by: bravebot_agent::git::a_carried_file_that_fails_part_way_leaves_what_the_checkout_had`
+`verified-by: bravebot_agent::git::an_uncarried_file_goes_with_the_directories_only_it_held`
+`verified-by: bravebot_agent::delegate::a_carried_summary_names_plain_paths_and_counts_the_rest`
+`verified-by: bravebot_agent::tools::the_isolation_field_offers_a_checkout_with_the_working_directorys_changes`
 
 ## Making one
 
@@ -420,7 +538,8 @@ What follows from the root follows unchanged. A command line starts at the check
 ([HOOK-4](hooks.md#HOOK-4)), and a relative path means a path in the checkout.
 
 The delegate is told, in the driver's words, which commit the checkout holds, that changes the
-person has not committed are not in it, which paths a deny rule left out, that a `git fetch` in
+person has not committed are not in it except those the call carried in
+([CHECKOUT-23](#CHECKOUT-23)), which paths a deny rule left out, that a `git fetch` in
 it updates the refs of the working directory and of every other checkout, and that it shares one
 stash with them, so it is not to use `git stash` ([CHECKOUT-5](#CHECKOUT-5)).
 
@@ -432,9 +551,11 @@ for it. With or without `run`, it is told not to ask a delegate in a checkout to
 **Why reach without a person opening it.** On grounds like those the session's own directory is
 reached on ([TRUST-16](trust-map.md#TRUST-16)): it was created here and is owned by this account.
 That directory is also empty, and a checkout is not. What stands in for that is that a checkout
-holds only what the driver wrote into it from a `.git` the map trusts in full, and each file in it
-carries the label the same path has in the working directory ([CHECKOUT-8](#CHECKOUT-8)), so the
-reach brings no file into the session that nobody has an answer about.
+holds what the driver wrote into it from a `.git` the map trusts in full, and where the call carried
+the working directory's changes the files it copied from there ([CHECKOUT-23](#CHECKOUT-23)), and
+each file in it carries the label the same path has in the working directory
+([CHECKOUT-8](#CHECKOUT-8)), so the reach brings no file into the session that nobody has an answer
+about.
 
 Built. The overlap refusals are made before anything is created. The delegate is told the commit,
 that changes not committed are not in it, the paths left out, and that its refs and its stash are
@@ -952,7 +1073,7 @@ in the checkout wrote, and nothing the planner does turns on it.
 `verified-by: bravebot_agent::turn::delegate_end::a_checkout_that_could_not_be_removed_is_named_with_its_place_and_commit`
 
 <a id="CHECKOUT-19"></a>
-### CHECKOUT-19: the trail records each checkout made, applied from and removed
+### CHECKOUT-19: the trail records each checkout made, carried into, applied from and removed
 
 Each is an event with the checkout's path, and one a delegate's run took keeps that run's number
 ([TRACE-4](trace.md#TRACE-4)). The commit and the checkout's number are not in it, since the
@@ -960,12 +1081,15 @@ trail's fields are gate names, capabilities, labels, paths, hosts and slot ids
 ([TRACE-2](trace.md#TRACE-2)). The session record holds both against the path.
 
 Built for the making and the removal, whether the delegate's ending or `/checkouts remove` removed
-it. A checkout a delegate's own run made for a delegate of its own carries that run's number, and
+it. Carrying the working directory's changes into a checkout ([CHECKOUT-23](#CHECKOUT-23)) is
+recorded as `carried changes into <path>`, once for each checkout that was given a file or had one
+taken out. A checkout a delegate's own run made for a delegate of its own carries that run's number, and
 one the turn made carries none. Applying from a checkout is recorded as `applied from <path>`,
 once for each `apply_checkout` call that brought a file back, and not for one that brought none
 ([CHECKOUT-14](#CHECKOUT-14)).
 
 `verified-by: bravebot_agent::turn::the_trail_records_a_checkout_made_and_removed_with_its_path`
+`verified-by: bravebot_agent::turn::a_delegate_given_a_checkout_with_changes_holds_the_tree_the_planner_has`
 `verified-by: bravebot_agent::turn::the_trail_records_no_removal_for_a_checkout_that_was_kept_and_holds_neither_commit_nor_number`
 `verified-by: bravebot_agent::turn::a_checkout_a_delegate_made_is_recorded_under_that_delegates_number`
 `verified-by: bravebot_tui::app::removing_a_checkout_is_recorded_with_its_path_and_a_kept_one_is_not`
@@ -1012,12 +1136,47 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 `verified-by: bravebot_tui::status::each_checkout_the_session_has_is_a_line_of_its_own`
 `verified-by: bravebot_tui::status::a_session_with_no_checkout_reports_none`
 
+<a id="CHECKOUT-22"></a>
+### CHECKOUT-22: a person's own setup command runs in each checkout as it is made
+
+The `checkout-made` moment ([HOOK-2](hooks.md#HOOK-2)) fires the hooks a person declared for it in
+their own `hooks.json` ([HOOK-1](hooks.md#HOOK-1)), once for each checkout the driver writes for a
+delegate. It fires from that delegate's run, in the checkout's root, before the delegate's first
+request, and the hook is handed the checkout's directory and the working directory it was made from
+([HOOK-5](hooks.md#HOOK-5)). A checkout holds HEAD's tracked files and nothing the repository
+ignores, so a setup command is where dependencies are installed there and a file such as `.env` is
+copied in from the working directory. No file in a checkout or in the working directory declares
+one, so a project cannot supply the command. A relative name in the person's own declaration is
+looked up in the checkout all the same ([HOOK-4](hooks.md#HOOK-4)).
+
+A setup that goes wrong is said to the person ([HOOK-7](hooks.md#HOOK-7)) and decides nothing
+([HOOK-6](hooks.md#HOOK-6)): the delegate runs in the checkout as it stands. A hook is a program
+started in the checkout whose writes the file tools do not record, so a checkout it ran in is kept
+as one a delegate started a program in is ([CHECKOUT-15](#CHECKOUT-15)), and a rewind records the gap
+([CHECKOUT-17](#CHECKOUT-17)). A delegate started inside a checkout works in the checkout its parent
+was given ([CHECKOUT-3](#CHECKOUT-3)), which is not made again, so it runs no setup.
+
+**Why a person's declaration and not the project's.** A setup command read from a file in the
+repository would be a program that arrived with a clone, run unconfined with the person's access
+([HOOK-1](hooks.md#HOOK-1), [HOOK-4](hooks.md#HOOK-4)).
+
+Built.
+
+`verified-by: bravebot_agent::turn::a_hook_runs_in_the_checkout_made_for_a_delegate_before_its_first_round`
+`verified-by: bravebot_agent::turn::a_delegate_given_no_checkout_fires_no_checkout_hook`
+`verified-by: bravebot_agent::turn::a_fan_out_into_checkouts_fires_the_hook_once_for_each_checkout_and_in_that_one`
+`verified-by: bravebot_agent::turn::a_delegate_started_inside_a_checkout_does_not_fire_the_hook_again`
+`verified-by: bravebot_agent::turn::a_checkout_a_hook_ran_in_is_kept_and_one_nothing_ran_in_is_not`
+`verified-by: bravebot_agent::turn::a_checkout_hook_that_fails_is_said_and_its_delegate_still_runs`
+`verified-by: bravebot_agent::turn::a_setup_that_cannot_start_or_outstays_its_bound_leaves_the_delegate_running_in_a_kept_checkout`
+
 ## Roads not taken
 
 - **The driver runs `git worktree add`.** git runs the programs the repository names
   ([CHECKOUT-5](#CHECKOUT-5)).
 - **A copy of the working tree**, by a copy-on-write clone or a plain copy. It would carry the
-  person's uncommitted changes. It also walks names nobody vouched for with no bound on size,
+  person's uncommitted changes, which [CHECKOUT-23](#CHECKOUT-23) carries by name. It also walks
+  names nobody vouched for with no bound on size,
   skipping `target/` or `node_modules` would be a decision made by names in a tree nobody vouched
   for, and the programs a delegate runs would have no repository.
 - **Files with no `.git`.** Nothing would be written into the person's repository, but git fails
@@ -1032,6 +1191,12 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   program in a checkout can run, and `git pull`, `git remote update` or a build script move the
   same refs. A lock on the command's name would cover one way of spelling it, and the working
   directory's refs would still move ([CHECKOUT-5](#CHECKOUT-5)).
+- **A setup command read from a file in the repository.** The command would arrive with a clone
+  ([CHECKOUT-22](#CHECKOUT-22)).
+- **A declared list of ignored files to copy into each checkout.** The driver would write bytes from
+  the working directory into the checkout, so it would have to give them the label of the source
+  path and apply the credential rules to that path first. That is the open question below, which a
+  setup command leaves to the person's own command.
 - **`run` refuses `git stash` in a checkout.** `git rebase --autostash`, `git pull --autostash`, an
   alias or a script stash as well, so a refusal on the command's name would cover one way of
   spelling it ([CHECKOUT-5](#CHECKOUT-5)).
@@ -1047,11 +1212,14 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 - **One prompt for an apply.** A person's yes is bound to one path, so bringing back twenty files is
   twenty questions. One prompt showing every difference could bind one yes per path it showed, as
   the question [PERM-15](permissions.md#PERM-15) asks names every rule it grants.
-- **Uncommitted changes.** A checkout holds HEAD alone. Carrying the working tree's difference into
-  it is possible only where [GIT-11](tools/read-git.md#GIT-11) trusts the whole working tree.
 - **A session whose working directory is a linked worktree.** [GIT-8](tools/read-git.md#GIT-8)
   declines it, so it gets no checkout. Opening a linked worktree from the common directory would
   answer that, and [CHECKOUT-12](#CHECKOUT-12) builds half of it.
+- **The label of an ignored file copied into a checkout.** A file a setup command copies in, such as
+  `.env`, is read under the rule its path has in the checkout ([CHECKOUT-8](#CHECKOUT-8)), which is
+  the working directory's rule for that path and not a label carried from the file it was copied
+  from. Whether a copy keeps its source's label, and whether the credential rules apply to a path
+  they were not asked about when it was written, is not settled.
 - **Removals on apply.** Bringing back a removal needs a removal under the write gate, which no tool
   has.
 - **Whether a desktop session gives checkouts before it can show them.** It gives them and keeps
@@ -1075,8 +1243,38 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
 - **A repository with a filter or an end-of-line conversion gets no checkout**, and that includes
   every repository using LFS.
 - **A worker's first build is asked about.** A command vouched for in the working directory is not
-  vouched for in a checkout ([CHECKOUT-10](#CHECKOUT-10)).
+  vouched for in a checkout ([CHECKOUT-10](#CHECKOUT-10)). A setup command installs what the build
+  needs and does not vouch for the build ([CHECKOUT-22](#CHECKOUT-22)).
 - **A write is asked about twice**, once in the checkout and once as it comes back.
+- **A carried file is a candidate again.** `apply_checkout` without `paths` and `/checkouts apply`
+  ask about each file carried into a checkout ([CHECKOUT-23](#CHECKOUT-23)) as well, whether or not
+  the delegate changed it, since the checkout's status lists it and the driver compares no bytes.
+- **The status does not list everything.** A file in a directory that took the place of a tracked
+  file is not listed, and the status says it is complete, so that file is carried only where the
+  planner wrote it by a name it typed. A file a program changed where the status is not answered, or
+  left something out, is not carried ([CHECKOUT-23](#CHECKOUT-23)). The delegate and the planner are
+  told how the status answered.
+- **A run in a checkout counts for the whole turn.** A program a delegate runs in a checkout that was
+  given at least one change counts as run against the turn's changes ([TURN-4](turns.md#TURN-4)),
+  including a change the checkout was not given or the planner wrote after it was made
+  ([CHECKOUT-23](#CHECKOUT-23)).
+- **The first 1,000 files by name are carried.** A status that lists more than that, which is a tree
+  with a build directory nobody ignored, leaves the rest, and the status does not say which of its
+  paths are modified and which are new ([CHECKOUT-23](#CHECKOUT-23)).
+- **A file's size and kind are told to the planner.** Whether a path is carried depends on its size
+  and on whether it is a plain file, never on its bytes, and the reason is in the answer to the spawn
+  even for a path the map distrusts ([CHECKOUT-23](#CHECKOUT-23)).
+- **The open race is closed on Unix alone.** On Windows the file a carry opens is not compared with
+  the one the walk examined, so a link a program puts in its place during the copy is followed
+  ([CHECKOUT-23](#CHECKOUT-23)).
+- **The person is not shown what was carried.** The delegate and the planner are told, and the trail
+  holds the checkout's path, so the person's own screen does not list the files
+  ([CHECKOUT-23](#CHECKOUT-23)).
+- **A recorded write stays recorded.** A file the session wrote and the person has since committed or
+  reverted is carried again as a file that matches HEAD, and counts against the bound
+  ([CHECKOUT-23](#CHECKOUT-23)).
+- **A carried change is unstaged.** The checkout's index is HEAD's, so git in it reports a file the
+  person staged as an unstaged change ([CHECKOUT-23](#CHECKOUT-23)).
 - **A global or system `core.autocrlf` on Unix goes unseen.** It is not read
   ([CHECKOUT-4](#CHECKOUT-4)), so where one is set the checkout holds a file's bytes as stored where
   the person's own git would have written them converted.
@@ -1101,5 +1299,16 @@ it made before it was left, until [CHECKOUT-16](#CHECKOUT-16) is built.
   brought back.
 - **A checker that ran a program keeps its checkout**, since it started a program there
   ([CHECKOUT-15](#CHECKOUT-15)), and a person removes it.
+- **A checkout whose setup hook is declared is always kept**, since the hook is a program started
+  there ([CHECKOUT-22](#CHECKOUT-22)), and a person removes it, though the delegate wrote nothing.
+  It is kept where the hook could not be started as well: the checkout is marked as worked in when
+  a hook is declared for the moment, and not when one starts.
+- **A file a setup hook wrote is not recorded, and is trusted as the path is.** A hook that fetches
+  code writes bytes nobody vouched for under the label the path has, as any file a program drops
+  into a trusted directory has ([TRUST-2](trust-map.md#TRUST-2)).
+- **A file a setup hook wrote that git does not ignore is a candidate to bring back** where the
+  status is read, since the status lists every untracked file ([CHECKOUT-13](#CHECKOUT-13)). A hook
+  that writes a directory of files git does not ignore adds each one to what a person is asked about
+  ([CHECKOUT-14](#CHECKOUT-14)).
 - **On Windows a killed session's checkouts stay** until a person removes them
   ([CHECKOUT-16](#CHECKOUT-16)).

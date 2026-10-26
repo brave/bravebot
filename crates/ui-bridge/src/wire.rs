@@ -214,6 +214,12 @@ pub fn change(change: &Change) -> Value {
 /// null rather than an absent key: a client reading an absent key as "finished, no note"
 /// would draw every in-flight call as complete.
 ///
+/// `shownTarget` is `target` spelled as [`Activity::shown_target`] spells it, so a file's name that
+/// is blank or ends in whitespace is visible where a window draws the line (PROMPT-1). `target`
+/// stays what a window matches a call to its confirmation on. `shownFile` is the same name for a
+/// list of files, with the slot a reference was drawn under and a leading `./` taken off and then
+/// spelled, so a window lists a file once and draws it as the confirmation for it does.
+///
 /// `waitedSeconds` is what the call spent at a model of its own, null for the nearly all of
 /// them that asked none. Whole seconds, as `remainingSeconds` is: what it answers is whether a
 /// slow call was slow because a model was, and that question is not decided in milliseconds.
@@ -221,6 +227,8 @@ pub fn activity(activity: &Activity) -> Value {
     json!({
         "verb": activity.verb,
         "target": activity.target,
+        "shownTarget": activity.shown_target(),
+        "shownFile": activity.shown_file(),
         "why": activity.why,
         "note": activity.note,
         "failed": activity.failed,
@@ -387,6 +395,7 @@ fn said(said: &Said) -> Value {
                 | Composed::Summary
                 | Composed::Imported
                 | Composed::Skill { .. }
+                | Composed::SkillNamed { .. }
                 | Composed::SkillKept { .. }
                 | Composed::Notice
                 | Composed::MessageSent { .. }
@@ -457,6 +466,7 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "intent": intent(request.intent),
         "untrusted": request.untrusted,
         "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label})),
@@ -506,11 +516,15 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         .map(|stage| {
             json!({
                 "program": stage.program,
-                "resolved": stage.resolved,
+                "resolved": stage.resolved.display().to_string(),
                 // The file the step runs after the path that starts it, which is what the
                 // terminal shows under the step.
                 "binary": stage.binary(),
-                "startedAs": stage.started_as,
+                // The same file spelled as the terminal draws it, so a path ending in whitespace
+                // or holding a byte that is not text is not drawn as another. The window draws
+                // this and never `binary`, `resolved` or `startedAs`.
+                "shownBinary": bravebot_agent::confirm::shown_binary(stage),
+                "startedAs": stage.started_as.display().to_string(),
                 "args": stage.args,
                 "display": stage.as_written(),
             })
@@ -521,6 +535,8 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "request": id,
         "stages": stages,
         "directory": request.directory(),
+        // Spelled as `shownWrites` is.
+        "shownDirectory": request.shown_directory(),
         // The line as the planner spelled it, which is not what an approval binds to: two
         // spellings that compile to the same plan are one endorsement. It is sent because a
         // reader with only the plan has nothing to compare it against, and a compiler that got
@@ -530,7 +546,21 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         // with no line from a build that does not send the field at all.
         "line": request.plan.line,
         "plan": request.plan.steps.display(),
-        "writes": request.plan.writes,
+        "writes": request
+            .plan
+            .writes
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
+        // Each path spelled as the other front ends draw it, so a path ending in whitespace or
+        // holding a character that draws as nothing is not drawn as another. The window draws
+        // this and never `writes`, as it draws `shownPath` and never `path`.
+        "shownWrites": request
+            .plan
+            .writes
+            .iter()
+            .map(|path| bravebot_agent::confirm::shown_path(path))
+            .collect::<Vec<_>>(),
         "stdin": request.stdin,
         "releasesPrivate": request.releases_private(),
         // The credential scopes and toolchain lists the planner asked this line to be lent, by
@@ -558,7 +588,7 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "vouches": request
             .would_vouch_for()
             .iter()
-            .map(|command| json!({ "program": command.program, "args": command.args, "display": command.display() }))
+            .map(|command| json!({ "program": command.program.display().to_string(), "args": command.args, "display": command.display() }))
             .collect::<Vec<_>>(),
         // What the stages are confined to, in the sentences the agent worded for it, or null where
         // the turn does not confine them. Worded once in the agent so no front end carries its own
@@ -569,6 +599,12 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 .directories
                 .iter()
                 .map(|directory| directory.display().to_string())
+                .collect::<Vec<_>>(),
+            // Spelled as `shownWrites` is.
+            "shownDirectories": confined
+                .directories
+                .iter()
+                .map(|directory| bravebot_agent::confirm::shown_path(directory))
                 .collect::<Vec<_>>(),
             "sentences": confined.sentences(),
         })),
@@ -587,6 +623,10 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
 /// [`crate::turn::BridgeConfirmer::confirm_read_output`] cannot fall back to anything
 /// except no.
 ///
+/// `output` has each character that draws as nothing already written out, `hidden` counts them and
+/// `hiddenNote` is the sentence that says so, in the catalog's words, or null where there are none.
+/// The agent made all three, so the front end draws what it is sent and reads none of it.
+///
 /// It is released for a screen and stops there. Nothing here may be fed back to the model
 /// by the front-end; approving is how it reaches the planner, and that path runs through
 /// the kernel.
@@ -596,6 +636,8 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
         "command": request.command,
         "reference": request.reference,
         "lines": request.lines,
+        "hidden": request.hidden,
+        "hiddenNote": bravebot_approval::hidden_note(request.hidden),
         "output": request.output,
         "label": request.label,
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
@@ -641,6 +683,7 @@ pub fn fetch_request(id: u64, request: &FetchRequest) -> Value {
         "request": id,
         "url": request.url,
         "host": request.host,
+        "redirectedFrom": request.redirected_from,
         "ambient": request
             .ambient_authority()
             .iter()
@@ -854,6 +897,7 @@ pub fn exposure_request(id: u64, request: &ExposureRequest) -> Value {
     json!({
         "request": id,
         "path": request.path,
+        "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "credentials": request.credentials,
         "summary": request.summary(),
     })
@@ -883,18 +927,27 @@ pub fn host_request(id: u64, request: &HostRequest) -> Value {
 /// `index` travels with every row so a selection can be reported back as data rather than
 /// by matching label text, and `key` travels with every prompt so a front-end can tell two
 /// questions apart without reimplementing the rule for what makes them different.
+///
+/// The same goes for where a question stands and whether settling it ends the series (ASK-6):
+/// `place` is the sentence the picker's title uses, null for a series of one, and `last` is the
+/// answer [`Asking::ends_at`] gives. The window puts the questions one at a time and keeps only
+/// which one it is on, so it says the position and ends the series from these and decides neither.
 pub fn ask_request(id: u64, asking: &Asking) -> Value {
+    let total = asking.prompts.len();
     json!({
         "request": id,
         "prompts": asking
             .prompts
             .iter()
-            .map(|prompt| {
+            .enumerate()
+            .map(|(at, prompt)| {
                 json!({
                     "header": prompt.header,
                     "question": prompt.question,
                     "multiple": prompt.multiple,
                     "key": prompt.key,
+                    "place": bravebot_i18n::ask::place(at, total),
+                    "last": asking.ends_at(at),
                     "rows": prompt
                         .rows
                         .iter()
@@ -1004,13 +1057,15 @@ fn vetting(
 
 /// A vetted read put to the person. Where the slot holds a picture or a PDF, `content` is empty
 /// and `picture` names the copy to open, the file's media type and its size, all of them the
-/// driver's (VET-4).
+/// driver's (VET-4). Otherwise `content` has each character that draws as nothing already written
+/// out, and `hidden` and `hiddenNote` count them and say so, as on an output request.
 pub fn vet_request(id: u64, request: &VetRequest) -> Value {
     let picture = request.picture.as_ref().map(|picture| {
         json!({ "path": picture.path.display().to_string(), "media": picture.media,
             "bytes": picture.bytes })
     });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines, "picture": picture,
+        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines,
+        "hidden": request.hidden, "hiddenNote": bravebot_approval::hidden_note(request.hidden), "picture": picture,
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()) })
 }

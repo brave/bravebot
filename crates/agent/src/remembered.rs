@@ -35,7 +35,9 @@
 //! it is, which they read at the write prompt, and never by what was written to it.
 
 use bravebot_core::command::{Route, Spelling};
-use bravebot_core::remembered::{Remembered, RememberedArg, RememberedLine, RememberedStep, Shape};
+use bravebot_core::remembered::{
+    Remembered, RememberedArg, RememberedLine, RememberedStep, Scope, Shape, scopes,
+};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -127,6 +129,21 @@ impl Store {
                         record.record(line, entry.session);
                     }
                 }
+                // One answer, held as the lines it covers. A line this build cannot read leaves the
+                // whole scope out rather than a shorter one in: a scope that covered some of what
+                // the person answered for would be read back as the whole of it. So does a line
+                // that is not one of its group's, since the reading back names the group.
+                Recorded::Scope(entry) => {
+                    if entry.directory.to_path().as_ref() != Some(&self.directory) {
+                        continue;
+                    }
+                    if let Some((scope, session)) = entry
+                        .into_scope()
+                        .filter(|(scope, _)| scopes::holds_only_its_group(scope))
+                    {
+                        record.record_scope(scope, session);
+                    }
+                }
                 // A file outside the directory covers nothing, however it came to be written:
                 // nothing here records one, so an entry naming one was put there by hand.
                 Recorded::File(entry) => {
@@ -172,6 +189,36 @@ impl Store {
         }
     }
 
+    /// Add one scope, answered in the session named, as one entry holding every line it covers.
+    ///
+    /// One entry so that deleting its line from the file takes the whole group back, and so that
+    /// two sessions writing at once cannot leave half of it. Appended and best effort, as
+    /// [`Store::remember`] is.
+    pub fn remember_scope(&self, scope: &Scope, session: &str) {
+        if !may_be_added_to() {
+            return;
+        }
+        let Some(parent) = self.path.parent() else {
+            return;
+        };
+        if crate::home::create_directory(parent).is_err() {
+            return;
+        }
+        let Ok(mut encoded) = serde_json::to_string(&WrittenScope {
+            directory: WrittenPath::of(&self.directory),
+            session: session.to_string(),
+            scope: scope.kind.into(),
+            repository: scope.repository.clone(),
+            lines: scope.lines.iter().map(WrittenLine::from).collect(),
+        }) else {
+            return;
+        };
+        encoded.push('\n');
+        if let Ok(mut file) = crate::home::append_to_file(&self.path) {
+            let _ = file.write_all(encoded.as_bytes());
+        }
+    }
+
     /// Add one file a write may create a credential in, answered in the session named.
     ///
     /// Appended and best effort, as [`Store::remember`] is. A file outside the directory is not
@@ -200,16 +247,80 @@ impl Store {
     }
 }
 
-/// One line of the record, whichever of the two kinds it is.
+/// One line of the record, whichever of the three kinds it is.
 ///
 /// Untagged, because each kind already refuses the other's fields: a line with a `file` is not a
-/// [`Written`], and one with a `line` is not a [`WrittenFile`]. A build that knows only lines reads
-/// a file entry as a line it cannot parse and skips it, which asks.
+/// [`Written`], one with a `line` is not a [`WrittenFile`], and one with a `scope` is neither. A
+/// build that knows only lines reads a file or a scope entry as a line it cannot parse and skips
+/// it, which asks.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Recorded {
     Line(Written),
     File(WrittenFile),
+    Scope(WrittenScope),
+}
+
+/// A scope as it is spelled on disk: the group it names and every line the group expanded to when
+/// the person answered, each spelled as a line is.
+///
+/// The lines are what covers, and the name and the repository are what the reading back says, so
+/// the two have to agree: an entry whose lines are not its group's on its repository covers nothing
+/// ([`scopes::holds_only_its_group`]). A name this build does not know refuses the whole entry, so a
+/// later build's group is asked about rather than read as lines whose purpose this one cannot
+/// state.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WrittenScope {
+    /// The working directory this answer was given in, in full.
+    directory: WrittenPath,
+    /// The session the key was pressed in. Decides nothing.
+    session: String,
+    scope: WrittenScopeKind,
+    repository: String,
+    lines: Vec<WrittenLine>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum WrittenScopeKind {
+    #[serde(rename = "read-pull-requests-and-issues")]
+    ReadPullRequestsAndIssues,
+}
+
+impl From<scopes::Kind> for WrittenScopeKind {
+    fn from(kind: scopes::Kind) -> Self {
+        match kind {
+            scopes::Kind::ReadPullRequestsAndIssues => Self::ReadPullRequestsAndIssues,
+        }
+    }
+}
+
+impl From<WrittenScopeKind> for scopes::Kind {
+    fn from(kind: WrittenScopeKind) -> Self {
+        match kind {
+            WrittenScopeKind::ReadPullRequestsAndIssues => Self::ReadPullRequestsAndIssues,
+        }
+    }
+}
+
+impl WrittenScope {
+    /// The scope this entry holds and the session that answered it, or nothing where any of its
+    /// lines holds a path nobody can name.
+    fn into_scope(self) -> Option<(Scope, String)> {
+        let lines = self
+            .lines
+            .into_iter()
+            .map(WrittenLine::into_line)
+            .collect::<Option<Vec<_>>>()?;
+        Some((
+            Scope {
+                kind: self.scope.into(),
+                repository: self.repository,
+                lines,
+            },
+            self.session,
+        ))
+    }
 }
 
 /// A file a write may create a credential in, as it is spelled on disk.
@@ -1053,18 +1164,52 @@ mod tests {
         }
     }
 
-    /// RUN-20: a family survives the round trip with its slot, and covers another number after.
+    fn scoped(plan: &Plan) -> Scope {
+        scopes::offered_for(plan).expect("a listed line")
+    }
+
+    fn plain_line(words: [&str; 2], number: &str, repository: &str) -> Plan {
+        Plan {
+            steps: Steps::Pipeline(vec![Step {
+                program: "gh".to_string(),
+                resolved: PathBuf::from("/usr/bin/gh"),
+                started_as: PathBuf::from("/usr/bin/gh"),
+                args: [words[0], words[1], number, "--repo", repository]
+                    .map(String::from)
+                    .to_vec(),
+                environment: Vec::new(),
+                routes: Vec::new(),
+            }]),
+            ..plan("gh", &[])
+        }
+    }
+
+    /// RUN-20: a scope survives the round trip with its slots, covers every sub-command of the group
+    /// with another number after, and covers no other sub-command and no other repository.
     #[test]
-    fn a_family_is_read_back_with_its_number_free() {
-        let scratch = Scratch::new("remembered-family-round-trip");
+    fn a_scope_is_read_back_covering_the_group_with_any_number() {
+        let scratch = Scratch::new("remembered-scope-round-trip");
         let store = scratch.store("/work");
-        let family = RememberedLine::family_of(&plain_view("1081")).expect("a listed line");
-        store.remember(&family, "a-session");
+        store.remember_scope(&scoped(&plain_view("1081")), "a-session");
 
         let read = store.read();
-        assert!(read.covers(&plain_view("1081")));
-        assert!(read.covers(&plain_view("1082")));
-        assert!(!read.covers(&plain_view("abc")));
+        for words in [
+            ["pr", "view"],
+            ["pr", "diff"],
+            ["pr", "checks"],
+            ["issue", "view"],
+        ] {
+            for number in ["1081", "1082", "7"] {
+                assert!(
+                    read.covers(&plain_line(words, number, "brave/bravebot")),
+                    "{words:?} {number} was asked about"
+                );
+            }
+            assert!(!read.covers(&plain_line(words, "abc", "brave/bravebot")));
+            assert!(!read.covers(&plain_line(words, "1082", "other/repo")));
+        }
+        assert!(!read.covers(&plain_line(["pr", "merge"], "1082", "brave/bravebot")));
+        assert!(!read.covers(&plain_line(["issue", "list"], "1082", "brave/bravebot")));
         let written = std::fs::read_to_string(store.path()).expect("the record");
         assert!(
             written.contains(r#"{"slot":"integer"}"#),
@@ -1072,16 +1217,87 @@ mod tests {
         );
     }
 
-    /// RUN-20: an entry whose slot this build cannot read covers nothing, and so does one whose
-    /// slot is a plain string, which is how a build that knew no slots would have to read it.
+    /// RUN-20: a scope is one entry in the file and one item when read back, so deleting its line
+    /// takes the whole group back, which is the way back the prompt names.
     #[test]
-    fn an_entry_whose_slot_cannot_be_read_covers_nothing() {
-        let scratch = Scratch::new("remembered-family-unreadable");
+    fn deleting_the_one_line_of_a_scope_takes_the_whole_group_back() {
+        let scratch = Scratch::new("remembered-scope-one-entry");
         let store = scratch.store("/work");
-        store.remember(
-            &RememberedLine::family_of(&plain_view("1081")).expect("a listed line"),
-            "a-session",
+        store.remember(&RememberedLine::of(&plain_view("1")), "a-session");
+        store.remember_scope(&scoped(&plain_view("1081")), "a-session");
+
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        assert_eq!(
+            written.lines().count(),
+            2,
+            "the scope was written as more than one entry: {written}"
         );
+        let read = store.read();
+        assert_eq!(read.len(), 2);
+        assert_eq!(read.scopes().count(), 1);
+        assert_eq!(read.iter().count(), 1, "a line of the scope was read alone");
+
+        let exact_line_only: String = written
+            .lines()
+            .filter(|line| !line.contains(r#""scope""#))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        std::fs::write(store.path(), exact_line_only).expect("rewritten");
+        let after = store.read();
+        assert_eq!(after.scopes().count(), 0);
+        for words in [["pr", "diff"], ["issue", "view"]] {
+            assert!(!after.covers(&plain_line(words, "1082", "brave/bravebot")));
+        }
+    }
+
+    /// RUN-20: the scope names the session that answered it and the repository, which is what the
+    /// reading back says.
+    #[test]
+    fn a_scope_is_read_back_with_its_repository_and_who_answered_it() {
+        let scratch = Scratch::new("remembered-scope-read-back");
+        let store = scratch.store("/work");
+        store.remember_scope(&scoped(&plain_view("1081")), "yesterday");
+        let read = store.read();
+        let [held] = read.scopes().collect::<Vec<_>>()[..] else {
+            panic!("the record holds {} scopes, not one", read.scopes().count());
+        };
+        assert_eq!(held.answered_in, "yesterday");
+        assert_eq!(held.scope.repository, "brave/bravebot");
+        assert_eq!(held.scope.kind, scopes::Kind::ReadPullRequestsAndIssues);
+        assert_eq!(held.scope.lines.len(), 4);
+    }
+
+    /// RUN-20: two directories whose names reduce to one key share a file, so the directory written
+    /// into a scope is what keeps one directory's answer from covering the other's.
+    #[test]
+    fn a_directory_sharing_a_key_with_another_is_not_answered_by_its_scopes() {
+        let scratch = Scratch::new("remembered-scope-lossy-key");
+        let mine = "/a/b";
+        let theirs = "/a-b";
+        assert_eq!(
+            crate::home::key_for(Path::new(mine)),
+            crate::home::key_for(Path::new(theirs)),
+            "this test needs two paths that reduce to one key"
+        );
+        scratch
+            .store(theirs)
+            .remember_scope(&scoped(&plain_view("1081")), "a-session");
+
+        let read = scratch.store(mine).read();
+        assert!(read.is_empty());
+        assert!(!read.covers(&plain_view("1082")));
+    }
+
+    /// RUN-20: an entry whose slot this build cannot read covers nothing, and so does one whose slot
+    /// is a plain string, which is how a build that knew no slots would have to read it. One line of
+    /// a scope that cannot be read, whether for a slot it does not know or for a binary written as a
+    /// rendering, leaves the whole scope out, so the three that can be read do not stand for an
+    /// answer the person gave for four.
+    #[test]
+    fn a_scope_with_a_line_this_build_cannot_read_covers_nothing() {
+        let scratch = Scratch::new("remembered-scope-unreadable");
+        let store = scratch.store("/work");
+        store.remember_scope(&scoped(&plain_view("1081")), "a-session");
         let written = std::fs::read_to_string(store.path()).expect("the record");
         for unreadable in [
             r#"{"slot":"hex"}"#,
@@ -1092,10 +1308,156 @@ mod tests {
             let rewritten = written.replacen(r#"{"slot":"integer"}"#, unreadable, 1);
             assert_ne!(rewritten, written, "the entry was not rewritten");
             std::fs::write(store.path(), rewritten).expect("rewritten");
+            let read = store.read();
+            assert!(read.is_empty(), "{unreadable} was read as an entry");
             assert!(
-                store.read().is_empty(),
-                "{unreadable} was read as an entry that covers"
+                !read.covers(&plain_line(["issue", "view"], "1082", "brave/bravebot")),
+                "{unreadable} left the lines after it covering"
             );
         }
+
+        let rendered = written.replacen(
+            r#""resolved":"/usr/bin/gh""#,
+            r#""resolved":"/usr/bin/gh-�""#,
+            1,
+        );
+        assert_ne!(rendered, written, "the entry was not rewritten");
+        std::fs::write(store.path(), rendered).expect("rewritten");
+        let read = store.read();
+        assert!(read.is_empty(), "a line naming a rendering was read back");
+        assert!(
+            !read.covers(&plain_line(["issue", "view"], "1082", "brave/bravebot")),
+            "the lines after one naming a rendering still covered"
+        );
+    }
+
+    /// RUN-20: a scope this build does not fully understand covers nothing: a group it has no name
+    /// for, a field it does not know, and a record that is both a line and a scope.
+    #[test]
+    fn a_scope_this_build_does_not_fully_understand_covers_nothing() {
+        let scratch = Scratch::new("remembered-scope-unknown");
+        let store = scratch.store("/work");
+        store.remember_scope(&scoped(&plain_view("1081")), "a-session");
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        for rewritten in [
+            written.replacen("read-pull-requests-and-issues", "manage-pull-requests", 1),
+            written.replacen(
+                r#"{"directory""#,
+                r#"{"something-later-builds-key-on":"x","directory""#,
+                1,
+            ),
+            written.replacen(
+                r#""lines":"#,
+                r#""line":{"steps":{"shape":"pipeline","steps":[]}},"lines":"#,
+                1,
+            ),
+        ] {
+            assert_ne!(rewritten, written, "the entry was not rewritten");
+            std::fs::write(store.path(), &rewritten).expect("rewritten");
+            let read = store.read();
+            assert!(read.is_empty(), "{rewritten} was read");
+            assert!(!read.covers(&plain_view("1082")));
+        }
+    }
+
+    /// RUN-20: the lines of a scope are what covers and its name is what the reading back says, so an
+    /// entry whose lines are not its group's, on its repository, is not read back as that group. It
+    /// covers nothing, where reading it as written would list "Read pull requests and issues in
+    /// brave/bravebot" for lines that cover something else, or nothing at all.
+    #[test]
+    fn a_scope_whose_lines_are_not_its_groups_on_its_repository_covers_nothing() {
+        let scratch = Scratch::new("remembered-scope-mismatch");
+        let store = scratch.store("/work");
+        store.remember_scope(&scoped(&plain_view("1081")), "a-session");
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        let untouched: serde_json::Value = serde_json::from_str(written.trim()).expect("json");
+        type Edit = fn(&mut serde_json::Value);
+        let edits: [(&str, Edit); 8] = [
+            ("no lines", |v| v["lines"] = serde_json::json!([])),
+            ("a sub-command that writes", |v| {
+                v["lines"][0]["steps"]["steps"][0]["args"][1] = serde_json::json!("merge")
+            }),
+            ("a line on another repository", |v| {
+                v["lines"][0]["steps"]["steps"][0]["args"][4] = serde_json::json!("other/repo")
+            }),
+            ("a name for another repository", |v| {
+                v["repository"] = serde_json::json!("other/repo")
+            }),
+            ("an extra flag", |v| {
+                v["lines"][0]["steps"]["steps"][0]["args"]
+                    .as_array_mut()
+                    .expect("args")
+                    .push(serde_json::json!("--web"))
+            }),
+            ("a variable set in front", |v| {
+                v["lines"][0]["steps"]["steps"][0]["environment"] =
+                    serde_json::json!([["GH_HOST", "example.com"]])
+            }),
+            ("a number written out", |v| {
+                v["lines"][0]["steps"]["steps"][0]["args"][2] = serde_json::json!("1081")
+            }),
+            ("a repository that is not a name", |v| {
+                v["repository"] = serde_json::json!("-x/y");
+                for line in v["lines"].as_array_mut().expect("lines") {
+                    line["steps"]["steps"][0]["args"][4] = serde_json::json!("-x/y");
+                }
+            }),
+        ];
+        for (what, edit) in edits {
+            let mut value = untouched.clone();
+            edit(&mut value);
+            std::fs::write(store.path(), format!("{value}\n")).expect("rewritten");
+            let read = store.read();
+            assert!(read.is_empty(), "a scope with {what} was read back");
+            assert!(
+                !read.covers(&plain_view("1082")),
+                "a scope with {what} covered a line"
+            );
+        }
+        std::fs::write(store.path(), format!("{untouched}\n")).expect("rewritten");
+        assert_eq!(store.read().scopes().count(), 1, "the unedited scope");
+    }
+
+    /// RUN-20: a scope saved when the table held fewer sub-commands is whole, and covers the lines it
+    /// holds and no others, so a table that grows later widens no answer already given.
+    #[test]
+    fn a_scope_written_for_a_smaller_group_covers_only_the_lines_it_holds() {
+        let scratch = Scratch::new("remembered-scope-smaller-group");
+        let store = scratch.store("/work");
+        let mut earlier = scoped(&plain_view("1081"));
+        earlier.lines.truncate(2);
+        store.remember_scope(&earlier, "an-earlier-build");
+
+        let read = store.read();
+        assert_eq!(read.scopes().count(), 1);
+        assert!(read.covers(&plain_line(["pr", "view"], "1082", "brave/bravebot")));
+        assert!(read.covers(&plain_line(["pr", "diff"], "1082", "brave/bravebot")));
+        assert!(!read.covers(&plain_line(["pr", "checks"], "1082", "brave/bravebot")));
+        assert!(!read.covers(&plain_line(["issue", "view"], "1082", "brave/bravebot")));
+    }
+
+    /// RUN-20, COMPAT-001: a line an earlier build wrote for its number-free answer, as one entry
+    /// holding a slot, is still read and still covers another number.
+    #[test]
+    fn a_number_free_line_an_earlier_build_wrote_is_still_read() {
+        let scratch = Scratch::new("remembered-earlier-family");
+        let store = scratch.store("/work");
+        std::fs::create_dir_all(store.path().parent().expect("parent")).expect("directory");
+        std::fs::write(
+            store.path(),
+            concat!(
+                r#"{"directory":"/work","session":"an-earlier-build","line":{"steps":"#,
+                r#"{"shape":"pipeline","steps":[{"program":"gh","resolved":"/usr/bin/gh","#,
+                r#""args":["pr","view",{"slot":"integer"},"--repo","brave/bravebot"],"#,
+                r#""environment":[],"routes":[]}]}}}"#,
+                "\n"
+            ),
+        )
+        .expect("written");
+        let read = store.read();
+        assert_eq!(read.iter().count(), 1);
+        assert_eq!(read.scopes().count(), 0);
+        assert!(read.covers(&plain_view("1082")));
+        assert!(!read.covers(&plain_line(["pr", "diff"], "1082", "brave/bravebot")));
     }
 }

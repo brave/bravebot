@@ -6,7 +6,8 @@ import { IconButton } from './IconButton'
 import { ago } from './Sessions'
 
 interface Grants {
-  paths: { path: string; integrity: string }[]
+  /** `shownPath` is `path` spelled so a blank or whitespace-ended name is visible. */
+  paths: { path: string; shownPath: string; integrity: string }[]
   commands: { program: string; startedAs: string; args: string[]; display: string }[]
   /** The yes kept about this directory for later sessions (TRUST-23), read when this was asked. */
   remembered?: KeptTrust | null
@@ -63,12 +64,15 @@ export function Permissions({ session, onClose, onRemembered }: { session: strin
  */
 export function RememberedHere({ kept, busy, onForget }: { kept: KeptTrust; busy: boolean; onForget: () => void }): React.JSX.Element {
   return <ul className="grant-list"><li className="grant-row">
-    <Icon name="pin" /><code>{kept.path}</code>
+    <Icon name="pin" /><code>{kept.shownPath}</code>
     <span className="grant-state" data-test="remembered-when">{`Trusted ${ago(kept.at)}`}</span>
-    {kept.root && <span className="grant-state" data-test="remembered-root">{`for ${kept.root}`}</span>}
+    {kept.shownRoot && <span className="grant-state" data-test="remembered-root">{`for ${kept.shownRoot}`}</span>}
     <Button size="small" kind="plain-faint" isDisabled={busy} onClick={onForget}>Forget</Button>
   </li></ul>
 }
+
+/** The root is the empty name, which a person is shown in words; any other rule is drawn as the agent spelled it. */
+const named = (grant: Grants['paths'][number]): string => grant.path === '' ? 'Project root' : grant.shownPath
 
 export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['paths']; busy: boolean; onRevoke: (path: string) => void }): React.JSX.Element {
   const trusted = paths.filter((grant) => grant.integrity === 'trusted')
@@ -79,15 +83,15 @@ export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['path
       <h3>Trusted paths</h3>
       <p className="grant-note">A parent grant covers its descendants unless a more specific rule overrides it. Revoking a parent keeps any separately listed child grants.</p>
       {trusted.length > 0 && <ul className="grant-list">{trusted.map((grant) => <li className="grant-row" key={grant.path}>
-        <Icon name="shield-done" /><code>{grant.path || 'Project root'}</code>
+        <Icon name="shield-done" /><code>{named(grant)}</code>
         <Button size="small" kind="plain-faint" isDisabled={busy} onClick={() => onRevoke(grant.path)}>Revoke</Button>
       </li>)}</ul>}
       {trusted.length === 0 && <p className="grant-empty"><Icon name="shield-done" />No trusted path grants.</p>}
     </section>
     {refused.length > 0 && <section className="grant-section"><h3>Untrusted path exceptions</h3><p className="grant-note">These paths remain untrusted even when a parent is trusted.</p>
-      <ul className="grant-list">{refused.map((grant) => <li className="grant-row" key={grant.path}><Icon name="warning-triangle-outline" /><code>{grant.path || 'Project root'}</code><span className="grant-state">Untrusted</span></li>)}</ul></section>}
+      <ul className="grant-list">{refused.map((grant) => <li className="grant-row" key={grant.path}><Icon name="warning-triangle-outline" /><code>{named(grant)}</code><span className="grant-state">Untrusted</span></li>)}</ul></section>}
     {undecided.length > 0 && <section className="grant-section"><h3>Paths awaiting a decision</h3><p className="grant-note">These paths require write approval and their contents remain untrusted until you grant trust.</p>
-      <ul className="grant-list">{undecided.map((grant) => <li className="grant-row" key={grant.path}><Icon name="radio-unchecked" /><code>{grant.path || 'Project root'}</code><span className="grant-state">Not decided</span></li>)}</ul></section>}
+      <ul className="grant-list">{undecided.map((grant) => <li className="grant-row" key={grant.path}><Icon name="radio-unchecked" /><code>{named(grant)}</code><span className="grant-state">Not decided</span></li>)}</ul></section>}
   </>
 }
 

@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync }
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND } from './drive-support.mjs'
 
 /** A language server that answers what a session asks of one, and says when it came up. */
 const SERVER = `#!/bin/sh
@@ -80,7 +80,7 @@ try {
   const cards = page.locator('.confirm.server')
   const ask = async (prompt) => {
     await composer.fill(prompt)
-    await page.locator('.composer .send').click()
+    await page.locator(COMPOSER_SEND).click()
     await stop.waitFor({ state: 'visible' })
   }
   const ended = () => stop.waitFor({ state: 'hidden' })

@@ -4,6 +4,8 @@ title: read_file
 status: normative
 governs:
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/results.rs
+  - crates/agent/src/notebook.rs
   - crates/agent/src/conversation.rs
   - crates/filetype/src/lib.rs
 documented-by: docs/website/docs/reference/tools.md
@@ -33,6 +35,7 @@ bytes at another.
 `verified-by: bravebot_core::policy::a_path_that_lost_its_trust_fills_the_slot_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_an_unvouched_path_is_untrusted`
 `verified-by: bravebot_core::policy::a_read_from_a_trusted_path_is_trusted`
+`verified-by: bravebot_agent::turn::a_read_the_planner_may_not_see_still_says_when_no_file_is_there`
 
 <a id="READ-2"></a>
 ### READ-2: a long file is paged, and says where to continue from
@@ -57,15 +60,71 @@ for the line cap, and a read the planner may not see reports only its size
 `verified-by: bravebot_agent::turn::the_model_can_ask_for_a_later_page`
 
 <a id="READ-3"></a>
-### READ-3: a file that is not text is reported as binary
+### READ-3: a file that is not text is reported as binary, and text in another encoding is decoded for the planner
 
-Never as a decoding error, which would read as a fault rather than as a fact about the file. A
-picture is the exception and is [READ-5](#READ-5): there is something to do with one, so saying
-"binary" would be refusing a read that can be answered.
+A file that is not text is reported as binary, never as a decoding error, which would read as a
+fault rather than as a fact about the file. A picture is the exception and is
+[READ-5](#READ-5): there is something to do with one, so saying "binary" would be refusing a read
+that can be answered.
+
+**What reads as text.** A page the planner is shown is decoded from the shape of the file's first
+bytes, in this order:
+
+1. A UTF-16 or UTF-32 byte order mark, in either byte order, is checked before the null-byte test,
+   since every such file holds nulls. The mark is stripped and the rest is decoded as that
+   encoding, an unpaired or cut-off unit becoming U+FFFD. UTF-32 is tried before UTF-16, because
+   the UTF-32 little-endian mark begins with the UTF-16 one.
+2. Without a mark, a file holding a null byte or more than 30 percent control characters in its
+   first 8 KiB is binary.
+3. Any other file is read as UTF-8, each invalid sequence of bytes becoming one U+FFFD, so a
+   Latin-1 file with one accented character reads. Where more than 30 percent of the characters
+   come out as U+FFFD the file is binary, the share of control characters step 2 already allows.
+
+A decoded text is held to the test in step 2 as well, so a binary file that happens to begin with a
+mark is binary. A UTF-16 file with no mark is binary by step 2, and so is text in an encoding such
+as Shift-JIS, which has no mark and is mostly bytes UTF-8 does not allow. A file that is not UTF-16
+but begins with the bytes of its mark reads as UTF-16, since the first bytes are all that decides.
+
+**The page says it was decoded.** Where a file was not valid UTF-8, its page ends with a note
+naming the decoding (UTF-16 or UTF-32 with the byte order, or that bytes which are not UTF-8 are
+shown as U+FFFD) and saying that `edit_file` cannot change the file.
+
+**These are decisions on the shape of the first bytes**, the same class as the null-byte test,
+and the seventh entry under Known costs in [labels.md](../labels.md) lists them with it. The label
+comes from the path ([READ-1](#READ-1)) and never from how a file decoded.
+
+**A decoding is not the file's bytes.** An edit writes its text back to the file, and the text a
+slot holds is written to a file or handed to a program as the file, so neither may be a decoding of
+another encoding. The whole read an edit works from, the read that fills a slot and the page a
+plan reads accept only text that is UTF-8 as it stands. They refuse a file with a mark or with
+invalid bytes as text in an encoding other than UTF-8, a fact about the file and not a decoding
+error. The survey a deferred read makes answers for the slot it reserves, so it ignores a byte
+order mark: in a directory nobody vouched for, a UTF-16 file is reported as binary when the
+planner asks, and a Latin-1 file is refused when something needs its bytes. A `write_file` body is
+the planner's own text and replaces the file as [WRITE-1](write-file.md#WRITE-1) says, whatever
+encoding the file had.
+
+**Why.** A UTF-16 source file from a Windows tool, and a Latin-1 file with one accented character,
+are text a person reads in an editor. Reported as binary, they leave the planner with no way to read
+them short of a shell command. The decoding stops at what the planner is shown, because anything
+written back from it would change bytes the planner never saw: U+FFFD over the byte it replaced, or
+UTF-8 over a UTF-16 file.
 
 `verified-by: bravebot_agent::workspace::a_binary_file_is_reported_as_binary`
 `verified-by: bravebot_agent::workspace::a_paged_read_of_a_binary_file_is_refused`
-`verified-by: bravebot_agent::workspace::a_file_that_passes_the_sniff_but_is_not_utf8_is_reported_as_binary`
+`verified-by: bravebot_agent::workspace::a_utf16_file_with_a_mark_pages_as_its_text_in_either_byte_order`
+`verified-by: bravebot_agent::workspace::a_file_with_a_stray_invalid_byte_pages_with_a_replacement_character`
+`verified-by: bravebot_agent::workspace::a_utf8_file_pages_without_a_decoding`
+`verified-by: bravebot_agent::workspace::nulls_without_a_byte_order_mark_are_still_binary`
+`verified-by: bravebot_agent::workspace::a_whole_read_of_a_file_that_is_not_utf8_is_refused_as_another_encoding`
+`verified-by: bravebot_agent::workspace::a_slot_is_never_filled_from_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::manifest::a_paged_read_in_a_plan_never_carries_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::workspace::a_deferred_read_of_a_utf16_file_is_reported_as_binary`
+`verified-by: bravebot_agent::workspace::a_decoded_page_is_labelled_by_its_path_alone`
+`verified-by: bravebot_agent::turn::a_utf16_file_is_read_as_text_and_an_edit_of_it_is_refused`
+`verified-by: bravebot_agent::turn::a_file_with_a_stray_invalid_byte_is_read_with_a_replacement_character_and_an_edit_is_refused`
+`verified-by: bravebot_agent::turn::a_copy_through_a_reference_never_carries_a_decoding_of_another_encoding`
+`verified-by: bravebot_agent::tools::a_decoded_page_says_how_it_was_decoded`
 `verified-by: bravebot_agent::workspace::text_files_are_not_mistaken_for_binary`
 `verified-by: bravebot_agent::workspace::an_empty_file_is_not_binary`
 `verified-by: bravebot_filetype::lib::a_null_byte_in_the_sniffed_head_is_binary`
@@ -73,6 +132,15 @@ picture is the exception and is [READ-5](#READ-5): there is something to do with
 `verified-by: bravebot_filetype::lib::thirty_percent_control_characters_is_text_and_thirty_one_is_not`
 `verified-by: bravebot_filetype::lib::tab_newline_form_feed_and_carriage_return_are_text`
 `verified-by: bravebot_filetype::lib::an_empty_file_is_not_binary`
+`verified-by: bravebot_filetype::lib::a_utf16_file_with_a_mark_decodes_in_either_byte_order`
+`verified-by: bravebot_filetype::lib::a_utf32_file_with_a_mark_decodes_in_either_byte_order`
+`verified-by: bravebot_filetype::lib::a_utf32_mark_is_not_taken_for_a_utf16_one`
+`verified-by: bravebot_filetype::lib::a_half_a_unit_or_an_unpaired_surrogate_in_a_wide_file_is_a_replacement_character`
+`verified-by: bravebot_filetype::lib::nulls_without_a_mark_are_binary_and_a_mark_alone_is_empty`
+`verified-by: bravebot_filetype::lib::a_binary_file_that_begins_with_a_mark_is_not_text`
+`verified-by: bravebot_filetype::lib::a_stray_invalid_byte_decodes_with_a_replacement_character`
+`verified-by: bravebot_filetype::lib::valid_utf8_decodes_as_itself`
+`verified-by: bravebot_filetype::lib::thirty_percent_invalid_bytes_is_text_and_thirty_one_is_not`
 
 <a id="READ-4"></a>
 ### READ-4: the planner may choose which file to read
@@ -305,3 +373,62 @@ the rounds after it, to tell the planner what it already had.
 `verified-by: bravebot_agent::conversation::a_kept_read_follows_its_message_to_its_new_position`
 `verified-by: bravebot_agent::conversation::a_window_shown_again_is_recorded_under_its_latest_token`
 `verified-by: bravebot_agent::workspace::requests_that_come_to_the_same_lines_are_one_window`
+
+<a id="READ-9"></a>
+### READ-9: a notebook the planner may read is shown as its cells, without their outputs
+
+A `.ipynb` file, named so by its extension alone, that the planner may be shown and that is a
+version 4 notebook, reads as its cells in the order the file holds them: a `[N] kind` line, N
+counting from 1, and then the cell's source. The result closes with the number of cells that hold
+saved outputs, and shows none of them. Paging, the change token and the caps of
+[READ-2](#READ-2) apply to that view as they do to a file's lines, so `offset` and `limit` count
+lines of the view. A file that is not valid JSON, or not a version 4 notebook, reads as the
+lines it is.
+
+A notebook the planner may not see is [READ-1](#READ-1) and is not opened, so none of its cells
+reach a context. The view is made only of a file whose label is trusted, and a slot filled from
+a notebook holds the file's own bytes, so a processor reads the JSON, outputs included, under
+the label the path gave it.
+
+**Why.** The JSON of a notebook is mostly pictures encoded as text and strings with escapes, which
+spends a page on a few cells and gives the planner nothing it can edit by. A saved output is text
+that a program, a web page or a dataset produced, so it is not shown to a planner even from a notebook
+somebody vouched for: the vouch covers what a person wrote into the cells. The way to them is
+[READ-10](#READ-10), or a processor reading the notebook.
+
+`verified-by: bravebot_agent::turn::a_trusted_notebook_reads_as_cells_without_its_outputs`
+`verified-by: bravebot_agent::turn::an_untrusted_notebook_is_not_shown_as_cells`
+`verified-by: bravebot_agent::notebook::the_view_numbers_cells_from_one_and_leaves_outputs_out`
+`verified-by: bravebot_agent::notebook::a_file_that_is_not_a_version_4_notebook_has_no_view`
+`verified-by: bravebot_agent::notebook::an_empty_notebook_says_so`
+`verified-by: bravebot_agent::notebook::only_a_path_ending_in_ipynb_names_a_notebook`
+
+<a id="READ-10"></a>
+### READ-10: a cell's saved outputs are read on request and come back as a reference
+
+`output_of`, a cell number counting from 1 as the view of [READ-9](#READ-9) shows them, asks for the
+saved outputs of that cell instead of the notebook's cells. It is accepted only for a path named a
+notebook by its extension and for a code cell that holds outputs; a number that is not a whole number
+from 1, a cell the notebook does not have, a cell that is not a code cell, a cell with no outputs and
+a file that is not a version 4 notebook are each refused in words naming which. A notebook the planner
+may not see is [READ-1](#READ-1), and the read of it is the reference to the whole file, outputs
+included. `offset` and `limit` are ignored.
+
+The result is text shaped for a processor and is labelled untrusted whatever the notebook's path is
+trusted as, so `Policy::present` holds it back and the planner is handed a reference: the labelled
+text is made in the kernel from the file's bytes, and the driver neither shows nor branches on it. A
+stream and an error are kept as text, a result's `text/plain` is kept, and every other form of data,
+a picture included, is replaced by a line giving its type and its size in characters as the file stores it. The result is cut at
+20,000 characters and says so.
+
+**Why.** A saved output is what a program, a web page or a dataset printed, so it can hold text
+written to steer a model, and a vouch for the notebook covers only what a person wrote into its
+cells. Asking for one cell's outputs by number spends a page on what the planner asked about and not
+on every picture in the file. A picture's base64 is a cap spent on nothing a reader can use.
+
+`verified-by: bravebot_agent::turn::a_cells_saved_outputs_come_back_as_a_reference_not_as_text`
+`verified-by: bravebot_agent::turn::an_output_request_that_names_no_outputs_is_refused`
+`verified-by: bravebot_agent::notebook::an_output_view_keeps_text_and_replaces_a_picture_with_its_size`
+`verified-by: bravebot_agent::notebook::an_output_view_is_cut_at_the_cap`
+`verified-by: bravebot_agent::notebook::an_output_view_of_unreadable_input_is_empty`
+`verified-by: bravebot_agent::notebook::outputs_are_asked_of_a_code_cell_that_holds_some`

@@ -2,6 +2,10 @@
 //!
 //! Events are collected into a vector instead of being written anywhere, which is the
 //! point of the callback: the library has no opinion about where they go.
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 #[path = "../../session/test-support/profile.rs"]
 mod test_profile;
@@ -643,7 +647,7 @@ fn permission_review_can_only_remove_existing_grants() {
     let before = call(&mut bridge, "permissions.list", json!({"session": session})).unwrap();
     assert_eq!(
         before["paths"],
-        json!([{"path": "", "integrity": "trusted"}])
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "trusted"}])
     );
     assert_eq!(before["commands"], json!([]));
     assert_eq!(
@@ -670,7 +674,7 @@ fn permission_review_can_only_remove_existing_grants() {
     .unwrap();
     assert_eq!(
         after["paths"],
-        json!([{"path": "", "integrity": "untrusted"}])
+        json!([{"path": "", "shownPath": "\"\"", "integrity": "untrusted"}])
     );
     assert_eq!(
         call(

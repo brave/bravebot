@@ -102,6 +102,7 @@ pub(crate) fn walk(walk: Walk) {
         .with_home(bravebot_agent::home::directory())
         .with_cache(bravebot_agent::home::cache())
         .with_model(model)
+        .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_deadlines(deadlines)
@@ -113,7 +114,8 @@ pub(crate) fn walk(walk: Walk) {
         .with_permissions(state.answers.rules.permissions.clone())
         .with_permission_mode(permission_mode.clone());
 
-    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+    let mut reporter =
+        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
     let mut asking = BridgeConfirmer::new(
         emitter.clone(),
         &session,
@@ -129,6 +131,8 @@ pub(crate) fn walk(walk: Walk) {
     let mut sink = BridgeSink::for_run(emitter.clone(), &session, run);
     let egress = Egress::new();
 
+    #[cfg(test)]
+    crate::running::built_in::record("manifest", task.account_session().identifier());
     let outcome = bravebot_agent::manifest::run_recording(
         &config,
         &egress,
@@ -227,6 +231,10 @@ pub(crate) fn walk(walk: Walk) {
         }
     };
 
+    // An agent does not outlive its run (DELEGATE-17), whichever way the run ended. Said before
+    // the event that ends it, so the window has the list it is to draw when it hears the end
+    // (VIEW-35).
+    reporter.turn_ended();
     drop(state);
     finished.store(true, Ordering::Release);
     emitter.send(event);

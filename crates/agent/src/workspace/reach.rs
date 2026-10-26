@@ -174,8 +174,7 @@ impl Workspace {
     /// Not a directory that holds it: the temporary directory it sits in is one a person may open by
     /// name, and the answer they give about that is theirs to give.
     pub(super) fn reaches_scratch(&self, canonical: &Path) -> bool {
-        self.scratch
-            .as_deref()
+        self.scratch()
             .is_some_and(|directory| canonical.starts_with(directory))
     }
 
@@ -412,8 +411,10 @@ impl Workspace {
         bravebot_sandbox::programs::keep_out(&canonical);
         // The old root among them: it is a directory that was open, and after this it is not.
         let mut closed = vec![std::mem::replace(&mut self.root, canonical.clone())];
-        // Names relative to the root left behind mean nothing under the new one (INSTR-14).
-        self.touched = Arc::default();
+        // Names relative to the root left behind mean nothing under the new one (INSTR-14, INSTR-16,
+        // CHECKOUT-23).
+        self.kept.touched = Arc::default();
+        locked(&self.kept.working_writes).last.clear();
         {
             let mut added = locked(&self.added);
             let (overlapping, kept) = std::mem::take(&mut *added)

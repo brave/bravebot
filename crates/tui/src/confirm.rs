@@ -44,6 +44,7 @@ use mcp::{
 };
 pub use note::Noted;
 use pinned::{Drawn, Seen};
+pub(crate) use run::scope_name;
 #[cfg(test)]
 use run::{RowsShown, RunDrawn, RunResponse, draw_run, run_answer_for};
 pub use run::{RunAnswer, ask_run};
@@ -53,7 +54,7 @@ use vet::{
     draw_output, draw_vet, draw_vouch, output_answer_for, vet_answer_for, vetting_fit,
     vetting_source,
 };
-pub use write::{WriteAnswer, ask};
+pub use write::{Asked, WriteAnswer, ask, ask_editing};
 #[cfg(test)]
 use write::{draw, write_answer_for};
 
@@ -186,6 +187,94 @@ impl Answer {
             Answer::Approve | Answer::Reject => false,
             Answer::Interrupt => true,
         }
+    }
+}
+
+/// What the loop that asked a question needs from the answer, whichever question it was.
+///
+/// Each answer type decides for itself whether it stops the turn and what the waiting turn is told.
+/// This names those two decisions so the loop handles every question the same way once it has the
+/// answer, and a question added later cannot leave out the stop.
+pub trait Answered {
+    /// What the waiting turn is told.
+    type Decision;
+
+    /// Whether the turn that asked stops as well as being refused.
+    fn stops_the_turn(&self) -> bool;
+
+    /// What to tell the waiting turn.
+    fn decision(self) -> Self::Decision;
+}
+
+impl Answered for Answer {
+    type Decision = Decision;
+
+    fn stops_the_turn(&self) -> bool {
+        Answer::stops_the_turn(*self)
+    }
+
+    fn decision(self) -> Decision {
+        Answer::decision(self)
+    }
+}
+
+impl Answered for VetAnswer {
+    type Decision = Decision;
+
+    fn stops_the_turn(&self) -> bool {
+        VetAnswer::stops_the_turn(*self)
+    }
+
+    fn decision(self) -> Decision {
+        VetAnswer::decision(self)
+    }
+}
+
+impl Answered for Noted<RunAnswer> {
+    type Decision = RunDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Noted::<RunAnswer>::stops_the_turn(self)
+    }
+
+    fn decision(self) -> RunDecision {
+        Noted::<RunAnswer>::decision(self)
+    }
+}
+
+impl Answered for Noted<WriteAnswer> {
+    type Decision = WriteDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Noted::<WriteAnswer>::stops_the_turn(self)
+    }
+
+    fn decision(self) -> WriteDecision {
+        Noted::<WriteAnswer>::decision(self)
+    }
+}
+
+impl Answered for Noted<CallAnswer> {
+    type Decision = CallDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Noted::<CallAnswer>::stops_the_turn(self)
+    }
+
+    fn decision(self) -> CallDecision {
+        Noted::<CallAnswer>::decision(self)
+    }
+}
+
+impl Answered for Asked {
+    type Decision = WriteDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Asked::stops_the_turn(self)
+    }
+
+    fn decision(self) -> WriteDecision {
+        Asked::decision(self)
     }
 }
 
@@ -397,6 +486,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -417,16 +507,15 @@ mod tests {
     }
 
     fn a_run(private: bool) -> RunRequest {
-        let pipeline = bravebot_core::Pipeline::new(vec![
+        let mut pipeline = bravebot_core::Pipeline::new(vec![
             bravebot_core::Stage::new("git", vec!["log".into(), "--oneline".into()]),
             bravebot_core::Stage::new("sed", vec!["-n".into(), "1,10p".into()]),
         ]);
+        if private {
+            pipeline.stdin = Some(bravebot_core::label::Label::trusted_private());
+        }
         RunRequest::from_pipeline(
-            &if private {
-                pipeline.with_stdin(bravebot_core::label::Label::trusted_private())
-            } else {
-                pipeline
-            },
+            &pipeline,
             &["/usr/bin/git".into(), "/usr/bin/sed".into()],
             "/home/someone/project",
         )
@@ -646,6 +735,7 @@ mod tests {
                 "a".repeat(1_500)
             ),
             host: "169.254.169.254".to_string(),
+            redirected_from: None,
         }
     }
 
@@ -1162,6 +1252,228 @@ mod tests {
         assert!(!drawn.contains("hooks"), "{drawn}");
     }
 
+    /// PROMPT-1: the run prompt draws a file the line writes, and a directory it is confined to,
+    /// with a name that would draw as nothing, or as another name, quoted and spelled, so a yes to
+    /// `note.md ` cannot be read as one to `note.md`.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_written_file_and_directory() {
+        let screen = |written: &str, directory: &str| {
+            let mut request = a_run(false);
+            request.plan.writes = vec![written.into()];
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory.into()],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let plain = screen("note.md", "/work");
+        assert!(plain.contains("note.md"), "{plain}");
+        assert!(plain.contains("/work"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let written = screen(name, "/work");
+            assert_ne!(written, plain, "{name:?}");
+            assert!(written.contains(spelled), "{name:?}\n{written}");
+            let confined = screen("note.md", name);
+            assert_ne!(confined, plain, "{name:?}");
+            assert!(confined.contains(spelled), "{name:?}\n{confined}");
+        }
+    }
+
+    /// Whether `screen` has a row that holds `text` and nothing else inside the box.
+    fn has_row(screen: &str, text: &str) -> bool {
+        screen
+            .lines()
+            .any(|row| row.trim_matches(|c: char| c == ' ' || c == '│') == text)
+    }
+
+    /// The run question at a size that holds every row of it, one string per row.
+    fn whole_run_screen(request: &RunRequest) -> String {
+        run_screen(request, (160, 90), 0, &mut RowsShown::default())
+            .0
+            .join("\n")
+    }
+
+    /// PROMPT-1: the run prompt draws the directory the line runs in, in its header and beside the
+    /// command `a` would vouch for, and the file each step runs, quoted and spelled where the path
+    /// would draw as nothing or as another, so a yes to a line in `/work/state ` is not read as one
+    /// in `/work/state`, and the same for the binary it starts.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_directory_and_binary() {
+        let screen = |directory: &str, binary: &str| {
+            let mut request = a_run(false);
+            request.plan.directory = directory.into();
+            let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                panic!("a pipeline");
+            };
+            steps[0].resolved = binary.into();
+            steps[0].started_as = binary.into();
+            // The header, and the row of each command `a` would vouch for.
+            let rows = 1 + request.would_vouch_for().len();
+            (whole_run_screen(&request), rows)
+        };
+        let (plain, _) = screen("/work", "/usr/bin/git");
+        assert!(plain.contains("/work"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let (directory, rows) = screen(name, "/usr/bin/git");
+            assert_ne!(directory, plain, "{name:?}");
+            assert_eq!(
+                directory.matches(spelled).count(),
+                rows,
+                "{name:?}\n{directory}"
+            );
+            let (binary, _) = screen("/work", name);
+            assert_ne!(binary, plain, "{name:?}");
+            // The row under the step, and the command `a` would vouch for.
+            assert!(has_row(&binary, spelled), "{name:?}\n{binary}");
+            assert!(
+                binary.contains(&format!("{spelled} log --oneline")),
+                "{name:?}\n{binary}"
+            );
+        }
+    }
+
+    /// PROMPT-1: a step started through a link is drawn as the link and the file it leads to, each
+    /// spelled on its own, so a link and a file that differ only in a trailing space are two paths.
+    #[test]
+    fn the_run_prompt_spells_the_link_and_the_file_a_step_starts_through() {
+        let mut request = a_run(false);
+        let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+            panic!("a pipeline");
+        };
+        steps[0].started_as = "/usr/local/bin/git ".into();
+        steps[0].resolved = "/usr/bin/git\u{202e}".into();
+        let drawn = whole_run_screen(&request);
+        let spelled = "\"/usr/local/bin/git\u{2423}\" -> \"/usr/bin/git\\u{202e}\"";
+        assert!(has_row(&drawn, spelled), "{drawn}");
+        assert!(
+            drawn.contains(&format!("{spelled} log --oneline")),
+            "{drawn}"
+        );
+    }
+
+    /// PROMPT-1, PROMPT-2: the file a yes is recorded in is drawn in each row that names one, the
+    /// remembered-lines record, the settings file a pattern would go in, the record of a kept reach
+    /// and the record of a chosen key with the key files on offer, spelled where the path would draw
+    /// as another.
+    #[test]
+    fn the_run_prompt_marks_an_unreadable_record_path() {
+        /// A run whose row under test names the file it is given.
+        type Naming = fn(&str) -> RunRequest;
+        let rows: [(&str, Naming); 5] = [
+            ("record", |name| RunRequest {
+                record: Some(name.into()),
+                ..a_recordable_run()
+            }),
+            ("pattern", |name| RunRequest {
+                pattern: Some(name.into()),
+                ..a_recordable_run()
+            }),
+            ("reach record", |name| RunRequest {
+                reach_record: Some(name.into()),
+                ..a_run_keeping_remote()
+            }),
+            ("key record", |name| {
+                let mut request = a_run_offering_two_keys();
+                request.key_choice.as_mut().expect("a choice").record = name.into();
+                request
+            }),
+            ("key candidate", |name| {
+                let mut request = a_run_offering_two_keys();
+                request.key_choice.as_mut().expect("a choice").candidates[1] = name.into();
+                request
+            }),
+        ];
+        for (row, request) in rows {
+            let plain = whole_run_screen(&request("/home/someone/.bravebot/file"));
+            assert!(
+                plain.contains("/home/someone/.bravebot/file"),
+                "{row}\n{plain}"
+            );
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = whole_run_screen(&request(name));
+                assert_ne!(drawn, plain, "{row}: {name:?}");
+                assert!(drawn.contains(spelled), "{row}: {name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1, PATH-003: a directory, a binary and a file a record is written to whose names hold a
+    /// byte that is not UTF-8 are drawn with that byte spelled, so none of them draws as the one its
+    /// replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_prompt_draws_a_directory_binary_and_record_that_are_not_text_as_their_bytes() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let screen = |byte: &[u8]| {
+            let path = |stem: &str| {
+                let mut bytes = stem.as_bytes().to_vec();
+                bytes.extend_from_slice(byte);
+                std::path::PathBuf::from(OsStr::from_bytes(&bytes))
+            };
+            let mut request = a_recordable_run();
+            request.plan.directory = path("/work/dir-");
+            request.record = Some(path("/record/file-"));
+            let bravebot_core::command::Steps::Pipeline(steps) = &mut request.plan.steps else {
+                panic!("a pipeline");
+            };
+            steps[0].resolved = path("/bin/binary-");
+            steps[0].started_as = path("/bin/binary-");
+            whole_run_screen(&request)
+        };
+        let invalid = screen(b"\xff");
+        let lookalike = screen("\u{fffd}".as_bytes());
+        assert_ne!(invalid, lookalike);
+        for spelled in ["\"/work/dir-\\xff\"", "\"/record/file-\\xff\""] {
+            assert!(invalid.contains(spelled), "{spelled}\n{invalid}");
+        }
+        assert!(has_row(&invalid, "\"/bin/binary-\\xff\""), "{invalid}");
+        assert!(!lookalike.contains("\\xff"), "{lookalike}");
+    }
+
+    /// PROMPT-1, PATH-003: the run prompt draws a directory it is confined to, and a file the line
+    /// writes, under a directory whose name holds a byte that is not UTF-8 with that byte spelled, so
+    /// neither is drawn as the one its replacement-character rendering spells.
+    #[cfg(unix)]
+    #[test]
+    fn the_run_prompt_draws_a_path_that_is_not_text_as_the_bytes_it_holds() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let screen = |directory: &[u8]| {
+            let directory = std::path::PathBuf::from(OsStr::from_bytes(directory));
+            let mut request = a_run(false);
+            request.plan.writes = vec![directory.join("note.md")];
+            request.confined = Some(bravebot_agent::Confined {
+                reads_the_machine: false,
+                directories: vec![directory],
+                network: bravebot_sandbox::network::Network::Open,
+                filesystem: Default::default(),
+                requested: Vec::new(),
+                requested_reaches: Vec::new(),
+                carried: Vec::new(),
+                writes_git_directories: false,
+            });
+            run_screen(&request, (160, 40), 0, &mut RowsShown::default())
+                .0
+                .join("\n")
+        };
+        let invalid = screen(b"/work/a\xffb");
+        let lookalike = screen("/work/a\u{fffd}b".as_bytes());
+        assert_ne!(invalid, lookalike);
+        assert!(invalid.contains("\"/work/a\\xffb\""), "{invalid}");
+        assert!(invalid.contains("\"/work/a\\xffb/note.md\""), "{invalid}");
+        assert!(lookalike.contains("/work/a\u{fffd}b"), "{lookalike}");
+        assert!(!lookalike.contains("\\xff"), "{lookalike}");
+    }
+
     /// SANDBOX-18: where nothing holds a `.git` back from a program that is not git, the heading a
     /// person approves under says that such a program can write a repository's hooks and
     /// configuration, at the size a terminal opens at, above the directories it names.
@@ -1320,9 +1632,33 @@ mod tests {
         let drawn = rendered_fetch(&FetchRequest {
             url: "http://169.254.169.254/latest/meta-data/iam/security-credentials/".to_string(),
             host: "169.254.169.254".to_string(),
+            redirected_from: None,
         });
         assert!(drawn.contains("metadata service"), "{drawn}");
         assert!(drawn.contains("credentials of the role"), "{drawn}");
+    }
+
+    /// FETCH-4: a host a redirect led to is drawn as one, with the host that was approved beside it,
+    /// and a fetch that was not redirected says nothing of the sort.
+    #[test]
+    fn a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for() {
+        let drawn = rendered_fetch(&FetchRequest {
+            url: "https://docs.example.com/start".to_string(),
+            host: "cdn.example.net".to_string(),
+            redirected_from: Some("docs.example.com".to_string()),
+        });
+        assert!(drawn.contains("talking to cdn.example.net"), "{drawn}");
+        assert!(
+            drawn.contains("redirected from docs.example.com"),
+            "{drawn}"
+        );
+
+        let plain = rendered_fetch(&FetchRequest {
+            url: "https://docs.example.com/start".to_string(),
+            host: "docs.example.com".to_string(),
+            redirected_from: None,
+        });
+        assert!(!plain.contains("redirected"), "{plain}");
     }
 
     /// An ordinary host is an ordinary question, and nothing of the kind is said about it.
@@ -1331,6 +1667,7 @@ mod tests {
         let drawn = rendered_fetch(&FetchRequest {
             url: "https://example.test/page".to_string(),
             host: "example.test".to_string(),
+            redirected_from: None,
         });
         assert!(!drawn.contains("metadata service"), "{drawn}");
     }
@@ -1343,6 +1680,7 @@ mod tests {
         let request = FetchRequest {
             url: format!("https://docs.example.invalid/{}", "section/".repeat(250)),
             host: "docs.example.invalid".to_string(),
+            redirected_from: None,
         };
         for width in [56, 64, 80] {
             let (rows, drawn) = fetch_screen(&request, (width, 24), 0);
@@ -2042,8 +2380,8 @@ mod tests {
         );
     }
 
-    /// A run prompt for a line the family table lists, in a session that can record.
-    fn a_family_run() -> RunRequest {
+    /// A run prompt for a line the scope table lists, in a session that can record.
+    fn a_scope_run() -> RunRequest {
         RunRequest {
             record: a_recordable_run().record,
             ..RunRequest::from_pipeline(
@@ -2059,92 +2397,136 @@ mod tests {
         }
     }
 
-    /// RUN-20: the family answer has a key of its own, approves the run, and records the family
-    /// and not the exact line. It vouches for nothing.
+    /// RUN-20: the scope answer has a key of its own, approves the run, and records the scope and
+    /// not the exact line. It vouches for nothing.
     #[test]
-    fn the_family_key_approves_and_records_the_family_only() {
+    fn the_scope_key_approves_and_records_the_scope_only() {
         assert_eq!(
-            run_answer_for(press(KeyCode::Char('f')), &a_family_run()),
-            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordFamily))
+            run_answer_for(press(KeyCode::Char('s')), &a_scope_run()),
+            Some(RunResponse::Answer(RunAnswer::ApproveAndRecordScope))
         );
-        let decision = RunAnswer::ApproveAndRecordFamily.decision();
+        let decision = RunAnswer::ApproveAndRecordScope.decision();
         assert!(decision.approved());
-        assert!(decision.record_family);
+        assert!(decision.record_scope);
         assert!(
             !decision.record,
-            "the family key also recorded the exact line"
+            "the scope key also recorded the exact line"
         );
         assert!(
             !decision.remember,
-            "the family key also vouched for the programs"
+            "the scope key also vouched for the programs"
         );
-        assert!(!RunAnswer::ApproveAndRecord.decision().record_family);
+        assert!(!RunAnswer::ApproveAndRecord.decision().record_scope);
+    }
+
+    /// RUN-20: the `f` key that answered "any number" before scopes is bound to nothing, so a
+    /// person who reaches for it does not record a scope they were not shown.
+    #[test]
+    fn the_old_any_number_key_answers_nothing() {
+        assert_eq!(
+            run_answer_for(press(KeyCode::Char('f')), &a_scope_run()),
+            None
+        );
     }
 
     /// RUN-20: the key is unbound where the line is not in the table, and where the prompt cannot
     /// record at all, so no key promises what the screen did not offer.
     #[test]
-    fn the_family_key_is_unbound_where_the_prompt_does_not_offer_it() {
+    fn the_scope_key_is_unbound_where_the_prompt_does_not_offer_it() {
         let cannot_record = RunRequest {
             record: None,
-            ..a_family_run()
+            ..a_scope_run()
         };
         for request in [a_run(false), a_recordable_run(), cannot_record] {
             assert_eq!(
-                run_answer_for(press(KeyCode::Char('f')), &request),
+                run_answer_for(press(KeyCode::Char('s')), &request),
                 None,
-                "a key recorded a family the prompt did not offer"
+                "a key recorded a scope the prompt did not offer"
             );
         }
     }
 
-    /// RUN-20: refusing and interrupting record no family.
+    /// RUN-20: refusing and interrupting record no scope.
     #[test]
-    fn refusing_a_run_records_no_family() {
+    fn refusing_a_run_records_no_scope() {
         for answer in [RunAnswer::Reject, RunAnswer::Interrupt] {
-            assert!(!answer.decision().record_family, "{answer:?}");
+            assert!(!answer.decision().record_scope, "{answer:?}");
         }
     }
 
-    /// RUN-20, PROMPT-4: the family key waits for the rows saying what it grants, as `r` waits for
+    /// RUN-20, PROMPT-4: the scope key waits for the rows saying what it grants, as `r` waits for
     /// its own.
     #[test]
-    fn the_family_key_waits_for_the_rows_saying_what_it_grants() {
+    fn the_scope_key_waits_for_the_rows_saying_what_it_grants() {
         let seen = RunDrawn {
             whole: true,
             ..RunDrawn::default()
         };
-        assert!(seen.takes(RunAnswer::ApproveAndRecordFamily));
+        assert!(seen.takes(RunAnswer::ApproveAndRecordScope));
         let unread = RunDrawn {
-            family_unread: 1,
+            scope_unread: 1,
             ..seen
         };
-        assert!(!unread.takes(RunAnswer::ApproveAndRecordFamily));
+        assert!(!unread.takes(RunAnswer::ApproveAndRecordScope));
         assert!(unread.takes(RunAnswer::Approve));
         assert!(unread.takes(RunAnswer::ApproveAndRecord));
     }
 
-    /// RUN-20: the prompt draws the entry with its slot, says what stays fixed, and draws the key.
-    /// A prompt for a line the table does not list draws none of it.
+    /// RUN-20: the prompt names the scope in words, says what it covers and what stays fixed, and
+    /// draws the key. It draws no argument list with a slot in it and no rule syntax, and a prompt
+    /// for a line the table does not list draws none of it.
     #[test]
-    fn a_prompt_offering_a_family_draws_the_entry_with_its_number_free() {
-        let drawn = fully_rendered_run(&a_family_run());
+    fn a_prompt_offering_a_scope_asks_in_words() {
+        let drawn = fully_rendered_run(&a_scope_run());
         for wanted in [
-            "pr view <number> --repo brave/bravebot",
-            "only a whole number may change",
-            "any number",
+            "Read pull requests and issues in brave/bravebot",
+            "read pull requests and issues in brave/bravebot",
+            "viewing a pull request or an issue and reading a pull request's diff and checks",
+            "everything else is still asked about: another repository, another flag, and anything that writes",
+            "deleting that line takes all of it back",
         ] {
             assert!(drawn.contains(wanted), "{wanted:?} was not drawn: {drawn}");
         }
+        for unwanted in ["<number>", "any number in place", "Bash(", "gh pr view *"] {
+            assert!(
+                !drawn.contains(unwanted),
+                "{unwanted:?} was drawn at a prompt that asks in words: {drawn}"
+            );
+        }
         let cannot_record = RunRequest {
             record: None,
-            ..a_family_run()
+            ..a_scope_run()
         };
         for request in [a_recordable_run(), cannot_record] {
             let plain = fully_rendered_run(&request);
-            assert!(!plain.contains("<number>"), "{plain}");
-            assert!(!plain.contains("any number"), "{plain}");
+            assert!(!plain.contains("Read pull requests"), "{plain}");
+            assert!(!plain.contains("read pull requests"), "{plain}");
         }
+    }
+
+    /// RUN-20: the scope is named for the repository the line named, so a person answering for
+    /// another repository is shown that one.
+    #[test]
+    fn the_scope_prompt_names_the_repository_the_line_named() {
+        let request = RunRequest {
+            record: a_recordable_run().record,
+            ..RunRequest::from_pipeline(
+                &bravebot_core::Pipeline::new(vec![bravebot_core::Stage::new(
+                    "gh",
+                    ["issue", "view", "7", "--repo", "someone/else"]
+                        .map(String::from)
+                        .to_vec(),
+                )]),
+                &["/usr/bin/gh".into()],
+                "/home/someone/project",
+            )
+        };
+        let drawn = fully_rendered_run(&request);
+        assert!(
+            drawn.contains("Read pull requests and issues in someone/else"),
+            "{drawn}"
+        );
+        assert!(!drawn.contains("brave/bravebot"), "{drawn}");
     }
 
     /// A run prompt for `gh pr view` that asked for `requested`, in a session that keeps a record
@@ -2204,14 +2586,14 @@ mod tests {
             assert_eq!(decision.remember_reach, Some(lasting));
             assert!(!decision.remember, "{answer:?} vouched for the programs");
             assert!(!decision.record, "{answer:?} recorded the line");
-            assert!(!decision.record_family, "{answer:?} recorded a family");
+            assert!(!decision.record_scope, "{answer:?} recorded a scope");
             assert!(!answer.stops_the_turn());
         }
         for answer in [
             RunAnswer::Approve,
             RunAnswer::ApproveAlways,
             RunAnswer::ApproveAndRecord,
-            RunAnswer::ApproveAndRecordFamily,
+            RunAnswer::ApproveAndRecordScope,
             RunAnswer::Reject,
             RunAnswer::Interrupt,
         ] {
@@ -2374,7 +2756,7 @@ mod tests {
             let decision = RunAnswer::ChooseKey(answer).decision();
             assert!(decision.approved());
             assert_eq!(decision.key, Some(answer));
-            assert!(!decision.remember && !decision.record && !decision.record_family);
+            assert!(!decision.remember && !decision.record && !decision.record_scope);
             assert_eq!(decision.remember_reach, None);
             assert!(!RunAnswer::ChooseKey(answer).stops_the_turn());
         }
@@ -2408,7 +2790,7 @@ mod tests {
             RunAnswer::Approve,
             RunAnswer::ApproveAlways,
             RunAnswer::ApproveAndRecord,
-            RunAnswer::ApproveAndRecordFamily,
+            RunAnswer::ApproveAndRecordScope,
             RunAnswer::KeepReach,
             RunAnswer::KeepReachEverySession,
             RunAnswer::Reject,
@@ -2983,6 +3365,7 @@ mod tests {
             expects: "the release notes for version 2".into(),
             content: content.into(),
             lines: content.lines().count(),
+            hidden: 0,
             verdict,
             reason: reason.map(str::to_string),
             picture: None,
@@ -3028,6 +3411,32 @@ mod tests {
         .iter()
         .map(|text| squeezed(text))
         .collect()
+    }
+
+    /// PROMPT-1: the names the removal would delete are drawn as what they are, so a file called
+    /// `note.md ` is not listed as the file called `note.md`.
+    #[test]
+    fn the_remove_checkout_question_marks_a_name_that_would_draw_as_another() {
+        let screen = |name: &str| {
+            let mut checkout = a_checkout_forty_files_were_written_in();
+            checkout.candidates.named = std::iter::once(name.to_string()).collect();
+            remove_checkout_screen(&checkout, (100, 30), 0).0.join("\n")
+        };
+        let plain = screen("note.md");
+        assert!(plain.contains("note.md"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
+        // The checkout's own directory is drawn in the same question, and named from the project's.
+        let mut checkout = a_checkout_forty_files_were_written_in();
+        checkout.path = "/state/checkouts/a\u{202e}b/c2".into();
+        let drawn = remove_checkout_screen(&checkout, (100, 30), 0).0.join("\n");
+        assert!(
+            drawn.contains("\"/state/checkouts/a\\u{202e}b/c2\""),
+            "{drawn}"
+        );
     }
 
     /// CHECKOUT-15. The question names the checkout, where it is and what removing it deletes, and
@@ -3106,6 +3515,36 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// PROMPT-1, CHECK-10: content holding characters that draw as nothing is shown with each one
+    /// written out, and the prompt says how many there are above them. Content with none says
+    /// nothing about any.
+    #[test]
+    fn the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = a_vetting(Verdict::Safe, None, text);
+        request.hidden = 2;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vet(frame, &request, 0, None, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the text: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 40, |frame| {
+            draw_vet(frame, &request, 0, None, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("U+XXXX"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
+        );
     }
 
     /// VET-4: whatever the terminal draws, the prompt names a copy to open and says what a person
@@ -3584,6 +4023,7 @@ mod tests {
             command: "find /Applications -name 'Brave Browser Nightly.app'".into(),
             output: text.into(),
             lines: text.lines().count(),
+            hidden: 0,
             reference: "ref:5".into(),
             verdict: Verdict::Safe,
             reason: None,
@@ -3633,11 +4073,52 @@ mod tests {
         );
     }
 
+    /// A yes releases every byte of the output to the model, so a colour code in it is drawn in
+    /// full and not counted: where nobody is deciding about the bytes colour codes are left out of
+    /// the drawing (VIEW-30), and here somebody is.
+    #[test]
+    fn the_output_prompt_draws_a_colour_code_in_full() {
+        let drawn = rendered_output(&an_output("\u{1b}[31mred\u{1b}[0m\n"));
+
+        assert!(drawn.contains("\u{241b}[31mred\u{241b}[0m"), "{drawn}");
+        assert!(!drawn.contains("colour code"), "{drawn}");
+    }
+
     /// A command that printed nothing is a fact worth stating. An empty box reads as a prompt that
     /// failed to render, and the reviewer would be answering about nothing.
     #[test]
     fn output_that_is_empty_says_so() {
         assert!(rendered_output(&an_output("")).contains("printed nothing"));
+    }
+
+    /// PROMPT-1, OUTPUT-1: output holding characters that draw as nothing is shown with each one
+    /// written out, and the prompt says how many there are above them. Output with none says
+    /// nothing about any.
+    #[test]
+    fn the_output_prompt_says_how_many_characters_draw_as_nothing_and_shows_each() {
+        let text = "plain \u{2039}U+E0041 A\u{203A}\u{2039}U+200B\u{203A} text";
+        let mut request = an_output(text);
+        request.hidden = 2;
+        let rows = rows_of(100, 24, |frame| {
+            draw_output(frame, &request, 0, &mut Seen::default());
+        });
+        let drawn = box_text(&rows);
+        assert!(
+            drawn.contains(&squeezed(&t!(hidden_characters, count = 2usize))),
+            "the prompt did not say characters drew as nothing: {rows:#?}"
+        );
+        assert!(
+            drawn.replace('┃', "").contains(&squeezed(text)),
+            "the characters were not written out in the text: {rows:#?}"
+        );
+        request.hidden = 0;
+        let rows = rows_of(100, 24, |frame| {
+            draw_output(frame, &request, 0, &mut Seen::default());
+        });
+        assert!(
+            !box_text(&rows).contains("U+XXXX"),
+            "a prompt with nothing hidden in it said something was: {rows:#?}"
+        );
     }
 
     /// The person has to be told what approving does, since the consequence is not visible in the
@@ -4102,6 +4583,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
         };
         assert!(
@@ -4130,6 +4612,7 @@ mod tests {
                 credentials: Vec::new(),
                 may_always: false,
                 record: None,
+                may_edit: false,
             })
         };
         assert!(
@@ -4160,6 +4643,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         });
 
         assert!(output.contains("Edit"));
@@ -4193,6 +4677,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         });
 
         assert!(
@@ -4228,6 +4713,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         });
 
         assert!(
@@ -4417,6 +4903,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0, &mut Seen::default());
@@ -4448,6 +4935,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let output = rendered(&request);
 
@@ -4496,6 +4984,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let drawn = rows_of(60, 24, |frame| {
             draw(frame, &request, 0, &mut Seen::default());
@@ -4536,6 +5025,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
 
         for (width, height) in [(80, 24), (100, 30)] {
@@ -4600,6 +5090,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         };
         let output = rendered(&request);
 
@@ -4807,6 +5298,84 @@ mod tests {
             assert_ne!(drawn, screen("note.md", "/work/note.md"), "{name:?}");
             assert!(drawn.contains("Trust \""), "{name:?}\n{drawn}");
             assert!(drawn.contains("trusts \"/work/"), "{name:?}\n{drawn}");
+        }
+    }
+
+    /// The names a prompt has to draw as what they are: each is the planner's spelling of a name
+    /// that would draw as nothing, or as another name, and the quoted form a person is shown.
+    const UNSEEN_NAMES: [(&str, &str); 6] = [
+        (" ", "\"\u{2423}\""),
+        ("note.md ", "\"note.md\u{2423}\""),
+        ("a\u{202e}b", "\"a\\u{202e}b\""),
+        ("a\u{200b}b", "\"a\\u{200b}b\""),
+        ("/work/state /file", "\"/work/state\u{2423}/file\""),
+        ("a\u{2800}b", "\"a\\u{2800}b\""),
+    ];
+
+    /// PROMPT-1: the write prompt, for a create and for an overwrite, draws a name that would draw
+    /// as nothing quoted with its characters spelled, so a yes to `note.md ` cannot be read as one
+    /// to `note.md`.
+    #[test]
+    fn the_write_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str, existing: Option<&str>| {
+            let mut asked = request("a line", existing);
+            asked.path = path.into();
+            rows_of(100, 30, |frame| {
+                draw(frame, &asked, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        for existing in [None, Some("old")] {
+            let plain = screen("note.md", existing);
+            assert!(plain.contains("note.md"), "{plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = screen(name, existing);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// PROMPT-1: the credential-read prompt draws the file it names the same way.
+    #[test]
+    fn the_exposure_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str| {
+            let request = ExposureRequest {
+                path: path.into(),
+                credentials: vec!["an API key at line 1".into()],
+            };
+            rows_of(100, 30, |frame| {
+                draw_exposure(frame, &request, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        let plain = screen("note.md");
+        assert!(plain.contains("note.md"), "{plain}");
+        for (name, spelled) in UNSEEN_NAMES {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+        }
+    }
+
+    /// PROMPT-1, SANDBOX-28: the prompt about a directory programs may reach draws the path the
+    /// grant is made for, so a path ending in whitespace is not drawn as the one without it.
+    #[test]
+    fn the_path_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str| {
+            let mut request = a_path_request(true);
+            request.path = std::path::PathBuf::from(path);
+            path_screen(&request, (160, 24), 0).0.join("\n")
+        };
+        let plain = screen("/opt/include");
+        assert!(plain.contains("/opt/include"), "{plain}");
+        for (name, spelled) in [
+            ("/opt/include ", "\"/opt/include\u{2423}\""),
+            ("/opt/in\u{202e}clude", "\"/opt/in\\u{202e}clude\""),
+        ] {
+            let drawn = screen(name);
+            assert_ne!(drawn, plain, "{name:?}");
+            assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
         }
     }
 
@@ -5494,6 +6063,17 @@ mod tests {
         grants: Vec<(char, Vec<String>)>,
     }
 
+    /// The first and the last few words of a sentence that wraps over several rows, squeezed, which
+    /// are the pieces [`scroll_through`] can ask for: a piece is drawn once a draw shows it whole,
+    /// and a sentence longer than a box is not whole in any one draw.
+    fn sentence_ends(sentence: &str) -> [String; 2] {
+        let words: Vec<&str> = sentence.split_whitespace().collect();
+        [
+            squeezed(&words[..3].join(" ")),
+            squeezed(&words[words.len() - 3..].join(" ")),
+        ]
+    }
+
     /// Each question with its deciding fields grown past what one screen holds.
     fn oversized(kind: Kind) -> Option<Case> {
         match kind {
@@ -5572,10 +6152,12 @@ mod tests {
                 let request = OutputRequest {
                     verdict: Verdict::Unsafe,
                     reason: Some(reason.join(" ")),
+                    hidden: 3,
                     ..an_output(&numbered('o', 100).join("\n"))
                 };
                 let drawn = request.clone();
                 let mut deciding = reason;
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("o0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {
@@ -5592,13 +6174,17 @@ mod tests {
             }
             Kind::Vet => {
                 let reason = numbered('r', 500);
-                let request = a_vetting(
-                    Verdict::Unsafe,
-                    Some(&reason.join(" ")),
-                    &numbered('c', 50).join("\n"),
-                );
+                let request = VetRequest {
+                    hidden: 3,
+                    ..a_vetting(
+                        Verdict::Unsafe,
+                        Some(&reason.join(" ")),
+                        &numbered('c', 50).join("\n"),
+                    )
+                };
                 let drawn = request.clone();
                 let mut deciding = reason;
+                deciding.extend(sentence_ends(&t!(hidden_characters, count = 3usize)));
                 deciding.push("c0000".to_string());
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {
@@ -6666,6 +7252,295 @@ mod tests {
         );
         assert_eq!(answer, Noted::plain(WriteAnswer::Interrupt));
         assert!(answer.stops_the_turn());
+    }
+
+    /// A write the planner's own text is offered an editor for.
+    fn an_editable_write() -> WriteRequest {
+        WriteRequest {
+            may_edit: true,
+            ..request("new line\n", Some("old line\n"))
+        }
+    }
+
+    /// WRITE-7: `e` opens the editor only at a prompt that offers it, so a key the screen does not
+    /// draw is unbound. A control chord does not count, since Ctrl-E is a line editor's, and the
+    /// answer it gives approves nothing: it is a refusal for any caller that cannot act on it.
+    #[test]
+    fn the_edit_key_is_bound_only_where_the_request_offers_it() {
+        let offered = an_editable_write();
+        for key in [KeyCode::Char('e'), KeyCode::Char('E')] {
+            assert_eq!(
+                write_answer_for(press(key), &offered, &Drawn::taking_yes()),
+                Some(Response::Answer(WriteAnswer::Edit)),
+                "{key:?}"
+            );
+        }
+        let not_offered = request("new line\n", Some("old line\n"));
+        assert_eq!(
+            write_answer_for(
+                press(KeyCode::Char('e')),
+                &not_offered,
+                &Drawn::taking_yes()
+            ),
+            None,
+            "a key the prompt did not draw opened an editor"
+        );
+        assert_eq!(
+            write_answer_for(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+                &offered,
+                &Drawn::taking_yes()
+            ),
+            None
+        );
+
+        assert!(!WriteAnswer::Edit.approves());
+        assert!(!WriteAnswer::Edit.stops_the_turn());
+        assert!(!WriteAnswer::Edit.decision().approved());
+        assert_eq!(WriteAnswer::Edit.decision().edited(), None);
+    }
+
+    /// WRITE-7: the keys row says `e` where it is bound, and says nothing of it where it is not,
+    /// so the screen and the keys agree.
+    #[test]
+    fn the_key_row_offers_the_editor_only_where_the_request_does() {
+        let offered = rendered(&an_editable_write());
+        assert!(offered.contains("e edit it first"), "{offered}");
+        let not_offered = rendered(&request("new line\n", Some("old line\n")));
+        assert!(!not_offered.contains("edit it first"), "{not_offered}");
+    }
+
+    /// WRITE-7: a prompt offering the editor beside both standing answers still draws every key's
+    /// label on one row at the width a hundred-column terminal gives it, since a label broken
+    /// across two rows reads as two keys.
+    #[test]
+    fn every_key_label_is_drawn_whole_beside_the_editor_and_both_standing_answers() {
+        let request = WriteRequest {
+            may_edit: true,
+            ..a_credential_write(true, true)
+        };
+        let rows = rows_of(100, 30, |frame| {
+            draw(frame, &request, 0, &mut Seen::default());
+        });
+        let keys = rows
+            .iter()
+            .find(|row| row.contains("write it"))
+            .expect("the key row was drawn");
+        for label in [
+            "y write it",
+            "e edit it first",
+            "a always this session",
+            "r remember it",
+            "n leave it alone",
+        ] {
+            assert!(
+                keys.contains(label),
+                "{label:?} was broken across rows: {rows:#?}"
+            );
+        }
+    }
+
+    /// What a person does at a write prompt that can open an editor, with `edit` standing in for
+    /// the editor: each call is recorded with the body and the path it was given.
+    fn editing_write(
+        script: &[(KeyEvent, bool)],
+        request: &WriteRequest,
+        edits: &mut Vec<(String, String)>,
+        mut returns: impl FnMut() -> Result<String, String>,
+    ) -> (write::Asked, String) {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        let (next, alone) = scripted(script);
+        let asked = write::ask_editing_reading(
+            &mut terminal,
+            request,
+            next,
+            alone,
+            |_terminal, body, path| {
+                edits.push((body.to_string(), path.to_string()));
+                returns()
+            },
+        );
+        let buffer = terminal.backend().buffer().clone();
+        let screen = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (asked, screen)
+    }
+
+    /// WRITE-7: what the person saved comes back as their answer and approves nothing, and the
+    /// editor is given the body as it was drawn and the path it is for.
+    #[test]
+    fn text_saved_from_the_editor_is_returned_and_approves_nothing() {
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[lone(KeyCode::Char('e'))],
+            &an_editable_write(),
+            &mut edits,
+            || Ok("saved line\n".to_string()),
+        );
+        assert_eq!(asked, write::Asked::Edited("saved line\n".to_string()));
+        assert!(!asked.stops_the_turn());
+        let decision = asked.decision();
+        assert!(!decision.approved(), "saving was taken for a yes");
+        assert_eq!(decision.edited(), Some("saved line\n"));
+        assert_eq!(
+            edits,
+            [("new line\n".to_string(), "src/main.rs".to_string())]
+        );
+    }
+
+    /// WRITE-7: an editor that hands back what it was given changed nothing, so the question is
+    /// still there with its own diff and the next key answers it.
+    #[test]
+    fn an_unchanged_body_leaves_the_question_where_it_was() {
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[lone(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &an_editable_write(),
+            &mut edits,
+            || Ok("new line\n".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject))
+        );
+        assert_eq!(edits.len(), 1);
+    }
+
+    /// WRITE-7: an editor that would not start is said above the question, which stays open, since
+    /// a key that fails and a key that does nothing look the same.
+    #[test]
+    fn an_editor_that_fails_is_said_above_the_question() {
+        let mut edits = Vec::new();
+        let (asked, screen) = editing_write(
+            &[lone(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &an_editable_write(),
+            &mut edits,
+            || Err("no editor found: set $VISUAL or $EDITOR to the one you want".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject))
+        );
+        assert!(screen.contains("no editor found"), "{screen}");
+        assert!(
+            screen.contains("approve this write?"),
+            "the question was not drawn again: {screen}"
+        );
+    }
+
+    /// WRITE-7: a final newline the editor adds on save is not a change, since most editors add one
+    /// and the person changed nothing, while any other difference is.
+    #[test]
+    fn a_final_newline_the_editor_added_is_not_an_edit() {
+        let bare = WriteRequest {
+            may_edit: true,
+            ..request("new line", Some("old line"))
+        };
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[lone(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &bare,
+            &mut edits,
+            || Ok("new line\n".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject)),
+            "a newline the editor added was taken for an edit"
+        );
+
+        for (shown, saved) in [
+            ("new line", "newer line"),
+            ("new line", "new line\n\n"),
+            ("new line\n", "new line\n\n"),
+            ("new line\n", "new line"),
+        ] {
+            let request = WriteRequest {
+                may_edit: true,
+                ..request(shown, Some("old line"))
+            };
+            let mut edits = Vec::new();
+            let (asked, _) =
+                editing_write(&[lone(KeyCode::Char('e'))], &request, &mut edits, || {
+                    Ok(saved.to_string())
+                });
+            assert_eq!(
+                asked,
+                write::Asked::Edited(saved.to_string()),
+                "{shown:?} -> {saved:?}"
+            );
+        }
+    }
+
+    /// WRITE-7: an `e` that arrived with other keys opens no editor. An editor reads whatever
+    /// arrives after the key that started it, so text another program writes into the terminal
+    /// could otherwise drive it, as it could drive a note field.
+    #[test]
+    fn an_e_that_arrived_with_other_keys_opens_no_editor() {
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[crowded(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &an_editable_write(),
+            &mut edits,
+            || Ok("changed\n".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject))
+        );
+        assert!(edits.is_empty(), "an editor was opened by a crowded key");
+    }
+
+    /// WRITE-7: coming back from an editor that returned nothing leaves the person where they were
+    /// in the diff, since the question they are looking at has not changed.
+    #[test]
+    fn the_place_in_a_long_diff_survives_an_editor_that_returns_nothing() {
+        let long: String = (1..=80).map(|n| format!("line {n:02}\n")).collect();
+        let request = WriteRequest {
+            may_edit: true,
+            ..request(&long, None)
+        };
+        let mut edits = Vec::new();
+        let (_, screen) = editing_write(
+            &[
+                lone(KeyCode::PageDown),
+                lone(KeyCode::Char('e')),
+                lone(KeyCode::Char('n')),
+            ],
+            &request,
+            &mut edits,
+            || Ok(long.clone()),
+        );
+        assert_eq!(edits.len(), 1);
+        assert!(
+            !screen.contains("+line 01"),
+            "the question came back at the top of the diff: {screen}"
+        );
+    }
+
+    /// WRITE-7: the editor key does not break the key row on a narrow terminal. The stop key and
+    /// its note hint stay on one row together, below the answers where they do not fit beside them.
+    #[test]
+    fn the_stop_key_stays_whole_beside_the_editor_key_on_a_narrow_terminal() {
+        let rows = rows_of(80, 30, |frame| {
+            draw(frame, &an_editable_write(), 0, &mut Seen::default());
+        });
+        let answers = rows
+            .iter()
+            .find(|row| row.contains("y write it"))
+            .expect("the answers were drawn");
+        assert!(answers.contains("n leave it alone"), "{rows:#?}");
+        let stop = rows
+            .iter()
+            .find(|row| row.contains("ctrl-c"))
+            .expect("the stop key was drawn");
+        assert!(stop.contains("tab note"), "{rows:#?}");
     }
 
     /// The line opens at a run prompt and at a call prompt as at a write, and the standing answers

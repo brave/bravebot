@@ -375,6 +375,12 @@ struct NamedSchema {
 }
 
 impl ResponseFormat {
+    /// The `generateContent` client sends the raw schema as `responseJsonSchema`, not this
+    /// protocol's `response_format` wrapper.
+    pub fn schema(&self) -> &serde_json::Value {
+        &self.json_schema.schema
+    }
+
     /// A reply that is one JSON value matching `schema`.
     pub fn json_schema(schema: serde_json::Value) -> Self {
         Self {
@@ -823,9 +829,26 @@ pub struct ChunkChoice {
 pub struct Delta {
     #[serde(default)]
     pub content: Option<String>,
+    /// The model's working, for a service that sends it beside the text rather than inside it.
+    ///
+    /// Not asked for: nothing in a request makes a model send it, so this is whatever a service
+    /// volunteers. Read for the screen's thinking view and nothing else (BACKEND-59). A value that
+    /// is not text is read as nothing, since refusing the reply would fail the whole turn over a
+    /// field this reads for display.
+    #[serde(default, deserialize_with = "text_or_nothing")]
+    pub reasoning_content: Option<String>,
     /// Tool calls arrive in fragments, each naming the index it belongs to.
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCallDelta>>,
+}
+
+fn text_or_nothing<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(text) => Some(text),
+        _ => None,
+    })
 }
 
 /// A fragment of a tool call.
@@ -873,6 +896,11 @@ pub struct StreamAccumulator {
     /// Chunks carrying a piece of a tool argument, counted toward the live figure and never toward
     /// what the reply is charged.
     argument_chunks: u64,
+    /// The words of the model's thinking not yet handed to the caller's screen.
+    ///
+    /// Emptied at every report, so it holds one read's worth, and kept apart from `content`, which
+    /// is the reply. It adds nothing to the count, which is of what the reply is made of.
+    thinking: String,
     /// Whether the server said the reply was over, rather than the bytes merely stopping.
     ended: bool,
 }
@@ -922,6 +950,10 @@ impl StreamAccumulator {
                 self.content_chunks += 1;
             }
 
+            if let Some(words) = delta.reasoning_content {
+                self.thinking.push_str(&words);
+            }
+
             for fragment in delta.tool_calls.unwrap_or_default() {
                 let call = match self.calls.iter_mut().find(|(i, _)| *i == fragment.index) {
                     Some((_, call)) => call,
@@ -954,6 +986,14 @@ impl StreamAccumulator {
     /// The reply so far.
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    /// The thinking that arrived since it was last taken, for a screen to draw on request.
+    ///
+    /// No part of [`StreamAccumulator::content`] or of what [`StreamAccumulator::finish`] returns,
+    /// so what is recorded and what a later request carries is the reply alone.
+    pub fn take_thinking(&mut self) -> String {
+        std::mem::take(&mut self.thinking)
     }
 
     /// Note that the stream reached its end-of-reply marker.
@@ -1060,13 +1100,36 @@ impl StreamAccumulator {
     }
 }
 
+/// The longest line [`SseDecoder`] reads, counted in the bytes before the `\n` that ends it, so the
+/// `\r` of a CRLF ending is counted.
+///
+/// The limit applies to every line, not only to `data:` ones, and a `data:` line is one payload,
+/// so it is also the largest event a service can send. A line is held until its newline arrives,
+/// so without a bound of the decoder's own, how much it holds is whatever its caller capped the
+/// body at. Every caller leaves that at `MAX_RESPONSE_BYTES` (2 MiB), so none reaches this one.
+/// Set far above any real event, as `MAX_FRAME_BYTES` is for the event stream Bedrock sends: the
+/// largest event is a reply's worth of text.
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+// A limit below the cap would end a stream the transport had let through whole.
+const _: () = assert!(MAX_LINE_BYTES >= bravebot_net::MAX_RESPONSE_BYTES);
+
 /// Pull `data:` payloads out of an SSE byte stream.
 ///
 /// Framing only. This decides where one event ends and the next begins, which is transport
 /// structure exactly like a JSON envelope, and never looks at what a payload says.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SseDecoder {
     buffer: Vec<u8>,
+    limit: usize,
+    /// A line passed `limit`, so nothing more is read.
+    overrun: bool,
+}
+
+impl Default for SseDecoder {
+    fn default() -> Self {
+        Self::with_limit(MAX_LINE_BYTES)
+    }
 }
 
 impl SseDecoder {
@@ -1074,17 +1137,50 @@ impl SseDecoder {
         Self::default()
     }
 
+    /// A decoder that ends at a line longer than `limit`.
+    ///
+    /// The `sse` fuzz target builds one with a small limit. At the real one, which is far above
+    /// what any input the fuzzer builds can reach, the bound would never be tested.
+    #[doc(hidden)]
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            buffer: Vec::new(),
+            limit,
+            overrun: false,
+        }
+    }
+
+    /// How many bytes are buffered waiting for their newline, which is at most the limit after any
+    /// call to [`SseDecoder::push`].
+    #[doc(hidden)]
+    pub fn held(&self) -> usize {
+        self.buffer.len()
+    }
+
     /// Add bytes and take whatever complete `data:` payloads they finish.
     ///
     /// Events are separated by a blank line, and a payload split across reads stays buffered
     /// until it is whole: emitting a partial line would hand out truncated JSON.
+    ///
+    /// A line longer than `MAX_LINE_BYTES`, of any kind, ends the decoding. Payloads from the
+    /// lines before it are returned, and it and every byte after it are discarded, whatever the
+    /// reads were split into. Every caller accepts a reply only once a payload says it ended, so
+    /// the reply is reported as incomplete. Skipping only that line would let a reply with a line
+    /// missing finish.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buffer.extend_from_slice(bytes);
         let mut payloads = Vec::new();
+        if self.overrun {
+            return payloads;
+        }
+        self.buffer.extend_from_slice(bytes);
 
         // Lines are self-delimiting here, so events are taken a line at a time rather than by
         // scanning for a blank-line boundary: a `data:` line is complete on its own.
         while let Some(position) = self.buffer.iter().position(|b| *b == b'\n') {
+            if position > self.limit {
+                self.give_up();
+                return payloads;
+            }
             let line: Vec<u8> = self.buffer.drain(..=position).collect();
             let line = String::from_utf8_lossy(&line);
             let line = line.trim_end_matches(['\r', '\n']);
@@ -1097,7 +1193,17 @@ impl SseDecoder {
             }
         }
 
+        if self.buffer.len() > self.limit {
+            self.give_up();
+        }
+
         payloads
+    }
+
+    /// Stop reading and let go of what is buffered.
+    fn give_up(&mut self) {
+        self.overrun = true;
+        self.buffer = Vec::new();
     }
 }
 
@@ -1347,6 +1453,119 @@ mod tests {
             );
         }
 
+        /// A reply with a line missing is not the reply the service wrote. If only the long line
+        /// were skipped, the lines after it could carry the reply's ending and the gap would be
+        /// accepted as a whole answer.
+        #[test]
+        fn a_line_over_the_limit_ends_the_decoding() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decode(&mut decoder, "data: 1\n"), vec!["1"]);
+            assert!(decode(&mut decoder, "data: 123456789\n").is_empty());
+            assert!(decode(&mut decoder, "data: 2\n").is_empty());
+            assert!(decode(&mut decoder, "data: 3\n").is_empty());
+        }
+
+        /// Lines before the long one in the same read are whole events, and are handed over.
+        #[test]
+        fn lines_read_before_a_line_over_the_limit_are_kept() {
+            let mut decoder = SseDecoder::with_limit(8);
+            let events = decode(&mut decoder, "data: 1\ndata: 2\ndata: 123456789\ndata: 3\n");
+            assert_eq!(events, vec!["1", "2"]);
+        }
+
+        /// The limit counts the bytes before the `\n`, so a line of exactly that length is read
+        /// and one byte more is not, and the `\r` of a CRLF ending is one of the bytes. A decoder
+        /// that refused a line of exactly the limit would be refusing lines it was set to accept.
+        #[test]
+        fn a_line_of_exactly_the_limit_is_read() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decode(&mut decoder, "data: 12\n"), vec!["12"]);
+            assert_eq!(decode(&mut decoder, "data: 1\r\n"), vec!["1"]);
+            assert!(decode(&mut decoder, "data: 123\n").is_empty());
+            assert!(decode(&mut decoder, "data: 4\n").is_empty());
+
+            let mut crlf = SseDecoder::with_limit(8);
+            assert!(decode(&mut crlf, "data: 12\r\n").is_empty());
+        }
+
+        /// A decoder built the way the callers build one takes its bound from the constant. The
+        /// other tests set a small limit of their own, so a default that applied no bound would
+        /// pass all of them.
+        #[test]
+        fn a_decoder_made_the_ordinary_way_is_bounded_by_the_constant() {
+            assert_eq!(SseDecoder::new().limit, MAX_LINE_BYTES);
+            assert_eq!(SseDecoder::default().limit, MAX_LINE_BYTES);
+        }
+
+        /// The fuzz target reads the buffer through `held`, so it has to be the bytes waiting for a
+        /// newline: not the limit, not the bytes ever received, and nothing once the decoding ended.
+        #[test]
+        fn held_counts_the_bytes_waiting_for_their_newline() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decoder.held(), 0);
+            decode(&mut decoder, "data: a");
+            assert_eq!(decoder.held(), 7);
+            decode(&mut decoder, "\n");
+            assert_eq!(decoder.held(), 0);
+            decode(&mut decoder, "data: 123456789");
+            assert_eq!(decoder.held(), 0, "an overrun lets go of what it held");
+        }
+
+        /// A service that never sends a newline must not be able to grow the buffer past the
+        /// limit, and what it sent after the limit is not read when the newline comes.
+        #[test]
+        fn a_line_with_no_newline_is_held_only_up_to_the_limit() {
+            let mut decoder = SseDecoder::with_limit(64);
+            for _ in 0..40 {
+                assert!(decode(&mut decoder, "data: xxxxxxxxx").is_empty());
+                assert!(decoder.buffer.len() <= 64, "held {}", decoder.buffer.len());
+            }
+            assert!(decode(&mut decoder, "\ndata: 1\n").is_empty());
+            assert_eq!(decoder.buffer.capacity(), 0, "the buffer is let go of");
+        }
+
+        /// The reads a stream arrives in belong to the network, so the payloads, and which line
+        /// is too long, cannot depend on where they fall. A line complete in one read is checked
+        /// when its newline is found, and one in pieces is checked as it grows, so each is
+        /// exercised at every split of streams holding both kinds of line, both line endings and
+        /// a line at the limit. The payloads of the unsplit stream are stated, because splits that
+        /// all gave the same wrong payloads would pass a comparison with each other.
+        #[test]
+        fn any_split_of_a_stream_gives_the_same_payloads() {
+            let streams: [(&[u8], &[&str]); 5] = [
+                (
+                    b"data: 1\r\n\r\n: hi\n\ndata: 12\ndata: \xc3\xa9\n",
+                    &["1", "12", "\u{e9}"],
+                ),
+                (b"data: 1\ndata: 123456789\ndata: 2\n", &["1"]),
+                (b"data: 12\ndata: 123\ndata: 2\n", &["12"]),
+                (b"data: 1\r\ndata: 12\r\ndata: 2\n", &["1"]),
+                (b"data: 123456789\r\n", &[]),
+            ];
+            for (stream, expected) in streams {
+                let whole = SseDecoder::with_limit(8).push(stream);
+                assert_eq!(whole, expected, "unsplit, {stream:?}");
+
+                for at in 0..=stream.len() {
+                    let (first, second) = stream.split_at(at);
+                    let mut decoder = SseDecoder::with_limit(8);
+                    let mut split = decoder.push(first);
+                    assert!(decoder.buffer.len() <= 8, "held {}", decoder.buffer.len());
+                    split.extend(decoder.push(second));
+                    assert!(decoder.buffer.len() <= 8, "held {}", decoder.buffer.len());
+                    assert_eq!(split, whole, "split at {at} of {stream:?}");
+                }
+
+                let mut decoder = SseDecoder::with_limit(8);
+                let mut bytewise = Vec::new();
+                for byte in stream {
+                    bytewise.extend(decoder.push(&[*byte]));
+                    assert!(decoder.buffer.len() <= 8, "held {}", decoder.buffer.len());
+                }
+                assert_eq!(bytewise, whole, "byte at a time, {stream:?}");
+            }
+        }
+
         fn chunk(raw: &str) -> ChatChunk {
             serde_json::from_str(raw).expect("a chunk")
         }
@@ -1406,6 +1625,49 @@ mod tests {
                 1,
                 "a chunk carrying only reasoning counted as output written"
             );
+        }
+
+        /// The same field is what `/thinking` draws (BACKEND-59). A screen is handed each piece
+        /// once and in the order it arrived, since one that was handed everything again at every
+        /// report would draw the same words over and over, and what the reply holds is its text
+        /// alone however much was thought before it.
+        #[test]
+        fn thinking_is_taken_once_in_the_order_it_arrived_and_is_no_part_of_the_reply() {
+            let mut acc = StreamAccumulator::new();
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"reasoning_content":"the user "}}]}"#,
+            ));
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"reasoning_content":"wants a file"}}]}"#,
+            ));
+            assert_eq!(acc.take_thinking(), "the user wants a file");
+            assert_eq!(
+                acc.take_thinking(),
+                "",
+                "a piece of thinking was handed over twice"
+            );
+
+            acc.push(chunk(
+                r#"{"choices":[{"delta":{"reasoning_content":" and a name"}}]}"#,
+            ));
+            acc.push(chunk(r#"{"choices":[{"delta":{"content":"Hello"}}]}"#));
+            assert_eq!(acc.take_thinking(), " and a name");
+            let (content, ..) = acc.finish();
+            assert_eq!(content, "Hello");
+        }
+
+        /// A service may send the field in a shape that is not text, and a chunk this client
+        /// refused for it would fail a turn that read past the field before this client read it.
+        #[test]
+        fn reasoning_that_is_not_text_is_read_as_nothing_and_the_reply_still_arrives() {
+            for value in ["null", r#"{"text":"x"}"#, r#"["x"]"#, "7", "true"] {
+                let mut acc = StreamAccumulator::new();
+                acc.push(chunk(&format!(
+                    r#"{{"choices":[{{"delta":{{"reasoning_content":{value},"content":"Hello"}}}}]}}"#
+                )));
+                assert_eq!(acc.content(), "Hello", "reasoning_content: {value}");
+                assert_eq!(acc.take_thinking(), "", "reasoning_content: {value}");
+            }
         }
 
         #[test]
@@ -1752,6 +2014,21 @@ mod tests {
         });
         let call: ToolCallRequest = serde_json::from_value(stored.clone()).expect("a stored call");
         assert!(call.extra_content.is_none());
+        assert_eq!(serde_json::to_value(&call).expect("serializes"), stored);
+    }
+
+    /// A conversation saved with a Vertex call and opened again must still send the call back with
+    /// the signature, or the first request after the resume is refused.
+    #[test]
+    fn a_stored_call_carrying_extra_content_reads_back_with_it() {
+        let stored = serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "list", "arguments": "{}"},
+            "extra_content": {"google": {"thought_signature": "opaque-signature"}},
+        });
+        let call: ToolCallRequest = serde_json::from_value(stored.clone()).expect("a stored call");
+        assert_eq!(call.extra_content.as_ref(), Some(&stored["extra_content"]));
         assert_eq!(serde_json::to_value(&call).expect("serializes"), stored);
     }
 

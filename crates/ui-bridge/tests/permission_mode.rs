@@ -6,6 +6,10 @@
 //! read off the disk, and whether anything was asked is read off what the bridge said.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -381,6 +385,9 @@ fn every_way_of_opening_a_session_opens_asking() {
     assert_eq!(front.ask(child), "ask", "a fork took its parent's mode");
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 
+    // The open sessions end, so nothing holds the record they wrote.
+    front.call("session.close", json!({"session": session}));
+    front.call("session.close", json!({"session": child}));
     let listed = front.call(
         "session.list",
         json!({"directory": scratch.project().display().to_string()}),

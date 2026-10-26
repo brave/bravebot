@@ -7,12 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-diag = { path = "../diag" }
 bravebot-net = { path = "../net" }
 bravebot-signing = { path = "../signing" }
+ruzstd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

@@ -395,7 +395,7 @@ a turn.
 ```
 
 Returns `{ "session": "s2", "directory": "…", "branch": "main", "remembered": null,
-"keeping": "…" }`, the last two as §9 has them. The `Record` is not written until the first
+"keeping": "…", "shownDirectory": "…", "shownKeeping": "…" }`, the last four as §9 has them. The `Record` is not written until the first
 turn, matching `Session::begin` + `save`, so an opened-and-abandoned window leaves nothing
 behind.
 
@@ -567,14 +567,16 @@ open session handle. Provider IDs remain qualified (for example,
 handle's previous choice, or uses the configured default for a fresh handle.
 The UI remembers explicit choices by durable session ID and resends them on reopening.
 
-`models.list` takes no parameters and returns `{ models, defaultModel, warnings }`.
+`models.list` takes no parameters and returns `{ models, defaultModel, warnings, warningCommands }`.
 Each model contains `id`, `name`, `provider`, `premium`, and nullable `contextWindow`.
 It also includes `capabilities`, an array of reported capability identifiers: `text`,
 `vision`, `image-output`, `audio-input`, `audio-output`, `video`, `files`, `tools`,
 `reasoning`, and `structured-output`. An empty array means no supported capabilities
 were reported to the UI, rather than proof that the model lacks them.
 Discovery uses configured backends; partial failures return warnings alongside available
-models and the configured default. `session.new` and `session.open` include `model`
+models and the configured default. Each warning is one sentence, and `warningCommands` holds, in the same
+order, the words of it that are a command to run, or `null` where it names none, so a client draws them as
+code without reading the sentence for them. `session.new` and `session.open` include `model`
 with the configured default, or `null` when configuration is unavailable.
 
 ```json
@@ -711,6 +713,30 @@ A pending confirmation checks cancellation at most every 50 ms and resolves to r
 No approval is sent, and no additional client reply is required. Cancellation also
 covers the race where the question is registered just after the stop request.
 
+#### `turn.interject`
+
+```json
+{ "id": 7, "method": "turn.interject", "params": { "session": "s1", "prompt": "no, the other one", "target": 12 } }
+→ { "accepted": true }
+```
+
+Sends words into the turn that is running, for the planner to read at the turn's next round
+boundary, after the round's calls have run (INPUT-10, INPUT-46). The words are the person's own,
+read under the routing the turn began with, and carry no file. A marker in `prompt` stands for a
+dropped file or a pasted picture: optional `files` (a list of `{ "marker", "name" }`) and `pictures`
+(a list of markers) say which, and the bridge writes a file as its name and a picture as a sentence
+saying it cannot be shown, as the terminal does (DROP-8). A malformed list is `bad_request`.
+`target` is optional and names the turn as in `turn.cancel`; absent, the
+line is for whatever is running.
+
+`accepted` is `true` when a running turn took it in, and `false` when nothing is running, the turn is
+being stopped, the target names something else, or the work is a manifest run, which asks nothing
+between rounds. A `false` means nobody will read the line, and the caller makes a turn of it. A
+`true` is not a promise: a turn that answers without another round ends with the line unread. The
+`turn.interjected` event says when the planner was given one, and lines are read in the order
+they were sent. A blank `prompt` is `bad_request`, and a session with a session view is refused with
+`bad_request`.
+
 #### `mentions.offer`
 
 ```json
@@ -810,12 +836,18 @@ for. A server reply has none either: an approval lasts as long as the session do
 the first and no more questions about this tool in this project for the second. `mcp-tools.reply`
 and `mcp-move.reply` accept `decision`.
 `ask.reply` accepts an `answers` array, whose entries contain `typed` text or `chosen`
-indices; unreadable entries decline. Choices are fitted to the question before use.
+indices; unreadable entries decline. Choices are fitted to the question before use. The entries
+answer the `prompts` of the request by position. A question the person answered earlier in the
+session is not in `prompts`, and a series whose questions are all settled sends no `ask.request`
+([ASK-8](../../docs/specs/tools/ask-user.md#ASK-8)). A question left without an answer is not
+remembered as declined.
 
 #### Permissions
 
 `permissions.list` takes `session` and returns `paths`, `commands` and `remembered`, the
-kept answer about the session's directory as §9 has it, read when the list is asked for.
+kept answer about the session's directory as §9 has it, read when the list is asked for. Each
+`paths` entry is `{ path, shownPath, integrity }`: a client draws `shownPath` and revokes with `path`,
+and tells the project root by an empty `path`.
 `permissions.revoke` takes `session` plus either `kind: "path"` and `path`,
 `kind: "command"` and `command: { program, startedAs, args }`, or `kind: "remembered"`, which removes
 every answer kept about the directory so the next session there is asked, and leaves this
@@ -924,29 +956,34 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 |---|---|---|
 | `agent.ready` | `{ build, version, home, configured, defaultModel }` | startup, no `session` |
 | `turn.started` | `{ turn, mode }` | `turn.send` accepted |
+| `turn.interjected` | `{ prompt }` | the planner was given the oldest line sent with `turn.interject` |
 | `phase` | `{ phase }` | `Reporter::phase` |
 | `composing` | `{ call }`, a verb word or `null` | `Reporter::composing`, **a delegate's dropped** |
-| `narration` | `{ text }` | `Reporter::narration`, **empty ones dropped** |
+| `thinking` | `{ text }`, the words that arrived since the last | `Reporter::thinking`, **a delegate's and an empty one dropped** |
+| `narration` | `{ text }`, or `{ text, command }` | `Reporter::narration`, **empty ones dropped**; the bridge's own notices (a summary the ChatGPT account could not make, a move to the fallback model after it failed) carry `command`, the words of `text` that are a command to run, or `null` |
 | `tool.started` | `Activity` | `Reporter::tool_started` |
 | `tool.finished` | `Activity` | `Reporter::tool_finished` |
 | `check.started` | `{ lines }` or `{ file }` | `Reporter::check_started` |
 | `check.finished` | `{}` | `Reporter::check_finished` |
+| `hook.started` | `{ moment, program }` | `Reporter::hook_started` |
+| `hook.finished` | `{}` | `Reporter::hook_finished` |
+| `agents` | `{ agents: [ { id, kind, task, state } ], started, working }`, `id` as the driver spells the number (`d1`, and it may repeat), `state` one of `working`, `finished`, `failed` | `Reporter::delegate_started` and `delegate_finished`, and the end of a turn or run with an agent still working; **nothing the delegate printed, its note and report dropped** (VIEW-35) |
 | `landed` | `{ landing }` | `Reporter::landed` |
 | `quarantined` | `Shown` | `Reporter::quarantined` |
 | `todos` | `{ rows: [ { content, status } ] }` | `Reporter::todos` |
 | `tokens` | `{ written }` | `Reporter::output_tokens`, **only when the figure changes** |
 | `audit` | `{ at, turn, event }` | the `Sink`, via `audit::as_json` |
 | `confirm.request` | see §8.1 | `Confirmer::confirm_write` |
-| `run.request` | `{ request, stages, directory, line, plan, writes, releasesPrivate, confinement, vouches, summary }` | command approval |
-| `output.request` | `{ request, command, reference, lines, output, summary }` | admit command output |
+| `run.request` | `{ request, stages, directory, shownDirectory, line, plan, writes, shownWrites, releasesPrivate, confinement, vouches, summary }` | command approval |
+| `output.request` | `{ request, command, reference, lines, hidden, hiddenNote, output, summary }` | admit command output |
 | `vouch.request` | preview and label fields from `wire::vouch_request` | trust a quarantined path |
 | `fetch.request` | `{ request, url, host, ambient, summary }` | fetch one URL; `host` is the agent's reading of `url` and is drawn as sent |
 | `server.request` | `{ request, language, program, workspace, runsBuildTooling, summary }` | start a language server for the session |
 | `manifest.request` | `{ request, task, steps }` | run a frozen plan; one line per step |
 | `manifest.started` | `{ run, mode }` | a manifest run began; `run` counts runs in this open session |
 | `manifest.done` | `{ run, reply, model, steps, clean, tokens, outputTokens, notices, attempt, record, trust }` | a run finished |
-| `manifest.error` | `{ run, kind, message, category, attempts, status, stopped, declined, problem, attempt, record, notices }` | a run stopped |
-| `exposure.request` | `{ request, path, credentials, summary }` | let the planner read a file holding a credential |
+| `manifest.error` | `{ run, kind, message, category, attempts, status, account, accountMessage, accountCommand, stopped, declined, problem, attempt, record, notices }` | a run stopped |
+| `exposure.request` | `{ request, path, shownPath, credentials, summary }` | let the planner read a file holding a credential |
 | `mcp.starting` | `{ servers }` | a session's first turn is starting the MCP servers its settings request |
 | `mcp-server.request` | `{ request, alias, transport, command, url, program, variables, reads, directory, digest, requestedBy, changed, fetching }` | use an MCP server (SERVERS-4) |
 | `mcp.started` | `{ servers, confined, notes }` | what started, and a line for each request that did not |
@@ -955,17 +992,27 @@ Approval, progress and lifecycle events carry `session`, except for `agent.ready
 | `mcp-move.request` | `{ request, alias, declared, destination, authority, mayRecord }` | a remote server's reply pointed elsewhere (SERVERS-11) |
 | `host.request` | `{ request, hosts }` | let programs reach hosts `sandbox.network.allowedHosts` does not list (SANDBOX-24) |
 | `ask.request` | `{ request, prompts }` | user questions |
-| `trust.request` | `{ directory, keeping }` | initial project trust; `keeping` as §9 |
+| `trust.request` | `{ directory, shownDirectory, keeping, shownKeeping, confinedLines }` | initial project trust; `keeping` as §9 |
 | `turn.done` | see §8.2 | `Ok(Outcome)` |
 | `turn.error` | see §8.3 | `Err(TurnError)` |
 
 `Activity` serialises as:
 
 ```json
-{ "verb": "read", "target": "src/main.rs", "why": "see the entry point", "note": "412 lines",
+{ "verb": "read", "target": "src/main.rs", "shownTarget": "src/main.rs", "shownFile": "src/main.rs",
+  "why": "see the entry point", "note": "412 lines",
   "failed": false, "untrusted": false, "waitedSeconds": null,
   "changes": [ { "kind": "added", "text": "…" } ] }
 ```
+
+`target` is what the call is about as the model named it, and `shownTarget` is the same text
+spelled for a person where the call names a file (PROMPT-1): a name that is empty, is only
+whitespace, ends in a space or holds a character that draws as nothing arrives quoted with each
+such character made visible, and any other target arrives unchanged. A client draws `shownTarget`
+and matches a call to its confirmation on `target`. `shownFile` is the name a list of files
+draws: `shownTarget` of the target with the `ref:N(label):` a reference was drawn under and a
+leading `./` taken off, so a file named two ways is one row and is spelled as the confirmation for
+it is. It equals `shownTarget` where the call names no file.
 
 `why` is the planner's own line on what the call is for, the same on `tool.started` and
 `tool.finished`, and empty where it gave none. It is released for the screen and read by
@@ -1024,6 +1071,12 @@ whose events all share one second cannot say which came first.
 } }
 ```
 
+- `path` is the name the planner wrote, and is what the decision is about. `shownPath` is the same
+  name spelled for a person: a name that is empty, has a space at either end of it or of a
+  directory in it, or holds a character that draws as nothing or as a blank cell (a zero-width
+  character, a bidirectional control, a no-break space, the blank braille pattern) is quoted with
+  each such character written out, and any other name is unchanged. A client
+  draws `shownPath` and never `path`. `vouch.request` and `exposure.request` carry it the same way.
 - `request` is agent-assigned and **single-use** for its pending question. IDs can
   recur in later turns; clients must discard pending questions when a turn ends.
 - `changes` is `WriteRequest::diff()`, already condensed. The full `contents` is **not**
@@ -1102,7 +1155,7 @@ a client that reloads on receipt sees the same thing on disk.
 ```json
 { "event": "turn.error", "session": "s1", "data": {
   "turn": 5, "kind": "cancelled"|"precommit"|"workspace"|"chat", "message": "…",
-  "category": "too-long",
+  "category": "too-long", "account": null, "accountMessage": null, "accountCommand": null,
   "cutOff": { "ceiling": 32000, "call": { "tool": "write_file" }, "thought": false },
   "notices": ["hook turn-finished: /usr/bin/fmt could not be started"],
   "prompt": 4, "id": "saved-session-id-or-null" } }
@@ -1110,6 +1163,21 @@ a client that reloads on receipt sees the same thing on disk.
 
 `prompt` is as on `turn.done`: a turn that failed still said what it was asked, so the
 prompt is in the conversation and is still a place a fork can be cut at.
+
+`account` names which failure of a ChatGPT account it was, and is `null` for a failure that did
+not come from the account. It is one of `not-signed-in`, `ended`, `token-refused`, `unusable`,
+`usage-limit`, `not-permitted`, `model-not-offered`, `renewal-refused`, `renewal-rate-limited`,
+`renewal-unavailable`, `renewal-incomplete` and `renewal-transport`, and the `category` beside it is still
+the class the failure belongs to. `accountMessage` is the bridge's sentence for that failure, and `null`
+where `account` is: one sentence in sentence case that says what happened and what to do. `accountCommand`
+is the words of it that are a command to run, as they stand in the sentence, and `null` where it names none.
+A client draws the sentence as text with the command in a code element, and does not word the failure from
+the name or read the sentence for the command. Neither holds text from a reply. For `usage-limit` and
+`not-permitted`, `status` is the status of the reply that refused, and `null` where the refusal came in an
+event of the stream; a wait the usage limit asked for at a 429 is in `accountMessage`. `model-not-offered`
+is the service refusing the model of the turn because the account does not offer it: `accountMessage` says
+so and that another model can be chosen, `accountCommand` and `status` are `null`, and the sign-in is
+untouched.
 
 `cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
 otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's
@@ -1129,7 +1197,8 @@ preferences to this ID just as they do for `turn.done`.
 `notices` is what the turn said about itself as it ran, as §8.2 carries for a turn that
 answered. A failed turn produces no outcome for those sentences to arrive on, and one of
 them is a hook of the person's own that could not be started, so a client that drops this
-field is a client on which nobody learns their formatter has stopped running.
+field is a client on which nobody learns their formatter has stopped running. The same list
+names each question the turn did not put because the person had already answered it.
 
 ### 8.4 Failure semantics — the load-bearing part
 
@@ -1180,9 +1249,11 @@ default: defaulting either way is the mistake this design exists to avoid.
 directory, or about the root of the git worktree around it, a session the flow above would ask
 is not asked: it starts from the rule a yes
 writes, emits no `trust.request`, reports `trust.known: true` where its response has `trust`,
-and its response carries `remembered: { at, path }`, when
-the answer was given (seconds since the epoch) and the file it is kept in, for the client to
-say at the top of the conversation. Otherwise `remembered` is `null`. The record is the one
+and its response carries `remembered: { at, path, shownPath, root, shownRoot }`, when
+the answer was given (seconds since the epoch), the file it is kept in and the directory it is
+about, for the client to say at the top of the conversation. `shownPath` and `shownRoot` are `path`
+and `root` spelled as `shownPath` is on a request, and a client draws those. Otherwise `remembered`
+is `null`. The record is the one
 the terminal keeps, so an answer kept in either front end settles the other.
 
 Where the question is put and a yes may be kept, the response and the `trust.request`
@@ -1190,6 +1261,12 @@ carry `keeping`, the file a yes writes; the client names it on the question and 
 is kept. `keeping` is `null` where the answer may not be kept: no state directory,
 a filesystem root, the home directory or one holding it, a filesystem that cannot say when
 the directory was made, or an incognito session.
+
+The `trust.request` event also carries `shownDirectory` and `shownKeeping`, which are `directory`
+and `keeping` spelled as `shownPath` is. A client that draws the question from the event draws
+those and never `directory` or `keeping`. `shownKeeping` is `null` exactly when `keeping` is. The
+responses of `session.new`, `session.open` and `session.fork` carry `shownDirectory` and
+`shownKeeping` the same way, for a client that puts the question from the response.
 
 ---
 
@@ -1345,12 +1422,21 @@ Still open:
 
 - `run.request` stages carry `binary`, the file the step runs, and the request carries
   `confinement`: `null` where the turn does not confine the stages, else `{ heading, directories,
-  sentences }` as the agent worded them.
-- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `picture` and
+  shownDirectories, sentences }` as the agent worded them. `writes` and `directories` are the paths as
+  held. `shownWrites` and `shownDirectories` are the same paths spelled as `shownPath` is, with a byte
+  that is not UTF-8 written `\xNN`, for a client to draw in place of them. `shownDirectory` spells
+  `directory` the same way, and each stage's `shownBinary` spells `startedAs` and `resolved`, joined
+  by ` -> ` where they differ.
+- `vet.request` carries `request`, `origin`, `summary`, `expects`, full `content`, `lines`, `hidden`, `hiddenNote`, `picture` and
   `vetting: { verdict, reason, detail }`. `picture` is `null` for text. For a picture or a PDF it
   is `{ path, media, bytes }`, a copy of the file for the person to open, deleted once the request
   is answered, and `content` is empty. `vet.reply` carries the session, request and
   explicit decision. Its kind is distinct from output and path-vouch replies.
+- `output` of `output.request` and `content` of `vet.request` have each character that draws as
+  nothing written out as `‹U+XXXX›`, and a tag character also names the letter it stands for. `hidden`
+  counts the characters written out, and `hiddenNote` is the sentence saying so in the agent's words,
+  or null when the count is zero. The card draws the sentence above the text when there is one. All
+  three are drawn as sent: the window does not read the text to make, count or word them.
 - `output.request` and `vouch.request` include `vetting`. `confirm.request` includes an
   optional `remark: { preview, lines, label }`. None is interpreted as an approval.
 - `watches.list/add/stop` operate on an open session. Add names a project-relative file;
@@ -1378,13 +1464,14 @@ Still open:
   The desktop category `model-unconfigured` identifies a selected Brave model without
   Brave configuration when another gateway or Bedrock service is configured; select
   a model from that service instead of replacing its credential.
-  Error events include stable `category`, optional `status` and `attempts`, and `cutOff` for a
-  turn the output ceiling ended; raw backend
+  Error events include stable `category`, optional `status` and `attempts`, `account`, `accountMessage` and
+  `accountCommand` for a failure of a ChatGPT account, and `cutOff` for a turn the output ceiling ended; raw backend
   diagnostic text is not sent as a turn error.
 - `hooks.inspect` reports the hooks file as the agent reads it: `path`, its `text` (null for a
   file this could not read at all), the `hooks` it declares as `{ on, tool, run, timeout, firesForNothing }`,
-  `timeoutSeconds` as `{ min, max }`, the whole numbers of seconds the reader accepts for an
-  entry's `timeout` (an entry with any other `timeout` is dropped), and `entire`, false where the
+  `timeoutSeconds` as `{ min, max, defaultFor }`, the whole numbers of seconds the reader accepts for an
+  entry's `timeout` (an entry with any other `timeout` is dropped) and, for each moment word, the
+  seconds an entry on it that states none is held to, and `entire`, false where the
   reader passed over part of the file, so that composing it back
   from `hooks` alone would drop what it did not read. An editor that offers a form refuses one for
   such a file. `no_home` where the platform names no state directory. Nothing else parses the
@@ -1427,7 +1514,8 @@ Still open:
 - `manifest.request` carries `request`, `task` and `steps`. `manifest.reply` carries the
   session, request and explicit decision. An approval covers that plan and does not approve its
   writes, which arrive as `confirm.request` when their steps are reached.
-- `manifest.error` reports the cause of the failure in `kind` and `category`. `declined` says
+- `manifest.error` reports the cause of the failure in `kind`, `category`, `account`, `accountMessage` and
+  `accountCommand`, which are those of `turn.error`. `declined` says
   the plan was put to the person and not approved. `stopped` says the person stopped the run.
   `problem` is the agent's own sentence, and is null for a model service failure.
   `attempt` holds `goal`, `proposed`, `plan` and `steps`, whatever the run got as far as making.
@@ -1442,7 +1530,7 @@ Still open:
   `proposed`, `plan` and `steps`, as `attempt` does, and `failure`, which is the agent's
   sentence about why the run stopped and is null for a run that finished. It is refused with
   `bad_request` for a session's record, and with `no_such_session` for an id that names none.
-- `exposure.request` carries `request`, `path`, `credentials` and `summary`. `credentials` has
+- `exposure.request` carries `request`, `path`, `shownPath`, `credentials` and `summary`. `credentials` has
   one line per finding, as the agent wrote it: the kind, where it is, and a mask of the value.
   No part of a value and no text of the file is sent. `exposure.reply` carries the session,
   request and explicit decision, and its kind is distinct from every other reply's.
@@ -1474,8 +1562,10 @@ Still open:
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
   `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
   force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
-  not a rule, where `said` is the agent's sentence about why. `proposed` holds `{ rule, file }`
-  for each `allow` rule a checkout wrote, which is not in force. `directories` holds the names
+  not a rule, where `said` is the agent's sentence about why. `proposed` holds
+  `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote, which is not in
+  force; `shownRule` is `rule` spelled as text and `shownFile` is `file` spelled as `shownPath`
+  is, and a client draws those. `directories` holds the names
   in `additionalDirectories`, none of which is opened.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.

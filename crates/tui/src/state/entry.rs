@@ -34,6 +34,23 @@ pub enum Speaker {
     Delegate,
 }
 
+/// How a note from the session reads against the notes beside it.
+///
+/// Set by the code that writes the note, from what happened, and never read back out of the words
+/// of the note. Only the renderer reads it. An export, the failure the status area repeats and the
+/// reason a turn is recorded as failed all read [`Speaker`], so a tone changes none of them
+/// (VIEW-8).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tone {
+    /// The session in its own voice, in the one ink every such note shares.
+    #[default]
+    Note,
+    /// Something a person asked for was done.
+    Done,
+    /// Something a person asked for was not done, and the note says why.
+    Refused,
+}
+
 /// One delegate's work, drawn where the call that started it would have been.
 ///
 /// A delegate is a second planner with a run of its own, and several are going at once, so its
@@ -55,8 +72,7 @@ pub struct Delegate {
     pub lines: Vec<Entry>,
     /// How many it has done in all, which is more than are kept once it has run long enough.
     pub calls: usize,
-    /// What the turn was told when it finished. `None` while it is still working, which is what
-    /// tells a delegate that is running from one that answered.
+    /// What the turn was told when it finished. `None` until the driver reports the finish.
     pub note: Option<String>,
     /// What it handed back, where it handed back anything. A delegate that could not finish
     /// reported nothing.
@@ -65,8 +81,9 @@ pub struct Delegate {
     /// driver's sentence about how the run ended, and this is the delegate's own about what it
     /// found. Which shape it takes was settled by the gate that decided what the planner got.
     pub reported: Option<Reported>,
-    /// Whether it ended by failing, so the line saying so can be coloured as such.
-    pub failed: bool,
+    /// Where it stands, as [`bravebot_agent::roster::Roster`] has it. The session sets it from
+    /// the roster after every change, so the rules for it are written there and nowhere else.
+    pub state: bravebot_agent::roster::AgentState,
     /// The token that asks this delegate to stop, and no other and not the turn (DELEGATE-25).
     pub stop: bravebot_core::cancel::DelegateStop,
 }
@@ -166,8 +183,7 @@ impl JobView {
                 ran_for = crate::loops::spell(
                     self.since.elapsed() + self.moved_after.unwrap_or_default()
                 )
-            )
-            .to_string(),
+            ),
             JobState::Stopping => t!(job_stopping).to_string(),
             JobState::Ended => outcome.summary(),
             JobState::EndedWithTurn => t!(job_ended_with_turn).to_string(),
@@ -181,8 +197,7 @@ impl JobView {
                 job_of_delegate,
                 name = self.name.clone(),
                 number = delegate.to_string()
-            )
-            .to_string(),
+            ),
             None => self.name.clone(),
         }
     }
@@ -193,9 +208,9 @@ pub(super) const JOB_ROW_LINES: usize = 2000;
 
 /// Something the delegate view can open.
 ///
-/// One list rather than two, because a person pressing the key is asking to see work that is not
-/// in the transcript, and which kind of work it was is a property of the row rather than a reason
-/// for a second key.
+/// One view and one set of keys serve two lists: the agents (asides and delegates), which Ctrl-L
+/// opens, and the commands that printed something, which `/outputs` opens. Which list a row
+/// belongs to is its variant.
 #[derive(Debug, Clone, Copy)]
 pub enum Watched<'a> {
     /// A question asked beside the work, and its answer.
@@ -222,7 +237,13 @@ pub(super) const DELEGATE_KEPT: usize = 400;
 impl Delegate {
     /// Whether this one is still working.
     pub fn is_running(&self) -> bool {
-        self.note.is_none()
+        self.state == bravebot_agent::roster::AgentState::Working
+    }
+
+    /// Whether it ended by failing, or was still working when its turn ended, so the line saying
+    /// so can be coloured as such.
+    pub fn failed(&self) -> bool {
+        self.state == bravebot_agent::roster::AgentState::Failed
     }
 
     /// Whether the person has asked it to stop and it has not yet finished doing so.
@@ -273,6 +294,8 @@ impl Delegate {
 pub struct Entry {
     pub speaker: Speaker,
     pub text: String,
+    /// The ink a [`Speaker::System`] note is drawn in. [`Tone::Note`] for every other entry.
+    pub tone: Tone,
     /// The audit trail recorded while producing this entry, shown when the trail is visible.
     ///
     /// Already in the words it is drawn in, because an entry replayed from a stored session has
@@ -284,6 +307,18 @@ pub struct Entry {
     /// Held on the entry rather than in one place so the scrollback shows what each turn did.
     /// A live list belongs to the turn in flight and goes here when that turn ends.
     pub todos: Vec<bravebot_core::todo::Row>,
+    /// The whole plan as it stood when the person asked for it to be printed (VIEW-37), for the
+    /// [`Speaker::System`] entry `/todos` leaves.
+    ///
+    /// Held apart from `todos`, which is the plan a turn worked to and is written down with the
+    /// session: a printed plan is an entry of the screen and no turn's plan, so it takes no place
+    /// in what the record keeps by turn.
+    pub whole_plan: Vec<bravebot_core::todo::Row>,
+    /// Whether no turn was running when the plan was printed, so that a row still to do is drawn
+    /// as the panel draws it then: hollow and dim, not as work being done (PANEL-10).
+    ///
+    /// Taken at the press and kept, so the printed plan does not change when a turn ends.
+    pub whole_plan_left_open: bool,
     /// The call this entry describes, for a [`Speaker::Tool`] entry.
     ///
     /// Carries the note and the hunks separately from `text` so the interface can style them
@@ -332,8 +367,11 @@ impl Entry {
         Self {
             speaker,
             text,
+            tone: Tone::Note,
             trail: Vec::new(),
             todos: Vec::new(),
+            whole_plan: Vec::new(),
+            whole_plan_left_open: false,
             landing: None,
             shown: None,
             returned: None,
@@ -373,6 +411,25 @@ impl Entry {
 
     pub fn system(text: impl Into<String>) -> Self {
         Self::blank(Speaker::System, text.into())
+    }
+
+    /// A note saying something a person asked for was done.
+    pub fn done(text: impl Into<String>) -> Self {
+        Self {
+            tone: Tone::Done,
+            ..Self::system(text)
+        }
+    }
+
+    /// A note saying something a person asked for was not done, and why.
+    ///
+    /// Not a [`Speaker::Failure`]: that is the reason a turn failed, which an export writes under
+    /// "Failed" and the status area repeats, and a command that was refused is neither.
+    pub fn refused(text: impl Into<String>) -> Self {
+        Self {
+            tone: Tone::Refused,
+            ..Self::system(text)
+        }
     }
 
     /// The block a delegate's work is drawn under.
@@ -435,6 +492,21 @@ impl Entry {
         Self {
             why: why.into(),
             ..Self::blank(Speaker::Tool, line.into())
+        }
+    }
+
+    /// The plan as `/todos` prints it, under `heading`, which is the interface's own words.
+    ///
+    /// `left_open` is whether no turn is running as it is printed.
+    pub fn printed_plan(
+        heading: impl Into<String>,
+        plan: Vec<bravebot_core::todo::Row>,
+        left_open: bool,
+    ) -> Self {
+        Self {
+            whole_plan: plan,
+            whole_plan_left_open: left_open,
+            ..Self::blank(Speaker::System, heading.into())
         }
     }
 

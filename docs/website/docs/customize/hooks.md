@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: Hooks
-description: Run a command of your own when a turn starts, when a tool call finishes, when a turn is over, or when a question is waiting on you.
+description: Run a command of your own when a session starts or ends, when a turn starts, when a tool call finishes, when a turn is over, when a question is waiting on you, when a checkout is made for a delegate, or when a conversation is compacted.
 ---
 
 # Hooks
@@ -30,7 +30,7 @@ inside a checkout, so a command named in one would be a command that arrived wit
 }
 ```
 
-## The four moments
+## The nine moments
 
 Each entry names one moment in `on`:
 
@@ -40,6 +40,11 @@ Each entry names one moment in `on`:
 | `tool-finished` | after one tool call has finished, whatever came of it |
 | `turn-finished` | when the turn you asked for is over, however it ended |
 | `prompt-shown` | just before a prompt or a question is put to you |
+| `checkout-made` | once a checkout has been made for a delegate, before that delegate's first request |
+| `compacted` | after a summary has replaced the older part of the conversation in the request |
+| `session-started` | when the interface you opened has begun a session, before it sends a turn |
+| `session-ended` | when you leave that interface, however it ended |
+| `file-changed` | when the file the entry names has changed since the last look |
 
 `turn-finished` fires even when the turn was cancelled or failed on its first request, because the
 commonest thing to attach to it is telling somebody who walked away, and a turn that died is exactly
@@ -48,6 +53,19 @@ when they want telling.
 A `tool-finished` entry may add `"tool": "write_file"` to fire for calls of that name alone. An entry
 naming no tool fires for every call. A `tool` on any other moment is about a call that does
 not happen there, so that entry fires for nothing.
+
+A `file-changed` entry names the one file to watch in `path`, a literal path that is relative to the
+directory you opened bravebot in or absolute, and not a pattern or a directory:
+
+```json
+{ "on": "file-changed", "path": ".envrc", "run": ["/usr/bin/notify-send", ".envrc changed"] }
+```
+
+The full-screen interface looks at the file every 5 seconds and runs the command when its size or
+modification time differs from the last look, or when it appears or is deleted. Several changes in
+one window run it once, and it does not run again until 5 seconds after the last run ended. No turn
+starts and the model is told nothing. The command is told the moment and not the path, so one
+command for two files is two entries. Up to 8 entries are kept, and the looks end when you leave.
 
 Two entries on one moment are two commands, run one after the other in the order the file lists them.
 A word this build does not fire declares no hook and leaves the rest of the file in force.
@@ -62,6 +80,53 @@ the session is waiting and not what for, like every hook. It fires only for a pr
 you: not in a one-shot run where nobody can be asked, and not for one your permission mode answered
 in advance. It cannot answer the prompt, and the hook runs before the prompt is drawn, so a slow one
 delays it up to its timeout.
+
+`checkout-made` is where a [checkout](agents.md#a-checkout-of-its-own) gets what a checkout lacks. A
+checkout holds the last commit's tracked files, so a delegate working in one has no installed
+dependencies and none of the files your repository ignores, such as `.env`. The hook runs once for
+each checkout, in the checkout's root, before its delegate sends anything, and it is declared in your
+own `hooks.json` like every hook, so a project cannot name the command:
+
+```json
+{ "on": "checkout-made", "run": ["/usr/local/bin/set-up-checkout"], "timeout": 300 }
+```
+
+Name the program by an absolute path outside the repository, as above: the command runs unconfined
+with your access, and a relative path would run whatever file the repository holds at that name.
+
+A delegate that works in your working directory fires nothing, and so does one started inside a
+checkout, which works in the checkout it was given. A setup that fails is reported to you and the
+delegate runs in the checkout as it stands. A checkout this hook ran in is kept for you to remove with
+[`/checkouts remove`](../reference/commands.md#checkouts-apply-n--remove-n), as one a delegate ran a
+program in is.
+
+`compacted` lets a command react to the session losing its detailed history: save notes, log the
+event, or tell you. It fires once for each summary that was adopted, whether the context budget
+forced it in the middle of a turn or you asked for it with `/compact`. It does not fire when there
+was nothing worth summarising, when the summary was refused or could not be made, or for a delegate
+summarising its own conversation. It is told that a compaction happened and nothing of the summary
+or of what it replaced, like every hook, and what it prints does not reach the planner. It cannot
+undo the compaction, and one that fails is reported while the conversation stays shortened.
+
+`session-started` and `session-ended` are for a command that should run once for the session rather
+than at every turn, such as starting a local service or writing a log line. They belong to the
+interface you opened and fire once for it: the full-screen interface, a session in lines
+(`--plain`), and a one-shot run (`-p`), which is a session of one turn. A turn never fires them, and
+neither does a delegate. `/resume` and `/clear` begin another conversation in the interface you
+already have open and fire neither. A session you hand to the background with `/bg` goes on, so
+`session-ended` does not fire for it. A run that was refused before it could send anything, or an
+interface you left at one of the questions it opens with, began no session, so neither fires.
+
+The hooks file is read when the session begins, and the same hooks fire when it ends. Both run in the
+directory the session opened in.
+
+The desktop app, an editor that hosts bravebot over ACP and the local host fire them too, once for
+each session they hold. A session there begins with its first turn, so one you opened and sent
+nothing to fires neither, and ends when you close it, or when the app or the editor ends and the
+process waits up to ten seconds for the hook. `session-ended` runs after the turn that was running
+when you closed the session has ended. If a `session-started` hook cannot be started, the first turn
+says so. A `session-ended` hook that cannot be started has nowhere to say so, because the session is
+already closed.
 
 ## A hook is a program and its arguments
 
@@ -83,6 +148,8 @@ quoting decides what runs.
 ## Where it runs, and what it reaches
 
 A hook runs in the directory the turn is working in, so a relative path in one means what you meant.
+For `checkout-made` that is the checkout's root, which holds the repository's tracked files, so a
+relative path there names a file the repository holds.
 
 It is not confined. Its environment is the one Brave Bot was started from, less this agent's own
 credentials, which are the same names taken off a program the planner asks to
@@ -114,9 +181,18 @@ One line of JSON on standard input, naming the moment and nothing else:
 {"event":"turn-finished"}
 ```
 
-No path, no argument a model wrote, no bytes out of a file, and nothing added to its environment. The
-`tool` on a `tool-finished` entry selects which entries fire and reaches no process. A hook that needs
-to know which tool ran declares one entry per tool.
+No argument a model wrote, no bytes out of a file, and no path, except for `checkout-made`. That
+hook's environment holds two variables, `BRAVEBOT_CHECKOUT`, the checkout it ran for, and
+`BRAVEBOT_WORKING_DIRECTORY`, the directory the checkout was made from, so a setup command can copy
+a file across:
+
+```sh
+cp "$BRAVEBOT_WORKING_DIRECTORY/.env" "$BRAVEBOT_CHECKOUT/.env"
+```
+
+Bravebot adds neither to the environment of any other hook, and adds nothing else to anyone's. The `tool` on a
+`tool-finished` entry selects which entries fire and reaches no process. A hook that needs to know
+which tool ran declares one entry per tool.
 
 ## A hook decides nothing
 
@@ -130,13 +206,13 @@ next tool call happens, through a channel no gate can see.
 
 **The cost, stated plainly: a secret scanner that blocks a write is not a hook, and cannot be one.**
 A rule about what to refuse is written as a rule, in
-[permissions](../security/permissions.md), where the decision comes from something you wrote rather
+[permissions](../security/permission-rules.md), where the decision comes from something you wrote rather
 than from something a program read.
 
 ## How long a hook may run
 
-A hook is stopped after 30 seconds. An entry may set its own limit with `timeout`, in whole seconds
-from 1 to 600:
+A hook is stopped after 30 seconds, and a `session-ended` hook after 5, since you are leaving. An
+entry may set its own limit with `timeout`, in whole seconds from 1 to 600:
 
 ```json
 { "on": "turn-finished", "run": ["make", "test"], "timeout": 300 }
@@ -172,5 +248,13 @@ since you mistyped its path.
 - **Nothing a hook prints is kept.** Debugging one means having it write a file.
 - **A hook runs while the turn waits.** Every hook is time added to the turn, up to 30 seconds each, or the `timeout` the entry sets, at most 600. A
   `tool-finished` hook with no `tool` pays that on every call.
-- **There is no moment for a session.** Something that should happen once when the program opens fires
-  per turn instead.
+- **`checkout-made` holds its delegate back while it runs.** The delegate sends nothing until its
+  hook has ended, so a setup that installs dependencies delays the work by as long as it takes. Set
+  a `timeout` for one that needs more than 30 seconds. Stopping the turn does not stop a hook that is
+  running. Delegates given a checkout by one call run their hooks at the same time, and the status
+  line names only one of them.
+- **A hook that reaches its time limit is stopped alone.** The program it started is stopped and the
+  programs that one started keep running.
+- **`compacted` does not say who asked, and there is no moment before a compaction.** A compaction you
+  asked for and one the budget forced run the same hooks with the same line. A command that has to
+  save something while the full history is still in the request has no moment to attach to.

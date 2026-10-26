@@ -6,12 +6,14 @@
 //! from the blocks of `one_turn` that read context files and present a tool's result.
 
 use bravebot_aichat::protocol::Tool;
+use bravebot_core::capability::Capability;
 use bravebot_core::delegate::{ADDRESSED, Addressed, Definitions};
 use bravebot_core::event::Sink;
 use bravebot_core::policy::{Denial, Policy, Routing};
 use bravebot_i18n::t;
 
-use super::{FOR_A_PERSON, OPENING, PLANNING, ReadOutputIs, Task, TurnError};
+use super::{FOR_A_PERSON, Inputs, OPENING, PLANNING, ReadOutputIs, Task, TurnError, held};
+use crate::confirm::Confirmer;
 use crate::report::Reporter;
 use crate::request_view::{Prompt, Provenance};
 use crate::styles::{self, Style};
@@ -226,10 +228,15 @@ pub(super) struct ModelForTheTurn {
     /// The model the definition wrote and the one it resolved to, where the definition's model is
     /// the one this turn asked for.
     pub(super) definition_model: Option<(String, String)>,
+    /// Whether the turn runs on the model `planModel` named (BACKEND-56), so the answering model
+    /// is not compared with the session's own.
+    pub(super) on_the_plan_model: bool,
 }
 
 pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
     config: &Config,
+    egress: &bravebot_net::Egress,
+    started_in: crate::permission_mode::PermissionMode,
     task: &Task,
     addressed: Option<&Addressed>,
     reporter: &mut R,
@@ -292,14 +299,30 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
         (None, Some(spec)) => spec.model().map(|_| spec.definition().to_string()),
         (None, None) => None,
     };
+    // The plan model, where the order BACKEND-56 gives puts it first. A name that cannot be used is
+    // said and set aside, leaving the turn on the session's own model.
+    let plan_model =
+        match crate::backend::answering(config, egress, started_in, task, named.is_some()) {
+            crate::backend::Answering::Plan(model) => Some(model),
+            crate::backend::Answering::PlanSetAside(named) => {
+                let said = t!(plan_model_unavailable, model = named);
+                reporter.notice(said.clone());
+                notices.push(crate::skills::Notice::from_message(said));
+                None
+            }
+            crate::backend::Answering::Definition | crate::backend::Answering::Task => None,
+        };
+    let on_the_plan_model = plan_model.is_some();
     let turn_model = definition_model
         .as_ref()
         .map(|(_, resolved)| resolved.clone())
+        .or(plan_model)
         .or_else(|| task.model.clone());
     Ok(ModelForTheTurn {
         pinned_by,
         turn_model,
         definition_model,
+        on_the_plan_model,
     })
 }
 
@@ -311,20 +334,27 @@ pub(super) fn model_for_the_turn<R: Reporter + ?Sized>(
 /// specific thing: a rule about this turn rather than about how work is done here. On both
 /// prompts, since a delegate writing files in plan mode would be the mode failing exactly where
 /// nobody is watching the writes. Only plan mode says anything: see
-/// `PermissionMode::instruction`.
+/// `PermissionMode::instruction`. The rule files a touched path brings in come after it, so that one
+/// a round adds is appended to what was sent (INSTR-16), and their heading says the mode and the
+/// user's words from the command line stand over them.
 ///
 /// `delegates` is the set the turn resolved, as narrowed by its `spawns:` lines, which decides
 /// whether a delegate is told it may delegate. `started_in` is the mode the turn began in, read
 /// once by the caller, which also updates it as the rounds go. `style` is the output style the
-/// turn resolved, which may differ from the one the task carries (INSTR-12). `memory` is what a
+/// turn resolved, which may differ from the one the task carries (INSTR-12). `skill_mode` is the
+/// name and gated words of the skill `/mode` keeps applied, which the turn read again (SKILL-21). `memory` is what a
 /// definition's kept memory says, which the caller reads through its policy and so keeps hold of.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a value the turn has already resolved, and turn.rs is its only caller"
+)]
 pub(super) fn system_prompt(
     task: &Task,
     workspace: &Workspace,
     delegates: &Definitions,
     addressed: Option<&Addressed>,
     style: Option<&Style>,
+    skill_mode: Option<(&str, &str)>,
     preamble: &crate::preamble::Preamble,
     started_in: crate::permission_mode::PermissionMode,
     memory: impl Fn(bool, &str) -> String,
@@ -389,9 +419,95 @@ pub(super) fn system_prompt(
                     ),
                 );
             }
+            // Ahead of the instructions files, so what the user's own `AGENTS.md` says has the last
+            // word over a skill, as it has over everything this program says (SKILL-21).
+            if let Some((name, words)) = skill_mode {
+                system.push(
+                    Provenance::Trusted("skill mode"),
+                    format!(
+                        "The user put the skill `{name}` in force as a mode for every turn of this \
+                         session, until they leave it. Follow it:\n\n{words}"
+                    ),
+                );
+            }
             system.extend(preamble.prompt.clone());
         }
     }
     system.push(Provenance::Driver, mode);
+    // After everything else, so a rule a round adds later is appended to what was sent (INSTR-16).
+    system.extend(preamble.rules.clone());
     system
+}
+
+/// The lists of the servers this session reached, settled at the start of a turn somebody asked
+/// for, a tick of their loop included, which is where there is a person to put a list to
+/// (SERVERS-8). A delegate settles none, since it puts no question to a person (DELEGATE-12),
+/// and is offered what its parent's turn already settled. Every run is offered the tools of the
+/// servers it holds a grant for and no other, and is put the lists of those alone, so a run
+/// of a definition that holds no servers is offered none and asked about none either
+/// (ADDRESS-7).
+///
+/// The offer with what settling it spent, which is this turn's since this turn is what asked.
+/// Adding the offer's tools to the turn's own is the caller's.
+pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
+    inputs: Inputs<'_>,
+    addressed: Option<&Addressed>,
+    policy: &mut Policy<'_, S>,
+    confirmer: &mut C,
+    reporter: &mut R,
+    subscription: &mut Option<crate::shared::Spending<'_>>,
+    notices: &mut Vec<crate::skills::Notice>,
+) -> Option<(crate::mcp::Offer, bravebot_aichat::protocol::Usage)> {
+    let Inputs {
+        config,
+        egress,
+        task,
+        cancel,
+        ..
+    } = inputs;
+    let holding = match (&task.delegate, addressed) {
+        (Some(spec), _) => spec.capabilities().clone(),
+        (None, Some(addressed)) => addressed.capabilities().clone(),
+        (None, None) => held(task),
+    };
+    let holds_a_server = holding
+        .iter()
+        .any(|capability| matches!(capability, Capability::McpCall(_)));
+    let mut mcp = match (&task.delegate, &task.mcp) {
+        (_, Some(_)) if !holds_a_server => None,
+        // `--tools` names this program's own tools, so a server's are not among them, and no
+        // list is put to the person for a server whose tools would not be offered.
+        (_, Some(_)) if bravebot_core::tool_set::names_only() => None,
+        (Some(_), Some(session)) => Some((
+            session.offer().holding(&holding),
+            bravebot_aichat::protocol::Usage::default(),
+        )),
+        (None, Some(session)) => {
+            let settled = session.settle(
+                policy,
+                &mut crate::processor::Chat::new(config, egress, task.account_session())
+                    .spending(subscription.as_mut())
+                    .on(task.model.as_deref())
+                    .stoppable_by(cancel),
+                confirmer,
+                reporter,
+                task.permission_mode.get(),
+                &holding,
+            );
+            notices.extend(
+                settled
+                    .notices
+                    .into_iter()
+                    .map(crate::skills::Notice::from_message),
+            );
+            Some((session.offer().holding(&holding), settled.usage))
+        }
+        (_, None) => None,
+    };
+    // Past the size the settings name, the tools are offered by name under one `load_tool`
+    // and a definition joins `offered` when the planner loads it (SERVERS-16).
+    if let (Some((offer, _)), Some(threshold)) = (&mut mcp, config.defer_mcp_tools_above) {
+        *offer = offer.clone().deferring_above(threshold);
+    }
+    mcp
 }

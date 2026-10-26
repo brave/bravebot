@@ -12,6 +12,13 @@
 **/*.rs.bk
 *.pdb
 
+# The fuzz package's build output, the inputs the fuzzer grows, the crashes it finds and its
+# coverage data. What is kept lives in fuzz/seeds and fuzz/regressions.
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/coverage/
+
 # Build output
 /dist/
 

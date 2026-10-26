@@ -120,10 +120,11 @@ shows a file in a directory [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30) leav
 as the program, the test that shows the same for a name the program itself starts, the `PATH` the
 program is given, and whether `own_credentials()` is removed from its environment
 ([CRED-14](../specs/credential-protection.md#CRED-14)).** `clippy.toml` refuses every call the
-tree starts a program with, so each start has a mark beside it in the diff,
-`#[allow(clippy::disallowed_methods, reason = "...")]`. A reviewer reads what the lint cannot
-decide: that the reason names who chose the program and is true, and what the program itself starts
-by name (SANDBOX-30).
+tree starts a program with, and a start goes through `bravebot_sandbox::programs::start`, which takes
+a `Resolved`, what the program inherits and the `PATH` it is given. A reviewer reads what neither
+can decide: that the constructor in the diff (`own_executable`, `written_in_source`,
+`named_by_person`, `found_earlier`, `to_confine`) names who chose the program truthfully, and what
+the program itself starts by name (SANDBOX-30).
 
 The second test puts a directory SANDBOX-30 leaves out first on the `PATH` bravebot inherits and
 plants an executable file in it under a name the program itself starts, such as the interpreter an
@@ -131,11 +132,11 @@ plants an executable file in it under a name the program itself starts, such as 
 installed later on that `PATH`. The test starts the program through the function production uses,
 and asserts both that the planted file did not run and that the program ran to its end. The first
 test passes for a program whose own file is found safely and whose interpreter is not, so it is no
-substitute for the second. The program is given a `PATH` reduced with
-`bravebot_sandbox::programs::restrict_path`, or the names it starts are passed as absolute paths,
-as the `/caffeinate` inhibitor's `cat` is. Where it is given neither, such as a language server that
-runs the project's own interpreter on purpose, the description cites the issue or Known costs entry
-that records it, as [GAP-001](gaps.md#GAP-001) says.
+substitute for the second. The program is started with `SearchPath::Reduced`, or the names it starts
+are passed as absolute paths, as the `/caffeinate` inhibitor's `cat` is. A start that is given
+`SearchPath::Inherited`, such as a language server that runs the project's own interpreter on
+purpose, has its description cite the issue or Known costs entry that records it, as
+[GAP-001](gaps.md#GAP-001) says.
 
 **Why:** the lint sees every start and no reason for it. A reason that says a program was resolved
 when it was found by a walk of the caller's own, and a program started by another program, each
@@ -158,3 +159,23 @@ for the spellings of a path.
 
 **Why:** the programs on the list are started from different code, so a fix at one start does not
 reach the others unless it is made in code they share.
+
+---
+
+<a id="PATH-007"></a>
+
+## A step that turns a name into a key says which different files it joins
+
+**A change to a step that turns a name into a key (trimming, case folding, a lossy rendering, a
+normalisation) states which different files the step joins and why, and carries a test in which
+two names that must stay different do.** The test makes both names in a directory, asks the volume
+whether they are one file, and asserts two keys when it holds them apart. A step that joins files on
+purpose says so in the clause that governs it, as a distrust joining canonically equivalent forms
+does in [TRUST-2](../specs/trust-map.md#TRUST-2). [PATH-004](#PATH-004) covers one file with many
+names; this covers many files with one key. The names to build the pairs from are `held_names()` in
+`crates/agent/test-support/aliases.rs`: `AWKWARD_NAMES` and `WINDOWS_NAMES`, less what a Windows
+host does not hold.
+
+**Why:** a table of the names one file has cannot show a step that merges two files, because every
+row in it is a pair the volume already opens as one. Each such step was found by a report after it
+shipped, and an extra rule about the wrong file decides what the person never agreed to.

@@ -10,21 +10,30 @@ governs:
   - crates/cli/src/session_search.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/hunks_command.rs
+  - crates/tui/src/app/records.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/agent/src/hunks.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/accounts.rs
   - crates/tui/src/state/completion.rs
   - crates/tui/src/state/watching.rs
   - crates/tui/src/history.rs
   - crates/session/src/store.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/background.rs
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs
-documented-by: docs/website/docs/using/sessions.md
+documented-by:
+  - docs/website/docs/using/sessions.md
+  - docs/website/docs/using/manifest-mode.md
+  - docs/website/docs/using/rewind.md
+  - docs/website/docs/customize/theme.md
 ---
 
 ## Scope
@@ -37,8 +46,8 @@ is [trace.md](trace.md). Everything else the command line does is [cli.md](cli.m
 the same file for its own topic.
 
 Everything here describes a session whose process a terminal owns and ends. A session whose process
-outlives the terminal is proposed in [background-sessions.md](background-sessions.md) and nothing
-builds it; until it does, no process other than the one running a session holds its record.
+outlives the terminal is [background-sessions.md](background-sessions.md). Either way the process
+running a session holds its record ([SESSION-38](#SESSION-38)).
 
 Everything here describes an ordinary session. A session started with `--incognito` keeps none of
 it, and reads all of it: [incognito.md](incognito.md) governs which half is which. A one-shot run
@@ -337,6 +346,15 @@ other than the name it was given, and the record is an account of what happened.
 before either was kept reads as no model and an empty breakdown, which is not the same as a
 session that cost nothing: the total is still there.
 
+The record also keeps how many of its tokens the model read and how many it wrote, as two running
+totals beside the total. Read is the total less what the model wrote, so a prompt the service
+answered out of its own cache is counted as read. A turn, a failed or stopped turn, a manifest run
+and a request made beside the work (`/compact`, a commit message, a handoff, a question, a goal
+check, a suggestion) each add the split of what they spent. Undoing a turn restores the split with
+the total, and clearing the conversation resets it. A record written before the split was kept has
+neither figure, and a session continued from one holds the split of its later turns only, so the two
+can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
+
 **Why.** A transcript is read after the fact to find out why a session went the way it did, and
 both questions are unanswerable from a total alone. Twenty even turns and one turn that ran away
 come to the same figure and want different fixes. Two sessions cannot be compared at all without
@@ -355,6 +373,25 @@ than the one in force at the time.
 `verified-by: bravebot_tui::app::successful_outcomes_replace_progress_and_empty_following_turns_cost_nothing`
 `verified-by: bravebot_tui::remote_confirm::cumulative_usage_reaches_the_main_thread_unchanged`
 `verified-by: bravebot_tui::state::a_resumed_session_keeps_the_recorded_model_until_a_turn_replaces_it`
+`verified-by: bravebot_session::sessions::a_failed_turn_is_charged_once_and_a_turn_with_no_request_not_at_all`
+`verified-by: bravebot_session::sessions::a_record_from_before_the_split_reads_it_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_rewind_point_from_before_the_split_reads_it_as_none_recorded`
+`verified-by: bravebot_session::sessions::a_continued_turn_adds_its_split_to_the_record`
+`verified-by: bravebot_session::sessions::a_stored_rewind_point_keeps_the_split_of_the_tokens_before_its_turn`
+`verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
+`verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
+`verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
+`verified-by: bravebot_tui::state::clearing_forgets_the_split`
+`verified-by: bravebot_tui::state::restoring_the_spend_leaves_no_split_from_before_it`
+`verified-by: bravebot_tui::state::a_resumed_session_carries_on_counting_the_split_it_was_written_with`
+`verified-by: bravebot_tui::app::a_finished_turn_is_charged_with_what_it_read_and_wrote`
+`verified-by: bravebot_tui::app::every_request_beside_the_work_is_charged_with_what_it_read_and_wrote`
+`verified-by: bravebot_tui::app::a_record_built_from_the_session_holds_the_split_it_has_counted`
+`verified-by: bravebot_tui::undo_tests::undoing_a_turn_takes_its_split_back_with_its_tokens`
+`verified-by: bravebot_tui::manifest_run::a_stopped_run_is_charged_with_the_split_of_its_latest_report`
+`verified-by: bravebot_ui_bridge::history::a_turn_records_its_split_and_a_resumed_one_adds_to_it`
+`verified-by: bravebot_ui_bridge::history::undoing_a_desktop_turn_takes_its_split_back_with_its_tokens`
+`verified-by: bravebot_cli::plain::a_failed_turn_is_charged_what_its_completed_requests_cost`
 
 <a id="SESSION-12"></a>
 ### SESSION-12: the record says where each turn's time went, not only how long it took
@@ -781,6 +818,7 @@ takes a number cannot also have it, so the number is on a word that has one.
 `verified-by: bravebot_tui::app::the_list_names_what_each_point_would_put_back`
 `verified-by: bravebot_tui::app::the_list_of_a_session_with_no_points_says_there_is_nothing`
 `verified-by: bravebot_session::rewind::going_back_further_than_the_session_remembers_rewinds_nothing`
+`verified-by: bravebot_tui::app::the_rewind_command_goes_back_the_number_it_was_given_and_nowhere_for_anything_else`
 
 
 <a id="SESSION-22"></a>
@@ -989,7 +1027,8 @@ planner message of its own needed to hold them. A recorded failure carries only 
 interface composed, never a message from the backend. A prompt handed back to the editor on
 cancellation stays out of the transcript on resume while that turn's spend and timing stay with its
 number; whether those words remain available to recall is SESSION-6, and the two are independent of
-each other. None of this is sent to the planner.
+each other. None of this is sent to the planner. What the planner is told of a failure is the note
+of [TURN-13](turns.md#TURN-13), which holds no more than the category and the request count.
 Accepted corrections remain within the cancelled turn through reload, export and later turns.
 
 **Why.** Turn boundaries cannot be recovered from the conversation afterwards, because a
@@ -1171,8 +1210,9 @@ go stale independently: one build ships both surfaces, and every build ships the
 ### SESSION-30: a stored session can be deleted, and nothing else goes with it
 
 The desktop app can delete a session from disk with `session.delete`, which takes the `directory`
-and `id` that `session.list` gave. It removes the record, the trail beside it and the index of what the session said
-([SESSION-33](#SESSION-33)), and nothing else: not another session in the same project, not a
+and `id` that `session.list` gave. It removes the record, the trail beside it, the index of what the session said
+([SESSION-33](#SESSION-33)) and the lock beside it where no process holds it ([SESSION-38](#SESSION-38)),
+and nothing else: not another session in the same project, not a
 session in another project, and not anything a bot keeps in its memory. Deleting is keyed on those two strings alone. Nothing read out of a record
 decides whether or what to delete.
 
@@ -1188,7 +1228,7 @@ nothing else: a session another process has open is not seen, and that process's
 its record back. A link standing where the record or the trail should be is removed as a link and
 never followed, so the file it points at is untouched.
 
-The command line removes the same three files with `bravebot sessions delete <id>` and `sessions purge`
+The command line removes the same files with `bravebot sessions delete <id>` and `sessions purge`
 ([CLI-33](cli.md#CLI-33)).
 
 The bridge deletes any session it is given, whether or not it is archived. The desktop app offers
@@ -1455,6 +1495,13 @@ stay behind because they were given for work that the brief describes only in wo
 
 ## Known costs
 
+- **A record is held until its session ends.** A terminal that is suspended or left open holds its
+  record, so resuming it from another terminal is refused until the first ends, with `--fork` as the
+  way to carry on from a copy ([SESSION-38](#SESSION-38)).
+- **Where no lock can be had, a refused save is not reported.** On a filesystem that keeps no locks
+  two processes can open one record, and the one whose save finds it changed goes on without
+  saving, as it does for a record it cannot write ([SESSION-5](#SESSION-5)). The record keeps what
+  the other process wrote. A resume is told when its record changed while it was opened.
 - **The first character typed reads every record.** Each record in the directory is parsed in full
   and its lines are held in memory for as long as the picker is open, so the first keystroke pauses
   for a long list of long sessions. Indexing would avoid it, at the cost of a second file that has
@@ -1504,9 +1551,11 @@ stay behind because they were given for work that the brief describes only in wo
   a directory is not saying that every file in it is worth copying anywhere: overwriting a file of
   credentials inside a project the user trusts copies them out of it and into the state directory.
   They leave the record once the point ages out, and 0600 covers them while they are there, but a
-  session that ends on such a turn leaves them in its record until the record is deleted. Nothing
-  here distinguishes a file worth keeping from one that is not, because nothing here reads the
-  bytes.
+  session that ends on such a turn leaves them in its record until the record is deleted: by the
+  person ([SESSION-30](#SESSION-30)), or once nothing has written the record for the retention
+  period, which is 30 days where none is stated
+  ([state-directory.md](state-directory.md#STATE-4)). Nothing here distinguishes a file worth keeping
+  from one that is not, because nothing here reads the bytes.
 
 - **A resumed session cannot rewind a file nobody vouched for.** What such a file held is kept in
   memory for the session that took the backup and left out of the record, so after a resume that
@@ -1616,3 +1665,59 @@ as data.
 `verified-by: bravebot_tui::app::a_note_with_no_text_lists_the_notes_the_session_holds`
 `verified-by: bravebot_session::sessions::a_note_where_no_record_can_be_written_says_it_reached_none`
 `verified-by: by-construction (the session-review skill reads a record's notes into a file beside the copy of the record, names that file to the analyzer and verifier prompts, and writes the number of notes shown into the marker; make check-scripts runs agents/skills/session-review/selftest.py, whose test_a_session_is_reviewed_once_for_its_notes_and_again_only_when_a_new_one_is_added pins that a session whose notes were all considered is not offered again, that a new note offers it again for the new note alone, and that a session with notes and no problems still gets its marker; test_a_session_with_a_new_note_and_no_summary_is_left_undecided_for_the_next_run pins that a session with a new note and an empty summary is undecided while one with no new note is not)`
+
+<a id="SESSION-38"></a>
+### SESSION-38: a record is written by one process at a time
+
+A process that resumes a record holds it for as long as the session lives: an exclusive lock on the
+file `<id>.lock` beside the record, taken when the session is made from the record and dropped when
+the session ends, or when the process does, however it ends. A session that began in this process
+takes the lock with its first write. A second process that resumes a record that is held is refused
+with the session's id and `bravebot --fork <id>`, which copies the record into a new session and is
+not refused. Nothing is read or written for a refused resume.
+
+This covers every way a record is resumed. `--resume <id>`, `--continue`, the list `--resume` opens
+with no id, `--from-pr` and `/resume` refuse where the person chose, before a session is shown. A
+one-shot run given a task with `--resume` or `--continue` is refused before anything is sent, and
+holds the record until its turn is written. The desktop's `session.open` is refused as a bad request
+in the same words. A record the desktop's own bridge closed a moment before is not refused: the
+turn of the closed session may still be writing it, so `session.open` waits for that work, for up to
+two seconds, and opens from a fresh read of the record. `attach` and `reply` on a stopped session
+are refused before a process is started, so a terminal that resumed the record while the session
+was stopped keeps it.
+
+A record counts its writes in `revision`. A session remembers the revision it last read or wrote,
+and a save, a name, a link or a note that finds another revision on disk does not replace the
+record. A resume that finds another revision than the one its record was read with is refused as
+written by another process while it was being opened, and says to resume it again. A record with no
+revision, which is one written before revisions were kept, is replaced by any writer. A write that
+is refused is a record that cannot be written ([SESSION-5](#SESSION-5)): the record on disk is left
+as it is. The revision is what holds a record where no lock can be had, because the lock file
+cannot be made or the filesystem keeps no locks.
+
+A lock is removed only by a process that can take it, so a record that is deleted
+([SESSION-30](#SESSION-30)) or swept ([STATE-4](state-directory.md#STATE-4)) while a process holds
+it leaves the lock to that process. A lock with no record goes by its own age, as a trail with no
+record does.
+
+**Why.** Each process writes the whole record from the copy of the state it holds, so two of them
+replace each other's turns. With them goes the untrusted rule a turn recorded for a file it wrote
+from fetched bytes ([TRUST-4](trust-map.md#TRUST-4)), after which the file reads as trusted
+([TRUST-6](trust-map.md#TRUST-6)).
+
+`verified-by: bravebot_session::sessions::a_record_a_process_holds_is_not_resumed_by_a_second`
+`verified-by: bravebot_session::sessions::a_session_that_began_here_holds_its_record_from_its_first_write`
+`verified-by: bravebot_session::sessions::a_second_resume_cannot_erase_the_distrust_the_first_recorded`
+`verified-by: bravebot_session::sessions::a_save_over_a_record_another_writer_wrote_is_refused`
+`verified-by: bravebot_session::sessions::an_amendment_is_not_written_over_a_record_another_writer_wrote`
+`verified-by: bravebot_session::sessions::a_record_written_before_revisions_is_replaced_by_a_save`
+`verified-by: bravebot_session::sessions::a_session_that_moves_holds_its_record_in_the_new_directory`
+`verified-by: bravebot_session::sessions::deleting_a_session_removes_its_lock_unless_a_process_holds_it`
+`verified-by: bravebot_session::retention::a_lock_with_no_record_goes_by_its_own_age_and_a_held_one_stays`
+`verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked`
+`verified-by: bravebot_tui::resume::a_session_another_process_holds_cannot_be_picked_from_a_pull_requests_list`
+`verified-by: bravebot_tui::app::a_resume_of_a_record_another_process_holds_restores_nothing`
+`verified-by: bravebot_ui_bridge::attaching::a_record_another_window_holds_is_not_opened`
+`verified-by: bravebot_ui_bridge::attaching::a_session_opened_again_waits_for_what_is_still_writing_its_record`
+`verified-by: bravebot_tui::sessions::resume_refuses_a_record_another_process_holds`
+`verified-by: bravebot_cli::running::a_record_a_terminal_holds_is_not_resumed_or_started_again`

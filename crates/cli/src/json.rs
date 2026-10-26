@@ -10,6 +10,7 @@
 //! serialisation dependency to spend on one flat object.
 
 use crate::exit::Ending;
+use bravebot_core::ask::Asking;
 use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::{Event, RecordingSink, Sink};
 use std::io::Write;
@@ -228,6 +229,45 @@ pub fn usage_event(tokens: &Tokens) -> String {
     event("usage", vec![("tokens", token_fields(tokens))])
 }
 
+/// A question the planner asked, put to whatever sends the input lines (CLI-36).
+///
+/// The one event that carries words the result object does not hold: the header, the question and
+/// the choices as the kernel released them to be put to somebody, which are the words a session
+/// draws. `id` is what an `answer` line names, and a choice is answered by its position in
+/// `choices`.
+pub fn question_event(id: u64, asking: &Asking) -> String {
+    let questions = object_list(asking.prompts.iter().map(|prompt| {
+        let choices = object_list(prompt.rows.iter().map(|row| {
+            object(&[
+                ("label", quoted(&row.label)),
+                ("detail", maybe(row.detail.as_deref())),
+            ])
+        }));
+        object(&[
+            ("header", quoted(&prompt.header)),
+            ("question", quoted(&prompt.question)),
+            ("choices", choices),
+            ("multiple", prompt.multiple.to_string()),
+        ])
+    }));
+    event(
+        "question",
+        vec![("id", id.to_string()), ("questions", questions)],
+    )
+}
+
+/// A line of the input stream was not taken (CLI-36).
+///
+/// Names the line by its number and the cause by a fixed word, and nothing of what the line said:
+/// the line is the launching program's, so it is not echoed back into a stream another program
+/// reads.
+pub fn input_refused_event(line: usize, reason: &str) -> String {
+    event(
+        "input_refused",
+        vec![("line", line.to_string()), ("reason", quoted(reason))],
+    )
+}
+
 /// Somewhere a stream's lines go. A failed write is dropped, as it is for the reply: a closed
 /// stdout is a caller that stopped reading, and the run should not stop for it.
 pub struct Stream(Box<dyn std::io::Write + Send>);
@@ -254,6 +294,10 @@ pub struct Streaming {
     /// The same events with the time of each, which is what the session's trail file holds.
     stamped: bravebot_session::audit::Trail,
     stream: Option<Stream>,
+    /// Where `--trace` writes each decision as the gate takes it, rather than after the run.
+    live_trace: Option<Stream>,
+    /// Whose events are arriving, for the line written live.
+    recording: Option<DelegateId>,
 }
 
 impl Streaming {
@@ -262,7 +306,19 @@ impl Streaming {
             recorded: RecordingSink::new(),
             stamped: bravebot_session::audit::Trail::new(),
             stream,
+            live_trace: None,
+            recording: None,
         }
+    }
+
+    /// Write every decision to `trace` as it is made, after the trail's heading.
+    ///
+    /// The sink writes the gate names, labels and paths the event carries and branches on none of
+    /// them (TRACE-2).
+    pub fn with_live_trace(mut self, mut trace: Stream) -> Self {
+        trace.line(crate::finish::TRAIL_HEADING);
+        self.live_trace = Some(trace);
+        self
     }
 
     pub fn recorded(&self) -> &RecordingSink {
@@ -292,11 +348,15 @@ impl Sink for Streaming {
                 reason: reason.clone(),
             }));
         }
+        if let Some(trace) = self.live_trace.as_mut() {
+            trace.line(&crate::finish::trace_line(self.recording, &event));
+        }
         self.stamped.emit(event.clone());
         self.recorded.emit(event);
     }
 
     fn recording_for(&mut self, delegate: Option<DelegateId>) {
+        self.recording = delegate;
         self.stamped.recording_for(delegate);
         self.recorded.recording_for(delegate);
     }
@@ -608,6 +668,61 @@ mod tests {
         assert_eq!(sink.recorded().events().len(), 2);
     }
 
+    /// `--trace` writes a decision the moment the gate takes it, in the words the trail printed
+    /// whole uses, and a stderr nobody reads does not stop the run.
+    #[test]
+    fn a_decision_is_traced_when_the_gate_takes_it() {
+        let out = Shared::default();
+        let mut sink = Streaming::new(None).with_live_trace(Stream::new(out.clone()));
+        assert_eq!(out.written(), "audit trail\n");
+
+        let passed = Event::GatePassed {
+            gate: "action",
+            detail: "read_file".to_string(),
+        };
+        sink.emit(passed.clone());
+        assert_eq!(
+            out.written(),
+            format!(
+                "audit trail\n{}\n",
+                crate::finish::trace_line(None, &passed)
+            ),
+            "the line was not there as soon as the gate decided"
+        );
+
+        let delegate = DelegateId::nth(1);
+        sink.recording_for(Some(delegate));
+        let blocked = Event::GateBlocked {
+            gate: "action",
+            detail: "write_file".to_string(),
+            reason: "injection blocked".to_string(),
+            principle: bravebot_core::event::Principle::IntegrityGate,
+        };
+        sink.emit(blocked.clone());
+        assert!(
+            out.written().ends_with(&format!(
+                "{}\n",
+                crate::finish::trace_line(Some(delegate), &blocked)
+            )),
+            "a delegate's decision lost its attribution: {}",
+            out.written()
+        );
+        assert_eq!(sink.recorded().events().len(), 2);
+
+        struct Closed;
+        impl Write for Closed {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+        }
+        let mut closed = Streaming::new(None).with_live_trace(Stream::new(Closed));
+        closed.emit(passed);
+        assert_eq!(closed.recorded().events().len(), 1);
+    }
+
     /// Without the flag nothing is written, and the trail is kept all the same.
     #[test]
     fn a_run_without_a_stream_writes_no_events() {
@@ -619,5 +734,63 @@ mod tests {
             principle: bravebot_core::event::Principle::IntegrityGate,
         });
         assert_eq!(sink.recorded().blocked().count(), 1);
+    }
+
+    /// What a program answers a question by: the id, and the position of each choice in the order
+    /// listed. The shape is published, so it is pinned whole, and the words in it are escaped as
+    /// every other string of the stream is, since the planner wrote them.
+    #[test]
+    fn a_question_is_an_event_a_program_can_answer_by_position() {
+        let asking = Asking {
+            prompts: vec![
+                bravebot_core::ask::Prompt {
+                    header: "Cache".to_string(),
+                    question: "Which \"layer\"?\n(one)".to_string(),
+                    rows: vec![
+                        bravebot_core::ask::Row {
+                            index: 0,
+                            label: "HTTP".to_string(),
+                            detail: Some("in front".to_string()),
+                        },
+                        bravebot_core::ask::Row {
+                            index: 1,
+                            label: "Query".to_string(),
+                            detail: None,
+                        },
+                    ],
+                    multiple: false,
+                    key: "k".to_string(),
+                },
+                bravebot_core::ask::Prompt {
+                    header: "Scope".to_string(),
+                    question: "Which?".to_string(),
+                    rows: Vec::new(),
+                    multiple: true,
+                    key: "k2".to_string(),
+                },
+            ],
+            closes_when_idle: false,
+        };
+
+        assert_eq!(
+            question_event(7, &asking),
+            concat!(
+                r#"{"schema":1,"event":"question","id":7,"questions":["#,
+                r#"{"header":"Cache","question":"Which \"layer\"?\n(one)","choices":["#,
+                r#"{"label":"HTTP","detail":"in front"},{"label":"Query","detail":null}],"#,
+                r#""multiple":false},"#,
+                r#"{"header":"Scope","question":"Which?","choices":[],"multiple":true}]}"#,
+            )
+        );
+    }
+
+    /// A line that was not taken is named by its number and a fixed cause. The cause is passed in
+    /// as a word and is the only text, so a caller cannot build the event out of the line.
+    #[test]
+    fn a_line_that_was_not_taken_is_named_by_number_and_cause() {
+        assert_eq!(
+            input_refused_event(12, "not_json"),
+            r#"{"schema":1,"event":"input_refused","line":12,"reason":"not_json"}"#
+        );
     }
 }

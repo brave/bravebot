@@ -30,10 +30,17 @@ enum Way {
     Bedrock,
     Import,
     Gateway,
+    ChatGpt,
 }
 
 impl Way {
-    const ALL: [Way; 4] = [Way::Leo, Way::Bedrock, Way::Import, Way::Gateway];
+    const ALL: [Way; 5] = [
+        Way::Leo,
+        Way::Bedrock,
+        Way::Import,
+        Way::Gateway,
+        Way::ChatGpt,
+    ];
 
     /// The word that names this way on the command line. Not translated, because a script types it.
     fn name(self) -> &'static str {
@@ -42,6 +49,7 @@ impl Way {
             Way::Bedrock => "bedrock",
             Way::Import => "import",
             Way::Gateway => "gateway",
+            Way::ChatGpt => "chatgpt",
         }
     }
 
@@ -57,6 +65,7 @@ impl Way {
             Way::Bedrock => t!(auth_way_bedrock),
             Way::Import => t!(auth_way_import),
             Way::Gateway => t!(auth_way_gateway),
+            Way::ChatGpt => t!(auth_way_chatgpt),
         }
     }
 }
@@ -85,9 +94,11 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
         "bravebot auth login bedrock",
         "bravebot auth login import",
         "bravebot auth login gateway [id]",
+        "bravebot auth login chatgpt",
         "bravebot auth logout leo",
         "bravebot auth logout gateway [id]",
-        "bravebot auth status [leo|bedrock|gateway [id]]",
+        "bravebot auth logout chatgpt",
+        "bravebot auth status [leo|bedrock|gateway [id]|chatgpt]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -156,11 +167,8 @@ fn picked<R: BufRead, W: Write>(
         Some(answer) if !answer.is_empty() => answer,
         _ => return Ok(None),
     };
-    let way = answer
-        .parse::<usize>()
-        .ok()
-        .and_then(|number| number.checked_sub(1))
-        .and_then(|index| Way::ALL.get(index).copied())
+    let way = crate::plain::numbered_row(&answer, &Way::ALL)
+        .copied()
         .or_else(|| Way::named(&answer));
     let Some(way) = way else {
         return Err(t!(auth_not_a_listed_way, answer = printable(&answer)));
@@ -210,6 +218,11 @@ fn held(way: Way) -> Option<String> {
         }
         // An import writes settings and holds nothing of its own, so it is never signed in.
         Way::Import => None,
+        Way::ChatGpt => match crate::chatgpt::standing() {
+            crate::chatgpt::Standing::SignedIn { .. } => Some(t!(auth_signed_in).to_string()),
+            crate::chatgpt::Standing::Unusable(_) => Some(t!(chatgpt_held_unusable).to_string()),
+            _ => None,
+        },
         // The ids alone. Which host each key goes to is the provider block's to say.
         Way::Gateway => match Keys::read(&home::directory()?) {
             Ok(stored) if stored.is_empty() => None,
@@ -233,9 +246,10 @@ fn sign_in(way: Way, rest: &[String]) -> ExitCode {
             [_, extra, ..] => unexpected(way, extra),
             _ => import_leo_creds(rest),
         },
-        Way::Bedrock | Way::Import if !rest.is_empty() => unexpected(way, &rest[0]),
+        Way::Bedrock | Way::Import | Way::ChatGpt if !rest.is_empty() => unexpected(way, &rest[0]),
         Way::Bedrock => bedrock(),
         Way::Import => crate::import::providers(&[]),
+        Way::ChatGpt => crate::chatgpt::login(),
         Way::Gateway => match rest {
             [flag, ..] if flag.starts_with('-') => fail(
                 Ending::Argument,
@@ -677,11 +691,8 @@ fn which_gateway<'p, R: BufRead, W: Write>(
                 Some(answer) if !answer.is_empty() => answer,
                 _ => return Ok(None),
             };
-            let picked = answer
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| number.checked_sub(1))
-                .and_then(|index| gateways.get(index).copied())
+            let picked = crate::plain::numbered_row(&answer, gateways)
+                .copied()
                 .or_else(|| {
                     gateways
                         .iter()
@@ -792,7 +803,11 @@ type Line = (String, Standing);
 /// whether bravebot can run is asking about the set.
 fn status(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
-        return report(&[Way::Leo, Way::Bedrock, Way::Gateway], None, false);
+        return report(
+            &[Way::Leo, Way::Bedrock, Way::Gateway, Way::ChatGpt],
+            None,
+            false,
+        );
     };
     if word.starts_with('-') {
         return fail(
@@ -846,6 +861,7 @@ fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
                     Err((ending, refusal)) => return fail(ending, refusal),
                 }
             }
+            Way::ChatGpt => lines.push(("chatgpt".into(), chatgpt())),
             Way::Import => {}
         }
     }
@@ -926,6 +942,19 @@ fn leo_standing(
         unspent = stored.remaining(),
         total = stored.credentials.len()
     ))
+}
+
+/// The stored ChatGPT sign-in, read from the file a turn would read.
+fn chatgpt() -> Standing {
+    use crate::chatgpt::Standing as Stored;
+    match crate::chatgpt::standing() {
+        Stored::SignedIn { expires } => {
+            Standing::SignedIn(t!(auth_status_chatgpt_expires, expires = expires))
+        }
+        Stored::NotSignedIn => Standing::NotSignedIn(t!(auth_status_chatgpt_none).into()),
+        Stored::Nowhere => Standing::NotSignedIn(t!(auth_status_chatgpt_nowhere).into()),
+        Stored::Unusable(reason) => Standing::Unusable(reason),
+    }
 }
 
 /// Each AWS account the configuration names, asked whether its session gives credentials.
@@ -1098,6 +1127,7 @@ fn logout(args: &[String]) -> ExitCode {
         Way::Bedrock => fail(Ending::Argument, t!(auth_logout_bedrock)),
         Way::Import => fail(Ending::Argument, t!(auth_logout_import)),
         Way::Gateway => forget_gateway(rest.first().map(String::as_str)),
+        Way::ChatGpt => crate::chatgpt::logout(),
     }
 }
 
@@ -1355,8 +1385,10 @@ mod tests {
             ("2\n", Some(Way::Bedrock)),
             ("3\n", Some(Way::Import)),
             ("4\n", Some(Way::Gateway)),
+            ("5\n", Some(Way::ChatGpt)),
             ("bedrock\n", Some(Way::Bedrock)),
             ("gateway\n", Some(Way::Gateway)),
+            ("ChatGPT\n", Some(Way::ChatGpt)),
             ("  import  \n", Some(Way::Import)),
             ("Bedrock\n", Some(Way::Bedrock)),
             ("\n", None),
@@ -1369,7 +1401,7 @@ mod tests {
                 "{answers:?}: {said}"
             );
         }
-        for refused in ["0\n", "5\n", "aws\n"] {
+        for refused in ["0\n", "6\n", "aws\n"] {
             let (said, picked) = asked(refused, &nothing_held);
             let complaint = picked.expect_err(refused);
             assert!(

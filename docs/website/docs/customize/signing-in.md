@@ -17,8 +17,9 @@ pick by number or by name:
 Ways to sign in to a model service:
   1. leo      Brave Leo Premium, from a Brave install that subscribes
   2. bedrock  An AWS account, for Amazon Bedrock
-  3. import   A model service Claude Code, opencode or Ollama has, imported into settings
+  3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
   4. gateway  A key for a gateway a provider block in settings names, typed here and kept by bravebot
+  5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
 Which one? Type its number or its name, or nothing to stop:
 ```
 
@@ -28,13 +29,15 @@ Each way is the command it was before, run for you:
 |---|---|---|
 | `leo` | `bravebot import-leo-creds [channel]` | [Leo Premium](premium.md) |
 | `bedrock` | the AWS sign-in a session makes on its first turn | [AWS Bedrock](providers/bedrock.md) |
-| `import` | `bravebot import-providers` | [Importing](configuration.md#importing-from-claude-code-opencode-or-ollama) |
+| `import` | `bravebot import-providers` | [Importing](importing.md) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
+| `chatgpt` | nothing before it: a sign-in in a browser | [ChatGPT](providers/chatgpt.md) |
 
 A script names the way, so nothing is asked: `bravebot auth login leo nightly`,
-`bravebot auth login bedrock`, `bravebot auth login import`. With no way named and no terminal to
-ask on, the command is refused and prints these forms. `gateway` is the exception, since the key is
-typed at the terminal and never given on the command line.
+`bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`. With no way
+named and no terminal to ask on, the command is refused and prints these forms. `gateway` is the
+exception, since the key is typed at the terminal and never given on the command line. `chatgpt` shows
+an address to open and waits for the browser, so it needs a terminal on standard error.
 
 **Leo** asks which channel, and nothing typed means stable. If a subscription is already imported it
 asks before signing in again, because each import registers this machine with Brave as one more
@@ -50,6 +53,17 @@ session uses it without the variable exported. Where that file already names
 `BRAVEBOT_USE_BEDROCK`, or something else turns Bedrock off, nothing is written. `AWS_REGION` and
 `AWS_PROFILE` are not written, so keep them exported or put them in the same block. To sign out, run
 `aws sso logout`.
+
+**ChatGPT** opens a browser at OpenAI, where you sign in, and keeps the sign-in it is given in
+`chatgpt-account.json` beside the other credential files. It prints the address as well, so a machine
+with no browser can finish the sign-in elsewhere through a forwarded port, and it waits five minutes.
+If a sign-in is already stored it asks before replacing it. The account's models are offered in
+`/model` as `chatgpt/<model>`. Where nothing serves the model in force, `bravebot` lists the account's
+models in the terminal and asks which one to use, remembers the answer for the next start, and opens on
+it. An answer that is not the number of a model, a start in a script or in an incognito session, and an
+account whose models could not be listed are refused as before, with the forms that name a model, and a
+listing that gave no model is said why. `bravebot auth logout chatgpt` forgets the copy here and ends nothing at
+OpenAI. See [ChatGPT](providers/chatgpt.md).
 
 ## Gateway
 
@@ -87,13 +101,13 @@ bravebot auth status leo
 ```
 
 prints whether Leo is signed in and usable, and exits 0 only if it is, so a script can test it.
-`bedrock` and `gateway [id]` ask about the other two. With no way named it asks about all of them and
-exits 0 if any is usable. See [the reference](../reference/cli.md#auth).
+`bedrock`, `gateway [id]` and `chatgpt` ask about the others. With no way named it asks about all of them
+and exits 0 if any is usable. See [the reference](../reference/cli.md#auth).
 
 ## In an incognito session
 
-In an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind), `leo`,
-`import` and `gateway` are refused, since each keeps something in bravebot's own directory.
+In an [incognito session](../using/incognito.md), `leo`,
+`import`, `gateway` and `chatgpt` are refused, since each keeps something in bravebot's own directory.
 `bedrock` is allowed: the AWS CLI keeps that session, and a session in this mode signs in to it as
 well. It writes nothing to settings, so `BRAVEBOT_USE_BEDROCK=1` still has to be exported. Signing
-out of Leo and forgetting a gateway key are allowed.
+out of Leo, forgetting a gateway key and signing out of ChatGPT are allowed.

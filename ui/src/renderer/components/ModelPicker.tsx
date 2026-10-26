@@ -4,6 +4,7 @@ import { setExperience, useExperience } from '../experience'
 import { rememberCatalogue } from '../context-window'
 import { useDelayedFlag, useFocusReturn } from '../hooks'
 import { Alert, Button, ButtonMenu, Hr, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
+import { ModelWarnings } from './ModelWarnings'
 
 /** The two capabilities this app uses; the rest are in the catalogue but not shown. */
 const CAPABILITY_ICONS: Record<string, IconName> = { text: 'message-bubble-text', tools: 'wrench' }
@@ -218,7 +219,7 @@ export function ModelPicker({ model, disabled, onChoose, scope = 'conversation',
       <div className="model-notices">
         {loading && <p className="model-status" role="status" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Loading available models…</p>}
         {problem && <Alert type="error" size="small" className="model-status" role="alert">{problem}</Alert>}
-        {catalogue?.warnings.map((warning) => <p className="model-status" key={warning}>{warning}</p>)}
+        {catalogue && <ModelWarnings warnings={catalogue.warnings} commands={catalogue.warningCommands} />}
         {!loading && options.length === 0 && <p className="model-status">{query ? 'No models match your search.' : 'No models available. Check your backend settings.'}</p>}
       </div>
       <leo-menu-section id={`${id}-list`} aria-label="Models" ref={list}>

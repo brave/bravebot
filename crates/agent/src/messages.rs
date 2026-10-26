@@ -30,7 +30,6 @@ pub fn heading(incoming: bool, session: &str, name: &str, label: &str) -> String
             name = name,
             label = label
         )
-        .to_string()
     } else {
         t!(
             session_message_sent_heading,
@@ -38,7 +37,6 @@ pub fn heading(incoming: bool, session: &str, name: &str, label: &str) -> String
             name = name,
             label = label
         )
-        .to_string()
     }
 }
 

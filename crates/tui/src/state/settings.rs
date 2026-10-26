@@ -170,7 +170,7 @@ impl Session {
     pub fn choose_model(&mut self, model: impl Into<String>, config: &bravebot_config::Config) {
         let model = model.into();
         if self.persist {
-            bravebot_session::store::save_model(config.name_to_record(&model));
+            bravebot_session::store::record_model(config, &model);
         }
         self.model = Some(model);
     }
@@ -201,6 +201,23 @@ impl Session {
     /// The output style `/style` chose, or `None` where it chose none.
     pub fn style(&self) -> Option<&bravebot_agent::styles::Style> {
         self.style.as_ref()
+    }
+
+    /// Only a name, which each turn resolves again, so it can name a skill that has since gone.
+    pub fn skill_mode(&self) -> Option<&str> {
+        self.skill_mode.as_deref()
+    }
+
+    /// Keep this skill applied to every later turn, or `None` to leave the mode (SKILL-21).
+    pub fn choose_skill_mode(&mut self, name: Option<String>) {
+        self.skill_mode = name;
+    }
+
+    /// Put back the mode a resumed record held, and say so, since the transcript shown has no line
+    /// of its own for it.
+    pub fn resume_skill_mode(&mut self, name: &str) {
+        self.skill_mode = Some(name.to_string());
+        self.note(t!(session_mode_resumed, skill = name));
     }
 
     /// The names of the project's styles offered after the others, as last read.
@@ -258,9 +275,47 @@ impl Session {
     /// The level a turn will actually send, which is nothing where the model does not read one.
     ///
     /// Sending a level to a model whose roster row says it reads none is a field that is dropped at
-    /// the far end, so the choice is kept and the request is not given it.
+    /// the far end, so the choice is kept and the request is not given it. A ChatGPT model is sent
+    /// the level the session began with and not the one chosen since, so the choice applies to the
+    /// next session and to every other model (CHATGPT-10).
     pub fn effort_in_force(&self) -> Option<Effort> {
-        self.effort.filter(|_| self.model_reads_effort)
+        let level = match self.model_is_account {
+            true => self.account.effort(),
+            false => self.effort,
+        };
+        level.filter(|_| self.model_reads_effort)
+    }
+
+    /// Begin the session the ChatGPT account sees, at the level in force now.
+    ///
+    /// Called once the level is settled, where the session starts, and where `/clear` and a handoff
+    /// begin another. A level chosen after that is not this session's for the account.
+    pub fn begin_account_session(&mut self) {
+        self.account = bravebot_agent::chatgpt::AccountSession::begin_with(self.effort);
+    }
+
+    /// Whether the model in force is one of the ChatGPT account's.
+    pub fn model_is_account(&self) -> bool {
+        self.model_is_account
+    }
+
+    /// The level the session began with, where the model in force is the account's, which is the
+    /// level that account is sent. `None` for any other model, and `Some(None)` where the session
+    /// began with no level.
+    pub fn account_level(&self) -> Option<Option<Effort>> {
+        self.model_is_account.then(|| self.account.effort())
+    }
+
+    /// Record whether the model now in force is one of the ChatGPT account's.
+    pub fn note_model_is_account(&mut self, account: bool) {
+        self.model_is_account = account;
+    }
+
+    /// What this session carries into its requests to the ChatGPT account, which every request it
+    /// makes is made in: a turn, a summary, a question beside the work, a goal check, a commit
+    /// message and an MCP server's prompt.
+    pub fn account_session(&self) -> &bravebot_agent::chatgpt::AccountSession {
+        &self.account
     }
 
     /// Whether the model in force reads a level at all.
@@ -286,6 +341,26 @@ impl Session {
             bravebot_session::store::save_effort(effort);
         }
         self.effort = effort;
+    }
+
+    /// The language `/language` last saved, for saying so.
+    ///
+    /// Read only for a session that persists, which is the rule every read of a saved pick here
+    /// follows: a test must not be handed the developer's own preference.
+    pub fn saved_language(&self) -> Option<String> {
+        self.persist
+            .then(bravebot_session::store::load_language)
+            .flatten()
+    }
+
+    /// Keep the language the person chose for the next start, or forget the choice where `None`,
+    /// and say whether that was done.
+    ///
+    /// Nothing in this session changes with it, since the interface is in one language for the
+    /// whole process: a session that persists nothing has nowhere to keep the choice, and answers
+    /// that it kept none.
+    pub fn choose_language(&mut self, tag: Option<&str>) -> bool {
+        self.persist && bravebot_session::store::save_language(tag)
     }
 
     /// Put `effort` in force for this session over every saved pick and file, and record nothing,
@@ -446,6 +521,22 @@ impl Session {
         self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
     }
 
+    /// Record how long a planner's question waits for a key before it is closed, from
+    /// `askIdleSeconds` (ASK-9). Absence waits for as long as it takes; what counts as usable is
+    /// `Settings::parse`'s rule alone.
+    pub fn adopt_ask_idle(&mut self, seconds: Option<u64>) {
+        self.ask_idle = seconds.map(Duration::from_secs);
+    }
+
+    /// How long `asking` waits with no key pressed before it is closed, where it may be at all.
+    ///
+    /// Only what the driver marked as the planner's own question is closed on a clock, and the
+    /// time is the person's setting: a plan, a spend limit and a repeated call wait for the person
+    /// whatever the settings say, and nothing a question says is read here.
+    pub fn ask_idle_for(&self, asking: &bravebot_core::ask::Asking) -> Option<Duration> {
+        self.ask_idle.filter(|_| asking.closes_when_idle)
+    }
+
     /// Record whether the interface captures the mouse, from `tui.mouse`. Only a `false` turns it
     /// off, so an absent key leaves the capture on.
     pub fn adopt_mouse(&mut self, configured: Option<bool>) {
@@ -525,17 +616,40 @@ impl Session {
     /// The columns the info panel takes on a frame `columns` wide, border included: the width the
     /// person dragged it to, held between its minimum and what leaves the transcript its own.
     pub fn panel_columns(&self, columns: u16) -> u16 {
+        if self.files.is_some() {
+            return crate::files_mode::columns(columns);
+        }
         crate::panel::clamped(self.panel_width, columns)
     }
 
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
     fn on_panel_border(&self, row: u16, column: u16) -> bool {
-        self.laid.panes.iter().any(|(pane, rect)| {
-            *pane == crate::select::Pane::Panel
-                && rect.x == column
-                && rect.y <= row
-                && row < rect.bottom()
-        })
+        // The files state is half the terminal, which dragging does not change (FILES-4).
+        self.files.is_none()
+            && self.laid.panes.iter().any(|(pane, rect)| {
+                *pane == crate::select::Pane::Panel
+                    && rect.x == column
+                    && rect.y <= row
+                    && row < rect.bottom()
+            })
+    }
+
+    /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
+    /// against the panel's rectangle as the last frame recorded it.
+    pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
+        let (_, area) = self
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)?;
+        crate::panel::target_at(self, *area, row, column)
+    }
+
+    /// Whether the cell is one the permission mode is drawn in, as the last frame drew it.
+    pub fn on_the_mode(&self, row: u16, column: u16) -> bool {
+        self.laid
+            .mode
+            .is_some_and(|rect| rect.contains(ratatui::layout::Position::new(column, row)))
     }
 
     /// Begin dragging the panel's border where the button went down, and say whether it was
@@ -552,6 +666,27 @@ impl Session {
     /// Whether a drag that began on the panel's border is still held.
     pub fn dragging_panel(&self) -> bool {
         self.panel_drag
+    }
+
+    /// Record where a mouse report put the pointer. Every kind of report says, so the position is
+    /// as current as the last thing the terminal sent.
+    pub(crate) fn note_pointer(&mut self, row: u16, column: u16) {
+        self.pointer = Some((row, column));
+    }
+
+    /// The shape the pointer should have: the one for a border that can be dragged while it is over
+    /// the panel's border or such a drag is held, and the terminal's own otherwise. Read against the
+    /// layout as it is now, so a border that moved or a panel that closed under a pointer at rest
+    /// is not where the pointer still is.
+    pub(crate) fn pointer_shape(&self) -> crate::pointer::Shape {
+        let over = self
+            .pointer
+            .is_some_and(|(row, column)| self.on_panel_border(row, column));
+        if over || self.panel_drag {
+            crate::pointer::Shape::ResizeColumns
+        } else {
+            crate::pointer::Shape::Default
+        }
     }
 
     /// Move the border to `column`: the panel is whatever is to its right.
@@ -602,7 +737,7 @@ impl Session {
     /// on a file with no end in view, and holding a laptop awake for that is holding it awake for
     /// as long as the session is open.
     pub fn work_pending(&self) -> bool {
-        self.status == Status::Working || self.looping.is_some()
+        self.status == Status::Working || !self.looping.is_empty()
     }
 
     /// Hold the machine awake where `/caffeinate` is on and work is pending, and release it
@@ -625,7 +760,7 @@ impl Session {
 
     /// Whether the person has the info panel open, whether or not the last frame had room for it.
     pub fn panel_open(&self) -> bool {
-        self.panel
+        self.panel || self.files.is_some()
     }
 
     /// Open or close the info panel.
@@ -635,6 +770,14 @@ impl Session {
     /// and the next widening would bring back a panel nobody remembered opening. A press to close
     /// always closes, so a panel left open before the terminal was narrowed can be put away.
     pub fn toggle_panel(&mut self) {
+        // The key hides the panel from either state, and the state goes with it (FILES-3).
+        if self.files.take().is_some() {
+            self.panel = false;
+            if self.persist {
+                bravebot_session::store::save_panel(false);
+            }
+            return;
+        }
         if !self.panel && !crate::panel::fits(self.laid.columns) {
             self.note(t!(panel_too_narrow, columns = crate::panel::NARROWEST));
             return;
@@ -665,6 +808,18 @@ impl Session {
             ..self.identity.clone()
         };
         self.reidentify(identity)
+    }
+
+    /// Record the repository a `#<number>` in a reply links into, from the checkout the session is
+    /// in, or none where its `origin` is not on GitHub. Read where the session opens and where it
+    /// moves to another directory, since reading it opens a file.
+    pub fn adopt_repository(&mut self, repository: Option<crate::issue_link::Repository>) {
+        self.repository = repository;
+    }
+
+    /// The repository a `#<number>` in a reply links into, where there is one.
+    pub fn repository(&self) -> Option<&crate::issue_link::Repository> {
+        self.repository.as_ref()
     }
 
     /// Record the id the info panel shows, answering as [`Session::identify`] does.
@@ -744,7 +899,8 @@ impl Session {
 
     /// Charge what a suggestion's request cost to the turn it followed, outside any turn's own
     /// figures and still in the session's total, as an aside is.
-    pub fn charge_suggestion(&mut self, tokens: u64) {
-        self.charge(tokens);
+    pub fn charge_suggestion(&mut self, usage: bravebot_aichat::protocol::Usage) {
+        self.charge(usage.total());
+        self.charged_split(usage.total(), usage.completion_tokens);
     }
 }

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { _electron as electron } from 'playwright-core'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE } from './drive-support.mjs'
 const profile = mkdtempSync('/tmp/bravebot-model-live-profile-')
 const project = mkdtempSync('/tmp/bravebot-model-live-project-')
 const shots = '/tmp/bravebot-model-live'
@@ -27,16 +27,16 @@ try {
   await trigger.waitFor()
   assert.match(await trigger.getAttribute('aria-label'), /claude-haiku-4.5/)
   const send = async (prompt, expected, shot) => {
-    const before = await page.locator('.bubble.assistant').count()
+    const before = await page.locator(ASSISTANT_BUBBLE).count()
     await page.locator(COMPOSER_INPUT).fill(prompt)
     await page.getByRole('button', { name: 'Send', exact: true }).click()
-    await page.waitForFunction((count) => {
+    await page.waitForFunction(({ count, assistant }) => {
       return document.querySelector('.unconfigured') || document.querySelector('.bubble.failed') ||
-        (document.querySelectorAll('.bubble.assistant').length > count && !document.querySelector('.model-trigger')?.disabled)
-    }, before, { timeout: 180000 })
+        (document.querySelectorAll(assistant).length > count && !document.querySelector('.model-trigger')?.disabled)
+    }, { count: before, assistant: ASSISTANT_BUBBLE }, { timeout: 180000 })
     await page.screenshot({ path: `${shots}/${shot}.png` })
     assert.equal(await page.locator('.unconfigured, .bubble.failed').count(), 0, 'inference must succeed')
-    const reply = await page.locator('.bubble.assistant').last().innerText()
+    const reply = await page.locator(ASSISTANT_BUBBLE).last().innerText()
     assert.match(reply, expected)
     console.log(`${shot}: ${reply.trim()}`)
   }

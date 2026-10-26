@@ -57,7 +57,11 @@ pub(crate) fn scratch_for_this_run(
             None
         }
     };
-    workspace.open_scratch(scratch.as_ref().map(|held| held.path().to_path_buf()));
+    workspace.open_scratch(
+        scratch
+            .as_ref()
+            .and_then(bravebot_agent::SessionScratch::directory),
+    );
     bravebot_session::sessions::sweep_unlisted_checkouts(workspace);
     scratch
 }
@@ -203,8 +207,7 @@ pub(crate) fn definition_for_a_run(
                     names = names,
                     count = count
                 ),
-            }
-            .to_string(),
+            },
         ));
     }
     // Nothing asks for the definition's model when the command line named one, so its sign-in

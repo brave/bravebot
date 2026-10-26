@@ -6,6 +6,10 @@
 
 #![cfg(unix)]
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use base64::Engine;
 use bravebot_browser::install::EXTENSION_ID;

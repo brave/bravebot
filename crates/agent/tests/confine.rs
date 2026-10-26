@@ -14,6 +14,8 @@ use bravebot_core::cancel::Cancel;
 use bravebot_core::command::Plan;
 use bravebot_sandbox::network::Network;
 #[cfg(unix)]
+use std::ffi::OsStr;
+#[cfg(unix)]
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
@@ -160,6 +162,17 @@ impl Places {
         confinement: Option<&Confinement>,
         scratch: Option<&Path>,
     ) -> exec::Ran {
+        self.try_run_given(line, confinement, scratch)
+            .unwrap_or_else(|error| panic!("`{line}` should start: {error}"))
+    }
+
+    /// [`Places::run_given`] for a line that may be refused before it runs.
+    fn try_run_given(
+        &self,
+        line: &str,
+        confinement: Option<&Confinement>,
+        scratch: Option<&Path>,
+    ) -> Result<exec::Ran, exec::ExecError> {
         exec::run_plan_observed(
             &self.plan(line),
             &Cancel::new(),
@@ -169,7 +182,6 @@ impl Places {
             confinement,
             &mut |_| Ok(()),
         )
-        .unwrap_or_else(|error| panic!("`{line}` should start: {error}"))
     }
 }
 
@@ -344,9 +356,12 @@ fn a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_
     .expect("a module left beside it");
     let program = "python3 -c 'import bravebot_stand_in; print(bravebot_stand_in.dumps([1]))'";
     let named = format!("PYTHONPATH='{}' {program}", stand_in.display());
-    let confinement =
-        Confinement::here(vec![places.session.clone()], Some(&own), Some(&places.home))
-            .expect("a platform with a base");
+    let confinement = Confinement::here(
+        vec![places.session.clone()],
+        given.directory().as_ref(),
+        Some(&places.home),
+    )
+    .expect("a platform with a base");
 
     let control = places.run_given(&named, None, Some(&own));
     let confined = places.run_given(&named, Some(&confinement), Some(&own));
@@ -361,6 +376,184 @@ fn a_confined_python_imports_from_the_sessions_own_directory_only_when_the_line_
         !unnamed.ended_well && unnamed.stdout.is_empty(),
         "a module was imported with no assignment on the line: {unnamed:?}"
     );
+}
+
+/// What a refused line says, which must be about the scratch directory and name where it was.
+#[cfg(unix)]
+fn refused_for_the_scratch_directory(
+    result: Result<exec::Ran, exec::ExecError>,
+    scratch: &Path,
+    line: &str,
+) {
+    match result {
+        Err(exec::ExecError::NotConfined { detail, .. }) => assert!(
+            detail.contains("scratch directory") && detail.contains(&scratch.display().to_string()),
+            "`{line}` was refused for another reason: {detail}"
+        ),
+        other => panic!("`{line}` was not refused: {other:?}"),
+    }
+}
+
+/// SANDBOX-18: the scratch row is the directory the session made. Once a stage has replaced the
+/// directory with a link, the stage after it is refused and is not given what the link leads to,
+/// whether that is a credential directory, a shell startup file or a directory outside every row.
+/// The first line below is an ordinary approved `run` and the second is what the next `run` of the
+/// session starts with. The regression it rejects: the second stage's row being wherever the link
+/// leads, which a check against the credential table alone lets through for the last of these.
+#[cfg(unix)]
+#[test]
+fn a_stage_that_relinks_the_scratch_directory_hands_the_next_stage_nothing() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("scratch-relinked");
+    let bashrc = places.home.join(".bashrc");
+    std::fs::write(&bashrc, "export HISTSIZE=1\n").expect("a startup file");
+    for (target, line, planted) in [
+        (
+            places.beside.clone(),
+            "touch '{scratch}/planted'",
+            Some(places.beside.join("planted")),
+        ),
+        (places.home.join(".ssh"), "cat '{scratch}/id_ed25519'", None),
+        (
+            places.home.join(".ssh"),
+            "touch '{scratch}/planted'",
+            Some(places.home.join(".ssh/planted")),
+        ),
+        (bashrc.clone(), "cat '{scratch}'", None),
+    ] {
+        let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+        let own = resolved(given.path());
+        std::fs::write(own.join("note.txt"), "mine\n").expect("a file of the session's");
+        let directory = given.directory().expect("the directory as made");
+        let confine = || {
+            Confinement::here(
+                vec![places.session.clone()],
+                Some(&directory),
+                Some(&places.home),
+            )
+            .expect("a platform with a base")
+        };
+        let aside = own.with_extension("aside");
+
+        let control = places.run_given(
+            &format!("cat '{}/note.txt'", own.display()),
+            Some(&confine()),
+            Some(&own),
+        );
+        let relink = places.run_given(
+            &format!(
+                "sh -c 'mv {} {} && ln -s {} {}'",
+                own.display(),
+                aside.display(),
+                target.display(),
+                own.display()
+            ),
+            Some(&confine()),
+            Some(&own),
+        );
+        let next = line.replace("{scratch}", &own.display().to_string());
+        let refused = places.try_run_given(&next, Some(&confine()), Some(&own));
+
+        assert_eq!(
+            control.stdout, "mine\n",
+            "the directory was not usable: {control:?}"
+        );
+        assert!(relink.ended_well, "the link was not made: {relink:?}");
+        refused_for_the_scratch_directory(refused, &own, &next);
+        if let Some(planted) = planted {
+            assert!(
+                !planted.exists(),
+                "`{next}` wrote {} through the link",
+                planted.display()
+            );
+        }
+        let _ = std::fs::remove_file(&own);
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+}
+
+/// SANDBOX-18: the same, on one line. The confinement of a line is built before its first stage,
+/// so the check has to be made again as each stage starts: on Linux the row is opened by its name
+/// when the stage after the link is started. The regression it rejects: the check made when the
+/// confinement is built and not again.
+#[cfg(unix)]
+#[test]
+fn a_line_that_relinks_the_scratch_directory_is_refused_at_the_stage_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("scratch-relinked-in-a-line");
+    let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(given.path());
+    let aside = own.with_extension("aside");
+    let confinement = Confinement::here(
+        vec![places.session.clone()],
+        given.directory().as_ref(),
+        Some(&places.home),
+    )
+    .expect("a platform with a base");
+    let line = format!(
+        "sh -c 'mv {} {} && ln -s {} {}' && cat '{}/id_ed25519'",
+        own.display(),
+        aside.display(),
+        places.home.join(".ssh").display(),
+        own.display(),
+        own.display()
+    );
+
+    let refused = places.try_run_given(&line, Some(&confinement), Some(&own));
+
+    refused_for_the_scratch_directory(refused, &own, &line);
+    let _ = std::fs::remove_file(&own);
+    let _ = std::fs::remove_dir_all(&aside);
+}
+
+/// SANDBOX-18: a scratch directory that a program removed and made again is not the one the
+/// session made and gets no row, and the stages after it still start. The regression it rejects: a
+/// refusal for every name that leads to anything but the directory made, which ends every later
+/// `run` of a session whose temporary directory was cleaned or whose directory a program made again.
+#[cfg(unix)]
+#[test]
+fn a_scratch_directory_made_again_by_a_program_does_not_stop_the_stages_after() {
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("scratch-made-again");
+    let given = bravebot_agent::SessionScratch::create().expect("a directory of its own");
+    let own = resolved(given.path());
+    let directory = given.directory().expect("the directory as made");
+    let confine = || {
+        Confinement::here(
+            vec![places.session.clone()],
+            Some(&directory),
+            Some(&places.home),
+        )
+        .expect("a platform with a base")
+    };
+    let aside = own.with_extension("aside");
+
+    let again = places.run_given(
+        &format!(
+            "sh -c 'mv {} {} && mkdir {}'",
+            own.display(),
+            aside.display(),
+            own.display()
+        ),
+        Some(&confine()),
+        Some(&own),
+    );
+    let next = places.try_run_given("cat inside.txt", Some(&confine()), Some(&own));
+
+    assert!(
+        again.ended_well,
+        "the directory was not made again: {again:?}"
+    );
+    let next = next.expect("a stage after the directory was made again starts");
+    assert_eq!(next.stdout, "inside\n", "{next:?}");
+    let _ = std::fs::remove_dir_all(&own);
+    let _ = std::fs::remove_dir_all(&aside);
 }
 
 /// The regression it rejects: a profile built once and kept, so a file created after the first
@@ -587,6 +780,65 @@ fn a_bypass_stage_writes_beside_the_working_directory_without_a_request() {
     );
     let bypass = places.run(&line, Some(&places.confinement().with_unasked_writes(true)));
     assert!(bypass.ended_well && target.exists(), "{bypass:?}");
+}
+
+/// SANDBOX-30 under bypass: a program a stage wrote and made read-only, with the directories above
+/// it, is not one bravebot starts itself. The account owns what a stage creates and can set its
+/// mode, so the lookup cannot tell a plant by whether `access` says the account can write it. The
+/// probe writes under the isolated `.ssh` when it runs, which a stage cannot do, so the marker
+/// shows that bravebot started it unconfined. The stage that ends with `chmod 555` is the one
+/// that reached the lookup as an installed program; the stage that leaves the modes alone is the
+/// control that the lookup refuses a program in the row at all.
+#[cfg(unix)]
+#[test]
+fn a_program_a_bypass_stage_made_read_only_is_not_found_and_so_never_started() {
+    use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath, start};
+    use std::os::unix::fs::PermissionsExt;
+    if !can_confine() {
+        return;
+    }
+    let places = Places::new("planted-read-only");
+    let marker = places.home.join(".ssh/marker");
+    let confinement = places.confinement().with_unasked_writes(true);
+    let refused = places.run(&touch(marker.display()), Some(&confinement));
+    assert!(
+        !refused.ended_well && !marker.exists(),
+        "a stage writes under .ssh, so the marker proves nothing: {refused:?}"
+    );
+
+    for (name, made_read_only) in [("untouched", false), ("read-only", true)] {
+        let held = places.beside.join(name);
+        let bin = held.join("bin");
+        let (bin_text, held_text, marker_text) = (bin.display(), held.display(), marker.display());
+        let modes = if made_read_only {
+            format!(" && chmod 555 {bin_text}/probe {bin_text} {held_text}")
+        } else {
+            String::new()
+        };
+        let line = format!(
+            "sh -c 'mkdir -p {bin_text} && printf \"#!/bin/sh\\n/usr/bin/touch {marker_text}\\n\" > {bin_text}/probe && chmod 755 {bin_text}/probe{modes}'"
+        );
+        let planted = places.run(&line, Some(&confinement));
+        assert!(
+            planted.ended_well && bin.join("probe").exists(),
+            "{name}: the stage did not write the program: {planted:?}"
+        );
+
+        let found = Resolved::find_on(OsStr::new("probe"), bin.as_os_str());
+        if let Some(program) = &found {
+            let _ = start(program, Inherits::All, SearchPath::Reduced).status();
+        }
+
+        // A read-only tree cannot be removed by the next run of this test, so it is opened again
+        // before anything can fail.
+        for path in [bin.join("probe"), bin, held] {
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+        }
+        assert!(
+            found.is_none() && !marker.exists(),
+            "{name}: bravebot started a program a stage wrote: {found:?}"
+        );
+    }
 }
 
 /// SANDBOX-22 under bypass: what a `request_path` would never be granted is still refused. The

@@ -9,9 +9,12 @@ governs:
   - crates/agent/src/workspace.rs
   - crates/cli/src/continued.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/checkouts_command.rs
   - crates/tui/src/resume.rs
   - crates/tui/src/status.rs

@@ -122,6 +122,17 @@ impl List {
             .filter(|i| i.status == Status::Cancelled)
             .count()
     }
+
+    /// How many tasks are neither finished nor dropped: the rows [`Row::struck`] leaves unstruck.
+    ///
+    /// Said as what is not struck, so a status added later counts as outstanding, as an
+    /// unrecognised one does.
+    pub fn open(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|i| !matches!(i.status, Status::Done | Status::Cancelled))
+            .count()
+    }
 }
 
 /// One line of the list, shaped for a screen.
@@ -174,17 +185,6 @@ pub fn rows(list: &List) -> Vec<Row> {
             status: item.status,
         })
         .collect()
-}
-
-/// The task in progress, for labelling the working indicator.
-///
-/// Presentation, like [`rows`]: the word beside a spinner is not a decision, and the fallback
-/// when nothing is marked active is the generic word the indicator would have used anyway.
-pub fn active_label(list: &List) -> Option<String> {
-    list.items
-        .iter()
-        .find(|i| i.status == Status::Active)
-        .map(|i| i.content.clone())
 }
 
 #[cfg(test)]
@@ -269,32 +269,24 @@ mod tests {
     }
 
     #[test]
-    fn the_active_task_names_the_indicator() {
-        assert_eq!(active_label(&list()).as_deref(), Some("Add prompt history"));
-    }
-
-    /// With nothing active there is no word to borrow, and the indicator keeps its own.
-    #[test]
-    fn a_list_with_nothing_active_has_no_label() {
-        let list = List::new(vec![Item::new("only task", Status::Done)]);
-        assert!(active_label(&list).is_none());
-    }
-
-    /// The first active item wins rather than the last, so a model that leaves two marked does
-    /// not make the word jump about between redraws.
-    #[test]
-    fn the_first_active_task_wins_when_the_model_marks_several() {
-        let list = List::new(vec![
-            Item::new("first", Status::Active),
-            Item::new("second", Status::Active),
-        ]);
-        assert_eq!(active_label(&list).as_deref(), Some("first"));
-    }
-
-    #[test]
     fn progress_is_counted() {
         assert_eq!(list().done(), 1);
         assert_eq!(list().len(), 3);
+    }
+
+    /// TURN-12. Open is what a row left unstruck: started and unstarted both, and a status nobody
+    /// recognised, since that reads as outstanding (TODO-2). Finished and dropped are not.
+    #[test]
+    fn a_task_is_open_unless_it_is_finished_or_dropped() {
+        let list = List::new(vec![
+            Item::new("finished", Status::Done),
+            Item::new("dropped", Status::Cancelled),
+            Item::new("started", Status::Active),
+            Item::new("not started", Status::Pending),
+            Item::new("unrecognised", Status::parse("nearly")),
+        ]);
+        assert_eq!(list.open(), 3);
+        assert_eq!(List::default().open(), 0);
     }
 
     fn with_a_cancelled_task() -> List {
@@ -322,11 +314,5 @@ mod tests {
         assert_eq!(list.done(), 1);
         assert_eq!(list.cancelled(), 1);
         assert_eq!(list.len(), 3);
-    }
-
-    /// A cancelled task is not the one being worked on, so it cannot name the indicator.
-    #[test]
-    fn a_cancelled_task_does_not_name_the_indicator() {
-        assert!(active_label(&with_a_cancelled_task()).is_none());
     }
 }

@@ -41,6 +41,10 @@ lend a credential for, and `start` and `continue` sign the commits they rewrite.
 - Where nothing holds `.git` back (Linux and Windows): `scopes: ["remote", "signing"]` on `start` and
   `continue`, `scopes: ["remote"]` on `check` and `push`, and no `unconfined`.
 
+`rebase.py` lets git run the hooks `make hooks` copied and not the pull request's own
+`.githooks/`. A `hooks:` line after the `worktree` line, or before a push, says there are none to
+run: see [Hooks](../pr-fix/SKILL.md#hooks) in the pr-fix skill.
+
 What to do when the session refuses an argument is in
 [When the session refuses an argument](../pr-fix/SKILL.md#when-the-session-refuses-an-argument) in
 the pr-fix skill.

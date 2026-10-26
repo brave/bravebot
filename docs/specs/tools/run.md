@@ -5,7 +5,6 @@ status: normative
 governs:
   - crates/agent/src/exec.rs
   - crates/agent/src/remembered.rs
-  - crates/agent/src/scrub.rs
   - crates/config/build.rs
   - crates/config/src/scrub.rs
   - crates/core/src/command.rs
@@ -21,10 +20,17 @@ guards:
 reads_a_step_without_keying:
   - crates/core/src/policy.rs::plan_words
   - crates/core/src/policy.rs::read_proven
+  - crates/agent/src/confine.rs::scope_of
+  - crates/agent/src/confine.rs::holds
+  - crates/agent/src/confine.rs::hands_over_a_file_the_plan_could_write
+  - crates/agent/src/confine.rs::identified
 documented-by:
   - docs/website/docs/reference/tools.md
   - docs/website/docs/reference/run-tool.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
+  - docs/website/docs/security/permission-rules.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope
@@ -253,8 +259,10 @@ settings and the person's answer and never from what a stage wrote or printed:
   or a rule that says ask ([permissions.md](../permissions.md));
 - no stage's program is a file under a directory the plan may write to, and no stage is given such a file
   as an argument where the file is executable or the stage is an interpreter or wrapper (`sh`, `python3`,
-  `node`, `env` and the like, known by the file its program resolved to). An argument is read as the words
-  in it, so `sh -c "./gen.sh a"` and `node --require=./hook.js` name the file they run. A stage could have
+  `node`, `env` and the like, known by the file its program resolved to). An argument is looked up whole,
+  since a file name may hold a space or any character a word is cut at, and as the words in it, read with the
+  quoting a shell applies and with an option's value after its `=`, so `sh "run script.sh"`, `sh -c "./gen.sh a"`,
+  `sh -c "'run script.sh'"` and `node --require=./hook.js` name the file they run. A stage could have
   written it, and under this answer the line that runs it would not ask.
 
 A line this answer lets through starts with the network closed for that line, whatever the session's
@@ -282,7 +290,10 @@ was told, and none can be decided by anything a stage did.
 ([SANDBOX-20](../sandboxing.md#SANDBOX-20)), such as a one-off `python3 -c` that fetches a page, fails in a trusted
 directory whose yes said so, and getting the network back means running it with `unconfined`, which asks.
 A program that runs files it finds by itself (`make`, `cargo`, `npm`, a module named with `-m`) still runs what a stage wrote unasked, held to the sandbox the stage that wrote it had. An interpreter this
-list does not name does the same for a file that is not executable.
+list does not name does the same for a file that is not executable. A command string is read for its
+quoting and not expanded, so a name written with `$'...'`, a variable, a glob or a nested command string,
+or an option's value that holds an `=` and is followed by another `=`, is not found, and the file runs
+unasked under the same sandbox.
 
 A line whose call asks for a credential scope (`signing` among them) or a toolchain list ([SANDBOX-26](../sandboxing.md#SANDBOX-26))
 is asked about whatever answers the same line without the request: a vouched entry and a
@@ -320,6 +331,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::one_stage_that_keeps_the_network_or_writes_a_git_directory_unholds_the_line`
 `verified-by: bravebot_agent::confine::a_program_the_plan_could_have_written_is_not_held`
 `verified-by: bravebot_agent::confine::an_interpreter_handed_a_file_the_plan_could_write_is_not_held`
+`verified-by: bravebot_agent::confine::a_file_name_holding_a_separator_is_looked_up_as_one_name`
+`verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::confined_lines::trust_of_the_directory_answers_a_held_line_and_nothing_else`
 
@@ -486,13 +499,19 @@ A compiler reports the field added to the step, and `make check-security` report
 written to read one field at a time, which is the half a compiler cannot see. Neither is a habit
 somebody has to hold, and the second fails the same pull request that introduces the function.
 
-A function may read a step field by field for something that is not a key, and the two that do are
+A function may read a step field by field for something that is not a key, and the six that do are
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
 the words a rule is matched against, which are the program and its arguments and deliberately not the
 whole step. `read_proven` first refuses a step that carries an assignment or
 a route, is started from inside the project, or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
+The four in `confine.rs` each answer a question about one step and build nothing that is stored,
+compared or approved. `scope_of` names the scope the program and its arguments ask for, `identified`
+whether a git stage names a remote an identity was chosen for, `hands_over_a_file_the_plan_could_write`
+whether an argument names a file the plan could have written, and `holds` whether every stage of a
+line is held by the sandbox. Each reads only the fields its question is about, and a field added to
+the step changes what a person approved for none of them.
 
 **A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
 asked about every time, in this session and in the next. The answer is the spelling that puts the
@@ -675,7 +694,9 @@ The environment a stage receives is the one this process holds, less the credent
 authenticates to its backend with and with the session's own directory named in it
 ([TRUST-17](../trust-map.md#TRUST-17)). Every stage, not only the first. Removed rather than
 emptied, so a program that distinguishes an unset variable from a blank one sees what a machine that
-never held the credential sees.
+never held the credential sees. A `NAME=value` the line writes in front of a program does not bring
+one of them back: the removal is applied again after the line's own assignments, since the line is
+the planner's and not the person's own.
 
 Those credentials are the signing key and its key id, and every variable the `env` of a gateway in
 force names as a place its bearer token may live. The gateways in force are the managed layer's where
@@ -755,6 +776,9 @@ as their own terminal does, and nothing else about it is gated either.
 `verified-by: bravebot_config::lib::google_api_key_is_a_gateway_token_only_while_vertex_is_configured`
 `verified-by: bravebot_agent::exec::a_gateways_environment_token_does_not_reach_a_program_it_runs`
 `verified-by: bravebot_agent::exec::no_stage_of_a_pipeline_sees_a_gateways_environment_token`
+`verified-by: bravebot_agent::exec::a_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step`
+`verified-by: bravebot_agent::exec::a_background_steps_own_assignment_of_a_withheld_name_does_not_reach_that_step`
+`verified-by: bravebot_lsp::server::a_server_is_not_handed_the_names_it_is_told_to_withhold`
 `verified-by: bravebot_agent::exec::a_background_job_is_not_handed_a_gateways_environment_token`
 `verified-by: bravebot_agent::exec::a_variable_no_provider_block_names_still_reaches_a_program`
 `verified-by: bravebot_agent::exec::switching_the_filtering_off_restores_a_gateways_environment_token`
@@ -984,6 +1008,7 @@ what was printed: nothing here reads a byte of it.
 
 `verified-by: bravebot_agent::turn::what_a_background_job_printed_is_quarantined_like_any_other_output`
 `verified-by: bravebot_agent::exec::a_background_pipeline_does_not_see_this_agents_credentials`
+`verified-by: bravebot_agent::turn::a_job_keeps_the_label_it_started_with_when_the_program_is_vouched_for_afterwards`
 
 <a id="RUN-17"></a>
 ### RUN-17: a look at a job may wait for it, inside the turn that owns it
@@ -993,6 +1018,25 @@ output arriving that the caller has not been handed, the job ending, the wait ru
 turn being cancelled. Which of the four it was is not reported separately, because the answer already
 says it: how many new lines there are, whether the job has ended, and how long the wait actually
 lasted.
+
+**A wait that output does not end.** `job_output` also takes `until_exit`, a boolean that is only
+accepted with `wait_seconds` beside it, which then bounds the wait. A call that gives both comes
+back at the first of four things: the job ending, the wait running out, the turn being cancelled, or
+a stop the person asks for on any job of the turn ([RUN-27](#RUN-27)). Output arriving does not end
+it, including output that is already there, unseen, when the call is made. What it hands back is
+what the job printed since the last look, in one answer, under the label the job has and cut to the
+output cap as any look's is, so output that is quarantined comes back as one reference to all of it.
+`until_exit` given as anything but a boolean, as `true` with no `wait_seconds`, or as `true` beside
+`kill` is refused. A flag that is quietly ignored hands back the output-ended wait the caller did
+not ask for, a flag that quietly chose its own bound would hand back a window nobody asked about,
+and a `kill` is carried out after the wait, so beside this flag it would be held back by the whole
+bound. `false` is the same as leaving it out.
+
+**Why `until_exit` exists.** A job that prints more often than a round takes ends every output-ended
+wait at its next line, so a build that prints a line per crate costs one planner round per look, and
+where its output is quarantined one `read_output` call per look as well, and a job that is printing
+when the call is made never lets the wait last at all. A caller that only needs the result of such a
+job has no other way to ask for it in one call.
 
 **Between one second and ten minutes, and a value outside that is refused.** [RUN-11](#RUN-11)'s
 deadline is clamped instead, and the difference is what a caller can tell afterwards. A run whose
@@ -1037,7 +1081,9 @@ pipeline it started: how many bytes have arrived, and which steps have exited. T
 bookkeeping [RUN-16](#RUN-16) already provides for, and the byte count is only ever compared against
 itself. A program does therefore decide when a wait returns by choosing when to print, which is
 exactly what a caller asking to be told about new output asked for, and the bytes themselves still
-reach anybody only under the label the plan was given.
+reach anybody only under the label the plan was given. A wait with `until_exit` does not compare a
+byte count either: it asks which steps have exited and what the clock says, so a program cannot
+end it by printing.
 
 **What is new is counted per pipe.** A pipeline has one pipe for its standard output and one for each
 stage's standard error, and what a look hands back composes them with the output first. A single
@@ -1070,14 +1116,26 @@ the window.
 `verified-by: bravebot_agent::exec::waiting_for_more_lasts_its_bound_where_a_job_that_has_printed_says_nothing_further`
 `verified-by: bravebot_agent::exec::waiting_for_more_returns_when_the_job_ends_without_printing`
 `verified-by: bravebot_agent::exec::a_cancelled_wait_for_more_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::waiting_for_exit_is_not_ended_by_the_output_of_a_job_that_keeps_printing`
+`verified-by: bravebot_agent::exec::waiting_for_exit_lasts_its_bound_where_the_job_keeps_running_and_printing`
+`verified-by: bravebot_agent::exec::a_cancelled_wait_for_exit_comes_back_without_waiting_out_its_bound`
+`verified-by: bravebot_agent::exec::a_wait_for_exit_comes_back_when_the_person_asks_to_stop_any_job_of_the_turn`
 `verified-by: bravebot_agent::exec::what_arrived_on_one_pipe_is_not_reported_as_what_arrived_on_the_other`
 `verified-by: bravebot_agent::exec::a_character_split_across_two_pipe_reads_is_handed_over_whole`
 `verified-by: bravebot_agent::tools::a_job_output_wait_outside_the_bounds_is_refused_rather_than_shortened`
 `verified-by: bravebot_agent::tools::job_output_offers_a_bounded_wait_rather_than_only_a_snapshot`
+`verified-by: bravebot_agent::tools::until_exit_is_a_boolean_that_needs_a_wait_and_no_kill_beside_it`
+`verified-by: bravebot_agent::tools::job_output_offers_a_wait_that_output_does_not_end`
 `verified-by: bravebot_agent::report::a_look_that_waited_is_described_with_both_the_window_and_the_warning`
 `verified-by: bravebot_agent::report::one_second_is_described_in_the_singular`
+`verified-by: bravebot_agent::tools::job_output_says_its_wait_stays_inside_the_turn`
 `verified-by: bravebot_agent::turn::one_job_output_call_that_waits_is_handed_output_arriving_after_it_was_made`
+`verified-by: bravebot_agent::turn::one_job_output_call_that_waits_for_the_exit_is_handed_all_that_a_chatty_job_printed`
+`verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_says_how_long_it_watched_a_job_still_printing`
+`verified-by: bravebot_agent::turn::a_job_output_call_asking_for_the_exit_in_a_way_it_cannot_honour_is_refused_without_waiting`
 `verified-by: bravebot_agent::turn::a_job_output_call_reports_the_code_a_finished_job_exited_with`
+`verified-by: bravebot_agent::report::a_look_that_waited_says_nothing_is_watching_the_job_now`
+`verified-by: bravebot_agent::tools::job_output_says_its_wait_ends_with_the_turn`
 
 <a id="RUN-18"></a>
 ### RUN-18: the tool's own description routes a request to watch something to one of two techniques
@@ -1161,10 +1219,11 @@ put a prompt to consults nothing. A session that moves its working directory is 
 record for where it moved to and no longer by the one for where it was, because what `make check`
 does depends on the tree it runs in and the person answered about one tree. The prompt shows what
 would be recorded and where, because that is the whole of the grant and a person cannot endorse a
-record they were not shown. Where a table in the source lists the line, a fourth key, `f`, records it
-with one number left free; that is the one exception to "this exact command line", and
-[RUN-20](#RUN-20) states it. Everything below about what is recorded, where, and when `r` is withheld
-holds for `f` unchanged, except the sentence naming the number.
+record they were not shown. Where a table in the source lists the line, a fourth key, `s`, records the
+named group of lines the line is in, each with one number left free; that is the one exception to
+"this exact command line", and [RUN-20](#RUN-20) states it. Everything below about what is recorded,
+where, and when `r` is withheld holds for `s` unchanged, except the sentences naming the line and
+the number.
 
 The row relabels `a` so that both lifetimes can be read off the screen, and it replaces
 [RUN-7](#RUN-7)'s row wherever a run prompt is drawn, including the prompts that offer no `r`. What
@@ -1320,7 +1379,7 @@ the file. An entry is added rather than the record rewritten, so two sessions op
 cannot lose each other's answers.
 
 **It is read back with what put it there.** `/status` lists what is covered and says of each line
-whether this session's own answer covered it or an earlier session's did, and where the list is
+or scope whether this session's own answer covered it or an earlier session's did, and where the list is
 shortened it says how many of each it left out. The two lifetimes are the point: a person deciding
 whether to press `r` again, or whether to delete something, cannot tell from a flat list which
 answers they are still carrying from last week. The reading also says where the record is, because
@@ -1410,11 +1469,12 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_agent::remembered::an_entry_whose_recorded_binary_is_a_rendering_covers_nothing`
 
 <a id="RUN-20"></a>
-### RUN-20: no answer at a prompt grants a family, except one a hand-written table lists
+### RUN-20: no answer at a prompt grants a family, except a scope a hand-written table lists
 
 Neither `a` nor `r` covers more than one argument list, and no key derives a wider grant from the
 lines a person has already answered. One answer is the exception, and only for a line a table in the
-source lists: `f`, which records the line with a single number left free.
+source lists: `s`, which records the scope the line is in, a named group of lines each with a single
+number left free.
 
 **Why.** Bounding a family means knowing which argument positions carry a value and which name
 something to run, and nothing available at a prompt can tell those apart. A wrapper puts what runs
@@ -1442,54 +1502,75 @@ about a program, and nothing here can make it. Where the line repeats, nothing i
 and [RUN-19](#RUN-19)'s key is the whole of the answer. The lines that vary are the only ones left,
 and they are the person's because only the person can decide them.
 
-**The one exception: a table of sub-commands with a typed slot.** The reason above is that nothing at a
-prompt can tell a value from a program, and it stops holding for a program whose argument positions
-somebody has audited ahead of time. The table is written by hand, one entry at a time, never built
-from the lines a person answered or from anything a program printed, and it is a proof in the sense of
-[command-line.md](command-line.md) rather than something a keypress mints. An entry names a program,
-two words after it, and the position of one slot. The first slot type is a decimal integer. The first
-entries are `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view`, each as
-`gh <word> <word> <number> --repo OWNER/REPO`, with the repository a fixed literal in the entry.
+**The one exception: a table of scopes, each a group of sub-commands with a typed slot.** The reason
+above is that nothing at a prompt can tell a value from a program, and it stops holding for a program
+whose argument positions somebody has audited ahead of time. The table is written by hand, one entry
+at a time, never built from the lines a person answered or from anything a program printed, and it is
+a proof in the sense of [command-line.md](command-line.md) rather than something a keypress mints. An
+entry names a program, two words after it, and the position of one slot. The first slot type is a
+decimal integer. A scope is a named group of entries, and the sentences the prompt puts to the person
+for it are written with it. The first scope reads pull requests and issues, and its entries are `gh pr view`, `gh pr diff`, `gh pr checks` and `gh issue view`, each as
+`gh <word> <word> <number> --repo OWNER/REPO`, with the repository the one the line on the screen named.
 
-A line is in the table only when its arguments are exactly that shape: the two words, an argument made of
-decimal digits alone, `--repo`, and an `OWNER/REPO` made of letters, digits, `-`, `_` and `.`, neither
-part empty or starting with `-` or `.`. Nothing else is listed. A flag the entry does not name
-(`--web`, `--json`, `--watch`), the short or `=` spelling of `--repo`, a host in the repository, a
-missing `--repo`, a second number, an environment assignment, a redirection, and any pipeline, join or
-group make the line one the table does not list, and it is asked about and recorded exactly as RUN-19
-says. Each of the four sub-commands was checked against `gh`'s own option list: with the repository
-fixed and no other flag present, the number selects which object is read, and the command reads it.
+A line is in a scope only when its arguments are exactly that shape for one of the scope's entries:
+the two words, an argument made of decimal digits alone, `--repo`, and an `OWNER/REPO` made of
+letters, digits, `-`, `_` and `.`, neither part empty or starting with `-` or `.`. Nothing else is
+listed. A flag the entry does not name (`--web`, `--json`, `--watch`), the short or `=` spelling of
+`--repo`, a host in the repository, a missing `--repo`, a second number, an environment assignment, a
+redirection, and any pipeline, join or group make the line one the table does not list, and it is
+asked about and recorded exactly as RUN-19 says. Each of the four sub-commands was checked against
+`gh`'s own option list: with the repository fixed and no other flag present, the number selects which
+object is read, and the command reads it. A line gets the same scope whichever entry it matched.
 
-`f` is offered next to `r` only for such a line, and records `gh pr view <number> --repo
-brave/bravebot`:
+`s` is offered next to `r` only for such a line. It is labelled and described in words, with no
+argument list, no slot and no rule syntax on the screen:
 
 ```
-  y run it    a always this session    r remember it    f any number    n don't    ctrl-c stop the turn
+  y run it    a always this session    r remember it    s read pull requests and issues in brave/bravebot    n don't    ctrl-c stop the turn
 ```
 
-The prompt draws the entry as it will be held, with the slot written `<number>`, and says that only a
-whole number may change. A later line is covered by it when every field but that argument is equal,
-including the binary and the path that started it, and that argument is nothing but decimal digits.
+Under the keys' explanations the prompt names the scope, `Read pull requests and issues in
+brave/bravebot`, and says what it covers (viewing a pull request or an issue and reading a pull
+request's diff and checks, each with any number) and what stays fixed (another repository, another
+flag, and anything that writes are still asked about). It says the answer is saved as one entry in
+the same file as `r`'s, and that deleting that line takes all of it back.
+
+Answering `s` approves this run and saves the scope as one entry in the record RUN-19 describes. The
+entry holds the scope's name, the repository, and the ordinary lines the scope expands to: one for each
+entry of the group, with the number free, the repository literal and the binary the line on the screen
+resolved to. What covers a later line is those lines and not the name, so a table that gains an entry
+in a later build widens no answer already given, and a person who wants to read or edit the lines can.
+A later line is covered when it is one of them: every field but the number is equal, including the
+binary and the path that started it, and that argument is nothing but decimal digits.
 `gh pr view 1082 --repo other/repo` is asked about after a record made for `brave/bravebot`, and so are
-`gh pr view abc` and `gh pr view 1082 --web`. A prompt for a program the table does not list is
-unchanged: no key, no row, no sentence.
+`gh pr view abc`, `gh pr view 1082 --web`, `gh pr merge 1082 --repo brave/bravebot` and `gh issue list
+--repo brave/bravebot`. A prompt for a program the table does not list is unchanged: no key, no row, no
+sentence. `/status` lists the entry as one item, named in the same words, and not as its lines.
 
 An entry is held as a list of arguments, each a literal or a slot, and is written with a slot as an
 object where a literal is a string. A build that knows no slots fails to read such an entry as a list
 of strings and skips it, and a build that finds a slot kind it does not know does the same, so an entry
-this build cannot read covers nothing, as RUN-19 already says of every entry it cannot read. The
-refusals RUN-19 makes are made again for `f`, where the prompt is drawn and where a keypress is acted
-on: a line that writes, reads a redirected file, runs outside the workspace root or carries an
-assignment cannot be recorded by either key. The table is consulted again at that second place, so a
-front end that sends `f` for a line the table does not list records nothing, and one that sends both
-keys records the exact line.
+this build cannot read covers nothing, as RUN-19 already says of every entry it cannot read. A scope is
+written as one entry of its own, with its lines inside it. A build that does not know scope entries, or
+that finds a group name it does not know, skips it, and so does a build that cannot read one of its
+lines: the other lines of that scope cover nothing either, since a scope covering some of what the
+person answered for would be read back as the whole of it. The same holds for an entry with no lines
+and for one holding a line that is not a sub-command of its group, with the number free, on its
+repository: the name the report gives is always what the lines cover. A group saved when the table
+held fewer sub-commands is read as it was saved. A line an earlier build recorded with a
+slot is still read, and is listed as the line it is. The refusals RUN-19 makes are made again for `s`,
+where the prompt is drawn and where a keypress is acted on: a line that writes, reads a redirected
+file, runs outside the workspace root or carries an assignment cannot be recorded by either key. The
+table is consulted again at that second place, so a front end that sends `s` for a line the table does
+not list records nothing, and one that sends both keys records the exact line.
 
-What `f` grants is the asking only, as `r` does. A covered line's output keeps the label RUN-4 gives
-it. What it adds to `r` is lines nobody read: other numbers of the same sub-command on the same
-repository. The repository is read from the argument list the planner wrote, which is the planner's own
-and public, so nothing a program printed decides what is covered. Slots other than a decimal integer, a
-second repository scope for the same entry, and an entry for a program the table does not list are
-each a change to the table and to this clause, and `f` for any repository is not offered.
+What `s` grants is the asking only, as `r` does. A covered line's output keeps the label RUN-4 gives
+it. What it adds to `r` is lines nobody read: other numbers of the same sub-command and the other
+sub-commands of the scope, on the same repository. The repository is read from the argument list the
+planner wrote, which is the planner's own and public, so nothing a program printed decides what is
+covered. Slots other than a decimal integer, a sub-command that writes, a second repository for the
+same entry, another scope, and an entry for a program the table does not list are each a change to the
+table and to this clause, and a scope for any repository is not offered.
 
 **What the prompt says instead.** Where the line being asked about is one whose arguments will differ
 next time, the prompt says that a pattern is written in a settings file rather than answered at a
@@ -1563,27 +1644,39 @@ the alternative of withholding it from the case it exists for.
 `verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
 `verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
 `verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
-`verified-by: bravebot_core::remembered::a_family_covers_the_same_sub_command_with_another_number`
-`verified-by: bravebot_core::remembered::a_family_frees_the_number_and_nothing_else`
+`verified-by: bravebot_core::remembered::a_scope_covers_every_sub_command_of_its_group_with_any_number`
+`verified-by: bravebot_core::remembered::the_scope_is_the_same_whichever_sub_command_was_asked_about`
+`verified-by: bravebot_core::remembered::a_scope_frees_the_number_and_nothing_else`
 `verified-by: bravebot_core::remembered::the_slot_admits_a_decimal_integer_and_no_other_argument`
 `verified-by: bravebot_core::remembered::an_exact_entry_for_a_listed_line_does_not_free_its_number`
-`verified-by: bravebot_core::remembered::a_line_the_table_does_not_list_has_no_family`
-`verified-by: bravebot_core::remembered::a_family_is_bound_to_the_binary_it_was_recorded_for`
-`verified-by: bravebot_core::remembered::a_family_is_drawn_with_its_number_free`
-`verified-by: bravebot_core::policy::a_family_remembered_past_the_session_is_not_asked_about_for_another_number`
-`verified-by: bravebot_agent::remembered::a_family_is_read_back_with_its_number_free`
-`verified-by: bravebot_agent::remembered::an_entry_whose_slot_cannot_be_read_covers_nothing`
-`verified-by: bravebot_agent::confirm::each_answer_records_the_line_it_names`
-`verified-by: bravebot_agent::confirm::the_family_answer_for_an_unlisted_line_records_nothing`
+`verified-by: bravebot_core::remembered::a_line_the_table_does_not_list_is_in_no_scope`
+`verified-by: bravebot_core::remembered::a_scope_is_bound_to_the_binary_it_was_recorded_for`
+`verified-by: bravebot_core::remembered::a_scope_is_one_answer_however_many_lines_it_holds`
+`verified-by: bravebot_core::remembered::a_scope_draws_each_line_with_its_number_free`
+`verified-by: bravebot_core::policy::a_scope_remembered_past_the_session_is_not_asked_about_for_another_number`
+`verified-by: bravebot_agent::remembered::a_scope_is_read_back_covering_the_group_with_any_number`
+`verified-by: bravebot_agent::remembered::deleting_the_one_line_of_a_scope_takes_the_whole_group_back`
+`verified-by: bravebot_agent::remembered::a_scope_is_read_back_with_its_repository_and_who_answered_it`
+`verified-by: bravebot_agent::remembered::a_directory_sharing_a_key_with_another_is_not_answered_by_its_scopes`
+`verified-by: bravebot_agent::remembered::a_scope_with_a_line_this_build_cannot_read_covers_nothing`
+`verified-by: bravebot_agent::remembered::a_scope_this_build_does_not_fully_understand_covers_nothing`
+`verified-by: bravebot_agent::remembered::a_scope_whose_lines_are_not_its_groups_on_its_repository_covers_nothing`
+`verified-by: bravebot_agent::remembered::a_scope_written_for_a_smaller_group_covers_only_the_lines_it_holds`
+`verified-by: bravebot_agent::remembered::a_number_free_line_an_earlier_build_wrote_is_still_read`
+`verified-by: bravebot_agent::confirm::each_answer_records_what_it_names`
+`verified-by: bravebot_agent::confirm::the_scope_answer_for_an_unlisted_line_records_nothing`
 `verified-by: bravebot_agent::confirm::both_keys_at_once_record_the_exact_line`
-`verified-by: bravebot_agent::confirm::the_prompt_offers_the_family_key_for_a_listed_line_it_may_record`
-`verified-by: bravebot_agent::turn::the_family_answer_for_a_program_the_table_does_not_list_records_nothing`
-`verified-by: bravebot_agent::run_family::a_family_remembered_in_one_session_covers_another_number_in_the_next`
-`verified-by: bravebot_tui::confirm::the_family_key_approves_and_records_the_family_only`
-`verified-by: bravebot_tui::confirm::the_family_key_is_unbound_where_the_prompt_does_not_offer_it`
-`verified-by: bravebot_tui::confirm::refusing_a_run_records_no_family`
-`verified-by: bravebot_tui::confirm::the_family_key_waits_for_the_rows_saying_what_it_grants`
-`verified-by: bravebot_tui::confirm::a_prompt_offering_a_family_draws_the_entry_with_its_number_free`
+`verified-by: bravebot_agent::confirm::the_prompt_offers_the_scope_key_for_a_listed_line_it_may_record`
+`verified-by: bravebot_agent::turn::the_scope_answer_for_a_program_the_table_does_not_list_records_nothing`
+`verified-by: bravebot_agent::run_scope::a_scope_remembered_in_one_session_covers_its_group_in_the_next`
+`verified-by: bravebot_tui::confirm::the_scope_key_approves_and_records_the_scope_only`
+`verified-by: bravebot_tui::confirm::the_old_any_number_key_answers_nothing`
+`verified-by: bravebot_tui::confirm::the_scope_key_is_unbound_where_the_prompt_does_not_offer_it`
+`verified-by: bravebot_tui::confirm::refusing_a_run_records_no_scope`
+`verified-by: bravebot_tui::confirm::the_scope_key_waits_for_the_rows_saying_what_it_grants`
+`verified-by: bravebot_tui::confirm::a_prompt_offering_a_scope_asks_in_words`
+`verified-by: bravebot_tui::confirm::the_scope_prompt_names_the_repository_the_line_named`
+`verified-by: bravebot_tui::status::the_report_lists_a_remembered_scope_as_one_item_in_words`
 
 <a id="RUN-21"></a>
 ### RUN-21: the cap on what output may spend of the conversation is configurable
@@ -1632,6 +1725,8 @@ worth and does not stop being theirs because the work moved ([DELEGATE-1](../del
 `verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_run_is_cut_to`
 `verified-by: bravebot_agent::turn::a_delegate_runs_under_the_output_cap_of_the_turn_that_spawned_it`
 `verified-by: bravebot_agent::turn::output_too_long_for_its_result_is_read_page_by_page_with_nobody_asked`
+`verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_a_look_at_a_background_job_is_cut_to`
+`verified-by: bravebot_agent::turn::a_configured_output_cap_is_what_the_account_of_a_finished_job_is_cut_to`
 
 <a id="RUN-22"></a>
 ### RUN-22: a run may ask to read what it printed, and gets it in the same result where nobody would be asked

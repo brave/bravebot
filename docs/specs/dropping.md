@@ -6,6 +6,8 @@ governs:
   - crates/filetype/src/by_name.rs
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/agent/src/attached.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/attached.rs
@@ -45,10 +47,13 @@ contains can put one there.
 
 Never a path a model proposed, never one read out of a file, never one a processor produced. The
 justification cannot be checked from the bytes, so it lives at the call site. Two call sites mint
-the grant: the terminal's drop handling, and the `dropped` and `attachments` lists a front end
-sends with `turn.send`, whose caller owes what [DROP-10](#DROP-10) states. Nothing else mints it.
+the grant: the terminal's drop handling, which a pasted path reaches and which a Ctrl-V that finds
+files on the clipboard reaches by the same route ([PASTE-12](pasting.md#PASTE-12)), and the
+`dropped` and `attachments` lists a front end sends with `turn.send`, whose caller owes what
+[DROP-10](#DROP-10) states. Nothing else mints it.
 
 `verified-by: bravebot_tui::drop::dropping_an_image_puts_a_marker_in_the_line`
+`verified-by: bravebot_tui::app::a_file_the_clipboard_names_is_staged_as_dropping_it_stages_it`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_read_as_a_drop`
 `verified-by: bravebot_agent::workspace::an_untrusted_path_is_not_attached_as_a_drop`
 
@@ -236,6 +241,7 @@ as its own turn it carries its files and pictures the way any prompt does.
 
 `verified-by: bravebot_tui::drop::a_file_dropped_into_a_queued_line_is_named_to_the_planner`
 `verified-by: bravebot_tui::drop::resolving_a_queued_line_does_not_rewrite_what_the_person_sees`
+`verified-by: bravebot_tui::state::a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence`
 
 <a id="DROP-9"></a>
 ### DROP-9: a recalled prompt names the file rather than the marker

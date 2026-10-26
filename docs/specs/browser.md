@@ -20,6 +20,7 @@ governs:
   - extension/tools.js
   - extension/options.js
   - extension/tests/background.test.mjs
+  - extension/tests/options.test.mjs
   - extension/tests/tools.test.mjs
   - docs/design/browser-extension.md
 documented-by: none (gap: a "Connecting Brave" section of docs/website/docs/customize/mcp-servers.md, once bravebot-browser and the extension ship in a release)
@@ -351,8 +352,9 @@ at the same URL cannot be told apart by the argument they approved.
 
 Only the platform check starts on. Listing tabs and their frames, reading a page or frame, searching history and bookmarks, and
 opening a tab start off until a person turns them on in the extension's options.
-A call to a tool that is off is refused before the browser is asked anything. A history search
-covers all of history, and a search returns at most 100 results.
+A call to a tool that is off is refused before the browser is asked anything. A tool that is on
+still leaves out and refuses a site the person has blocked ([BROWSER-17](#BROWSER-17)). A history
+search covers all of history, and a search returns at most 100 results.
 
 **Why.** Every tool but the platform check reaches what a person has open, has visited or has
 saved, or sends their cookies to a site, so none of them does so before the person has said it
@@ -397,6 +399,44 @@ describes. The reply goes through [MCP-1](mcp.md#MCP-1), so the final URL is unt
 `verified-by: bravebot_browser::tools::a_tab_is_opened_by_its_url_alone`
 `verified-by: by-construction (extension/tests/tools.test.mjs asserts that open_tab creates one background tab at the URL asked for and replies with the committed URL alone, that a commit on another host, a different port or a browser error page, a load error and a commit that never comes within twenty seconds, and not before, each close the tab and fail naming the URL asked for and not the one the tab went to, that a same-host redirect is kept, that only the tab's own top frame is read, and that a non-web scheme or no URL reaches no tab; it runs where the test under BROWSER-13 runs)`
 
+<a id="BROWSER-17"></a>
+### BROWSER-17: a site on the person's blocked list is not listed, read, searched or opened
+
+The extension's options hold a list of sites the person writes, one to a line, kept beside the tool
+switches. It starts empty. A site is an HTTP or HTTPS origin, compared as written:
+`https://example.com` covers every URL with that scheme, host and port, a `blob:` or `view-source:`
+URL of it included, and does not cover `https://www.example.com`, `http://example.com` or another
+port. A path after the origin is dropped. A line that is not one HTTP or HTTPS address of a host
+stops the save, and the options page names it and leaves the list saved before in force, so a
+mistyped line cannot drop the site it replaced. The options page saves when the person leaves the
+box, since a save on every keystroke would take a site off the list while its line is edited, and
+says an edit is not saved yet until then. A call uses the list as it stood when the call began.
+
+`list_tabs`, `search_history` and `search_bookmarks` leave out an entry at a listed site, and
+`list_tabs` also a tab that is loading one or leaving one. `list_frames` leaves out a frame at a
+listed site and a frame inside one, and `read_page` does not find such a frame. `list_frames`,
+`read_page` and `open_tab` fail when a URL they are given is at a listed site, naming the list and
+not the URL, before the browser is asked for a tab or a frame, so the failure does not say whether
+the site is open. `open_tab` also closes a tab that commits at a listed site and fails the same way. While the list is not empty, a history search asks the browser for the
+1,000 newest matches and returns the first of the others up to the count asked for, so leaving
+entries out does not return fewer than there are. A stored list that is not a list of strings fails
+every tool but the platform check, and the options page says it cannot read it until the next save
+replaces it.
+
+**Why.** Turning a tool on makes every open page, history entry and bookmark reachable by any call a
+person approves, and a standing allow rule removes the question before the call. A person cannot
+exclude a bank, a mail client or a password manager once and for all except by leaving the tool off.
+The list is their own setting and a second control beside [BROWSER-14](#BROWSER-14), not a
+replacement for it. The comparison is made in the extension, which is outside the driver, between
+the person's list and a URL, and the driver reads no part of a result to make it. The refusal comes
+before any tab is looked for so that it cannot answer whether a page is open, and it names the
+list because it goes back to the session. What [VIEW-3](terminal-transcript.md#VIEW-3) shows the
+person is what the extension returns, so a listing with entries left out holds fewer rows than
+Brave has, and the options page says so. A list that could not be read and was taken for an empty
+one would leave every site open and tell nobody.
+
+`verified-by: by-construction (extension/tests/tools.test.mjs asserts that the tools list, search, read and open nothing at a listed origin, over a table of URLs that are at it and URLs that only resemble it, that a tab loading a listed site, a frame at one or inside one in an open tab and the first matches of a history or bookmark search at one are left out without shortening the result, that the refusals are one message naming the list and not the URL and reach no tab, frame or script API, that a tab redirected to a listed site is closed with the same message, that a list that cannot be read refuses every tool but the platform check, that every such tool, given a listed site open in a tab, in history and in bookmarks, returns nothing of it and reaches no tab, frame or script, that a line that is not one address of a host, a wildcard or two sites on a line included, stops the save and leaves the list saved before in force, and that what the options page saves is what the tools read; extension/tests/options.test.mjs asserts that the page's field shows the saved list, saves nothing while typing and says so, saves on leaving the box, names a line that is not an address and keeps the list saved before, reports a save that fails, does not replace text typed during a save, says when the stored list cannot be read, and saves a switch without replacing the list; both run where the test under BROWSER-13 runs)`
+
 ## Known costs
 
 - The secret in [BROWSER-3](#BROWSER-3) is only as private as the directory. Any process of the
@@ -410,5 +450,22 @@ describes. The reply goes through [MCP-1](mcp.md#MCP-1), so the final URL is unt
   cannot start the host until it is installed again.
 - Windows starts no stdio server today, so the MCP half cannot run there at all, and whether a named
   pipe or a Unix socket is the right transport is open.
+- A blocked site is matched by the origin written. The same server reached under another name, such
+  as a trailing dot, an address or another host name, is another origin and is not covered, and the
+  person lists each one they use.
+- Two options pages open at once each save what they show, and the last save wins. An edit that is
+  not saved because the tab was closed before the person left the box is lost, and the page said it
+  was not saved yet.
+- A refusal says that a site is on the list, so a session that guesses a URL learns whether its
+  origin is listed. It learns nothing of which tabs are open.
+- A URL at an origin that is not listed can redirect to one that is, for example from `http://` to
+  `https://` on the same host. `open_tab` closes the tab once it commits there, after the request,
+  with the person's cookies, has been made.
+- The descriptions a session sees for the tools do not say that results leave out blocked sites,
+  since changing them changes the tool list a person accepted. A session that asks whether a page is
+  open can be told no for a page that is.
+- While a site is blocked, a history search drops listed entries from the 1,000 newest matches the
+  browser returns. A search whose newest 1,000 matches are all at listed sites returns nothing
+  although older matches exist.
 - The extension's id is fixed only while it is loaded unpacked. A copy from the Web Store or
   bundled with Brave has an id of its own, and `install` has to be given it.

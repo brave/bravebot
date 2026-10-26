@@ -1,16 +1,16 @@
-//! What Claude Code's and opencode's own configuration holds, and what a running Ollama serves, that
-//! this program can use.
+//! What Claude Code's and opencode's own configuration holds, and what a running Ollama, LM Studio
+//! or llama-server serves, that this program can use.
 //!
 //! Read and mapped here, and never written: the question and the write belong to the front end that
 //! asks (`docs/specs/import.md`). Only files in the person's profile directory are opened, because a
 //! checkout's files are whatever the repository's author wrote, and a host and a credential name
-//! taken from one would let a clone decide where the person's key is sent. Ollama is asked by the
-//! caller, and only where it listens on this machine.
+//! taken from one would let a clone decide where the person's key is sent. The servers are asked by
+//! the caller, and only where they listen on this machine.
 
 use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
-use crate::provider::{self, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
+use crate::provider::{self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
 use serde_json::{Map, Value};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -30,12 +30,15 @@ const CLAUDE_MODEL: &str = "ANTHROPIC_MODEL";
 /// The Bedrock API key Claude Code can sign in with, which bravebot does not: it signs through the
 /// AWS credential chain.
 const BEDROCK_BEARER: &str = "AWS_BEARER_TOKEN_BEDROCK";
-/// What Claude Code reaches Anthropic's own API with, in a wire format no service here speaks.
-const ANTHROPIC_NAMES: [&str; 3] = [
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-];
+/// The key Claude Code reaches Anthropic's own API with, which an `anthropic` provider block sends in
+/// the header that API reads it from.
+const ANTHROPIC_KEY: &str = "ANTHROPIC_API_KEY";
+/// The host Claude Code sends it to instead of Anthropic's.
+const ANTHROPIC_BASE_URL: &str = "ANTHROPIC_BASE_URL";
+/// What else Claude Code reaches Anthropic's own API with. The first is sent as a bearer token and
+/// the second is a host written without the route this program appends, so neither is carried into
+/// a `provider` block.
+const ANTHROPIC_NAMES: [&str; 2] = ["ANTHROPIC_AUTH_TOKEN", ANTHROPIC_BASE_URL];
 /// The names a Claude Code Bedrock setup states that bravebot reads under the same spelling.
 const BEDROCK_NAMES: [&str; 5] = [
     env_var::AWS_REGION,
@@ -49,17 +52,33 @@ const BEDROCK_NAMES: [&str; 5] = [
 pub const OLLAMA_HOST: &str = "OLLAMA_HOST";
 /// The port Ollama listens on where `OLLAMA_HOST` names none and no scheme.
 const OLLAMA_PORT: u16 = 11434;
-/// The id the gateway is written under, which is the one the configuration guide's block uses.
-const OLLAMA_ID: &str = "ollama";
+/// Where LM Studio is asked, read as [`OLLAMA_HOST`] is.
+///
+/// LM Studio reads no variable for its own address, so this one is bravebot's and moves only where
+/// bravebot asks. A person who changed LM Studio's port in its settings names the new one here.
+pub const LM_STUDIO_HOST: &str = "BRAVEBOT_LM_STUDIO_HOST";
+/// The port LM Studio's server listens on until it is told another.
+const LM_STUDIO_PORT: u16 = 1234;
+/// What llama-server is told in order to listen where it does, which is also what asking it needs.
+pub const LLAMA_ARG_HOST: &str = "LLAMA_ARG_HOST";
+pub const LLAMA_ARG_PORT: &str = "LLAMA_ARG_PORT";
+/// The ports llama-server listens on until it is told another: the one it has defaulted to since
+/// October 2026, and the one every release before that, and the container image, still use.
+const LLAMA_SERVER_PORTS: [u16; 2] = [9931, 8080];
 /// The capability a model must report for a session's tools to reach it.
-const TOOLS: &str = "tools";
+///
+/// What a server's reader reports for a model that can call tools, so it is the one name the readers
+/// in `bravebot-aichat` and the choice here agree on.
+pub const TOOLS: &str = "tools";
 
-/// The two programs whose configuration is read, and the server that is asked.
+/// The two programs whose configuration is read, and the servers that are asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     ClaudeCode,
     Opencode,
     Ollama,
+    LmStudio,
+    LlamaServer,
 }
 
 impl Source {
@@ -69,42 +88,63 @@ impl Source {
             Self::ClaudeCode => "Claude Code",
             Self::Opencode => "opencode",
             Self::Ollama => "Ollama",
+            Self::LmStudio => "LM Studio",
+            Self::LlamaServer => "llama-server",
+        }
+    }
+
+    /// Whether this is a server asked on this machine, rather than files read.
+    pub fn is_server(self) -> bool {
+        self.gateway_id().is_some()
+    }
+
+    /// The id a server's entry is written under, which for Ollama is the one the configuration
+    /// guide's block uses. `None` for a source that is files.
+    fn gateway_id(self) -> Option<&'static str> {
+        match self {
+            Self::Ollama => Some("ollama"),
+            Self::LmStudio => Some("lmstudio"),
+            Self::LlamaServer => Some("llama-server"),
+            Self::ClaudeCode | Self::Opencode => None,
         }
     }
 }
 
-/// Where Ollama listens, as its own client reads `OLLAMA_HOST`.
+/// Where a server listens, as the variable that names it is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Ollama {
-    /// On this machine, at this base URL, which ends in no slash.
-    Here(String),
+pub enum Listens {
+    /// On this machine, at these base URLs, none ending in a slash. A server that has had more than
+    /// one default has one URL for each, and the first that answers is the one offered.
+    Here(Vec<String>),
     /// On another machine, which is never asked: a start would otherwise reach whatever host the
-    /// variable names before the person has agreed to anything.
-    Elsewhere,
+    /// variable names before the person has agreed to anything. Carries the name of the variable.
+    Elsewhere(&'static str),
 }
 
-impl Ollama {
-    /// Where `OLLAMA_HOST` says Ollama is, read as Ollama's client reads it: surrounding space and
-    /// quotes dropped, `http` and port 11434 where it names no scheme, the scheme's own port where it
-    /// names one and no port, and any path kept.
+impl Listens {
+    /// Where `value` says a server is, read as Ollama's client reads `OLLAMA_HOST`: surrounding
+    /// space and quotes dropped, `http` and `bare_port` where it names no scheme, the scheme's own
+    /// port where it names one and no port, and any path kept.
     ///
-    /// Unset, or set to nothing, is the address the configuration guide's block names. `0.0.0.0` and
-    /// `::` are what a server is told to listen on, and name this machine to a client.
-    pub fn from_value(value: Option<&str>) -> Self {
-        let value = value
-            .unwrap_or_default()
-            .trim()
-            .trim_matches(['"', '\''])
-            .trim();
+    /// Unset, or set to nothing, is `unset`. `0.0.0.0` and `::` are what a server is told to listen
+    /// on, and name this machine to a client. `variable` is what is said where the value names
+    /// another machine.
+    fn from_value(
+        value: Option<&str>,
+        variable: &'static str,
+        unset: &str,
+        bare_port: u16,
+    ) -> Self {
+        let value = unquoted(value.unwrap_or_default());
         if value.is_empty() {
-            return Self::Here(format!("http://localhost:{OLLAMA_PORT}"));
+            return Self::Here(vec![unset.to_string()]);
         }
         // Another scheme is kept, as Ollama's client keeps it, and asking there fails.
         let (scheme, rest, default_port) = match value.split_once("://") {
-            None => ("http", value, OLLAMA_PORT),
+            None => ("http", value, bare_port),
             Some(("http", rest)) => ("http", rest, 80),
             Some(("https", rest)) => ("https", rest, 443),
-            Some((scheme, rest)) => (scheme, rest, OLLAMA_PORT),
+            Some((scheme, rest)) => (scheme, rest, bare_port),
         };
         let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
         let (host, port) = match split_host_port(authority) {
@@ -112,15 +152,48 @@ impl Ollama {
             None => (authority.trim_matches(['[', ']']), default_port),
         };
         let Some(host) = this_machine(host) else {
-            return Self::Elsewhere;
+            return Self::Elsewhere(variable);
         };
         let path = path.trim_end_matches('/');
         let path = match path.is_empty() {
             true => String::new(),
             false => format!("/{path}"),
         };
-        Self::Here(format!("{scheme}://{host}:{port}{path}"))
+        Self::Here(vec![format!("{scheme}://{host}:{port}{path}")])
     }
+
+    /// Where llama-server listens, as the variables it is started with say: `LLAMA_ARG_HOST` is the
+    /// address it binds, and `LLAMA_ARG_PORT` the port. A port that is set is the only one asked.
+    /// One that is not set, or is not a port, leaves both ports it has defaulted to.
+    fn llama_server(host: Option<&str>, port: Option<&str>) -> Self {
+        let host = unquoted(host.unwrap_or_default());
+        let host = match host.is_empty() {
+            true => Some("127.0.0.1".to_string()),
+            false => this_machine(host.trim_matches(['[', ']'])),
+        };
+        let Some(host) = host else {
+            return Self::Elsewhere(LLAMA_ARG_HOST);
+        };
+        let named = port
+            .and_then(|port| unquoted(port).parse::<u16>().ok())
+            .filter(|port| *port != 0);
+        let ports = match named {
+            Some(port) => vec![port],
+            None => LLAMA_SERVER_PORTS.to_vec(),
+        };
+        Self::Here(
+            ports
+                .into_iter()
+                .map(|port| format!("http://{host}:{port}"))
+                .collect(),
+        )
+    }
+}
+
+/// A variable's value with the space and quotes around it dropped, as a shell leaves them where a
+/// value was copied from a file.
+fn unquoted(value: &str) -> &str {
+    value.trim().trim_matches(['"', '\'']).trim()
 }
 
 /// A host and port as Go's `net.SplitHostPort` splits them, or `None` where it would refuse:
@@ -173,7 +246,7 @@ pub fn local_port(url: &str) -> Option<u16> {
         .map(|_| port)
 }
 
-/// The files each source is read from, and where Ollama is asked.
+/// The files each source is read from, and where the servers are asked.
 ///
 /// Resolved from the variables each program itself reads, so a person who moved one program's
 /// directory is read where they moved it. A relative value is never resolved: against the working
@@ -186,8 +259,9 @@ pub struct Places {
     pub opencode: Vec<PathBuf>,
     /// opencode's `auth.json`.
     pub opencode_auth: Option<PathBuf>,
-    /// Where Ollama listens.
-    pub ollama: Option<Ollama>,
+    /// Where each server listens, in the order the questions are asked: Ollama, LM Studio, then
+    /// llama-server. Empty where nothing is read at all.
+    pub servers: Vec<(Source, Listens)>,
 }
 
 impl Places {
@@ -230,11 +304,39 @@ impl Places {
         let mut opencode = vec![config.join("opencode.json"), config.join("opencode.jsonc")];
         opencode.extend(absolute("OPENCODE_CONFIG"));
 
+        let servers = vec![
+            (
+                Source::Ollama,
+                Listens::from_value(
+                    lookup(OLLAMA_HOST).as_deref(),
+                    OLLAMA_HOST,
+                    &format!("http://localhost:{OLLAMA_PORT}"),
+                    OLLAMA_PORT,
+                ),
+            ),
+            (
+                Source::LmStudio,
+                Listens::from_value(
+                    lookup(LM_STUDIO_HOST).as_deref(),
+                    LM_STUDIO_HOST,
+                    &format!("http://127.0.0.1:{LM_STUDIO_PORT}"),
+                    LM_STUDIO_PORT,
+                ),
+            ),
+            (
+                Source::LlamaServer,
+                Listens::llama_server(
+                    lookup(LLAMA_ARG_HOST).as_deref(),
+                    lookup(LLAMA_ARG_PORT).as_deref(),
+                ),
+            ),
+        ];
+
         Self {
             claude_code,
             opencode,
             opencode_auth: Some(data.join("auth.json")),
-            ollama: Some(Ollama::from_value(lookup(OLLAMA_HOST).as_deref())),
+            servers,
         }
     }
 
@@ -404,10 +506,11 @@ pub struct Left {
 /// Why something found is not imported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
-    /// Anthropic's own API, whose wire format no service here speaks.
+    /// A setting for Anthropic's own API that this import does not carry into a `provider` block: a
+    /// bearer token, a host, or a key stated for that host.
     AnthropicApi,
-    /// Google Vertex AI with no usable project, or through Google Cloud credentials: neither is
-    /// reached by a service here.
+    /// Google Vertex AI with no usable project and no key to reach it with, or through Google Cloud
+    /// credentials: neither is reached by a service here.
     Vertex,
     /// A Bedrock API key, where bravebot signs through the AWS credential chain.
     BearerToken,
@@ -422,38 +525,40 @@ pub enum Reason {
     /// A key built from an opencode substitution inside a longer value, which this program does not
     /// make, so the value as written is not the key.
     Substitution,
-    /// `OLLAMA_HOST` names another machine, which is not asked.
+    /// The variable that names where a server is asked names another machine, which is not asked.
     Elsewhere,
-    /// A running Ollama with no model that can call tools, which a session could not use.
+    /// A running server with no model that can call tools, which a session could not use.
     NoToolModel,
 }
 
-/// One model a running Ollama lists, as its `/api/tags` names it.
+/// One model a running server lists, as its listing names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
     pub name: String,
-    /// When it was pulled, in RFC 3339.
+    /// When it was pulled, in RFC 3339, or empty where the server states no time.
     pub modified_at: String,
     /// What it can do, or `None` where the listing reported nothing, which an Ollama older than
-    /// the field does.
+    /// the field does, and llama-server always does.
     pub capabilities: Option<Vec<String>>,
     /// The context window it is loaded with, in tokens, or `None` where it is not loaded or the
     /// server did not say.
     pub window: Option<u64>,
 }
 
-/// Everything the sources hold, Claude Code first and Ollama last.
+/// Everything the sources hold, Claude Code first, then opencode, then the servers in the order
+/// [`Places::servers`] lists them.
 ///
 /// `environment` is the process environment. A Claude Code Bedrock setup is often exported rather
 /// than written down, and a name already there is read from there at run time, so it is not copied.
 ///
-/// `ollama` asks the server at a base URL for its listing, and answers `None` where nothing
+/// `ask` asks the server of a source at a base URL for its listing, and answers `None` where nothing
 /// listens there or what came back could not be read. It is called only where the server is on
-/// this machine, and after every file has been read.
+/// this machine, and after every file has been read. Every address is asked at once, so a server
+/// that never answers holds the start for one bound and not one for each.
 pub fn found(
     places: &Places,
     environment: impl Fn(&str) -> Option<String>,
-    ollama: impl FnOnce(&str) -> Option<Vec<Installed>>,
+    ask: impl Fn(Source, &str) -> Option<Vec<Installed>> + Sync,
 ) -> Vec<Found> {
     let environment = |name: &str| environment(name).filter(|value| !value.trim().is_empty());
     let mut found = Vec::new();
@@ -461,22 +566,72 @@ pub fn found(
         found.extend(claude_code(path, &environment));
     }
     found.extend(opencode(&places.opencode, places.opencode_auth.as_deref()));
-    match &places.ollama {
-        None => {}
-        Some(Ollama::Elsewhere) => found.push(ollama_left(OLLAMA_HOST, Reason::Elsewhere, None)),
-        Some(Ollama::Here(host)) => found.extend(ollama(host).map(|listed| running(host, listed))),
+
+    let addresses: Vec<(Source, &str)> = places
+        .servers
+        .iter()
+        .flat_map(|(source, listens)| match listens {
+            Listens::Here(hosts) => hosts.iter().map(|host| (*source, host.as_str())).collect(),
+            Listens::Elsewhere(_) => Vec::new(),
+        })
+        .collect();
+    // A thread the system will not give is no answer, as a server that did not reply is none.
+    let answers: Vec<Option<Vec<Installed>>> = std::thread::scope(|scope| {
+        let asking: Vec<_> = addresses
+            .iter()
+            .map(|(source, host)| {
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, || ask(*source, host))
+                    .ok()
+            })
+            .collect();
+        asking
+            .into_iter()
+            .map(|asked| {
+                asked.and_then(|asked| {
+                    asked
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+            })
+            .collect()
+    });
+    let mut answers = answers.into_iter();
+    for (source, listens) in &places.servers {
+        match listens {
+            Listens::Elsewhere(variable) => {
+                found.push(server_left(*source, variable, Reason::Elsewhere, None));
+            }
+            Listens::Here(hosts) => {
+                // Taken for every address, so that the answers after this source's own are the
+                // ones of the next.
+                let theirs: Vec<_> = hosts
+                    .iter()
+                    .zip(answers.by_ref().take(hosts.len()))
+                    .collect();
+                if let Some((host, listed)) = theirs
+                    .into_iter()
+                    .find_map(|(host, listed)| listed.map(|listed| (host, listed)))
+                {
+                    found.push(running(*source, host, listed));
+                }
+            }
+        }
     }
     found
 }
 
-/// What a running Ollama at `host` serves, as the configuration guide's block for it: a gateway
-/// needing no key, and the newest model that can call tools.
+/// What a running server at `host` serves, as the configuration guide's block for it: a gateway
+/// needing no key, and one model that can call tools.
 ///
-/// Where no model reports what it can do, the newest model is taken, since an Ollama older than
-/// the field would otherwise be offered nothing at all.
-pub fn running(host: &str, listed: Vec<Installed>) -> Found {
+/// Ollama's is the newest it has pulled. The other two state no time: LM Studio's is the one it has
+/// loaded, or the first it lists where none is, and llama-server's is the first it lists.
+///
+/// Where no model reports what it can do, the model is chosen among them all, since an Ollama older
+/// than the field would otherwise be offered nothing at all.
+pub fn running(source: Source, host: &str, listed: Vec<Installed>) -> Found {
     let reported = listed.iter().any(|model| model.capabilities.is_some());
-    let chosen = listed
+    let candidates: Vec<Installed> = listed
         .into_iter()
         .filter(|model| !model.name.trim().is_empty())
         .filter(|model| {
@@ -486,9 +641,18 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
                     .as_ref()
                     .is_some_and(|can| can.iter().any(|capability| capability == TOOLS))
         })
-        .max_by_key(|model| crate::time::rfc3339(&model.modified_at));
-    let Some(chosen) = chosen else {
-        return ollama_left(host, Reason::NoToolModel, Some(host));
+        .collect();
+    let chosen = match source {
+        Source::Ollama => candidates
+            .into_iter()
+            .max_by_key(|model| crate::time::rfc3339(&model.modified_at)),
+        _ => {
+            let loaded = candidates.iter().position(|model| model.window.is_some());
+            candidates.into_iter().nth(loaded.unwrap_or_default())
+        }
+    };
+    let (Some(chosen), Some(id)) = (chosen, source.gateway_id()) else {
+        return server_left(source, host, Reason::NoToolModel, Some(host));
     };
 
     let endpoint = format!("{host}/v1");
@@ -503,18 +667,21 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
         options.insert("contextWindow".to_string(), Value::from(window));
     }
     let mut entry = Map::new();
-    entry.insert("name".to_string(), Value::from("Ollama (local)"));
+    entry.insert(
+        "name".to_string(),
+        Value::from(format!("{} (local)", source.name())),
+    );
     entry.insert("options".to_string(), Value::Object(options));
     Found {
-        source: Source::Ollama,
+        source,
         read: Vec::new(),
         running_at: Some(host.to_string()),
         window: chosen.window,
         env: Vec::new(),
-        model: Some(format!("{OLLAMA_ID}/{}", chosen.name)),
-        model_gateway: Some(OLLAMA_ID.to_string()),
+        model: Some(format!("{id}/{}", chosen.name)),
+        model_gateway: Some(id.to_string()),
         gateways: vec![Gateway {
-            id: OLLAMA_ID.to_string(),
+            id: id.to_string(),
             endpoint,
             entry,
             key: Key::Named,
@@ -523,10 +690,10 @@ pub fn running(host: &str, listed: Vec<Installed>) -> Found {
     }
 }
 
-/// An Ollama that offers nothing, and why.
-fn ollama_left(name: &str, reason: Reason, running_at: Option<&str>) -> Found {
+/// A server that offers nothing, and why.
+fn server_left(source: Source, name: &str, reason: Reason, running_at: Option<&str>) -> Found {
     Found {
-        source: Source::Ollama,
+        source,
         read: Vec::new(),
         running_at: running_at.map(str::to_string),
         window: None,
@@ -725,6 +892,26 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         .or_else(|| string(root.and_then(|root| root.get("model"))))
         .filter(|word| bedrock && Tier::from_alias(word).is_some_and(reached));
 
+    // A key stated beside a host was issued for that host, and the entry written here would send it
+    // to Anthropic's, so both are left.
+    let mut gateways = Vec::new();
+    let proxied = stated(ANTHROPIC_BASE_URL).is_some();
+    match (
+        stated(ANTHROPIC_KEY),
+        provider::known_endpoint(ANTHROPIC_ID),
+    ) {
+        (Some(key), Some(endpoint)) if !proxied => gateways.push(Gateway {
+            id: ANTHROPIC_ID.to_string(),
+            endpoint: endpoint.to_string(),
+            entry: Map::new(),
+            key: Key::Held(Secret::new(key)),
+        }),
+        (Some(_), _) => left.push(Left {
+            name: ANTHROPIC_KEY.to_string(),
+            reason: Reason::AnthropicApi,
+        }),
+        (None, _) => {}
+    }
     for name in ANTHROPIC_NAMES {
         if stated(name).is_some() {
             left.push(Left {
@@ -754,7 +941,7 @@ fn claude_code(path: &Path, environment: &dyn Fn(&str) -> Option<String>) -> Opt
         env,
         model,
         model_gateway: None,
-        gateways: Vec::new(),
+        gateways,
         left,
     };
     (found.importable() || !found.left.is_empty()).then_some(found)
@@ -844,8 +1031,14 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
                 } else if !speaks_the_protocol(id, None) {
                     Reason::AnotherSdk
                 } else if id == GOOGLE_VERTEX_ID {
-                    // A key with no project to build the endpoint from.
-                    Reason::Vertex
+                    // A key with no project is express mode, which needs nothing else.
+                    gateways.push(Gateway {
+                        id: id.clone(),
+                        endpoint: provider::VERTEX_EXPRESS_ENDPOINT.to_string(),
+                        entry: Map::new(),
+                        key: Key::Held(key),
+                    });
+                    continue;
                 } else if let Some(endpoint) = provider::known_endpoint(id) {
                     gateways.push(Gateway {
                         id: id.clone(),
@@ -917,27 +1110,26 @@ fn merge(into: &mut Map<String, Value>, from: Map<String, Value>) {
 }
 
 /// The ids opencode reaches through an SDK of their own where the entry names none, each in a
-/// protocol other than OpenAI's.
-const OWN_SDK_IDS: [&str; 5] = [
-    "anthropic",
-    "azure",
-    "cohere",
-    "google",
-    "google-vertex-anthropic",
-];
+/// protocol other than OpenAI's and none of them one this program sends.
+///
+/// `anthropic` is not here: it is reached in the Messages protocol, which this program does send.
+const OWN_SDK_IDS: [&str; 4] = ["azure", "cohere", "google", "google-vertex-anthropic"];
 
 /// Whether an entry's `npm` names an SDK speaking the protocol this entry is reached by.
 ///
-/// On top of [`Provider::all`], which ignores the field: an `@ai-sdk/anthropic` entry with a
-/// `baseURL` would be kept there and then sent requests in a protocol it does not speak. An entry
-/// naming no SDK gets the one opencode picks for its id.
+/// On top of [`Provider::all`], which ignores the field: an `@ai-sdk/anthropic` entry under any id
+/// but `anthropic`, with a `baseURL`, would be kept there and then sent requests in a protocol that
+/// id is not reached by. An entry naming no SDK gets the one opencode picks for its id.
 fn speaks_the_protocol(id: &str, npm: Option<&str>) -> bool {
     match npm {
         None => !OWN_SDK_IDS.contains(&id),
-        Some("@ai-sdk/openai-compatible") => true,
+        // Not for `anthropic`, which an entry written out here would then be read as reaching in the
+        // Messages protocol: the field that says otherwise is not written.
+        Some("@ai-sdk/openai-compatible") => id != ANTHROPIC_ID,
         Some("@openrouter/ai-sdk-provider") => id == "openrouter",
         Some("@ai-sdk/amazon-bedrock") => id == AWS_PROVIDER_ID,
         Some("@ai-sdk/google-vertex") => id == GOOGLE_VERTEX_ID,
+        Some("@ai-sdk/anthropic") => id == ANTHROPIC_ID,
         Some(_) => false,
     }
 }
@@ -974,6 +1166,23 @@ fn gateway(
     let npm = entry.get("npm").and_then(Value::as_str).map(str::trim);
     if !speaks_the_protocol(id, npm) {
         return Err(Reason::AnotherSdk);
+    }
+    if id == GOOGLE_VERTEX_ID {
+        // The OpenAI-compatible endpoint exists only for a stated project; a `baseURL` does not
+        // substitute for one. An entry naming none is express mode, which needs the key the entry
+        // states and the host compiled in: one stating a `baseURL` or no key is left, since
+        // opencode serves it through an SDK route this program does not take.
+        let options = entry.get("options").and_then(Value::as_object);
+        let project = string(options.and_then(|options| options.get("project")));
+        let location = string(options.and_then(|options| options.get("location")));
+        let named = |name: &str| string(options.and_then(|options| options.get(name)));
+        let usable = match project {
+            Some(_) => provider::vertex_endpoint(project.as_deref(), location.as_deref()).is_some(),
+            None => named("baseURL").is_none() && named("apiKey").is_some(),
+        };
+        if !usable {
+            return Err(Reason::Vertex);
+        }
     }
     let aws = id == AWS_PROVIDER_ID;
     let mut probe = Parsed::default();
@@ -1403,7 +1612,7 @@ mod tests {
 
     fn found_in(home: &Path, set: &[(&str, &str)]) -> Vec<Found> {
         let lookup = environment(home, set);
-        found(&Places::from_lookup(&lookup), &lookup, |_| None)
+        found(&Places::from_lookup(&lookup), &lookup, |_, _| None)
     }
 
     fn one(home: &Path, set: &[(&str, &str)], source: Source) -> Found {
@@ -1691,10 +1900,55 @@ mod tests {
         );
     }
 
-    /// IMPORT-3 and IMPORT-4: without a project the entry configures nothing, and a project that is
-    /// a reference opencode would have substituted names no project here.
+    /// IMPORT-3: the entry opencode writes for Vertex AI express mode names an API key and no
+    /// project, and is offered at the host compiled in with the key as IMPORT-6 says.
     #[test]
-    fn a_google_vertex_entry_naming_no_project_is_left_and_said() {
+    fn a_google_vertex_entry_naming_a_key_and_no_project_is_offered_in_express_mode() {
+        let home = Scratch::new("import-vertex-express");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {
+                "npm": "@ai-sdk/google-vertex",
+                "options": {"apiKey": "{env:GOOGLE_VERTEX_API_KEY}"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["google-vertex"]);
+        let vertex = gateway(&found, "google-vertex");
+        assert_eq!(vertex.endpoint, "https://aiplatform.googleapis.com/v1");
+        assert_eq!(vertex.variables(), ["GOOGLE_VERTEX_API_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: a key `opencode auth login` keeps for Vertex AI is express mode too, since it has
+    /// no project to name.
+    #[test]
+    fn an_auth_json_key_for_google_vertex_is_offered_in_express_mode() {
+        let home = Scratch::new("import-vertex-express-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"google-vertex": {"type": "api", "key": "a-vertex-key"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        let vertex = gateway(&found, "google-vertex");
+        assert_eq!(vertex.endpoint, "https://aiplatform.googleapis.com/v1");
+        match &vertex.key {
+            Key::Held(key) => assert_eq!(key.expose(), "a-vertex-key"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(!format!("{found:?}").contains("a-vertex-key"));
+    }
+
+    /// IMPORT-3 and IMPORT-4: with no project and no key there is nothing to reach the service
+    /// with, and a project that is a reference opencode would have substituted names no project
+    /// here.
+    #[test]
+    fn a_google_vertex_entry_naming_no_project_and_no_key_is_left_and_said() {
         let home = Scratch::new("import-vertex-no-project");
         home.write(
             ".config/opencode/opencode.json",
@@ -1707,6 +1961,23 @@ mod tests {
         home.write(
             ".config/opencode/opencode.json",
             r#"{"provider": {"google-vertex": {"options": {"project": "{env:GOOGLE_CLOUD_PROJECT}"}}}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(ids(&found).is_empty());
+        assert_eq!(left(&found), [("google-vertex", Reason::Vertex)]);
+    }
+
+    /// IMPORT-3: a `baseURL` is not a project. opencode still serves this id through its own SDK
+    /// when the entry names no project, so a stated proxy host must not make it look like the
+    /// OpenAI-compatible gateway `google-vertex` only becomes with one.
+    #[test]
+    fn a_google_vertex_entry_naming_a_base_url_and_no_project_is_left_and_said() {
+        let home = Scratch::new("import-vertex-baseurl-no-project");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"google-vertex": {
+                "options": {"baseURL": "https://vertex-proxy.example/v1", "apiKey": "a-key"}
+            }}}"#,
         );
         let found = one(&home.path, &[], Source::Opencode);
         assert!(ids(&found).is_empty());
@@ -1733,8 +2004,9 @@ mod tests {
         assert!(left(&found).is_empty(), "{:?}", left(&found));
     }
 
-    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, which this program does not send, so an
-    /// entry naming it is left even though the host it would reach is one this program knows.
+    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, and the entry import writes names no SDK,
+    /// so one written from it would be sent chat completions at a host that takes the other protocol.
+    /// An entry naming it is left even though the host it would reach is one this program knows.
     #[test]
     fn an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk() {
         let home = Scratch::new("import-openai-sdk");
@@ -1783,7 +2055,6 @@ mod tests {
                 "not-openrouter": {"npm": "@openrouter/ai-sdk-provider", "options": {"baseURL": "https://x.invalid/v1"}},
                 "compatible": {"npm": "@ai-sdk/openai-compatible", "options": {"baseURL": "https://y.invalid/v1"}},
                 "openrouter": {"npm": "@openrouter/ai-sdk-provider"},
-                "anthropic": {"options": {"baseURL": "https://anthropic-proxy.invalid"}},
                 "google": {"options": {"baseURL": "https://gemini-proxy.invalid"}}
             }}"#,
         );
@@ -1791,16 +2062,129 @@ mod tests {
         let found = one(&home.path, &[], Source::Opencode);
 
         assert_eq!(ids(&found), ["compatible", "openrouter"]);
-        // Naming no SDK, the two known ids get their own from opencode, and neither speaks OpenAI's.
+        // Naming no SDK, `google` gets its own from opencode, which does not speak OpenAI's, and
+        // `@ai-sdk/anthropic` is the Messages protocol, which only the `anthropic` id is reached by.
         assert_eq!(
             left(&found),
             [
-                ("anthropic", Reason::AnotherSdk),
                 ("anthropic-proxy", Reason::AnotherSdk),
                 ("google", Reason::AnotherSdk),
                 ("not-openrouter", Reason::AnotherSdk)
             ]
         );
+    }
+
+    /// IMPORT-3: opencode reads an `anthropic` entry naming no SDK through the Anthropic SDK, and
+    /// bravebot reaches the same host through the Messages API. The entry arrives naming the
+    /// variable opencode reads the key from, since this program reads only what an entry names.
+    #[test]
+    fn an_anthropic_entry_naming_no_sdk_is_offered_at_anthropics_endpoint() {
+        let home = Scratch::new("import-anthropic");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {"name": "Anthropic"}}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        assert_eq!(anthropic.variables(), ["ANTHROPIC_API_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: naming the Anthropic SDK is how opencode says the same thing, and a `baseURL` the
+    /// entry states is the one written, so a proxy in front of the API is reached as it was there.
+    #[test]
+    fn an_anthropic_entry_naming_its_own_sdk_keeps_the_endpoint_it_states() {
+        let home = Scratch::new("import-anthropic-sdk");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/anthropic",
+                "options": {"baseURL": "https://proxy.invalid/anthropic/v1", "apiKey": "{env:MY_CLAUDE_KEY}"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://proxy.invalid/anthropic/v1");
+        assert_eq!(anthropic.variables(), ["MY_CLAUDE_KEY"]);
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+    }
+
+    /// IMPORT-3: an `anthropic` entry that names the OpenAI-compatible SDK is a gateway that happens to
+    /// be called that, and the entry written out would drop the field that says so and be read as
+    /// reaching Anthropic's own protocol. It is left rather than imported as something it is not.
+    #[test]
+    fn an_anthropic_entry_naming_the_openai_compatible_sdk_is_left_as_another_sdk() {
+        let home = Scratch::new("import-anthropic-compatible");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"anthropic": {
+                "npm": "@ai-sdk/openai-compatible",
+                "options": {"baseURL": "https://litellm.invalid/v1"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("anthropic", Reason::AnotherSdk)]);
+    }
+
+    /// IMPORT-3: only the `anthropic` id is reached in the Messages protocol, so a proxy kept under
+    /// another id that names the Anthropic SDK would be written out as a gateway speaking chat
+    /// completions, which is not what it was there. It is left, and says why.
+    #[test]
+    fn an_anthropic_sdk_entry_under_another_id_is_left_as_another_sdk() {
+        let home = Scratch::new("import-anthropic-sdk-elsewhere");
+        home.write(
+            ".config/opencode/opencode.json",
+            r#"{"provider": {"claude-proxy": {
+                "npm": "@ai-sdk/anthropic",
+                "options": {"baseURL": "https://proxy.invalid/anthropic/v1", "apiKey": "{env:MY_CLAUDE_KEY}"}
+            }}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("claude-proxy", Reason::AnotherSdk)]);
+    }
+
+    /// IMPORT-3: `opencode auth login` keeps an Anthropic API key in `auth.json` and writes no
+    /// config entry. The endpoint is compiled in, so the key is a gateway rather than a
+    /// `NoEndpoint`, and a sign-in beside it is still left, since this program takes only a key.
+    #[test]
+    fn an_auth_json_key_for_anthropic_is_a_provider_and_its_sign_in_is_not() {
+        let home = Scratch::new("import-anthropic-auth");
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"anthropic": {"type": "api", "key": "a-held-key"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::Opencode);
+
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        match &anthropic.key {
+            Key::Held(key) => assert_eq!(key.expose(), "a-held-key"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(anthropic.fallback(), Some("ANTHROPIC_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+
+        home.write(
+            ".local/share/opencode/auth.json",
+            r#"{"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 1}}"#,
+        );
+        let found = one(&home.path, &[], Source::Opencode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(left(&found), [("anthropic", Reason::SignIn)]);
     }
 
     /// IMPORT-3: opencode's own lists say what the person turned off there.
@@ -2082,6 +2466,64 @@ mod tests {
         for value in ["sk-ant-secret", "proxy.invalid", "bedrock-secret"] {
             assert!(!said.contains(value), "{value} is in {said}");
         }
+    }
+
+    /// IMPORT-3: a key Claude Code reaches Anthropic's API with is an `anthropic` entry at the
+    /// endpoint compiled in, holding the key for its own question, and is not also said as left.
+    #[test]
+    fn a_claude_code_anthropic_key_is_an_anthropic_provider() {
+        let home = Scratch::new("import-claude-anthropic-key");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret"}}"#,
+        );
+
+        let found = one(&home.path, &[], Source::ClaudeCode);
+
+        assert!(found.importable());
+        assert_eq!(ids(&found), ["anthropic"]);
+        let anthropic = gateway(&found, "anthropic");
+        assert_eq!(anthropic.endpoint, "https://api.anthropic.com/v1");
+        match &anthropic.key {
+            Key::Held(key) => assert_eq!(key.expose(), "sk-ant-secret"),
+            other => panic!("the key was not held: {other:?}"),
+        }
+        assert_eq!(anthropic.fallback(), Some("ANTHROPIC_API_KEY"));
+        assert!(left(&found).is_empty(), "{:?}", left(&found));
+        assert!(!anthropic.shown().contains("sk-ant-secret"));
+    }
+
+    /// IMPORT-4: a key stated beside a host was issued for that host. Written as an entry it would be
+    /// sent to Anthropic's, so the key and the host are both left, and so is a bearer token, which
+    /// the header this API reads a key from does not carry.
+    #[test]
+    fn a_claude_code_anthropic_key_for_another_host_or_a_bearer_token_is_left() {
+        let home = Scratch::new("import-claude-anthropic-proxy");
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_API_KEY": "sk-ant-secret",
+                        "ANTHROPIC_BASE_URL": "https://proxy.invalid"}}"#,
+        );
+        let found = one(&home.path, &[], Source::ClaudeCode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [
+                ("ANTHROPIC_API_KEY", Reason::AnthropicApi),
+                ("ANTHROPIC_BASE_URL", Reason::AnthropicApi),
+            ]
+        );
+
+        home.write(
+            ".claude/settings.json",
+            r#"{"env": {"ANTHROPIC_AUTH_TOKEN": "a-bearer-token"}}"#,
+        );
+        let found = one(&home.path, &[], Source::ClaudeCode);
+        assert!(ids(&found).is_empty(), "{:?}", ids(&found));
+        assert_eq!(
+            left(&found),
+            [("ANTHROPIC_AUTH_TOKEN", Reason::AnthropicApi)]
+        );
     }
 
     /// IMPORT-6: `{env:VAR}` is opencode's substitution, and bravebot makes none, so copied as it is
@@ -2408,21 +2850,42 @@ mod tests {
         ]
     }
 
+    /// What a start finds with `set` exported and `answer` as each server's reply, and every
+    /// address each server was asked at, in no order, since the servers are asked together.
+    fn with_servers(
+        set: &[(&str, &str)],
+        answer: impl Fn(Source, &str) -> Option<Vec<Installed>> + Sync,
+    ) -> (Vec<Found>, Vec<(Source, String)>) {
+        // Never made, so no file is found and the servers are the only sources.
+        let home = crate::testutil::scratch_dir("import-servers-no-home");
+        let lookup = environment(&home, set);
+        let asked = std::sync::Mutex::new(Vec::new());
+        let found = found(&Places::from_lookup(&lookup), &lookup, |source, host| {
+            asked
+                .lock()
+                .expect("asked")
+                .push((source, host.to_string()));
+            answer(source, host)
+        });
+        (found, asked.into_inner().expect("asked"))
+    }
+
     /// What a start finds with `set` exported and `listed` as Ollama's answer, and every base URL
-    /// Ollama was asked at.
+    /// Ollama was asked at. Nothing else answers.
     fn with_ollama(
         set: &[(&str, &str)],
         listed: Option<Vec<Installed>>,
     ) -> (Vec<Found>, Vec<String>) {
-        // Never made, so no file is found and Ollama is the only source.
-        let home = crate::testutil::scratch_dir("import-ollama-no-home");
-        let lookup = environment(&home, set);
-        let asked = std::cell::RefCell::new(Vec::new());
-        let found = found(&Places::from_lookup(&lookup), &lookup, |host| {
-            asked.borrow_mut().push(host.to_string());
-            listed
+        let (found, asked) = with_servers(set, |source, _| match source {
+            Source::Ollama => listed.clone(),
+            _ => None,
         });
-        (found, asked.into_inner())
+        let asked = asked
+            .into_iter()
+            .filter(|(source, _)| *source == Source::Ollama)
+            .map(|(_, host)| host)
+            .collect();
+        (found, asked)
     }
 
     /// IMPORT-10: the window shown is the one of the model that is written, not of another model
@@ -2441,7 +2904,7 @@ mod tests {
             }
         }
 
-        let found = running("http://localhost:11434", listed);
+        let found = running(Source::Ollama, "http://localhost:11434", listed);
 
         assert_eq!(found.model.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
         assert_eq!(found.window, Some(4096));
@@ -2456,7 +2919,7 @@ mod tests {
         let options = |window: Option<u64>| {
             let mut listed = three_pulled();
             listed[0].window = window;
-            let found = running("http://localhost:11434", listed);
+            let found = running(Source::Ollama, "http://localhost:11434", listed);
             let chosen = found.model.clone();
             assert_eq!(chosen.as_deref(), Some("ollama/qwen3-coder-oc:latest"));
             found.gateways[0].entry["options"].clone()
@@ -2662,5 +3125,469 @@ mod tests {
 
         assert_eq!(asked.len(), 1);
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// An LM Studio with three language models and an embedding model, as `/api/v1/models` reports
+    /// them: the first is trained for tool use, the second is loaded, and the third is neither.
+    fn lm_studio_listing() -> Vec<Installed> {
+        let model = |name: &str, tools: bool, window: Option<u64>| Installed {
+            name: name.to_string(),
+            modified_at: String::new(),
+            capabilities: Some(match tools {
+                true => vec!["completion".to_string(), "tools".to_string()],
+                false => vec!["completion".to_string()],
+            }),
+            window,
+        };
+        vec![
+            model("qwen/qwen3-coder-30b", true, None),
+            model("google/gemma-4-26b-a4b", true, Some(4096)),
+            model("google/gemma-3-4b", false, Some(8192)),
+        ]
+    }
+
+    /// What a start finds where only `source` answers, with `listed`.
+    fn with_only(
+        source: Source,
+        set: &[(&str, &str)],
+        listed: Vec<Installed>,
+    ) -> (Vec<Found>, Vec<(Source, String)>) {
+        with_servers(set, |asked, _| (asked == source).then(|| listed.clone()))
+    }
+
+    /// IMPORT-12: nothing configured and LM Studio running is offered as the block a person would
+    /// write by hand for it: a gateway needing no key, at the address that answered, named for the
+    /// program, with a model LM Studio serves.
+    #[test]
+    fn a_running_lm_studio_is_offered_as_a_gateway_needing_no_key() {
+        let (found, asked) = with_only(Source::LmStudio, &[], lm_studio_listing());
+
+        assert_eq!(
+            asked
+                .iter()
+                .filter(|(source, _)| *source == Source::LmStudio)
+                .collect::<Vec<_>>(),
+            [&(Source::LmStudio, "http://127.0.0.1:1234".to_string())]
+        );
+        let [found] = found.as_slice() else {
+            panic!("not one source: {found:?}");
+        };
+        assert_eq!(found.source, Source::LmStudio);
+        assert!(found.read.is_empty() && found.env.is_empty() && found.left.is_empty());
+        assert_eq!(found.running_at.as_deref(), Some("http://127.0.0.1:1234"));
+        let documented: Value = serde_json::from_str(
+            r#"{"name": "LM Studio (local)", "options": {"baseURL": "http://127.0.0.1:1234/v1", "contextWindow": 4096}}"#,
+        )
+        .expect("json");
+        let gateway = gateway(found, "lmstudio");
+        assert_eq!(Value::Object(gateway.entry.clone()), documented);
+        assert_eq!(gateway.endpoint, "http://127.0.0.1:1234/v1");
+        assert!(matches!(gateway.key, Key::Named), "{:?}", gateway.key);
+        assert_eq!(
+            found.model.as_deref(),
+            Some("lmstudio/google/gemma-4-26b-a4b")
+        );
+        assert_eq!(found.model_gateway.as_deref(), Some("lmstudio"));
+    }
+
+    /// IMPORT-12: LM Studio states no time, so no model is the newest. The one written is a model it
+    /// has loaded and can call tools with, since a request for one that is not loaded waits on LM
+    /// Studio loading it, and otherwise the first it lists that can. A loaded model without tools,
+    /// a model that is not first only because it was listed last, and a blank name are not it.
+    #[test]
+    fn the_model_chosen_from_lm_studio_is_one_it_has_loaded_that_can_call_tools() {
+        let chosen = |listed: Vec<Installed>| {
+            let (found, _) = with_only(Source::LmStudio, &[], listed);
+            found.first().expect("a source").model.clone()
+        };
+
+        assert_eq!(
+            chosen(lm_studio_listing()).as_deref(),
+            Some("lmstudio/google/gemma-4-26b-a4b")
+        );
+        let mut none_loaded = lm_studio_listing();
+        none_loaded.iter_mut().for_each(|model| model.window = None);
+        assert_eq!(
+            chosen(none_loaded).as_deref(),
+            Some("lmstudio/qwen/qwen3-coder-30b")
+        );
+        let mut blank_first = lm_studio_listing();
+        blank_first[0].name = "  ".to_string();
+        blank_first[1].window = None;
+        assert_eq!(
+            chosen(blank_first).as_deref(),
+            Some("lmstudio/google/gemma-4-26b-a4b")
+        );
+    }
+
+    /// IMPORT-12: a session's tools reach only a model that can call them, so an LM Studio that
+    /// reports none trained for tool use, or holds no language model at all, is left and said, as
+    /// an Ollama with none is.
+    #[test]
+    fn an_lm_studio_with_no_model_trained_for_tool_use_is_left_and_said() {
+        let mut without_tools = lm_studio_listing();
+        without_tools.retain(|model| model.capabilities.as_ref().unwrap().len() == 1);
+        for listed in [without_tools, Vec::new()] {
+            let (found, _) = with_only(Source::LmStudio, &[], listed.clone());
+
+            let [found] = found.as_slice() else {
+                panic!("not one source for {listed:?}: {found:?}");
+            };
+            assert!(!found.importable(), "{found:?}");
+            assert_eq!(
+                left(found),
+                [("http://127.0.0.1:1234", Reason::NoToolModel)],
+                "{listed:?}"
+            );
+        }
+    }
+
+    /// IMPORT-5 and IMPORT-12: the window LM Studio has a model loaded with is written where it is
+    /// below the assumed one, as it is for Ollama, and not where it is at or above it.
+    #[test]
+    fn an_lm_studios_window_below_the_assumed_one_is_written_into_the_entry() {
+        let options = |window: Option<u64>| {
+            let mut listed = lm_studio_listing();
+            listed[1].window = window;
+            let (found, _) = with_only(Source::LmStudio, &[], listed);
+            let found = found.into_iter().next().expect("a source");
+            assert_eq!(found.window, window);
+            found.gateways[0].entry["options"].clone()
+        };
+
+        assert_eq!(
+            options(Some(4096)),
+            serde_json::json!({"baseURL": "http://127.0.0.1:1234/v1", "contextWindow": 4096})
+        );
+        let plain = serde_json::json!({"baseURL": "http://127.0.0.1:1234/v1"});
+        assert_eq!(options(Some(crate::provider::CONTEXT_WINDOW)), plain);
+        assert_eq!(options(None), plain);
+    }
+
+    fn llama_server_listing() -> Vec<Installed> {
+        vec![installed(
+            "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+            "",
+            None,
+        )]
+    }
+
+    /// IMPORT-12: a running llama-server is offered as a gateway needing no key, with the model it
+    /// lists. It reports no capabilities and no loaded window, so none is claimed for it.
+    #[test]
+    fn a_running_llama_server_is_offered_as_a_gateway_needing_no_key() {
+        let (found, _) = with_only(
+            Source::LlamaServer,
+            &[(LLAMA_ARG_PORT, "9931")],
+            llama_server_listing(),
+        );
+
+        let [found] = found.as_slice() else {
+            panic!("not one source: {found:?}");
+        };
+        assert_eq!(found.source, Source::LlamaServer);
+        assert_eq!(found.running_at.as_deref(), Some("http://127.0.0.1:9931"));
+        let documented: Value = serde_json::from_str(
+            r#"{"name": "llama-server (local)", "options": {"baseURL": "http://127.0.0.1:9931/v1"}}"#,
+        )
+        .expect("json");
+        let gateway = gateway(found, "llama-server");
+        assert_eq!(Value::Object(gateway.entry.clone()), documented);
+        assert!(matches!(gateway.key, Key::Named), "{:?}", gateway.key);
+        assert_eq!(
+            found.model.as_deref(),
+            Some("llama-server/../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf")
+        );
+        assert_eq!(found.window, None);
+    }
+
+    /// IMPORT-2 and IMPORT-12: LM Studio reads no variable for its address, so the one that moves
+    /// where it is asked is bravebot's own, read as `OLLAMA_HOST` is, and the default is the address
+    /// LM Studio's server starts on.
+    #[test]
+    fn the_lm_studio_host_moves_where_lm_studio_is_asked() {
+        for (value, host) in [
+            ("", "http://127.0.0.1:1234"),
+            ("localhost", "http://localhost:1234"),
+            ("localhost:4321", "http://localhost:4321"),
+            ("127.0.0.1:4321/lm", "http://127.0.0.1:4321/lm"),
+            ("0.0.0.0:4321", "http://127.0.0.1:4321"),
+            ("[::1]", "http://[::1]:1234"),
+            ("http://localhost", "http://localhost:80"),
+            ("localhost:99999", "http://localhost:1234"),
+        ] {
+            let (found, asked) = with_only(
+                Source::LmStudio,
+                &[(LM_STUDIO_HOST, value)],
+                lm_studio_listing(),
+            );
+
+            assert!(
+                asked.contains(&(Source::LmStudio, host.to_string())),
+                "{value:?} was asked at {asked:?}"
+            );
+            let found = found.first().expect("a source");
+            assert_eq!(found.running_at.as_deref(), Some(host), "{value:?}");
+            assert_eq!(
+                gateway(found, "lmstudio").endpoint,
+                format!("{host}/v1"),
+                "{value:?}"
+            );
+        }
+    }
+
+    /// IMPORT-2 and IMPORT-12: llama-server is asked at the port it was told to listen on, and
+    /// where it was told none, at both ports it has defaulted to. Its host is the address it binds,
+    /// which for `0.0.0.0` and `::` is this machine to a client.
+    #[test]
+    fn llama_args_move_where_llama_server_is_asked() {
+        for (set, hosts) in [
+            (
+                vec![],
+                vec!["http://127.0.0.1:9931", "http://127.0.0.1:8080"],
+            ),
+            (
+                vec![(LLAMA_ARG_PORT, "7777")],
+                vec!["http://127.0.0.1:7777"],
+            ),
+            (
+                vec![(LLAMA_ARG_PORT, " 7777 ")],
+                vec!["http://127.0.0.1:7777"],
+            ),
+            (
+                vec![(LLAMA_ARG_PORT, "not-a-port")],
+                vec!["http://127.0.0.1:9931", "http://127.0.0.1:8080"],
+            ),
+            (
+                vec![(LLAMA_ARG_PORT, "0")],
+                vec!["http://127.0.0.1:9931", "http://127.0.0.1:8080"],
+            ),
+            (
+                vec![(LLAMA_ARG_PORT, "70000")],
+                vec!["http://127.0.0.1:9931", "http://127.0.0.1:8080"],
+            ),
+            (
+                vec![(LLAMA_ARG_HOST, "0.0.0.0"), (LLAMA_ARG_PORT, "7777")],
+                vec!["http://127.0.0.1:7777"],
+            ),
+            (
+                vec![(LLAMA_ARG_HOST, "::"), (LLAMA_ARG_PORT, "7777")],
+                vec!["http://[::1]:7777"],
+            ),
+            (
+                vec![(LLAMA_ARG_HOST, "127.0.0.2"), (LLAMA_ARG_PORT, "7777")],
+                vec!["http://127.0.0.2:7777"],
+            ),
+            (
+                vec![(LLAMA_ARG_HOST, "localhost")],
+                vec!["http://localhost:9931", "http://localhost:8080"],
+            ),
+        ] {
+            let (_, asked) = with_only(Source::LlamaServer, &set, llama_server_listing());
+
+            let mut asked: Vec<_> = asked
+                .into_iter()
+                .filter(|(source, _)| *source == Source::LlamaServer)
+                .map(|(_, host)| host)
+                .collect();
+            asked.sort();
+            let mut hosts = hosts;
+            hosts.sort();
+            assert_eq!(asked, hosts, "{set:?}");
+        }
+    }
+
+    /// IMPORT-12: llama-server has listened on 8080 in every release before October 2026 and in
+    /// its container image, and on 9931 since. One that answers at either is found, the current
+    /// default is preferred where both answer, and only one entry is offered either way.
+    #[test]
+    fn llama_server_is_found_at_either_port_it_has_defaulted_to() {
+        let answering = |ports: &'static [&'static str]| {
+            let (found, _) = with_servers(&[], move |source, host| {
+                (source == Source::LlamaServer && ports.iter().any(|port| host.ends_with(port)))
+                    .then(llama_server_listing)
+            });
+            found
+                .into_iter()
+                .map(|found| found.running_at.unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(answering(&[":9931"]), ["http://127.0.0.1:9931"]);
+        assert_eq!(answering(&[":8080"]), ["http://127.0.0.1:8080"]);
+        assert_eq!(answering(&[":9931", ":8080"]), ["http://127.0.0.1:9931"]);
+        assert!(answering(&[]).is_empty());
+    }
+
+    /// IMPORT-2 and IMPORT-12: a variable naming another machine is said and nothing is asked of
+    /// it, for each server by the variable that named it, and the other servers are asked as before.
+    /// For llama-server that is the address it binds when it is not this machine's loopback.
+    #[test]
+    fn a_server_address_off_this_machine_is_left_and_not_asked() {
+        for (variable, source, value) in [
+            (LM_STUDIO_HOST, Source::LmStudio, "192.168.1.5"),
+            (LM_STUDIO_HOST, Source::LmStudio, "https://example.com/lm"),
+            (LLAMA_ARG_HOST, Source::LlamaServer, "192.168.1.5"),
+            (LLAMA_ARG_HOST, Source::LlamaServer, "example.com"),
+            (LLAMA_ARG_HOST, Source::LlamaServer, "127.0.0.1,192.168.1.5"),
+            (LLAMA_ARG_HOST, Source::LlamaServer, "/tmp/llama.sock"),
+        ] {
+            let (found, asked) =
+                with_servers(&[(variable, value)], |_, _| Some(lm_studio_listing()));
+
+            assert!(
+                asked.iter().all(|(asked, _)| *asked != source),
+                "{value:?} was asked at {asked:?}"
+            );
+            let this = found
+                .iter()
+                .find(|found| found.source == source)
+                .unwrap_or_else(|| panic!("nothing said of {value:?}: {found:?}"));
+            assert!(!this.importable(), "{value:?}: {this:?}");
+            assert_eq!(left(this), [(variable, Reason::Elsewhere)], "{value:?}");
+            let others: Vec<_> = found.iter().map(|found| found.source).collect();
+            assert_eq!(others.len(), 3, "{value:?}: {others:?}");
+        }
+    }
+
+    /// IMPORT-12: every server is asked at once, so a start where several hold the connection and
+    /// never answer waits for one bound, not for the sum of them. Each question waits for the others
+    /// to have been put, which a start that asked one after another never lets it see, and stops
+    /// waiting at a deadline so that such a start fails here and does not hang.
+    #[test]
+    fn every_server_is_asked_at_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+        let asking = AtomicUsize::new(0);
+        let seen_together = std::sync::Mutex::new(Vec::new());
+
+        let (_, asked) = with_servers(&[], |source, host| {
+            asking.fetch_add(1, Ordering::SeqCst);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while asking.load(Ordering::SeqCst) < 4 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            seen_together.lock().expect("seen").push((
+                source,
+                host.to_string(),
+                asking.load(Ordering::SeqCst),
+            ));
+            None
+        });
+
+        assert_eq!(asked.len(), 4, "{asked:?}");
+        let seen = seen_together.into_inner().expect("seen");
+        assert!(
+            seen.iter().all(|(_, _, together)| *together == 4),
+            "a question was put before the others: {seen:?}"
+        );
+    }
+
+    /// IMPORT-12: the servers are offered in the order Ollama, LM Studio, llama-server, whatever
+    /// order they answered in, so the one asked about first, and the one a second answer at the same
+    /// port finds already written, is always the same. They answer in the reverse order here.
+    #[test]
+    fn the_servers_are_offered_in_a_fixed_order() {
+        let (found, _) = with_servers(&[], |source, _| {
+            let (listed, after) = match source {
+                Source::Ollama => (three_pulled(), 200),
+                Source::LmStudio => (lm_studio_listing(), 100),
+                Source::LlamaServer => (llama_server_listing(), 0),
+                Source::ClaudeCode | Source::Opencode => return None,
+            };
+            std::thread::sleep(std::time::Duration::from_millis(after));
+            Some(listed)
+        });
+
+        let sources: Vec<_> = found.iter().map(|found| found.source).collect();
+        assert_eq!(
+            sources,
+            [Source::Ollama, Source::LmStudio, Source::LlamaServer]
+        );
+    }
+
+    /// IMPORT-10: only an `http` or `https` address on this machine counts as the local server. A
+    /// remote gateway that happens to use port 11434, or a look-alike host, is taken for it otherwise,
+    /// and a real Ollama entry is left unwritten because "it is already there".
+    #[test]
+    fn local_port_refuses_another_machine_another_scheme_and_an_unreadable_url() {
+        for url in [
+            "http://example.invalid:11434/v1",
+            "https://gw.example.invalid:11434",
+            "http://localhost.example.com:11434",
+            "ftp://localhost:11434",
+            "http://localhost:99999",
+            "",
+        ] {
+            assert_eq!(local_port(url), None, "{url}");
+        }
+    }
+
+    /// IMPORT-10: `localhost`, `127.0.0.1`, `[::1]` and `0.0.0.0` are one server. A spelling missed
+    /// here gets a second entry for it, and every model is listed twice in the picker.
+    #[test]
+    fn local_port_reads_the_port_of_every_spelling_of_this_machine() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:11434",
+            "https://[::1]:11434/v1",
+            "http://0.0.0.0:11434",
+        ] {
+            assert_eq!(local_port(url), Some(11434), "{url}");
+        }
+    }
+
+    /// IMPORT-10: an address with no port reaches the default port of its scheme, 80 or 443. Read as
+    /// no port, an entry for it is never matched; read as one scheme's port for both, it is matched
+    /// against a server it does not reach.
+    #[test]
+    fn local_port_falls_back_to_the_default_port_of_the_scheme() {
+        assert_eq!(local_port("http://localhost/v1"), Some(80));
+        assert_eq!(local_port("https://localhost/v1"), Some(443));
+    }
+
+    fn destination_with(home: &Scratch, providers: &str) -> Destination {
+        let path = home.write("settings.json", &format!(r#"{{"provider": {providers}}}"#));
+        Destination::open(&path).expect("a document")
+    }
+
+    /// IMPORT-10: an entry on another machine at the same port is not this server. Matching by port
+    /// alone takes it for the local one, and the Ollama entry the person needs is left unwritten.
+    #[test]
+    fn serving_locally_ignores_a_remote_entry_on_the_same_port() {
+        let home = Scratch::new("serving-locally-remote");
+        let destination = destination_with(
+            &home,
+            r#"{"remote": {"options": {"baseURL": "http://example.invalid:11434/v1"}}}"#,
+        );
+        assert_eq!(destination.serving_locally("http://127.0.0.1:11434"), None);
+    }
+
+    /// IMPORT-10: an entry with no `options.baseURL` says nothing about any server. Reading it as one
+    /// reaching this machine, or failing on it, hides the entries that do.
+    #[test]
+    fn serving_locally_skips_an_entry_without_a_base_url() {
+        let home = Scratch::new("serving-locally-no-base");
+        let destination = destination_with(
+            &home,
+            r#"{"bare": {}, "keyed": {"options": {"apiKey": "k"}}}"#,
+        );
+        assert_eq!(destination.serving_locally("http://127.0.0.1:11434"), None);
+    }
+
+    /// IMPORT-10: the entry is named by its own id, whatever it is called, and not by `ollama`. A
+    /// remote entry listed before it is passed over to find it.
+    #[test]
+    fn serving_locally_names_a_loopback_entry_by_its_own_id() {
+        let home = Scratch::new("serving-locally-loopback");
+        let destination = destination_with(
+            &home,
+            r#"{"remote": {"options": {"baseURL": "http://example.invalid:11434/v1"}},
+                "whatever": {"options": {"baseURL": "http://localhost:11434/v1"}}}"#,
+        );
+        assert_eq!(
+            destination.serving_locally("http://127.0.0.1:11434"),
+            Some("whatever")
+        );
     }
 }

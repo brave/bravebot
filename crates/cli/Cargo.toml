@@ -11,9 +11,13 @@ repository.workspace = true
 name = "bravebot"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 bravebot-agent = { path = "../agent" }
 bravebot-approval = { path = "../approval" }
+bravebot-backtrace = { path = "../backtrace" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 bravebot-diag = { path = "../diag" }
@@ -27,4 +31,12 @@ bravebot-stamp = { path = "../stamp" }
 bravebot-tui = { path = "../tui" }
 
 [dev-dependencies]
+# The seams that point the ChatGPT sign-in, its renewal and the account's requests at a stand-in, for
+# the tests that run the built binary against one. Enabled here and nowhere else.
+bravebot-config = { path = "../config", features = ["test-hosts"] }
+bravebot-skus = { path = "../skus", features = ["test-hosts"] }
+# Reads the zstd frame a request to the ChatGPT account is sent as, so a test that runs the built
+# binary against a stand-in can see the level the body asks for. Already in the lockfile for the client
+# that writes the frames.
+ruzstd.workspace = true
 serde_json.workspace = true

@@ -29,13 +29,26 @@ curl -fsSL https://raw.githubusercontent.com/brave/bravebot/main/install.sh | IN
 Running the line again is how an install made this way is updated: it remembers where the last
 one went, so a second run replaces that binary rather than leaving two on your PATH.
 
+On Windows there is a PowerShell script, for a machine with no Node on it:
+
+```powershell
+irm https://raw.githubusercontent.com/brave/bravebot/main/install.ps1 | iex
+```
+
+It checks the release against the published checksum and the binary's Authenticode signature, and
+puts `bravebot.exe` in `%LOCALAPPDATA%\Programs\bravebot`. `INSTALL_DIR` puts it somewhere else. It
+adds that directory to the end of your user PATH, and to the PowerShell session it ran in, so
+`bravebot` runs by name. Set `BRAVEBOT_NO_MODIFY_PATH` to anything first and it leaves your PATH
+alone and names the directory to add. Running the line again updates the copy the last run
+installed.
+
 To build from source instead, see [development/README.md](development/README.md).
 
 ## Staying current
 
 A session started on a version that has been superseded says so, once, under the trust question,
 and gives the line that updates the copy you are running: the npm command for an npm install and
-the script again for a script install. A build from source is left alone, since neither line would
+the script again for a script install, whichever of the two scripts installed it. A build from source is left alone, since neither line would
 update one.
 
 Nothing about that waits: the notice comes from an answer written down on an earlier launch, and
@@ -142,7 +155,7 @@ There is one thing to set up before the first session, and it is which service a
 binary arrives with none configured, so rather than open a session with nothing set up to answer it,
 a first run says what to configure and stops.
 
-Configure one of these four. `bravebot doctor` reports what it will use once you have.
+Configure one of these five. `bravebot doctor` reports what it will use once you have.
 
 Each block below sets a top-level `model` key as well. A block on its own leaves the model in force
 the one the build came with, which is Brave's own, so the first run says the same thing again and
@@ -193,8 +206,9 @@ and the models to offer:
 }
 ```
 
-`openrouter` and `openai` need no endpoint written down, their own being compiled in. Any other
-gateway names one in `options.baseURL`, and a gateway naming no models at all is asked what it
+`openrouter` and `openai` need no endpoint written down, their own being compiled in, and neither
+does `anthropic`, which reaches Claude with an Anthropic API key in Anthropic's own protocol. Any
+other gateway names one in `options.baseURL`, and a gateway naming no models at all is asked what it
 serves. The block is read in the shape another tool already reads, so one copied out of that tool's
 configuration works here unedited.
 
@@ -220,7 +234,25 @@ No `models` key, so Ollama is asked what it has pulled, and `/model` lists what 
 
 You need not write it by hand. With Ollama running and nothing else configured, a first run in a
 terminal shows this block, with the newest of your models that can call tools as `model`, and asks
-whether to write it. `bravebot import-providers` asks the same at any time.
+whether to write it. A running LM Studio or llama-server is offered the same way, as a block of its
+own. `bravebot import-providers` asks the same at any time.
+
+### A ChatGPT account, if you have one
+
+```sh
+bravebot auth login chatgpt
+```
+
+This prints an address and opens it in a browser, where you sign in to OpenAI. The browser then returns
+to a port bravebot holds open on `127.0.0.1`, and the command waits five minutes for it. The sign-in is
+stored only where OpenAI's reply grants the scope that lets bravebot use the account's tokens. On a machine with no browser, open the printed address
+somewhere else and forward that port. Once the sign-in is stored, `bravebot` started on its own in a
+terminal asks which of the account's models to use and remembers the answer, where nothing serves the
+model in force. `/model` offers the models the account reaches once a session is open, named
+`chatgpt/<model>`, and `--model chatgpt/<model>`, given with a prompt or a task as in
+`bravebot -i "<prompt>" --model chatgpt/<model>`, names one. A `provider` block named
+`chatgpt` that states an endpoint is a gateway and keeps the name, and the sign-in is refused until
+it is renamed. The design is [specs/chatgpt-sign-in.md](specs/chatgpt-sign-in.md).
 
 ### Brave Leo Premium, if you already subscribe
 
@@ -233,7 +265,7 @@ its own and nothing it holds is spent. Run it on a machine where Brave is signed
 subscription.
 
 These models are reached through Brave's AI gateway, which has problems of its own still being
-worked on, so prefer one of the two above for now. It is the shortest route if you already
+worked on, so prefer one of the other routes for now. It is the shortest route if you already
 subscribe.
 
 ### Pointing it somewhere else entirely

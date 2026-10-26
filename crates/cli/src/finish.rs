@@ -1,8 +1,10 @@
 //! How a finished turn, or a run stopped before one, is written out.
 
 use crate::exit::{Ending, fail};
+use crate::goal_run::Unmet;
 use crate::json;
 use crate::usage::print_help;
+use bravebot_core::delegate::DelegateId;
 use bravebot_core::event::{Event, Principle, RecordingSink, Role};
 use bravebot_i18n::t;
 use std::io::Write;
@@ -19,8 +21,9 @@ pub(crate) struct Finished<'a> {
     /// What a traced manifest run planned, when there was one. On stderr with the trail,
     /// never on stdout: a pipe of the reply must not pick up the plan.
     pub(crate) attempt: Option<&'a str>,
-    /// The trail and the model behind it, when `--trace` asked for them.
-    pub(crate) trail: Option<(&'a RecordingSink, &'a str)>,
+    /// The model behind the run, named where `--trace` asked for the trail. The trail itself was
+    /// written line by line as the gates ran (TRACE-5), so it is not part of what is reported here.
+    pub(crate) model: Option<&'a str>,
     /// Whether no gate refused anything during the turn.
     pub(crate) clean: bool,
     /// How the turn ended, which is what the substitution complaint's identifier is read from: it
@@ -53,9 +56,8 @@ pub(crate) fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Fini
         let _ = writeln!(beside);
         let _ = write!(beside, "{attempt}");
     }
-    if let Some((sink, model)) = run.trail {
+    if let Some(model) = run.model {
         let _ = writeln!(beside);
-        print_trace(beside, sink);
         let _ = writeln!(beside, "{}", t!(cli_model_used, model = model));
     }
     if !run.clean {
@@ -81,74 +83,59 @@ pub(crate) fn say_notices(beside: &mut impl Write, notices: &[String]) {
 }
 
 /// What a manifest run that stopped leaves for a person to read (MANIFEST-3): the plan or the
-/// document that would not become one, and the steps that ran. Only the audit trail waits on
-/// `--trace`; the attempt is printed either way, since a failed plan with no plan to look at is a
-/// one-line complaint about a document nobody can see.
+/// document that would not become one, and the steps that ran. It is printed whether or not
+/// `--trace` was asked for, since a failed plan with no plan to look at is a one-line complaint
+/// about a document nobody can see.
 pub(crate) fn say_what_a_stopped_manifest_produced(
     output: &mut impl Write,
     attempt: &bravebot_agent::manifest::Attempt,
-    trail: Option<&RecordingSink>,
 ) {
     let report = attempt.describe();
     if !report.is_empty() {
         let _ = writeln!(output);
         let _ = write!(output, "{report}");
     }
-    if let Some(trail) = trail {
-        let _ = writeln!(output);
-        print_trace(output, trail);
-    }
 }
 
-/// Print the audit trail: what was checked, allowed, and refused.
-///
-/// A failed write is dropped, as it is for progress. The trail describes a turn that has already
-/// happened, so a closed stderr means nobody is reading it, not that the run should die holding a
-/// reply it has already produced.
-pub(crate) fn print_trace(output: &mut impl Write, sink: &RecordingSink) {
-    macro_rules! trace {
-        ($($arg:tt)*) => {
-            { let _ = writeln!(output, $($arg)*); }
-        };
-    }
+/// The heading `--trace` writes before the first decision.
+pub(crate) const TRAIL_HEADING: &str = "audit trail";
 
-    trace!("audit trail");
-    for (delegate, event) in sink.recorded() {
-        // Which run took the decision, in front of what it decided. A turn and the delegates it
-        // spawned record into this one trail, and two delegates of the same kind decide alike.
-        let run = match delegate {
-            Some(delegate) => format!("{delegate} "),
-            None => String::new(),
-        };
-        match event {
-            Event::GatePassed { gate, detail } => trace!("  ok      {run}{gate}: {detail}"),
-            Event::GateBlocked { gate, reason, .. } => trace!("  BLOCK   {run}{gate}: {reason}"),
-            Event::Observed { capability, label } => {
-                trace!("  observe {run}{capability} produced {label}")
-            }
-            Event::SlotWritten { slot, label } => trace!("  slot    {run}{slot} at {label}"),
-            Event::SlotDeferred {
-                slot,
-                label,
-                origin,
-            } => trace!("  defer   {run}{slot} holds {origin}, unread, at {label}"),
-            Event::Declassified { slot, from, to, .. } => {
-                trace!("  release {run}{slot} {from} -> {to}")
-            }
-            Event::ActionField {
-                tool,
-                field,
-                role,
-                label,
-                allowed,
-            } => {
-                let mark = if *allowed { "ok     " } else { "BLOCK  " };
-                let role = match role {
-                    Role::Routing => "routing",
-                    Role::Content => "content",
-                };
-                trace!("  {mark} {run}{tool}.{field} [{role}] {label}");
-            }
+/// One line of the audit trail: what was checked, allowed, or refused, and by which run.
+pub(crate) fn trace_line(delegate: Option<DelegateId>, event: &Event) -> String {
+    // Which run took the decision, in front of what it decided. A turn and the delegates it
+    // spawned record into one trail, and two delegates of the same kind decide alike.
+    let run = match delegate {
+        Some(delegate) => format!("{delegate} "),
+        None => String::new(),
+    };
+    match event {
+        Event::GatePassed { gate, detail } => format!("  ok      {run}{gate}: {detail}"),
+        Event::GateBlocked { gate, reason, .. } => format!("  BLOCK   {run}{gate}: {reason}"),
+        Event::Observed { capability, label } => {
+            format!("  observe {run}{capability} produced {label}")
+        }
+        Event::SlotWritten { slot, label } => format!("  slot    {run}{slot} at {label}"),
+        Event::SlotDeferred {
+            slot,
+            label,
+            origin,
+        } => format!("  defer   {run}{slot} holds {origin}, unread, at {label}"),
+        Event::Declassified { slot, from, to, .. } => {
+            format!("  release {run}{slot} {from} -> {to}")
+        }
+        Event::ActionField {
+            tool,
+            field,
+            role,
+            label,
+            allowed,
+        } => {
+            let mark = if *allowed { "ok     " } else { "BLOCK  " };
+            let role = match role {
+                Role::Routing => "routing",
+                Role::Content => "content",
+            };
+            format!("  {mark} {run}{tool}.{field} [{role}] {label}")
         }
     }
 }
@@ -184,6 +171,44 @@ pub(crate) fn failure_of_a_turn(ending: Ending, not_served: Option<&str>) -> Opt
     }
 }
 
+/// How a run that worked towards a condition ends, given how its turns did (CLI-35).
+///
+/// An unmet condition is what a status 0 cannot say, so it decides only where the turns would have
+/// ended well. A refusal or a substituted model outranks it, being what a person has to deal with
+/// first, and [`say_the_goal_unmet`] still says the condition was not met.
+pub(crate) fn ending_with_the_goal(turns: Ending, unmet: Option<&Unmet>) -> Ending {
+    match (turns, unmet) {
+        (Ending::Done, Some(why)) => why.ending(),
+        _ => turns,
+    }
+}
+
+/// The sentence a result object explains a run's failure with: why its turns failed, if they did,
+/// and then why its condition went unmet, if it did.
+pub(crate) fn failure_with_the_goal(
+    failure: Option<&str>,
+    unmet: Option<&Unmet>,
+) -> Option<String> {
+    match (failure, unmet) {
+        (Some(failure), Some(why)) => Some(format!("{failure}\n{}", why.said())),
+        (Some(failure), None) => Some(failure.to_string()),
+        (None, Some(why)) => Some(why.said()),
+        (None, None) => None,
+    }
+}
+
+/// Say why a goal run's condition went unmet, beside the reply.
+///
+/// With the identifier of the status where that is the reason the run ended on it, and plainly where
+/// another failure outranked it, as the complaint about a substituted model is.
+pub(crate) fn say_the_goal_unmet(beside: &mut impl Write, ending: Ending, why: &Unmet) {
+    let said = why.said();
+    let _ = match ending == why.ending() {
+        true => writeln!(beside, "{}", ending.told(said)),
+        false => writeln!(beside, "{said}"),
+    };
+}
+
 /// Every refusal the trail holds, as a result object lists them.
 pub(crate) fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
     sink.blocked()
@@ -205,17 +230,24 @@ pub(crate) fn refusals(sink: &RecordingSink) -> Vec<json::Refusal> {
 
 /// The refusals a trail holds, then the questions nobody could be asked.
 ///
-/// Those never reached the policy, so the trail has no entry for them, and a result object that
-/// said `"ok":false,"status":4` with nothing to point at would be a refusal a script cannot read.
+/// A plan or a `run` is not told to the policy, so the trail has no entry for it, and a result
+/// object that said `"ok":false,"status":4` with nothing to point at would be a refusal a script
+/// cannot read. A question the policy did record is left out, since the trail's entry already
+/// lists it.
 pub(crate) fn with_declined(
     mut refused: Vec<json::Refusal>,
     declined: &[crate::one_shot::Declined],
 ) -> Vec<json::Refusal> {
-    refused.extend(declined.iter().map(|d| json::Refusal {
-        gate: d.gate,
-        principle: Principle::Capability.name(),
-        reason: d.reason.to_string(),
-    }));
+    refused.extend(
+        declined
+            .iter()
+            .filter(|d| !d.in_the_trail)
+            .map(|d| json::Refusal {
+                gate: d.gate,
+                principle: Principle::Capability.name(),
+                reason: d.reason.to_string(),
+            }),
+    );
     refused
 }
 
@@ -226,9 +258,14 @@ pub(crate) fn with_declined(
 /// failed part way through still says what it had done by then: the calls are what a caller needs
 /// to know which of them to undo, and the notices are what it was told on the way, there being no
 /// outcome left to carry them (HOOK-7).
+///
+/// `steps` is the rounds of tool calls the run made where it knows them, which is a run stopped at
+/// a limit (CLI-38), and zero for every other run with no outcome: a count the run has not got is
+/// not invented.
 pub(crate) fn what_ran(
     ending: Ending,
     message: &str,
+    steps: usize,
     spent: bravebot_agent::Spent,
     calls: &[json::Call],
     refusals: &[json::Refusal],
@@ -241,7 +278,7 @@ pub(crate) fn what_ran(
         model: "",
         agent: None,
         session: None,
-        steps: 0,
+        steps,
         tokens: json::Tokens {
             total: spent.tokens,
             output: spent.output_tokens,
@@ -277,6 +314,7 @@ pub(crate) fn stopped_before_the_turn(
         say_the_result(&what_ran(
             ending,
             &message,
+            0,
             Default::default(),
             &[],
             &[],

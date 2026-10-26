@@ -467,4 +467,56 @@ mod tests {
         assert_eq!(failed.rows[0].kind, RowKind::Error);
         assert!(failed.pending.is_none());
     }
+
+    /// A question left on the view after the turn that asked it has ended is one nothing can
+    /// answer, and a client that keeps showing it offers a choice that grants nothing. Every way
+    /// a turn ends takes the question off the view and replaces its row as resolved, and so does
+    /// closing the session (RPCVIEW-2).
+    #[test]
+    fn a_terminal_update_clears_the_question_still_waiting() {
+        let waiting_on_a_question = || {
+            let mut view = View::new(true);
+            view.started(1, 1, json!({"text": "prompt"}));
+            let asked = json!({"request": 7, "path": "a.rs"});
+            let waiting = view
+                .event(&Event::new("confirm.request", "s1", asked.clone()))
+                .unwrap();
+            assert_eq!(waiting.status, Status::Waiting);
+            let question = waiting.pending.expect("a question is waiting").row;
+            (view, asked, question)
+        };
+
+        for (name, data, status) in [
+            ("turn.done", json!({"reply": "ok"}), Status::Completed),
+            ("turn.error", json!({"kind": "backend"}), Status::Failed),
+            (
+                "turn.error",
+                json!({"kind": "cancelled"}),
+                Status::Cancelled,
+            ),
+        ] {
+            let (mut view, asked, question) = waiting_on_a_question();
+
+            let ended = view.event(&Event::new(name, "s1", data.clone())).unwrap();
+
+            assert_eq!(ended.status, status, "{name} {data}");
+            assert!(ended.pending.is_none(), "{name} {data} left the question");
+            assert_eq!(ended.rows.len(), 2, "{name} {data}");
+            assert_eq!(ended.rows[0].id, question, "{name} {data}");
+            assert!(ended.rows[0].resolved, "{name} {data}");
+            assert_eq!(ended.rows[0].data, asked, "{name} {data}");
+            assert!(ended.rows[1].id > question, "{name} {data}");
+            assert!(view.answered(7).is_none(), "{name} {data}");
+        }
+
+        let (mut view, asked, question) = waiting_on_a_question();
+        let detached = view.detach();
+        assert_eq!(detached.status, Status::Detached);
+        assert!(detached.pending.is_none(), "closing left the question");
+        assert_eq!(detached.rows.len(), 1);
+        assert_eq!(detached.rows[0].id, question);
+        assert!(detached.rows[0].resolved);
+        assert_eq!(detached.rows[0].data, asked);
+        assert!(view.answered(7).is_none());
+    }
 }

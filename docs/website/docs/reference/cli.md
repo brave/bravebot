@@ -27,7 +27,7 @@ Usage:
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
+  bravebot auth logout <way>             Forget an imported Leo Premium subscription, a stored gateway key or a ChatGPT sign-in
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
@@ -35,6 +35,7 @@ Usage:
   bravebot permissions check <call>      Report which permission rule decides a tool call
   bravebot completion <bash|zsh|fish>    Print a shell completion script
   bravebot shell-init <bash|zsh|fish>    Print the shell hook that gives @bravebot the commands you ran
+  bravebot --handle-uri <link>           Open a session from a bravebot://open link, its prompt in the box and not sent
 ```
 
 ## Commands
@@ -60,7 +61,8 @@ Usage:
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
-| `bravebot auth status [leo\|bedrock\|gateway [id]]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
+| `bravebot auth logout chatgpt` | forget the ChatGPT sign-in `auth login chatgpt` stored |
+| `bravebot auth status [leo\|bedrock\|gateway [id]\|chatgpt]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot --bg "<prompt>"` | start a session that runs in the background and keeps going after the terminal closes ([Sessions](../using/sessions.md#sessions-in-the-background)) |
@@ -73,6 +75,7 @@ Usage:
 | `bravebot sessions list [--json] [--limit <n>]` | print the sessions recorded for this directory, newest first ([Sessions](../using/sessions.md#picking-one-back-up)) |
 | `bravebot sessions delete <id>` | delete one session recorded for this directory, with its trail and search index ([Sessions](../using/sessions.md#deleting-a-session)) |
 | `bravebot sessions purge [--dry-run] [-y]` | delete every session recorded for this directory, asking first unless `-y` is given ([Sessions](../using/sessions.md#deleting-a-session)) |
+| `bravebot stats [--days <n>] [--models] [--project [<dir>]]` | total the sessions, turns and tokens, read and written, the recorded sessions spent, for every project or one ([below](#stats)) |
 | `bravebot mcp <command>` | declare, list, approve and remove MCP servers ([below](#mcp)) |
 | `bravebot permissions check <call>` | say which permission rule decides a tool call, and the file it is in ([below](#permissions-check)) |
 | `bravebot completion <shell>` | print a completion script for `bash`, `zsh` or `fish` ([below](#completion)) |
@@ -96,12 +99,16 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--mode <turn\|manifest>` | how a one-shot is run; `turn` (the default) decides step by step, `manifest` plans the whole run first ([below](#--mode-turnmanifest)) |
 | `--model <name>` | the model this run asks for; outranks every other way one is named ([below](#--model-name)) |
 | `--advisor <name>` | a model the planner may put a question to, through the `advisor` tool ([below](#--advisor-name)) |
+| `--processor-model <name>` | the model processors run on for this run; outranks the `processorModel` setting ([below](#--processor-model-name)) |
 | `--effort <level>` | how hard this run asks the model to think; outranks every other way one is named ([below](#--effort-level)) |
 | `--settings <path>` | read one more settings file, above every layer found ([below](#--settings-path)) |
 | `--output-schema <path>` | hold the reply to the JSON Schema in this file, or end on status 6 ([below](#--output-schema-path)) |
-| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
+| `--goal <condition>` | keep working until a judge says the condition holds, or end on status 7 ([below](#--goal-condition)) |
+| `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
+| `--max-tokens <n>` | stop the run before a request once it has spent this many tokens, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
+| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../security/sandbox.md#runnetwork)) |
 | `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)). Where a machine-level file pins `sandbox.mode`, a mode that reads more of the machine, writes more or both is refused, and the refusal says which and names the pinned mode to run with |
-| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
+| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../security/sandbox.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
 | `--issue <url>`, `--pr <url>` | give the session it opens its issue and pull request links, as `/issue` and `/pr` do ([below](#--issue-url-and---pr-url)) |
@@ -109,6 +116,8 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--append-system-prompt <prompt>` | add your own words to the system prompt for this run, after the project's `AGENTS.md` ([below](#--system-prompt-prompt-and---append-system-prompt-prompt)) |
 | `--json` | put one result object on stdout in the reply's place ([below](#--json)) |
 | `--json-stream` | write one event per line as the run goes, then the result object ([below](#--json-stream)) |
+| `--input-format lines` | read turns, steers, answers and stops from stdin, a JSON object to a line, for as many turns as it is sent; implies `--json-stream` ([below](#--input-format-lines)) |
+| `--trust-input-lines` | with `--input-format lines`, treat the lines as your own words and not a program's ([below](#--input-format-lines)) |
 | `--trace` | print the audit trail to stderr |
 | `--vet` | let a check answer about a quarantined slot, for this run: it releases what it finds nothing in, and where nobody can be asked it keeps back everything else ([below](#--vet)) |
 | `--tools <a,b,c>` | offer the agent only the named tools; a tool a setting removed stays removed, and no MCP server's tools are offered ([below](#--tools-abc-and---no-shell)) |
@@ -135,7 +144,7 @@ combines with a session, `--plain` and a one-shot run, but not with `--resume`, 
 way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
-[an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+[an incognito session](../using/incognito.md).
 
 `--safe` is for finding out whether your own configuration is why a session misbehaves. The run
 reads none of your hooks, skills, delegate definitions, `mcp.request` entries or `AGENTS.md` files,
@@ -168,7 +177,7 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
 question, including the ones that decide trust. See
-[modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+[modes](../security/permission-modes.md) for what it costs.
 
 ### `--accept-edits`
 
@@ -202,10 +211,9 @@ still whoever is reading the output. With either end piped or redirected there i
 the run stops before its first step unless `--dangerously-skip-permissions` was given. A plan that
 failed to build is printed on stderr even without `--trace`, and never shares stdout with the reply.
 
-This is a different axis from the [permission mode](../security/permissions.md#answering-in-advance-modes):
+This is a different axis from the [permission mode](../security/permission-modes.md):
 `--mode` decides when control flow is settled, the other decides who answers a prompt, and the two
-compose. See [Non-interactive use](../using/headless.md) and
-[Sessions](../using/sessions.md) for the rest.
+compose. See [Plan first, then execute](../using/manifest-mode.md) for the rest.
 
 ## `--model <name>`
 
@@ -216,7 +224,7 @@ bravebot --model opus "review the diff on this branch"
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
 run asks for the model a session opening in the same directory would: a
 [`model`](../customize/configuration.md#model) key in the checkout's settings or the file
-`--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
+`--settings` names, then the choice [`/model`](../customize/model.md)
 recorded, then the key in `~/.bravebot/settings.json`, then an exported
 `BRAVEBOT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
 you picked without your having to write it down twice, a checkout that names its model gets it, and
@@ -250,6 +258,28 @@ no such tool. The flag wins over the setting. The name is read as `--model` read
 `--advisor` with no name, a blank one, a model this machine's managed settings refuse, a model
 nothing is configured to serve, or `--mode manifest` is refused and the run stops before it starts.
 A turn may ask its advisor at most three times. The advisor's tokens are added to the run's total.
+
+## `--processor-model <name>`
+
+```sh
+bravebot --mode manifest --processor-model haiku "shorten every README under docs/"
+```
+
+Names the model processors run on for this run. A processor is the isolated call that reads and
+rewrites a file nobody vouched for, and in a [`--mode manifest`](#--mode-turnmanifest) run it is each
+processing step. The planner keeps the model the run was given, so a plan can be made on a stronger
+model and carried out on a cheaper one. Without the flag the model is the one the
+[`processorModel`](../customize/configuration.md#processormodel) setting names, and with neither a
+processor runs on the run's model. The flag wins over the setting, and `inherit` puts processors on
+the run's model whatever the setting names. The name is read as `--model` reads it, so `opus`,
+`sonnet` and `haiku` name a tier.
+
+`--processor-model` with no name or a blank one is refused and the run stops before it starts. So is a
+model that your administrator refuses or that no configured service answers for: nothing is sent, and
+the run is not started on the run's model in its place. A model that needs a sign-in this machine has
+not made, and the same models named in the `processorModel` setting, are met at the first processor
+instead, which in a manifest run is after the two planning calls. `--trace` prints the model each
+processor call asked for.
 
 ## `--effort <level>`
 
@@ -416,7 +446,7 @@ standing is better piped in, where it is quarantined.
 
 A flag with no words after it, a blank one, or one whose words open with `-` and hold no space is
 refused with status 2. A sentence opening with `-` is words. If a flag is given twice, the last is
-used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`,
+used. Both are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `stats`,
 `import-leo-creds`, `import-providers`, `completion` and `shell-init`. There is no settings key for them: words a checkout
 always wants belong in its `AGENTS.md`.
 
@@ -471,6 +501,80 @@ schema: Bedrock, or a model whose listing states its supported parameters withou
 or `response_format`. A model whose listing states none is asked, and the check after the turn is
 what holds the reply there.
 
+## `--goal <condition>`
+
+```sh
+bravebot --goal "docs/api.md documents every public function in src/lib.rs" \
+  -p "document the public API in docs/api.md" --accept-edits
+```
+
+Keeps a one-shot run working until a condition you wrote is judged met, as [`/goal`](commands.md#goal-condition)
+does in a session. The prompt is the first round. When a round ends, a judge with no tools reads
+a copy of the conversation and answers `MET`, `NOT MET` or `IMPOSSIBLE` on its first line. On `NOT MET`
+the work goes back for another round with the reason, and the run ends when the judge says `MET`.
+Every round is told the condition, and nothing a round reads or writes changes it. Files and
+piped input given with the prompt go to the first round only. The judge reads the conversation and
+runs nothing, so a condition is met only when a round observed it. With nobody to ask, a run is
+refused unless `--dangerously-skip-permissions` is given, so a condition about what a command prints
+needs that flag, and one about files can be observed without it.
+
+The status says how it ended. `MET` ends as the rounds alone would have, usually 0. Status 7
+(`BB1007`) is a run that did its work and did not meet the condition: the work was sent back ten
+times, three rounds in a row made no tool call, the judge said `IMPOSSIBLE`, or its answer began with
+no verdict or could not be read. A refusal in any round is status 4 and outranks it, and the message
+still says the condition was not met. A judge that cannot be reached ends the run on status 1 or 5
+as any failed request does. stdout is the last round's reply, or the result object under `--json`, whose
+`steps` and `tokens` cover every round and every check. After each check one line on stderr gives
+the verdict and its reason.
+
+The run is written down as one session, so `--resume` carries the whole conversation, and the
+condition is not carried with it. The flag is refused with status 2 before anything is sent when no
+condition follows it, when it is blank or is the next flag, and with `--mode manifest`,
+`--max-rounds` or `--max-tokens`. A
+[`summaryModel`](../customize/configuration.md#summarymodel) that cannot be used for the judge is
+refused with status 3 before the first round.
+
+:::caution
+**Every round re-sends the conversation.** Ten rounds of a long task cost more than ten ordinary
+turns, and a condition the conversation can never show to be met spends all ten.
+:::
+
+## `--max-rounds <n>` and `--max-tokens <n>`
+
+```sh
+bravebot --json --max-rounds 30 --max-tokens 400000 -p "update the changelog"
+```
+
+Two limits on a one-shot run, for a job that has to bound what a run costs or how long it takes.
+
+`--max-rounds` is the most rounds of tool calls the run may make. When the agent asks for another
+round after that many, the calls are not run and the run stops. `--max-tokens` is the most tokens,
+input and output together, the run may have spent when it is about to send a request. At or over it
+the request is not sent. The count is the one the result object reports as `tokens.total`, so the
+figure from an earlier run is the number to choose from.
+
+A run that reaches either ends on status 8 (`BB1008`). The message on stderr says which limit it
+was and nothing goes to stdout. Under [`--json`](#--json) the object has `"reason": "limit"`, the
+rounds the run made in `steps`, the tokens it spent and the calls it made, and `reply` is empty.
+The files it had changed stay changed, and no session is recorded for it.
+
+A run that finishes within the limits is not affected. An agent that answers after its last
+allowed round has reached nothing. An answer that takes the total past `--max-tokens` is still
+written, because the limit stops a request from being sent and none is left, so `--max-tokens`
+bounds what the run sends next and not what it has spent. The count comes from the usage the service
+reports, so a service that reports none never stops a run at it, and a delegate still running
+when the run stops is waited for and its tokens are in the total.
+
+Each takes a whole number written in digits, 1 or more. `--max-rounds` is below 200, the bound
+every one-shot run carries, which has the agent answer with what it has and exits 0. Either flag
+is refused with status 2, before anything is sent, when its value is anything else, and when
+[`--mode manifest`](#--mode-turnmanifest) is given, since a manifest run plans the whole run first
+and makes no rounds of tool calls, and when [`--goal`](#--goal-condition) is given, since each round
+of a goal run counts a limit from nothing and the run would spend it in every round. There is no
+limit in money, because bravebot holds no price table. A session has the
+[`limit`](../customize/configuration.md#limit) setting and
+[`/limit`](commands.md#limit-amount--off) instead.
+
 ## `--json-stream`
 
 ```sh
@@ -491,6 +595,64 @@ The last line is the result object, exactly what `--json` writes for the same ru
 field. Nothing else is on stdout, and progress, the message and the audit trail stay on stderr. The
 schema rule of `--json` applies to each event: fields and event kinds may be added within one number,
 and none is removed or renamed.
+
+## `--input-format lines`
+
+```sh
+bravebot --input-format lines --trust-input-lines -p "review the diff" < turns.jsonl
+```
+
+One process that **reads JSON lines on stdin for as many turns as it is sent**. It is a
+[`--json-stream`](#--json-stream) run, writing the events and each turn's result object. Each line
+is one JSON object with a `type`:
+
+| `type` | other fields | what it does |
+|---|---|---|
+| `prompt` | `text` | starts a turn with those words; one that arrives while a turn runs waits for its turn |
+| `steer` | `text` | reaches the turn that is running at its next round, as a line typed mid-turn does; one sent while no turn runs, or that the turn ended without taking, starts a turn of its own |
+| `answer` | `id`, `choices` | answers the `question` event with that `id`; `choices` is one array of choice positions for each question, an empty array declining it |
+| `stop` | none | ends the turn that is running and leaves the prompts behind it to run |
+
+The words on the command line are the first turn, and `--file` and `--session-ref` attach to it
+alone. Each later turn carries on the session record the one before wrote, as `-p` with
+[`--resume`](#continuing-a-session-from-a-one-shot-run) does, and ends with a result object of its
+own, so `session` is the same id throughout. A turn that wrote no record, because the record could not
+be written, leaves nothing to carry on from, so the turns after it are not run and each says so. The
+process exits when stdin closes and the last turn has ended, with that turn's status. Stdin closing
+before any prompt arrived is a run with no task and exits on status 2.
+
+**A line is a program's words until you say otherwise.** Without `--trust-input-lines` the text of a
+`prompt` or `steer` is labelled as piped input is: untrusted and private, so the planner is given a
+reference to it and never the words, and a `steer` waits for a turn of its own. With the flag the
+lines are your words, a `prompt` is the prompt of its turn and a `steer` is delivered to the turn
+running. The flag vouches for the words and nothing else. A write, a command, a fetch and every
+other question are still refused, as in any run nobody is watching, and no line approves one.
+
+**Questions.** A question the planner asks is written as a `question` event and the turn waits for the
+answer:
+
+```json
+{"schema":1,"event":"question","id":1,"questions":[{"header":"Cache","question":"Which cache?","choices":[{"label":"HTTP","detail":null},{"label":"Query","detail":null}],"multiple":false}]}
+```
+
+```json
+{"type":"answer","id":1,"choices":[[1]]}
+```
+
+An answer is positions among the choices the planner offered and no words, sent after the `question`
+event it names. It is refused when no question with that `id` is waiting or the positions do not fit
+the question. A question still waiting
+when stdin closes, or when the turn is stopped, is declined.
+
+**A line that is not taken** is written as an `input_refused` event with `line`, its number counted
+from 1, and `reason`: `unreadable` (over the size cap of piped input, or not UTF-8), `not_json`,
+`unknown_type`, `bad_field`, `no_such_question` or `too_much_waiting` (the prompts waiting for a turn
+already hold as many bytes as that cap). The event holds nothing the line said. A blank
+line is ignored, and a field a line's type does not use is skipped.
+
+The flags are refused with status 2 before stdin is read when `--input-format` names anything but
+`lines`, with `--mode manifest` and with `--incognito`, and when `--trust-input-lines` comes without
+`--input-format lines`.
 
 ## Continuing a session from a one-shot run
 
@@ -552,6 +714,30 @@ It is refused with the argument status when no prompt follows it, after `--resum
 `--fork`, `--from-pr` or `--bg`, and where stdin or stdout is not a terminal, since there is nothing
 to draw the session on. Use `-p` for a run nobody watches.
 
+## `--handle-uri <link>`
+
+```sh
+bravebot --handle-uri 'bravebot://open?dir=%2Fhome%2Fme%2Fproject&prompt=fix+the+failing+test'
+```
+
+What a `bravebot://open` link runs. On Linux `install.sh` registers it, so opening such a link in a
+browser starts a terminal with this command. You do not type it.
+
+A link carries two optional parameters, percent-encoded: `dir`, an absolute path, and `prompt`.
+Anything else in a link, a mode, a tool, a model or `dangerously-skip-permissions` among them,
+refuses the whole link with the argument status, since a link has no say in how the session runs.
+
+- **Where it starts.** In `dir` only if you already answered yes to trusting that directory in an
+  earlier session. Otherwise in your home directory, and the first line of the session says so. The
+  question about trusting the directory is asked as in any session.
+- **The prompt.** It is put in the box as a paste is, and is not sent. The line under the box says
+  it came from an external link, and over 1000 characters says how many there are and asks you to
+  scroll and review it. Enter sends it as your own message, as it sends any paste, so read it first.
+  The note goes when the box is emptied or the message is sent.
+
+Links are switched off by [`deepLinks`](../customize/configuration.md#deeplinks), and the installer
+registers nothing where `BRAVEBOT_NO_DEEP_LINKS` is set. macOS and Windows register nothing yet.
+
 ## `--plain`
 
 ```sh
@@ -605,7 +791,7 @@ directory](#doctor), readable by you alone, and the ten most recent are kept. At
 `error`, a run that fails nowhere leaves no file. `info` adds the steps taken, such as a retry or a
 server starting, and `debug` adds the detail between them. `doctor` prints the directory.
 
-An [`--incognito`](../using/sessions.md) session writes no log.
+An [`--incognito`](../using/incognito.md) session writes no log.
 
 ## `bug-report`
 
@@ -622,7 +808,7 @@ that file as well. `doctor` names paths, model services and the names, never the
 environment variables, so read the file before posting it. No transcript, trace, settings file,
 environment value or file of the directory holds a place in it.
 
-Nothing reads the file back. An [`--incognito`](../using/sessions.md) session, or a machine with no
+Nothing reads the file back. An [`--incognito`](../using/incognito.md) session, or a machine with no
 home directory, writes no report, and the command exits with status 1. Any argument is refused with
 status 2.
 
@@ -632,18 +818,22 @@ status 2.
 bravebot update
 ```
 
-Prints the command that updates this copy, and runs nothing. Two installations have a command it
+Prints the command that updates this copy, and runs nothing. Five installations have a command it
 can name:
 
 | How this copy was installed | What it prints |
 |---|---|
 | the npm package `@brave/bravebot` | `npm install -g @brave/bravebot@latest` |
 | `install.sh` | the same `curl` line that installed it, piped to `sh` |
+| `install.ps1` | the same `irm` line that installed it, piped to `iex` |
+| the Homebrew cask | `brew upgrade --cask bravebot` |
+| the WinGet package | `winget upgrade Brave.Bravebot` |
 
-A copy neither of those put here, a build from source above all, is told there is no update command
-for it; that is a success, since nothing on the machine is wrong. The two lines are not
+A copy none of those put here, a build from source above all, is told there is no update command
+for it; that is a success, since nothing on the machine is wrong. The lines are not
 interchangeable: the npm one installs a package manager's copy, which leaves a script install's
-binary untouched, and the script's one writes over the path the script recorded.
+binary untouched, the shell script's one cannot run in a Windows shell, and each script's one writes
+over the path that script recorded.
 
 It asks nothing of any registry, so the command is the same whether or not a newer version has been
 published and no version is named. Whether one is out is said once at the top of an interface
@@ -693,6 +883,9 @@ Answers "what will this actually use", and changes nothing. It reports:
 - any project or local settings file whose `provider` block or `model` key was ignored, since those two
   are read from your own file and the one `--settings` names;
 - whether a gateway key is stored by `bravebot auth login gateway`, without printing it;
+- where a ChatGPT sign-in is stored by `bravebot auth login chatgpt`, when its access token expires and
+  what would end it, without printing either token, nothing where none is stored, and that the file cannot
+  be read, with the remedy, where it cannot, which fails the report;
 - any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
   the report, since only `~/.bravebot/mcp.json` declares one;
 - which names a machine-level file pinned, and where that file is;
@@ -764,10 +957,11 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [leo [channel] | bedrock | import | gateway [id]]
+bravebot auth login [leo [channel] | bedrock | import | gateway [id] | chatgpt]
 bravebot auth logout leo
 bravebot auth logout gateway [id]
-bravebot auth status [leo | bedrock | gateway [id]]
+bravebot auth logout chatgpt
+bravebot auth status [leo | bedrock | gateway [id] | chatgpt]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -779,13 +973,15 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
 | `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
+| `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
 argument. With one gateway configured it asks for no id.
 
 `auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
-and the id can be left off when only one is stored. In an incognito session the `leo`, `import` and
-`gateway` ways are refused, and `bedrock`, `auth status` and both forms of `auth logout` are allowed. See
+and the id can be left off when only one is stored. `auth logout chatgpt` forgets the stored ChatGPT
+sign-in and ends nothing at OpenAI. In an incognito session the `leo`, `import`, `gateway` and `chatgpt`
+ways are refused, and `bedrock`, `auth status` and every form of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
 `auth status` prints one line per sign-in and changes nothing:
@@ -795,11 +991,13 @@ $ bravebot auth status
 leo: signed in: production subscription imported, 12 of 30 credentials unspent
 bedrock: not signed in: the AWS session has lapsed: run `bravebot auth login bedrock`
 gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
+chatgpt: signed in: the access token expires 2026-10-22T21:05:27Z
 ```
 
 A line says signed in, not signed in (signing in fixes it), or unusable (it does not: a stored
 subscription for another Brave channel, an unreadable file, a missing `aws`), with the reason and
-what to run. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
+what to run. For ChatGPT it says when the access token expires, and a token past that time is still
+signed in, since the next request replaces it. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
 is one of four fixed sentences: the AWS session has lapsed, the AWS CLI has no profile by the name
 you set, the AWS CLI is not installed, or the AWS CLI answered with something that is not a
 credential. What the AWS CLI itself printed is never copied, because it can name accounts and roles.
@@ -823,10 +1021,10 @@ Without a channel, `stable` is what importing means. `--forget` removes what was
 bravebot import-providers
 ```
 
-Reads what Claude Code and opencode configured in your home directory, and asks a running Ollama on
-this machine what it serves, shows what it would add to `~/.bravebot/settings.json`, and asks once for
-each. It takes no arguments, needs a terminal to ask on, and refuses in an incognito session. See
-[Importing from Claude Code, opencode or Ollama](../customize/configuration.md#importing-from-claude-code-opencode-or-ollama).
+Reads what Claude Code and opencode configured in your home directory, and asks a running Ollama, LM
+Studio and llama-server on this machine what each serves, shows what it would add to
+`~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on, and refuses in an incognito session. See
+[Importing from Claude Code, opencode or a local model server](../customize/importing.md).
 
 ## `mcp`
 
@@ -886,7 +1084,56 @@ When no rule matches, it says so and the ordinary approval gates decide. An `all
 checkout's settings is not in force until you grant it at the question a session asks, so it is
 never reported as the rule that decides: a line says it would allow the call and is not in force.
 It starts nothing and changes nothing. It checks the rules only, not the
-[permission modes](../security/permissions.md), and a command line that names no call exits 2.
+[permission modes](../security/permission-modes.md), and a command line that names no call exits 2.
+
+## `stats`
+
+```sh
+bravebot stats [--days <n>] [--models] [--project [<dir>]]
+```
+
+Adds up what the session records under `~/.bravebot` hold and prints the number of sessions, turns
+and tokens, and how many of the tokens the model read and how many it wrote, for every project
+unless `--project` narrows it. It writes nothing, and it runs under `--incognito`.
+
+```
+$ bravebot stats --days 7 --models
+Sessions last written in the last 7 days, in every project
+
+Model        Sessions  Turns  Tokens    Read  Written  Unsplit
+qwen-3-235b         2     10  214600  198400    16200        0
+unknown             1      2       0       0        0        0
+Total               3     12  214600  198400    16200        0
+```
+
+| Option | What it does |
+|---|---|
+| `--days <n>` | count only the sessions last written within the last `n` days, in days of 24 hours. `n` is a whole number from 1 to 9223372036854775807 |
+| `--models` | put a row for each model above the total, the one that spent the most first |
+| `--project [<dir>]` | count only the sessions that ran in this directory, or in `<dir>` when one follows. A word that starts with `-` is the next option, not a directory. An empty `<dir>` is refused, so quote a variable: an unquoted empty one leaves `--project` bare, which is this directory |
+
+The figures are tokens, not money: the record keeps no price
+([Sessions](../using/sessions.md#asking-what-it-has-cost) says why). Read is what the model was
+sent, which is the total less what it wrote, so a prompt the service answered out of its own cache
+is counted as read. A session written before the split was kept has tokens and no split, so its
+tokens are in the Unsplit column and Read, Written and Unsplit add up to Tokens. A session is
+counted whole, under the day it was last written and the model that answered its last turn, so a
+session that ran over several days or changed model part way is not split between them. The
+`unknown` row holds sessions whose record names no model: ones written before the model was kept,
+ones whose turns never reached a server, and ones copied in from another program. A model name is
+shown with the characters a terminal would act on removed and cut to 60 characters, and names that
+read alike after that are one row.
+
+Each record is counted, and a record can hold spend another one holds. A session forked with
+`--fork` or `/branch` starts with the spend of the original, and one moved with `/cd` leaves its
+record in the directory it came from beside the one it writes in the new directory. Such a session
+is counted once for each record, so the totals can read higher than what was spent.
+
+An incognito session leaves no record, so it is not counted, and the command says so on stderr.
+Entries in the sessions directory that cannot be read as a record are counted there as well, without
+their names, and add to no figure. Stdout holds the table and nothing else, so
+`bravebot stats | tail -n 1` is the total. A project that is not a directory, a count that is zero,
+too large or not a number, a repeated option and any other word are refused with status 2.
 
 ## `completion`
 
@@ -945,9 +1192,11 @@ a reference to them. Quote the question. The lines are emptied once sent, so the
 carries only what you ran after it.
 
 - Only the command line is recorded, as you submitted it. What a command printed is not.
-- Lines are written to `~/.bravebot/shell/<process id of the shell>`, readable by you alone, and the
-  file is removed when the terminal closes. A terminal that is killed leaves its file until another
-  shell with the same process id starts.
+- Lines are written to `shell/<process id of the shell>` in your state directory, which is
+  `~/.bravebot` or the directory `BRAVEBOT_HOME` names in the shell that sourced the hook
+  ([moving the state directory](../customize/configuration.md#moving-the-state-directory)). The file
+  is readable by you alone, and it is removed when the terminal closes. A terminal that is killed
+  leaves its file until another shell with the same process id starts.
 - A line that is `@bravebot` or begins with `@bravebot` and a space is not recorded. bash records a
   line when the command finishes, and a line your `HISTCONTROL` or `HISTIGNORE` drops is not
   recorded. Anything piped into `@bravebot` is ignored, and the lines are emptied when the question
@@ -967,11 +1216,14 @@ one shell name and exits with status 2 for anything else.
 | Shift-Enter, Ctrl-J | New line without sending |
 | Ctrl-G | Compose in `$VISUAL` or `$EDITOR` |
 | Ctrl-S | Stash the line, or bring back the stashed one |
-| Ctrl-V | Paste, including screenshots |
+| Ctrl-V | Paste, including screenshots and copied files |
+| Ctrl-P | Rewrite the typed line to be more specific, and leave the rewrite in the box |
 | Shift-Tab | Choose how much the session asks before it acts |
 | Ctrl-T | Toggle the audit trail |
 | Ctrl-O | Open the scroller over the transcript |
-| Ctrl-L | Watch what a delegate is doing, and read what a command printed |
+| Ctrl-L | Watch what a delegate is doing, and read what an aside answered |
+| Alt-L | Read what a command printed, as `/outputs` does |
+| Alt-A | Print the whole plan, as `/todos` does |
 | Up / Down | Walk back through sent prompts |
 | Ctrl-R | Search every prompt you have sent |
 | Wheel, PageUp / PageDown | Scroll the transcript |
@@ -1000,6 +1252,7 @@ are in [Reading the transcript](../using/transcript.md#the-scroller).
 | `/theme [name]` | Choose which theme paints the interface |
 | `/effort [low \| medium \| high \| xhigh \| max]` | Choose how hard to think before answering |
 | `/config` | Choose how the input box edits text |
+| `/language [tag \| auto]` | Choose the interface language for the next start, or drop the choice |
 | `/add-dir <path> \| close <path>` | Open another directory and trust it for this session, or close one |
 | `/cd <path>` | Work in another directory from now on, and trust it for this session |
 | `/rename <name>` | Call this conversation something else |
@@ -1052,6 +1305,8 @@ different things to do about a failed run.
 | 4 | `BB1004` | had an effect refused by a gate |
 | 5 | `BB1005` | never reached the backend |
 | 6 | `BB1006` | finished, and its reply is not what `--output-schema` asked for |
+| 7 | `BB1007` | worked towards the condition `--goal` gave, and it did not hold |
+| 8 | `BB1008` | reached the limit `--max-rounds` or `--max-tokens` gave it, and stopped before going past it |
 
 Only the transport's own failures are status 5. A non-success answer from the service is the service
 answering, so a refused credential is a configuration problem rather than a connection to retry.
@@ -1077,5 +1332,5 @@ one-shot run is pipeable.
 |---|---|
 | piped input | 10 MiB, refused rather than truncated past that |
 | a pasted picture | 10 MB |
-| tool rounds in one turn | unbounded interactively; 200 for a one-shot or manifest run, after which the planner answers with what it has |
+| tool rounds in one turn | unbounded interactively; 200 for a one-shot or manifest run, after which the planner answers with what it has; [`--max-rounds`](#--max-rounds-n-and---max-tokens-n) lowers it for a one-shot run and stops the run instead |
 | context budget | the window your model advertises; 24,000 prompt tokens where it advertises none |

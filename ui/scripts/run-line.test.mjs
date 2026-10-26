@@ -60,11 +60,13 @@ const asked = (line, confinement, notSandboxed) =>
       {
         program: 'wc',
         resolved: '/usr/bin/wc',
+        shownBinary: '/usr/bin/wc',
         args: ['-l', 'notes.txt', 'report.txt'],
         display: 'wc -l notes.txt report.txt',
       },
     ],
     directory: '/home/someone/project',
+    shownDirectory: '/home/someone/project',
     releasesPrivate: false,
     ambient: [],
     vouches: [{ program: '/usr/bin/wc', args: ['-l'], display: 'wc -l' }],
@@ -105,6 +107,7 @@ test('a confined run card names what the programs are held to and does not call 
     asked('wc -l *.txt', {
       heading: 'zzconfined to these directories:',
       directories: ['/home/someone/project', '/tmp/zzscratch'],
+      shownDirectories: ['/home/someone/project', '/tmp/zzscratch'],
       sentences: ['zzeach stage brings no credentials'],
     }),
   )

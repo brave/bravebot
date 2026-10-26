@@ -10,6 +10,8 @@ governs:
   - crates/agent/src/subscription.rs
   - crates/agent/src/backend.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -281,6 +283,7 @@ person asked, where a turn says nothing about it.
 `verified-by: bravebot_cli::running::auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would`
 `verified-by: bravebot_cli::running::auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy`
 `verified-by: bravebot_agent::backend::only_the_aichat_backend_spends_an_imported_subscription`
+`verified-by: bravebot_agent::home::a_machine_that_imported_nothing_is_not_told_its_subscription_cannot_be_used`
 
 <a id="PREM-9"></a>
 ### PREM-9: the tier reported is the one the last turn ran on, not the one the build was compiled with

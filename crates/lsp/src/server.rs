@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// How long a request may wait for the index to settle before answering from what there is.
 ///
@@ -268,6 +268,98 @@ enum Key {
 /// The directory holding one index per workspace, directly under the state directory.
 const CACHE_ROOT: &str = "lsp";
 
+/// The file inside an index directory whose modification time says when a server last started on it.
+///
+/// An index is rewritten deep inside by whatever the server runs, and the directory's own time moves
+/// only when an entry is added or removed directly in it, so neither says whether the index is in
+/// use. A server start stamps this file ([`mark_used`]) and [`remove_unused_indexes`] reads nothing
+/// else.
+const USED_MARKER: &str = ".used";
+
+/// Stamp `index` as used now, by creating or touching its marker.
+///
+/// A marker that is not a plain file is somebody else's and is left alone: opening one by a link
+/// would set the time of whatever it leads to. A failure is dropped, since an index that cannot be
+/// stamped is one that stays unstamped, and a stamp that never lands keeps an index rather than
+/// removing it.
+fn mark_used(index: &Path) {
+    let marker = index.join(USED_MARKER);
+    match std::fs::symlink_metadata(&marker) {
+        Ok(found) if found.is_file() => {
+            if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&marker) {
+                let _ = file.set_modified(SystemTime::now());
+            }
+        }
+        Ok(_) => {}
+        Err(_) => {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let _ = options.open(&marker);
+        }
+    }
+}
+
+/// When a server last started on `index`, or `None` where nothing says.
+fn last_used(index: &Path) -> Option<SystemTime> {
+    let found = std::fs::symlink_metadata(index.join(USED_MARKER)).ok()?;
+    found.is_file().then(|| found.modified().ok()).flatten()
+}
+
+/// Remove every index under `state` that no server has started on since `cutoff`, returning how
+/// many went.
+///
+/// The age is the modification time of the marker a server start stamps and nothing a file holds,
+/// so no byte an index contains decides whether it is kept. An index with no marker is one an
+/// earlier build wrote: it is stamped now and kept, so it is removed once a whole period has gone
+/// by without a server starting on it, rather than on the strength of a time it never recorded.
+/// `state` is the state directory itself.
+///
+/// `in_use` is the workspace of the session that is starting, whose index is kept at any age: a
+/// server is about to start on it, and one removed under that server would be written again while
+/// the server runs.
+///
+/// Only a directory directly under `lsp` is looked at. A link standing as `lsp` or as one of its
+/// entries is stepped over, because where it leads is outside the directory this was given, and
+/// `remove_dir_all` removes a link inside a directory as the link rather than what it points at. A
+/// removal that fails costs that index and nothing more. A server of another process that is running
+/// when its index goes writes it again, so the cost of removing one in use is the time the server
+/// takes to build it.
+pub fn remove_unused_indexes(state: &Path, cutoff: SystemTime, in_use: Option<&Path>) -> usize {
+    let root = state.join(CACHE_ROOT);
+    if !std::fs::symlink_metadata(&root).is_ok_and(|found| found.is_dir()) {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return 0;
+    };
+    let kept = in_use.map(|workspace| cache_under(state, workspace));
+    let mut removed = 0;
+    for entry in entries.filter_map(Result::ok) {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let index = entry.path();
+        if kept.as_deref() == Some(index.as_path()) {
+            continue;
+        }
+        match last_used(&index) {
+            Some(used) if used < cutoff => {
+                if std::fs::remove_dir_all(&index).is_ok() {
+                    removed += 1;
+                }
+            }
+            Some(_) => {}
+            None => mark_used(&index),
+        }
+    }
+    removed
+}
+
 /// Remove an index an earlier build put one directory too deep.
 ///
 /// The state directory's own name used to be appended a second time, so the index landed in
@@ -440,6 +532,7 @@ fn create_cache(path: &Path) -> std::io::Result<()> {
         remove_misplaced_index(state);
     }
     create_private(path)?;
+    mark_used(path);
     #[cfg(unix)]
     {
         // The directory holding one cache per workspace, narrowed for the same reason. This one and
@@ -780,23 +873,19 @@ impl Server {
             language_ids,
         } = spec;
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the language server's absolute path, resolved by the host before the \
-                          person was shown it (`Server::launch`)"
-        )]
-        let mut command = std::process::Command::new(resolved);
-        command.args(&args);
-
         // The user's environment reaches the server, because it runs with their access and a
         // toolchain reads its own variables to work: `CARGO_HOME`, `GOPATH`, `NODE_PATH`. What does
         // not reach it is this agent's own credentials, which is RUN-12 exactly: a person approving a
         // server read what it is and where it will run, and a credential travelling alongside was
         // granted without having been seen. The names come from the caller because which they are is
         // the host's business, the same reason `resolved` is passed in rather than looked up here.
-        for name in withheld {
-            command.env_remove(name);
-        }
+        // Its `PATH` is bravebot's own: it runs the project's interpreter on purpose (LSP-5).
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::found_earlier(resolved),
+            bravebot_sandbox::programs::Inherits::Without(withheld),
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        );
+        command.args(&args);
 
         // Where the index goes, said to each ecosystem in its own spelling. Nothing is written to the
         // workspace, which is LSP-10.
@@ -1893,6 +1982,50 @@ done
         }
     }
 
+    /// RUN-12: a server is not handed a name its launcher is told to withhold, and is handed the
+    /// rest. The regression it rejects: a start that ignores the names, which hands a server this
+    /// agent's own credentials. The server writes its environment and exits, so the launch fails
+    /// and the file is what it was handed.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_is_not_handed_the_names_it_is_told_to_withhold() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("a scratch directory");
+        let seen = tmp.path().join("environment.txt");
+        let script = tmp.path().join("records-its-environment.sh");
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\n/usr/bin/env > '{}'\n", seen.display()),
+        )
+        .expect("write the script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let handed = |withheld: &[String]| {
+            // A launch that fails writes to the process-wide diagnostic log.
+            let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = std::fs::remove_file(&seen);
+            // A script written a moment ago can be refused for being open for writing while another
+            // test forks, so it is launched again until it has run.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while !seen.exists() && std::time::Instant::now() < deadline {
+                let _ = Server::launch(
+                    Language::Rust,
+                    &script,
+                    tmp.path(),
+                    &tmp.path().join("cache"),
+                    withheld,
+                );
+            }
+            std::fs::read_to_string(&seen)
+                .expect("the server ran")
+                .lines()
+                .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
+                .collect::<Vec<String>>()
+        };
+
+        assert!(handed(&[]).contains(&"PATH".to_string()));
+        assert!(!handed(&["PATH".to_string()]).contains(&"PATH".to_string()));
+    }
+
     /// LSP-5: nothing starts until a person says so, and a refusal is not a failure of the tool.
     #[test]
     fn starting_a_server_is_put_to_a_person() {
@@ -2166,6 +2299,157 @@ done
             mode, 0o755,
             "a directory outside the cache was narrowed through a link"
         );
+    }
+
+    /// Stamp an index's marker as last used `days` ago, standing in for a server start that long
+    /// ago, and put a file in it so removing it is a removal of something.
+    fn index_last_used(state: &Path, name: &str, days: u64) -> PathBuf {
+        let index = state.join(CACHE_ROOT).join(name);
+        std::fs::create_dir_all(index.join("debug")).expect("an index");
+        std::fs::write(
+            index.join("debug").join("derived"),
+            "derived from the workspace",
+        )
+        .expect("write");
+        let marker = index.join(USED_MARKER);
+        std::fs::write(&marker, "").expect("marker");
+        let then = SystemTime::now() - Duration::from_secs(days * 86_400);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&marker)
+            .expect("open marker")
+            .set_modified(then)
+            .expect("age the marker");
+        index
+    }
+
+    fn thirty_days_ago() -> SystemTime {
+        SystemTime::now() - Duration::from_secs(30 * 86_400)
+    }
+
+    /// STATE-4: an index no server has started on for longer than the period goes, and one a server
+    /// started on inside it stays, so the sweep is told apart from one that empties the directory.
+    #[test]
+    fn an_index_no_server_started_on_for_the_period_is_removed_and_a_newer_one_is_kept() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-age");
+        let old = index_last_used(&scratch, "00000000000000aa", 40);
+        let new = index_last_used(&scratch, "00000000000000bb", 3);
+
+        let removed = remove_unused_indexes(&scratch, thirty_days_ago(), None);
+
+        assert_eq!(removed, 1);
+        assert!(!old.exists(), "an index unused for forty days was kept");
+        assert!(
+            new.join("debug").join("derived").is_file(),
+            "an index used three days ago was removed"
+        );
+    }
+
+    /// STATE-4: a server starting on an index is what makes it recent. An index that has been in use
+    /// all along has had nothing added to its top directory for months, so reading the age off the
+    /// directory would remove the one a person is working in.
+    #[test]
+    fn starting_a_server_on_an_index_keeps_it_from_being_removed() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-start");
+        let index = index_last_used(&scratch, "00000000000000cc", 40);
+
+        create_cache(&index).expect("a server starts on it");
+        let removed = remove_unused_indexes(&scratch, thirty_days_ago(), None);
+
+        assert_eq!(removed, 0);
+        assert!(index.join("debug").join("derived").is_file());
+    }
+
+    /// STATE-4: an index an earlier build wrote records no time, so it is not removed on the strength
+    /// of one it never had. It is given a time when first seen and goes once a whole period has
+    /// passed from then.
+    #[test]
+    fn an_index_with_no_recorded_use_is_kept_and_removed_a_period_later() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-legacy");
+        let index = scratch.join(CACHE_ROOT).join("00000000000000dd");
+        std::fs::create_dir_all(&index).expect("an index an earlier build wrote");
+        std::fs::write(index.join("derived"), "derived from the workspace").expect("write");
+
+        assert_eq!(remove_unused_indexes(&scratch, thirty_days_ago(), None), 0);
+        assert!(index.join("derived").is_file(), "removed at first sight");
+        assert!(index.join(USED_MARKER).is_file(), "no time was recorded");
+
+        let a_period_later = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(remove_unused_indexes(&scratch, a_period_later, None), 1);
+        assert!(!index.exists());
+    }
+
+    /// STATE-1: removal stops at the state directory and steps over links. A link standing as the
+    /// directory of indexes, or as one index, leads outside what the sweep was given, and what is
+    /// there is not this crate's to remove.
+    #[cfg(unix)]
+    #[test]
+    fn the_sweep_does_not_follow_a_link_out_of_the_state_directory() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-link");
+        let state = scratch.join("state");
+        let elsewhere = index_last_used(&scratch, "elsewhere", 400);
+        std::fs::create_dir_all(state.join(CACHE_ROOT)).expect("lsp");
+        std::os::unix::fs::symlink(&elsewhere, state.join(CACHE_ROOT).join("linked"))
+            .expect("link an index");
+
+        assert_eq!(remove_unused_indexes(&state, thirty_days_ago(), None), 0);
+        assert!(
+            elsewhere.join("debug").join("derived").is_file(),
+            "an index outside the state directory was removed through a link"
+        );
+
+        let linked_root = scratch.join("linked-state");
+        std::fs::create_dir_all(&linked_root).expect("state");
+        std::os::unix::fs::symlink(
+            elsewhere.parent().expect("the directory holding it"),
+            linked_root.join(CACHE_ROOT),
+        )
+        .expect("link the directory of indexes");
+
+        assert_eq!(
+            remove_unused_indexes(&linked_root, thirty_days_ago(), None),
+            0
+        );
+        assert!(elsewhere.join("debug").join("derived").is_file());
+    }
+
+    /// STATE-4: only an index is looked at. A file sitting in the directory of indexes is not one,
+    /// whatever its age.
+    #[test]
+    fn a_file_among_the_indexes_is_left_where_it_is() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-file");
+        std::fs::create_dir_all(scratch.join(CACHE_ROOT)).expect("lsp");
+        let stray = scratch.join(CACHE_ROOT).join("notes");
+        std::fs::write(&stray, "somebody's own").expect("write");
+
+        assert_eq!(
+            remove_unused_indexes(&scratch, SystemTime::now() + Duration::from_secs(60), None),
+            0
+        );
+        assert!(stray.is_file());
+    }
+
+    /// STATE-4: the index of the workspace the session starting is in is kept at any age, because a
+    /// server is about to start on it. Another workspace's index of the same age is removed beside
+    /// it, so the exemption is the workspace's and not a pass for every old index.
+    #[test]
+    fn the_index_of_the_workspace_being_opened_is_kept_at_any_age() {
+        let scratch = crate::testutil::Scratch::new("bravebot-lsp-sweep-in-use");
+        let workspace = scratch.join("workspace");
+        std::fs::create_dir_all(&workspace).expect("a workspace");
+        let name = cache_under(&scratch, &workspace)
+            .file_name()
+            .expect("an index is named")
+            .to_string_lossy()
+            .into_owned();
+        let kept = index_last_used(&scratch, &name, 400);
+        let other = index_last_used(&scratch, "00000000000000ee", 400);
+
+        let removed = remove_unused_indexes(&scratch, thirty_days_ago(), Some(&workspace));
+
+        assert_eq!(removed, 1);
+        assert!(kept.join("debug").join("derived").is_file());
+        assert!(!other.exists(), "another workspace's old index was kept");
     }
 
     /// LSP-10: two workspaces do not share an index.

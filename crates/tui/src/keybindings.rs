@@ -191,10 +191,18 @@ pub struct Keybindings {
     pub history: KeyChord,
     pub trail: KeyChord,
     pub watch: KeyChord,
+    /// Opens the view over what commands printed, as `/outputs` does (WATCH-7).
+    pub outputs: KeyChord,
     pub paste: KeyChord,
     pub panel: KeyChord,
+    /// Prints the whole plan, as `/todos` does (CMD-28).
+    pub todos: KeyChord,
     pub scope: KeyChord,
     pub undo: KeyChord,
+    /// Absent where the session cannot be suspended, which is Windows (INPUT-47).
+    #[cfg(unix)]
+    pub suspend: KeyChord,
+    pub enhance: KeyChord,
 }
 
 impl Default for Keybindings {
@@ -207,13 +215,26 @@ impl Default for Keybindings {
             history: KeyChord::ctrl('r'),
             trail: KeyChord::ctrl('t'),
             watch: KeyChord::ctrl('l'),
+            // Alt and not Ctrl because every Ctrl letter is spoken for: the box, a control
+            // character (Ctrl-H, -I, -M, -J, -[), flow control (Ctrl-Q) or another action.
+            outputs: KeyChord::alt('l'),
             paste: KeyChord::ctrl('v'),
             panel: KeyChord::ctrl('x'),
+            // Alt for the reason `outputs` is: every Ctrl letter is taken.
+            todos: KeyChord::alt('a'),
             scope: KeyChord::ctrl('n'),
             undo: Keybindings::UNDO,
+            #[cfg(unix)]
+            suspend: KeyChord::ctrl('z'),
+            enhance: KeyChord::ctrl('p'),
         }
     }
 }
+
+/// How many actions a settings file can move. Fifteen where the session can be suspended, and
+/// fourteen where it cannot, since an action that does nothing has no chord to be moved off of
+/// (INPUT-47).
+const MOVABLE: usize = if cfg!(unix) { 15 } else { 14 };
 
 /// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
 ///
@@ -239,22 +260,26 @@ const UNDO_SPELLINGS: [KeyChord; 4] = [
 impl Keybindings {
     /// What the undo step answers unless a settings file moves it.
     ///
-    /// Ctrl-_ rather than Ctrl-Z, which suspends the process on a terminal that has not had job
-    /// control turned off, and which this program does not take.
+    /// Ctrl-_ rather than Ctrl-Z, which suspends the session to the shell (INPUT-47).
     pub const UNDO: KeyChord = KeyChord::new(KeyCode::Char('_'), KeyModifiers::CONTROL);
 
     /// Every action by the name a settings file calls it, in one list so that resolving one chord
-    /// can see the ten it has to differ from.
-    fn slots(&mut self) -> [(&'static str, &mut KeyChord); 11] {
+    /// can see the others it has to differ from.
+    fn slots(&mut self) -> [(&'static str, &mut KeyChord); MOVABLE] {
         [
             ("background", &mut self.background),
             ("editor", &mut self.editor),
+            ("enhance", &mut self.enhance),
             ("history", &mut self.history),
+            ("outputs", &mut self.outputs),
             ("panel", &mut self.panel),
             ("paste", &mut self.paste),
             ("scope", &mut self.scope),
             ("scroller", &mut self.scroller),
             ("stash", &mut self.stash),
+            #[cfg(unix)]
+            ("suspend", &mut self.suspend),
+            ("todos", &mut self.todos),
             ("trail", &mut self.trail),
             ("undo", &mut self.undo),
             ("watch", &mut self.watch),
@@ -273,8 +298,8 @@ impl Keybindings {
     pub fn from_map(configured: &BTreeMap<String, String>) -> Self {
         let mut active = Self::default();
         let mut slots = active.slots();
-        let defaults: [KeyChord; 11] = std::array::from_fn(|i| *slots[i].1);
-        let mut asked: [Option<KeyChord>; 11] = std::array::from_fn(|i| {
+        let defaults: [KeyChord; MOVABLE] = std::array::from_fn(|i| *slots[i].1);
+        let mut asked: [Option<KeyChord>; MOVABLE] = std::array::from_fn(|i| {
             configured
                 .get(slots[i].0)
                 .and_then(|spelling| KeyChord::parse(spelling))
@@ -285,7 +310,8 @@ impl Keybindings {
         // given, so this settles rather than deciding once. Every round drops at least one request
         // or is the last, and with no requests left the defaults are what stand, which differ.
         loop {
-            let standing: [KeyChord; 11] = std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
+            let standing: [KeyChord; MOVABLE] =
+                std::array::from_fn(|i| asked[i].unwrap_or(defaults[i]));
             let contested =
                 |chord: KeyChord| standing.iter().filter(|on| **on == chord).count() > 1;
             let mut given_up = false;
@@ -334,6 +360,10 @@ impl Keybindings {
         self.watch.matches(key)
     }
 
+    pub fn is_outputs(&self, key: &KeyEvent) -> bool {
+        self.outputs.matches(key)
+    }
+
     pub fn is_paste(&self, key: &KeyEvent) -> bool {
         self.paste.matches(key)
     }
@@ -346,18 +376,39 @@ impl Keybindings {
         self.scope.matches(key)
     }
 
+    /// Whether this press asks for the whole plan to be printed (CMD-28).
+    pub fn is_todos(&self, key: &KeyEvent) -> bool {
+        self.todos.matches(key)
+    }
+
+    /// Whether this press asks for the session to be suspended to the shell (INPUT-47).
+    #[cfg(unix)]
+    pub fn is_suspend(&self, key: &KeyEvent) -> bool {
+        self.suspend.matches(key)
+    }
+
+    /// Whether this press asks for the line in the box to be rewritten to be more specific (INPUT-48).
+    pub fn is_enhance(&self, key: &KeyEvent) -> bool {
+        self.enhance.matches(key)
+    }
+
     /// Whether `chord` is what some other action currently answers to, whether that is still its
     /// default or a settings file moved it there.
     fn chord_taken_by_another_action(&self, chord: KeyChord) -> bool {
         [
             self.background,
             self.editor,
+            self.enhance,
             self.history,
+            self.outputs,
             self.panel,
             self.paste,
             self.scope,
             self.scroller,
             self.stash,
+            #[cfg(unix)]
+            self.suspend,
+            self.todos,
             self.trail,
             self.watch,
         ]
@@ -371,7 +422,7 @@ impl Keybindings {
     /// chord a settings file named is matched as every other configured chord is.
     ///
     /// An alternative is skipped where a settings file moved another action onto that exact chord:
-    /// `from_map` resolves contests among the ten movable chords, but these four are not among
+    /// `from_map` resolves contests among the movable chords, but these four are not among
     /// them, so nothing there stops a person asking for `ctrl-/` on `trail` and finding undo answer
     /// it instead.
     pub fn is_undo(&self, key: &KeyEvent) -> bool {
@@ -412,6 +463,10 @@ impl Keybindings {
         self.watch.display()
     }
 
+    pub fn outputs_name(&self) -> String {
+        self.outputs.display()
+    }
+
     pub fn paste_name(&self) -> String {
         self.paste.display()
     }
@@ -424,23 +479,42 @@ impl Keybindings {
         self.scope.display()
     }
 
+    pub fn todos_name(&self) -> String {
+        self.todos.display()
+    }
+
     pub fn undo_name(&self) -> String {
         self.undo.display()
     }
 
-    /// Whether any of the eleven configurable actions answers this key event.
+    #[cfg(unix)]
+    pub fn suspend_name(&self) -> String {
+        self.suspend.display()
+    }
+
+    pub fn enhance_name(&self) -> String {
+        self.enhance.display()
+    }
+
+    /// Whether any of the configurable actions answers this key event.
     pub fn claims(&self, key: &KeyEvent) -> bool {
-        self.is_background(key)
+        let claimed = self.is_background(key)
             || self.is_stash(key)
             || self.is_scroller(key)
             || self.is_editor(key)
             || self.is_history(key)
             || self.is_trail(key)
             || self.is_watch(key)
+            || self.is_outputs(key)
             || self.is_paste(key)
             || self.is_panel(key)
             || self.is_scope(key)
+            || self.is_todos(key)
             || self.is_undo(key)
+            || self.is_enhance(key);
+        #[cfg(unix)]
+        let claimed = claimed || self.is_suspend(key);
+        claimed
     }
 }
 
@@ -616,6 +690,74 @@ mod tests {
         assert!(!bindings.is_background(&vacated) && !bindings.claims(&vacated));
     }
 
+    /// Opening what commands printed is an action of its own on Alt-L, because every Ctrl letter
+    /// is taken. It moves like the others and gives up the chord it left, and another action
+    /// asking for Alt-L loses to it, so Ctrl-L's asides and delegates stay on a key of their own.
+    #[test]
+    fn the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.outputs, KeyChord::alt('l'));
+        assert_eq!(defaults.outputs_name(), "alt-l");
+        assert_eq!(defaults.watch, KeyChord::ctrl('l'));
+
+        let mut map = BTreeMap::new();
+        map.insert("outputs".to_string(), "alt-y".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.outputs, KeyChord::alt('y'));
+        let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('l'), KeyModifiers::ALT);
+        assert!(bindings.is_outputs(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_outputs(&vacated) && !bindings.claims(&vacated));
+
+        // Another action asking for the outputs default is turned away, and so is the outputs
+        // action asking for another action's default: both fall back to the defaults.
+        let mut map = BTreeMap::new();
+        map.insert("editor".to_string(), "alt-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        let mut map = BTreeMap::new();
+        map.insert("outputs".to_string(), "ctrl-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+    }
+
+    /// Printing the whole plan is an action of its own on Alt-A, because every Ctrl letter is
+    /// taken. It moves like the others and gives up the chord it left.
+    ///
+    /// Rejects: a default other than Alt-A, and a moved action whose old chord still answers for
+    /// it.
+    #[test]
+    fn the_todos_chord_is_alt_a_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.todos, KeyChord::alt('a'));
+        assert_eq!(defaults.todos_name(), "alt-a");
+        let pressed = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
+        assert!(defaults.is_todos(&pressed) && defaults.claims(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("todos".to_string(), "alt-y".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.todos_name(), "alt-y");
+        let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
+        assert!(bindings.is_todos(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_todos(&pressed) && !bindings.claims(&pressed));
+    }
+
+    /// Another action asking for Alt-A loses to the action that prints the whole plan, as it loses
+    /// asking for any other action's chord, and the plan's action asking for another action's chord
+    /// loses to that one: both fall back to the defaults.
+    ///
+    /// Rejects: another action that takes Alt-A from the plan's action, which an existing
+    /// `keybindings` entry on `alt-a` would do without being told, and the plan's action that takes
+    /// a chord from the action that has it.
+    #[test]
+    fn another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another() {
+        let mut map = BTreeMap::new();
+        map.insert("editor".to_string(), "alt-a".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        let mut map = BTreeMap::new();
+        map.insert("todos".to_string(), "alt-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+    }
+
     /// The panel is opened and closed from the box, so a person whose terminal or multiplexer
     /// already uses Ctrl-X needs to put it somewhere else and have the old chord stop answering.
     /// The panel is an action a settings file can move, and a moved panel gives up the
@@ -683,9 +825,8 @@ mod tests {
         assert_eq!(bindings.scroller, KeyChord::ctrl('o'));
     }
 
-    /// The undo chord is Ctrl-_ rather than Ctrl-Z, which suspends the process on a terminal that
-    /// has not had job control turned off, and a person whose terminal already uses it can move
-    /// it, with the old chord going dead.
+    /// The undo chord is Ctrl-_ rather than Ctrl-Z, which suspends the session (INPUT-47), and a
+    /// person whose terminal already uses it can move it, with the old chord going dead.
     #[test]
     fn the_undo_chord_is_ctrl_underscore_and_can_be_moved() {
         let defaults = Keybindings::default();
@@ -733,7 +874,7 @@ mod tests {
     /// A settings file moving another action onto one of the alternate spellings takes it: that
     /// action stands on the chord, and undo gives it up rather than answering a press meant for
     /// the action a person asked for. `from_map` does not see these four chords at all, since they
-    /// are not among the eleven it resolves, so skipping one has to be undo's own to do.
+    /// are not among the movable chords it resolves, so skipping one has to be undo's own to do.
     #[test]
     fn an_alternate_spelling_given_to_another_action_no_longer_answers_undo() {
         let mut map = BTreeMap::new();
@@ -777,6 +918,123 @@ mod tests {
             bindings.undo,
             Keybindings::UNDO,
             "undo did not keep the default the request contested"
+        );
+    }
+
+    /// Ctrl-Z stops the session to the shell, and a person whose terminal or multiplexer answers it
+    /// first can move it, with the old chord going dead (INPUT-47).
+    #[cfg(unix)]
+    #[test]
+    fn the_suspend_chord_is_ctrl_z_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.suspend, KeyChord::ctrl('z'));
+        assert_eq!(defaults.suspend_name(), "ctrl-z");
+
+        let mut map = BTreeMap::new();
+        map.insert("suspend".to_string(), "alt-z".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.suspend_name(), "alt-z");
+        let moved = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::ALT);
+        let vacated = KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert!(bindings.is_suspend(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_suspend(&vacated) && !bindings.claims(&vacated));
+    }
+
+    /// A settings file that gave Ctrl-Z to another action contests the default of an action that
+    /// did not exist when it was written. The request gives way as every contested request does
+    /// (INPUT-32), the action is back on its own default and suspend keeps Ctrl-Z. The same holds
+    /// the other way: suspend asking for another action's chord leaves both where they were.
+    #[cfg(unix)]
+    #[test]
+    fn a_chord_contested_with_suspend_is_given_up_by_the_request() {
+        for action in ["trail", "stash", "undo", "scope"] {
+            let mut map = BTreeMap::new();
+            map.insert(action.to_string(), "ctrl-z".to_string());
+            assert_eq!(
+                Keybindings::default(),
+                Keybindings::from_map(&map),
+                "{action} took Ctrl-Z from suspend"
+            );
+        }
+
+        let mut map = BTreeMap::new();
+        map.insert("suspend".to_string(), "ctrl-t".to_string());
+        assert_eq!(
+            Keybindings::default(),
+            Keybindings::from_map(&map),
+            "suspend took the trail's chord"
+        );
+    }
+
+    /// Suspend moved onto one of undo's alternate spellings takes it from undo, as any other action
+    /// moved there does. The four are not among the chords `from_map` resolves, so undo skipping
+    /// one depends on suspend being among the actions it asks about.
+    #[cfg(unix)]
+    #[test]
+    fn suspend_moved_onto_an_undo_spelling_takes_it_from_undo() {
+        let mut map = BTreeMap::new();
+        map.insert("suspend".to_string(), "ctrl-/".to_string());
+        let bindings = Keybindings::from_map(&map);
+
+        let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+        assert!(bindings.is_suspend(&pressed));
+        assert!(
+            !bindings.is_undo(&pressed),
+            "undo answered a chord moved to suspend"
+        );
+        assert!(bindings.is_undo(&KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL)));
+    }
+
+    /// Where the session cannot be suspended there is no such action, so a settings file naming it
+    /// is naming nothing and Ctrl-Z is as free for another action as it was before.
+    #[cfg(not(unix))]
+    #[test]
+    fn where_nothing_suspends_ctrl_z_is_free_for_another_action() {
+        let mut map = BTreeMap::new();
+        map.insert("trail".to_string(), "ctrl-z".to_string());
+        assert_eq!(Keybindings::from_map(&map).trail, KeyChord::ctrl('z'));
+    }
+
+    /// The enhance chord is Ctrl-P, which a person whose terminal already uses it can move, with the
+    /// old chord going dead. Another action asking for it, or it asking for another's, leaves both
+    /// on their defaults (INPUT-32).
+    #[test]
+    fn the_enhance_chord_is_ctrl_p_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.enhance, KeyChord::ctrl('p'));
+        assert_eq!(defaults.enhance_name(), "ctrl-p");
+        let pressed = KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(defaults.is_enhance(&pressed) && defaults.claims(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("enhance".to_string(), "alt-e".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.enhance_name(), "alt-e");
+        let moved = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT);
+        assert!(bindings.is_enhance(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_enhance(&pressed) && !bindings.claims(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("enhance".to_string(), "ctrl-r".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        let mut map = BTreeMap::new();
+        map.insert("history".to_string(), "ctrl-p".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+    }
+
+    /// A chord moved onto one of the alternate spellings of Ctrl-_ is the moved action's, and that
+    /// holds for enhance as for every other action `chord_taken_by_another_action` reads.
+    #[test]
+    fn an_alternate_spelling_given_to_enhance_no_longer_answers_undo() {
+        let mut map = BTreeMap::new();
+        map.insert("enhance".to_string(), "ctrl-/".to_string());
+        let bindings = Keybindings::from_map(&map);
+        let pressed = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::CONTROL);
+
+        assert!(bindings.is_enhance(&pressed));
+        assert!(
+            !bindings.is_undo(&pressed),
+            "undo answered a chord moved to enhance"
         );
     }
 }

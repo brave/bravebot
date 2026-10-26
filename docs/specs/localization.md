@@ -7,7 +7,9 @@ governs:
   - crates/i18n/src/*.rs
   - crates/i18n/locales/*.ftl
   - crates/agent/tests/audience.rs
-documented-by: docs/website/docs/customize/configuration.md
+documented-by:
+  - docs/website/docs/customize/configuration.md
+  - docs/website/docs/customize/language.md
 ---
 
 ## Scope
@@ -89,13 +91,15 @@ name, and the POSIX `C` locale asks for no catalog at all.
 A message that counts states its own forms, and which one is used is decided by the rules of the
 language the catalog those forms came from is written in, which for a message a translation leaves
 out is the reference. A language whose rules are not written down cannot ship a message that
-counts.
+counts. The reference may say its forms alike where its own language does not tell them apart, so
+that a translation can tell them apart.
 
 **Why.** Borrowing English's rule is how a translation comes out reading correctly for one and
 wrongly for everything else, which is a defect only a speaker of that language can see and which
 no review in English will catch.
 
 `verified-by: bravebot_i18n::lib::a_plural_select_picks_the_variant_the_language_calls_for`
+`verified-by: bravebot_i18n::generate::a_select_whose_forms_say_the_same_is_generated_as_that_text`
 `verified-by: bravebot_i18n::lib::a_language_with_a_plural_rule_is_the_only_kind_a_select_may_ship_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
@@ -118,7 +122,8 @@ only ever noticed afterwards.
 
 Nothing about the environment reaches a message until a binary says so, and it says so once,
 before anything is drawn. Anything that did not ask reads the reference. The terminal chooses from
-the environment. `bravebot-rpc` chooses `en-US` whatever the environment says, because the desktop
+the environment and from what the person said ([LOCALE-8](#LOCALE-8)). `bravebot-rpc` chooses `en-US`
+whatever the environment says, because the desktop
 window it serves is in English only and shows the notes the bridge builds as they stand.
 
 **Why.** A library that consulted the environment the first time something needed a word would
@@ -129,6 +134,59 @@ sees is worth nothing if two people running it see different things.
 `verified-by: bravebot_i18n::lib::a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked`
 `verified-by: bravebot_i18n::sizes_in_french::the_size_notes_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: bravebot_ui_bridge::history::a_failed_turn_on_the_account_is_sent_in_english_on_a_machine_set_to_french`
+`verified-by: bravebot_ui_bridge::history::the_narrations_for_a_summary_the_account_could_not_make_are_in_english_on_a_machine_set_to_french`
+
+<a id="LOCALE-8"></a>
+### LOCALE-8: what the person said outranks the shell, and only their own file says it
+
+Before anything is drawn the terminal takes the first of these that names something:
+`BRAVEBOT_LOCALE`, the tag `/language` saved in `~/.bravebot/language`, the `language` key of
+`~/.bravebot/settings.json`, then `LC_ALL`, `LC_MESSAGES` and `LANG`. A blank value names nothing,
+and so does `auto` in the saved tag or the key, which is how a person hands the question to the next
+source. The key is read from the person's own file alone, ahead of the command line. A project or
+local settings file and a file `--settings` names cannot set it, and `doctor` reports each one that
+tried and a value no catalog answers. The value is matched against the catalogs that shipped by the widening of
+[LOCALE-4](#LOCALE-4), so it chooses among finished catalogs and names no message
+([LOCALE-2](#LOCALE-2), [LOCALE-6](#LOCALE-6)).
+
+`/language <tag>` saves the tag of the catalog that answered the word and refuses a word no catalog
+answers, naming the catalogs there are. The choice applies from the next start, since the catalog is
+chosen once ([LOCALE-7](#LOCALE-7)). `/language auto` removes the saved tag. A session that records
+nothing saves nothing, and says so.
+
+**Why.** A person's language belongs to the person and has to be settable where a shell is not: a
+program started from a launcher has no shell profile to edit. A project's file is written by whoever
+wrote the project, and the catalog is one choice for the whole process, made before the command line
+says whether that file may be read. `BRAVEBOT_LOCALE` stays first because a launch can give it for
+itself, and the tests that run the binary pin their catalog with it. What `/language` saved outranks
+the file because it is the later act, as a saved model or effort level outranks the person's own file.
+
+`verified-by: bravebot_i18n::lib::a_language_the_person_wrote_outranks_the_posix_variables`
+`verified-by: bravebot_i18n::lib::without_a_choice_the_posix_variables_answer_in_their_order`
+`verified-by: bravebot_i18n::lib::what_the_person_picked_outranks_what_the_settings_file_says`
+`verified-by: bravebot_i18n::lib::the_variable_made_for_this_program_outranks_what_the_person_said`
+`verified-by: bravebot_i18n::lib::a_blank_or_auto_choice_leaves_the_question_to_the_next_source`
+`verified-by: bravebot_i18n::lib::a_language_that_did_not_ship_is_found_by_nothing_though_it_resolves_to_the_reference`
+`verified-by: bravebot_config::settings::only_the_persons_own_file_can_name_the_language`
+`verified-by: bravebot_config::settings::the_language_read_ahead_of_the_command_line_is_the_home_layers`
+`verified-by: bravebot_config::settings::a_language_that_is_blank_or_not_a_string_names_nothing`
+`verified-by: bravebot_session::store::a_saved_language_is_read_back_replaced_and_forgotten`
+`verified-by: bravebot_session::store::a_pipe_where_the_language_file_should_be_is_no_choice_and_holds_nothing_up`
+`verified-by: bravebot_session::store::a_language_file_grown_large_still_answers_with_its_first_line`
+`verified-by: bravebot_tui::app::the_language_command_carries_its_word`
+`verified-by: bravebot_tui::app::a_language_a_catalog_answers_is_saved_under_the_catalogs_own_tag`
+`verified-by: bravebot_tui::app::a_language_no_catalog_answers_is_refused_and_not_saved`
+`verified-by: bravebot_tui::app::auto_gives_the_choice_back_and_leaves_no_file`
+`verified-by: bravebot_tui::app::a_session_that_keeps_nothing_says_the_language_was_not_saved`
+`verified-by: bravebot_tui::app::the_bare_language_command_says_what_is_in_use_and_what_was_saved`
+`verified-by: bravebot_cli::running::a_language_in_the_settings_file_outranks_what_the_shell_says`
+`verified-by: bravebot_cli::running::without_the_key_the_shell_still_chooses_the_language`
+`verified-by: bravebot_cli::running::a_language_saved_by_the_command_outranks_the_settings_file`
+`verified-by: bravebot_cli::running::the_variable_made_for_this_program_outranks_the_settings_file_and_the_saved_choice`
+`verified-by: bravebot_cli::running::a_checkouts_settings_files_cannot_choose_the_language`
+`verified-by: bravebot_cli::running::doctor_names_a_language_a_checkout_wrote`
+`verified-by: bravebot_cli::running::doctor_names_a_language_no_catalog_answers_and_only_that`
 
 ## Known costs
 
@@ -163,3 +221,8 @@ sees is worth nothing if two people running it see different things.
   translating it is a line in a diff rather than a warning in a build that passed. The build still
   counts the gap as it compiles the catalogs, and that count is a convenience rather than the
   check: a warning is silent on a build that did not re-run.
+
+- **`BRAVEBOT_LOCALE` can outrank a choice.** It is read first, so a person who exports it has the
+  catalog it names whatever `/language` saved or the settings file says. `/language` reads no
+  environment, since only the binary's start does ([LOCALE-7](#LOCALE-7)), so its note says the choice
+  applies unless that variable is set.

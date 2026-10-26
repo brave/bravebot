@@ -1,0 +1,202 @@
+/*
+ * The hero has its own flat background in each colour mode: near-black with white stars, and
+ * near-white with dark stars. The page sets --stars-dark and --stars-light to the two tiles, and
+ * the rest of the page follows the theme.
+ */
+
+.hero {
+  --hero-bg: #0b0c14;
+  --hero-ink: #eceaf8;
+  --hero-muted: #a6abd0;
+  --hero-edge: #363a4d;
+  --hero-panel: #14161f;
+  --hero-hover: #1d2030;
+  --hero-accent: #ff5601;
+  background-color: var(--hero-bg);
+  background-image: var(--stars-dark);
+  background-size: 640px 640px;
+  color: var(--hero-ink);
+  padding: 3rem 1rem 3.5rem;
+  text-align: center;
+}
+
+html[data-theme='light'] .hero {
+  --hero-bg: #f5f6fa;
+  --hero-ink: #14161f;
+  --hero-muted: #565b73;
+  --hero-edge: #c4c8d6;
+  --hero-panel: #ffffff;
+  --hero-hover: #e7e9f1;
+  --hero-accent: #c83f00;
+  background-image: var(--stars-light);
+}
+
+.title {
+  margin: 0 auto;
+  max-width: 1100px;
+  font-size: 1rem;
+  line-height: 0;
+}
+
+.art {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* A halo in the hero's own colour, so a star behind a letter does not read as part of it. */
+.tagline {
+  margin: 1.75rem auto 0;
+  font-size: clamp(1.15rem, 2.4vw, 1.75rem);
+  font-weight: 600;
+  text-shadow: 0 0 4px var(--hero-bg), 0 0 10px var(--hero-bg);
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.button {
+  padding: 0.7rem 1.5rem;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+.button:hover {
+  text-decoration: none;
+}
+
+.primary {
+  background: #ff5601;
+  color: #0b0c14;
+}
+
+.primary:hover {
+  background: #ff7a33;
+  color: #0b0c14;
+}
+
+.secondary {
+  background: var(--hero-bg);
+  border-color: var(--hero-ink);
+  color: var(--hero-ink);
+}
+
+.secondary:hover {
+  background: var(--hero-hover);
+  color: var(--hero-ink);
+}
+
+.install {
+  max-width: 760px;
+  margin: 2rem auto 0;
+  text-align: left;
+}
+
+.install :global(.tabs) {
+  --ifm-tabs-color: var(--hero-muted);
+  --ifm-tabs-color-active: var(--hero-accent);
+  --ifm-tabs-color-active-border: var(--hero-accent);
+  --ifm-hover-overlay: var(--hero-hover);
+  margin-bottom: 0;
+}
+
+.install :global(.margin-top--md) {
+  margin-top: 0.5rem !important;
+}
+
+/* The same halo as the tagline, so a star does not land on a tab's label. */
+.install :global(.tabs__item),
+.more a {
+  text-shadow: 0 0 4px var(--hero-bg), 0 0 10px var(--hero-bg);
+}
+
+.command {
+  position: relative;
+  border: 1px solid var(--hero-edge);
+  border-radius: 6px;
+  background: var(--hero-panel);
+}
+
+.command pre {
+  margin: 0;
+  padding: 0.9rem 5.5rem 0.9rem 1rem;
+  overflow-x: auto;
+  background: none;
+  color: var(--hero-ink);
+}
+
+.command code {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 0.95rem;
+  white-space: pre;
+}
+
+.copy {
+  position: absolute;
+  top: 50%;
+  right: 0.6rem;
+  transform: translateY(-50%);
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--hero-edge);
+  border-radius: 4px;
+  background: var(--hero-bg);
+  color: var(--hero-ink);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.copy:hover {
+  background: var(--hero-hover);
+}
+
+.more {
+  margin: 0.75rem 0 0;
+  text-align: center;
+}
+
+.more a {
+  color: var(--hero-muted);
+  text-decoration: underline;
+}
+
+.more a:hover {
+  color: var(--hero-ink);
+}
+
+.features {
+  padding: 2rem 0 3rem;
+}
+
+.features h2 {
+  margin-bottom: 1.5rem;
+}
+
+.cell {
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  height: 100%;
+  padding: 1.25rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: 8px;
+}
+
+.card h3 {
+  margin-bottom: 0.5rem;
+  font-size: 1.15rem;
+}
+
+.card p {
+  margin-bottom: 0.75rem;
+}

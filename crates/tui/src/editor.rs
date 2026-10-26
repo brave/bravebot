@@ -18,7 +18,6 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// What to open when nothing is configured, in the order they are tried.
@@ -96,7 +95,7 @@ fn show_through(
     text: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<(), Failure> {
-    let path = scratch("transcript");
+    let path = scratch("transcript", "md");
     if let Err(failure) = write_scratch(&path, text) {
         let _ = std::fs::remove_file(&path);
         return Err(failure);
@@ -116,8 +115,61 @@ fn round_trip(
     line: &str,
     open: impl FnOnce(&Path) -> Result<(), Failure>,
 ) -> Result<String, Failure> {
-    let path = scratch("prompt");
-    if let Err(failure) = write_scratch(&path, line) {
+    let mut text = through_a_file(scratch("prompt", "md"), line, open)?;
+    tidy(&mut text);
+    Ok(text)
+}
+
+/// Put the body of a proposed write in front of the user in their editor, and return what they
+/// saved.
+///
+/// The text comes back exactly as the editor wrote it. A prompt is fitted to the box it returns
+/// to, and a file is not: a final newline is part of it, and so are its line endings, which the
+/// write prompt shows the effect of on the screen where the text is approved. `extension` names
+/// the scratch file so the editor chooses the syntax of the file the body is for.
+pub fn edit_body(body: &str, extension: &str) -> Result<String, Failure> {
+    body_round_trip(body, extension, open_in_an_editor)
+}
+
+/// The file half of [`edit_body`], with opening it left to the caller so it can be tested.
+fn body_round_trip(
+    body: &str,
+    extension: &str,
+    open: impl FnOnce(&Path) -> Result<(), Failure>,
+) -> Result<String, Failure> {
+    through_a_file(scratch("write", extension), body, open)
+}
+
+/// What to call the scratch file of a body bound for `path`, so the editor takes it for the kind of
+/// file it is.
+///
+/// The extension of the last component, where it is short and made of letters and digits, and
+/// `txt` otherwise. Nothing else of the name is used: the path is the planner's, and this is a
+/// file name in a shared directory.
+pub fn scratch_extension(path: &str) -> String {
+    Path::new(path)
+        .extension()
+        .and_then(OsStr::to_str)
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= MOST_EXTENSION_BYTES
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .unwrap_or("txt")
+        .to_string()
+}
+
+/// The longest extension a scratch file takes from a path.
+const MOST_EXTENSION_BYTES: usize = 12;
+
+/// Write `text` to `path`, run `open` on it and read back what is there, removing the file on every
+/// path out.
+fn through_a_file(
+    path: PathBuf,
+    text: &str,
+    open: impl FnOnce(&Path) -> Result<(), Failure>,
+) -> Result<String, Failure> {
+    if let Err(failure) = write_scratch(&path, text) {
         // A write that failed partway leaves a file behind, and one holding a prompt is not
         // something to leave in a shared directory.
         let _ = std::fs::remove_file(&path);
@@ -126,20 +178,18 @@ fn round_trip(
 
     let opened = open(&path);
     let saved = std::fs::read_to_string(&path);
-    // Before either result is examined, so the prompt does not outlive the edit down any path.
+    // Before either result is examined, so the text does not outlive the edit down any path.
     let _ = std::fs::remove_file(&path);
 
     opened?;
-    let mut text = saved.map_err(Failure::Scratch)?;
-    tidy(&mut text);
-    Ok(text)
+    saved.map_err(Failure::Scratch)
 }
 
 /// Where the line is put for the editor to open.
 ///
 /// The system's temporary directory rather than `~/.bravebot`, which is the user's configuration
 /// surface and is read as trusted: scratch files do not belong in it.
-fn scratch(kind: &str) -> PathBuf {
+fn scratch(kind: &str, extension: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_nanos())
@@ -150,7 +200,7 @@ fn scratch(kind: &str) -> PathBuf {
     // reason a name already taken is refused rather than reused.
     // nosemgrep: rust.lang.security.temp-dir.temp-dir
     std::env::temp_dir().join(format!(
-        "bravebot-{kind}-{}-{stamp}-{nth}.md",
+        "bravebot-{kind}-{}-{stamp}-{nth}.{extension}",
         std::process::id()
     ))
 }
@@ -347,13 +397,11 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
         .to_string_lossy()
         .into_owned();
 
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the editor `lookup` found: a path the person wrote, or a name \
-                      `bravebot_sandbox::programs::find` returned (SANDBOX-30)"
-    )]
-    let mut command = Command::new(program);
-    bravebot_sandbox::programs::restrict_path(&mut command);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
     match command.args(arguments).arg(path).status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(Failure::Editor(match status.code() {
@@ -394,7 +442,7 @@ mod tests {
                     let gate = Arc::clone(&gate);
                     std::thread::spawn(move || {
                         gate.wait();
-                        scratch("prompt")
+                        scratch("prompt", "md")
                     })
                 })
                 .collect();
@@ -626,7 +674,7 @@ mod tests {
         let path = std::env::join_paths([session.join(".venv/bin"), system.clone()]).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env(SYSTEM, &system)
@@ -671,7 +719,7 @@ mod tests {
         }
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let child = Command::new(std::env::current_exe().unwrap())
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
             .env(SESSION, &session)
             .env("PATH", &bin)
@@ -779,7 +827,7 @@ mod tests {
         let path = std::env::join_paths(entries(&session, &tools)).unwrap();
 
         // nosemgrep: rust.lang.security.current-exe.current-exe
-        let mut child = Command::new(std::env::current_exe().unwrap());
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
         child
             .args(["--exact", test, "--test-threads=1", "--nocapture"])
             .env(STARTED_SESSION, &session)
@@ -1128,6 +1176,75 @@ mod tests {
         let mut text = "one\r\ntwo\rthree\n".to_string();
         tidy(&mut text);
         assert_eq!(text, "one\ntwo\nthree");
+    }
+
+    /// WRITE-7: the body of a file comes back as the editor wrote it. A prompt is fitted to a box,
+    /// and a file is not: the newline an editor ends it with and its line endings are part of what
+    /// the person approves, and `tidy` here would strip the one and rewrite the other.
+    #[test]
+    fn a_body_comes_back_exactly_as_the_editor_wrote_it() {
+        let written = "fn main() {\r\n    run();\r\n}\r\n\r\n";
+        let saved = body_round_trip("fn main() {}\n", "rs", |path| {
+            std::fs::write(path, written).unwrap();
+            Ok(())
+        })
+        .expect("the round trip completes");
+        assert_eq!(saved, written);
+
+        let untouched = body_round_trip("no final newline", "txt", |_| Ok(()))
+            .expect("the round trip completes");
+        assert_eq!(untouched, "no final newline");
+    }
+
+    /// WRITE-7: a body is as private as a prompt: the file is removed whether the editor worked or
+    /// not, and carries no group or other bit while it is open. The extension is the path's, so the
+    /// editor treats the text as the kind of file it is for.
+    #[cfg(unix)]
+    #[test]
+    fn the_file_a_body_is_edited_in_is_private_named_for_its_kind_and_removed() {
+        use std::os::unix::fs::PermissionsExt;
+        let mut opened = PathBuf::new();
+        let mut mode = 0;
+        body_round_trip("the body", "rs", |path| {
+            opened = path.to_path_buf();
+            mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            Ok(())
+        })
+        .expect("the round trip completes");
+        assert_eq!(opened.extension().and_then(OsStr::to_str), Some("rs"));
+        assert_eq!(mode & 0o077, 0, "the body's file had mode {mode:o}");
+        assert!(!opened.exists(), "the file was left behind after an edit");
+
+        let mut failed = PathBuf::new();
+        let outcome = body_round_trip("the body", "rs", |path| {
+            failed = path.to_path_buf();
+            Err(Failure::Editor("no".to_string()))
+        });
+        assert!(outcome.is_err());
+        assert!(!failed.exists(), "the file was left behind after a failure");
+    }
+
+    /// WRITE-7: the scratch file takes the extension of the last component of the path, where that
+    /// is a few letters or digits, and `txt` for everything else. The path is the planner's, so
+    /// nothing else of it reaches a file name in a shared directory.
+    #[test]
+    fn a_scratch_file_takes_a_plain_extension_from_the_path_and_nothing_else() {
+        for (path, extension) in [
+            ("src/main.rs", "rs"),
+            ("notes.md", "md"),
+            ("archive.tar.gz", "gz"),
+            ("Makefile", "txt"),
+            (".gitignore", "txt"),
+            ("dir.d/file", "txt"),
+            ("ref:1", "txt"),
+            ("odd.r s", "txt"),
+            ("odd.a/b", "txt"),
+            ("odd.\u{fffd}", "txt"),
+            ("long.abcdefghijklmnopqrstuvwxyz", "txt"),
+            ("empty.", "txt"),
+        ] {
+            assert_eq!(scratch_extension(path), extension, "{path}");
+        }
     }
 
     /// A bare GUI editor exits the moment its window opens, and the line would come back

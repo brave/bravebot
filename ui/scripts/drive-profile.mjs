@@ -11,7 +11,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launch, SIDEBAR_TAB } from './drive-support.mjs'
+import { launch, SIDEBAR_TAB, BOT_OPEN_BUTTON } from './drive-support.mjs'
 
 /**
  * Where the app keeps what it remembers, asked of the app rather than composed here: `userData`
@@ -98,7 +98,7 @@ export async function openBot(app, page, { name, row, purpose, checkout, check }
 
   const mine = page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: row }) })
   check((await mine.count()) === 1, 'the bot is in the list')
-  await mine.locator('.bot-open-button').click()
+  await mine.locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-page"]').waitFor()
   await page.locator('[data-test="project-trigger"]').click()
   await page.locator('[data-test="project-pick"]').click()

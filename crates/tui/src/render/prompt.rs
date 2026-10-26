@@ -78,6 +78,42 @@ pub(super) fn input_height(session: &Session, width: u16, height: u16) -> u16 {
     (rows + 2).min(ceiling) as u16
 }
 
+/// The byte offset in the line that a press on screen cell (`row`, `column`) lands on, for a box
+/// drawn over `area` (MOUSE-16).
+///
+/// Measured the way [`draw_input`] draws it: the same wrap, the same window of rows around the
+/// caret and the same two columns of lead on each row. A cell on the border lands nowhere. A cell
+/// past the end of a row lands at its end, and one on the lead at its start. A character drawn two
+/// cells wide is taken from either of them.
+pub(crate) fn offset_at(session: &Session, area: Rect, row: u16, column: u16) -> Option<usize> {
+    if row <= area.y || row + 1 >= area.bottom() || column <= area.x || column + 1 >= area.right() {
+        return None;
+    }
+    let wrapped = wrap::wrap(
+        session.input(),
+        input_text_width(area.width),
+        session.caret(),
+    );
+    let visible = (area.height as usize).saturating_sub(2).max(1);
+    let (first, rows) = wrapped.window(visible);
+    let drawn = usize::from(row - area.y - 1);
+    let text = rows.get(drawn)?;
+    let index = first + drawn;
+    let lead = lead_for(index, session.shell, session.shell_private()).len();
+    let target = usize::from(column - area.x - 1).saturating_sub(lead);
+
+    let mut offset = 0;
+    let mut width = 0;
+    for (bytes, columns) in wrap::clusters(text) {
+        if target < width + columns {
+            break;
+        }
+        width += columns;
+        offset += bytes;
+    }
+    Some(wrapped.starts[index] + offset)
+}
+
 /// A row with `at..through` of it drawn as a block, which is where the caret is.
 ///
 /// A block rather than a glyph inserted between two characters, because inserting one moves
@@ -156,11 +192,15 @@ fn named_words(session: &Session) -> Vec<(usize, usize)> {
         return vec![(start, start + name.len())];
     }
     let held = session.held_skills();
+    // A prompt of a server runs only from the first word, so it is recognised nowhere else (CMD-26).
+    let first = line.len() - line.trim_start().len();
     let mut words = Vec::new();
     let mut offset = 0;
     for piece in line.split_inclusive(char::is_whitespace) {
         let word = piece.trim_end_matches(char::is_whitespace);
-        if crate::skills::named(held, word).is_some() {
+        if crate::skills::named(held, word)
+            .is_some_and(|row| offset == first || !row.is_a_server_prompt())
+        {
             words.push((offset, offset + word.len()));
         }
         offset += piece.len();
@@ -340,6 +380,9 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     let selection = session.vi_selection();
     let words = named_words(session);
     let hint = argument_hint(session);
+    // The files state owns every key, so the box has no caret to draw and no selection to show
+    // (FILES-9). The line keeps its text.
+    let held = session.files_open();
 
     // Shell mode is coloured throughout rather than only in the marker, because the whole line
     // means something different: it goes to a shell instead of the model, and that is worth more
@@ -371,6 +414,10 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
                 .iter()
                 .filter_map(|&word| covered(row, wrapped.starts[index], word))
                 .collect();
+            if held {
+                spans.extend(text_spans(row, 0, row.len(), &named));
+                return Line::from(spans);
+            }
             if let Some((at, through)) =
                 selection.and_then(|span| covered(row, wrapped.starts[index], span))
             {
@@ -414,11 +461,19 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
             Style::default().fg(colour),
         )];
         // A suggestion takes the invitation's place, drawn the same way: dimmed, with the caret on
-        // its first character, since that is where the first character typed would land.
-        spans.extend(placeholder_spans(
-            colour,
-            session.suggestion().unwrap_or(placeholder()),
-        ));
+        // its first character, since that is where the first character typed would land. Dimmed
+        // alone where the box holds no caret.
+        if held {
+            spans.push(Span::styled(
+                session.suggestion().unwrap_or(placeholder()).to_string(),
+                dim(),
+            ));
+        } else {
+            spans.extend(placeholder_spans(
+                colour,
+                session.suggestion().unwrap_or(placeholder()),
+            ));
+        }
         vec![Line::from(spans)]
     } else {
         lines
@@ -496,6 +551,15 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
         if let Some(ways_in) = ways_in {
             block = block.title_top(Line::from(Span::styled(ways_in, dim())).right_aligned());
         }
+    }
+
+    // The mode stays on the box for as long as it is in force, so a person who has forgotten it is
+    // reminded by the place they type in (SKILL-21).
+    if let Some(skill) = session.skill_mode() {
+        block = block.title_bottom(Line::from(Span::styled(
+            format!(" {} ", t!(input_skill_mode, skill = skill)),
+            dim(),
+        )));
     }
 
     frame.render_widget(Paragraph::new(lines).block(block), area);

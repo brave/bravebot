@@ -5,10 +5,13 @@ use bravebot_i18n::t;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::command_table::{held_back_by, named, runs_while_working};
 use crate::keybindings::Keybindings;
+use crate::skills::Origin;
 use crate::state::{Bound, Session, Status};
 use crate::theme;
 use crate::wrap;
+use bravebot_agent::skills::Source;
 
 use super::{dim, head_of, printable, tail_of};
 
@@ -162,7 +165,15 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
             0
         };
         let left = (width as usize).saturating_sub(used + offered);
-        let bound = format!(
+        // A command that would have been carried out as it was typed, but for a line waiting ahead
+        // of it, names that line (CMD-8). One that waits for the turn on its own account does not,
+        // since the lines ahead of it are not why.
+        let after = (goes == Bound::CarriedOut && runs_while_working(&waiting.prompt))
+            .then(|| held_back_by(session, at, &waiting.prompt))
+            .flatten();
+        // Where the line goes, in the words that name what it waits behind where there are any and
+        // room for them, and in the plain words where there is not.
+        let plain = format!(
             "  {}",
             match goes {
                 Bound::IntoThisTurn => t!(queued_into_this_turn),
@@ -172,7 +183,17 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
                 Bound::Run => t!(queued_run),
             }
         );
-        if wrap::display_width(&bound) <= left {
+        let with_name = after.map(|(ahead, line)| {
+            format!(
+                "  {}",
+                t!(queued_carried_out_after, line = named(ahead, line))
+            )
+        });
+        if let Some(bound) = with_name
+            .into_iter()
+            .chain([plain])
+            .find(|bound| wrap::display_width(bound) <= left)
+        {
             mark.push(Span::styled(bound, dim()));
         }
         if offer {
@@ -287,10 +308,19 @@ fn slash_lines(
         let chosen = highlighted.as_ref() == Some(skill);
         let word = skill_word(skill);
         let padding = column.saturating_sub(word.chars().count()) + 2;
-        let from = match skill.source {
-            bravebot_agent::skills::Source::Workspace => t!(skill_from_project),
-            bravebot_agent::skills::Source::Home => t!(skill_from_user),
-            bravebot_agent::skills::Source::BuiltIn => t!(skill_from_built_in),
+        let found = match &skill.source {
+            Origin::Skill(Source::Workspace) => t!(skill_from_project).to_string(),
+            Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
+            Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
+            Origin::Server { alias, .. } => {
+                t!(skill_from_mcp_server, alias = alias.as_str())
+            }
+        };
+        // After where it was found, so the row says both: a skill the planner is kept from is one only
+        // this line can load (SKILL-20).
+        let from = match skill.person_only {
+            true => format!("{found} {}", t!(skill_person_only)),
+            false => found,
         };
         // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
         // where the skill came from is still on the row.
@@ -370,17 +400,17 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The eleven the file can move
+/// list names the key that answers rather than the key that used to. The fifteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
-) -> [(String, &'static str); 27] {
+) -> Vec<(String, &'static str)> {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
         crate::vim::Editing::Vi => "letters as commands, then stop",
     };
-    [
+    let mut listed = vec![
         ("!".to_string(), "run a shell command"),
         ("/".to_string(), "commands and skills"),
         ("@".to_string(), "name a file"),
@@ -397,6 +427,7 @@ pub(super) fn shortcuts(
         ("ctrl-d".to_string(), "exit"),
         (bindings.editor_name(), "write prompt in $EDITOR"),
         (bindings.watch_name(), "watch a delegate work"),
+        (bindings.outputs_name(), "read what a command printed"),
         (bindings.scroller_name(), "open the scroller"),
         (bindings.history_name(), "search earlier prompts"),
         (bindings.stash_name(), "stash, bring it back, or search"),
@@ -404,14 +435,22 @@ pub(super) fn shortcuts(
         (bindings.paste_name(), "paste, pictures too"),
         (bindings.background_name(), "background a running command"),
         (bindings.panel_name(), "show or hide the info panel"),
+        (bindings.todos_name(), t!(shortcut_todos)),
         (
             bindings.scope_name(),
             "earlier prompts: this session or all",
         ),
         (bindings.undo_name(), "undo the last edit"),
+        (bindings.enhance_name(), "make the line more specific"),
+    ];
+    // Where the session can be suspended, which is every platform but Windows (INPUT-47).
+    #[cfg(unix)]
+    listed.push((bindings.suspend_name(), "suspend to the shell"));
+    listed.extend([
         ("drag".to_string(), "select, copy on release"),
         ("shift-drag".to_string(), "the terminal's own selection"),
-    ]
+    ]);
+    listed
 }
 
 /// The shortcuts in as many columns as the width will hold.

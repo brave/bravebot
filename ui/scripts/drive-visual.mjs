@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
+import { ASSISTANT_BUBBLE, COMPOSER_NAME } from './drive-support.mjs'
 
 const output = process.env.VISUAL_OUTPUT || join(tmpdir(), 'bravebot-visual')
 mkdirSync(output, { recursive: true })
@@ -58,7 +59,8 @@ try {
       if (method === 'session.new') return { ok: { session: 's-new', directory, branch: 'main', model: 'sample/fast' } }
       if (method === 'session.open') return { ok: { session: 's-' + p.id, model: 'sample/fast', record: { ...rows.find((r) => r.id === p.id), started: 1, turns: 1, tokens: 100, build: 'fixture' }, said: p.id === idA ? said : [], todos: { rows: [{ content: 'Split the lock', status: 'done' }, { content: 'Move the migration', status: 'active' }, { content: 'Write migration tests', status: 'pending' }] }, context: '', trust: { known: true, rules: [] }, archived: 0, branchNote: null, buildNote: null, frontNote: null } }
       if (method === 'turn.send') { emit('turn.started', { turn: 2 }, p.session); return { ok: { turn: 2 } } }
-      if (method === 'permissions.list') return { ok: { paths: [{ path: '', integrity: 'trusted' }, { path: 'vendor', integrity: 'untrusted' }], commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }] } }
+      if (method === 'turn.interject') return { ok: { accepted: true } }
+      if (method === 'permissions.list') return { ok: { paths: [{ path: '', shownPath: '""', integrity: 'trusted' }, { path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }], commands: [{ program: '/usr/bin/git', args: ['status'], display: 'git status' }] } }
       if (method === 'watches.list') return { ok: { busy: false, watches: [{ number: 1, path: 'src/store.ts', state: 'watching', remainingSeconds: 86400, armedBy: null }] } }
       if (method === 'settings.inspect') return { ok: { build: '0.9.0 (abc1234)', configured: true, problem: null, model: 'sample/fast', brave: false, bedrock: false, providers: [], selected: null, layers: [], overrides: [], managed: { path: null, keys: [] }, network: { roots: [], problem: null, trustsNothing: false, proxy: null, authenticated: false, unusableProxy: null, noProxy: null } } }
       if (method === 'about') return { ok: { version: '1.0.0', build: '0.9.0 (abc1234)', home: '/Users/example/.bravebot' } }
@@ -116,7 +118,7 @@ try {
   }
   const escape = async () => { await page.keyboard.press('Escape'); await page.waitForTimeout(200) }
   const tool = (verb, target, why, note, extra = {}) => ({ verb, target, why, note, failed: false, untrusted: false, changes: [], waitedSeconds: null, ...extra })
-  const open = async (title) => { await page.locator('.session').filter({ hasText: title }).first().click(); await page.getByRole('textbox', { name: 'Message the agent' }).waitFor() }
+  const open = async (title) => { await page.locator('.session').filter({ hasText: title }).first().click(); await page.getByRole('textbox', { name: COMPOSER_NAME }).waitFor() }
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.reload()
@@ -126,7 +128,7 @@ try {
 
   await scene('02-conversation', async () => {
     await open('Refactor the session store')
-    await page.locator('.bubble.assistant').first().waitFor()
+    await page.locator(ASSISTANT_BUBBLE).first().waitFor()
     await variants('02-conversation')
   })
 
@@ -151,9 +153,33 @@ try {
     await variants('03-running')
   })
 
+  // VIEW-34: off until the person asks, then the last eight lines of the round's thinking under
+  // the working row, and gone again when the button is pressed a second time.
+  await scene('03b-thinking', async () => {
+    const thought = ['The lock is taken in open(), so every reader waits on the writer.', 'A read side that takes a snapshot would not need it.', 'Check whether migrate() writes while a reader is open.']
+    await emit('phase', { phase: 'thinking' })
+    await emit('thinking', { text: thought.slice(0, 2).join('\n') + '\n' })
+    const toggle = page.locator('[data-test="thinking-toggle"]')
+    await toggle.waitFor()
+    if (await page.locator('[data-test="thinking"]').count()) throw new Error('the thinking was drawn before it was asked for')
+    await toggle.click()
+    await page.locator('[data-test="thinking"]').waitFor()
+    await emit('thinking', { text: thought[2] + '\n' + Array.from({ length: 8 }, (_, line) => `Step ${line + 1}: <b>read</b> the next call site.`).join('\n') })
+    await settle()
+    if (await page.locator('.thinking-text').innerText().then((text) => text.includes('lock is taken'))) throw new Error('more than the last eight lines were drawn')
+    await variants('03b-thinking')
+    await toggle.click()
+    await settle()
+    if (await page.locator('[data-test="thinking"]').count()) throw new Error('the thinking stayed drawn after it was turned off')
+    // The round ends and the next opens: the thinking is gone and the button is still there.
+    await emit('phase', { phase: 'planning' })
+    await settle()
+    if (!(await toggle.count())) throw new Error('the button went with the round that offered it')
+  })
+
   await scene('04-confirm', async () => {
     await emit('tool.finished', tool('Search', 'lock', 'Find other lock users', '3 matches'))
-    await emit('confirm.request', { request: 1, path: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 3, removed: 1, exact: true, changes: [
+    await emit('confirm.request', { request: 1, path: 'src/store.ts', shownPath: 'src/store.ts', intent: 'edit', untrusted: false, existing: true, added: 3, removed: 1, exact: true, changes: [
       { kind: 'kept', text: 'export class Store {' }, { kind: 'removed', text: '  private lock = new Mutex()' }, { kind: 'added', text: '  private readLock = new RwLock()' }, { kind: 'added', text: '  private writeLock = new Mutex()' }, { kind: 'added', text: '  // Reads take a snapshot.' }, { kind: 'elided', lines: 42 }, { kind: 'kept', text: '}' },
     ] })
     await page.locator('.confirm').first().scrollIntoViewIfNeeded()
@@ -162,14 +188,14 @@ try {
 
   await scene('05-untrusted', async () => {
     await page.locator('.confirm .approve').first().click()
-    await emit('confirm.request', { request: 2, path: 'vendor/patch.ts', intent: 'create', untrusted: true, existing: false, added: 2, removed: 0, exact: false, remark: { preview: ['Applied the vendor fix.'], lines: 1, label: 'processor remark' }, credentials: ['api key at line 2: sk-…9f'], changes: [{ kind: 'added', text: 'export const fix = true' }, { kind: 'added', text: 'const key = "sk-…9f"' }] })
+    await emit('confirm.request', { request: 2, path: 'vendor/patch.ts', shownPath: 'vendor/patch.ts', intent: 'create', untrusted: true, existing: false, added: 2, removed: 0, exact: false, remark: { preview: ['Applied the vendor fix.'], lines: 1, label: 'processor remark' }, credentials: ['api key at line 2: sk-…9f'], changes: [{ kind: 'added', text: 'export const fix = true' }, { kind: 'added', text: 'const key = "sk-…9f"' }] })
     await page.locator('.confirm.untrusted').last().scrollIntoViewIfNeeded()
     await variants('05-untrusted')
   })
 
   await scene('06-run-output-vouch', async () => {
     await page.locator('.confirm .reject').last().click()
-    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
+    await emit('run.request', { request: 3, line: 'npm test -- store', plan: 'npm test -- store', stages: [{ program: 'npm', resolved: '/usr/local/bin/npm', shownBinary: '/usr/local/bin/npm', args: ['test', '--', 'store'], display: 'npm test -- store' }], directory, shownDirectory: directory, releasesPrivate: false, ambient: [], vouches: [{ program: 'npm', args: ['test'], display: 'npm test' }], summary: 'Run the store tests' })
     await page.locator('.confirm.run').last().scrollIntoViewIfNeeded()
     await variants('06-run')
     await page.locator('.confirm.run .approve').first().click()
@@ -185,18 +211,22 @@ try {
 
   await scene('09-ask', async () => {
     await emit('ask.request', { request: 6, prompts: [
-      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock' },
-      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests' },
+      { header: 'Lock', question: 'Which lock should reads use?', rows: [{ index: 0, label: 'RwLock', detail: 'Many readers, one writer' }, { index: 1, label: 'Snapshot', detail: 'Copy on write' }], multiple: false, key: 'lock', place: 'the agent is asking (1 of 2)', last: false },
+      { header: 'Tests', question: 'Which suites should run?', rows: [{ index: 0, label: 'Unit', detail: null }, { index: 1, label: 'Integration', detail: null }], multiple: true, key: 'tests', place: 'the agent is asking (2 of 2)', last: true },
     ] })
     await page.locator('.confirm.ask').last().scrollIntoViewIfNeeded()
     await variants('09-ask')
+    // One question at a time: the second is drawn after the first is answered, and a skip on it ends the series.
+    await page.locator('.confirm.ask .choice').last().click()
+    await page.locator('.confirm.ask .approve').last().click()
+    await variants('09-ask-second')
     await page.locator('.confirm.ask .reject').last().click()
   })
 
   await scene('10-done-and-error', async () => {
     await emit('turn.done', { id: idA, turn: 2, reply: 'Split the lock and added **three** migration tests.', model: 'sample/fast', steps: 6, clean: true, tokens: 18342, outputTokens: 1204, contextTokens: 64000, notices: ['Hook turn-finished: formatted 2 files'], trust: { rules: [] }, archived: 0, prompt: 1 })
-    await page.getByRole('textbox', { name: 'Message the agent' }).fill('Now run the full suite')
-    await page.getByRole('textbox', { name: 'Message the agent' }).press('Enter')
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).fill('Now run the full suite')
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).press('Enter')
     await emit('turn.error', { kind: 'provider', message: 'The provider is busy (429).', category: 'rate_limited', attempts: 3, status: 429, turn: 3, id: idA, contextTokens: 64000 })
     await page.locator('[data-test="error-card"]').last().scrollIntoViewIfNeeded()
     await variants('10-done-and-error')
@@ -296,14 +326,28 @@ try {
     await page.setViewportSize({ width: 900, height: 560 })
     await open('Refactor the session store')
     await emit('turn.started', { turn: 3 })
-    const composer = page.getByRole('textbox', { name: 'Message the agent' })
+    const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
     await page.getByRole('button', { name: 'Attach files' }).click()
     await page.locator('.attachment-chips').waitFor()
     for (const text of ['First queued follow-up', 'Second, a longer follow-up that runs on far enough to need truncating in the tray', 'Third', 'Fourth']) {
       await composer.fill(text)
-      await composer.press('Enter')
+      await composer.press('Alt+Enter')
     }
     await variants('23-queue-and-attachments')
+    await page.setViewportSize({ width: 1440, height: 900 })
+  })
+
+  // In the conversation the scene above left running, with its queue still showing under the tray.
+  await scene('23b-sent-into-the-turn', async () => {
+    await page.setViewportSize({ width: 900, height: 560 })
+    const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
+    for (const text of ['no, the other one', 'And a second line, long enough that the tray has to truncate it before it reaches the end of the row']) {
+      await composer.fill(text)
+      await composer.press('Enter')
+    }
+    await composer.fill('Held for after the turn')
+    await page.locator('[data-test="interjected-messages"]').waitFor()
+    await variants('23b-sent-into-the-turn')
     await page.setViewportSize({ width: 1440, height: 900 })
   })
 

@@ -37,6 +37,19 @@
 
 #![deny(unsafe_code)]
 
+// The seam that points the ChatGPT sign-in at a stand-in exists for tests, and a release build that
+// turned it on, by `--all-features` or a manifest, would let a variable choose where a token goes.
+// Rust has no `cfg` for the release profile, so the refusal reads the two settings that profile has
+// and a test build does not: no debug assertions, and a panic that aborts. A release with
+// `debug-assertions = true` aborts on a panic, and `cargo test --release` unwinds and has no assertions,
+// so each is refused by one of the two. `crates/cli/tests/layering.rs` compiles this line under each
+// combination and reads the root manifest for the release profile's `panic = "abort"`.
+#[cfg(all(feature = "test-hosts", any(not(debug_assertions), panic = "abort")))]
+compile_error!(
+    "the test-hosts feature is for tests: it is refused where debug assertions are off or a panic aborts, as in a release build"
+);
+
+pub mod chatgpt;
 pub mod device;
 pub mod profile;
 pub mod secret;
@@ -157,7 +170,7 @@ pub fn new_request_id() -> String {
 ///
 /// A failure is not survivable: a predictable request id could collide with another device's batch,
 /// so there is no sensible fallback to a weaker source.
-fn fill_random(bytes: &mut [u8]) {
+pub(crate) fn fill_random(bytes: &mut [u8]) {
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(bytes);
 }

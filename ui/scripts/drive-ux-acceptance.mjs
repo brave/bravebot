@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture.mjs'
+import { BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-ux-final')
 mkdirSync(output, { recursive: true })
 const { profile, directory } = makeProfile({ copy: true })
@@ -22,7 +23,7 @@ try {
   // Playwright clicks bypass native window dragging; assert the native hit-test exclusion too.
   for (const name of ['Chats', 'Bots']) assert.equal(await page.getByRole('button', {name, exact:true}).evaluate(e => getComputedStyle(e.closest('leo-segmentedcontrol') ?? e.getRootNode().host?.closest('leo-segmentedcontrol') ?? e).getPropertyValue('-webkit-app-region')), 'no-drag', `${name} must receive native mouse clicks inside the draggable titlebar`)
   await page.locator('.session').filter({hasText:'Review the sample project'}).click()
-  const composer=page.getByRole('textbox',{name:'Message the agent'})
+  const composer=page.getByRole('textbox',{name:COMPOSER_NAME})
   await composer.fill('Draft retained across conversations.');await snap('02-conversation')
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await composer.fill('Independent draft.')
   await page.locator('.session').filter({hasText:'Review the sample project'}).click();assert.equal(await composer.inputValue(),'Draft retained across conversations.')
@@ -43,7 +44,7 @@ try {
   await page.getByRole('button',{name:'Attach files'}).click();await page.locator('.attachment-chips').waitFor();await snap('10-attachment');await page.getByRole('button',{name:'Remove attachment src/nested/sample.txt'}).click()
   await page.locator('.model-trigger').click();await page.getByRole('option',{name:/Deep model/}).waitFor();await snap('11-models');await page.getByRole('option',{name:/Deep model/}).click();await page.locator('.model-trigger').click();await snap('12-recent-model');await page.keyboard.press('Escape')
   await composer.fill('Start review');await page.getByRole('button',{name:'Send',exact:true}).click()
-  await emit('ask.request',{request:1,prompts:[{header:'Color',question:'Which color should the sample use?',rows:[{index:0,label:'Blue',detail:'A cool accent'},{index:1,label:'Green',detail:'A natural accent'}],multiple:false,key:'color'}]})
+  await emit('ask.request',{request:1,prompts:[{header:'Color',question:'Which color should the sample use?',rows:[{index:0,label:'Blue',detail:'A cool accent'},{index:1,label:'Green',detail:'A natural accent'}],multiple:false,key:'color',place:null,last:true}]})
   await composer.fill('Follow up after this review');await composer.press('Enter');await snap('13-question-queue')
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await snap('14-background')
   await page.locator('.session').filter({hasText:'Review the sample project'}).click();await page.getByRole('button',{name:'Stop',exact:true}).click();await page.getByText('Task stopped',{exact:true}).waitFor();await snap('15-stopped-queue')
@@ -58,14 +59,14 @@ try {
   const changes=[{kind:'kept',text:'Alpha'},{kind:'removed',text:'Beta'},{kind:'added',text:'Delta'},{kind:'kept',text:'Gamma'}]
   const activity={verb:'Update',target:'ref:1(U,pub):src/nested/sample.txt',note:null,failed:false,untrusted:true,changes:[]}
   await emit('tool.started',activity)
-  await emit('confirm.request',{request:2,path:'src/nested/sample.txt',intent:'update',untrusted:true,existing:true,added:1,removed:1,exact:true,changes})
+  await emit('confirm.request',{request:2,path:'src/nested/sample.txt',shownPath:'src/nested/sample.txt',intent:'update',untrusted:true,existing:true,added:1,removed:1,exact:true,changes})
   await page.getByRole('button',{name:'Expand diff'}).click();await snap('28-expanded-diff');await page.getByRole('button',{name:'Done',exact:true}).click()
   await page.getByRole('tab',{name:'Overview',exact:true}).click();await snap('29-waiting-write')
   await page.getByRole('button',{name:'Apply this change',exact:true}).click();await page.locator('.files .applying').waitFor();await snap('30-approved-write')
   await emit('tool.finished',{...activity,note:'Updated sample.txt',changes});await page.locator('.files .applied').waitFor();assert.equal(await page.getByRole('tab',{name:'Overview',exact:true}).count(),1);await snap('31-applied-write');await done()
   const executionPlan='/usr/bin/printf hello > /tmp/result.txt && /usr/bin/true';
   const lineSent='printf hello > /tmp/result.txt && true';
-  await emit('run.request',{request:3,directory,stages:[{program:'printf',resolved:'/usr/bin/printf',args:['hello'],display:'printf hello > /tmp/result.txt'},{program:'true',resolved:'/usr/bin/true',args:[],display:'true'}],line:lineSent,plan:executionPlan,stdin:'ref:3',writes:['/tmp/result.txt'],releasesPrivate:false,vouches:[],summary:'run two steps'});
+  await emit('run.request',{request:3,directory,shownDirectory:directory,stages:[{program:'printf',resolved:'/usr/bin/printf',shownBinary:'/usr/bin/printf',args:['hello'],display:'printf hello > /tmp/result.txt'},{program:'true',resolved:'/usr/bin/true',shownBinary:'/usr/bin/true',args:[],display:'true'}],line:lineSent,plan:executionPlan,stdin:'ref:3',writes:['/tmp/result.txt'],shownWrites:['/tmp/result.txt'],releasesPrivate:false,vouches:[],summary:'run two steps'});
   // Both, and not one of the two: the plan is what an approval binds to, and the line is what a
   // reader compares it against.
   await page.getByText(lineSent,{exact:true}).waitFor();
@@ -93,7 +94,7 @@ try {
   await app.evaluate(({BrowserWindow},session)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:bots:consolidated',{session,slug:'review-bot',delivered:true}),'s-'+idA)
   await page.waitForFunction(()=>document.querySelector('.queued-messages')===null);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance+1);await done()
   // A bot's own page: its conversations in the middle, its details and memory on the right.
-  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
+  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
   await page.locator('[data-test="bot-details"]').getByRole('button',{name:'Edit memory',exact:true}).waitFor();await snap('20-bot-editor')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('textbox',{name:'Edit memory'}).fill('# Saved preference\n\n- Use a blue accent.');await page.getByRole('button',{name:'Save memory'}).click();await page.locator('.bot-memory').getByText('Saved preference',{exact:false}).waitFor();await snap('21-memory-read')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('button',{name:'Reset…',exact:true}).click();await snap('23-memory-reset');await page.getByRole('button',{name:'Reset saved memory'}).click()
@@ -104,7 +105,7 @@ try {
   await page.reload();await page.getByRole('button',{name:'Chats',exact:true}).click();await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor();assert.equal(await composer.inputValue(),'Independent draft.');await snap('35-backend-not-ready');await page.getByRole('button',{name:'Diagnostics',exact:true}).click();await snap('38-diagnostics');await page.keyboard.press('Escape')
   await page.getByRole('button',{name:'Setup help'}).click();await snap('36-setup-help');await page.keyboard.press('Escape')
   await app.evaluate(()=>globalThis.ux.configured=true);await page.getByRole('button',{name:'Check again'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor({state:'hidden'})
-  const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();await page.locator('[data-test="bot-conversations"]').waitFor()}
+  const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-conversations"]').waitFor()}
   await openBot();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();await page.locator('.transcript-head .where').waitFor()
   // A new bot conversation starts from the bot's page by sending to it; the message waits for the trust question.
   await openBot();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await page.getByRole('button',{name:"Don't trust",exact:true}).click();await snap('39-new-bot-conversation')

@@ -5,8 +5,11 @@
 //! read off the messages written to it.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
-#[allow(dead_code)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../../session/test-support/profile.rs"]
@@ -32,15 +35,22 @@ struct Editor {
 impl Editor {
     /// An adapter whose model is the scripted endpoint.
     fn on(endpoint: &str, project: &Path) -> Self {
-        let settings = project.join("test-settings.json");
-        std::fs::write(
-            &settings,
-            json!({"model": "acp-test/test", "provider": {"acp-test": {
-                "options": {"baseURL": endpoint}, "models": {"test": {}}
-            }}})
-            .to_string(),
-        )
-        .unwrap();
+        Self::on_model("acp-test/test", endpoint, project)
+    }
+
+    /// An adapter whose model is `model`, with the scripted endpoint configured as a gateway.
+    fn on_model(model: &str, endpoint: &str, project: &Path) -> Self {
+        Self::on_settings(json!({"model": model}), endpoint, project)
+    }
+
+    /// An adapter whose settings are `settings` and the scripted endpoint as a gateway besides.
+    fn on_settings(mut settings: Value, endpoint: &str, project: &Path) -> Self {
+        settings["provider"] = json!({"acp-test": {
+            "options": {"baseURL": endpoint}, "models": {"test": {}}
+        }});
+        let settings_file = project.join("test-settings.json");
+        std::fs::write(&settings_file, settings.to_string()).unwrap();
+        let settings = settings_file;
         let (sent, written) = mpsc::channel();
         Self {
             acp: Acp::new(
@@ -423,6 +433,105 @@ fn no_turn_starts_before_the_trust_question_is_answered() {
     );
 }
 
+/// CHATGPT-8: a turn that failed on the ChatGPT account tells the editor which command signs in
+/// again, in the window's own sentence for the step that failed, and not the name of the category,
+/// which says nothing an editor can act on. The turn is on a model of the account in a profile nobody
+/// signed in to, so it fails before any request is sent and no model service is asked.
+///
+/// The faults this rejects: the category's name for a failure of the account, and the terminal's
+/// lower case wording with its backticks reaching an editor that draws them as they are.
+#[test]
+fn a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_signs_in() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let account_project = project("account-failure");
+    let mut editor = Editor::on_model("chatgpt/gpt-6-sol", "http://127.0.0.1:9", &account_project);
+    let session = editor.session(&account_project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+
+    let done = editor.response(prompt);
+
+    let said = done["error"]["message"].as_str().expect("a failure");
+    assert_eq!(
+        said,
+        "the turn failed: You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{done}"
+    );
+    assert!(
+        !said.contains("unauthorized"),
+        "the category was said in place of the sentence: {said}"
+    );
+
+    // A failure of any other service is the name of its category, which quotes nothing a service
+    // wrote: a gateway that refuses the request is not the sign-in failing.
+    let project = project("gateway-failure");
+    let (config, _requests, server) = endpoint::endpoint(vec!["fail".into()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+    let done = editor.response(prompt);
+    server.join().unwrap();
+    assert_eq!(
+        done["error"]["message"], "the turn failed: refused",
+        "{done}"
+    );
+}
+
+/// CHATGPT-8: a summary of the conversation that could not be made because the account's sign-in is
+/// not there is told to the editor in the window's own sentences, one each, the second naming the
+/// command that signs in again, and the prompt still ends normally on the model that was asked. The
+/// summary model is the account and the service said each earlier prompt filled its window, so the
+/// fourth prompt has exchanges to cut.
+///
+/// The faults this rejects: the terminal's lower case line with its backticks reaching the editor,
+/// and a prompt that fails because its summary could not be made.
+#[test]
+fn a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let long = "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":5000000,\"completion_tokens\":1}}\n\ndata: [DONE]\n\n";
+    let project = project("account-summary");
+    let (config, _requests, server) = endpoint::endpoint(vec![long.into(); 4], None);
+    let mut editor = Editor::on_settings(
+        json!({"model": "acp-test/test", "summaryModel": "chatgpt/gpt-6-sol"}),
+        &config.endpoint,
+        &project,
+    );
+    let session = editor.session(&project);
+    for words in ["one", "two", "three", "four"] {
+        let prompt = editor.prompt(&session, text(words));
+        if words == "one" {
+            editor.answer_next(selected("allow-once"));
+        }
+        let done = editor.response(prompt);
+        assert_eq!(done["result"]["stopReason"], "end_turn", "{words}: {done}");
+    }
+    server.join().unwrap();
+
+    let told = editor.texts();
+    let window = [
+        "The conversation could not be summarised, so the turn goes on with the messages it has.",
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+    ];
+    assert_eq!(
+        told.iter()
+            .filter(|said| window.contains(&said.as_str()))
+            .count(),
+        2,
+        "{told:?}"
+    );
+    assert!(
+        !told
+            .iter()
+            .any(|said| said.contains("`") || said.contains("unauthorized")),
+        "{told:?}"
+    );
+}
+
 /// A prompt is words a person typed: a slash word in it is text for the model, and nothing here
 /// runs it as a command.
 #[test]
@@ -761,6 +870,33 @@ fn a_refusal_at_the_trust_question_is_not_kept() {
 
     let second = Editor::on(&config.endpoint, &project).session_and_prompt(&project, "two");
     assert_eq!(second.questions, 1, "a refusal settled a later session");
+}
+
+/// PROMPT-1: the question names a directory that ends in a space as the terminal spells it, so the
+/// editor's person does not read it as the directory without the space.
+#[cfg(unix)]
+#[test]
+fn the_trust_question_names_a_directory_that_ends_in_a_space_as_the_terminal_does() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("trust-spaced ");
+    let (config, _requests, _server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let mut editor = Editor::on(&config.endpoint, &project);
+    let session = editor.session(&project);
+    let first = editor.prompt(&session, text("one"));
+    let asked = editor.answer_next(selected("reject-once"));
+    editor.response(first);
+
+    let held = project.display().to_string();
+    let spelled = format!(
+        "\"{}\u{2423}\"",
+        held.strip_suffix(' ').expect("a trailing space")
+    );
+    assert_eq!(
+        asked["params"]["toolCall"]["title"],
+        json!(format!("Trust {spelled}"))
+    );
 }
 
 /// Where a yes cannot be kept, the question says so and the option does not claim to remember.

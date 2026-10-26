@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// The byte offset `column` characters into `line`, or its end where it is shorter.
+///
+/// What keeps the caret roughly where it looked while moving between lines of unequal length.
+pub(super) fn along(line: &str, column: usize) -> usize {
+    line.char_indices()
+        .nth(column)
+        .map_or(line.len(), |(index, _)| index)
+}
+
 /// A readline kill, as it left the line.
 #[derive(Debug, Clone)]
 pub(super) struct Kill {
@@ -169,10 +178,25 @@ impl Session {
     /// `u` after a send would put back the prompt that had just gone.
     pub(super) fn set_input(&mut self, line: impl Into<String>) {
         self.handoff = false;
+        self.enhanced = None;
+        // A line that arrived whole is not the one the link wrote, so its banner goes with it.
+        self.link_prompt = None;
         self.put_in_the_box(line);
         self.undo.clear();
         self.inserting = None;
         self.ordinary_run_open = false;
+    }
+
+    /// Put a line that arrived whole in the box: leave the history cursor, replace the line as
+    /// [`Session::set_input`] does and drop shell mode, which is for a command and not for what
+    /// arrives. With `keep_draft`, a line already in the box is kept as the draft Up brings back.
+    pub(super) fn replace_the_box(&mut self, line: impl Into<String>, keep_draft: bool) {
+        if keep_draft && !self.input.trim().is_empty() {
+            self.history.keep_draft(self.input.clone());
+        }
+        self.history.leave();
+        self.set_input(line);
+        self.shell = false;
     }
 
     /// Replace the line as [`Session::set_input`] does, keeping what `u` can take back.
@@ -229,6 +253,42 @@ impl Session {
         if let Some(c) = self.input[self.caret..].chars().next() {
             self.caret += c.len_utf8();
         }
+    }
+
+    /// The offset in the line that a press on screen cell (`row`, `column`) lands on, in the box as
+    /// the last frame drew it (MOUSE-16).
+    ///
+    /// None where the cell is not one of the box's text, and where the box is not the one in use:
+    /// a picker is painted over the frame and takes every key, the files state owns every key, and
+    /// the vi box has modes a click would have to know the meaning of.
+    pub fn offset_in_the_box(&self, row: u16, column: u16) -> Option<usize> {
+        if self.picking().is_some()
+            || self.files_open()
+            || self.editing() != crate::vim::Editing::Ordinary
+        {
+            return None;
+        }
+        let (_, area) = self
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Input)?;
+        crate::render::caret_offset_at(self, *area, row, column)
+    }
+
+    /// Put the caret where a press on screen cell (`row`, `column`) lands in the box, and say
+    /// whether it was a cell of the box's text.
+    ///
+    /// A cell on a marker puts the caret at the marker's start, since the places the caret can rest
+    /// are the ones the arrows reach.
+    pub fn click_in_the_box(&mut self, row: u16, column: u16) -> bool {
+        let Some(at) = self.offset_in_the_box(row, column) else {
+            return false;
+        };
+        let at = at.min(self.input.len());
+        self.caret = self.marker_at(at).map_or(at, |(start, _)| start);
+        self.ordinary_run_open = false;
+        true
     }
 
     /// Move the caret to the start of the word before it.
@@ -490,6 +550,9 @@ impl Session {
         // typed find a run already open and share a step this press already closed.
         self.ordinary_run_open = false;
         self.abandon_the_selection();
+        // The list stands over a line that arrived under it as it does over a paste or a recalled
+        // one (INPUT-13).
+        self.shortcuts = false;
         self.input.insert_str(self.caret, &yanked.text);
         self.caret += yanked.text.len();
     }
@@ -591,15 +654,9 @@ impl Session {
     /// mid-turn would mean the field the user returns to is not the one they left.
     pub fn clear_input(&mut self) {
         if self.status == Status::Idle {
-            if !self.history.on_a_sent_prompt() && !self.input.trim().is_empty() {
-                self.history.keep_draft(self.input.clone());
-            }
-            self.history.leave();
-            self.set_input(String::new());
             // The mode goes with the line. Escape means "never mind this", and leaving the marker
-            // behind would arm the next thing typed as a command. The list of keys goes with the
-            // line too, which is settled where the line is written.
-            self.shell = false;
+            // behind would arm the next thing typed as a command.
+            self.replace_the_box(String::new(), !self.history.on_a_sent_prompt());
         }
     }
 

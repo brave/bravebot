@@ -69,17 +69,16 @@ fn names() -> String {
 fn report(held: &Sandboxed) -> String {
     let mode = held.choice.mode.name();
     let detail = match (&held.choice.source, held.typed) {
-        (_, true) => t!(session_sandbox_from_command, mode = mode).to_string(),
-        (Source::Default, false) => t!(doctor_sandbox_default, mode = mode).to_string(),
-        (Source::Flag, false) => t!(session_sandbox_from_flag, mode = mode).to_string(),
+        (_, true) => t!(session_sandbox_from_command, mode = mode),
+        (Source::Default, false) => t!(doctor_sandbox_default, mode = mode),
+        (Source::Flag, false) => t!(session_sandbox_from_flag, mode = mode),
         (Source::File(path) | Source::Managed(path), false) => t!(
             doctor_sandbox_from,
             mode = mode,
             path = path.display().to_string()
-        )
-        .to_string(),
+        ),
     };
-    t!(session_sandbox_report, detail = detail).to_string()
+    t!(session_sandbox_report, detail = detail)
 }
 
 /// The sentence a mode the managed file does not allow is refused with, naming the file.
@@ -99,7 +98,6 @@ fn refusal(refused: &Refused) -> String {
             pinned_in = pinned_in
         ),
     }
-    .to_string()
 }
 
 /// Decide what `word`, the argument after `/sandbox`, comes to.
@@ -111,15 +109,13 @@ pub fn decide(word: &str, held: &Sandboxed, managed: &Managed) -> Step {
         return Step::Say(report(held));
     }
     let Some(mode) = SandboxMode::parse(word) else {
-        return Step::Say(t!(session_sandbox_needs_a_mode, names = names()).to_string());
+        return Step::Say(t!(session_sandbox_needs_a_mode, names = names()));
     };
     if let Err(refused) = allowed_in_session(mode, managed) {
         return Step::Say(refusal(&refused));
     }
     match mode {
-        _ if mode == held.choice.mode => {
-            Step::Say(t!(session_sandbox_already, mode = mode.name()).to_string())
-        }
+        _ if mode == held.choice.mode => Step::Say(t!(session_sandbox_already, mode = mode.name())),
         SandboxMode::Off => Step::Ask,
         _ => Step::Move(mode),
     }
@@ -137,7 +133,7 @@ pub fn question(keeping: SandboxMode) -> Asking {
             rows: vec![
                 Row {
                     index: 0,
-                    label: t!(ask_sandbox_off_no, mode = keeping.name()).to_string(),
+                    label: t!(ask_sandbox_off_no, mode = keeping.name()),
                     detail: None,
                 },
                 Row {
@@ -149,6 +145,7 @@ pub fn question(keeping: SandboxMode) -> Asking {
             multiple: false,
             key: String::new(),
         }],
+        ..Default::default()
     }
 }
 
@@ -172,7 +169,7 @@ pub fn run(
         }
         Step::Ask => {
             if !said_yes(&ask(&question(kept))) {
-                session.note(t!(session_sandbox_kept, mode = kept.name()).to_string());
+                session.note(t!(session_sandbox_kept, mode = kept.name()));
                 return;
             }
             SandboxMode::Off
@@ -182,8 +179,17 @@ pub fn run(
     session.set_sandbox_mode(moved);
     session.note(match moved {
         SandboxMode::Off => t!(session_sandbox_set_off).to_string(),
-        mode => t!(session_sandbox_set, mode = mode.name()).to_string(),
+        mode => t!(session_sandbox_set, mode = mode.name()),
     });
+    // A job keeps the profile it started under, so a move to `read-only` leaves each running one
+    // writing where it did. The names are the driver's own (`job:1`), never a job's output.
+    let running = session.running_job_names();
+    if moved == SandboxMode::ReadOnly && !running.is_empty() {
+        session.note(t!(
+            session_sandbox_jobs_keep_their_mode,
+            jobs = running.join(", ")
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -244,6 +250,52 @@ mod tests {
             never_asked,
         );
         assert_eq!(session.sandbox_mode(), SandboxMode::WorkspaceWrite);
+    }
+
+    /// SANDBOX-22: a move to `read-only` names each background job still running, which keeps the
+    /// mode it started under, and says `/jobs stop` ends it. The regression it rejects is a reply
+    /// that says nothing of a job still writing the project, or that names a job that has ended.
+    #[test]
+    fn a_move_to_read_only_names_the_jobs_that_keep_the_earlier_mode() {
+        let start = |session: &mut Session, name: &str| {
+            session.job(bravebot_agent::report::JobEvent::Started {
+                name: name.to_string(),
+                line: "while true; do date >> log.txt; done".to_string(),
+                moved_after: None,
+                stop: bravebot_core::cancel::JobStop::new(),
+            });
+        };
+        let mut session = Session::new("kernel-enforced");
+        run(&mut session, "read-only", &Managed::default(), never_asked);
+        assert!(
+            !last_note(&session).contains("/jobs stop"),
+            "{}",
+            last_note(&session)
+        );
+
+        let mut session = Session::new("kernel-enforced");
+        start(&mut session, "job:1");
+        start(&mut session, "job:2");
+        session.job(bravebot_agent::report::JobEvent::Ended {
+            name: "job:2".to_string(),
+            outcome: bravebot_agent::report::Outcome::Succeeded,
+        });
+        run(&mut session, "read-only", &Managed::default(), never_asked);
+        let note = last_note(&session);
+        assert!(
+            note.contains("job:1") && note.contains("/jobs stop"),
+            "{note}"
+        );
+        assert!(!note.contains("job:2"), "{note}");
+
+        let mut session = Session::new("kernel-enforced");
+        start(&mut session, "job:1");
+        run(&mut session, "strict", &Managed::default(), never_asked);
+        assert!(
+            !last_note(&session).contains("job:1"),
+            "{}",
+            last_note(&session)
+        );
     }
 
     /// SANDBOX-22, COMPAT-001: `/sandbox standard`, the earlier word for `workspace-write`, still

@@ -63,6 +63,15 @@ pub(super) fn draw_fetch(
         Style::default().fg(theme::muted()),
         width,
     );
+    // Under the host, so a hop reads as one: the host above is where a server sent the fetch, and
+    // this is the one the person approved.
+    if let Some(from) = request.redirected_from.as_deref() {
+        header.extend(indented(
+            t!(fetch_redirected, from = from),
+            Style::default().fg(theme::fail()),
+            width,
+        ));
+    }
     // What the host is, where it is the metadata service of the machine this runs on. The
     // address above is what the request reaches and is not what it means: that service asks
     // nothing of whoever opens the socket and answers with the credentials of the role, so a
@@ -135,7 +144,7 @@ pub(super) fn draw_path(
     let inside = panel(frame, area, theme::note(), t!(path_title));
     let width = inside.width as usize;
     let muted = Style::default().fg(theme::muted());
-    let shown = request.path.display().to_string();
+    let shown = bravebot_agent::confirm::shown_path(&request.path);
 
     let access = match request.write {
         true => t!(path_writes, path = shown.as_str()),
@@ -245,7 +254,7 @@ pub(super) fn draw_remove_checkout(
         width,
     );
     above.extend(indented(
-        checkout.path.display().to_string(),
+        bravebot_agent::confirm::shown_path(&checkout.path),
         Style::default().add_modifier(Modifier::BOLD),
         width,
     ));
@@ -253,7 +262,11 @@ pub(super) fn draw_remove_checkout(
 
     let mut written = Vec::new();
     for name in &checkout.candidates.named {
-        written.extend(indented(name.clone(), Style::default(), width));
+        written.extend(indented(
+            bravebot_agent::confirm::shown_name(name),
+            Style::default(),
+            width,
+        ));
     }
     let referenced = checkout.candidates.referenced;
     if referenced > 0 {
@@ -330,7 +343,7 @@ pub(super) fn draw_exposure(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                request.path.clone(),
+                bravebot_agent::confirm::shown_name(&request.path),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ]),

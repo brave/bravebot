@@ -8,6 +8,7 @@ import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
 import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
+import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
 import type { Side } from '../columns'
 import type { ExportFormat } from '../../shared/export'
@@ -27,7 +28,9 @@ import { conversationPreferences, setConversation } from '../experience'
 import { ErrorCard } from './ErrorCard'
 import { RunRecord } from './RunRecord'
 import { failureSummary } from '../failure'
+import { FailureSentence } from './FailureSentence'
 import { FilePreview } from './FilePreview'
+import { ThinkingTail } from './ThinkingTail'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
@@ -51,6 +54,9 @@ interface Live {
   checking: Checking | null
   hook: Hook | null
   composing: string | null
+  thinking: string
+  showThinking?: boolean
+  thinkingSeen?: boolean
   contextTokens?: number
   archived?: number
   tokens: number
@@ -97,9 +103,13 @@ interface Props {
   onCheckBackend: () => void
   onDiagnostics: () => void
   onSetup: () => void
+  /** Show or stop showing the model's thinking in this session (VIEW-34). */
+  onThinking: (shown: boolean) => void
   storageKey: string
   onNew: (directory?: string) => void
   onQueue: () => void
+  onInterject: () => void
+  interjected: string[]
   queued: string[]
   queuePaused: boolean
   onResumeQueued: () => void
@@ -278,9 +288,12 @@ export function Transcript({
   onCheckBackend,
   onDiagnostics,
   onSetup,
+  onThinking,
   storageKey,
   onNew,
   onQueue,
+  onInterject,
+  interjected,
   queued, queuePaused, onResumeQueued, onDismissRefusal,
   onRemoveQueued,
   live,
@@ -439,6 +452,7 @@ export function Transcript({
   const stableAnswer = useEvent((...args: Parameters<AnswerQuestions>) => { onAnswer(...args); toComposer() })
   const send = useEvent(() => { latest(); onSubmit(); toComposer() })
   const queue = useEvent(onQueue)
+  const interject = useEvent(onInterject)
   const cancel = useEvent(onCancel)
   const plan = useEvent(() => { latest(); onPlan?.() })
   const draftChanged = useEvent(onDraft)
@@ -507,6 +521,14 @@ export function Transcript({
     if (following.current) jump(bottom.current)
     else setUnseen(true)
   }, [live?.handle, live?.entries, live?.phase])
+
+  // The thinking tail grows under the working row without adding an entry, so a reader at the
+  // bottom is carried down with it. It is never counted as something unseen: it is not an entry,
+  // and it goes when the round does.
+  useEffect(() => {
+    // Instant: a frame arrives many times a second, and a smooth scroll begun for each interrupts the last.
+    if (live?.showThinking && live.thinking !== '' && following.current && focusRef.current === null) bottom.current?.scrollIntoView({ block: 'nearest', behavior: 'auto' })
+  }, [live?.showThinking, live?.thinking])
 
   useEffect(() => {
     if (!focused) return
@@ -767,6 +789,10 @@ export function Transcript({
             tokens={live.tokens}
             turn={Object.values(live.turns).filter((turn) => turn.status === 'running').at(-1)?.turn ?? null}
             onAudit={onAudit}
+            thinking={live.thinking}
+            showThinking={live.showThinking === true}
+            offerThinking={live.thinkingSeen === true || live.showThinking === true}
+            onThinking={onThinking}
           />
         )}
         <div ref={bottom} />
@@ -808,6 +834,8 @@ export function Transcript({
           onDraft={draftChanged}
           onSend={send}
           onQueue={queue}
+          onInterject={interject}
+          interjected={interjected}
           onCancel={cancel}
           onPlan={onPlan ? plan : undefined}
           onModel={chooseModelFor}
@@ -951,12 +979,17 @@ export function workingWord(phase: Waiting | null, checking: Checking | null, co
  * written. Stopping it is the composer's Stop, which is where the eye already is while waiting;
  * a second Cancel here was one more thing to aim at for the same act.
  */
-function WorkingRow({ bot, word, tokens, turn, onAudit }: {
+export function WorkingRow({ bot, word, tokens, turn, onAudit, thinking, showThinking, offerThinking, onThinking }: {
   bot: Bot | null
   word: string
   tokens: number
   turn: number | null
   onAudit: OpenAudit
+  thinking: string
+  showThinking: boolean
+  /** Whether the session has been sent any thinking, so that there is something to turn on. */
+  offerThinking: boolean
+  onThinking: (shown: boolean) => void
 }): React.JSX.Element {
   const [since] = useState(() => Date.now())
   const [now, setNow] = useState(since)
@@ -967,6 +1000,7 @@ function WorkingRow({ bot, word, tokens, turn, onAudit }: {
   const seconds = Math.floor((now - since) / 1000)
   const elapsed = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, '0')}s`
   return (
+    <>
     <div className={`working${bot ? ' working-bot' : ''}`}>
       {/* For a bot, the bot itself, looking down at the page — the one place in the transcript
           its face carries something the header does not: it is *here*, at the point of
@@ -983,9 +1017,16 @@ function WorkingRow({ bot, word, tokens, turn, onAudit }: {
         {seconds > 0 && elapsed}
         {tokens > 0 && `${seconds > 0 ? ' · ' : ''}${tokens.toLocaleString()} tokens written`}
       </span>
+      {/* Offered once the session has been sent thinking, and kept from then on rather than for the
+          round that sent it, which would take it away before it could be pressed. A service that
+          sends none never offers it. */}
+      {offerThinking && <IconButton icon="idea" label="Thinking" tooltip={showThinking ? 'Hide thinking' : 'Show thinking'} size="tiny"
+        className="thinking-toggle" pressed={showThinking} data-test="thinking-toggle" onClick={() => onThinking(!showThinking)} />}
       {turn !== null && <IconButton icon="shield-done" label="Audit" tooltip="Audit this turn" size="tiny" className="turn-audit-link"
         controls="turn-audit-inspector" onClick={(event) => onAudit(turn, event.currentTarget as HTMLButtonElement)} />}
     </div>
+    {showThinking && <ThinkingTail text={thinking} />}
+    </>
   )
 }
 
@@ -1167,8 +1208,10 @@ const ToolRun = memo(function ToolRun({ entries, active }: { entries: t.Entry[];
  * A series of questions the planner is putting to the person.
  *
  * The one question in the interface that is not a yes or a no, so it holds its own state
- * until it is sent: several questions arrive together and are answered together, in one
- * reply, because the turn is blocked on the series rather than on any one of them.
+ * until it is sent. The questions are put one at a time with their position, and the answers
+ * are sent in one reply once the last is settled, because the turn is blocked on the series
+ * rather than on any one of them. Skipping a question moves on to the next, and the last one
+ * ends the series however it was settled (ASK-6).
  *
  * A question with no rows is not a mistake — it can only be answered in the person's own
  * words — and every question keeps a free-text box for the same reason: the model's options
@@ -1182,43 +1225,30 @@ function Questions({
   request: t.Entry & { kind: 'ask' }
   answers: AskAnswer[] | null
   onAnswer: AnswerQuestions
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const prompts = request.request.prompts
-  const [picked, setPicked] = useState<number[][]>(() => prompts.map(() => []))
-  const [typed, setTyped] = useState<string[]>(() => prompts.map(() => ''))
-
-  const choose = (question: number, index: number, multiple: boolean): void => {
-    setPicked((old) =>
-      old.map((chosen, at) => {
-        if (at !== question) return chosen
-        if (!multiple) return chosen.includes(index) ? [] : [index]
-        return chosen.includes(index)
-          ? chosen.filter((one) => one !== index)
-          : [...chosen, index].sort((a, b) => a - b)
-      }),
-    )
-  }
-
-  /**
-   * What each question would be answered with.
-   *
-   * Typed words win over a selection, matching what the agent does with a reply that
-   * carries both: they are the more specific thing to have done. An empty answer is sent as
-   * an empty object, which is how declining is said.
-   */
-  const collected = (): AskAnswer[] =>
-    prompts.map((_, at) => {
-      const words = typed[at]?.trim() ?? ''
-      if (words) return { typed: words }
-      const chosen = picked[at] ?? []
-      return chosen.length > 0 ? { chosen } : {}
-    })
-
-  const blank = collected().filter((answer) => !answer.typed && !answer.chosen).length
+  const [step, setStep] = useState(() => asking.recall(request.id).step)
+  const [chosen, setChosen] = useState(() => asking.recall(request.id).chosen)
+  const [typed, setTyped] = useState(() => asking.recall(request.id).typed)
+  const over = Boolean(answers) || Boolean(request.interrupted)
+  useEffect(() => {
+    if (over) asking.release(request.id)
+    else asking.keep(request.id, { step, chosen, typed })
+  }, [request.id, over, step, chosen, typed])
+  // Next and Skip are pressed on the question they leave, and the button that was pressed is shut
+  // by the time the next one is drawn, which drops focus on the page. Put it on the question that
+  // took its place, so a person at the keyboard carries on from there.
+  const card = useRef<HTMLDivElement>(null)
+  const was = useRef(step.at)
+  useEffect(() => {
+    if (was.current === step.at) return
+    was.current = step.at
+    card.current?.querySelector<HTMLElement>('.choice, .typed')?.focus()
+  }, [step.at])
 
   // Answered, or ended before it could be: either way the questions are a record rather than a
   // form, so they are drawn as text with no choices to press.
-  if (answers || request.interrupted) {
+  if (over) {
     return (
       <div className="confirm ask">
         <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompts.length} question{prompts.length === 1 ? '' : 's'}</span>} />
@@ -1237,12 +1267,38 @@ function Questions({
     )
   }
 
-  return (
-    <div className="confirm ask">
-      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompts.length} question{prompts.length === 1 ? '' : 's'}</span>} />
+  const prompt = prompts[step.at]
+  if (!prompt) return null
+  const given = asking.answerOf(chosen, typed)
+  // Nothing picked or typed is not an answer, and passing the question over is what Skip says.
+  const blank = !given.typed && !given.chosen
 
-      {prompts.map((prompt, at) => (
-        <fieldset className="ask-question" key={at}>
+  const choose = (index: number): void => {
+    setChosen((old) => {
+      if (!prompt.multiple) return old.includes(index) ? [] : [index]
+      return old.includes(index) ? old.filter((one) => one !== index) : [...old, index].sort((a, b) => a - b)
+    })
+  }
+
+  const settle = (answer: AskAnswer): void => {
+    const next = asking.settle(step, answer, prompt.last)
+    if ('answers' in next) {
+      onAnswer(request.request.request, next.answers)
+      return
+    }
+    setStep(next.step)
+    setChosen([])
+    setTyped('')
+  }
+
+  return (
+    <div className="confirm ask" ref={card}>
+      <CardHead icon="message-bubble" intent="Asked" subject={<span className="path">{prompt.place ?? '1 question'}</span>} />
+
+      {/* Said again when the next question replaces this one, so a person using a screen reader
+          learns that it did. */}
+      <div aria-live="polite">
+        <fieldset className="ask-question" key={step.at}>
           <legend>
             <span className="header">{prompt.header}</span>
             {prompt.multiple && <span className="any">pick any</span>}
@@ -1251,13 +1307,13 @@ function Questions({
 
           <ul className="choices">
             {prompt.rows.map((row) => {
-              const on = (picked[at] ?? []).includes(row.index)
+              const on = chosen.includes(row.index)
               return (
                 <li key={row.index}>
                   <button
                     className={`choice ${on ? 'picked' : ''}`}
                     aria-pressed={on}
-                    onClick={() => choose(at, row.index, prompt.multiple)}
+                    onClick={() => choose(row.index)}
                   >
                     <Icon className="choice-mark" name={prompt.multiple ? (on ? 'checkbox-checked' : 'checkbox-unchecked') : (on ? 'radio-checked' : 'radio-unchecked')} />
                     <span className="choice-text">
@@ -1273,28 +1329,23 @@ function Questions({
           <Input
             className="typed"
             size="small"
-            value={typed[at] ?? ''}
+            value={typed}
             aria-label={`Your own answer to: ${prompt.question}`}
             placeholder={prompt.rows.length > 0 ? 'Or say something else…' : 'Your answer…'}
-            onInput={({ value }) => setTyped((old) => old.map((text, index) => (index === at ? value : text)))}
+            onInput={({ value }) => setTyped(value)}
           />
         </fieldset>
-      ))}
+      </div>
 
       <div className="confirm-actions">
-        {/* Declining every question is a real answer and the turn continues, so it is a
-            button here rather than something a person has to leave blank and guess at. */}
-        <Button kind="plain-faint" size="small" className="reject" onClick={() => onAnswer(request.request.request, prompts.map(() => ({})))}>
-          Decline
+        {/* Skipping is a real answer and the turn continues, so it is a button here rather than
+            something a person has to leave blank and guess at. It moves on to the next question
+            and leaves the rest of the series to be answered. */}
+        <Button kind="plain-faint" size="small" className="reject" onClick={() => settle({})}>
+          Skip
         </Button>
-        <Button kind="filled" size="small" className="approve" onClick={() => onAnswer(request.request.request, collected())}>
-          Answer
-          {/* Leaving a question blank declines it, which is legitimate but should not be a
-              surprise — with several questions on screen it is easy to answer two of three
-              and not notice. Said on the button rather than after the fact. */}
-          {blank > 0 && prompts.length > 1 && (
-            <span className="aside"> · {blank} declined</span>
-          )}
+        <Button kind="filled" size="small" className="approve" isDisabled={blank} onClick={() => settle(given)}>
+          {prompt.last ? 'Answer' : 'Next'}
         </Button>
       </div>
     </div>
@@ -1314,7 +1365,7 @@ function Questions({
  * of every export: a note this window wrote about a session is not something the session said.
  * The fork link is a button and not a link, because nothing in this window navigates.
  */
-function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onManage }: {
+export function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onManage }: {
   forkedFrom: { title: string; prompt: number } | null
   kept: KeptTrust | null
   vetting: boolean
@@ -1338,7 +1389,7 @@ function SessionNotices({ forkedFrom, kept, vetting, rules, onOpenParent, onMana
         </p>
       )}
       {kept && (
-        <p className="session-banner session-notice" role="note" data-tooltip={`Trusted ${ago(kept.at)} · kept in ${kept.path}`}>
+        <p className="session-banner session-notice" role="note" data-tooltip={`Trusted ${ago(kept.at)} · kept in ${kept.shownPath}`}>
           <Icon name="shield-done" />
           <span className="notice-text">You trusted this directory, so chats started here are not asked.</span>
           <Button kind="plain" size="tiny" className="link" onClick={onManage}>Manage</Button>
@@ -1400,7 +1451,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {rules.proposed.map((entry, index) => (
               <li key={index}>
-                <code>{entry.rule}</code> from <code>{entry.file}</code>
+                <code>{entry.shownRule}</code> from <code>{entry.shownFile}</code>
               </li>
             ))}
           </ul>
@@ -1657,17 +1708,19 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
       ? 'The plan was declined, so nothing ran'
       : ended.problem
         ? 'The run stopped'
-        : failureSummary(ended.category ?? ended.kind).title
-  const detail = ended.stopped
+        : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
+  const detail: React.ReactNode = ended.stopped
     ? 'Steps that finished before the stop remain in the project. The run was not saved.'
     : declined
       ? 'Nothing was read or written.'
-      : ended.problem ?? failureSummary(ended.category ?? ended.kind).description
+      : ended.problem ?? (ended.accountMessage
+        ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
+        : failureSummary(ended.category ?? ended.kind).description)
   const attempt = ended.attempt
   return (
     <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
       <strong>{title}</strong>
-      <p>{detail}</p>
+      <p className="plan-detail">{detail}</p>
       {attempt?.plan && (
         <details>
           <summary>The plan</summary>
@@ -1840,7 +1893,7 @@ function Card({
       )
 
     case 'narration':
-      return <div className="narration"><Icon name="file-text" />{entry.text}</div>
+      return <div className="narration"><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
     case 'attached':
       // A line rather than a bubble, and the path rather than the contents. This is the same
@@ -1875,7 +1928,7 @@ function Card({
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':
-      return <ErrorCard category={entry.category} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
+      return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 
     case 'replayed-tool':
       // No outcome, because the record does not keep one. Drawn quietly for the same
@@ -1902,7 +1955,7 @@ function Card({
           <span className="tool-body">
             <span className="call">
               <span className="verb">{activity.verb}</span>
-              {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
+              {activity.shownTarget && <span className="target" data-tooltip={activity.shownTarget.length > TARGET_WIDTH ? activity.shownTarget : undefined}>{middleTruncate(activity.shownTarget, TARGET_WIDTH)}</span>}
             </span>
             {activity.why && <span className="why" data-tooltip={activity.why.length > WHY_WIDTH ? activity.why : undefined}>{activity.why}</span>}
           </span>
@@ -1955,10 +2008,10 @@ function Card({
         <DecisionCard
           className={`confirm ${request.untrusted ? 'untrusted' : ''}`}
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You approved this write' : 'You refused this write' }}
           head={<CardHead icon="edit-box" intent={INTENT_WORD[request.intent]} deciding
-            subject={<code className="path" data-tooltip={request.path}>{request.path}</code>}
+            subject={<code className="path" data-tooltip={request.shownPath}>{request.shownPath}</code>}
             counts={<span className="counts" aria-label={`${stats.added} added, ${stats.removed} removed`}><span className="stat added">+{stats.added}</span><span className="stat removed">−{stats.removed}</span></span>}
             trust={request.untrusted && <Label mode="loud" color="yellow" className="trust-label"><Icon name="warning-triangle-filled" slot="icon-before" />Untrusted source</Label>} />}
           actions={<>
@@ -2004,7 +2057,7 @@ function Card({
             <pre>{request.remark.preview.join('\n')}</pre>
             <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
           </div>}
-          <Diff changes={request.changes} path={request.path} untrusted={request.untrusted} deciding />
+          <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
           <Collapse className="card-details" title="Details" isOpen={undefined}>
             <p className="permission-scope">{request.existing ? 'Update an existing project file.' : 'Create a new project file.'} This decision applies to the change shown above.</p>
           </Collapse>
@@ -2026,7 +2079,7 @@ function Card({
             text: decision === 'reject' ? 'You refused this command' : remember ? 'You ran this and vouched for the programs' : 'You ran this once',
           }}
           head={<CardHead icon="window-console" intent={commands === 1 ? 'Run a command' : `Run ${commands} commands`} deciding
-            subject={<code className="path" data-tooltip={request.directory}>{request.directory}</code>} />}
+            subject={<code className="path" data-tooltip={request.shownDirectory}>{request.shownDirectory}</code>} />}
           actions={<>
             <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('run', request.request, false)}>
               Don’t run
@@ -2060,14 +2113,13 @@ function Card({
               binary rather than the word. */}
           {request.plan && <p className="permission-scope" data-deciding="all"><strong>Execution plan:</strong> <code>{request.plan}</code></p>}
           {request.stdin && <p className="permission-scope" data-deciding="all"><strong>Standard input:</strong> <code>{request.stdin}</code></p>}
-          {!!request.writes?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.writes.map(path => <li key={path}><code>{path}</code></li>)}</ul></div>}
+          {!!request.shownWrites?.length && <div className="permission-scope" data-deciding="all"><strong>Files created or modified:</strong><ul>{request.shownWrites.map((path, index) => <li key={index}><code>{path}</code></li>)}</ul></div>}
           <ol className="stages" data-deciding="all">
             {request.stages.map((stage, index) => (
               <li key={index}>
                 <code className="argv">{stage.display}</code>
                 <span className="resolved">
-                  {stage.startedAs && stage.startedAs !== stage.resolved && `${stage.startedAs} -> `}
-                  {stage.resolved ?? 'not found on PATH'}
+                  {stage.resolved === null ? 'not found on PATH' : stage.shownBinary}
                 </span>
               </li>
             ))}
@@ -2079,7 +2131,7 @@ function Card({
           {request.confinement && (
             <div className="permission-scope" data-test="confinement" data-deciding="all">
               <p>{request.confinement.heading}</p>
-              {!!request.confinement.directories.length && <ul>{request.confinement.directories.map((directory) => <li key={directory}><code>{directory}</code></li>)}</ul>}
+              {!!request.confinement.shownDirectories.length && <ul>{request.confinement.shownDirectories.map((directory, index) => <li key={index}><code>{directory}</code></li>)}</ul>}
               {request.confinement.sentences.map((sentence, index) => <p key={index}>{sentence}</p>)}
             </div>
           )}
@@ -2148,6 +2200,8 @@ function Card({
             instruction will be read there as one.</span>
           </p>
 
+          <HiddenCharacters note={request.hiddenNote} />
+
           {/* In full, never truncated. The answer to this question rests on the bytes, so
               a preview would be asking for an approval of what nobody saw. */}
           <pre className="preview" data-deciding="first">{request.output}</pre>
@@ -2192,6 +2246,7 @@ function Card({
         </>}>
         <VettingReason vetting={request.vetting} />
         <p className="permission-scope" data-deciding="all">Expected contents: {request.expects}</p>
+        <HiddenCharacters note={request.hiddenNote} />
         <pre className="preview" data-deciding="first">{request.content}</pre>
         <Collapse className="card-details" title="Details" isOpen={undefined}>
           <p className="permission-scope">Approval lets the planner read only this content. It does not trust this file for future reads.</p>
@@ -2216,6 +2271,15 @@ function Card({
           <p className="permission-scope fetch-host" data-deciding="all">
             <strong>Talking to:</strong> <code>{request.host}</code>
           </p>
+
+          {/* Where a server sent a fetch that was approved for another host: the hop is a
+              destination nobody was shown, so it is said to be one. */}
+          {request.redirectedFrom && (
+            <p className="permission-scope" data-deciding="all">
+              Redirected from <code>{request.redirectedFrom}</code>, which is the host this fetch
+              was approved for.
+            </p>
+          )}
 
           <AmbientNotice ambient={request.ambient} deciding />
 
@@ -2375,7 +2439,7 @@ function Card({
         <div className="confirm exposure">
           <div className="confirm-head" data-deciding="all">
             <span className="intent">send file</span>
-            <code className="path">{request.path}</code>
+            <code className="path">{request.shownPath}</code>
             <span className="counts">
               {found} finding{found === 1 ? '' : 's'}
             </span>
@@ -2817,7 +2881,7 @@ function Card({
         <DecisionCard
           className="confirm vouch"
           answerable={answerable}
-          subject={request.path}
+          subject={request.shownPath}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
           head={<CardHead icon="shield-done" intent="Vouch for" deciding
             subject={<code className="path">{request.shownPath}</code>}
@@ -2979,6 +3043,21 @@ function VettingVerdict({ vetting }: { vetting?: import('../../shared/protocol')
     : verdict === 'unsafe'
       ? <Label mode="loud" color="red" className="vetting-verdict unsafe"><Icon name="warning-triangle-filled" slot="icon-before" />Possible instructions detected</Label>
       : <Label mode="outline" color="yellow" className="vetting-verdict">Check inconclusive</Label>
+}
+
+/**
+ * What the tokens in the text below are, where some of it draws as nothing. The agent wrote each
+ * such character out as `‹U+XXXX›` and worded this sentence, so this draws it and reads none of the
+ * text. A row the answer waits on: the planner is given the characters themselves.
+ */
+function HiddenCharacters({ note }: { note?: string | null }): React.JSX.Element | null {
+  if (!note) return null
+  return (
+    <p className="warn" data-deciding="all" data-test="hidden-characters">
+      <Icon name="warning-triangle-filled" />
+      <span>{note}</span>
+    </p>
+  )
 }
 
 /** The checker's one-sentence reason, beside the content it is about: it is the evidence for the verdict. */

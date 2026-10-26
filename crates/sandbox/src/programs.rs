@@ -80,6 +80,172 @@ pub fn keep_out_where_writable(directory: &Path) {
     }
 }
 
+/// A program bravebot may start, and the only thing [`start`] takes.
+///
+/// The field is private, so a value comes from one of the constructors below and each of those
+/// says who chose the program: [`Resolved::find`] and [`Resolved::find_on`] search only the
+/// directories SANDBOX-30 allows, and the rest name a program that needs no search. A call that
+/// starts a program from a bare path or string does not compile, so a new start picks one in the
+/// diff, where a reviewer reads it.
+///
+/// Neither a path nor a string is accepted, and the field cannot be written to by a caller:
+///
+/// ```compile_fail
+/// use bravebot_sandbox::programs::{Inherits, SearchPath};
+/// let path = std::path::PathBuf::from("/usr/bin/git");
+/// let _ = bravebot_sandbox::programs::start(&path, Inherits::All, SearchPath::Inherited);
+/// ```
+///
+/// ```compile_fail
+/// let _ = bravebot_sandbox::programs::Resolved(std::path::PathBuf::from("/usr/bin/git"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved(PathBuf);
+
+impl Resolved {
+    /// [`find`], as the type [`start`] takes.
+    pub fn find(program: &OsStr) -> Option<Self> {
+        find(program).map(Self)
+    }
+
+    /// [`find_on`], as the type [`start`] takes.
+    pub fn find_on(program: &OsStr, path: &OsStr) -> Option<Self> {
+        find_on(program, path).map(Self)
+    }
+
+    /// This program's own executable.
+    pub fn own_executable() -> std::io::Result<Self> {
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        std::env::current_exe().map(Self)
+    }
+
+    /// A path the source of this program writes out, such as `/usr/bin/xcode-select`.
+    pub fn written_in_source(program: &'static str) -> Self {
+        Self(PathBuf::from(program))
+    }
+
+    /// A program a person named: their `$SHELL`, a hook's or an editor's path, the client after
+    /// `--`, a credential authority they configured. A bare name given here is searched by the
+    /// operating system, so a caller that takes one looks it up with [`Resolved::find`] first.
+    pub fn named_by_person(program: impl Into<PathBuf>) -> Self {
+        Self(program.into())
+    }
+
+    /// A path an earlier step returned and the caller kept: this program's own executable
+    /// passed down to a supervisor, the program a `run` line was planned with, a language server the host resolved before the person was shown it, a
+    /// stage's program.
+    pub fn found_earlier(program: impl Into<PathBuf>) -> Self {
+        Self(program.into())
+    }
+
+    /// The program the caller of a confinement backend asked to run inside it. The backend starts
+    /// it already confined, so there is no unconfined lookup for it to skip.
+    pub fn to_confine(program: impl Into<PathBuf>) -> Self {
+        Self(program.into())
+    }
+
+    /// The path this will start.
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+/// What of this process's environment a started program inherits.
+///
+/// There is no default: a start says which, so a new one cannot leave out the removal
+/// [CRED-14](../../../docs/specs/credential-protection.md#CRED-14) asks of a program bravebot
+/// starts on its own account. `bravebot-sandbox` depends on no crate, so the names a caller
+/// withholds are its argument. The configuration owns which they are.
+#[derive(Clone, Copy, Debug)]
+pub enum Inherits<'a> {
+    /// All of it. For a program that is run with the person's own environment, or holds nothing
+    /// this agent authenticates with to hand on: a line typed at the `!` prompt, the editor
+    /// Ctrl-G opens, a clipboard tool, the inhibitor, a system helper, and this program started
+    /// again (the background host, `doctor` for a bug report). A program that runs what the
+    /// planner chose or what a project carries is given [`Inherits::Without`]
+    /// ([RUN-12](../../../docs/specs/tools/run.md#RUN-12)).
+    All,
+    /// All of it except these names, which are removed rather than emptied: a program that checks
+    /// whether a variable is set would read an empty string as configured but blank.
+    Without(&'a [String]),
+    /// Only these names, each where this process holds it, and the `PATH` a [`SearchPath::Reduced`]
+    /// start is given. Every other variable this process holds is removed by name, so the removals
+    /// show in `Command::get_envs` for code that builds a confined program's environment from it.
+    Only(&'a [&'a str]),
+}
+
+impl Inherits<'_> {
+    /// Remove the names [`Inherits::Without`] holds from `command`, and do nothing for the others.
+    ///
+    /// [`start`] does this. A caller that then sets variables from input it does not control,
+    /// such as the assignments a `run` line writes in front of a program, calls it again, so a
+    /// withheld name stays withheld whatever the line assigned.
+    pub fn withhold(&self, command: &mut Command) {
+        if let Inherits::Without(names) = self {
+            for name in *names {
+                command.env_remove(name);
+            }
+        }
+    }
+}
+
+/// The `PATH` a started program is given, which is where the names it starts itself are looked up.
+///
+/// [`find`] chooses the file that is started, and a started program goes on to look names up
+/// through the `PATH` it inherits: an `env` shebang, a wrapper script, the `vim` in an `$EDITOR`
+/// of `env vim`. Every start says which of these it gets
+/// ([SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchPath {
+    /// This process's own `PATH`, unchanged. For a program that starts no other by name, or one
+    /// meant to find what the project carries: a language server runs the project's interpreter.
+    Inherited,
+    /// Only the entries [`find`] searches, in the order they were written. Where none remains the
+    /// program is given no `PATH` variable, since an empty one is read as the current directory.
+    Reduced,
+}
+
+/// Whether `held`, the name of a variable this process holds, is `kept`. Windows reads a variable's
+/// name without regard to case, so `Path` is `PATH` there.
+fn is_variable(held: &OsStr, kept: &str) -> bool {
+    if cfg!(windows) {
+        held.eq_ignore_ascii_case(kept)
+    } else {
+        held == OsStr::new(kept)
+    }
+}
+
+/// The one place a program is started.
+///
+/// `clippy.toml` refuses `Command::new` everywhere else, so every start reaches here with a
+/// [`Resolved`] and a program named by a variable or a helper no longer slips past a check that
+/// reads literals. It also reaches here with an [`Inherits`] and a [`SearchPath`], which have
+/// no default, so what the program is handed shows in the diff that starts it.
+///
+/// The environment is settled before this returns: the `inherits` rule first, then the `path`. A
+/// variable the caller sets on the command afterwards replaces what was removed here, so a caller
+/// that sets variables from input it does not control calls [`Inherits::withhold`] again.
+pub fn start(program: &Resolved, inherits: Inherits<'_>, path: SearchPath) -> Command {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the one start: its argument is a `Resolved`, which only the lookup and the \
+                  named constructors build (SANDBOX-30)"
+    )]
+    let mut command = Command::new(&program.0);
+    inherits.withhold(&mut command);
+    if let Inherits::Only(names) = inherits {
+        for (held, _) in std::env::vars_os() {
+            if !names.iter().any(|kept| is_variable(&held, kept)) {
+                command.env_remove(held);
+            }
+        }
+    }
+    if path == SearchPath::Reduced {
+        restrict_path(&mut command);
+    }
+    command
+}
+
 /// The program as an absolute path, or `None` when the only one `PATH` offers is in a directory
 /// a stage may write. A name that is already an absolute path is returned as it is.
 pub fn find(program: &OsStr) -> Option<PathBuf> {
@@ -106,16 +272,15 @@ pub fn outside_stage_writable_with(
     writable: &[PathBuf],
     where_the_account_can: &[PathBuf],
 ) -> bool {
-    let out = kept_out(writable);
+    let out = Rows::new(kept_out(writable));
+    let held = Rows::new(where_the_account_can.to_vec());
     let Some(entry) = candidate.parent() else {
         return false;
     };
     let Ok(resolved) = candidate.canonicalize() else {
         return false;
     };
-    is_searched(entry, &out, where_the_account_can)
-        && !within_any(&resolved, &out)
-        && !planted(&resolved, where_the_account_can)
+    is_searched(entry, &out, &held) && !within_any(&resolved, &out) && !planted(&resolved, &held)
 }
 
 /// Every path recorded with [`keep_out_where_writable`] so far.
@@ -137,7 +302,10 @@ fn held_where_the_account_can() -> Vec<PathBuf> {
 ///
 /// Where no entry remains the command gets no `PATH` variable at all. `execvp` reads an empty
 /// `PATH` as the current directory, which is the directory a session writes in.
-pub fn restrict_path(command: &mut Command) -> &mut Command {
+///
+/// Only [`start`] calls this, for [`SearchPath::Reduced`], so no start reduces the `PATH` a second
+/// way or forgets to.
+fn restrict_path(command: &mut Command) -> &mut Command {
     restrict_path_with(
         command,
         &std::env::var_os("PATH").unwrap_or_default(),
@@ -166,9 +334,10 @@ fn searched_path(
     writable: &[PathBuf],
     where_the_account_can: &[PathBuf],
 ) -> Option<OsString> {
-    let out = kept_out(writable);
+    let out = Rows::new(kept_out(writable));
+    let held = Rows::new(where_the_account_can.to_vec());
     let searched: Vec<PathBuf> = std::env::split_paths(path)
-        .filter(|entry| is_searched(entry, &out, where_the_account_can))
+        .filter(|entry| is_searched(entry, &out, &held))
         .collect();
     if searched.is_empty() {
         return None;
@@ -208,10 +377,11 @@ pub fn find_in_with(
     if Path::new(program).components().count() != 1 {
         return None;
     }
-    let out = kept_out(writable);
+    let out = Rows::new(kept_out(writable));
+    let held = Rows::new(where_the_account_can.to_vec());
 
     for entry in std::env::split_paths(path) {
-        if !is_searched(&entry, &out, where_the_account_can) {
+        if !is_searched(&entry, &out, &held) {
             continue;
         }
         for name in names(program) {
@@ -220,10 +390,7 @@ pub fn find_in_with(
                 continue;
             };
             // A link in a safe directory that points into a writable one is the writable file.
-            if !usable(&resolved)
-                || within_any(&resolved, &out)
-                || planted(&resolved, where_the_account_can)
-            {
+            if !usable(&resolved) || within_any(&resolved, &out) || planted(&resolved, &held) {
                 continue;
             }
             return Some(candidate);
@@ -246,16 +413,48 @@ fn kept_out(writable: &[PathBuf]) -> Vec<PathBuf> {
 /// Whether a `PATH` entry is one the lookup searches. [`restrict_path`] keeps the same entries for a
 /// started program's own lookups, so the two cannot differ on which entries are left out. A `PATH`
 /// names directories, so the check on the file a lookup resolves to has no counterpart there.
-fn is_searched(entry: &Path, out: &[PathBuf], where_the_account_can: &[PathBuf]) -> bool {
+fn is_searched(entry: &Path, out: &Rows, where_the_account_can: &Rows) -> bool {
     entry.is_absolute() && !within_any(entry, out) && !planted(entry, where_the_account_can)
 }
 
 /// Whether `candidate` lies within a row a stage holds where the account can write, and the account
-/// can write it or the directory holding it.
-fn planted(candidate: &Path, where_the_account_can: &[PathBuf]) -> bool {
-    within_any(candidate, where_the_account_can)
-        && (the_account_can_write(candidate)
-            || candidate.parent().is_some_and(the_account_can_write))
+/// owns or can write it or a directory from it up to the row.
+///
+/// A stage creates files as the account and can set their modes, so a program it wrote and then made
+/// read-only is still one the account owns. A directory the account owns can have its entries
+/// replaced whatever its mode, and one it can write can too.
+fn planted(candidate: &Path, where_the_account_can: &Rows) -> bool {
+    candidate
+        .ancestors()
+        .take_while(|above| within_any(above, where_the_account_can))
+        .any(the_account_owns_or_can_write)
+}
+
+/// Whether the account this process runs as owns `path` or can write it.
+///
+/// Ownership counts as well as the write permission, since the account can set the mode of what it
+/// owns. A path that does not exist is neither.
+#[cfg(unix)]
+fn the_account_owns_or_can_write(path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    the_account_can_write(path)
+        || std::fs::metadata(path).is_ok_and(|metadata| metadata.uid() == the_effective_user())
+}
+
+#[cfg(not(unix))]
+fn the_account_owns_or_can_write(_path: &Path) -> bool {
+    true
+}
+
+/// The user id this process runs as.
+#[cfg(unix)]
+#[allow(
+    unsafe_code,
+    reason = "`libc::geteuid` takes no arguments, cannot fail and has no preconditions"
+)]
+fn the_effective_user() -> u32 {
+    // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
+    unsafe { libc::geteuid() }
 }
 
 /// Whether the account this process runs as can write `path`.
@@ -263,7 +462,10 @@ fn planted(candidate: &Path, where_the_account_can: &[PathBuf]) -> bool {
 /// Asked of the platform and not read from the mode bits, which leave out ownership, access lists
 /// and a read-only volume.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "`libc::access` is given a NUL-terminated `CString` that lives for the call, so the FFI call is sound"
+)]
 fn the_account_can_write(path: &Path) -> bool {
     use std::os::unix::ffi::OsStrExt;
     let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
@@ -271,11 +473,6 @@ fn the_account_can_write(path: &Path) -> bool {
     };
     // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
     unsafe { libc::access(name.as_ptr(), libc::W_OK) == 0 }
-}
-
-#[cfg(not(unix))]
-fn the_account_can_write(_path: &Path) -> bool {
-    true
 }
 
 /// The path, and its resolved form where that differs and can be had.
@@ -289,16 +486,106 @@ fn forms(directory: &Path) -> Vec<PathBuf> {
     forms
 }
 
-fn within_any(path: &Path, directories: &[PathBuf]) -> bool {
+/// Directories a lookup leaves out, with what each of them is when the lookup begins.
+///
+/// What a directory is is asked once for the lookup and not for every path compared with it. A
+/// directory recorded after the lookup began is not in it, as it is not in the names.
+struct Rows {
+    directories: Vec<PathBuf>,
+    identities: Vec<Identity>,
+    identity: fn(&Path) -> Option<Identity>,
+}
+
+impl Rows {
+    fn new(directories: Vec<PathBuf>) -> Self {
+        Self::identified_by(directories, identity_of)
+    }
+
+    fn identified_by(directories: Vec<PathBuf>, identity: fn(&Path) -> Option<Identity>) -> Self {
+        let identities = directories
+            .iter()
+            .filter_map(|directory| identity(directory))
+            .collect();
+        Self {
+            directories,
+            identities,
+            identity,
+        }
+    }
+}
+
+/// Whether `path` lies within one of the rows, by the names and then by the directories they
+/// reach.
+///
+/// A volume can open two spellings of a name as one directory: an ext4 or tmpfs directory with
+/// `casefold`, vfat, a macOS firmlink, a bind mount. Resolving a path there returns the spelling
+/// it was given, so a `PATH` entry written another way than the recorded directory has other names
+/// and is the same directory. The names are compared first, which is all there is to compare for a
+/// directory that no longer exists.
+fn within_any(path: &Path, rows: &Rows) -> bool {
+    if rows.directories.is_empty() {
+        return false;
+    }
     // The entry itself may be a link into a writable directory, so it is compared as written and as
     // resolved.
-    let resolved = path.canonicalize().ok();
-    directories.iter().any(|directory| {
+    let resolved = resolve_existing(path);
+    let by_name = rows.directories.iter().any(|directory| {
         within(path, directory)
             || resolved
                 .as_deref()
                 .is_some_and(|resolved| within(resolved, directory))
-    })
+    });
+    if by_name {
+        return true;
+    }
+    // Every directory above where the path leads. These are the directories a program in it is
+    // inside of, however the path was spelled to reach them.
+    !rows.identities.is_empty()
+        && resolved
+            .as_deref()
+            .into_iter()
+            .flat_map(Path::ancestors)
+            .filter_map(rows.identity)
+            .any(|reached| rows.identities.contains(&reached))
+}
+
+/// `path` with the links in the part of it that exists followed and the rest as written, or `None`
+/// where no part of it resolves.
+///
+/// An entry that does not exist yet leads where its existing part does: a stage that may write the
+/// directory the part leads into can make the rest.
+fn resolve_existing(path: &Path) -> Option<PathBuf> {
+    let mut missing = Vec::new();
+    for ancestor in path.ancestors() {
+        if let Ok(resolved) = ancestor.canonicalize() {
+            return Some(
+                missing
+                    .iter()
+                    .rev()
+                    .fold(resolved, |resolved, name| resolved.join(name)),
+            );
+        }
+        missing.push(ancestor.file_name()?);
+    }
+    None
+}
+
+/// The device and inode of a directory, which it has under every spelling.
+type Identity = (u64, u64);
+
+/// The identity of the directory `path` names now, or `None` where it names nothing or something
+/// that is not a directory. Always `None` off Unix, where the file index is not in the standard
+/// library.
+#[cfg(unix)]
+fn identity_of(path: &Path) -> Option<Identity> {
+    use std::os::unix::fs::MetadataExt;
+    let found = path.metadata().ok().filter(|found| found.is_dir())?;
+    Some((found.dev(), found.ino()))
+}
+
+#[cfg(not(unix))]
+fn identity_of(_path: &Path) -> Option<Identity> {
+    None
 }
 
 fn within(path: &Path, directory: &Path) -> bool {
@@ -367,6 +654,213 @@ fn usable(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::{Inherits, Resolved, SearchPath, start};
+    use std::ffi::OsStr;
+
+    /// [`start`] with the environment and `PATH` left as they are.
+    fn started(program: &Resolved) -> std::process::Command {
+        start(program, Inherits::All, SearchPath::Inherited)
+    }
+
+    /// `start` runs the program its argument names. The regression it rejects: a start that
+    /// ignores the `Resolved` it is given, which would make every caller's lookup decorative.
+    #[test]
+    fn start_is_given_the_program_the_resolved_names() {
+        for resolved in [
+            Resolved::written_in_source("/usr/bin/xcode-select"),
+            Resolved::named_by_person("/opt/editor/bin/vim"),
+            Resolved::found_earlier("/usr/bin/git"),
+            Resolved::to_confine("/bin/cat"),
+        ] {
+            assert_eq!(
+                started(&resolved).get_program(),
+                resolved.as_path().as_os_str()
+            );
+        }
+        let own = Resolved::own_executable().expect("a test has an executable");
+        assert_eq!(started(&own).get_program(), own.as_path().as_os_str());
+    }
+
+    /// CRED-14: every name a start is told to withhold is removed, and no other variable is touched.
+    /// The regressions it rejects: a start that ignores the names, one that removes only the first,
+    /// and one that removes something of its own when it is given none.
+    #[test]
+    fn start_removes_the_names_it_is_given_and_no_others() {
+        let program = Resolved::named_by_person("true");
+        let removed = |inherits| {
+            let mut removed: Vec<_> = start(&program, inherits, SearchPath::Inherited)
+                .get_envs()
+                .map(|(name, value)| (name.to_os_string(), value.is_none()))
+                .collect();
+            removed.sort();
+            removed
+        };
+        let names = [
+            "BRAVEBOT_PROBE_KEY".to_string(),
+            "BRAVEBOT_PROBE_ID".to_string(),
+        ];
+
+        assert_eq!(
+            removed(Inherits::Without(&names)),
+            [
+                (OsString::from("BRAVEBOT_PROBE_ID"), true),
+                (OsString::from("BRAVEBOT_PROBE_KEY"), true),
+            ]
+        );
+        assert_eq!(removed(Inherits::Without(&[])), []);
+        assert_eq!(removed(Inherits::All), []);
+    }
+
+    /// A start told to hand a program only some names hands it those, where this process holds them,
+    /// and nothing else. The regressions it rejects: a start that does not clear the environment,
+    /// which leaves the rest of it in place, and one that clears it and passes nothing back.
+    #[cfg(unix)]
+    #[test]
+    fn start_hands_a_program_only_the_names_it_is_given() {
+        let names = ["PATH", "BRAVEBOT_PROBE_NOT_HELD"];
+
+        assert_eq!(
+            handed(Inherits::Only(&names), SearchPath::Inherited),
+            ["PATH"]
+        );
+    }
+
+    /// A held variable is a name a start was given only where the two are the same name. The
+    /// regression it rejects: a comparison through `to_string_lossy`, which reads `NAME-\xff` as
+    /// `NAME-\u{FFFD}` and so keeps a variable that was never asked for.
+    #[cfg(unix)]
+    #[test]
+    fn a_variable_name_that_is_not_text_is_not_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let not_text = OsStr::from_bytes(b"NAME-\xff");
+        let lookalike = "NAME-\u{FFFD}";
+
+        assert!(!is_variable(not_text, lookalike));
+        assert!(is_variable(OsStr::new(lookalike), lookalike));
+    }
+
+    /// A start given only some names reports the removal of every other variable the process holds
+    /// through `get_envs`. The regression it rejects: clearing the environment with `env_clear`,
+    /// which `get_envs` does not report, so code that builds a confined program's environment from
+    /// this process's own and the command's `get_envs` hands the program all of it.
+    #[test]
+    fn a_start_given_only_some_names_reports_the_removal_of_the_rest_through_get_envs() {
+        let kept = ["PATH"];
+        let command = start(
+            &Resolved::named_by_person("true"),
+            Inherits::Only(&kept),
+            SearchPath::Inherited,
+        );
+
+        let mut removed: Vec<OsString> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_os_string())
+            .collect();
+        let mut expected: Vec<OsString> = std::env::vars_os()
+            .map(|(name, _)| name)
+            .filter(|name| name != "PATH")
+            .collect();
+        removed.sort();
+        expected.sort();
+        assert_eq!(removed, expected);
+    }
+
+    /// A start given only some names still reduces the `PATH` it is asked to reduce, though `PATH`
+    /// is not among them, and gives no other name. The regression it rejects: reducing the `PATH`
+    /// before the environment is cleared, which leaves the program none.
+    #[cfg(unix)]
+    #[test]
+    fn a_start_given_only_some_names_still_reduces_its_path() {
+        let names = ["BRAVEBOT_PROBE_NOT_HELD"];
+
+        assert_eq!(
+            handed(Inherits::Only(&names), SearchPath::Reduced),
+            ["PATH"]
+        );
+    }
+
+    /// The names `env` printed for a program started with these rules, which is what it was handed.
+    #[cfg(unix)]
+    fn handed(inherits: Inherits<'_>, path: SearchPath) -> Vec<String> {
+        let printed = start(&Resolved::written_in_source("/usr/bin/env"), inherits, path)
+            .output()
+            .expect("env runs");
+        String::from_utf8_lossy(&printed.stdout)
+            .lines()
+            .filter_map(|line| line.split_once('=').map(|(name, _)| name.to_string()))
+            .collect()
+    }
+
+    /// A caller that sets a withheld name after `start` takes it off again, and the other rules
+    /// take nothing off. The regressions it rejects: a `withhold` that does nothing, which lets an
+    /// assignment bring a withheld name back, and one that removes names under a rule that names none.
+    #[test]
+    fn withhold_takes_a_name_set_after_start_off_again() {
+        let names = ["BRAVEBOT_PROBE_KEY".to_string()];
+        let set = |inherits: Inherits<'_>| {
+            let mut command = start(
+                &Resolved::named_by_person("true"),
+                inherits,
+                SearchPath::Inherited,
+            );
+            command.env("BRAVEBOT_PROBE_KEY", "the-lines-own");
+            inherits.withhold(&mut command);
+            command
+                .get_envs()
+                .find(|(name, _)| *name == OsStr::new("BRAVEBOT_PROBE_KEY"))
+                .map(|(_, value)| value.map(OsStr::to_os_string))
+        };
+
+        assert_eq!(set(Inherits::Without(&names)), Some(None));
+        assert_eq!(
+            set(Inherits::All),
+            Some(Some(OsString::from("the-lines-own")))
+        );
+        assert_eq!(
+            set(Inherits::Only(&[])),
+            Some(Some(OsString::from("the-lines-own")))
+        );
+    }
+
+    /// Only a start asked for the reduced `PATH` is given one. What the reduction holds is pinned
+    /// by the tests below. The regressions it rejects: a start that never reduces, which leaves an
+    /// `env` shebang to find a file a stage wrote, and one that always does, which breaks a language
+    /// server that is meant to find the project's interpreter.
+    #[test]
+    fn start_gives_a_reduced_path_only_where_it_is_asked_for() {
+        let program = Resolved::named_by_person("true");
+        let sets_path = |path| {
+            start(&program, Inherits::All, path)
+                .get_envs()
+                .any(|(name, _)| name == OsStr::new("PATH"))
+        };
+
+        assert!(sets_path(SearchPath::Reduced));
+        assert!(!sets_path(SearchPath::Inherited));
+    }
+
+    /// The lookup constructors apply the lookup: a name nothing on `PATH` holds is not a program,
+    /// and an absolute path is taken as written. The regression it rejects: a constructor that
+    /// wraps whatever it is given without searching.
+    #[cfg(unix)]
+    #[test]
+    fn the_lookup_constructors_search_and_do_not_wrap_a_name() {
+        assert_eq!(
+            Resolved::find(OsStr::new("/bin/sh")).map(|found| found.as_path().to_path_buf()),
+            Some(std::path::PathBuf::from("/bin/sh"))
+        );
+        assert_eq!(
+            Resolved::find_on(OsStr::new("sh"), OsStr::new("")),
+            None,
+            "an empty PATH searches nowhere"
+        );
+        assert_eq!(
+            Resolved::find(OsStr::new("no-such-program-bravebot-2740")),
+            None
+        );
+    }
+
     /// A Windows executable extension is not part of the name a program is known by, in any case,
     /// and nothing else is removed. The regression it rejects: comparing the file's whole name, which
     /// never matches `cargo` on Windows, or stripping any extension, which makes `git.bak` `git`.
@@ -413,6 +907,8 @@ mod tests {
     /// A directory with nothing in it, so a file left by an earlier run is not found.
     fn scratch_dir(name: &str) -> PathBuf {
         let directory = crate::testutil::scratch_dir(name);
+        #[cfg(unix)]
+        reopen(&directory);
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).unwrap();
         directory
@@ -503,7 +999,7 @@ mod tests {
     #[test]
     fn the_system_temp_directory_counts_as_writable() {
         // nosemgrep: rust.lang.security.temp-dir.temp-dir
-        let temporary = std::env::temp_dir().join("bravebot-programs-temp");
+        let temporary = std::env::temp_dir().join(format!("bb-programs-{}", std::process::id()));
         executable(&temporary, "aws");
         let found = find_in(OsStr::new("aws"), &path_of(&[&temporary]), &[]);
         let _ = std::fs::remove_dir_all(&temporary);
@@ -685,45 +1181,147 @@ mod tests {
         );
     }
 
-    /// SANDBOX-28: a program under a row a stage holds is still found where the account cannot
-    /// write it, its directory, or the directory holding that. The regression it rejects is every
-    /// program under such a row left out, which drops `/usr/bin` from the lookup.
+    /// Sets the mode of each path read-only and restores it when dropped, so a failed assertion
+    /// leaves a scratch directory that can still be removed.
+    #[cfg(unix)]
+    struct ReadOnly(Vec<PathBuf>);
+
+    #[cfg(unix)]
+    impl ReadOnly {
+        fn new(paths: &[&Path]) -> Self {
+            for path in paths {
+                set_mode(path, 0o555);
+            }
+            Self(paths.iter().map(|path| path.to_path_buf()).collect())
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ReadOnly {
+        fn drop(&mut self) {
+            for path in &self.0 {
+                set_mode(path, 0o755);
+            }
+        }
+    }
+
+    /// Makes every directory under `directory` writable again, so a run that was killed while a
+    /// tree was read-only does not leave one the next run cannot remove.
+    #[cfg(unix)]
+    fn reopen(directory: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o755));
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                reopen(&entry.path());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// SANDBOX-28: a program under a row a stage holds is still found where the account neither
+    /// owns nor can write it, nor any directory from it up to the row. The regression it rejects is
+    /// every program under such a row left out, which drops `/usr/bin` from the lookup. `/bin/sh`
+    /// under a row of `/` is a program that is the system's, whichever user runs the test.
     #[cfg(unix)]
     #[test]
-    fn a_program_in_a_row_the_account_cannot_write_is_still_found() {
-        use std::os::unix::fs::PermissionsExt;
-        let set = |path: &Path, mode| {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
-        };
-        let row = crate::testutil::scratch_dir("programs-where-it-cannot");
-        let held = row.join("held");
-        let bin = held.join("bin");
-        // A run that stopped before restoring these would leave the scratch directory unremovable.
-        set(&held, 0o755);
-        set(&bin, 0o755);
-        let row = scratch_dir("programs-where-it-cannot");
-        let tool = executable(&bin, "tool");
-        for path in [&tool, &bin, &held] {
-            set(path, 0o555);
-        }
-        let read_only = [&tool, &bin, &held]
-            .iter()
-            .all(|path| !the_account_can_write(path));
-
-        let found = find_in_with(
-            OsStr::new("tool"),
-            &path_of(&[&bin]),
-            &[],
-            std::slice::from_ref(&row),
-        );
-        set(&bin, 0o755);
-        set(&held, 0o755);
-
-        // Root writes a directory whatever its mode, so there is no directory to test with.
-        if !read_only {
+    fn a_program_in_a_row_the_account_neither_owns_nor_can_write_is_still_found() {
+        let shell = Path::new("/bin/sh").canonicalize().unwrap();
+        // A system where the account owns part of this tree has no program to test with.
+        if shell.ancestors().any(the_account_owns_or_can_write)
+            || the_account_owns_or_can_write(Path::new("/bin"))
+        {
             return;
         }
-        assert_eq!(found, Some(tool));
+        let everything = [PathBuf::from("/")];
+        let path = path_of(&[Path::new("/bin")]);
+
+        assert_eq!(
+            find_in_with(OsStr::new("sh"), &path, &[], &everything),
+            Some(PathBuf::from("/bin/sh"))
+        );
+        assert_eq!(
+            searched_path(&path, &[], &everything).as_deref(),
+            Some(OsStr::new("/bin"))
+        );
+        assert!(outside_stage_writable_with(
+            Path::new("/bin/sh"),
+            &[],
+            &everything
+        ));
+    }
+
+    /// SANDBOX-30: a program the account wrote and then made read-only, with `bin` and the directory
+    /// holding that, is not found under a row a stage holds. The account owns what a stage creates
+    /// and can set its mode back, so `access` saying no is not a program the account did not write.
+    /// The installed program behind it is the one found, which tells this apart from a lookup that
+    /// finds nothing, and the `PATH` a started program inherits drops the same entry.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_the_account_made_read_only_in_a_held_row_is_not_found() {
+        let row = scratch_dir("programs-made-read-only");
+        let held = row.join("held");
+        let bin = held.join("bin");
+        let tool = executable(&bin, "aws");
+        let installed = executable(&scratch_dir("programs-made-read-only-behind"), "aws");
+        let _restore = ReadOnly::new(&[&tool, &bin, &held]);
+        let safe = installed.parent().unwrap();
+        let path = path_of(&[&bin, safe]);
+        let rows = std::slice::from_ref(&row);
+
+        // Root writes a file whatever its mode, so there is no read-only program to test with.
+        if the_account_can_write(&tool) {
+            return;
+        }
+        assert_eq!(
+            find_in_with(OsStr::new("aws"), &path, &[], rows),
+            Some(installed.clone())
+        );
+        assert_eq!(
+            searched_path(&path, &[], rows).as_deref(),
+            Some(safe.as_os_str())
+        );
+        assert!(!outside_stage_writable_with(&tool, &[], rows));
+    }
+
+    /// SANDBOX-30: an entry reached through a directory the account owns is one a stage can point
+    /// somewhere else, whatever the mode of the entry and the directory holding it. The link here
+    /// leads to `/`, so `access` on the entry and on its parent both say no, and only the owned
+    /// directory above them shows that a stage could have made it. The same `PATH` with no row
+    /// finds `sh`, so the refusal is the row's.
+    #[cfg(unix)]
+    #[test]
+    fn an_entry_reached_through_a_directory_the_account_owns_is_not_searched() {
+        let row = scratch_dir("programs-through-owned");
+        let owned = row.join("owned");
+        std::fs::create_dir_all(&owned).unwrap();
+        let link = owned.join("system");
+        std::os::unix::fs::symlink("/", &link).unwrap();
+        let _restore = ReadOnly::new(&[&owned]);
+        let entry = link.join("bin");
+        let path = path_of(&[&entry]);
+        // Root writes a file whatever its mode, so there is no read-only entry to test with.
+        if the_account_can_write(&entry) || the_account_can_write(&link) {
+            return;
+        }
+
+        assert_eq!(
+            find_in_with(OsStr::new("sh"), &path, &[], &[]),
+            Some(entry.join("sh"))
+        );
+        assert_eq!(
+            find_in_with(OsStr::new("sh"), &path, &[], std::slice::from_ref(&row)),
+            None
+        );
+        assert_eq!(searched_path(&path, &[], std::slice::from_ref(&row)), None);
     }
 
     /// SANDBOX-30: a caller searching a `PATH` of its own gets the rows a stage given the whole
@@ -748,44 +1346,30 @@ mod tests {
         );
     }
 
-    /// SANDBOX-28: a row a stage given the whole machine holds stays searched where the account
-    /// cannot write it, through a caller's own `PATH` as through the process's. Counting such a row
-    /// as written outright would leave `/usr/bin` out, and the `aws` installed there with it.
+    /// SANDBOX-30: a caller's own `PATH` is searched with the same rule as the process's, so a
+    /// program the account made read-only under a row a stage holds is left out of it too, and the
+    /// program behind it is found.
     #[cfg(unix)]
     #[test]
-    fn a_search_of_a_given_path_still_finds_a_program_in_a_held_row_the_account_cannot_write() {
-        use std::os::unix::fs::PermissionsExt;
-        let set = |path: &Path, mode| {
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode));
-        };
-        let row = crate::testutil::scratch_dir("programs-on-path-cannot");
+    fn a_search_of_a_given_path_leaves_out_a_read_only_program_the_account_owns_in_a_held_row() {
+        let row = scratch_dir("programs-on-path-read-only");
         let held = row.join("held");
         let bin = held.join("bin");
-        // A run that stopped before restoring these would leave the scratch directory unremovable.
-        set(&held, 0o755);
-        set(&bin, 0o755);
-        let row = scratch_dir("programs-on-path-cannot");
         let tool = executable(&bin, "bravebot-held-read-only-probe");
-        for path in [&tool, &bin, &held] {
-            set(path, 0o555);
-        }
-        let read_only = [&tool, &bin, &held]
-            .iter()
-            .all(|path| !the_account_can_write(path));
+        let installed = executable(
+            &scratch_dir("programs-on-path-read-only-behind"),
+            "bravebot-held-read-only-probe",
+        );
+        let _restore = ReadOnly::new(&[&tool, &bin, &held]);
         keep_out_where_writable(&row);
 
-        let found = find_on(
-            OsStr::new("bravebot-held-read-only-probe"),
-            &path_of(&[&bin]),
+        assert_eq!(
+            find_on(
+                OsStr::new("bravebot-held-read-only-probe"),
+                &path_of(&[&bin, installed.parent().unwrap()])
+            ),
+            Some(installed)
         );
-        set(&bin, 0o755);
-        set(&held, 0o755);
-
-        // Root writes a directory whatever its mode, so there is no directory to test with.
-        if !read_only {
-            return;
-        }
-        assert_eq!(found, Some(tool));
     }
 
     /// SANDBOX-30: the `PATH` a started program looks its own names up in holds the entries the
@@ -922,6 +1506,274 @@ mod tests {
             set,
             [(OsStr::new("PATH"), None)],
             "the PATH was left alone or set to a value instead of being removed"
+        );
+    }
+
+    /// The other spellings of `directory` that the volume under it opens as the same directory:
+    /// macOS's second absolute name for a directory on its data volume, and the last name in capitals
+    /// where the volume opens names without regard to case. Empty on a volume that opens neither,
+    /// such as ext4 without `casefold`, where there is nothing to test.
+    #[cfg(unix)]
+    fn other_spellings(directory: &Path) -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Ok(below_root) = directory.strip_prefix("/") {
+            candidates.push(Path::new("/System/Volumes/Data").join(below_root));
+        }
+        if let Some(name) = directory.file_name().and_then(OsStr::to_str) {
+            candidates.push(directory.with_file_name(name.to_uppercase()));
+        }
+        let reached = identity_of(directory);
+        candidates
+            .into_iter()
+            .filter(|spelling| {
+                spelling != directory && reached.is_some() && identity_of(spelling) == reached
+            })
+            .collect()
+    }
+
+    /// A directory a stage may write with an `aws` in its `bin`, the other spellings of it the
+    /// volume opens, and an `aws` installed in a directory nothing leaves out.
+    #[cfg(unix)]
+    fn planted_beside_an_installed(name: &str) -> (PathBuf, Vec<PathBuf>, PathBuf) {
+        let session = scratch_dir(&format!("programs-{name}-session"));
+        executable(&session.join("bin"), "aws");
+        let installed = executable(&scratch_dir(&format!("programs-{name}-system")), "aws");
+        let spellings = other_spellings(&session);
+        if spellings.is_empty() {
+            eprintln!("{name}: the volume holds every spelling of the directory apart, skipped");
+        }
+        (session, spellings, installed)
+    }
+
+    /// SANDBOX-30: a `PATH` entry the volume opens as a directory a stage may write is not
+    /// searched, however it is spelled. Where the volume returns the spelling it was given, the
+    /// names differ and the entry is the directory, so a stage's `aws` there would be the one
+    /// started. The installed `aws` behind it is the one found, which tells this apart from a lookup
+    /// that leaves out every entry.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_entry_the_volume_opens_as_a_directory_a_stage_may_write_is_not_searched() {
+        let (session, spellings, installed) = planted_beside_an_installed("spelling-entry");
+
+        for spelling in &spellings {
+            let path = path_of(&[&spelling.join("bin"), installed.parent().unwrap()]);
+
+            assert_eq!(
+                find_in(OsStr::new("aws"), &path, std::slice::from_ref(&session)),
+                Some(installed.clone()),
+                "the entry spelled {spelling:?} was searched"
+            );
+        }
+    }
+
+    /// SANDBOX-30: the `PATH` a started program looks its own names up in leaves out the same
+    /// entry, since the editor, a hook and the suite's unconfined programs are given it through
+    /// [`restrict_path`] and an `env` shebang searches it.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_programs_path_leaves_out_an_entry_the_volume_opens_as_a_writable_directory() {
+        let (session, spellings, installed) = planted_beside_an_installed("spelling-restrict");
+        let safe = installed.parent().unwrap();
+
+        for spelling in &spellings {
+            let path = path_of(&[&spelling.join("bin"), safe]);
+
+            assert_eq!(
+                searched_path(&path, std::slice::from_ref(&session), &[]).as_deref(),
+                Some(safe.as_os_str()),
+                "the entry spelled {spelling:?} was kept"
+            );
+        }
+    }
+
+    /// SANDBOX-30: a row a stage holds where the account can write is judged the same way, so a
+    /// stage given the whole machine has not chosen the `aws` in a directory the account owns by
+    /// spelling its path another way.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_the_volume_opens_in_a_row_held_where_the_account_can_write_is_not_found() {
+        let (session, spellings, installed) = planted_beside_an_installed("spelling-held");
+
+        for spelling in &spellings {
+            let path = path_of(&[&spelling.join("bin"), installed.parent().unwrap()]);
+
+            assert_eq!(
+                find_in_with(
+                    OsStr::new("aws"),
+                    &path,
+                    &[],
+                    std::slice::from_ref(&session)
+                ),
+                Some(installed.clone()),
+                "the entry spelled {spelling:?} was searched"
+            );
+        }
+    }
+
+    /// SANDBOX-30: the `PATH` a started program is given leaves out an entry that links into another
+    /// spelling of a writable directory, as it does one that links into the directory under its
+    /// recorded name. Neither the entry nor a directory above it is the recorded directory, and the
+    /// directory it resolves to is, so only the ancestors of the resolved path show it. Nothing
+    /// resolves a file in the entry here, as a lookup does, so no later check covers it.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_programs_path_leaves_out_a_link_into_another_spelling_of_a_writable_directory() {
+        let (session, spellings, installed) = planted_beside_an_installed("spelling-entry-link");
+        let safe = installed.parent().unwrap();
+
+        for (index, spelling) in spellings.iter().enumerate() {
+            let entry = scratch_dir(&format!("programs-spelling-entry-link-{index}")).join("bin");
+            std::os::unix::fs::symlink(spelling.join("bin"), &entry).unwrap();
+            let path = path_of(&[&entry, safe]);
+
+            assert_eq!(
+                searched_path(&path, std::slice::from_ref(&session), &[]).as_deref(),
+                Some(safe.as_os_str()),
+                "the entry linked to {spelling:?} was kept"
+            );
+        }
+    }
+
+    /// SANDBOX-30: a file in a searched directory that links into another spelling of a writable
+    /// directory is the writable file. The entry is not the directory, so only the check on the
+    /// file the lookup resolves to can leave it out.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_a_safe_directory_to_a_program_under_another_spelling_is_not_found() {
+        let (session, spellings, installed) = planted_beside_an_installed("spelling-file-link");
+
+        for (index, spelling) in spellings.iter().enumerate() {
+            let safe = scratch_dir(&format!("programs-spelling-file-link-{index}"));
+            std::os::unix::fs::symlink(spelling.join("bin").join("aws"), safe.join("aws")).unwrap();
+            let path = path_of(&[&safe, installed.parent().unwrap()]);
+
+            assert_eq!(
+                find_in(OsStr::new("aws"), &path, std::slice::from_ref(&session)),
+                Some(installed.clone()),
+                "the link to {spelling:?} was found"
+            );
+        }
+    }
+
+    /// SANDBOX-30: which spellings a volume opens as one directory is the volume's answer, so the
+    /// comparison is also driven with a made one in which `/mnt/mirror/work` is a second name for
+    /// `/vol/Project`, which no volume need hold files to show. A path is within a recorded
+    /// directory when it, or a directory above it, is that directory, and not when it is above it,
+    /// beside it or elsewhere.
+    #[test]
+    fn a_path_is_within_a_directory_a_volume_opens_under_another_name() {
+        let volume = |path: &Path| -> Option<Identity> {
+            match path.to_str()? {
+                "/vol" => Some((1, 2)),
+                "/vol/Project" | "/mnt/mirror/work" => Some((1, 10)),
+                "/vol/Project/bin" | "/mnt/mirror/work/bin" => Some((1, 11)),
+                "/vol/Project-tools" => Some((1, 12)),
+                "/mnt/mirror" => Some((1, 20)),
+                _ => None,
+            }
+        };
+        let rows = Rows::identified_by(vec![PathBuf::from("/vol/Project")], volume);
+
+        for (path, within, why) in [
+            ("/vol/Project/bin", true, "the name it was recorded under"),
+            (
+                "/mnt/mirror/work",
+                true,
+                "another name for the directory itself",
+            ),
+            (
+                "/mnt/mirror/work/bin",
+                true,
+                "another name for a directory below it",
+            ),
+            (
+                "/mnt/mirror/work/bin/aws",
+                true,
+                "a file below the other name, which the volume does not list",
+            ),
+            (
+                "/vol/Project-tools",
+                false,
+                "a sibling that shares a name prefix",
+            ),
+            ("/vol", false, "the directory above it"),
+            ("/mnt/mirror", false, "the directory above the other name"),
+            ("/vol/other/bin", false, "a directory nothing recorded"),
+        ] {
+            assert_eq!(within_any(Path::new(path), &rows), within, "{path}: {why}");
+        }
+    }
+
+    /// SANDBOX-30: a recorded directory that no longer exists has no identity, and is still left
+    /// out under the name it was recorded under, which is the only thing to compare it by.
+    #[test]
+    fn a_recorded_directory_that_does_not_exist_is_still_compared_by_name() {
+        let rows = Rows::identified_by(vec![PathBuf::from("/vol/gone")], |_| None);
+
+        assert!(within_any(Path::new("/vol/gone/bin"), &rows));
+        assert!(!within_any(Path::new("/vol/gone-tools/bin"), &rows));
+    }
+
+    /// SANDBOX-30: an entry that does not exist yet, below a link into a directory a stage may
+    /// write, is left out of the `PATH` a started program is given, as one that exists is. The stage
+    /// can make the directory, and the entry is then one it wrote. The link leads into a
+    /// subdirectory of the recorded one, so the recorded directory is not among the entry's own
+    /// ancestors, and the entry has no resolved form until its existing part is resolved. No volume
+    /// that opens two spellings is needed, so this runs wherever there are links.
+    #[cfg(unix)]
+    #[test]
+    fn a_started_programs_path_leaves_out_an_entry_not_yet_made_below_a_link_into_a_writable_directory()
+     {
+        let session = scratch_dir("programs-below-link-session");
+        let deeper = session.join("tools");
+        std::fs::create_dir_all(&deeper).unwrap();
+        let safe = scratch_dir("programs-below-link-safe");
+        let link = scratch_dir("programs-below-link-elsewhere").join("link");
+        std::os::unix::fs::symlink(&deeper, &link).unwrap();
+        let entry = link.join("bin");
+        assert!(
+            !entry.exists(),
+            "the entry exists, so it has a resolved form"
+        );
+
+        assert_eq!(
+            searched_path(
+                &path_of(&[&entry, &safe]),
+                std::slice::from_ref(&session),
+                &[]
+            )
+            .as_deref(),
+            Some(safe.as_os_str())
+        );
+    }
+
+    /// SANDBOX-30: a directory whose name is not text is judged by what it is, and the directory
+    /// named by its lossy rendering is another one ([PATH-003]). Each entry is below a link to one
+    /// of them and does not exist, so it is judged by the directory its link leads to. A comparison
+    /// that keyed a directory by a lossy rendering of its name would leave out both.
+    ///
+    /// [PATH-003]: ../../../docs/best-practices/paths.md
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_directory_that_is_not_text_is_judged_by_what_it_is_and_not_by_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let parent = scratch_dir("programs-bytes-identity");
+        let writable = parent.join(OsStr::from_bytes(b"w\xff"));
+        let lookalike = parent.join("w\u{FFFD}");
+        std::fs::create_dir_all(&writable).unwrap();
+        std::fs::create_dir_all(&lookalike).unwrap();
+        let (to_writable, to_lookalike) = (parent.join("to-writable"), parent.join("to-lookalike"));
+        std::os::unix::fs::symlink(&writable, &to_writable).unwrap();
+        std::os::unix::fs::symlink(&lookalike, &to_lookalike).unwrap();
+        let kept = to_lookalike.join("bin");
+
+        assert_eq!(
+            searched_path(
+                &path_of(&[&to_writable.join("bin"), &kept]),
+                std::slice::from_ref(&writable),
+                &[]
+            ),
+            Some(kept.into_os_string())
         );
     }
 }

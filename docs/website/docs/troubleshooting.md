@@ -37,7 +37,11 @@ issued it. Import from the Brave channel matching the environment the binary is 
 
 **`no model service is configured yet`**. Nothing is set up to send the request, so the run stops
 instead of starting work that has no service to do it. It lists the ways to configure one, each
-naming what to type or write. `doctor` says the same and fails. See
+naming what to type or write. `doctor` says the same and fails. With a ChatGPT sign-in stored and no
+other service configured, it says so instead of listing the ways, and names the commands that use the
+account: `bravebot -i "<prompt>" --model chatgpt/<model>` and `bravebot "<task>" --model
+chatgpt/<model>`. Started in a terminal outside an incognito session with no `--model`, `bravebot` first
+asks which of the account's models to use, where the account lists them. See
 [Configuration](customize/configuration.md).
 
 ## When a turn fails
@@ -52,7 +56,12 @@ how long a rate limit asked you to wait: bravebot reads it as a number, waits it
 is two minutes or less, and when it is longer says `the service asked for fewer requests, and for a wait of
 about N minutes` so you know when to ask again. Where the status is known it is appended as
 `(HTTP 429)`, and where requests were sent it says `after 3 attempts`, counting retries and
-capability probes.
+capability probes. A failure of a ChatGPT account is said in a sentence of its own that names the step
+and what to run, and no count of attempts follows it. A refusal that names the account says in that
+sentence how long the service asked you to wait, where it asked for one at a 429. The line a failed turn
+leaves in the terminal and the error a one-shot run prints put the status after it, as `(HTTP 429)`, and
+the line `/compact` leaves, the line a turn says when it could not summarise the conversation, the window
+and an editor say the sentence alone.
 
 | What it says | What it means |
 |---|---|
@@ -70,6 +79,12 @@ capability probes.
 
 For the network cases, `bravebot doctor` has a `network` section naming the trust roots in force, the
 proxy, and the hosts it is not used for.
+
+**What the model is told about a failed turn.** The requests after it carry a short note in
+bravebot's own words, with the failure's category and, where it is known, the number of requests
+sent, so asking `what happened?` gets an answer about the failure and not a promise to carry on.
+The note holds no text the service sent, is not drawn in the transcript, and is kept when you
+resume the session.
 
 **A turn failed but I was still charged for it.** That is deliberate. A later error or a stop does
 not undo the cost of requests that already finished, so what completed work spent stays counted in
@@ -166,7 +181,8 @@ or lower `BRAVEBOT_CONTEXT_BUDGET`, if the window your model advertises is large
 **It stopped calling tools and just answered.** A bounded turn reached its round limit: the planner
 is told it has no tools left, so it answers with what it has. Ask again with a narrower task. An
 interactive turn carries no such limit, so this is a one-shot or manifest run, where the default is
-200 rounds.
+200 rounds. A one-shot run given `--max-rounds` or `--max-tokens` does not answer when it reaches
+one: it stops and exits with status 8.
 
 ## Sessions
 
@@ -188,7 +204,8 @@ being read against code that has moved since.
 **`no state directory: … names nothing`**. Nothing resolved a directory to keep things in, so this
 run has no settings of your own, no session to resume, no prompt history and no skills. `doctor`
 names the variables it looked at and what is not kept without one. On Windows `USERPROFILE` answers
-where `HOME` is unset, so a stock install resolves one.
+where `HOME` is unset, so a stock install resolves one. `BRAVEBOT_HOME` answers first when it holds an
+absolute path, and is passed over when it holds anything else.
 
 **A session is not where I expected it.** `doctor` prints the state directory it resolved and the
 variable it came from, which is the quickest way to settle where anything is being written.

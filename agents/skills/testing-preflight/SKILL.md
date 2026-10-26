@@ -28,6 +28,14 @@ row in the table-driven tests, so every consumer of a file's name is asked about
 leaves needs the issue the table names. A test for the reported spelling alone passes on an
 implementation that fixes only that spelling.
 
+A change to a step that turns a name into a key needs the other direction as well: two names a
+volume holds apart have two keys, and a rule about one decides nothing about the other
+([PATH-007](../../../docs/best-practices/paths.md#PATH-007)). The table lists only names one file
+has, so it has no row for a join of two files. Take the names from `held_names()` in
+`crates/agent/test-support/aliases.rs` instead of listing the ones the report named, and ask
+every consumer of a key, not only the trust map. A test of the reported name alone passes on a
+step that joins the next awkward name.
+
 List the distinct behaviours and states the affected requirement promises, then map their entry
 points to tests. A requirement covering both failure and cancellation needs evidence for each,
 even when the reported bug concerns only one. Shared code does not prove that every caller uses

@@ -8,6 +8,10 @@
 //! fetch went out is read off the website, and whether a write landed is read off the disk.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -494,7 +498,12 @@ fn an_allow_rule_a_checkout_wrote_answers_nothing_and_is_reported() {
     assert_eq!(rules["allow"], json!([]), "{rules}");
     assert_eq!(
         rules["proposed"],
-        json!([{"rule": THE_SITE, "file": run.scratch.checkout_file().display().to_string()}]),
+        json!([{
+            "rule": THE_SITE,
+            "shownRule": THE_SITE,
+            "file": run.scratch.checkout_file().display().to_string(),
+            "shownFile": run.scratch.checkout_file().display().to_string(),
+        }]),
         "{rules}"
     );
 

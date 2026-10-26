@@ -3,23 +3,20 @@ import { BotDetails } from './components/BotDetails'
 import type { ComposerFooterProps, ProjectChoice } from './components/Composer'
 import { botHistory } from '../shared/bot-history'
 import type { Tab } from '../shared/view'
-import type { FileAttachment } from '../shared/files'
-import { grantsOf, named, sent, type Staged } from './staging'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  AskAnswer,
   BridgeEvent,
   ForkedSession,
-  KeptTrust,
   OpenedSession,
   PermissionMode,
   SandboxMode,
   RunRecord,
-  SettingsRules,
+  SessionSettled,
   SessionSummary,
 } from '../shared/protocol'
 import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
+import { Agents } from './components/Agents'
 import { SessionInfo, firstChat } from './components/Sessions'
 import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
@@ -43,20 +40,23 @@ import { useAudit } from './use-audit'
 import { useExport } from './use-export'
 import { useRewind } from './use-rewind'
 import { useBots } from './use-bots'
+import { useTurn } from './use-turn'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
 import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
-import { Unconfigurable, METHOD, call, callBot } from './rpc'
+import { call } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
-import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft } from './live'
+import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
 
 export function App(): React.JSX.Element {
   /** Settings take the place of the chat view while open; which page was last open is kept. */
   const [settings, setSettings] = useState(false)
+  /** The list of agents the open conversation has started, over the chat view. */
+  const [agentsOpen, setAgentsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('general')
   /** A bot's own page, shown in place of a conversation. */
   const [botView, setBotView] = useState<string | null>(null)
@@ -67,7 +67,6 @@ export function App(): React.JSX.Element {
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
-  const answeringTrust = useRef(false)
   const [livesRevision, refreshLives] = useState(0)
   const preferences = useExperience()
   const setLive = useCallback((action: React.SetStateAction<Live | null>) => {
@@ -117,6 +116,9 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
+  const { answerTrust, submit, submitPlan, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+    liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
+  })
   const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
@@ -174,6 +176,7 @@ export function App(): React.JSX.Element {
               ...old,
               entries: running ? [...old.entries, t.consolidating()] : old.entries,
               running,
+              consolidating: running,
               // Only when it actually ran. Such a turn carries the briefing, so the session is
               // grounded again and the next prompt must not carry it twice — but one that never
               // left delivered nothing, and marking it said would cost the bot the briefing over
@@ -253,10 +256,8 @@ export function App(): React.JSX.Element {
         contextTokens: opened.contextTokens,
         // A kept answer settles a record whose map does not, which is all it may settle: a
         // map the record carries is this session's own and comes first.
-        askingTrust: opened.trust.known ? null : opened.record.directory,
-        keepingTrust: opened.keeping ?? null,
-        confinedLinesNotice: opened.confinedLines ?? null,
-        trustRemembered: opened.remembered ?? null,
+        askingTrust: opened.trust.known ? null : opened.shownDirectory,
+        ...settledBy(opened),
         // Looked up rather than carried: this session may have been forked in another launch
         // entirely, and the file the main process keeps is where that is written down.
         forkedFrom: cameFrom(forksRef.current, summary.directory, summary.id, sessionsRef.current),
@@ -267,10 +268,6 @@ export function App(): React.JSX.Element {
         // extra reading of a short file is cheaper than a bot that has quietly forgotten itself.
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
-        autoVetting: opened.autoVetting,
-        permissionMode: opened.permissionMode,
-        sandboxMode: opened.sandboxMode,
-        rules: opened.settingsRules ?? null,
         rewind: opened.rewind ?? [],
       }))
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]
@@ -291,17 +288,11 @@ export function App(): React.JSX.Element {
     const chosen = directory ?? (await window.bravebot.chooseDirectory())
     if (!chosen) return null
     try {
-      const made = await call<{
+      const made = await call<SessionSettled & {
         session: string
         branch: string | null
         model: string | null
-        autoVetting: boolean
-        permissionMode: PermissionMode
-        sandboxMode: SandboxMode
-        settingsRules?: SettingsRules | null
-        remembered?: KeptTrust | null
-        keeping?: string | null
-        confinedLines?: string | null
+        shownDirectory: string
       }>('session.new', {
         directory: chosen,
       })
@@ -320,226 +311,18 @@ export function App(): React.JSX.Element {
         entries: [],
         todos: [],
         contextTokens: 0,
-        askingTrust: made.remembered ? null : chosen,
-        keepingTrust: made.keeping ?? null,
-        confinedLinesNotice: made.confinedLines ?? null,
-        trustRemembered: made.remembered ?? null,
+        askingTrust: made.remembered ? null : made.shownDirectory,
+        ...settledBy(made),
         forkedFrom: null,
         focus: null,
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: 0,
-        autoVetting: made.autoVetting,
-        permissionMode: made.permissionMode,
-        sandboxMode: made.sandboxMode,
-        rules: made.settingsRules ?? null,
       }))
       setProblem(null)
       return made.session
     } catch (error) {
       setProblem(String(error))
       return null
-    }
-  }, [])
-
-  const answerTrust = useCallback(async (trusted: boolean) => {
-    const handle = handleRef.current
-    // One answer per question: a second click would be refused, the offer to keep a yes being spent.
-    if (!handle || answeringTrust.current) return
-    answeringTrust.current = true
-    const path = openedLives.current.get(handle)?.keepingTrust ?? null
-    // Said back to the bridge only for a question that showed the sentence: the bridge takes the
-    // answer to cover confined lines (RUN-5) from this and from nothing else.
-    const confinedLines = !!openedLives.current.get(handle)?.confinedLinesNotice
-    try {
-      const { kept } = await call<{ trusted: boolean; kept: boolean | null }>('trust.reply', { session: handle, trusted, confinedLines })
-      const remembered = kept === true && path ? { at: Math.floor(Date.now() / 1000), path } : null
-      updateSession(handle, (old) => (old ? {
-        ...old,
-        askingTrust: null,
-        keepingTrust: null,
-        confinedLinesNotice: null,
-        trustRemembered: remembered ?? old.trustRemembered,
-      } : old))
-      // Still a yes, for this session. Said, because the next session here will ask after all.
-      if (kept === false) {
-        setProblem(`Trusting this directory for this chat only: the answer could not be written to ${path}, so the next chat here will ask.`)
-      }
-    } catch (error) {
-      setProblem(String(error))
-    } finally {
-      answeringTrust.current = false
-    }
-  }, [])
-
-  const send = useCallback(async (prompt: string, target?: string, selectedFiles?: FileAttachment[], queuedStaged?: Staged[]) => {
-    const handle = target ?? handleRef.current
-    if (!handle) return
-    // Read before the state below is changed, because that is what clears it: this is the turn
-    // that carries the briefing, and by the time it has been sent the session is grounded again.
-    const sending = openedLives.current.get(handle)
-    const bot = sending?.bot ?? null
-    const model = sending?.model ?? null
-    const attachments = selectedFiles ?? sending?.attachments ?? []
-    // A queued message carries what it named when it was queued. Otherwise it is what the draft
-    // still names: a marker deleted before sending took its file or picture off.
-    const staged = queuedStaged ?? named(sending?.staging, prompt)
-    const grants = grantsOf(staged)
-    // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
-    // that cannot go stops the send here, with the message still where it was written. The bridge
-    // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
-    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
-    if (!mentioned.ok) {
-      const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
-      const queued = selectedFiles !== undefined
-      updateSession(handle, (old) => old ? {
-        ...old,
-        sendRefused: refused,
-        queued: queued ? [{ prompt, attachments, staged }, ...(old.queued ?? [])] : old.queued,
-        queuePaused: queued ? true : old.queuePaused,
-      } : old)
-      if (!queued && sending) {
-        const key = liveKey(sending)
-        if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: prompt })
-      }
-      return
-    }
-    const mentionedFiles = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
-    const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
-    // Made here rather than inside the update so its id can be remembered: the agent says where
-    // this prompt landed when the turn ends, and that answer has to find the row it belongs to.
-    const said = t.userSaid(prompt)
-    updateSession(handle, (old) =>
-      old
-        ? {
-            ...old,
-            summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
-            attachments: selectedFiles ? old.attachments : [],
-            sendRefused: null,
-            staging: queuedStaged ? old.staging : sent(old.staging),
-            entries: [
-              ...old.entries,
-              ...reads.map((path): t.Entry => ({ kind: 'attached', id: crypto.randomUUID(), path })),
-              // A dropped text file is read at the top of the turn as a picked one is. A picture or
-              // a PDF goes in the prompt's own message, whose marker already says so.
-              ...staged.flatMap((item): t.Entry[] => item.via === 'drop' && item.file.kind === 'text' ? [{ kind: 'attached', id: crypto.randomUUID(), path: item.file.name }] : []),
-              said,
-            ],
-            awaitingOrdinal: said.id,
-            running: true,
-            queuePaused: old.queued?.length ? old.queuePaused : false,
-            bot: old.bot ? { ...old.bot, grounded: true } : null,
-          }
-        : old,
-    )
-    try {
-      if (bot) {
-        // A bot's turn never goes through `call`. It needs files attached, and the main process
-        // strips those from anything a window sends — a window that could name a file to read
-        // would be a window that could have the planner read any file on the machine. So this
-        // names the bot and says whether the briefing is due, and the paths are composed over
-        // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
-      } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
-      }
-    } catch (error) {
-      if (error instanceof Unconfigurable) {
-        setUnconfigured(error.message)
-        updateSession(handle, (old) => (old ? { ...old, running: false, queuePaused: true, awaitingOrdinal: null, entries: [...old.entries, t.errored(error.message)] } : old))
-        return
-      }
-      updateSession(handle, (old) =>
-        old
-          ? {
-              ...old,
-              entries: [...old.entries, t.errored(String(error))],
-              queuePaused: true,
-              running: false,
-              // Nothing was sent, so this prompt is in no conversation and there is no ordinal
-              // coming for it. Left standing, it would take the ordinal of the next turn to
-              // finish, which may be one nobody in this window asked for.
-              awaitingOrdinal: null,
-              // Put back. Nothing was sent, so nothing was said — a briefing marked delivered by a
-              // turn that failed would be one the bot never received.
-              bot: old.bot ? { ...old.bot, grounded: bot?.grounded ?? false } : null,
-            }
-          : old,
-      )
-    }
-  }, [])
-
-  // Chats whose queued message is between leaving the queue and `send` returning. `send` awaits the
-  // bridge's check of the message's `@` names before it marks the chat running, and without this the
-  // queue would take the next message in that gap and send both.
-  const dequeuing = useRef(new Set<string>())
-  useEffect(() => {
-    for (const item of openedLives.current.values()) {
-      if (item.running || !item.queued?.length || item.queuePaused || item.askingTrust) continue
-      if (dequeuing.current.has(item.handle)) continue
-      const [message, ...remaining] = item.queued
-      updateSession(item.handle, (old) => old ? { ...old, queued: remaining } : old)
-      if (!message) continue
-      const handle = item.handle
-      dequeuing.current.add(handle)
-      void send(message.prompt, handle, message.attachments, message.staged).finally(() => {
-        dequeuing.current.delete(handle)
-        refreshLives((revision) => revision + 1)
-      })
-    }
-  }, [live, livesRevision, send, updateSession])
-
-  const cancel = useCallback(async () => {
-    const handle = handleRef.current
-    if (handle) {
-      updateSession(handle, (old) => old ? { ...old, queuePaused: true } : old)
-      await call('turn.cancel', { session: handle }).catch((error) => setProblem(String(error)))
-    }
-  }, [])
-
-  /**
-   * Answer whichever question is on screen.
-   *
-   * One callback for every kind in [`t.REPLY`], because the shape of the exchange is identical
-   * and the differences are entirely in which method carries it. `remember` is only ever true
-   * for a run: it is the second answer that question has and the others do not.
-   *
-   * The card is only marked once the agent has accepted the answer. Marking it first would
-   * draw an approval the turn never received if the call failed, which is the one direction
-   * this must not be wrong in.
-   */
-  const answer = useCallback(
-    async (kind: t.Asked, request: number, approve: boolean, remember = false) => {
-      const handle = handleRef.current
-      if (!handle) return
-      const decision = approve ? 'approve' : 'reject'
-      try {
-        await call(METHOD[kind], { session: handle, request, decision, remember })
-        updateSession(handle, (old) =>
-          old
-            ? { ...old, entries: t.decide(old.entries, kind, request, decision, remember) }
-            : old,
-        )
-      } catch (error) {
-        setProblem(String(error))
-      }
-    },
-    [],
-  )
-
-  /**
-   * Answer a series of questions.
-   *
-   * Separate from [`answer`] because this reply is not a decision: it carries one answer per
-   * question, and there is no approve/reject for it to be a flavour of.
-   */
-  const answerQuestions = useCallback(async (request: number, answers: AskAnswer[]) => {
-    const handle = handleRef.current
-    if (!handle) return
-    try {
-      await call('ask.reply', { session: handle, request, answers })
-      updateSession(handle, (old) => (old ? { ...old, entries: t.answered(old.entries, request, answers) } : old))
-    } catch (error) {
-      setProblem(String(error))
     }
   }, [])
 
@@ -622,44 +405,6 @@ export function App(): React.JSX.Element {
       updateSession(handle, (old) => (old ? { ...old, sandboxMode } : old))
     } catch (error) { setProblem(String(error)) }
   }, [updateSession])
-
-  /**
-   * Start a manifest run for a task: plan all of it, ask once, then walk the plan.
-   *
-   * One run per press. The session does not hold this as a mode, so the next message is an
-   * ordinary turn unless the button is pressed again.
-   */
-  const plan = useCallback(async (task: string) => {
-    const handle = handleRef.current
-    if (!handle) return
-    const model = openedLives.current.get(handle)?.model ?? null
-    updateSession(handle, (old) => old ? { ...old, running: true, entries: [...old.entries, t.planAsked(task)] } : old)
-    try {
-      await call('manifest.run', { session: handle, task, model })
-    } catch (error) {
-      if (error instanceof Unconfigurable) setUnconfigured(error.message)
-      updateSession(handle, (old) => old ? { ...old, running: false, queuePaused: true, entries: [...old.entries, t.errored(error instanceof Unconfigurable ? error.message : String(error))] } : old)
-    }
-  }, [])
-
-  /** Start a run from whatever is in the composer, where a run can take it. */
-  const submitPlan = useCallback(() => {
-    const task = draft.trim()
-    if (!handleRef.current || !canSend(live, backendReady, task)) return
-    // A run reads nothing before it plans, so it cannot take attached files, and a bot's turn
-    // carries a briefing a run has no place for.
-    if (live?.attachments?.length || named(live?.staging, task).length || live?.bot) return
-    setDraft('')
-    void plan(task)
-  }, [draft, live?.running, live?.askingTrust, live?.attachments, live?.staging, live?.bot, plan, backendReady])
-
-  /** Send whatever is in the composer, on the same terms the Send button uses. */
-  const submit = useCallback(() => {
-    const prompt = draft.trim()
-    if (!handleRef.current || !canSend(live, backendReady, prompt)) return
-    setDraft('')
-    void send(prompt)
-  }, [draft, live?.running, live?.askingTrust, send, backendReady])
 
   /**
    * Let go of the open session.
@@ -841,10 +586,8 @@ export function App(): React.JSX.Element {
           entries: t.fromSaid(forked.said),
           todos: Object.values(forked.todos).flat(),
           contextTokens: forked.contextTokens,
-          askingTrust: forked.trust.known ? null : forked.directory,
-          keepingTrust: forked.keeping ?? null,
-          confinedLinesNotice: forked.confinedLines ?? null,
-          trustRemembered: forked.remembered ?? null,
+          askingTrust: forked.trust.known ? null : forked.shownDirectory,
+          ...settledBy(forked),
           // A fork is a session and not a bot, even when it was cut out of a bot's. A bot is one
           // conversation resumed forever; a second one carrying its name would be a second bot
           // wearing it, with the same memory file and no way to tell them apart in the list.
@@ -854,10 +597,6 @@ export function App(): React.JSX.Element {
           // needed, where too high a figure would miss the one that is — and a fork is not a bot, so
           // in this build it asks for nothing at all.
           archived: 0,
-          autoVetting: forked.autoVetting,
-          permissionMode: forked.permissionMode,
-          sandboxMode: forked.sandboxMode,
-          rules: forked.settingsRules ?? null,
           // The parent's backups stay the parent's: nothing in the child has written anything yet.
           rewind: [],
           forkedFrom: {
@@ -1032,6 +771,7 @@ export function App(): React.JSX.Element {
   const stableSwitchTab = useEvent(switchTab)
   const stableOpenBot = useEvent(openBot)
   const openSettings = useEvent(() => openSettingsPage())
+  const openAgents = useEvent(() => setAgentsOpen(true))
   const stableSwitchProject = useEvent((choice: ProjectChoice) => { void switchProject(choice) })
 
   // A bot's own page, while no conversation is open over it.
@@ -1108,6 +848,9 @@ export function App(): React.JSX.Element {
         onRemoveBot={removeBot}
         build={build}
         onSettings={openSettings}
+        agentsStarted={live?.agentCounts.started ?? 0}
+        agentsWorking={live?.agentCounts.working ?? 0}
+        onAgents={openAgents}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1129,6 +872,7 @@ export function App(): React.JSX.Element {
         onCheckBackend={() => void checkBackend()}
         onDiagnostics={() => void doctor()}
         onSetup={() => openSettingsPage('agent')}
+        onThinking={(shown) => setLive((old) => old ? { ...old, showThinking: shown } : old)}
         storageKey={draftKey}
         attachments={live?.attachments ?? []}
         onAttach={() => {
@@ -1143,18 +887,9 @@ export function App(): React.JSX.Element {
         queuePaused={live?.queuePaused ?? false}
         onResumeQueued={() => setLive((old) => old ? { ...old, queuePaused: false } : old)}
         queued={live?.queued?.map((message) => message.prompt) ?? []}
-        onQueue={() => {
-          if (!draft.trim()) return
-          // The queued message keeps the grants it names, and sends them when its turn comes. The
-          // terminal names the files instead (DROP-8), because its queue joins the running turn.
-          setLive((old) => old ? {
-            ...old,
-            queued: [...(old.queued ?? []), { prompt: draft.trim(), attachments: old.attachments ?? [], staged: named(old.staging, draft) }],
-            attachments: [],
-            staging: sent(old.staging),
-          } : old)
-          setDraft('')
-        }}
+        onInterject={interjectDraft}
+        onQueue={queueDraft}
+        interjected={live?.interjected?.map((line) => line.prompt) ?? []}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
         onDismissRefusal={() => setLive((old) => old ? { ...old, sendRefused: null } : old)}
         onNew={create}
@@ -1207,6 +942,16 @@ export function App(): React.JSX.Element {
       <Context live={live} audit={auditPanel} details={details} />
       </div>
       </div>
+      {agentsOpen && (
+        <Agents
+          agents={live?.agents ?? []}
+          onClose={() => {
+            setAgentsOpen(false)
+            // Back to the entry that opened the list, once the chat view is no longer inert.
+            requestAnimationFrame(() => document.querySelector('.agents-open')?.shadowRoot?.querySelector<HTMLElement>('button')?.focus())
+          }}
+        />
+      )}
       {settings && (
         <SettingsView
           page={settingsPage}
@@ -1233,7 +978,7 @@ export function App(): React.JSX.Element {
           onCancel={cancelRewind} onConfirm={() => void confirmRewind()} />
       })()}
       {live?.askingTrust && (
-        <TrustPrompt directory={live.askingTrust} keeping={live.keepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
+        <TrustPrompt directory={live.askingTrust} keeping={live.shownKeepingTrust} confinedLines={live.confinedLinesNotice} onAnswer={answerTrust} />
       )}
       <TooltipLayer />
     </div>

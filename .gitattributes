@@ -1,0 +1,4 @@
+# Inputs for the fuzz targets are exact bytes. Several hold CRLF, which a checkout that converts line
+# endings would rewrite, and a reproducer rewritten that way no longer triggers what it was kept for.
+fuzz/seeds/** binary
+fuzz/regressions/** binary

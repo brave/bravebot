@@ -10,19 +10,27 @@ governs:
   - crates/config/src/managed.rs
   - crates/agent/src/permissions.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/error.rs
+  - crates/agent/src/workspace/other_names.rs
   - crates/agent/src/workspace/reach.rs
+  - crates/agent/src/workspace/resolve.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/app/actions.rs
 guards:
   - symbol: Policy::with_permissions
   - symbol: Policy::before_read
   - symbol: Policy::read_is_denied
-  - symbol: Policy::before_write
+  - symbol: Policy::refuse_denied_write
   - symbol: Policy::before_plan_rules
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
+  - docs/website/docs/security/permission-rules.md
+  - docs/website/docs/customize/managed-settings.md
 ---
 
 ## Scope
@@ -167,6 +175,17 @@ as the relative pattern from the workspace, so `Read(/x)` in `.bravebot/settings
 `Read(./x)`, and one that starts anywhere else is the full path. A pattern whose anchor is unknown, such as `~/` on a machine with no home
 directory, is reported as unusable rather than silently matching nothing.
 
+A path specifier with whitespace at either end is not read and is reported ([PERM-11](#PERM-11)).
+Whitespace there is part of the name of a file that has it ([TRUST-2](trust-map.md#TRUST-2)) and as
+likely padding inside the brackets. Read as the name, `Read( .env )` would cover a file nobody meant
+and leave `.env` open. Trimmed, `Read(./a.md )` would cover `a.md` and not the file it names, and as
+an `allow` rule would grant it. Neither reading is one to guess at. Whitespace between the first and
+last character is part of the name, so `Read(./my notes.md)` is about the file `my notes.md`, and a
+name that starts with whitespace is written from `./` or `**/`, as `Read(./ a.md)`. A name that ends
+with whitespace has no spelling, since a `*` in its place covers other names too. Brackets holding
+only whitespace are empty. The line around the rule is trimmed, and so is the specifier of every
+other family, where padding inside the brackets says nothing.
+
 Segments are separated by `/`. A path pattern and the path it is matched against are both spelled
 that way first, whatever the host separates with, and both are respelled where the rules are read
 and where they are asked rather than at each gate: a gate added later cannot be the one that forgot.
@@ -238,6 +257,9 @@ spelled as a full path would refuse nothing asked for by that name.
 `verified-by: bravebot_core::permissions::a_bare_name_matches_at_any_depth_in_every_list`
 `verified-by: bravebot_core::permissions::each_anchor_points_where_its_leader_says`
 `verified-by: bravebot_core::permissions::one_star_stays_in_a_segment_and_two_cross_them`
+`verified-by: bravebot_core::permissions::whitespace_inside_a_path_specifier_is_part_of_the_name`
+`verified-by: bravebot_core::permissions::padding_inside_the_brackets_of_a_command_host_or_tool_rule_is_dropped`
+`verified-by: bravebot_config::settings::a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier`
 `verified-by: bravebot_core::permissions::a_trailing_double_star_covers_the_directory_it_names`
 `verified-by: bravebot_core::permissions::a_relative_rule_says_nothing_about_an_absolute_path`
 `verified-by: bravebot_core::permissions::an_anchored_pattern_matches_only_where_it_is_anchored`
@@ -390,7 +412,15 @@ the directory it was asked for, and an entry a rule covers is left out before th
 its name is reported. A directory a rule covers is not descended into. Both are decided ahead of
 the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
 does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
-link to a denied file is not a second name a listing or a search hands back.
+link to a denied file is not a second name a listing or a search hands back. A hard link is a
+regular file under another name, so a walk reaches it, and an entry is left out when a rule covers
+any name its file has, found by device and inode as for a call that names it. A hard link to a
+denied file is left out of a listing, a search and a repository map as the file is, whichever
+directory the call named. An entry reached by a second path to an open tree (a firmlink or a bind
+mount opened with `/add-dir`) is left out when a rule covers its name beneath the first path, and
+so is a directory. Where the search for the other names reaches the search cap or cannot list a
+directory, or a name of the file is not UTF-8, an entry with more than one name is left out while a
+`Read` deny rule is in force. This is on Unix only.
 
 The files this program reads from the project on its own account are judged the same way. The
 project's instructions file, the file it points at, and a skill or a definition the project holds,
@@ -427,6 +457,7 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::tools::a_rule_over_a_home_file_refuses_a_path_spelled_from_the_home_directory`
 `verified-by: bravebot_core::permissions::a_deny_or_ask_rule_covers_every_canonical_spelling_of_a_name`
 `verified-by: bravebot_core::permissions::a_rule_about_a_name_does_not_cover_the_name_with_whitespace_at_an_end`
+`verified-by: bravebot_agent::workspace::a_rule_about_one_name_decides_no_file_the_volume_holds_apart_from_it`
 `verified-by: bravebot_core::permissions::a_canonical_spelling_is_covered_in_any_case_on_a_folding_volume`
 `verified-by: bravebot_core::permissions::an_allow_rule_is_matched_in_the_spelling_it_was_written_in`
 `verified-by: bravebot_core::policy::a_denied_step_refuses_the_whole_line`
@@ -493,6 +524,13 @@ same reason: the refusal comes before there is a prompt, so there is nothing for
 `verified-by: bravebot_agent::workspace::a_listing_does_not_enumerate_a_tree_a_deny_rule_covers`
 `verified-by: bravebot_agent::workspace::a_denied_file_does_not_spend_a_searchs_budget`
 `verified-by: bravebot_agent::turn::a_walk_does_not_report_a_link_to_a_denied_file`
+`verified-by: bravebot_agent::turn::a_walk_does_not_read_a_hard_link_to_a_denied_file`
+`verified-by: bravebot_agent::workspace::a_search_does_not_open_a_hard_link_to_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_search_leaves_out_a_file_with_two_names_where_the_walk_for_the_other_name_gives_up`
+`verified-by: bravebot_agent::workspace::a_file_with_a_name_that_is_not_utf8_is_covered_and_not_spelled_as_its_lossy_lookalike`
+`verified-by: bravebot_agent::workspace::a_search_leaves_out_a_file_with_a_name_no_rule_can_be_written_about_and_only_that_file`
+`verified-by: bravebot_agent::workspace::a_search_of_a_second_path_to_the_tree_does_not_open_a_file_a_deny_rule_covers`
+`verified-by: bravebot_agent::workspace::a_listing_of_a_second_path_to_the_tree_does_not_name_a_directory_a_deny_rule_covers`
 `verified-by: bravebot_agent::tools::a_read_refused_by_a_rule_with_a_reason_says_the_reason`
 `verified-by: bravebot_agent::tools::a_write_refused_by_a_rule_with_a_reason_says_the_deciding_rules_reason`
 `verified-by: bravebot_agent::tools::a_reason_a_checkout_wrote_is_not_in_a_refusal_and_the_persons_own_is`
@@ -605,24 +643,30 @@ directory a person typed from being reachable on different terms.
 <a id="PERM-11"></a>
 ### PERM-11: an unreadable rule is dropped, named, and takes nothing with it
 
-A line that is not a rule, names no family this agent has, or has no anchor to resolve is dropped,
-and the rest of the file still applies. So is an entry that is not a line at all: a number, or a
-rule nested one array too deep. So is a `deny`, `ask` or `allow` value that is not an array, and a
-`permissions` block that is not an object, each named with the keys that lead to it and the file
-that wrote it. Every one dropped is reported: on `doctor`, and in the session where the file was
-read, named in the spelling the file used.
+A line that is not a rule, names no family this agent has, has no anchor to resolve, or holds a path
+with whitespace at an end ([PERM-3](#PERM-3)) is dropped, and the rest of the file still applies. So
+is an entry that is not a line at all: a number, or a rule nested one array too deep. So is a `deny`,
+`ask` or `allow` value that is not an array, and a `permissions` block that is not an object, each
+named with the keys that lead to it and the file that wrote it. Every one dropped is reported: on
+`doctor`, and in the session where the file was read, named in the spelling the file used, with each
+control character drawn as its picture ([LAYER-3](layering.md#LAYER-3)).
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
 allow rule quietly removed a deny rule's protection.
 
 `verified-by: bravebot_core::permissions::a_rule_that_cannot_be_read_is_dropped_and_reported`
+`verified-by: bravebot_core::permissions::brackets_holding_only_whitespace_are_empty_in_every_family`
+`verified-by: bravebot_core::permissions::a_path_specifier_with_whitespace_at_an_end_is_reported_and_decides_nothing`
+`verified-by: bravebot_agent::permissions::a_settings_rule_whose_path_has_whitespace_at_an_end_is_reported_and_decides_nothing`
 `verified-by: bravebot_core::permissions::one_unreadable_rule_does_not_discard_the_others`
 `verified-by: bravebot_config::settings::an_entry_that_is_not_a_rule_is_carried_out_to_be_reported`
 `verified-by: bravebot_config::settings::an_unreadable_entry_is_carried_out_of_whichever_rule_list_held_it`
 `verified-by: bravebot_config::settings::a_malformed_permissions_block_carries_no_rules`
 `verified-by: bravebot_config::settings::a_rule_list_that_is_not_a_list_is_carried_out_to_be_reported`
 `verified-by: bravebot_cli::running::doctor_keeps_the_home_rules_under_a_checkout_block_that_is_not_an_object`
+`verified-by: bravebot_cli::running::doctor_draws_the_control_characters_of_a_checkouts_settings_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures`
 `verified-by: bravebot_agent::permissions::a_line_that_is_not_a_rule_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported`
 `verified-by: bravebot_agent::permissions::an_entry_that_is_not_a_line_is_reported_to_a_run_nobody_is_watching`
@@ -633,6 +677,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
+`verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`
 `verified-by: bravebot_agent::permissions::a_checkouts_unreadable_allow_entry_is_named_to_a_run_nobody_is_watching`
 `verified-by: bravebot_config::settings::an_object_entry_with_no_rule_is_carried_out_to_be_reported`
 
@@ -658,7 +703,9 @@ altered a session nobody had configured would be a change to every session.
 
 A name in `additionalDirectories` is resolved before it is put to anybody, and the question shows
 what it resolved to. A name that cannot be opened whatever the answer is reported instead of asked
-about, and a directory two layers both named is one question.
+about, and a directory two layers both named is one question. A relative name is taken against the
+working directory as `/add-dir` takes one ([TRUST-9](trust-map.md#TRUST-9)), so it is reported where
+that directory's name is not text.
 
 **Why.** Opening a directory follows a name wherever it leads, so a question about the spelling
 collects an answer about a different tree: a link inside a checkout resolves somewhere else
@@ -669,6 +716,7 @@ train the habit of answering without reading, which is the whole of what asking 
 `verified-by: bravebot_tui::app::a_named_directory_is_resolved_before_it_is_asked_about`
 `verified-by: bravebot_tui::app::a_directory_two_layers_both_named_is_asked_about_once`
 `verified-by: bravebot_tui::app::a_name_that_cannot_be_opened_is_said_so_rather_than_asked_about`
+`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
 
 ## Which file a rule may be written in
 
@@ -1135,6 +1183,15 @@ vouch for the same reason. The decision reads the argv and nothing else.
   `vendor/secrets/key` and not `vault/key`, since finding every copy is a walk of the tree. And
   the place is looked up in the spelling the rule is stored in, folded where the volume folds case,
   so a link behind a name the volume does not open in its folded spelling is not followed.
+- **A hard link, or a second path to an open tree, reaches a denied file through the files the
+  program looks for itself.** The instructions file and the files it points at, a skill, a
+  definition, a style, a file named with `@`, `--file` or a drop, and an `lsp` location are judged
+  under the name they were found by and the one they land on ([PERM-7](#PERM-7)). A hard link to a
+  denied file, or a file's name beneath a second path to an open tree, is not covered there, though
+  a call that names it is refused and a walk leaves it out. Covering them takes a walk of the open
+  directories for each file that has more than one name, which a repository of hard-linked objects
+  pays once per object, and a walk that cannot finish would leave out a hard-linked instructions
+  file the person wants read.
 - **`readsStayInWorkspace` does not confine a program a `run` starts.** It governs the file tools, as
   the path rules do, and the known cost above about a path rule not reaching a program's own file
   access holds here word for word: `run cat ~/.ssh/id_rsa` is judged against the `Bash` rules and the

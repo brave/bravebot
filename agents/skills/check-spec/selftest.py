@@ -14,6 +14,7 @@ what stays out of it, and which runs may write the file.
 
 import contextlib
 import io
+import json
 import os
 import shutil
 import subprocess  # nosemgrep: gitlab.bandit.B404
@@ -25,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import importlib.util  # noqa: E402
 
-from specs import TestIndex, crate_directories, load_specs  # noqa: E402
+import reviewed  # noqa: E402
+from specs import TestIndex, load_specs  # noqa: E402
 
 spec = importlib.util.spec_from_file_location(
     "check_spec", Path(__file__).resolve().parent / "check-spec.py"
@@ -177,7 +179,6 @@ def git(root, *arguments):
 def run_checks():
     specs = load_specs()
     sources = check.load_sources()
-    crates = crate_directories()
     index = TestIndex()
     prefixes = {s.id for s in specs if s.id}
     declared, findings = check.declared_renumbers()
@@ -185,15 +186,16 @@ def run_checks():
         findings.extend(check.check_front_matter(one))
         findings.extend(check.check_clause_numbering(one))
         findings.extend(check.check_clause_history(one, declared))
-        findings.extend(check.check_coverage(one, index, crates))
+        findings.extend(check.check_coverage(one, index))
         findings.extend(check.check_anchors(one))
         findings.extend(check.check_governs(one))
         findings.extend(check.check_guards(one, sources))
         findings.extend(check.check_isolation(one, prefixes))
         findings.extend(check.check_prose(one))
         findings.extend(check.check_documentation(one))
+    findings.extend(check.check_reviewed_file())
     findings.extend(check.check_readme(specs))
-    findings.extend(check.check_unverified_file(specs, index, crates))
+    findings.extend(check.check_unverified_file(specs, index))
     findings.extend(check.check_renumbered_file(specs, declared))
     return findings
 
@@ -861,6 +863,15 @@ CASES = [
         None,
     ),
     (
+        "the key steps' front matter key, which the security-audit skill reads",
+        lambda root: edit_spec(
+            root,
+            "guards:\n",
+            "key_step_allowed:\n  - crates/demo/src/lib.rs::key trim: the reason\nguards:\n",
+        ),
+        None,
+    ),
+    (
         "one guarded symbol pinning its sites while another does not",
         lambda root: edit_spec(root, "guards:\n", "guards:\n  - symbol: opens_twice\n"),
         "guard-sites-partial",
@@ -1006,6 +1017,10 @@ UNDECIDED = dict(VIOLATION, kind="unclear", severity="warning", clause="DEMO-2")
 # A mechanical error fails `make check-spec`, so it is red on the branch that caused it.
 RED_IN_CI = dict(UNCOVERED, kind="clause-numbering", severity="error", clause="DEMO-2")
 
+# What a clause kept from the record is, in the report: drafted by the run that decided it.
+CARRIED_VIOLATION = dict(VIOLATION, clause="DEMO-2", carried=True, recorded="0123456789ab")
+CARRIED_GAP = dict(UNCOVERED, kind="untested", clause="DEMO-1", carried=True, recorded="0123456789ab")
+
 THE_TOKEN = "github.com:\n  oauth_token: gho_SELFTEST\n"
 A_SCREEN = "the gate is open\nand a ``` fence, which must not close the block\n"
 
@@ -1058,6 +1073,10 @@ def draft_checks():
         (
             "only the findings a green CI run leaves unsaid are drafted",
             sorted(by_kind) == ["clause-uncovered", "violation"],
+        ),
+        (
+            "a finding the record carried is not drafted again, whatever its severity",
+            draft.draftable([VIOLATION, CARRIED_VIOLATION, CARRIED_GAP], errors_only=False) == [VIOLATION],
         ),
         (
             "two findings on one clause get a body each",
@@ -1196,9 +1215,48 @@ def site_checks():
                 draft.first_site([f"{outside}:2 the token", "crates/demo/src/lib.rs:4 the gate"])
                 == gate,
             ),
+            (
+                "a place that names a range or a list of lines is opened at its first line",
+                draft.first_site(["crates/demo/src/lib.rs:4-9 the gate"]) == gate
+                and draft.first_site(["crates/demo/src/lib.rs:4,12-15 the gate"]) == gate,
+            ),
         ]
     finally:
         shutil.rmtree(outside.parent, ignore_errors=True)
+
+
+def bullet_checks():
+    """How an evidence item is written into a body: the place in a code span, then what is there.
+
+    A lane writes a place as one line, a range or several, and a body that closes the span after the
+    first number prints the rest as if it were what is there.
+    """
+    return [
+        (
+            "a place with one line is a code span and what is there follows it",
+            draft.as_bullet("crates/demo/src/lib.rs:4 the gate")
+            == "- `crates/demo/src/lib.rs:4` the gate",
+        ),
+        (
+            "a range of lines stays inside the code span",
+            draft.as_bullet("crates/demo/src/lib.rs:4-9 the gate")
+            == "- `crates/demo/src/lib.rs:4-9` the gate",
+        ),
+        (
+            "a list of lines and ranges stays inside the code span",
+            draft.as_bullet("crates/demo/src/lib.rs:4,12-15 the gate")
+            == "- `crates/demo/src/lib.rs:4,12-15` the gate",
+        ),
+        (
+            "a number that opens what is there is not taken for a line",
+            draft.as_bullet("crates/demo/src/lib.rs:4 12 callers")
+            == "- `crates/demo/src/lib.rs:4` 12 callers",
+        ),
+        (
+            "an item that names no place is kept as written",
+            draft.as_bullet("the clause says so") == "- the clause says so",
+        ),
+    ]
 
 
 def nest_a_spec(root):
@@ -1255,6 +1313,916 @@ def selection_checks():
     ]
 
 
+# What a repeat run reviews. The fixture gets a second spec over files of its own, so that a change
+# to one governed file can be told apart from a change to the other's, and the scripts under test
+# copied in, so that they run as they do in a checkout: from a file whose third parent is the root.
+
+SKILL = Path(__file__).resolve().parent
+OTHER_SPEC = f"""\
+---
+id: OTHER
+title: Another demonstration
+status: normative
+governs:
+  - crates/demo/src/other/*.rs
+{DOCUMENTED_BY}
+---
+
+## Clauses
+
+<a id="OTHER-1"></a>
+### OTHER-1: a second spec reads files of its own
+
+`verified-by: bravebot_demo::other_test::a_second_spec_reads_only_its_own_files`
+"""
+THE_TEST = "#[test]\nfn a_second_spec_reads_only_its_own_files() {}\n"
+ALL_THREE = ["DEMO-1", "DEMO-2", "OTHER-1"]
+THE_VIOLATION = "the gate stays open"
+THE_GAP = "no test pins that the second spec reads only its own files"
+
+
+def build_incremental(root):
+    """The case's `break_it`: the fixture, then a second spec listed in the README, and the scripts."""
+    (root / "docs" / "specs" / "other.md").write_text(OTHER_SPEC, encoding="utf-8")
+    (root / "docs" / "specs" / "README.md").write_text(
+        CLEAN_README + "| [other.md](other.md) | `OTHER` | 1 | another demonstration |\n", encoding="utf-8"
+    )
+    other = root / "crates" / "demo" / "src" / "other"
+    (other / "deep").mkdir(parents=True)
+    (other / "a.rs").write_text("pub fn a() {}\n" * 20, encoding="utf-8")
+    (other / "deep" / "c.rs").write_text("pub fn c() {}\n", encoding="utf-8")
+    (root / "crates" / "demo" / "tests").mkdir()
+    (root / "crates" / "demo" / "tests" / "other_test.rs").write_text(THE_TEST, encoding="utf-8")
+    for source in sorted(SKILL.glob("*.py")):
+        if source.name != "selftest.py":
+            copy_into(root, source, f"agents/skills/check-spec/{source.name}")
+    copy_into(root, SKILL.parents[1] / "work_dir.py", "agents/work_dir.py")
+    copy_into(
+        root,
+        SKILL.parent / "peer-advisories" / "peer-advisories.py",
+        "agents/skills/peer-advisories/peer-advisories.py",
+    )
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "a second spec, and the scripts that read it")
+    # What a person's checkout of main has, which is the one tree a verdict may be recorded for.
+    git(root, "update-ref", "refs/remotes/upstream/main", "HEAD")
+
+
+def copy_into(root, source, target):
+    (root / target).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(source, root / target)
+
+
+def recorded_at(commit=None, decided=None):
+    """What a first run would have written: every clause of the fixture decided at `commit`, as
+    conforming unless `decided` says otherwise."""
+    commit = commit or git(Path.cwd(), "rev-parse", "HEAD")[:12]
+    hashes = digests()
+    record = {}
+    for one in load_specs():
+        for clause in one.clauses:
+            verdict, severity, summary = (decided or {}).get(clause.id, ("conforms", "-", ""))
+            record[clause.id] = {
+                "verdict": verdict,
+                "severity": severity,
+                "commit": commit,
+                "hash": hashes[clause.id],
+                "date": "2026-10-20",
+                "summary": summary,
+            }
+    return record
+
+
+class Plan:
+    """What `prepare_review` made of the fixture, with the prompts read before their directory went."""
+
+    def __init__(self, entries, reasons, texts):
+        self.entries = entries
+        self.reasons = reasons
+        self.texts = texts
+
+    @property
+    def prompts(self):
+        return [p for e in self.entries for p in e["reviewer_prompts"]]
+
+    def reviewing(self, mode):
+        return sorted(c for p in self.prompts if p["mode"] == mode for c in p["clauses"])
+
+    @property
+    def kept(self):
+        return sorted(k["clause"] for e in self.entries for k in e["kept"])
+
+
+def plan_of(record, threshold=check.DIFF_BELOW):
+    with tempfile.TemporaryDirectory(prefix="check-spec-selftest-work-") as work:
+        entries, reasons = check.prepare_review(
+            load_specs(),
+            Path(work),
+            check.Repo(Path.cwd()),
+            record,
+            check.load_sources(),
+            TestIndex(),
+            check.Limits(6, threshold),
+        )
+        texts = {}
+        for entry in entries:
+            for prompt in entry["reviewer_prompts"]:
+                texts[prompt["prompt_file"]] = Path(prompt["prompt_file"]).read_text(encoding="utf-8")
+                if prompt.get("diff_file"):
+                    texts[prompt["diff_file"]] = Path(prompt["diff_file"]).read_text(encoding="utf-8")
+    return Plan(entries, reasons, texts)
+
+
+def digests():
+    """Each clause's hash, as `prepare_review` takes it: with the guarded uses and the instructions."""
+    sources, index = check.load_sources(), TestIndex()
+    repo = check.Repo(Path.cwd())
+    found = {}
+    for one in load_specs():
+        patterns = check.inputs(one, index)
+        found.update(check.clause_hashes(one, one.clauses, sources, repo, patterns)[1])
+    return found
+
+
+def spec_file(name):
+    return Path.cwd() / "docs" / "specs" / name
+
+
+LABELS_SPEC = """\
+---
+id: LABEL
+title: The rule every reviewer is told about
+status: normative
+governs:
+  - crates/demo/src/lib.rs
+---
+
+## Known costs
+
+- The gate may open twice in a test.
+"""
+
+
+def hash_checks():
+    """What reviews a clause again: its own words, and the words of its spec that a reviewer reads
+    beside it. What does not: another clause's, and anything a verdict was not read from."""
+    labels = spec_file("labels.md")
+    labels.write_text(LABELS_SPEC, encoding="utf-8")
+    before = digests()
+    demo = spec_file("demo.md")
+    text = demo.read_text(encoding="utf-8")
+    checks = []
+
+    def after(change):
+        demo.write_text(text, encoding="utf-8")
+        edit_spec(Path.cwd(), *change)
+        found = digests()
+        demo.write_text(text, encoding="utf-8")
+        return found
+
+    reworded = after(("### DEMO-1: the gate opens only once", "### DEMO-1: the gate opens once"))
+    checks += [
+        ("rewording a clause changes its hash", reworded["DEMO-1"] != before["DEMO-1"]),
+        ("rewording a clause leaves its neighbour's hash alone", reworded["DEMO-2"] == before["DEMO-2"]),
+        ("a spec's hashes are not another spec's", before["DEMO-1"] != before["OTHER-1"]),
+    ]
+    renamed_test = after(("the_gate_opens_only_once`", "the_gate_opens_twice`"))
+    checks.append(("the tests a clause names are part of what it says", renamed_test["DEMO-1"] != before["DEMO-1"]))
+
+    inserted = after(
+        ('<a id="DEMO-2"></a>\n', f'<a id="DEMO-3"></a>\n{A_THIRD_CLAUSE}\n\n{ITS_COVERAGE}\n\n<a id="DEMO-2"></a>\n')
+    )
+    checks.append(
+        (
+            "a clause inserted after another does not reword it, though the anchor ending its body changes",
+            inserted["DEMO-1"] == before["DEMO-1"] and inserted["DEMO-2"] == before["DEMO-2"],
+        )
+    )
+    spaced = after(("`verified-by: by-construction (the field is private)`", "`verified-by: by-construction (the field is private)`   \n\n\n"))
+    checks.append(("trailing space and blank lines are not words", spaced["DEMO-2"] == before["DEMO-2"]))
+
+    context = after(("## Clauses\n", "## Clauses\n\nA sentence the reviewer reads beside every clause.\n"))
+    checks.append(
+        (
+            "text a spec carries before its clauses reviews every clause of it",
+            context["DEMO-1"] != before["DEMO-1"] and context["DEMO-2"] != before["DEMO-2"],
+        )
+    )
+    costs = after(("by-construction (the field is private)`\n", "by-construction (the field is private)`\n\n## Known costs\n\nThe gate may open twice in a test.\n"))
+    checks.append(
+        (
+            "an exception a spec admits after its clauses reviews every clause of it",
+            costs["DEMO-1"] != before["DEMO-1"] and costs["DEMO-2"] != before["DEMO-2"],
+        )
+    )
+    moved = after(("  - crates/demo/src/lib.rs\nguards:", "  - crates/demo/src/lib.rs\n  - crates/demo/src/extra.rs\nguards:"))
+    checks.append(
+        (
+            "a path added to what a spec governs reviews its clauses, which were never read against it",
+            moved["DEMO-1"] != before["DEMO-1"] and moved["OTHER-1"] == before["OTHER-1"],
+        )
+    )
+    pages = after((DOCUMENTED_BY, "documented-by: docs/website/docs/other.md"))
+    checks.append(("the pages describing a spec are not what a verdict reads", pages == before))
+
+    appended = after(("  - crates/demo/src/lib.rs\nguards:", "  - crates/demo/src/lib.rs\n  - crates/demo/src/extra.rs\nguards:"))
+    reversed_ = after(("governs:\n  - crates/demo/src/lib.rs\n", "governs:\n  - crates/demo/src/extra.rs\n  - crates/demo/src/lib.rs\n"))
+    checks.append(
+        (
+            "the order a spec lists what it governs in is not a change to it",
+            appended["DEMO-1"] == reversed_["DEMO-1"] and appended["DEMO-1"] != before["DEMO-1"],
+        )
+    )
+    flipped = after(("    every-spelling: yes\n", "    every-spelling: no\n"))
+    checks.append(
+        (
+            "a change to how a guarded symbol is pinned reviews the clauses of the spec",
+            flipped["DEMO-1"] != before["DEMO-1"] and flipped["OTHER-1"] == before["OTHER-1"],
+        )
+    )
+
+    # A use of a guarded symbol in a file nobody watches, which no diff of the watched paths shows.
+    use_the_gate_elsewhere(Path.cwd())
+    used = digests()
+    (Path.cwd() / "crates" / "demo" / "src" / "extra.rs").unlink()
+    checks.append(
+        (
+            "a new use of a guarded symbol in an unwatched file reviews the clauses of the spec",
+            used["DEMO-1"] != before["DEMO-1"] and used["OTHER-1"] == before["OTHER-1"],
+        )
+    )
+    # A use in a file the spec watches is in the diff when it appears, so the hash leaves it out.
+    use_the_gate_again(Path.cwd())
+    watched_use = digests()
+    git(Path.cwd(), "checkout", "--", "crates/demo/src/lib.rs")
+    checks.append(
+        (
+            "a new use of a guarded symbol in a watched file is left to the diff",
+            watched_use["DEMO-1"] == before["DEMO-1"],
+        )
+    )
+    labels.write_text(LABELS_SPEC.replace("twice in a test", "twice anywhere"), encoding="utf-8")
+    excepted = digests()
+    labels.write_text(LABELS_SPEC, encoding="utf-8")
+    checks.append(
+        (
+            "an exception added to the rule every reviewer is told about reviews every clause of every spec",
+            all(excepted[c] != before[c] for c in before),
+        )
+    )
+    told = check.GROUND_RULES
+    check.GROUND_RULES = told + "\nAnd one more thing a reviewer is told.\n"
+    try:
+        retold = digests()
+    finally:
+        check.GROUND_RULES = told
+    checks.append(
+        (
+            "a change to what a reviewer is told reviews every clause",
+            all(retold[c] != before[c] for c in before),
+        )
+    )
+    return checks
+
+
+def change_of(added, deleted, size, untracked=()):
+    return check.Change({"p.rs": (added, deleted)}, {"p.rs": size}, list(untracked))
+
+
+def asked_nothing():
+    """Whether `decide` leaves git alone for a clause whose hash differs, which no diff can change."""
+    asked = []
+    check.decide({"hash": "h"}, "other", lambda: asked.append(1), 0.5)
+    return asked == []
+
+
+def decide_checks():
+    """The order of the questions and the edges of the threshold, with no repository in it."""
+    held = {"hash": "h"}
+    small = change_of(1, 0, 100)
+
+    def mode(record, hashed, change, threshold=0.5):
+        return check.decide(record, hashed, lambda: change, threshold)[0]
+
+    return [
+        ("no record is a full review", check.decide(None, "h", lambda: None, 0.5) == (check.FULL, check.NO_RECORD)),
+        (
+            "other words are a full review, whatever the code did",
+            check.decide(held, "other", lambda: check.Change({}, {}, []), 0.5) == (check.FULL, check.CHANGED),
+        ),
+        (
+            "git is not asked about a clause whose words changed",
+            asked_nothing(),
+        ),
+        ("a commit with nothing to compare is a full review", check.decide(held, "h", lambda: None, 0.5) == (check.FULL, check.NOT_COMPARABLE)),
+        ("an untracked file is a full review, since no diff shows it", check.decide(held, "h", lambda: change_of(0, 0, 100, ["new.rs"]), 0.5) == (check.FULL, check.UNTRACKED)),
+        ("no change is no review", mode(held, "h", check.Change({}, {"p.rs": 100}, [])) == check.KEEP),
+        (
+            "a change smaller than a percent is not drawn as none",
+            check.share(0.001) == "under 1%" and check.share(0) == "0%" and check.share(0.153) == "15%",
+        ),
+        ("a change under the threshold is a review of the diff", mode(held, "h", small) == check.DIFF),
+        (
+            "a change at the threshold is a full review",
+            check.decide(held, "h", lambda: change_of(25, 0, 100), 0.25) == (check.FULL, check.OVER),
+        ),
+        ("a change one line under it is a review of the diff", mode(held, "h", change_of(24, 0, 100), 0.25) == check.DIFF),
+        (
+            "a file counts at most once over its length",
+            # Sixty lines added and sixty deleted in a hundred-line file beside three hundred
+            # unchanged ones is a quarter of the lines. Uncapped, it would count three tenths.
+            check.Change({"p.rs": (60, 60)}, {"p.rs": 100, "q.rs": 300}, []).fraction == 0.25
+            and mode(held, "h", check.Change({"p.rs": (60, 60)}, {"p.rs": 100, "q.rs": 300}, []), 0.28) == check.DIFF,
+        ),
+    ]
+
+
+def incremental_checks():
+    """What a run reviews, in the fixture, against a record of an earlier run at its first commit."""
+    root = Path.cwd()
+    lib = root / "crates" / "demo" / "src" / "lib.rs"
+    original = lib.read_text(encoding="utf-8")
+    start = git(root, "rev-parse", "HEAD")[:12]
+    decided = {"DEMO-2": ("violation", "error", THE_VIOLATION), "OTHER-1": ("untested", "warning", THE_GAP)}
+    record = recorded_at(decided=decided)
+    checks = []
+
+    def case(name, held):
+        checks.append((name, bool(held)))
+
+    unchanged = plan_of(record)
+    case("a second run on an unchanged tree starts no reviewers", unchanged.prompts == [] and unchanged.kept == ALL_THREE)
+    case(
+        "what it keeps is what the record held",
+        {k["clause"]: k["verdict"] for e in unchanged.entries for k in e["kept"]}
+        == {"DEMO-1": "conforms", "DEMO-2": "violation", "OTHER-1": "untested"},
+    )
+
+    unrecorded = plan_of({k: v for k, v in record.items() if k != "OTHER-1"})
+    case(
+        "a clause with no record is reviewed in full, and the others are kept",
+        unrecorded.reviewing("full") == ["OTHER-1"]
+        and unrecorded.kept == ["DEMO-1", "DEMO-2"]
+        and unrecorded.reasons == {check.NO_RECORD: 1},
+    )
+
+    demo = spec_file("demo.md")
+    spec_text = demo.read_text(encoding="utf-8")
+    edit_spec(root, "### DEMO-1: the gate opens only once", "### DEMO-1: the gate opens once")
+    reworded = plan_of(record)
+    demo.write_text(spec_text, encoding="utf-8")
+    case(
+        "a clause whose words changed is reviewed in full, and its neighbours are kept",
+        reworded.reviewing("full") == ["DEMO-1"]
+        and reworded.kept == ["DEMO-2", "OTHER-1"]
+        and reworded.reasons == {check.CHANGED: 1},
+    )
+    edit_spec(
+        root,
+        '<a id="DEMO-2"></a>\n',
+        f'<a id="DEMO-3"></a>\n{A_THIRD_CLAUSE}\n\n{ITS_COVERAGE}\n\n<a id="DEMO-2"></a>\n',
+    )
+    added = plan_of(record)
+    demo.write_text(spec_text, encoding="utf-8")
+    case(
+        "a clause added between two others is the only one reviewed",
+        added.reviewing("full") == ["DEMO-3"] and added.kept == ALL_THREE and added.reasons == {check.NO_RECORD: 1},
+    )
+
+    lib.write_text(original + "\nfn added() {}\n", encoding="utf-8")
+    changed = plan_of(record)
+    case(
+        "a change confined to one governed file starts reviewers for the spec that governs it only",
+        changed.reviewing("diff") == ["DEMO-1", "DEMO-2"]
+        and changed.reviewing("full") == []
+        and changed.kept == ["OTHER-1"],
+    )
+    # One reviewer for the two clauses. Read as a plain lookup so that a plan with none fails a case
+    # instead of ending the run.
+    prompt = changed.prompts[0] if len(changed.prompts) == 1 else {}
+    diff_file = prompt.get("diff_file", "")
+    case(
+        "each of them is given the diff since the commit it was reviewed at",
+        diff_file.endswith(f"since-{start}.diff") and "+fn added() {}" in changed.texts.get(diff_file, ""),
+    )
+    text = changed.texts.get(prompt.get("prompt_file"), "")
+    case(
+        "and the verdict it is asked about, with the summary that went with it",
+        THE_VIOLATION in text
+        and "`DEMO-1`: conforms" in text
+        and f"last reviewed at commit `{start}`" in text
+        and prompt.get("previous", {}).get("DEMO-2", {}).get("verdict") == "violation",
+    )
+    case(
+        "and is told to keep the earlier verdict by saying so",
+        '"holds": true' in text and "Mark a clause `\"holds\": true` only when you have read the diff" in text,
+    )
+    full_prompt = unrecorded.prompts[0] if len(unrecorded.prompts) == 1 else {}
+    full_text = unrecorded.texts.get(full_prompt.get("prompt_file"), "")
+    fields = check.CLAUSE_FIELDS.splitlines()
+    case(
+        "the full prompt and the diff prompt each show the reviewer every field of a clause's entry",
+        len(fields) == 8
+        and full_prompt.get("mode") == "full"
+        and prompt.get("mode") == "diff"
+        and all(line in full_text.splitlines() for line in fields)
+        and all(line in text.splitlines() for line in fields),
+    )
+    git(root, "config", "color.ui", "always")
+    git(root, "config", "diff.external", "false")
+    coloured = plan_of(record)
+    git(root, "config", "--unset", "color.ui")
+    git(root, "config", "--unset", "diff.external")
+    case(
+        "the diff is plain whatever colour or external diff program the person has configured",
+        all(
+            "\x1b[" not in coloured.texts[p["diff_file"]] and "+fn added() {}" in coloured.texts[p["diff_file"]]
+            for p in coloured.prompts
+            if p["mode"] == "diff"
+        )
+        and coloured.reviewing("diff") == ["DEMO-1", "DEMO-2"],
+    )
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "a change to one governed file")
+    committed = plan_of(record)
+    case(
+        "a committed change is reviewed as an uncommitted one is",
+        committed.reviewing("diff") == ["DEMO-1", "DEMO-2"]
+        and all("+fn added() {}" in committed.texts[p["diff_file"]] for p in committed.prompts if p["mode"] == "diff"),
+    )
+
+    # A clause reviewed later is compared from the commit it was reviewed at, which is after the first.
+    later = git(root, "rev-parse", "HEAD")[:12]
+    mixed = dict(record, **{"DEMO-2": dict(record["DEMO-2"], commit=later)})
+    lib.write_text(lib.read_text(encoding="utf-8") + "\nfn added_again() {}\n", encoding="utf-8")
+    split = plan_of(mixed)
+    since = {
+        p["previous"][p["clauses"][0]]["commit"]: split.texts[p["diff_file"]]
+        for p in split.prompts
+        if p["mode"] == "diff"
+    }
+    case(
+        "clauses recorded at different commits are given a diff each",
+        sorted(since) == sorted([start, later])
+        and "+fn added() {}" in since[start]
+        and "+fn added_again() {}" in since[start]
+        and "+fn added() {}" not in since[later]
+        and "+fn added_again() {}" in since[later],
+    )
+
+    # Most of the file replaced, with the impl that holds the guarded definitions left as it was, so
+    # that the hash is the same and only the size of the change decides.
+    kept_impl = "".join(original.splitlines(keepends=True)[:9])
+    lib.write_text(kept_impl + "fn rewritten() {}\n" * 40, encoding="utf-8")
+    rewritten = plan_of(record)
+    case(
+        "a diff over the threshold is a full review, and the other spec is still kept",
+        rewritten.reviewing("full") == ["DEMO-1", "DEMO-2"]
+        and rewritten.kept == ["OTHER-1"]
+        and rewritten.reasons == {check.OVER: 2},
+    )
+    lib.write_text(original + "\nfn added() {}\n", encoding="utf-8")
+    case(
+        "a threshold of nothing reviews every changed clause in full",
+        plan_of(record, threshold=0).reviewing("full") == ["DEMO-1", "DEMO-2"],
+    )
+    lib.write_text(original, encoding="utf-8")
+    git(root, "reset", "-q", "--hard", start)
+    case(
+        "a tree back where the record was kept nothing",
+        plan_of(record).prompts == [],
+    )
+
+    named = root / "crates" / "demo" / "tests" / "other_test.rs"
+    named.write_text(THE_TEST + "// the test, emptied\n", encoding="utf-8")
+    emptied = plan_of(record)
+    case(
+        "a change to a test a clause names, in a file nobody governs, is read as a diff",
+        emptied.reviewing("diff") == ["OTHER-1"] and emptied.kept == ["DEMO-1", "DEMO-2"],
+    )
+    named.write_text(THE_TEST, encoding="utf-8")
+
+    lib.write_text("\n".join(original.splitlines()[:7]) + "\n", encoding="utf-8")
+    shrunk = check.Repo(root).since(start, ["crates/demo/src/lib.rs"])
+    case(
+        "a file cut short is measured against the length it had",
+        shrunk is not None and shrunk.sizes["crates/demo/src/lib.rs"] == len(original.splitlines()),
+    )
+    lib.write_text(original, encoding="utf-8")
+    lib.chmod(0o755)
+    case("a change of mode alone is no change to what a clause is about", plan_of(record).prompts == [])
+    lib.chmod(0o644)
+
+    deep = root / "crates" / "demo" / "src" / "other" / "deep" / "c.rs"
+    deep.write_text("pub fn c() { /* changed */ }\n", encoding="utf-8")
+    case(
+        "a change in a directory a glob does not reach is not a change to what the spec governs",
+        plan_of(record).prompts == [],
+    )
+    deep.write_text("pub fn c() {}\n", encoding="utf-8")
+    fresh = root / "crates" / "demo" / "src" / "other" / "b.rs"
+    fresh.write_text("pub fn b() {}\n", encoding="utf-8")
+    untracked = plan_of(record)
+    case(
+        "a file git does not know in what a spec governs is a full review, since no diff shows it",
+        untracked.reviewing("full") == ["OTHER-1"]
+        and untracked.reasons == {check.UNTRACKED: 1}
+        and untracked.kept == ["DEMO-1", "DEMO-2"],
+    )
+    case(
+        "a tree with a file git does not know in what a spec governs is not a commit",
+        check.Repo(root).dirty(["crates/demo/src/other/*.rs"]) == ["crates/demo/src/other/b.rs"],
+    )
+    fresh.unlink()
+    case("a tree that is a commit is clean", check.Repo(root).dirty(["crates/demo/src/other/*.rs"]) == [])
+    scratch = root / "crates" / "demo" / "src" / "scratch.rs"
+    scratch.write_text("fn scratch() {}\n", encoding="utf-8")
+    paths = check.review_paths(load_specs(), TestIndex())
+    case(
+        "a source git does not know is a difference, since the guarded uses are counted in every source",
+        check.Repo(root).dirty(paths) == ["crates/demo/src/scratch.rs"],
+    )
+    scratch.unlink()
+    both = load_specs()
+    twice = check.review_paths(both + both, TestIndex())
+    case("a path two specs watch is listed once", len(twice) == len(set(twice)))
+    lib.write_text(original + "\nfn added() {}\n", encoding="utf-8")
+    case(
+        "a tracked file that differs is not a commit either",
+        check.Repo(root).dirty([]) == ["crates/demo/src/lib.rs"],
+    )
+    lib.write_text(original, encoding="utf-8")
+    reviewed.write_ledger(root / reviewed.LEDGER, record)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "a record")
+    reviewed.write_ledger(root / reviewed.LEDGER, {})
+    case("the record is not a difference, since a run writes it", check.Repo(root).dirty([]) == [])
+    git(root, "reset", "-q", "--hard", "HEAD")
+
+    elsewhere = git(root, "commit-tree", "HEAD^{tree}", "-m", "a commit on no branch")[:12]
+    for name, commit in (("one this history never held", "0123456789ab"), ("one this tree does not descend from", elsewhere)):
+        stranded = plan_of(recorded_at(commit=commit))
+        case(
+            f"a record at {name} is reviewed in full",
+            stranded.reviewing("full") == ALL_THREE and stranded.reasons == {check.NOT_COMPARABLE: 3},
+        )
+    return checks
+
+
+def run_script(name, *arguments):
+    return subprocess.run(
+        [sys.executable, "-B", str(Path.cwd() / "agents" / "skills" / "check-spec" / name), *arguments],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def prepared(work, *arguments):
+    """The manifest `check-spec.py` writes for a run of the fixture, started as it is in a checkout."""
+    done = run_script("check-spec.py", "--work-dir", str(work), *arguments)
+    assert done.returncode == 0, done.stderr
+    return json.loads((Path(work) / "manifest.json").read_text(encoding="utf-8"))
+
+
+def answer(manifest, **answers):
+    """Write what reviewers would have written, per clause, for each prompt of `manifest` that has one."""
+    for entry in manifest["specs"]:
+        for prompt in entry["reviewer_prompts"]:
+            clauses = [dict(answers[c], clause=c) for c in prompt["clauses"] if c in answers]
+            if clauses:
+                Path(prompt["results_file"]).write_text(json.dumps({"clauses": clauses}), encoding="utf-8")
+
+
+def modes(manifest):
+    return sorted((c, p["mode"]) for e in manifest["specs"] for p in e["reviewer_prompts"] for c in p["clauses"])
+
+
+def ledger_of():
+    """What the record holds, or nothing where it cannot be read, so that a script that wrote a line
+    the record refuses fails the case that read it."""
+    try:
+        return reviewed.read_ledger(Path.cwd() / reviewed.LEDGER)
+    except reviewed.Problem:
+        return {}
+
+
+def record_checks():
+    """The runs a person makes in turn, through the scripts: review, record, review again."""
+    root = Path.cwd()
+    lib = root / "crates" / "demo" / "src" / "lib.rs"
+    ledger = root / reviewed.LEDGER
+    checks = []
+
+    def case(name, held):
+        checks.append((name, bool(held)))
+
+    with tempfile.TemporaryDirectory(prefix="check-spec-selftest-runs-") as runs:
+        runs = Path(runs)
+        # A line for a clause no spec has any more, left by a spec that was edited since.
+        gone = recorded_at(decided={"DEMO-1": ("conforms", "-", "")})["DEMO-1"]
+        reviewed.write_ledger(ledger, {"GONE-1": gone})
+        stale = ledger.read_bytes()
+        first = prepared(runs / "first")
+        case(
+            "a first run reviews every clause in full",
+            modes(first) == [(c, "full") for c in ALL_THREE] and first["commit"] == git(root, "rev-parse", "HEAD"),
+        )
+        answer(
+            first,
+            **{
+                "DEMO-1": {"verdict": "conforms"},
+                "DEMO-2": {"verdict": "violation", "severity": "error", "summary": THE_VIOLATION, "failure": "open it twice"},
+                # A severity the record has no place for, from a reviewer that made one up.
+                "OTHER-1": {"verdict": "untested", "summary": THE_GAP, "severity": "high"},
+            },
+        )
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "first"), "--dry-run")
+        case("a dry run records nothing", done.returncode == 0 and ledger.read_bytes() == stale)
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "first"))
+        written = ledger_of() if done.returncode == 0 else {}
+        head = git(root, "rev-parse", "HEAD")[:12]
+        case(
+            "recording writes what the reviewers decided, at the main commit they read, and drops a clause no spec has",
+            {c: (e["verdict"], e["severity"], e["commit"]) for c, e in written.items()}
+            == {
+                "DEMO-1": ("conforms", "-", head),
+                "DEMO-2": ("violation", "error", head),
+                "OTHER-1": ("untested", "warning", head),
+            }
+            and written["DEMO-2"]["summary"] == THE_VIOLATION
+            and written["DEMO-1"]["hash"] == digests()["DEMO-1"],
+        )
+
+        second = prepared(runs / "second")
+        case("a second run on the same tree starts no reviewers", second["progress_lines"][0].startswith("check-spec: 2 specs, 0 reviewers") and modes(second) == [])
+        report = run_script("collect-findings.py", "--work-dir", str(runs / "second"))
+        case(
+            "and still reports the violation it kept, with the commit it was found at",
+            report.returncode == 1 and THE_VIOLATION in report.stdout and f"recorded at {head}" in report.stdout
+            and "3 clauses, 0 reviewed, 3 carried from the record" in report.stdout,
+        )
+        drafted = run_script("draft-issues.py", "--work-dir", str(runs / "second"), "--json")
+        case("but drafts no issue for it again", json.loads(drafted.stdout)["drafts"] == [])
+
+        case("a full run reviews every clause the record holds", modes(prepared(runs / "all", "--full")) == [(c, "full") for c in ALL_THREE])
+
+        lib.write_text(lib.read_text(encoding="utf-8") + "\nfn added() {}\n", encoding="utf-8")
+        reading = prepared(runs / "reading")
+        case(
+            "a change to a governed file is read as a diff by the spec that governs it",
+            modes(reading) == [("DEMO-1", "diff"), ("DEMO-2", "diff")],
+        )
+        case(
+            "a threshold given on the command line decides it",
+            modes(prepared(runs / "strict", "--threshold", "0")) == [("DEMO-1", "full"), ("DEMO-2", "full")],
+        )
+        answer(reading, **{"DEMO-1": {"holds": True}, "DEMO-2": {"holds": False, "verdict": "conforms"}})
+        before = ledger.read_bytes()
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "reading"))
+        case(
+            "a tree that is not main is not recorded",
+            done.returncode == 2 and "nothing recorded" in done.stderr and ledger.read_bytes() == before,
+        )
+
+        # The run was prepared on a tree with an uncommitted change, which is gone by the time it is
+        # recorded: the tree is main again, and what the reviewers read was not.
+        changed = lib.read_bytes()
+        git(root, "checkout", "--", "crates/demo/src/lib.rs")
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "reading"))
+        case(
+            "a run prepared on a tree that was not a commit is not recorded, whatever the tree is now",
+            done.returncode == 2 and "was not a commit" in done.stderr and ledger.read_bytes() == before,
+        )
+        lib.write_bytes(changed)
+
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "a change to a governed file")
+        # A clean tree that is a commit, and not main: a branch a commit ahead of it.
+        ahead = prepared(runs / "ahead")
+        answer(ahead, **{"DEMO-1": {"holds": True}, "DEMO-2": {"holds": False, "verdict": "conforms"}})
+        before = ledger.read_bytes()
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "ahead"))
+        case(
+            "a tree that is a commit but not main is not recorded either",
+            ahead["dirty"] == [] and done.returncode == 2 and "differs from" in done.stderr
+            and ledger.read_bytes() == before,
+        )
+        git(root, "update-ref", "refs/remotes/upstream/main", "HEAD")
+        moved = git(root, "rev-parse", "HEAD")[:12]
+        reading = prepared(runs / "moved")
+        answer(reading, **{"DEMO-1": {"holds": True}, "DEMO-2": {"holds": False, "verdict": "conforms"}})
+        report = run_script("collect-findings.py", "--work-dir", str(runs / "moved"))
+        case(
+            "a violation the diff fixed is gone from the report",
+            report.returncode == 0 and THE_VIOLATION not in report.stdout and "carried from the record" in report.stdout,
+        )
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "moved"))
+        now = ledger_of()
+        case(
+            "a verdict that held moves to the commit it was reviewed at again, and one that changed is replaced",
+            done.returncode == 0
+            and (now["DEMO-1"]["verdict"], now["DEMO-1"]["commit"]) == ("conforms", moved)
+            and (now["DEMO-2"]["verdict"], now["DEMO-2"]["severity"], now["DEMO-2"]["commit"])
+            == ("conforms", "-", moved)
+            and now["DEMO-2"]["summary"] == "",
+        )
+        case(
+            "a clause nothing was reviewed for keeps the line it had",
+            (now.get("OTHER-1", {}).get("verdict"), now.get("OTHER-1", {}).get("commit")) == ("untested", head),
+        )
+
+        lib.write_text(lib.read_text(encoding="utf-8") + "\nfn added_again() {}\n", encoding="utf-8")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "another change")
+        git(root, "update-ref", "refs/remotes/upstream/main", "HEAD")
+        unanswered = prepared(runs / "unanswered")
+        before = ledger.read_bytes()
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "unanswered"))
+        case(
+            "a reviewer that returned nothing leaves the lines of its clauses as they were",
+            done.returncode == 0 and ledger.read_bytes() == before and modes(unanswered) == [("DEMO-1", "diff"), ("DEMO-2", "diff")],
+        )
+        answer(unanswered, **{"DEMO-1": {"holds": False, "verdict": "unclear", "summary": "could not tell"}, "DEMO-2": {"holds": True}})
+        done = run_script("record-reviewed.py", "--work-dir", str(runs / "unanswered"))
+        now = ledger_of()
+        case(
+            "a clause the reviewer could not decide loses its line, so it is reviewed again from the start",
+            done.returncode == 0 and "DEMO-1" not in now and "DEMO-2" in now
+            and modes(prepared(runs / "undecided")) == [("DEMO-1", "full")],
+        )
+        ledger.write_text("DEMO-2 conforms\n", encoding="utf-8")
+        done = run_script("check-spec.py", "--mechanical-only", "--json")
+        found = json.loads(done.stdout)["findings"]
+        case(
+            "a record that cannot be read is an error, and until it is fixed every clause is reviewed in full",
+            done.returncode == 1
+            and [(f["kind"], f["severity"]) for f in found] == [("reviewed-malformed", "error")]
+            and modes(prepared(runs / "unreadable")) == [(c, "full") for c in ALL_THREE],
+        )
+    return checks
+
+
+def collect_checks():
+    """Which answers a reviewer of a change may give, and what each one keeps."""
+    earlier = {
+        "DEMO-1": {"verdict": "conforms", "severity": "-", "summary": "", "commit": "0123456789ab"},
+        "DEMO-2": {"verdict": "violation", "severity": "error", "summary": THE_VIOLATION, "commit": "0123456789ab"},
+    }
+    with tempfile.TemporaryDirectory(prefix="check-spec-selftest-collect-") as tmp:
+        results = Path(tmp) / "results.json"
+
+        def read(*clauses, kept=()):
+            results.write_text(json.dumps({"clauses": list(clauses)}), encoding="utf-8")
+            prompt = {
+                "results_file": str(results),
+                "clauses": ["DEMO-1", "DEMO-2"],
+                "mode": "diff",
+                "previous": earlier,
+            }
+            entry = {"path": "docs/specs/demo.md", "clauses": 2, "kept": list(kept), "reviewer_prompts": [prompt]}
+            return draft.collect.load_reviews({"specs": [entry]})
+
+        both_hold = read({"clause": "DEMO-1", "holds": True}, {"clause": "DEMO-2", "holds": True})
+        liar = read(
+            {"clause": "DEMO-1", "holds": True, "verdict": "violation", "severity": "error", "summary": "the gate opens twice"},
+            {"clause": "DEMO-2", "holds": True, "verdict": "conforms"},
+        )
+        silent = read({"clause": "DEMO-1"}, {"clause": "DEMO-2", "holds": False})
+        fixed = read({"clause": "DEMO-1", "holds": True}, {"clause": "DEMO-2", "holds": False, "verdict": "conforms"})
+        kept = read(
+            kept=[
+                dict(earlier["DEMO-2"], clause="DEMO-2"),
+                dict(earlier["DEMO-1"], clause="DEMO-1"),
+            ]
+        )
+    return [
+        (
+            "a verdict that holds is carried into the report with the commit it was reached at",
+            [(f["clause"], f["kind"], f.get("carried"), f.get("recorded")) for f in both_hold[0]]
+            == [("DEMO-2", "violation", True, "0123456789ab")]
+            and both_hold[1] == 2,
+        ),
+        ("and is recorded as held", both_hold[2]["DEMO-2"]["held"] and both_hold[2]["DEMO-1"]["held"]),
+        (
+            "holding does not stand for another verdict: a reviewer that names one has found it",
+            [(f["clause"], f["kind"], f.get("carried")) for f in liar[0]] == [("DEMO-1", "violation", None)]
+            and not liar[2]["DEMO-1"]["held"]
+            and liar[2]["DEMO-2"]["verdict"] == "conforms"
+            and not liar[2]["DEMO-2"]["held"],
+        ),
+        (
+            "an answer that neither says the verdict holds nor gives another decides nothing",
+            sorted((f["clause"], f["kind"]) for f in silent[0]) == [("DEMO-1", "unclear"), ("DEMO-2", "unclear")]
+            and silent[2]["DEMO-1"]["verdict"] == "unclear",
+        ),
+        (
+            "a violation the change fixed leaves the report",
+            fixed[0] == [] and fixed[2]["DEMO-2"]["verdict"] == "conforms" and fixed[2]["DEMO-1"]["held"],
+        ),
+        (
+            "a clause kept without a review is in the report when it is a finding, and not when it conforms",
+            [(f["clause"], f["carried"]) for f in kept[0] if f["kind"] != "review-incomplete"] == [("DEMO-2", True)],
+        ),
+    ]
+
+
+def ledger_checks():
+    """The file itself: what it holds, what it refuses, and the order it is written in."""
+    entry = {"verdict": "conforms", "severity": "-", "commit": "0123456789ab", "hash": "0123456789abcdef", "date": "2026-10-20", "summary": ""}
+    line = "DEMO-1 conforms - 0123456789ab 0123456789abcdef 2026-10-20"
+    with tempfile.TemporaryDirectory(prefix="check-spec-selftest-ledger-") as tmp:
+        path = Path(tmp) / "ledger"
+
+        def refused(text):
+            path.write_text(text, encoding="utf-8")
+            try:
+                reviewed.read_ledger(path)
+            except reviewed.Problem as problem:
+                return str(problem)
+            return None
+
+        reviewed.write_ledger(
+            path,
+            {
+                "DEMO-10": dict(entry, verdict="violation", severity="error", summary="a cost — and a long one " + "x " * 200),
+                "DEMO-2": entry,
+                "AAA-3": entry,
+            },
+        )
+        written = path.read_text(encoding="utf-8").splitlines()
+        read_back = reviewed.read_ledger(path)
+        listing = sorted(p.name for p in Path(tmp).iterdir())
+
+        # A write that dies partway, as a full disk does: the file that was there is still there.
+        earlier = path.read_bytes()
+        replace = reviewed.os.replace
+
+        def no_space(*_):
+            raise OSError("no space left on device")
+
+        reviewed.os.replace = no_space
+        try:
+            reviewed.write_ledger(path, {"DEMO-1": entry})
+            died = False
+        except OSError:
+            died = True
+        finally:
+            reviewed.os.replace = replace
+        survived = died and path.read_bytes() == earlier
+        (Path(tmp) / "ledger.new").unlink(missing_ok=True)
+
+        def refused_bytes(where):
+            where.write_bytes(b"DEMO-1 conforms - \xff\xfe\n")
+            try:
+                reviewed.read_ledger(where)
+            except reviewed.Problem as problem:
+                return "cannot be read" in str(problem)
+            except Exception:  # the run ends where the record should have been refused
+                return False
+            return False
+        return [
+            ("clauses are written in order of their numbers, not of their digits", [l.split()[0] for l in written if not l.startswith("#")] == ["AAA-3", "DEMO-2", "DEMO-10"]),
+            ("a summary is one short line with no em-dash", "—" not in written[-1] and len(read_back["DEMO-10"]["summary"]) <= reviewed.SUMMARY_LIMIT and read_back["DEMO-10"]["summary"].startswith("a cost, and a long one")),
+            ("a record is read back as it was written", read_back["DEMO-2"] == entry),
+            ("the file is replaced whole, leaving nothing beside it", listing == ["ledger"]),
+            ("a write that dies partway leaves the file that was there", survived),
+            ("a missing file is no record", reviewed.read_ledger(Path(tmp) / "absent") == {}),
+            ("a file that is not text is refused rather than crashing the run", refused_bytes(path)),
+            ("a well formed line is read", refused(line) is None),
+            ("a line missing its fields is refused with its number", "ledger:1" in (refused("DEMO-1 conforms\n") or "")),
+            ("a verdict the record does not keep is refused", refused(line.replace("conforms", "unclear")) is not None),
+            ("a conforming clause with a severity is refused", refused(line.replace(" - ", " error ")) is not None),
+            ("a violation with no severity is refused", refused(line.replace("conforms", "violation")) is not None),
+            ("a clause recorded twice is refused", refused(f"{line}\n{line}\n") is not None),
+            ("a hash that is not one is refused", refused(line.replace("0123456789abcdef", "xyz")) is not None),
+            ("a date that is not one is refused", refused(line.replace("2026-10-20", "yesterday")) is not None),
+            ("a commit that is not one is refused", refused(line.replace("0123456789ab ", "main ")) is not None),
+        ]
+
+
+
+THE_RECORD = "DEMO-1 conforms - 0123456789ab 0123456789abcdef 2026-10-20\n"
+
+
+def write_the_record(text):
+    def write(root):
+        (root / reviewed.LEDGER).write_text(text, encoding="utf-8")
+
+    return write
+
+
+CASES += [
+    ("a record every line of which is well formed", write_the_record(THE_RECORD), None),
+    ("a record line with fields missing", write_the_record("DEMO-1 conforms\n"), "reviewed-malformed"),
+    (
+        "a record line with a verdict the record does not keep",
+        write_the_record(THE_RECORD.replace("conforms", "unclear")),
+        "reviewed-malformed",
+    ),
+]
+
+
 # Which runs may write the file. A run given a filter read part of the tree, and the list is
 # about all of it.
 SELECTIONS = [
@@ -1282,7 +2250,7 @@ def in_fixture(break_it, ask):
 
 
 def generated_list():
-    return check.unverified_clauses(load_specs(), TestIndex(), crate_directories())
+    return check.unverified_clauses(load_specs(), TestIndex())
 
 
 def main():
@@ -1331,9 +2299,24 @@ def main():
     for name, held in sited:
         note(name, held, "the drafter chose a different place")
 
+    for name, held in bullet_checks():
+        note(name, held, "the bullet was written differently")
+
     selected = in_fixture(nest_a_spec, selection_checks)
     for name, held in selected:
         note(name, held, "the selector resolved to something else")
+
+    # What a repeat run reviews. The first three need no repository; the rest run in the fixture.
+    repeated = (
+        [(c, "the threshold decided otherwise") for c in decide_checks()]
+        + [(c, "the file read or wrote something else") for c in ledger_checks()]
+        + [(c, "the collector read the answer differently") for c in collect_checks()]
+        + [(c, "a hash moved, or did not") for c in in_fixture(build_incremental, hash_checks)]
+        + [(c, "the plan was not the one the record calls for") for c in in_fixture(build_incremental, incremental_checks)]
+        + [(c, "the scripts did not do what a run needs") for c in in_fixture(build_incremental, record_checks)]
+    )
+    for (name, held), why in repeated:
+        note(name, held, why)
 
     total = (
         len(CASES)
@@ -1345,6 +2328,7 @@ def main():
         + len(manifests)
         + len(sited)
         + len(selected)
+        + len(repeated)
     )
     print()
     if failures:

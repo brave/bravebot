@@ -3,6 +3,29 @@
 
 use super::*;
 
+/// The model a request names now: the pick where there is one, and otherwise the configured default,
+/// which a `model` key of the settings file sets.
+///
+/// What the picker marks as current, what the roster is ordered around, and what the budget, the
+/// level the roster says is read, the sign-in a session makes before a turn and the refusal of a level
+/// are asked about, so that a session opened on a configured model is not taken for one on Brave's
+/// `automatic`. The callers that hand a pick to `list_models`, `Config::adopt_window_of_model_in_force`
+/// and `Config::runs_on_chatgpt_account` leave the default to them, which read it themselves.
+pub(super) fn model_in_force<'a>(picked: Option<&'a str>, config: &'a Config) -> &'a str {
+    picked.unwrap_or(&config.default_model)
+}
+
+/// Whether the service has refused a level for the model in force, which the turn or the manifest run
+/// that has just ended may have learned. `refused` asks it of a model, so which model is asked is
+/// reached without a service that has refused one.
+pub(super) fn refused_level_in_force(
+    session: &Session,
+    config: &Config,
+    refused: impl FnOnce(&Config, &str) -> bool,
+) -> bool {
+    refused(config, model_in_force(session.model(), config))
+}
+
 /// Ask the endpoint what it offers.
 ///
 /// Shared by the picker and by the budget lookup a session does when it starts, because both want
@@ -12,6 +35,34 @@ pub(super) fn list_models(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+    // The account is asked only for a turn on one of its own models: every other caller needs the
+    // row of the model in force, and a session on a Brave or a gateway model has no business
+    // sending a stored sign-in's token to the serving host at each start and each turn.
+    roster(config, chosen, config.runs_on_chatgpt_account(chosen)).map(|roster| roster.models)
+}
+
+/// The rows a picker offers, and what a person is told where the rows of a service they use are not
+/// among them.
+pub(super) struct PickerRoster {
+    pub(super) models: Vec<bravebot_aichat::models::Model>,
+    /// One sentence for each service whose listing could not be read: a gateway that names no models
+    /// and could not be asked, and the ChatGPT account where a sign-in is stored and its listing
+    /// could not be had. A person who never signed in to ChatGPT is told nothing, and a listing that
+    /// was read, even an empty one, is not a problem.
+    pub(super) problems: Vec<String>,
+}
+
+/// [`list_models`] for the picker, which offers the account's models whatever is in force
+/// ([CHATGPT-9](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+pub(super) fn list_models_for_picker(
+    config: &Config,
+    chosen: Option<&str>,
+) -> Result<PickerRoster, String> {
+    roster(config, chosen, true)
+}
+
+/// The rosters of every service, with the ChatGPT account's where `account` says to ask it.
+fn roster(config: &Config, chosen: Option<&str>, account: bool) -> Result<PickerRoster, String> {
     // Bedrock is additive. Its tiers come from configuration rather than from a listing, since it has
     // no listing endpoint and an ARN does not say which model it resolves to, but the Brave roster is
     // what everyone has and a settings block adds to it rather than replacing it.
@@ -23,6 +74,8 @@ pub(super) fn list_models(
         .as_ref()
         .map(bedrock_models)
         .unwrap_or_default();
+    // What a person is told where a service they use could not be asked, in the order they were.
+    let mut problems = Vec::new();
 
     // Additive on the same terms. A block that named its models is taken at its word and costs no
     // round trip, which is what keeps a configured gateway working offline. One that named none is
@@ -40,20 +93,225 @@ pub(super) fn list_models(
         }
         match provider.models.is_empty() {
             false => configured.extend(provider_models(provider)),
-            true => configured.extend(in_reading_order(
-                fetch_gateway_models(provider).unwrap_or_default(),
-                chosen.unwrap_or(&config.default_model),
-            )),
+            true => {
+                let listed = match fetch_gateway_models(provider) {
+                    Ok(listed) => listed,
+                    // Said by `doctor`, and again when a turn is sent without one.
+                    Err(Unlisted::NoCredential) => Vec::new(),
+                    Err(Unlisted::Unreadable) => {
+                        problems.push(t!(
+                            session_gateway_models_unreadable,
+                            gateway = provider.display_name(),
+                            id = provider.id.as_str()
+                        ));
+                        Vec::new()
+                    }
+                };
+                configured.extend(in_reading_order(listed, model_in_force(chosen, config)));
+            }
         }
     }
+
+    // Additive like a gateway: a stored ChatGPT sign-in adds its models to the rows and takes none
+    // away. Not asked where nothing is signed in, and a listing that cannot be had adds the compiled
+    // names and is said, so a person who signed in does not take them for what the account reaches.
+    if account {
+        let asked = ask_the_account(config);
+        problems.extend(account_problem_said(&asked));
+        configured.extend(account_rows(asked, model_in_force(chosen, config)));
+    }
+    let rostered = |models| PickerRoster {
+        models: requestable(config, models),
+        problems,
+    };
 
     // A build from source pointed only at Bedrock has blank Brave credentials, and asking with them
     // would list a roster whose every request then fails unsigned.
     if !config.serves_aichat() {
-        return Ok(requestable(config, configured));
+        return Ok(rostered(configured));
     }
 
-    combined(configured, fetch_models(config)).map(|models| requestable(config, models))
+    combined(configured, fetch_models(config)).map(rostered)
+}
+
+/// Run a listing request under a policy that may fetch and nothing else.
+///
+/// A policy exists because `bravebot-net` is the only way out to the network and its gate takes one.
+/// Routing is the listing itself: this is not a turn, nothing is read from the workspace, and no
+/// model is involved, so there is no prompt to anchor it to. The caller names the destinations,
+/// which come from configuration, and `ask` makes the request under the policy.
+fn listing_under_policy<T, E: std::fmt::Display>(
+    routing: bravebot_core::policy::Routing,
+    ask: impl FnOnce(&mut bravebot_core::policy::Policy<'_, Trail>, &Egress) -> Result<T, E>,
+) -> Result<T, String> {
+    let mut sink = Trail::new();
+    let egress = Egress::new();
+
+    bravebot_core::policy::Policy::begin(
+        routing,
+        bravebot_core::policy::ReleasePlan::new(),
+        bravebot_core::capability::CapabilitySet::from_iter([
+            bravebot_core::capability::Capability::WebFetch,
+        ]),
+        &mut sink,
+    )
+    .map_err(|denial| denial.to_string())
+    .and_then(|mut policy| ask(&mut policy, &egress).map_err(|error| error.to_string()))
+}
+
+/// Ask the Brave endpoint what it offers.
+fn fetch_models(config: &Config) -> Result<Vec<bravebot_aichat::models::Model>, String> {
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("models", config.models_url());
+
+    listing_under_policy(routing, |policy, egress| {
+        bravebot_aichat::models::list(policy, config, egress)
+    })
+}
+
+/// Ask one gateway what it offers, for a block that named no models.
+///
+/// What comes back names the gateway the same way a configured model from it does, so one service
+/// does not appear twice under two names in the same list.
+///
+/// A gateway whose block named a credential nothing holds is not asked. The listing would come back
+/// refused, and the useful thing to say about that gateway is what `doctor` already says: no
+/// credential found. A service with a compiled list is the exception: offering that list asks
+/// nothing, so it is offered with the key missing, and the missing key is said when a turn is sent,
+/// as it is for a model a block names.
+///
+/// A block naming no credential at all is asked, unauthenticated. That is somebody saying the gateway
+/// wants none, and it is the block a local Ollama is configured with. That block lists no models
+/// either, so not asking leaves it offering nothing.
+///
+/// Why there is no roster is not told in the words of the error that says so, which belong to the
+/// service and to this process and are not for a picker's note: a listing that could not be read is
+/// said to the person, and a credential that is missing is not, since `doctor` says it.
+fn fetch_gateway_models(
+    provider: &bravebot_config::provider::Provider,
+) -> Result<Vec<bravebot_aichat::models::Model>, Unlisted> {
+    let token = match provider.credential(|name| std::env::var(name).ok()) {
+        bravebot_config::provider::Credential::Token(token) => Some(token),
+        bravebot_config::provider::Credential::NotNeeded => None,
+        bravebot_config::provider::Credential::Absent if provider.compiled_roster().is_some() => {
+            None
+        }
+        bravebot_config::provider::Credential::Absent => return Err(Unlisted::NoCredential),
+    };
+
+    // Resolved beside the token, from the same environment, for the same reason: a value may name a
+    // variable, and one read at startup is stale once somebody exports another.
+    let headers = provider.request_headers(|name| std::env::var(name).ok());
+
+    // Both destinations are the gateway's own endpoint, which came from configuration. Nothing
+    // fetched decides either, which is what makes asking a service for a list of names safe at all.
+    let mut routing = bravebot_core::policy::Routing::new();
+    routing.insert_trusted("models", provider.models_url());
+    routing.insert_trusted("account-models", provider.account_models_url());
+
+    listing_under_policy(routing, |policy, egress| {
+        let token = token.as_ref().map(bravebot_config::Secret::expose);
+        bravebot_aichat::models::list_from_gateway(policy, provider, token, &headers, egress)
+    })
+    .map_err(|_| Unlisted::Unreadable)
+}
+
+/// Why a gateway that names no models has none among the rows.
+#[derive(Debug, PartialEq, Eq)]
+enum Unlisted {
+    /// The block names a credential nothing holds, so the gateway was not asked.
+    NoCredential,
+    /// The gateway was asked and its listing could not be read: the request failed, or what answered
+    /// was not a listing.
+    Unreadable,
+}
+
+/// What the ChatGPT account offers, asked of the serving host with the stored sign-in
+/// ([CHATGPT-9](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// The one place this crate asks. A unit test never reaches the host, which is compiled in and would
+/// be sent a stored sign-in's token from a machine that has one: it gets the answer it scripted on
+/// its thread, or an account nobody signed in to, and can read how often it was asked.
+fn ask_the_account(config: &Config) -> bravebot_agent::chatgpt::AccountModels {
+    #[cfg(test)]
+    {
+        let _ = config;
+        scripted_account::ask()
+    }
+    #[cfg(not(test))]
+    {
+        bravebot_agent::chatgpt::account_models(config, &mut Trail::new())
+    }
+}
+
+/// The rows the ChatGPT account adds to a roster (CHATGPT-9), in the order a fetched gateway
+/// roster is met in.
+///
+/// Split from the request so the joining is testable without a server. A listing that could not be
+/// had adds the compiled list, and one the service refused in a code that names the account adds
+/// nothing.
+pub(super) fn account_rows(
+    account: bravebot_agent::chatgpt::AccountModels,
+    chosen: &str,
+) -> Vec<bravebot_aichat::models::Model> {
+    match account {
+        bravebot_agent::chatgpt::AccountModels::Offered(rows)
+        | bravebot_agent::chatgpt::AccountModels::Compiled(rows) => in_reading_order(rows, chosen),
+        bravebot_agent::chatgpt::AccountModels::Absent
+        | bravebot_agent::chatgpt::AccountModels::Unreadable
+        | bravebot_agent::chatgpt::AccountModels::Refused(_) => Vec::new(),
+    }
+}
+
+/// What a picker says where the ChatGPT account's models could not be had, or `None` where there is
+/// nothing to say (CHATGPT-9).
+///
+/// A listing refused in a code that names the account is said in that clause's sentence, which does
+/// not send the person to sign in again, since a new sign-in changes nothing there. An account
+/// nobody signed in to, and one whose listing was read, are not a problem.
+pub(super) fn account_problem_said(
+    account: &bravebot_agent::chatgpt::AccountModels,
+) -> Option<String> {
+    match account {
+        bravebot_agent::chatgpt::AccountModels::Unreadable => {
+            Some(t!(session_chatgpt_models_unreadable).into())
+        }
+        bravebot_agent::chatgpt::AccountModels::Compiled(_) => {
+            Some(t!(session_chatgpt_models_compiled).into())
+        }
+        bravebot_agent::chatgpt::AccountModels::Refused(refusal) => Some(t!(
+            session_chatgpt_models_refused,
+            refusal = bravebot_agent::chatgpt::said_of_refusal(*refusal)
+        )),
+        bravebot_agent::chatgpt::AccountModels::Absent
+        | bravebot_agent::chatgpt::AccountModels::Offered(_) => None,
+    }
+}
+
+/// The rows of the ChatGPT account that a start nothing serves offers to choose a model from
+/// ([BACKEND-39](../../../../docs/specs/backends.md#BACKEND-39)): the account's rows as the picker
+/// lists them, in the picker's order and without the models the machine-level layer refuses. Where
+/// there is none, the listing that gave none, so the start can say why.
+///
+/// Only rows the service listed. Where the listing could not be had, the picker offers the compiled
+/// names beside what it says, and a start that did the same would choose a model the account may
+/// refuse for a person who has not yet seen a turn. A listing that was refused, that cannot be read
+/// from the sign-in file, that was read and is empty, and an account whose sign-in ended while it was
+/// asked for, are no rows at all.
+pub fn account_models_to_start_on(
+    config: &Config,
+) -> Result<Vec<bravebot_aichat::models::Model>, bravebot_agent::chatgpt::AccountModels> {
+    match ask_the_account(config) {
+        listed @ bravebot_agent::chatgpt::AccountModels::Offered(_) => {
+            match requestable(config, account_rows(listed, &config.default_model)) {
+                rows if rows.is_empty() => {
+                    Err(bravebot_agent::chatgpt::AccountModels::Offered(Vec::new()))
+                }
+                rows => Ok(rows),
+            }
+        }
+        none => Err(none),
+    }
 }
 
 /// The roster without the models the machine-level layer refuses (BACKEND-48).
@@ -203,10 +461,7 @@ pub(super) fn provider_models(
             // A block names models and never their parameters, so the level goes out to be judged
             // at the far end and the judgment is the only description there is: read one where
             // this service has already refused the field for this model.
-            reads_effort: bravebot_aichat::reads_effort(
-                &provider.chat_completions_url(),
-                &model.id,
-            ),
+            reads_effort: bravebot_aichat::reads_effort(&provider.completion_url(), &model.id),
             // A block names models and describes none of them, so there is nothing to carry.
             advertised: bravebot_aichat::models::Advertised::default(),
         })
@@ -223,6 +478,7 @@ pub(super) fn provider_models(
 /// is what it was before this existed, and a session that is merely offline should not open with a
 /// complaint about a request nobody asked for.
 pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut Config) {
+    note_whether_the_model_in_force_is_the_accounts(session, config);
     let Ok(models) = list_models(config, session.model()) else {
         return;
     };
@@ -234,18 +490,30 @@ pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut
     }) {
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
-    let in_force = session.model().unwrap_or(&config.default_model).to_string();
-    config.adopt_inputs(&in_force, advertised_inputs(&models, session.model()));
+    let in_force = model_in_force(session.model(), config).to_string();
+    config.adopt_inputs(&in_force, advertised_inputs(&models, Some(&in_force)));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
     // The model in force, not the pick: with no pick the configured default is what a request names,
     // and it is the roster row for that one which says whether a level is read (BACKEND-22).
-    session.note_model_reads_effort(reads_effort_in_force(
+    session.note_model_reads_effort(reads_effort(
         &models,
-        session.model(),
-        &config.default_model,
+        model_in_force(session.model(), config),
     ));
+}
+
+/// Record whether the model in force, the pick or else the configured default, is one of the ChatGPT
+/// account's, which decides whether the level a turn sends is the one chosen or the one the session
+/// began with (CHATGPT-10).
+///
+/// Whatever a listing says, and before one is asked for: it is the configuration that names which
+/// service answers a model.
+pub(super) fn note_whether_the_model_in_force_is_the_accounts(
+    session: &mut Session,
+    config: &Config,
+) {
+    session.note_model_is_account(config.runs_on_chatgpt_account(session.model()));
 }
 
 /// Take on a level the service refused while a turn was running.
@@ -305,6 +573,48 @@ pub fn adopt_listing_for_model(config: &mut Config, model: &str) -> bool {
     reads_effort(&models, model)
 }
 
+/// The model other than the session's that answers a turn, whose window is the budget it compacts
+/// against (BACKEND-7): the one a `/agent` line's definition names, and otherwise `planModel` for a
+/// turn that begins in plan mode (BACKEND-56).
+///
+/// Settled by the agent's [`answering`](bravebot_agent::backend::answering), the function the turn
+/// settles its own model with, so the window is read for the model the turn runs on. A plan model
+/// the turn will set aside leaves the session's window with the session's model.
+pub(super) fn model_answering_the_turn(
+    config: &Config,
+    egress: &bravebot_net::Egress,
+    started_in: bravebot_agent::PermissionMode,
+    task: &Task,
+    addressed_model: Option<&str>,
+) -> Option<String> {
+    use bravebot_agent::backend::{Answering, answering};
+    match answering(config, egress, started_in, task, addressed_model.is_some()) {
+        Answering::Definition => addressed_model.map(str::to_string),
+        Answering::Plan(model) => Some(model),
+        Answering::PlanSetAside(_) | Answering::Task => None,
+    }
+}
+
+/// What a turn is run with: the task told the mode the turn began in, and the configuration whose
+/// window is that of the model that answers it (BACKEND-7, BACKEND-56).
+///
+/// The mode is read here, once. The window is sized from that reading and the task carries it, so
+/// the turn begins in the mode its window was sized for even where the key that sets the mode is
+/// pressed as the turn opens (MODE-8).
+pub(super) fn settle_the_turn(
+    config: &Config,
+    egress: &bravebot_net::Egress,
+    task: Task,
+    mode: &bravebot_agent::LiveMode,
+    addressed_model: Option<&str>,
+) -> (Task, Config) {
+    let started_in = mode.get();
+    let task = task.beginning_in(started_in);
+    let answering = model_answering_the_turn(config, egress, started_in, &task, addressed_model);
+    let turn = config_for_turn(config, answering.as_deref());
+    (task, turn)
+}
+
 /// The configuration a turn is run on: the session's, with the window of the model that answers it
 /// where a `/agent` line's definition names one other than the session's (BACKEND-7).
 ///
@@ -347,18 +657,6 @@ pub(super) fn lists_structured_output(
                 .iter()
                 .any(|it| it == "structured_outputs" || it == "response_format")
         })
-}
-
-/// Whether the roster says the model a request names reads an effort level: the pick where there is
-/// one, and the configured default where there is none.
-///
-/// Split out so the choice of which name is looked up is testable without a server.
-pub(super) fn reads_effort_in_force(
-    models: &[bravebot_aichat::models::Model],
-    picked: Option<&str>,
-    default_model: &str,
-) -> bool {
-    reads_effort(models, picked.unwrap_or(default_model))
 }
 
 /// Whether the roster says `chosen` reads an effort level.
@@ -417,11 +715,37 @@ pub(super) fn choose_model(
     session: &mut Session,
     config: &mut Config,
 ) {
-    match list_models(config, session.model()) {
-        Ok(models) => {
-            let chosen = crate::model_prompt::choose(terminal, models, session.model(), |frame| {
-                render::draw(frame, session);
-            });
+    choose_model_with(session, config, |models, current, session| {
+        crate::model_prompt::choose(terminal, models, current, |frame| {
+            render::draw(frame, session);
+        })
+    });
+}
+
+/// [`choose_model`] with what puts the list in front of a person stated: it is given the rows, the
+/// model in force to mark as current and the session to draw behind the list, and returns the row that
+/// was picked, if one was.
+///
+/// Split so the part that decides what is offered and which row is current is reached without a
+/// terminal to read keys from.
+pub(super) fn choose_model_with(
+    session: &mut Session,
+    config: &mut Config,
+    choose: impl FnOnce(
+        Vec<bravebot_aichat::models::Model>,
+        Option<&str>,
+        &Session,
+    ) -> Option<bravebot_aichat::models::Model>,
+) {
+    match list_models_for_picker(config, session.model()) {
+        Ok(PickerRoster { models, problems }) => {
+            // Before the picker draws, so the sentences are in the transcript behind it and stay there
+            // once it closes.
+            for problem in problems {
+                session.note(problem);
+            }
+            let current = Some(model_in_force(session.model(), config));
+            let chosen = choose(models, current, session);
             if let Some(chosen) = chosen {
                 model_picked(session, config, chosen);
             }
@@ -456,9 +780,13 @@ pub(super) fn model_picked(
         None => t!(session_using_model, model = &chosen.display_name),
     });
     session.note_model_reads_effort(chosen.reads_effort);
+    session.note_model_is_account(config.chatgpt_model(&chosen.key).is_some());
     if !chosen.reads_effort && session.effort().is_some() {
         session.note(t!(session_effort_not_read));
     }
+    // A model the session moves to is sent the level the session began with where it is the
+    // account's, which the person is told where it is not the one they chose.
+    say_if_kept_for_account(session);
     session.choose_model(chosen.key, config);
 }
 
@@ -467,10 +795,92 @@ pub(super) fn model_picked(
 ///
 /// A refusal or an unreachable endpoint leaves the model as it was and says so, as at rest.
 pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
-    match list_models(config, session.model()) {
-        Ok(models) => session.open_picking(crate::picking::Picking::Model(
-            crate::model_prompt::Picker::new(models, session.model()),
-        )),
+    match list_models_for_picker(config, session.model()) {
+        Ok(PickerRoster { models, problems }) => {
+            for problem in problems {
+                session.note(problem);
+            }
+            session.open_picking(crate::picking::Picking::Model(
+                crate::model_prompt::Picker::new(
+                    models,
+                    Some(model_in_force(session.model(), config)),
+                ),
+            ));
+        }
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),
+    }
+}
+
+/// What a unit test scripts for the account's listing, and how often it was asked for.
+#[cfg(test)]
+pub(super) mod scripted_account {
+    use bravebot_agent::chatgpt::AccountModels;
+    use bravebot_aichat::models::Model;
+    use bravebot_aichat::responses::protocol::Refusal;
+    use std::cell::{Cell, RefCell};
+
+    /// What the account answers on this thread.
+    enum Answer {
+        Models(Vec<Model>),
+        Unreadable,
+        Compiled,
+        Refused(Refusal),
+    }
+
+    thread_local! {
+        static ANSWER: RefCell<Option<Answer>> = const { RefCell::new(None) };
+        static ASKED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn script(answer: Answer) {
+        ANSWER.with(|scripted| *scripted.borrow_mut() = Some(answer));
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// Offer `models` to whatever asks on this thread, and forget how often it was asked.
+    pub(in crate::app) fn offer(models: Vec<Model>) {
+        script(Answer::Models(models));
+    }
+
+    /// Answer as a machine nobody signed in to does: nothing is offered and nothing is said.
+    pub(in crate::app) fn nobody_signed_in() {
+        ANSWER.with(|scripted| *scripted.borrow_mut() = None);
+        ASKED.with(|asked| asked.set(0));
+    }
+
+    /// Answer that the listing could not be had, so the compiled list stands in for it.
+    pub(in crate::app) fn fail_to_list() {
+        script(Answer::Compiled);
+    }
+
+    /// Answer that nothing can be offered because the sign-in file could not be read.
+    pub(in crate::app) fn fail_to_read_the_file() {
+        script(Answer::Unreadable);
+    }
+
+    /// Answer that the listing was refused in a code that names the account.
+    pub(in crate::app) fn refuse(refusal: Refusal) {
+        script(Answer::Refused(refusal));
+    }
+
+    /// How often the account was asked about on this thread since the last script, or since it
+    /// began.
+    pub(in crate::app) fn asked() -> usize {
+        ASKED.with(Cell::get)
+    }
+
+    pub(super) fn ask() -> AccountModels {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        ANSWER.with(|scripted| match scripted.borrow().as_ref() {
+            Some(Answer::Models(models)) => AccountModels::Offered(models.clone()),
+            Some(Answer::Unreadable) => AccountModels::Unreadable,
+            Some(Answer::Compiled) => {
+                AccountModels::Compiled(bravebot_aichat::models::compiled_for_account(
+                    &bravebot_config::provider::Provider::chatgpt_account(),
+                ))
+            }
+            Some(Answer::Refused(refusal)) => AccountModels::Refused(*refusal),
+            None => AccountModels::Absent,
+        })
     }
 }

@@ -293,7 +293,10 @@ impl SeatbeltSandbox {
 /// The per-user cache directory the platform names for this account, with its links followed,
 /// which is how Seatbelt matches it. `None` where the platform does not name one.
 // The exemption sits on the function because the function is the syscall.
-#[allow(unsafe_code)]
+#[allow(
+    unsafe_code,
+    reason = "confstr(_CS_DARWIN_USER_CACHE_DIR) writes into a local PATH_MAX buffer, and its length is checked"
+)]
 #[cfg(target_os = "macos")]
 pub fn user_cache_directory() -> Option<std::path::PathBuf> {
     let mut buffer = [0u8; libc::PATH_MAX as usize];
@@ -327,11 +330,11 @@ pub fn developer_directory() -> Option<std::path::PathBuf> {
     static DIRECTORY: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     DIRECTORY
         .get_or_init(|| {
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "the program is `/usr/bin/xcode-select`, an absolute path written here"
-            )]
-            let mut command = std::process::Command::new("/usr/bin/xcode-select");
+            let mut command = crate::programs::start(
+                &crate::programs::Resolved::written_in_source("/usr/bin/xcode-select"),
+                crate::programs::Inherits::All,
+                crate::programs::SearchPath::Inherited,
+            );
             command
                 .arg("-p")
                 .env_remove("DEVELOPER_DIR")
@@ -500,12 +503,13 @@ impl SeatbeltSandbox {
             });
         }
 
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the program is `SANDBOX_EXEC`, an absolute path written here; the program \
-                      it confines is an argument the caller chose"
-        )]
-        let mut wrapped = Command::new(SANDBOX_EXEC);
+        // The program is `SANDBOX_EXEC`, an absolute path written here. The program it confines is
+        // an argument the caller chose, and runs under the profile.
+        let mut wrapped = crate::programs::start(
+            &crate::programs::Resolved::written_in_source(SANDBOX_EXEC),
+            crate::programs::Inherits::All,
+            crate::programs::SearchPath::Inherited,
+        );
         wrapped.arg("-p").arg(Self::profile(policy));
         wrapped.args(confined_argv(
             program,
@@ -2942,6 +2946,7 @@ int main(int argc, char **argv) {
         let held_back = [
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
+            ".bravebot/chatgpt-account.json",
             ".bravebot/mcp.json",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",

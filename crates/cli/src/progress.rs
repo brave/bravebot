@@ -33,6 +33,25 @@ const BLOCK_WIDTH: usize = 80;
 
 pub(crate) use bravebot_approval::printable;
 
+/// A file's path as [`printable`] draws it.
+pub(crate) fn printable_path(path: &std::path::Path) -> String {
+    printable(&path.display().to_string())
+}
+
+/// One dropped permission entry, said as [`bravebot_agent::permissions::describe`] says it, with
+/// the entry and the file it was written in pictured by [`printable`] (LAYER-3).
+///
+/// Both are text a checkout's settings file chose, and `describe` puts them into the sentence
+/// unchanged. The sentence's own words are left alone, so a message that runs over several lines
+/// keeps its breaks.
+pub(crate) fn described(rejected: &bravebot_core::permissions::Rejected) -> String {
+    bravebot_agent::permissions::describe(&bravebot_core::permissions::Rejected {
+        text: printable(&rejected.text),
+        reason: rejected.reason,
+        file: rejected.file.as_deref().map(printable),
+    })
+}
+
 /// One line of shown content as rows, each beginning with the margin.
 fn marked(margin: &str, line: &str) -> Vec<String> {
     // One column at least. A margin wider than the block still gets its margin, and the content
@@ -75,7 +94,13 @@ fn tokens_of(spent: bravebot_agent::Spent) -> Tokens {
 /// Generic over the sink so a test can read back exactly what a run would have printed.
 pub struct Progress<W: Write> {
     out: W,
+    /// What the turn running now has cost, as it last reported it. A turn reports from nothing, so
+    /// this restarts when the next one begins.
     spent: bravebot_agent::Spent,
+    /// What the rounds before this one and the judge's checks cost, for a run that works towards a
+    /// goal (CLI-35). Zero for every other run, which is what leaves their figures as the turn
+    /// reported them.
+    earlier: bravebot_agent::Spent,
     /// Every call the run made, in order, for a result object that has to list them.
     ///
     /// Kept here because this is the one thing told about every call, start and finish, and a
@@ -87,6 +112,8 @@ pub struct Progress<W: Write> {
     /// these on it and the ending prints them from there: written twice, a run that loaded a skill
     /// would say so once in the middle of its progress and once at the end.
     notices: Vec<String>,
+    /// How many of `notices` the rounds before this one said, for a goal run (CLI-35).
+    earlier_notices: usize,
     /// Where each call and each finished request is written as it happens, for `--json-stream`.
     stream: Option<Stream>,
     /// Where the turn's prompt entered the recounted conversation, for a run that writes its
@@ -99,8 +126,10 @@ impl<W: Write> Progress<W> {
         Self {
             out,
             spent: Default::default(),
+            earlier: Default::default(),
             calls: Vec::new(),
             notices: Vec::new(),
+            earlier_notices: 0,
             stream: None,
             prompt_at: None,
         }
@@ -117,8 +146,51 @@ impl<W: Write> Progress<W> {
         self.prompt_at
     }
 
+    /// What the run has cost: every round so far and every check of its goal, with the turn running
+    /// now.
     pub fn spent(&self) -> bravebot_agent::Spent {
-        self.spent
+        self.counted()
+    }
+
+    /// [`Progress::spent`], under a name the `Reporter` method of the same name cannot take.
+    fn counted(&self) -> bravebot_agent::Spent {
+        let mut total = self.spent;
+        total.add_spent(&self.earlier);
+        // A turn that has not made its first request has no reading yet, and the last one's is
+        // still how full the conversation is.
+        if total.context_tokens == 0 {
+            total.context_tokens = self.earlier.context_tokens;
+        }
+        total.timing.add(self.earlier.timing);
+        total
+    }
+
+    /// Start the next round of a goal run. What the finished one cost is kept, so the figures a
+    /// stream and a failure report keep rising rather than starting again from nothing.
+    pub fn next_round(&mut self) {
+        self.earlier = self.counted();
+        self.spent = Default::default();
+        self.earlier_notices = self.notices.len();
+    }
+
+    /// What every round before the one running now, and every check of the goal, cost.
+    pub fn earlier(&self) -> bravebot_agent::Spent {
+        self.earlier
+    }
+
+    /// Add what one check of the goal cost, which no turn reports.
+    pub fn charge(&mut self, spent: bravebot_agent::Spent) {
+        let before = tokens_of(self.counted());
+        self.earlier.add_spent(&spent);
+        self.announce(before);
+    }
+
+    /// Write a usage event if the cost differs from `before`.
+    fn announce(&mut self, before: Tokens) {
+        let counted = tokens_of(self.counted());
+        if let (true, Some(stream)) = (counted != before, self.stream.as_mut()) {
+            stream.line(&json::usage_event(&counted));
+        }
     }
 
     /// What the run called, in the order it called it.
@@ -157,12 +229,9 @@ impl<W: Write> Reporter for Progress<W> {
         // Reported more often than the figure moves: at the start, with nothing, and again for a
         // request already counted. Only a change is an event, since a line repeating the last one
         // tells a caller following the stream nothing and reads as a request that did not happen.
-        let counted = tokens_of(spent);
-        let changed = counted != tokens_of(self.spent);
+        let before = tokens_of(self.counted());
         self.spent = spent;
-        if let (true, Some(stream)) = (changed, self.stream.as_mut()) {
-            stream.line(&json::usage_event(&counted));
-        }
+        self.announce(before);
     }
 
     /// Left to the per-call lines. A task list redrawn in place is legible; the same list
@@ -180,6 +249,12 @@ impl<W: Write> Reporter for Progress<W> {
 
     /// Kept for the ending to print. See [`Progress::notices`] for why it is not said here.
     fn notice(&mut self, text: String) {
+        // Every round of a goal run says what a turn says about itself, and a sentence an earlier
+        // round already said is the same fact, so a run that fails in round six does not print it
+        // six times.
+        if self.notices[..self.earlier_notices].contains(&text) {
+            return;
+        }
         self.notices.push(text);
     }
 
@@ -238,15 +313,12 @@ impl<W: Write> Reporter for Progress<W> {
             .take(bravebot_agent::messages::ID_SHOWN)
             .collect();
         self.say("");
-        self.say(&printable(
-            &t!(
-                session_message_heading,
-                from = from,
-                name = heard.name,
-                label = heard.label
-            )
-            .to_string(),
-        ));
+        self.say(&printable(&t!(
+            session_message_heading,
+            from = from,
+            name = heard.name,
+            label = heard.label
+        )));
         match heard.body {
             Reported::Said(text) => self.draw_quoted(&text),
             Reported::Kept(shown) => self.draw_quarantined(&shown),
@@ -263,15 +335,12 @@ impl<W: Write> Reporter for Progress<W> {
             .take(bravebot_agent::messages::ID_SHOWN)
             .collect();
         self.say("");
-        self.say(&printable(
-            &t!(
-                session_message_sent_heading,
-                to = to,
-                name = sent.name,
-                label = sent.label
-            )
-            .to_string(),
-        ));
+        self.say(&printable(&t!(
+            session_message_sent_heading,
+            to = to,
+            name = sent.name,
+            label = sent.label
+        )));
         self.draw_quoted(&sent.text);
     }
 }
@@ -299,7 +368,15 @@ impl<W: Write> Progress<W> {
             label = &shown.label
         )];
         block.extend(shown.reach.note().map(|note| format!("  {note}")));
-        block.extend(shown.preview.iter().cloned());
+
+        // The preview's colour codes are taken out and counted (VIEW-30). The heading is not
+        // touched, since its origin can be a filename and a person is shown every byte of one.
+        let mut dropped = 0;
+        block.extend(shown.preview.iter().map(|line| {
+            let (plain, taken) = bravebot_tui::colour_codes::without(line);
+            dropped += taken;
+            plain
+        }));
 
         // Said rather than silently dropped: a preview that stops without saying so reads as the
         // whole of what was there.
@@ -309,6 +386,7 @@ impl<W: Write> Progress<W> {
                 count = shown.lines - shown.preview.len()
             ));
         }
+        block.extend(bravebot_tui::colour_codes::note(dropped));
 
         self.say("");
         for line in &block {
@@ -607,6 +685,93 @@ mod tests {
         );
     }
 
+    /// A program that colours its output writes a code around each coloured word, and drawn as
+    /// pictures they bury the words. The block shows the words and says how many codes it left
+    /// out, behind the same margin as every other row (VIEW-30).
+    #[test]
+    fn colour_codes_in_a_block_are_counted_and_not_drawn() {
+        let written = log(|p| {
+            p.quarantined(quarantining(
+                vec!["\u{1b}[0m\u{1b}[36m\u{251c}\u{1b}[0m Announcement: a link".to_string()],
+                1,
+            ))
+        });
+
+        assert!(
+            written.contains("\u{251c} Announcement: a link"),
+            "got: {written:?}"
+        );
+        assert!(
+            !written.contains("[36m") && !written.contains("[0m") && !written.contains('\u{241b}'),
+            "a colour code was drawn as text: {written:?}"
+        );
+        let note = written
+            .lines()
+            .find(|row| row.contains("3 colour codes not drawn"))
+            .unwrap_or_else(|| panic!("the count was not written: {written:?}"));
+        assert_eq!(
+            note.chars().position(|c| !c.is_whitespace()),
+            note.chars().position(|c| c == BAR),
+            "the count begins with content rather than the margin: {note:?}"
+        );
+    }
+
+    /// Only a colour code is left out. An erase beside one is written as pictures and not counted
+    /// as a colour, and the heading's origin is a filename a person is shown every byte of.
+    #[test]
+    fn only_colour_codes_are_left_out_of_a_block() {
+        let mut shown = quarantining(vec!["\u{1b}[31mred\u{1b}[2Jcleared".to_string()], 1);
+        shown.origin = "a\u{1b}[8mb.md".to_string();
+        let written = log(|p| p.quarantined(shown));
+
+        assert!(
+            written.contains("red\u{241b}[2Jcleared"),
+            "got: {written:?}"
+        );
+        assert!(
+            written.contains("a\u{241b}[8mb.md"),
+            "the origin was changed: {written:?}"
+        );
+        assert!(
+            written.contains("1 colour code not drawn"),
+            "got: {written:?}"
+        );
+        assert!(!written.contains('\u{1b}'), "got: {written:?}");
+    }
+
+    /// A block with no colour code says nothing about them.
+    #[test]
+    fn a_block_without_colour_codes_says_nothing_about_them() {
+        let written = log(|p| p.quarantined(quarantining(vec!["plain".to_string()], 1)));
+
+        assert!(!written.contains("colour code"), "got: {written:?}");
+    }
+
+    /// The sentence about a dropped rule is the catalog's, and the rule and the file are a
+    /// checkout's. Both are drawn as pictures, and the sentence around them keeps its own breaks,
+    /// so the replacement is of the pieces rather than of the whole line.
+    #[test]
+    fn a_dropped_rule_and_the_file_it_was_written_in_are_described_as_pictures() {
+        let rejected = bravebot_core::permissions::Rejected {
+            text: "\u{1b}[8mrule".to_string(),
+            reason: bravebot_core::permissions::Unreadable::NotAList,
+            file: Some("\u{1b}[8mfile.json".to_string()),
+        };
+
+        let said = described(&rejected);
+
+        assert!(
+            !said.chars().any(|c| c.is_control() && c != '\n'),
+            "the sentence holds a control character from the checkout: {said:?}"
+        );
+        for piece in ["\u{241b}[8mrule", "\u{241b}[8mfile.json"] {
+            assert!(
+                said.contains(piece),
+                "{piece:?} was left out of the sentence rather than pictured: {said:?}"
+            );
+        }
+    }
+
     /// A previewed line arrives trimmed to a width wider than most terminals. Left whole, the
     /// terminal wraps it, and the row it wraps onto starts at column 0 with no margin at all.
     #[test]
@@ -649,5 +814,116 @@ mod tests {
         let mut progress = Progress::new(Closed);
         progress.tool_started(Activity::running("Read", "a.rs"));
         progress.narration("still fine".into());
+    }
+
+    /// A turn that starts again from nothing is one round of a run that works towards a goal
+    /// (CLI-35), so what the run has cost is the rounds before it and the checks between them as
+    /// well, whether it ends in an answer or in a failure.
+    #[test]
+    fn what_a_run_has_cost_adds_up_across_its_rounds_and_its_checks() {
+        let a_round = |tokens: u64| bravebot_agent::Spent {
+            tokens,
+            output_tokens: tokens / 10,
+            context_tokens: tokens,
+            ..Default::default()
+        };
+        let mut progress = Progress::new(std::io::sink());
+
+        Reporter::spent(&mut progress, a_round(100));
+        progress.charge(a_round(30));
+        progress.next_round();
+        assert_eq!(
+            progress.spent().tokens,
+            130,
+            "the round that finished was forgotten or counted twice"
+        );
+        Reporter::spent(&mut progress, bravebot_agent::Spent::default());
+        assert_eq!(
+            progress.spent().tokens,
+            130,
+            "the round before was forgotten"
+        );
+        assert_eq!(
+            progress.spent().context_tokens,
+            100,
+            "a round that has made no request reads as an empty conversation"
+        );
+        Reporter::spent(&mut progress, a_round(40));
+
+        let total = progress.spent();
+        assert_eq!(total.tokens, 170);
+        assert_eq!(total.output_tokens, 4 + 10 + 3);
+        assert_eq!(
+            total.context_tokens, 40,
+            "the last request is how full it is"
+        );
+        assert_eq!(progress.earlier().tokens, 130);
+    }
+
+    /// A caller following a stream reads the usage as a running total, so the first request of the
+    /// next round must not read as the total falling back to its own.
+    #[test]
+    fn a_streamed_total_never_falls_when_the_next_round_starts() {
+        #[derive(Clone, Default)]
+        struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for Shared {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                let mut held = self
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                held.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let written = Shared::default();
+        let mut progress =
+            Progress::new(std::io::sink()).streaming(Some(Stream::new(written.clone())));
+        let a_round = |tokens: u64| bravebot_agent::Spent {
+            tokens,
+            ..Default::default()
+        };
+
+        Reporter::spent(&mut progress, a_round(100));
+        progress.charge(a_round(30));
+        progress.next_round();
+        Reporter::spent(&mut progress, bravebot_agent::Spent::default());
+        Reporter::spent(&mut progress, a_round(40));
+
+        let text = String::from_utf8(written.0.lock().expect("a lock").clone()).expect("utf-8");
+        let totals: Vec<u64> = text
+            .lines()
+            .map(|line| {
+                let at = line.find(r#""total":"#).expect(line) + r#""total":"#.len();
+                let digits: String = line[at..]
+                    .chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                digits.parse().expect(line)
+            })
+            .collect();
+        assert_eq!(totals, [100, 130, 170], "{text}");
+    }
+
+    /// Each round of a goal run says what a turn says about itself, so what a run that fails in a
+    /// later round has to print is each sentence once, and a sentence only a later round says too.
+    #[test]
+    fn a_notice_a_later_round_says_again_is_kept_once() {
+        let mut progress = Progress::new(std::io::sink());
+
+        progress.notice("loaded AGENTS.md".to_string());
+        progress.next_round();
+        progress.notice("loaded AGENTS.md".to_string());
+        progress.notice("a hook failed".to_string());
+        progress.notice("a hook failed".to_string());
+
+        assert_eq!(
+            progress.notices(),
+            ["loaded AGENTS.md", "a hook failed", "a hook failed"],
+            "a sentence one round said twice is that round's to say, and another round's is not"
+        );
     }
 }

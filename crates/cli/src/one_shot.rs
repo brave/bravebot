@@ -41,11 +41,19 @@ pub(crate) struct OneShot<R: Read, W: Write> {
     alert: Option<bravebot_agent::PromptAlert>,
     /// The effects that went unapproved because nobody was there to approve them, in order.
     ///
-    /// A refusal the policy never saw: the tool answers a declined question with a problem for the
-    /// planner and never calls the gate, so the run's own clean flag stays true. Kept here, at the
-    /// one place that knows the answer was a refusal for want of anybody to ask, so the run can end
-    /// on the status that says a gate refused something (CLI-6).
+    /// Kept here, at the one place that knows the answer was a refusal for want of anybody to ask,
+    /// so the run can end on the status that says a gate refused something (CLI-6). A question the
+    /// tool answers with a problem for the planner without telling the policy leaves the run's own
+    /// clean flag true, and this is then the only record of it. A write, a run, a fetch or a call
+    /// to a server's tool is told to the policy, so it is kept for the status alone
+    /// (`Declined::in_the_trail`).
     declined: Vec<Declined>,
+    /// The input lines a run given `--input-format lines` reads (CLI-36), where it was.
+    ///
+    /// The planner's questions are put to the program on the other end of it and a steer line is
+    /// what an interjection takes. Nothing else changes: a write, a run, a fetch and every other
+    /// question is still refused here, because a line sent on a pipe approves none of them.
+    lines: Option<crate::lines::Channel>,
 }
 
 /// One question a one-shot run could not put to anybody, and so answered no.
@@ -55,6 +63,11 @@ pub(crate) struct Declined {
     pub(crate) gate: &'static str,
     /// Why, as a sentence a script can print.
     pub(crate) reason: &'static str,
+    /// Whether the audit trail already holds this refusal, which the policy recorded when the tool
+    /// answered the planner. It still ends the run on the refused status, since a delegate's
+    /// policy keeps its own refusals and this confirmer is shared, and a result object lists it
+    /// once, from the trail.
+    pub(crate) in_the_trail: bool,
 }
 
 impl<R: Read, W: Write> OneShot<R, W> {
@@ -66,7 +79,14 @@ impl<R: Read, W: Write> OneShot<R, W> {
             refusing: bravebot_agent::Unattended,
             alert: None,
             declined: Vec::new(),
+            lines: None,
         }
+    }
+
+    /// Put the planner's questions to the program sending these lines, and take its steers.
+    pub(crate) fn with_lines(mut self, lines: crate::lines::Channel) -> Self {
+        self.lines = Some(lines);
+        self
     }
 
     /// What was refused for want of anybody to ask, in the order it was asked.
@@ -141,6 +161,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "manifest_plan",
                 reason: "the plan was not approved",
+                in_the_trail: false,
             });
         }
         decision
@@ -152,6 +173,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "file_write",
                 reason: "the write was not approved, and nobody was there to approve it",
+                in_the_trail: true,
             });
         }
         decision
@@ -163,6 +185,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "run",
                 reason: "the program was not approved, and nobody was there to approve it",
+                in_the_trail: true,
             });
         }
         decision
@@ -182,6 +205,7 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
             self.declined.push(Declined {
                 gate: "web_fetch",
                 reason: "the fetch was not approved, and nobody was there to approve it",
+                in_the_trail: true,
             });
         }
         decision
@@ -213,7 +237,15 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
         &mut self,
         request: &bravebot_agent::confirm::McpCallRequest,
     ) -> bravebot_agent::confirm::CallDecision {
-        self.refusing.confirm_mcp_call(request)
+        let decision = self.refusing.confirm_mcp_call(request);
+        if decision.decision == Decision::Reject {
+            self.declined.push(Declined {
+                gate: "mcp_call",
+                reason: "the call was not approved, and nobody was there to approve it",
+                in_the_trail: true,
+            });
+        }
+        decision
     }
 
     fn confirm_path(&mut self, request: &bravebot_agent::confirm::PathRequest) -> Decision {
@@ -236,14 +268,22 @@ impl<R: Read, W: Write> Confirmer for OneShot<R, W> {
     }
 
     /// Declined rather than answered, as everywhere nobody can be asked: a reply invented here would
-    /// be reported to the planner as the person's own words.
+    /// be reported to the planner as the person's own words. Where lines are being read the question
+    /// is put to the program sending them, and what comes back is a pick among the choices the
+    /// planner offered (CLI-36).
     fn ask_user(&mut self, asking: &Asking) -> Vec<Answer> {
-        self.refusing.ask_user(asking)
+        match &self.lines {
+            Some(lines) => lines.ask(asking),
+            None => self.refusing.ask_user(asking),
+        }
     }
 
-    /// Nothing. Nobody is typing between steps: the only line this reads is an answer to a question
-    /// it just asked.
+    /// Nothing, except a steer line from a channel a person vouched for. Nobody is typing between
+    /// steps: the only line otherwise read is an answer to a question it just asked.
     fn interjection(&mut self) -> Option<String> {
-        self.refusing.interjection()
+        match &self.lines {
+            Some(lines) => lines.steer(),
+            None => self.refusing.interjection(),
+        }
     }
 }

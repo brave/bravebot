@@ -17,7 +17,28 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
+import type { AgentEntry, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
+
+/** A message waiting for the turn to end, and the grants it was written with. */
+export interface Queued {
+  prompt: string
+  attachments: FileAttachment[]
+  staged: Staged[]
+  /**
+   * Put here because the running turn did not read it, which is not the person's choice to wait.
+   * It goes as a turn of its own whether or not the queue is paused.
+   */
+  fromInterjection?: boolean
+}
+
+/** A line sent into the running turn, kept as written until the turn says it has read it. */
+export interface Interjection {
+  id: string
+  prompt: string
+  attachments: FileAttachment[]
+  staged: Staged[]
+}
 
 /** What the app is doing, which decides most of what the interface offers. */
 export interface Live {
@@ -44,15 +65,37 @@ export interface Live {
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
   hook: Hook | null
+  /**
+   * Every agent this conversation has started, oldest first, with where each stands (VIEW-36),
+   * as the last `agents` event listed them. Never a line a delegate printed.
+   */
+  agents: AgentEntry[]
+  /** How many of those the bridge counted as started and as working, as that event sent them. */
+  agentCounts: { started: number; working: number }
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
+  /**
+   * The end of what the model has thought in the round now being written (VIEW-34), held whether
+   * or not it is shown so that turning it on mid-round shows what has come so far. Never part of
+   * `entries`: it is no part of the conversation and goes when the round does.
+   */
+  thinking: string
+  /** Whether that is drawn. Off when a session opens, and this session's alone. */
+  showThinking?: boolean
+  /**
+   * Whether this session has been sent any thinking, which is what offers the button that shows it.
+   * Kept past the round, since the button would otherwise be gone before it could be pressed.
+   */
+  thinkingSeen?: boolean
   tokens: number
   contextTokens?: number
   running: boolean
-  /** Set when a fresh session needs the trust question answered before it can run. */
+  /** Set when a fresh session needs the trust question answered before it can run: the directory it asks about, spelled for a person (PROMPT-1). */
   askingTrust: string | null
   /** Where a yes would be kept, while the question is asked and the answer may be kept (TRUST-23). */
   keepingTrust: string | null
+  /** `keepingTrust` spelled for a person: what the question draws. Null exactly when `keepingTrust` is. */
+  shownKeepingTrust: string | null
   /** What a yes also grants, said on the question and answered with `confinedLines` (RUN-5). */
   confinedLinesNotice: string | null
   /** The yes kept about this directory, as last heard: said above the transcript while it lasts. */
@@ -116,7 +159,17 @@ export interface Live {
   outcome?: 'complete' | 'failed'
   draftId?: string
   queuePaused?: boolean
-  queued?: { prompt: string; attachments: FileAttachment[]; staged: Staged[] }[]
+  queued?: Queued[]
+  /**
+   * Lines sent into the turn that is running and not yet read by it, oldest first (INPUT-10).
+   *
+   * Drawn as sent the moment the person presses Enter, and moved into the transcript when the
+   * agent says the planner has them. One still here when the turn ends was not read, and goes on
+   * as a turn of its own.
+   */
+  interjected?: Interjection[]
+  /** The turn that is running is the bot's memory update, which takes no line from the person. */
+  consolidating?: boolean
   attachments?: FileAttachment[]
   /** Why the last message did not go: a name written with `@` that is not a text file in the project. */
   sendRefused?: string | null
@@ -155,7 +208,7 @@ export function cameFrom(
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */
-type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'composing' | 'tokens' | 'running'
+type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents' | 'agentCounts' | 'composing' | 'thinking' | 'tokens' | 'running'
 
 /**
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
@@ -169,9 +222,26 @@ export function newLive(fields: Omit<Live, Starting>): Live {
     phase: null,
     checking: null,
     hook: null,
+    agents: [],
+    agentCounts: { started: 0, working: 0 },
     composing: null,
+    thinking: '',
     tokens: 0,
     running: false,
+  }
+}
+
+/** What a bridge's answer settles about a session, in the names `Live` holds it under. */
+export function settledBy(answer: SessionSettled) {
+  return {
+    keepingTrust: answer.keeping ?? null,
+    shownKeepingTrust: answer.shownKeeping ?? null,
+    confinedLinesNotice: answer.confinedLines ?? null,
+    trustRemembered: answer.remembered ?? null,
+    autoVetting: answer.autoVetting,
+    permissionMode: answer.permissionMode,
+    sandboxMode: answer.sandboxMode,
+    rules: answer.settingsRules ?? null,
   }
 }
 

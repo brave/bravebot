@@ -11,6 +11,10 @@ of places rather than from an instruction to go and look at things.
 Stdout is `{"work_dir": ..., "manifest": ...}`. The mechanical report goes to stderr, because those
 findings are already decided and a reader should see them before any lane runs.
 
+A run that has lanes also writes `tracker.txt` in the work directory: the titles of the issues labelled
+`security`, read with `gh issue list`, for the lanes to compare a candidate with before they report it.
+`--tracker FILE` supplies them instead, and a `--mechanical-only` run never asks.
+
 The mechanical half checks what a tool can check and the specs do not yet: that the two documents
 naming the admitted exceptions agree on how many there are, that every crate keeping a network
 client of its own is one the egress register admits and no comment claims a dependency a manifest
@@ -26,9 +30,10 @@ digest rather than a tag its publisher can move, that no job holding a credentia
 dependency beside it, that a checkout of this tree names a kind of ref rather than a bare name a
 branch and a tag can share, that the contexts a merge is held to are written down, name jobs
 that exist, and cover every job that runs a check, that clippy still refuses a program start by any
-name and every allow of that refusal says who chose the program, and that every question and
-remembered answer has a row in the register of kept answers. A rule that can be written as one of these belongs here
-rather than in a reviewer's head.
+name and every allow of that refusal says who chose the program, that every question and
+remembered answer has a row in the register of kept answers, and that no function keying a name
+trims it, folds its case or decodes it lossily unless the trust spec says which files that joins. A
+rule that can be written as one of these belongs here rather than in a reviewer's head.
 """
 
 import argparse
@@ -36,17 +41,29 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import subprocess  # nosemgrep: gitlab.bandit.B404
 import sys
 import tempfile
 import tomllib
+import unicodedata
+from functools import partial
 from itertools import zip_longest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "check-spec"))
 
+from findings import ERROR, WARNING, finding  # noqa: E402
 from specs import load_specs  # noqa: E402
+from workflow_checks import (  # noqa: E402
+    WORKFLOWS,
+    check_checkout_ref_is_qualified,
+    check_downloads_verified,
+    check_grant_is_behind_an_environment,
+    check_pinned_actions,
+    check_pinned_images,
+    check_privileged_job_runs_only_its_own_code,
+    check_required_checks_are_the_gates,
+)
 
 _spec = importlib.util.spec_from_file_location(
     "check_spec", Path(__file__).resolve().parent.parent / "check-spec" / "check-spec.py"
@@ -59,9 +76,6 @@ _shared = importlib.util.spec_from_file_location(
 )
 workdir = importlib.util.module_from_spec(_shared)
 _shared.loader.exec_module(workdir)
-
-ERROR = "error"
-WARNING = "warning"
 
 REVIEW_DOC = Path("docs/development/reviewing-for-the-rule.md")
 LABELS_SPEC = Path("docs/specs/labels.md")
@@ -222,108 +236,46 @@ RUN_SPEC = Path("docs/specs/tools/run.md")
 # than here, so admitting one is an edit somebody reviews.
 NOT_A_KEY = "reads_a_step_without_keying"
 
-# A third party step in a workflow, and the only form of it that names one immutable thing. A tag or
-# a branch is whatever its owner points it at today, and every one of these runs with the repository
-# checked out and a token in the environment.
-WORKFLOWS = Path(".github/workflows")
-USES = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)")
-PINNED = re.compile(r"^[\w.-]+/[\w.:/-]+@[0-9a-f]{40}$")
-
-# The structure of a workflow, to the depth these checks read: the jobs, what each one is granted,
-# and the text of every `run` in it.
-JOBS = re.compile(r"^jobs:\s*$")
-JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
-PERMISSIONS = re.compile(r"^\s*permissions:\s*(.*)$")
-# Either `environment: name` or the mapping form with `name:` beneath it.
-ENVIRONMENT = re.compile(r"^\s*environment:")
-RUN = re.compile(r"^\s*(?:-\s+)?run:\s*(.*)$")
-BLOCK = ("", "|", "|-", "|+", ">", ">-", ">+")
-# A job's own `name:`, which is the name its check run reports under and so the name a required
-# context has to match. Four columns is the job's; a step's is deeper and a workflow's is at zero.
-# An unquoted scalar ends at a ` #`, so the comment is not part of the name.
-DISPLAY_NAME = re.compile(r"^ {4}name:\s*(.+?)\s*$")
-TRAILING_COMMENT = re.compile(r"\s+#.*$")
-EXPRESSION = re.compile(r"\$\{\{")
-# A `make` invocation and the check targets in it. Read as the whole command rather than the word
-# after `make`, since a target can arrive behind a flag, behind a variable, or second in a list.
-MAKE = re.compile(r"\bmake\b[^\n;&|]*")
-CHECK_TARGET = re.compile(r"\bcheck-[\w-]+\b")
-
-# Which of those check runs a merge is actually held to, and where the tree says so. The list the
-# protection enforces is a repository setting rather than a file, so this is the record of what it
-# has to hold, and the documentation is where a target's promise to fail a pull request is written.
-REQUIRED_CHECKS = Path("contrib/required-checks.txt")
-CHECKS_DOC = Path("docs/development/checks.md")
-DOC_TARGET = re.compile(r"`make (check-[\w-]+)`")
-GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
-
-# What a job can hold that is worth stealing, and the commands that run bytes nobody here wrote. The
-# grant is a permission to request a token rather than a token, which is the whole of the difference:
-# the runner hands every step in the job the two variables that turn it into one.
-#
-# Every spelling of the grant, because the check is worth no more than the narrowest one it reads:
-# a block, an inline map, a quoted value, and `write-all`, which grants this along with the rest.
-GRANT = re.compile(r"""id-token\s*:\s*["']?write\b|\bwrite-all\b""")
-SECRET = re.compile(r"\bsecrets\.[A-Za-z_]")
-# A command is read as the manager, then any options, then the subcommand, because `npm --prefix ui ci`
-# and `pnpm --dir ui install` are the same commands as the ones without the option, and a pattern that
-# needs the subcommand next to the manager misses them.
-PACKAGE_MANAGER = re.compile(r"(?:^|[\s;&|(])(npm|pnpm|yarn)(?=\s|$)([^;&|()#]*)")
-# A bare `pnpm build` runs the script `build`. Only a manager at the start of a command is read that
-# way, so prose such as `pnpm and the cache` in a step name or an echo is not.
-COMMAND_START = re.compile(r"(?:^|[;&|(]\s*|\brun:\s*|\bsudo\s+|\bcorepack\s+)$")
-# Options whose next token is their value, not the subcommand. `-w` is a flag for pnpm (the workspace
-# root) and a value for npm, so it is not listed.
-OPTIONS_WITH_A_VALUE = {"--prefix", "--dir", "-C", "--filter", "-F", "--workspace", "--cwd"}
-INSTALLS = {"ci", "install", "i", "add", "rebuild", "rb", "approve-builds"}
-RUNS = {"run", "run-script", "exec", "x", "dlx", "test", "t", "start"}
-# pnpm subcommands that run no package code. Any other word after pnpm is a script name.
-PNPM_RUNS_NOTHING = {
-    "publish", "pack", "config", "c", "get", "set", "view", "audit", "outdated", "list", "ls", "ll",
-    "why", "root", "bin", "store", "env", "setup", "self-update", "licenses", "deprecate",
-    "unpublish", "patch", "patch-commit", "remove", "rm", "uninstall", "un", "unlink", "prune",
-    "link", "ln", "version", "help", "update", "up", "upgrade", "dedupe", "fetch", "import",
-}
-# What a Rust job runs that executes bytes nobody here wrote: cargo compiles every build script and
-# proc macro in Cargo.lock and runs them, and the tests after them. `contrib/measure-flakes.py` is the
-# one script known to do it, and it does not when it is given `--load`, which is its filing mode.
-CARGO_RUNS = re.compile(
-    r"(?:^|[\s;&|(])cargo(?:\s+\+\S+)?\s+(?:build|b|test|t|clippy|run|r|nextest|install|check|c|bench|doc)\b"
+# The functions that turn a name into the key a decision is filed under, and the helpers that fold or
+# decompose it (TRUST-2). A step in one of them that trims, folds case or decodes lossily gives two
+# files the volume holds apart one key, and the table of names asks only whether one file's names
+# share a rule, so nothing else asks about it. `normalise` and the two `key` methods build the key
+# every trust rule, writer reservation and prompt answer is filed under, and `key_of` is the key a
+# permission rule is matched under. The rest are the steps those call that fold or decompose a name.
+# Only these are read: a step added somewhere else is the reviewer's, which is what PATH-007 asks.
+KEY_FUNCTIONS = (
+    ("crates/core/src/trust.rs", "normalise"),
+    ("crates/core/src/trust.rs", "key"),
+    ("crates/core/src/trust.rs", "fold_case"),
+    ("crates/core/src/trust.rs", "canonical_form"),
+    ("crates/core/src/file_authority.rs", "key"),
+    ("crates/core/src/permissions.rs", "key_of"),
+    ("crates/core/src/permissions.rs", "fold"),
+    ("crates/core/src/permissions.rs", "drive_in_upper_case"),
 )
-MEASURES_FLAKES = re.compile(r"(?:^|[\s;&|(])(?:\S*/)?contrib/measure-flakes\.py\b(?![^;&|\n]*--load)")
-WRITE_GRANT = re.compile(r"\bwrite\b|\bwrite-all\b")
-NOT_PERSISTED = re.compile(r"persist-credentials\s*:\s*[\"']?false\b")
-DEPENDENCY = (
-    (
-        re.compile(
-            r"(?:^|[\s;&|(])(?:npx|pnpx)(?=\s|$)|(?:^|[\s;&|(])\.?/?node_modules/\.bin/"
-        ),
-        "runs a dependency",
-    ),
+# A trim, a case fold, a lossy decode or a Unicode normalisation, written as a method, as a path
+# (`.map(str::trim)`, `char::to_lowercase`) or, for the helpers, as a call. `.fold(` on an iterator
+# is none of them, so a bare `fold(` counts only where nothing is called on the left of it. What is
+# recognised is these names. A step spelled another way is the reviewer's, which PATH-007 asks of
+# them.
+JOINING_NAMES = (
+    "trim|trim_start|trim_end|trim_left|trim_right|trim_matches|trim_start_matches"
+    "|trim_end_matches|to_lowercase|to_uppercase|to_ascii_lowercase|to_ascii_uppercase"
+    "|make_ascii_lowercase|make_ascii_uppercase|eq_ignore_ascii_case|to_string_lossy"
+    "|from_utf8_lossy|fold_case|decompose|canonical_form|nfc|nfd|nfkc|nfkd"
 )
-
-
-def package_manager_verb(tool, rest, at_command_start):
-    """What one `npm`, `pnpm` or `yarn` command does with dependencies, or None if nothing."""
-    tokens = rest.split()
-    index = 0
-    while index < len(tokens) and tokens[index].startswith("-"):
-        index += 2 if tokens[index] in OPTIONS_WITH_A_VALUE else 1
-    if index >= len(tokens):
-        return None
-    word = tokens[index]
-    if word in INSTALLS:
-        return "installs a dependency"
-    if word in RUNS:
-        return "runs a dependency"
-    if (
-        tool == "pnpm"
-        and at_command_start
-        and word not in PNPM_RUNS_NOTHING
-        and re.fullmatch(r"[A-Za-z0-9:_-]+", word)
-    ):
-        return "runs a dependency"
-    return None
+JOINING_CONSTRUCT = re.compile(
+    rf"(?:\.|::)({JOINING_NAMES})\b"
+    r"|(?<![.\w:])(?<!fn )(fold_case|fold|from_utf8_lossy|decompose|canonical_form)\s*\("
+)
+CHAR_LITERAL = re.compile(r"'(?:[^'\\]|\\.)'")
+# A construct a key function is allowed to keep, each with the reason a reader checks: a `path::fn
+# construct: reason` line under this key in the trust spec, so admitting one is an edit somebody
+# reviews, as for `declassify`. It allows one call. `path::fn construct xN: reason` allows N, so a
+# second call is a change the spec has to say yes to as well.
+KEY_STEP_ALLOWED = "key_step_allowed"
+KEY_STEP_SPEC = "TRUST"
+KEY_STEP_ENTRY = re.compile(r"^(\S+::\w+ \w+)(?: x(\d+))?:\s*(.*)$")
 
 
 LANES = (
@@ -337,7 +289,75 @@ LANES = (
     "supply-chain",
     "shown-before-answered",
     "approval-binding",
+    "identity",
+    "checkout-controls",
+    "output-sinks",
+    "tooling",
 )
+
+# The calls that turn a name into a thing, or ask what a name is: the places a decision made on a
+# spelling and a use of the thing by that spelling can be separated by a stage or a clone.
+IDENTITY_CALLS = re.compile(
+    r"\b(?:canonicalize|hard_links|read_link|symlink_metadata)\b|\bPathFd::new\b"
+)
+# A deny rule asked about a path as it is spelled. A call that names one file is judged under every
+# name the file has, and a walk that asks the same question of each entry it meets judges the name
+# it met the entry under, which is where a second name of a covered file is read.
+DENY_JUDGEMENTS = re.compile(r"(?<!fn )\bread_is_denied\b")
+# Where a session's rows are put together. A row granted here is a path the sandbox then holds a
+# stage to, so each one is a name something decided was safe.
+CONFINEMENT = Path("crates/agent/src/confine.rs")
+CONFINEMENT_ROWS = re.compile(
+    r"\b(?:allow_read|allow_write|allow_write_listed|allow_loopback)\(|\.grant\("
+    r"|\b(?:egress_through|socket_path)\b"
+)
+
+# What a checkout's own files can reach, which is the settings layers and the clauses that say which
+# layers answer for which name.
+LAYERED_CALLS = re.compile(r"\b(?:layered_since|unread_keys|rule_texts)\b")
+SETTINGS_FILE = Path("crates/config/src/settings.rs")
+SETTINGS_STRUCT = re.compile(r"^pub struct Settings\s*\{")
+SETTINGS_FIELD = re.compile(r"^\s{4}([a-z_][a-z0-9_]*)\s*:")
+SETTINGS_NAMES = re.compile(r"^\s*pub fn names\(&self\)")
+SETTINGS_RECORDS = ("_ignored", "_unreadable", "_misshapen", "_unread", "_by")
+LAYER_CLAUSES = ("BACKEND-24", "BACKEND-33")
+
+# Where text lands on a person's terminal, in a window or in a file another program reads. A macro
+# whose arguments are all literals cannot carry anything somebody else chose, so only the others are
+# listed.
+OUTPUT_MACROS = ("println", "eprintln", "print", "eprint", "writeln", "write")
+OUTPUT_CRATES = ("crates/cli/", "crates/tui/", "crates/approval/")
+OUTPUT_START = re.compile(
+    r"\b(" + "|".join(OUTPUT_MACROS) + r")!\s*\(|\bt!\s*\(|\.say\("
+)
+WINDOW_SINKS = re.compile(r"<pre\b|\binnerHTML\b|\bdangerouslySetInnerHTML\b")
+WINDOW_COMPONENT = re.compile(r"^(?:export\s+)?(?:default\s+)?(?:function|const)\s+([A-Za-z_]\w*)")
+WINDOW_SOURCE_SUFFIXES = (".ts", ".tsx", ".js", ".jsx", ".mjs")
+WINDOW_ROOT = Path("ui/src")
+FORMAT_HOLE = re.compile(r"(?<!\{)\{(?!\{)[^{}]*\}")
+
+# What a maintainer's own tools run: the scripts the skills and the checks are, the hooks git runs
+# on a commit, and the Makefile lines that decide which of them git is told to use.
+TOOL_FILES = ("agents/*.py", "agents/skills/*/*.py", "contrib/*.py", "contrib/*.sh", ".githooks/*")
+TOOL_DEFINITIONS = ("agents/agents/*.md", "agents/skills/*/SKILL.md", "agents/settings.json")
+STARTS_A_PROCESS = re.compile(
+    r"\bsubprocess\.(?:run|Popen|check_output|check_call|call)\b|\bos\.(?:system|popen|exec\w*)\b"
+    r"|\bshell\s*=\s*True\b|^\s*from\s+(?:subprocess|os)\s+import\b"
+    r"|\bimport\s+(?:subprocess|os)\s+as\b"
+)
+MAKE_RECIPE_GIT = re.compile(r"\bgit\b[^#\n]*\bconfig\b|\bgit\s+-c\b|\bhooksPath\b")
+MAKE_TARGET = re.compile(r"^([A-Za-z0-9_.-]+)\s*:(?!=)")
+PYTHON_DEF = re.compile(r"^(\s*)(?:async\s+)?def\s+(\w+)")
+
+# The tracker the lanes compare a candidate with before they report it. The security issues are the
+# ones a lane would otherwise spend its run rediscovering.
+TRACKER_REPO = "brave/bravebot"
+TRACKER_FILE = "tracker.txt"
+TRACKER_LIMIT = 1000
+TRACKER_TIMEOUT = 60
+# Control, format, surrogate, private-use and unassigned characters: a title is written into a file
+# a model reads, and none of these shows on a screen.
+INVISIBLE = {"Cc", "Cf", "Cs", "Co", "Cn"}
 
 # The spec whose `governs` list is the terminal's prompts, and the function each of them asks with.
 PROMPT_SPEC = "PROMPT"
@@ -345,6 +365,21 @@ ASKS = re.compile(r"^\s*pub(?:\([^)]*\))?\s+fn (ask(?:_\w+)?)\s*[<(]")
 # A desktop card is the `case` arm of the transcript's entry switch that draws one of these.
 CARD_CASE = re.compile(r"^\s*case '([\w-]+)':")
 CARD_DRAWS = re.compile(r"<(?:DecisionCard|YesOrNo|ThreeAnswers)\b")
+
+# The questions the line interface, the editor protocol and the background host put with a layout of
+# their own, by the file and the functions in it that write a question's lines, put it or replay it.
+OTHER_PROMPTS = {
+    Path("crates/cli/src/plain.rs"): re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn (confirm_\w+|ask_\w+|ask|put)\b"
+    ),
+    Path("crates/approval/src/lib.rs"): re.compile(r"^\s*pub fn (\w+_lines)\b"),
+    Path("crates/ui-bridge/src/acp.rs"): re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn (ask|pictured)\b"
+    ),
+    Path("crates/cli/src/host.rs"): re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn (emit|attach)\b"
+    ),
+}
 
 # The register of answers kept past the effect they were given for: a table in one clause of the
 # prompting spec, and a front matter list saying which row each question and remembered set lands in.
@@ -433,32 +468,6 @@ CHANGES_TABLE_FILE = Path("crates/agent/src/kept_answers.rs")
 CHANGES_TABLE_CASE = re.compile(r'Case\s*\{\s*row:\s*"([^"]+)",\s*change:\s*"([^"]+)"', re.DOTALL)
 
 
-REPRODUCE = "python3 agents/skills/security-audit/security-audit.py --mechanical-only"
-
-
-def finding(severity, kind, title, summary, area, impact, evidence=None, fix=None, gain=None):
-    """A decided finding.
-
-    `title` is separate from `summary` because a title has to say the mechanism and the consequence in
-    one line and a summary has room for the counts. Truncating the second into the first produces a
-    title that stops mid clause, which is what somebody scanning a tracker reads.
-    """
-    return {
-        "severity": severity,
-        "kind": kind,
-        "title": title,
-        "summary": summary,
-        "area": area,
-        "impact": impact,
-        "evidence": evidence,
-        "fix": fix,
-        "gain": gain,
-        "reproduce": [REPRODUCE],
-        "source": "mechanical",
-        "lane": "mechanical",
-    }
-
-
 def enclosing(lines, number):
     """The function a line is inside, by walking back to the nearest `fn`.
 
@@ -507,27 +516,11 @@ def sites_for(symbol, sources):
                 "text": text.strip()[:200],
                 "count": count,
                 "function": enclosing(sources[Path(path)], number),
-                "test_file": "/tests/" in path or path.endswith("_test.rs"),
+                "test_file": is_test_path(path),
                 "core": path.startswith("crates/core/"),
             }
         )
     return found
-
-
-def in_test_module(sources, path, line):
-    """Whether a line sits under a `#[cfg(test)]`, so a count can exclude the tests.
-
-    The tests hold the largest concentration of both primitives and are supposed to: a test that
-    proves an untrusted value cannot be read has to build one. Counting them with the rest would
-    bury the sites that matter.
-    """
-    for index in range(min(line, len(sources[path])) - 1, -1, -1):
-        stripped = sources[path][index].strip()
-        if stripped.startswith("#[cfg(test)]"):
-            return True
-        if stripped.startswith("impl ") or (stripped.startswith("pub fn ") and index < line - 1):
-            return False
-    return False
 
 
 def check_exception_counts():
@@ -819,6 +812,21 @@ START_CALLS = (
     "windows_sys::Win32::System::Threading::CreateProcessW",
 )
 START_LINT = "clippy::disallowed_methods"
+# The production files that hold a mark, with how many each holds and why. A program is started with
+# `bravebot_sandbox::programs::start`, which takes a `Resolved` that only a lookup or a named
+# constructor builds, and the `PATH` and variables the program is given, so a mark anywhere else is
+# a start that skipped all three. What stays marked is `start` itself, `CreateProcessW`, which `start`
+# does not wrap, and a build script, which cannot depend on `bravebot-sandbox`. A file holds the
+# number written here and no more, so a second start beside one of these is a change to this list
+# that a reviewer reads.
+START_MARKS_ALLOWED = {
+    "crates/sandbox/src/programs.rs": (1, "`start`, the one `Command::new` of a program"),
+    "crates/sandbox/src/windows/appcontainer.rs": (
+        1,
+        "the command line a caller asked to run, created inside an AppContainer",
+    ),
+    "crates/stamp/build.rs": (1, "a build script, run once by the person building"),
+}
 # Allowing a group that holds the lint, or every warning, refuses nothing either.
 WIDE_ALLOW = re.compile(r"\b(?:allow|expect)\s*\([^()]*\b(?:clippy::style|clippy::all|warnings)\b")
 REASON = re.compile(r'\breason\s*=\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
@@ -902,9 +910,20 @@ def check_process_starts_are_marked(sources):
     beside it and a reviewer reads each one in the diff.
 
     What this decides is what clippy cannot: that the ban is still configured, that nothing makes
-    a crate read another configuration, that a mark carries a reason, and that a mark covers a
-    start and not a crate or a module.
+    a crate read another configuration, that a mark carries a reason, that a mark covers a
+    start and not a crate or a module, and that a mark in production code is in a file that
+    `START_MARKS_ALLOWED` lists. Every other start goes through
+    `bravebot_sandbox::programs::start`, which takes a `Resolved` that a lookup or a named
+    constructor builds, so a new spawn is that call and no mark.
     """
+    marked = {}
+    yield from start_refusal_findings()
+    yield from start_mark_findings(sources, marked)
+    yield from start_allowance_findings(sources, marked)
+
+
+def start_refusal_findings():
+    """The clippy configuration that refuses a program start is still in place."""
     missing = [call for call in START_CALLS if call not in refused_calls()]
     if missing:
         yield finding(
@@ -934,6 +953,13 @@ def check_process_starts_are_marked(sources):
             fix="move its settings into the `clippy.toml` at the root and remove it",
             gain="a crate whose spawns no lint reads",
         )
+
+
+def start_mark_findings(sources, marked):
+    """Each mark beside a start: what it covers, where it is, whether it says why.
+
+    Counts the marks in production code per file into `marked`.
+    """
     for path in sorted(sources):
         raw = "\n".join(sources[path])
         if START_LINT not in raw and not WIDE_ALLOW.search(raw):
@@ -978,6 +1004,28 @@ def check_process_starts_are_marked(sources):
                 )
             if START_LINT not in attribute:
                 continue
+            if not test_only:
+                marked[path.as_posix()] = marked.get(path.as_posix(), 0) + 1
+            if not test_only and path.as_posix() not in START_MARKS_ALLOWED:
+                yield finding(
+                    ERROR,
+                    "process-start-mark-outside-start",
+                    "a program started with a mark and not through `programs::start` skips the "
+                    "lookup and the environment rules every start is given",
+                    f"`{path}:{number}` marks a start in a file that `START_MARKS_ALLOWED` does not "
+                    "list",
+                    "sandbox",
+                    "high",
+                    evidence=shown,
+                    fix="resolve the program with `bravebot_sandbox::programs` (`Resolved::find`, or "
+                    "`Resolved::own_executable`, `named_by_person`, `found_earlier`, "
+                    "`written_in_source` or `to_confine` where no lookup is involved) and start it "
+                    "with `programs::start`, which takes the environment and the `PATH` the program "
+                    "is given as arguments, or for a test allow the lint at the crate root with "
+                    "`#![cfg_attr(test, allow(...))]` "
+                    "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                    gain="a start whose program and environment nobody had to choose",
+                )
             reason = REASON.search(attribute)
             if reason and re.sub(r"\\\n\s*", "", reason.group(1)).strip():
                 continue
@@ -990,10 +1038,50 @@ def check_process_starts_are_marked(sources):
                 "sandbox",
                 "high",
                 evidence=shown,
-                fix="add `reason = \"...\"` saying who chose the program: a path from "
-                "`bravebot_sandbox::programs`, `current_exe()`, the person's own line, or a "
-                "program a person's setting names ([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                fix="add `reason = \"...\"` saying who chose the program, for a start that cannot "
+                "call `bravebot_sandbox::programs::start` "
+                "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
                 gain="a mark nobody has to justify, which is how a spawn goes unreviewed",
+            )
+
+
+def start_allowance_findings(sources, marked):
+    """Each file `START_MARKS_ALLOWED` lists holds as many marks as it admits."""
+    for allowed, (expected, why) in START_MARKS_ALLOWED.items():
+        if Path(allowed) not in sources:
+            continue
+        held = marked.get(allowed, 0)
+        if held < expected:
+            yield finding(
+                ERROR,
+                "process-start-allowance-unused",
+                "a file listed as holding marks holds fewer, so the list admits a mark nobody has "
+                "written",
+                f"`{allowed}` is in `START_MARKS_ALLOWED` for {why} with {expected} "
+                f"mark{'s' if expected != 1 else ''} and holds {held}",
+                "sandbox",
+                "medium",
+                evidence=[allowed],
+                fix="lower the count, or remove the file, in `START_MARKS_ALLOWED` in "
+                "`agents/skills/security-audit/security-audit.py`",
+                gain="a start marked in a file the list still admits, unread",
+            )
+        elif held > expected:
+            yield finding(
+                ERROR,
+                "process-start-mark-count",
+                "a second start marked in a file the list admits skips the lookup and the "
+                "environment rules, and no start outside `start` is read in the diff",
+                f"`{allowed}` is in `START_MARKS_ALLOWED` for {why} with {expected} "
+                f"mark{'s' if expected != 1 else ''} and holds {held}",
+                "sandbox",
+                "high",
+                evidence=[allowed],
+                fix="start the program with `bravebot_sandbox::programs::start`, or raise the "
+                "count in `START_MARKS_ALLOWED` in `agents/skills/security-audit/security-audit.py` "
+                "and say why in the pull request "
+                "([SANDBOX-30](docs/specs/sandboxing.md#SANDBOX-30))",
+                gain="a start whose program and environment nobody had to choose",
             )
 
 
@@ -1183,7 +1271,7 @@ def check_exhaustive_reader_docs(sources):
             for other, text in enumerate(stripped, start=1):
                 if other == number or not reads.search(text):
                     continue
-                if in_test_module(sources, path, other):
+                if other in test_lines(sources[path]):
                     continue
                 inside = enclosing(stripped, other)
                 if inside not in named:
@@ -1347,7 +1435,7 @@ def outside_the_kernel(sites, sources):
         for site in sites
         if not site["core"]
         and not site["test_file"]
-        and not in_test_module(sources, Path(site["path"]), site["line"])
+        and site["line"] not in test_lines(sources[Path(site["path"])])
     ]
 
 
@@ -1601,35 +1689,6 @@ def check_gates_pinned(specs, sources):
             )
 
 
-def test_regions(lines):
-    """The line ranges under a `#[cfg(test)]`, by brace depth.
-
-    `in_test_module` walks back to the nearest marker and gives up at an `impl`, which is right for
-    a call site inside an inherent method and wrong for a function inside a test module that holds
-    one. A key check reports a function rather than a call, so it needs the module's extent.
-    """
-    spans = []
-    depth = None
-    counter = 0
-    armed = False
-    for number, raw in enumerate(lines, start=1):
-        if depth is None and raw.strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
-            armed = True
-        opens = raw.count("{")
-        closes = raw.count("}")
-        if armed and opens:
-            depth = counter
-            armed = False
-            start = number
-        counter += opens - closes
-        if depth is not None and counter <= depth:
-            spans.append((start, number))
-            depth = None
-    if depth is not None:
-        spans.append((start, len(lines)))
-    return spans
-
-
 def carries_the_guarantee(spec):
     """Whether a spec is one the guarantee rests on, by its path under `docs/specs`.
 
@@ -1707,12 +1766,12 @@ def check_key_sites_exhaustive(specs, sources):
     reads = {}
     destructures = set()
     for path, lines in sources.items():
-        if "/tests/" in str(path):
+        if is_test_path(path):
             continue
-        spans = test_regions(lines)
+        inside = test_lines(lines)
         stripped = mechanics.strip_comments(lines)
         for number, raw in enumerate(stripped, start=1):
-            if any(start <= number <= end for start, end in spans):
+            if number in inside:
                 continue
             if STEP_DESTRUCTURE.search(raw):
                 destructures.add(f"{path}::{enclosing(lines, number)}")
@@ -1773,899 +1832,187 @@ def check_key_sites_exhaustive(specs, sources):
         )
 
 
-def check_pinned_actions():
-    """Every workflow step names an immutable commit, not a tag somebody else can move.
-
-    A step runs with this repository checked out and a token in its environment, so whoever controls
-    what a tag points at controls what runs. Every step in the tree is pinned today and nothing keeps
-    it that way, which is the same shape as the constructor above: right now, held by nobody.
-    """
-    if not WORKFLOWS.is_dir():
-        return
-    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
-        lines = path.read_text(encoding="utf-8").split("\n")
-        for number, raw in enumerate(lines, start=1):
-            found = USES.match(raw)
-            if not found:
-                continue
-            step = found.group(1).strip("\"'")
-            # A local action or a container image is not a third party tag.
-            if step.startswith("./") or step.startswith("docker://"):
-                continue
-            if PINNED.match(step):
-                continue
-            yield finding(
-                ERROR,
-                "unpinned-action",
-                f"{path.name} runs {step} unpinned, so its owner decides what runs here",
-                f"`{step}` is not pinned to a commit, so whoever owns that repository decides what "
-                "runs here with the tree checked out",
-                "infrastructure",
-                "high",
-                evidence=[f"{path}:{number} {raw.strip()[:120]}"],
-                fix="pin it to the full 40 character commit of the release, with the version as a "
-                "trailing comment, the way every other step in this workflow already is",
-            )
-
-
-def indented(raw):
-    return len(raw) - len(raw.lstrip(" "))
-
-
-def nested(lines, start, base=None):
-    """The lines under a key, by indentation. A blank line does not end a block; a shallower key does.
-
-    `base` is the column the key itself is at, and is worth passing where the key is the first in a
-    sequence entry: the `-` sits left of the key, so the dash column would take the entry's other
-    keys for the key's own content.
-
-    A comment line is not content. Inside a `run` block it is a line the shell ignores, and above a
-    key it is prose, so neither is a command or a permission however it reads.
-    """
-    base = indented(lines[start]) if base is None else base
-    found = []
-    for raw in lines[start + 1 :]:
-        if not raw.strip():
-            continue
-        if indented(raw) <= base:
-            break
-        if raw.lstrip().startswith("#"):
-            continue
-        found.append(raw)
-    return found
-
-
-def workflow_jobs(lines):
-    """Every job in a workflow, with what it is granted and the text of every `run` in it.
-
-    Indentation rather than a YAML parser, because the rest of the mechanical half is standard
-    library Python over the checkout and this reads two keys deep. `permissions` at job scope
-    replaces the workflow's rather than adding to it, which is what GitHub does with it, so a job
-    without its own block is given the workflow's.
-
-    A secret is attributed to the job whose text names it and to every job where the name is above
-    `jobs:`, since a workflow-level `env` is in the environment of all of them.
-
-    Jobs are read at one column, which is every job or none rather than some of them: sibling keys in
-    YAML share a column, so a job written at another one is a key inside the job above it, which
-    GitHub refuses to run at all. A file whose jobs are all at a column this does not read is the
-    `workflow-unreadable` error below.
-    """
-    start = next((number for number, raw in enumerate(lines) if JOBS.match(raw)), len(lines))
-    everywhere = any(
-        SECRET.search(raw) for raw in lines[:start] if not raw.lstrip().startswith("#")
-    )
-
-    grants = []
-    jobs = []
-    current = None
-    in_jobs = False
-    for number, raw in enumerate(lines):
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        column = indented(raw)
-        if column == 0:
-            in_jobs = bool(JOBS.match(raw))
-            current = None
-            found = PERMISSIONS.match(raw)
-            if found:
-                grants = [found.group(1)] + nested(lines, number)
-            continue
-        found = JOB.match(raw) if in_jobs and column == 2 else None
-        if found:
-            current = {
-                "name": found.group(1),
-                "line": number + 1,
-                "grants": None,
-                "environment": False,
-                "secret": everywhere,
-                "secret_above_steps": everywhere,
-                "persists": False,
-                "in_steps": False,
-                "steps": [],
-            }
-            jobs.append(current)
-            continue
-        if current is None:
-            continue
-        if column == 4 and raw.strip() == "steps:":
-            current["in_steps"] = True
-        if SECRET.search(raw):
-            current["secret"] = True
-            if not current["in_steps"]:
-                current["secret_above_steps"] = True
-        found = USES.match(raw)
-        if found and CHECKOUT.match(unquoted(found.group(1))):
-            if not any(NOT_PERSISTED.search(line) for line in step_text(lines, number)):
-                current["persists"] = True
-        found = PERMISSIONS.match(raw) if column == 4 else None
-        if found:
-            current["grants"] = [found.group(1)] + nested(lines, number)
-        if column == 4 and ENVIRONMENT.match(raw):
-            current["environment"] = True
-        found = RUN.match(raw)
-        if found:
-            inline = found.group(1).strip()
-            current["steps"].append(
-                {
-                    "line": number + 1,
-                    "body": nested(lines, number, base=raw.index("run:"))
-                    if inline in BLOCK
-                    else [inline],
-                    "secret": any(SECRET.search(line) for line in step_text(lines, number)),
-                }
-            )
-    for job in jobs:
-        if job["grants"] is None:
-            job["grants"] = grants
-    return jobs
-
-
-# The other half of pinning a `uses:` step: which ref the step is pointed at when the step is this
-# repository checking itself out. Handed a ref that names no kind, `actions/checkout` looks for a
-# remote branch of that name and takes a tag of it only when there is none (`src/ref-helper.ts`,
-# `getCheckoutInfo`), so a name a branch and a tag can both carry resolves to whichever exists,
-# decided by what has been pushed rather than by anything in this tree. `publish-npm.yml` takes
-# that name from a dispatch input and publishes the tree the checkout produced.
-CHECKOUT = re.compile(r"^[\w.-]+/checkout(?:@|$)")
-REF = re.compile(r"^\s*ref:\s*(.*?)\s*$")
-STEP_START = re.compile(r"^(\s*)-\s+\S")
-COMMIT = re.compile(r"^[0-9a-f]{40}$")
-# A ref written as an expression cannot be read here, so it is read by name. Anything with `sha` in
-# it is taken for a commit, which is not a ref at all and so never reaches the branch-before-tag
-# resolution. The cost is an input actually called `sha` passing; the other direction, reporting
-# every workflow that rebuilds `github.sha`, would be noise nobody could act on.
-NAMES_A_COMMIT = re.compile(r"sha\b", re.IGNORECASE)
-
-
-def step_text(lines, number):
-    """The lines of the step a line is in, including a line that is the `- key:` opening it."""
-    found = STEP_START.match(lines[number])
-    if found:
-        return [lines[number]] + nested(lines, number, base=len(found.group(1)))
-    return enclosing_step(lines, number)
-
-
-def enclosing_step(lines, number):
-    """The lines of the sequence entry a line sits in, or nothing where it is in none.
-
-    A step is a `-` entry under `steps:`, so the entry begins at the nearest `-` above this line
-    indented less than it, and ends at the next line indented no further than that `-`. Walking up
-    rather than tracking `steps:` downwards is what makes the order of a step's keys irrelevant: a
-    `with:` written above its `uses:` is the same block either way.
-    """
-    column = indented(lines[number])
-    for index in range(number - 1, -1, -1):
-        raw = lines[index]
-        if not raw.strip() or raw.lstrip().startswith("#"):
-            continue
-        found = STEP_START.match(raw)
-        if found and len(found.group(1)) < column:
-            return [raw] + nested(lines, index, base=len(found.group(1)))
-        if indented(raw) == 0:
-            break
-    return []
-
-
-def check_checkout_ref_is_qualified():
-    """A checkout of this tree names a kind of ref, not a name a branch and a tag can share.
-
-    `refs/tags/v0.9.0` is one object. `v0.9.0` is whichever of a branch and a tag of that name
-    exists, and where both do it is the branch, because that is the order the action resolves in.
-    The workflow that publishes to npm is handed that name by whoever dispatches it, and every
-    refusal after the checkout reads either the checked out tree or the GitHub release of the tag,
-    so a branch of the version's name satisfies all of them and the registry gets a tree nobody
-    reviewed under a version somebody released.
-
-    A step with no `ref:` is not read: it takes the commit that triggered the run, which is a
-    commit rather than a name. What this cannot read is a `ref:` inside an inline mapping, since
-    the rest of this half is line-oriented too; no workflow here writes one.
-    """
-    if not WORKFLOWS.is_dir():
-        return
-    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
-        lines = path.read_text(encoding="utf-8").split("\n")
-        for number, raw in enumerate(lines):
-            found = REF.match(raw)
-            if not found:
-                continue
-            step = [USES.match(line) for line in enclosing_step(lines, number)]
-            if not any(one and CHECKOUT.match(unquoted(one.group(1))) for one in step):
-                continue
-            value = unquoted(found.group(1))
-            if value.startswith("refs/") or COMMIT.match(value) or NAMES_A_COMMIT.search(value):
-                continue
-            yield finding(
-                ERROR,
-                "unqualified-checkout-ref",
-                f"{path.name} checks out `{value}`, a name a branch and a tag can share, so a "
-                "branch decides what this run reads",
-                f"`{path}` checks out `{value}`, which names no kind of ref, and `actions/checkout` "
-                "prefers a remote branch of that name over a tag of it, so what the run reads is "
-                "whichever of the two has been pushed",
-                "infrastructure",
-                "high",
-                evidence=[f"{path}:{number + 1} {raw.strip()[:120]}"],
-                fix="write the kind: `refs/tags/` for a release, `refs/heads/` for a branch. A "
-                "qualified ref fetches that one ref, so a dispatch naming a tag that does not "
-                "exist fails the run rather than resolving to something else",
-                gain="whoever can push a branch to this repository chooses the tree a dispatch of "
-                "the tag of that name reads, and in the publish workflow that tree is what reaches "
-                "the registry under the released version",
-            )
-
-
-def dependency_commands(body):
-    """The commands in a `run` that install something from the lockfile or execute what it installed.
-
-    `npm publish` is neither: it uploads the files `package.json` lists and needs nothing installed.
-    A line the shell treats as a comment is not a command, so a `run` that mentions one in passing is
-    not a use of it.
-    """
-    found = []
-    for raw in body:
-        line = raw.strip()
-        if line.startswith("#"):
-            continue
-        verbs = [
-            package_manager_verb(
-                match.group(1), match.group(2), bool(COMMAND_START.search(line[: match.start(1)]))
-            )
-            for match in PACKAGE_MANAGER.finditer(line)
-        ]
-        verbs += [verb for pattern, verb in DEPENDENCY if pattern.search(line)]
-        verbs = [verb for verb in verbs if verb]
-        if verbs:
-            verb = "installs a dependency" if "installs a dependency" in verbs else verbs[0]
-            found.append((verb, line[:120]))
-    return found
-
-
-def runs_project_code(path, job, granted):
-    """The steps of one job that compile or run this repository's dependencies beside a credential.
-
-    Reported for a step that runs `cargo build`, `test`, `clippy`, `run`, `nextest` or `install`, or
-    `contrib/measure-flakes.py` in its measuring mode (#2789), when what it can read is a token:
-
-    - `id-token: write` on the job, which every step is handed the means to use;
-    - a secret named by the step itself, or by the job above its steps, or the workflow above its
-      jobs, since each of those is in the step's environment. A secret in another step of the job is
-      not, which is what lets one job measure in one step and hold the token in none of the steps
-      that run code;
-    - a write grant on a job whose `actions/checkout` leaves its credential in the checkout, because
-      the checkout is what every later step reads and `persist-credentials: false` is the only way
-      the token is not in it.
-    """
-    write = any(WRITE_GRANT.search(raw) for raw in job["grants"])
-    for step in job["steps"]:
-        ran = [
-            line.strip()[:120]
-            for line in step["body"]
-            if not line.strip().startswith("#")
-            and (CARGO_RUNS.search(line) or MEASURES_FLAKES.search(line))
-        ]
-        if not ran:
-            continue
-        if granted:
-            holds = "id-token: write"
-        elif step["secret"] or job["secret_above_steps"]:
-            holds = "a secret in its environment"
-        elif write and job["persists"]:
-            holds = "a write grant its checkout leaves in the working tree"
-        else:
-            continue
-        yield finding(
-            ERROR,
-            "privileged-job-runs-project-code",
-            f"{path.name} runs the build or the tests in {job['name']}, a step that holds {holds}, "
-            "so a build script, proc macro or test of any crate in Cargo.lock can use it",
-            f"`{job['name']}` in `{path}` runs `{ran[0]}` where {holds} is readable, and cargo "
-            "runs the build script and proc macro of every crate in `Cargo.lock` and then their "
-            "tests, in the environment and working tree of that step",
-            "infrastructure",
-            "medium",
-            evidence=[f"{path}:{job['line']} job `{job['name']}`", f"{path}:{step['line']} {ran[0]}"],
-            fix="measure in a step or job that holds no token and writes what it found to a file, "
-            "and file from a job that holds the grant and runs only `gh`. Set "
-            "`persist-credentials: false` on the checkout either way",
-            gain="whoever owns one crate in the lockfile reads the token and acts as the workflow "
-            "on this repository for as long as the job runs",
-        )
-
-
-def check_privileged_job_runs_only_its_own_code():
-    """A job that can mint a credential installs and runs nothing from `node_modules`.
-
-    A grant or a secret is readable by every step of the job holding it, so a job is the smallest
-    boundary either has. A step that installs from `pnpm-lock.yaml` and then runs what it
-    installed executes bytes nobody here wrote, deliberately: that is what a lint is. In a job
-    holding `id-token: write` those bytes can exchange the runner's OIDC token for a publishing
-    credential at the registry and ship a tarball with this repository's provenance on it, and the
-    same two commands in a job holding `contents: read` reach a green check and nothing else. So the
-    finding is the pairing rather than either half.
-
-    It reads the npm and pnpm tree, and the Rust one: a job that compiles the tree runs a crate's
-    build script in the same environment, so `runs_project_code` pairs `cargo` commands and
-    `contrib/measure-flakes.py` with the same credentials (#2789).
-    """
-    if not WORKFLOWS.is_dir():
-        return
-    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
-        lines = path.read_text(encoding="utf-8").split("\n")
-        jobs = workflow_jobs(lines)
-        if not jobs:
-            if any(JOBS.match(raw) for raw in lines):
-                yield finding(
-                    ERROR,
-                    "workflow-unreadable",
-                    f"{path.name} declares jobs this check cannot read, so it is passing in silence",
-                    f"`{path}` has a `jobs:` key and no job this check could read under it, so it "
-                    "cannot tell what any of them is granted and reports nothing whatever they run",
-                    "infrastructure",
-                    "medium",
-                    fix="write the jobs at the two space indentation every workflow here uses, or "
-                    "widen `JOB` in this file to match where they moved to",
-                    gain="nothing directly. It removes the check that would report the next "
-                    "credential handed to a job that runs somebody else's code",
-                )
-            continue
-        for job in jobs:
-            granted = any(GRANT.search(raw) for raw in job["grants"])
-            yield from runs_project_code(path, job, granted)
-            if not granted and not job["secret"]:
-                continue
-            reached = [
-                f"{path}:{step['line']} {verb}: {command}"
-                for step in job["steps"]
-                for verb, command in dependency_commands(step["body"])
-            ]
-            if not reached:
-                continue
-            holds = "id-token: write" if granted else "a secret"
-            yield finding(
-                ERROR,
-                "privileged-job-runs-dependencies",
-                f"{path.name} runs a dependency in {job['name']}, the job that holds {holds}, so "
-                "whoever owns that dependency can use it",
-                f"`{job['name']}` in `{path}` holds {holds} and runs "
-                f"{len(reached)} command"
-                + ("" if len(reached) == 1 else "s")
-                + " that install or execute something from `node_modules`, which every step in that "
-                "job can read the credential from",
-                "infrastructure",
-                "medium",
-                evidence=[f"{path}:{job['line']} job `{job['name']}` holds {holds}"] + reached,
-                fix="move the install and everything it runs into a job of their own holding only "
-                "`contents: read`, and give this job a `needs:` on that one. Where the grant is "
-                "declared for the whole workflow, declare it on this job instead: a job is the "
-                "smallest boundary it has",
-                gain="whoever owns one of the installed packages runs code beside the credential "
-                "this job exists to mint, and what they publish with it carries this repository's "
-                "provenance",
-            )
-
-
-def check_grant_is_behind_an_environment():
-    """A job that can mint an OIDC token names an `environment:`, so a reviewer stands in front of it.
-
-    `workflow_dispatch` runs the file at the ref it is dispatched on, and the registry's trusted
-    publisher keys on the repository and the filename, not the ref. A person with write access can
-    push a branch holding a copy of the publish workflow without its refusals and dispatch that, and
-    the token it mints is accepted. An `environment:` is the one control the dispatcher's copy of the
-    file cannot remove for the real one to keep: the environment's required reviewer is a setting of
-    the repository, and the registry compares the environment claim once the job declares one.
-
-    Only the key is read. That the environment has a reviewer, and that npmjs.com names it, are
-    settings of the repository and the registry that no checkout holds, which is recorded in
-    `docs/development/branch-protection.md`.
-    """
-    if not WORKFLOWS.is_dir():
-        return
-    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
-        for job in workflow_jobs(path.read_text(encoding="utf-8").split("\n")):
-            if not any(GRANT.search(raw) for raw in job["grants"]) or job["environment"]:
-                continue
-            yield finding(
-                ERROR,
-                "grant-without-environment",
-                f"{path.name} gives {job['name']} id-token: write and no environment, so no "
-                "reviewer stands between a writer and the credential",
-                f"`{job['name']}` in `{path}` can request an OIDC token and names no "
-                "`environment:`, so a dispatch of a branch's copy of this file mints a token the "
-                "registry or cloud account accepts, with nothing waiting for an approval",
-                "infrastructure",
-                "medium",
-                evidence=[f"{path}:{job['line']} job `{job['name']}` holds id-token: write"],
-                fix="add `environment: <name>` to the job and give that GitHub environment a "
-                "required reviewer who is not the person dispatching. Name the environment on the "
-                "registry's trusted-publisher record too, and record both in "
-                "`docs/development/branch-protection.md`",
-                gain="whoever can push a branch to this repository publishes under this "
-                "repository's identity from a copy of the workflow nobody reviewed",
-            )
-
-
-# The other thing that runs with this tree inside it. A container image on a tag is whatever its
-# publisher points at today, exactly as an action on a tag is, and the pass above skips `docker://`
-# for the narrow reason that an image is not a `uses:` step, so until this nothing read one at all.
-# The cross-build compiles every shipped binary with the whole checkout at /src and the configured
-# credential mounted, and `make strip` rewrites each finished asset inside the same image, both
-# before anything is signed. A digest names bytes. A tag names whoever can push to it.
-DOCKER_COMMAND = re.compile(r"\bdocker\s+(?:run|create|pull)\b")
-FROM_LINE = re.compile(r"^\s*FROM\s+(.+?)\s*$", re.IGNORECASE)
-COPY_FROM = re.compile(r"^\s*COPY\s+.*?--from=(\S+)", re.IGNORECASE)
-ARG_DEFAULT = re.compile(r"^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)=(\S+)\s*$", re.IGNORECASE)
-YAML_IMAGE = re.compile(r"^\s*image:\s*([^\s#]+)")
-BY_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}$")
-ASSIGNMENT = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\s*[:?]?=\s*(.*?)\s*$")
-# Directories that name no image this tree decides, and that walking costs minutes. `.claude` holds
-# the generated discovery links and, under `worktrees`, whole second checkouts of this repository:
-# an image named in one of those is another commit's to pin, so reporting it names a file nothing
-# here can fix and fails the check on a clean tree.
-NOT_WALKED = {".git", ".claude", "target", "node_modules", "dist", ".venv"}
-# The `docker run` options that take the token after them as their value. An option missing from
-# this set is read as taking none, so its value is reported as an unpinned image: a false report
-# somebody answers by adding the option here. The other direction -- reading past the image and
-# finding nothing to report -- is the failure this check exists so as not to have.
-TAKES_A_VALUE = {
-    "--add-host", "--cap-add", "--cap-drop", "--device", "--entrypoint", "--env", "--env-file",
-    "--label", "--memory", "--mount", "--name", "--network", "--platform", "--publish",
-    "--security-opt", "--tmpfs", "--ulimit", "--user", "--volume", "--volumes-from", "--workdir",
-    "-e", "-l", "-m", "-p", "-u", "-v", "-w",
-}
-
-
-def joined_lines(text):
-    """A file's lines with backslash continuations joined, each keeping the number it starts on.
-
-    A `docker run` in a Makefile recipe puts its options on one line and its image on the next, so a
-    pass that reads a line at a time reads the options and never the image.
-    """
-    start, held = None, ""
-    for number, raw in enumerate(text.split("\n"), start=1):
-        if start is None:
-            start, held = number, ""
-        if raw.endswith("\\"):
-            held += raw[:-1] + " "
-            continue
-        yield start, held + raw
-        start = None
-    if start is not None:
-        yield start, held
-
-
-def tokens_of(line):
-    """A shell line split into tokens, as far as the lexer can read it.
-
-    Quoting matters twice over: `-v "$(PWD):/src:ro"` is one argument, and a split on whitespace
-    makes the token after `-v` something other than that option's value, which moves what is read as
-    the image on to the token after that. A line the lexer cannot finish is returned as far as it
-    got, and an image past that point is `None` to the caller rather than absent from it.
-    """
-    lexer = shlex.shlex(line, posix=True)
-    lexer.whitespace_split = True
-    lexer.commenters = ""
-    found = []
-    try:
-        for token in lexer:
-            found.append(token)
-    except ValueError:
-        pass
-    return found
-
-
-def image_argument(tokens):
-    """The image a `docker run` names: the first token that is neither an option nor one's value."""
-    at = 0
-    while at < len(tokens):
-        token = tokens[at]
-        if token in TAKES_A_VALUE:
-            at += 2
-            continue
-        if token.startswith("-"):
-            at += 1
-            continue
-        return token
-    return None
-
-
-def images_run(line, values):
-    """Every image a line's `docker run`, `docker create` or `docker pull` names, and `None` for one
-    that could not be read.
-
-    Read from each command rather than from the start of the line, so a command inside a quoted
-    script -- `sh -c 'docker run ...'` -- is read too, where a pass over the line's own tokens sees
-    that whole script as one token and never looks inside it.
-
-    A reference with no tag and no registry path is the image the build itself produced a line or
-    two earlier, and there is nothing upstream of it to pin. A reference assembled by a `$(shell
-    ...)` is the limit of this pass: it is left alone rather than run.
-    """
-    found = []
-    for match in DOCKER_COMMAND.finditer(line):
-        image = image_argument(tokens_of(line[match.end():]))
-        if image is not None:
-            image = expanded(unquoted(image), values)
-            if "$" in image and ":" not in image and "/" not in image:
-                continue
-        found.append(image)
-    return found
-
-
-def workflow_images(line):
-    """The image a workflow names outside a `run:` block: a job or service container, and the step
-    form `check_pinned_actions` passes over because an image is not a `uses:` step."""
-    named = YAML_IMAGE.match(line)
-    if named:
-        yield unquoted(named.group(1))
-    step = USES.match(line)
-    if step and unquoted(step.group(1)).startswith("docker://"):
-        yield unquoted(step.group(1))[len("docker://"):]
-
-
-def unquoted(token):
-    return token.strip("\"'")
-
-
-def make_values(text):
-    """The `NAME = value` assignments of a Makefile, which is how an image reference in one can be
-    written. A value that is computed rather than written -- a `$(shell ...)` -- is left alone,
-    because resolving it means running it."""
-    values = {}
-    for raw in text.split("\n"):
-        found = ASSIGNMENT.match(raw)
-        if found and "$(shell" not in found.group(2):
-            values[found.group(1)] = found.group(2)
-    return values
-
-
-def expanded(reference, values):
-    """A reference with the variables it is written through substituted in.
-
-    Longest name first, so `$BASE` does not rewrite the front of `$BASE_IMAGE`.
-    """
-    for _ in range(3):
-        before = reference
-        for name in sorted(values, key=len, reverse=True):
-            for form in (f"$({name})", "${%s}" % name, f"${name}"):
-                reference = reference.replace(form, values[name])
-        if reference == before:
-            break
-    return reference
-
-
-def image_files():
-    """Every file that can name an image: the Dockerfiles, the Makefile, and the workflows."""
-    for root, directories, names in os.walk("."):
-        directories[:] = sorted(
-            one for one in directories
-            if one not in NOT_WALKED and not (Path(root) / one / ".git").exists()
-        )
-        for name in sorted(names):
-            if name.startswith("Dockerfile") or name == "Makefile":
-                yield Path(root) / name
-    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
-        yield path
-
-
-def dockerfile_images(text):
-    """`(number, reference)` for each image a Dockerfile pulls: what its stages are built on, and
-    what a `COPY --from` reaches into.
-
-    `scratch` is the empty image and has no bytes to name, a name this file declared with `AS` is a
-    stage of this same build, and `--from=0` is one by position. Everything else is pulled, and a
-    base written through an `ARG` is read through the default that `ARG` declares rather than passed
-    over for having a `$` in it: parameterising the base is how one stops being written down.
-    """
-    stages, values = set(), {}
-    for number, line in joined_lines(text):
-        default = ARG_DEFAULT.match(line)
-        if default:
-            values[default.group(1)] = default.group(2)
-        copied = COPY_FROM.match(line)
-        if copied:
-            reference = expanded(copied.group(1), values)
-            if reference not in stages and not reference.isdigit():
-                yield number, reference
-            continue
-        found = FROM_LINE.match(line)
-        if not found:
-            continue
-        words = [one for one in found.group(1).split() if not one.startswith("--")]
-        if not words:
-            continue
-        if len(words) >= 3 and words[1].upper() == "AS":
-            stages.add(words[2])
-        if words[0] == "scratch" or words[0] in stages:
-            continue
-        yield number, expanded(words[0], values)
-
-
-def check_pinned_images():
-    """Every container image this tree runs names a digest, not a tag its publisher can move.
-
-    The same question `check_pinned_actions` asks, about the other thing that runs with the tree in
-    it. `Dockerfile.cross` compiles every shipped binary with the checkout at `/src` and the
-    configured credential mounted, and `make strip` rewrites each finished asset inside a second
-    container, both before Jenkins signs what comes out; the three check targets run a third with
-    the tree mounted. An image on a tag is a decision left to whoever can push that tag.
-    """
-    for path in image_files():
-        text = path.read_text(encoding="utf-8")
-        if path.name.startswith("Dockerfile"):
-            found = list(dockerfile_images(text))
-        else:
-            found = []
-            values = make_values(text) if path.name == "Makefile" else {}
-            for number, line in joined_lines(text):
-                # A comment naming a command is prose about it, not a command.
-                if line.lstrip().startswith("#"):
-                    continue
-                found.extend((number, one) for one in images_run(line, values))
-                if path.is_relative_to(WORKFLOWS):
-                    found.extend((number, one) for one in workflow_images(line))
-        for number, reference in found:
-            if reference is not None and BY_DIGEST.search(reference):
-                continue
-            named = f"`{reference}`" if reference else "an image this pass could not read"
-            yield finding(
-                ERROR,
-                "unpinned-image",
-                f"{path.name} runs {reference or 'an image nothing can read'} unpinned, so its "
-                "publisher decides what runs with this tree",
-                f"{named} is not pinned to a digest, so whoever can push that tag decides what "
-                "runs with the whole checkout inside it",
-                "infrastructure",
-                "high",
-                evidence=[f"{path}:{number}"],
-                fix="name the digest as well as the tag, `image:tag@sha256:<64 hex>`, the way "
-                "every workflow step here already names a commit as well as a version",
-            )
-
-
-DOWNLOAD = re.compile(r"\b(curl|wget)\b")
-# What turns downloaded bytes into code that runs: piped straight into an interpreter or unpacker,
-# or later made executable or unpacked.
-DOWNLOAD_PIPED = re.compile(r"\|\s*(sudo\s+)?(tar|unzip|sh|bash|zsh|python3?|ruby|node)\b")
-DOWNLOAD_RUN = re.compile(r"\bchmod\s+(-\w+\s+)?(\+\w*x|[0-7]*[1357][0-7]{0,2}\b)|\b(tar|unzip)\s+-?[xz]")
-DOWNLOAD_COMPARED = re.compile(r"sha256|sha512|shasum|dgst|matches_pin|cosign|gpg\s+--verify|minisign")
-
-
-def download_files():
-    """The scripts under `contrib/` and the Makefile: what a person or the bot runs on a checkout."""
-    yield from sorted(Path("contrib").glob("*.sh"))
-    if Path("Makefile").is_file():
-        yield Path("Makefile")
-
-
-def check_downloads_verified():
-    """Nothing fetched with `curl` or `wget` is made executable or unpacked without a digest check.
-
-    The tree pins its actions to commits and its images to digests so that whoever owns a tag cannot
-    decide what runs here. A release asset fetched by tag in a helper script is the same decision
-    left to the same person, and the script runs as whoever invokes it. A download piped into an
-    interpreter or `tar` has nowhere to compare anything, so it is always a finding; one written to
-    a file is a finding unless a comparison appears between the fetch and the `chmod` or unpacking.
-    """
-    for path in download_files():
-        lines = [
-            (number, line) for number, line in joined_lines(path.read_text(encoding="utf-8"))
-            if not line.lstrip().startswith("#")
-        ]
-        for index, (number, line) in enumerate(lines):
-            fetch = DOWNLOAD.search(line)
-            if not fetch:
-                continue
-            if DOWNLOAD_PIPED.search(line[fetch.end():]):
-                unverified = "is piped into a program that runs it"
-            else:
-                unverified = None
-                for _, later in lines[index + 1:]:
-                    if DOWNLOAD_COMPARED.search(later):
-                        break
-                    if DOWNLOAD_RUN.search(later):
-                        unverified = "is made executable or unpacked with no digest compared first"
-                        break
-                if unverified is None:
-                    continue
-            yield finding(
-                ERROR,
-                "unverified-download",
-                f"{path.name} fetches a file that {unverified}, so whoever can replace it decides "
-                "what runs as the invoking user",
-                f"the download at {path}:{number} {unverified}, and nothing fixes its content: a "
-                "release tag can be re-pointed by its owner",
-                "infrastructure",
-                "high",
-                evidence=[f"{path}:{number}"],
-                fix="pin the sha256 of the asset in the script and compare it before `chmod` or "
-                "unpacking, failing closed on a mismatch or a missing pin",
-            )
-
-
-def job_display_names(lines):
-    """Every job in a workflow by the name its check run reports under, with the targets it runs.
-
-    A required context matches a check run's name, which is the job's `name:` where it has one and
-    its key where it does not. A name built from an expression is one no checkout can resolve --
-    the cross-build names its six legs from a matrix -- so it is left out rather than guessed at,
-    and a context could not name it either.
-    """
-    found = {}
-    for job in workflow_jobs(lines):
-        block = nested(lines, job["line"] - 1)
-        written = next((one.group(1) for one in map(DISPLAY_NAME.match, block) if one), job["name"])
-        if not written.startswith(("'", '"')):
-            written = TRAILING_COMMENT.sub("", written).strip()
-        display = unquoted(written)
-        if EXPRESSION.search(display):
-            continue
-        targets = set()
-        for step in job["steps"]:
-            for raw in step["body"]:
-                for command in MAKE.findall(raw):
-                    targets.update(CHECK_TARGET.findall(command))
-        found.setdefault(display, set()).update(targets)
-    return found
-
-
-def required_contexts():
-    """The contexts `contrib/required-checks.txt` names, or nothing where the file is gone."""
-    if not REQUIRED_CHECKS.is_file():
-        return None
+def blanked(lines):
+    """The lines with their comments cut and the inside of every string and character literal
+    emptied, so that a brace or a construct named in one is not read as code.
+
+    Character literals first: `'"'` is one, and read after the strings it would pair its quote with
+    the next string's and move the brace depth."""
     return [
-        line
-        for line in (raw.strip() for raw in REQUIRED_CHECKS.read_text(encoding="utf-8").split("\n"))
-        if line and not line.startswith("#")
+        STRING_LITERAL.sub('""', CHAR_LITERAL.sub("''", raw))
+        for raw in mechanics.strip_comments(lines)
     ]
 
 
-def gated_targets():
-    """The make targets `checks.md` promises will fail a pull request, by the line it promises on.
+def braced_spans(lines, name):
+    """The 1-based line ranges of each `fn name` outside a test module, from its signature to the
+    line closing its body.
 
-    A paragraph rather than the whole document, because the promise and the target it is about are
-    written together: `make check-locales` is named in four paragraphs and only one of them says
-    what CI does with it.
+    The signature is found as the rest of the tree finds one (`definition_of`), generics included.
     """
-    if not CHECKS_DOC.is_file():
-        return {}
-    found = {}
-    number = 1
-    for paragraph in CHECKS_DOC.read_text(encoding="utf-8").split("\n\n"):
-        flat = " ".join(paragraph.split())
-        if any(one in flat for one in GATES_A_PULL_REQUEST):
-            for target in DOC_TARGET.findall(paragraph):
-                found.setdefault(target, number)
-        number += paragraph.count("\n") + 2
-    return found
+    code = blanked(lines)
+    tests = test_lines(lines)
+    declaration = mechanics.definition_of(name)
+    spans = []
+    for index, raw in enumerate(code):
+        number = index + 1
+        if not declaration.search(raw) or number in tests:
+            continue
+        depth = 0
+        opened = False
+        end = None
+        for at in range(index, len(code)):
+            if not opened and ";" in code[at] and "{" not in code[at]:
+                break
+            depth += code[at].count("{") - code[at].count("}")
+            opened = opened or "{" in code[at]
+            if opened and depth <= 0:
+                end = at
+                break
+        if end is not None:
+            spans.append((number, end + 1))
+    return spans
 
 
-def check_required_checks_are_the_gates():
-    """The contexts a merge is held to are written down, and they name jobs that exist.
+def key_step_allowances(specs):
+    """What the trust spec allows, as `path::fn construct` to the number of calls and the reason,
+    and a finding for each other spec that lists any.
 
-    A red job stops nothing by itself. What stops a merge is branch protection's list of required
-    contexts, which is a repository setting: no file in a checkout can read it, and a job renamed
-    here leaves that list naming a check run nothing produces -- always green, because it never
-    reports. This repository has one of those already, since the required lower-case `security` is
-    the organisation's scan and not CI's `Security`, and the cost is a check the documentation says
-    fails a pull request sitting red above an enabled merge button.
-
-    So the intended list is a file, and this decides the three things about it a checkout can: that
-    every context named is a job that exists, that every job running a `make check-` target is
-    named, since a job whose whole purpose is a check and which nothing requires reports its
-    verdict beside an enabled merge button, and that a target the documentation promises will fail
-    a pull request is run by some job at all. Comparing the file against what the protection really
-    requires is the part that needs the network, and `contrib/required-checks.txt` says how.
-
-    What this does not read is when a job runs. A check target moved into a job that runs only on a
-    push or a schedule would be demanded here and never report on a pull request, which holds every
-    merge rather than letting one through, so it is a state whoever made it finds out about at once.
+    Read from the trust spec alone. The list is the one place that says which files a key function
+    joins, and an entry in another spec would silence the check without being read where the table
+    of names is.
     """
-    contexts = required_contexts()
-    if contexts is None:
-        yield finding(
-            ERROR,
-            "unrecorded-required-check",
-            f"`{REQUIRED_CHECKS}` is gone, so nothing in the tree says which checks hold a merge",
-            f"`{REQUIRED_CHECKS}` is the only statement anywhere in this repository of which check "
-            "contexts branch protection has to require; without it a job can be renamed, or a "
-            "check added, with nothing to compare the protection against",
-            "infrastructure",
-            "medium",
-            evidence=[f"{REQUIRED_CHECKS}: absent"],
-            fix="restore the file, listing the display name of every job a merge is held to",
-        )
-        return
-
-    jobs = {}
-    if WORKFLOWS.is_dir():
-        for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
-            lines = path.read_text(encoding="utf-8").split("\n")
-            for display, targets in job_display_names(lines).items():
-                jobs.setdefault(display, set()).update(targets)
-
-    for context in contexts:
-        if context in jobs:
+    allowed = {}
+    misplaced = []
+    for spec in specs:
+        if KEY_STEP_ALLOWED not in spec.front:
             continue
+        if spec.front.get("id") != KEY_STEP_SPEC:
+            misplaced.append(spec)
+            continue
+        listed = spec.front[KEY_STEP_ALLOWED]
+        for entry in [listed] if isinstance(listed, str) else listed:
+            parsed = KEY_STEP_ENTRY.match(str(entry).strip())
+            if parsed:
+                where, calls, reason = parsed.groups()
+                allowed[where] = (int(calls or 1), reason.strip())
+            else:
+                allowed[str(entry).strip()] = (1, "")
+    return allowed, misplaced
+
+
+def check_key_steps_join_no_names(specs, sources):
+    """A construct inside a key function that makes two different names one key.
+
+    The table of names in TRUST-2 and the tests over it ask whether the names of one file share a
+    rule. A step that joins two different files has no row there and no test, which is how
+    `normalise` kept its `trim()` from the first commit until a file named only whitespace was keyed
+    as the working directory and a vouch for it trusted the whole workspace. A tool can find the
+    construct, so this does, and a reviewer reads what is left: the allowed entries and the reason
+    each gives.
+
+    A construct that stays is listed in the trust spec with the files it joins and why, which is also
+    where PATH-007 asks the description to say it. It is allowed for the number of calls the spec
+    gives, so a second call is read again. An entry that no longer matches is reported, since it
+    would otherwise be a standing allowance for whatever is written there next.
+    """
+    allowed, misplaced = key_step_allowances(specs)
+    for spec in misplaced:
         yield finding(
             ERROR,
-            "orphaned-required-check",
-            f"no job is called `{context}`, so requiring it requires a check run nothing produces",
-            f"`{REQUIRED_CHECKS}` names `{context}`, which is the display name of no job in "
-            "`.github/workflows/`. A required context that nothing reports is not a gate: it is "
-            "pending forever, or it is satisfied by whatever else happens to report under that "
-            "name",
-            "infrastructure",
-            "high",
-            evidence=[f"{REQUIRED_CHECKS}: {context}"],
-            fix="spell it exactly as the job's `name:`, or drop it where the job is gone. A job "
-            "renamed on one side and not the other is how a required context comes to name "
-            "something else",
+            "key-step-allowance-misplaced",
+            f"{spec.front.get('id', 'a spec')} lists `{KEY_STEP_ALLOWED}`, which only the trust spec reads",
+            f"`{KEY_STEP_ALLOWED}` is listed in a spec other than `docs/specs/trust-map.md`, so "
+            "the constructs it allows are not where the table of names is read, and they would "
+            "silence this check there",
+            "trust",
+            "low",
+            fix=f"move the entries to `{KEY_STEP_ALLOWED}:` in `docs/specs/trust-map.md`",
         )
 
-    promised = gated_targets()
-    for display in sorted(jobs):
-        targets = sorted(jobs[display])
-        if not targets or display in contexts:
+    hits = {}
+    for path, name in KEY_FUNCTIONS:
+        lines = sources.get(Path(path))
+        spans = braced_spans(lines, name) if lines else []
+        if not spans:
+            yield finding(
+                ERROR,
+                "key-function-missing",
+                f"`{name}` in {path} is not where the key check reads it, so nothing checks it",
+                f"`{path}` has no `fn {name}` outside a test module, so the check that keeps a "
+                "trim, a case fold or a lossy decode out of the functions that key a name is "
+                "silently passing for it",
+                "trust",
+                "medium",
+                fix=f"point `KEY_FUNCTIONS` in this script at where `{name}` is now, or remove "
+                "its entry in the same change that removes the function",
+                gain="nothing directly. It removes the check that would report the next step "
+                "that gives two different files one key",
+            )
             continue
+        code = blanked(lines)
+        for start, end in spans:
+            for number in range(start, end + 1):
+                for found in JOINING_CONSTRUCT.finditer(code[number - 1]):
+                    construct = next(group for group in found.groups() if group)
+                    where = f"{path}::{name} {construct}"
+                    hits.setdefault(where, []).append((number, lines[number - 1].strip()))
+
+    for where, found in sorted(hits.items()):
+        permitted = allowed.get(where, (0, ""))[0]
+        if len(found) <= permitted:
+            continue
+        path, _, rest = where.partition("::")
+        name, _, construct = rest.partition(" ")
+        said = f", and the spec allows {permitted}" if permitted else ""
         yield finding(
             ERROR,
-            "ungated-check",
-            f"`{display}` runs `make {targets[0]}` and is not a context a merge is held to, so it "
-            "reports its verdict beside an enabled merge button",
-            f"`{display}` exists to run {', '.join(f'`make {one}`' for one in targets)}. "
-            f"`{REQUIRED_CHECKS}` does not name it, and a check nothing requires decides nothing: "
-            "the job goes red and the merge button stays enabled"
-            + (
-                f". `{CHECKS_DOC}` promises that `make {targets[0]}` fails a pull request"
-                if targets[0] in promised
-                else ""
-            ),
-            "infrastructure",
+            "key-step-joins-names",
+            f"{name} calls {construct}, which can make two different files one key",
+            f"`{name}` in `{path}` turns a name into a key and calls `{construct}` {len(found)} "
+            f"time{'s' * (len(found) != 1)}{said}, so two names a volume holds apart can have one "
+            "key, and a trust rule, a writer reservation, a prompt answer or a permission rule "
+            "about one decides the other",
+            "trust",
             "medium",
-            evidence=[f"{display} runs make {one}" for one in targets]
-            + [f"{CHECKS_DOC}:{promised[one]}" for one in targets if one in promised],
-            fix=f"add `{display}` to `{REQUIRED_CHECKS}` and require the context, or move the "
-            "target out of a job of its own where it is not meant to hold a merge",
+            evidence=[f"{path}:{number}: {text}" for number, text in found],
+            fix=f"remove the call. Where the join is deliberate, add `{where}: <the files it "
+            f"joins and why>` under `{KEY_STEP_ALLOWED}:` in `docs/specs/trust-map.md` (`x<N>` "
+            "after the construct for N calls), add the row to the TRUST-2 table, and add a test in "
+            "which two names that must stay different do (PATH-007)",
+            gain="a step that trims, folds or decodes a name joins two files the table of names "
+            "does not list. That is the defect #2752 was, and each earlier report in this family "
+            "found one join after the one before it",
         )
 
-    run_somewhere = {one for targets in jobs.values() for one in targets}
-    for target, number in sorted(promised.items()):
-        if target in run_somewhere:
-            continue
-        yield finding(
-            ERROR,
-            "unrun-promise",
-            f"`{CHECKS_DOC.name}` says `make {target}` fails a pull request, and no job runs it",
-            f"`{CHECKS_DOC}` promises that `make {target}` fails a pull request rather than "
-            "holding only for whoever remembers to run it, and no job in `.github/workflows/` "
-            "runs that target, so nothing runs it on a pull request at all",
-            "infrastructure",
-            "medium",
-            evidence=[f"{CHECKS_DOC}:{number}"],
-            fix="give the target a job and require its context, or amend the paragraph to say "
-            "what actually runs it",
-        )
+    for where, (permitted, reason) in sorted(allowed.items()):
+        if not reason:
+            yield finding(
+                ERROR,
+                "key-step-allowance-unexplained",
+                f"{where} is allowed with no reason",
+                f"`{where}` is listed under `{KEY_STEP_ALLOWED}:` with nothing after the colon, so "
+                "a reader of the spec cannot tell which files the construct joins or why",
+                "trust",
+                "low",
+                fix=f"write the files it joins and why after `{where}:`",
+            )
+        if len(hits.get(where, ())) < permitted:
+            yield finding(
+                WARNING,
+                "key-step-allowance-stale",
+                f"{where} is allowed {permitted} time{'s' * (permitted != 1)} and the function "
+                "has fewer such calls",
+                f"`{where}` is listed under `{KEY_STEP_ALLOWED}:` for {permitted} call"
+                f"{'s' * (permitted != 1)} and the key function has "
+                f"{len(hits.get(where, ()))}, so the entry would admit whatever is next written "
+                "there under that name rather than the call somebody reviewed",
+                "trust",
+                "low",
+                evidence=[f"{KEY_STEP_ALLOWED}: {where}"],
+                fix=f"drop the entry from `{KEY_STEP_ALLOWED}:`, or correct it to where the call "
+                "moved to",
+            )
 
 
 def check_guarantee_specs_exist():
@@ -2775,6 +2122,18 @@ def prompt_sites(sources, specs):
     return found
 
 
+def other_prompt_sites(sources):
+    """Each function in the line interface, the editor protocol and the background host that writes a
+    question's lines, puts the question or replays what was written."""
+    found = []
+    for path, pattern in OTHER_PROMPTS.items():
+        for number, raw in code_lines(sources.get(path) or []):
+            named = pattern.match(raw)
+            if named:
+                found.append({"path": str(path), "line": number, "function": named.group(1)})
+    return found
+
+
 def declared_members(sources, declaration):
     """The names declared at the margin of one trait or struct, or `None` where it is not found.
 
@@ -2819,27 +2178,56 @@ def check_answers_registered(specs, sources):
     question the terminal's trust prompts ask is listed against the row it lands in, or as keeping
     nothing, and every row names the tests that pin it or the Known cost that accepts it.
     """
+    inputs = yield from register_inputs(specs, sources)
+    if inputs is None:
+        return
+    spec, columns, rows, declared, entries = inputs
+    yield from register_row_findings(spec, columns, rows)
+    yield from register_evidence_findings(spec, columns, rows)
+    listed = yield from kept_in_findings(spec, entries, declared, [row[0] for row in rows])
+    yield from unlisted_member_findings(spec, declared, listed)
+
+
+def unreadable_finding(kind, title, summary, fix, gain=None):
+    """A table a check reads could not be read, so what it holds to is no longer held."""
+    return finding(ERROR, kind, title, summary, "trust", "medium", fix=fix, gain=gain)
+
+
+register_unreadable = partial(
+    unreadable_finding,
+    "register-unreadable",
+    "the register of kept answers could not be read, so nothing checks what one is kept under",
+    gain="nothing directly. It removes the check that makes a new prompt or a new "
+    "remembered set say what its answer is kept under before it lands",
+)
+
+
+def known_costs_section_exists(spec, target):
+    """Whether the file a spec links for an accepted cost has a Known costs section."""
+    linked = spec.path.parent / target
+    return linked.is_file() and any(
+        line.strip() == KNOWN_COSTS for line in linked.read_text(encoding="utf-8").split("\n")
+    )
+
+
+def resolve_cited(index, reference):
+    """The (status, detail) a cited test resolves to, or None where it is a test there."""
+    status, detail = index.resolve(reference)
+    return None if status == "ok" else (status, detail)
+
+
+def register_inputs(specs, sources):
+    """The register's spec, columns, rows, what each kept answer's name declares, and the entries.
+
+    Returns None after yielding the finding that says what could not be read.
+    """
     spec, header, rows, entries = register_of(specs)
-
-    def unreadable(summary, fix):
-        return finding(
-            ERROR,
-            "register-unreadable",
-            "the register of kept answers could not be read, so nothing checks what one is kept under",
-            summary,
-            "trust",
-            "medium",
-            fix=fix,
-            gain="nothing directly. It removes the check that makes a new prompt or a new "
-            "remembered set say what its answer is kept under before it lands",
-        )
-
     if spec is None:
-        yield unreadable(
+        yield register_unreadable(
             f"no spec under `docs/specs` has the id `{PROMPT_SPEC}`, which is where the register is",
             f"restore the id, or update `PROMPT_SPEC` here to the spec the register moved to",
         )
-        return
+        return None
     for other in specs:
         if other is not spec and KEPT_IN in other.front:
             yield finding(
@@ -2855,24 +2243,26 @@ def check_answers_registered(specs, sources):
                 fix=f"move the entries into `{KEPT_IN}:` in `{spec.rel}`",
             )
     if not header or not rows:
-        yield unreadable(
+        yield register_unreadable(
             f"`{spec.rel}` has no table under {REGISTER}",
             f"restore the table under {REGISTER}, or update `REGISTER` here to the clause it moved to",
         )
-        return
+        return None
     declared = {}
     for name, declaration in REGISTERED.items():
         members = declared_members(sources, declaration)
         if not members:
-            yield unreadable(
+            yield register_unreadable(
                 f"`{declaration[0]}` has no `{name}` member this check can read",
                 f"update `REGISTERED` here to where `{name}` moved to",
             )
-            return
+            return None
         declared[name] = members
+    return spec, header[0], rows, declared, entries
 
-    columns = header[0]
-    named_rows = [row[0] for row in rows]
+
+def register_row_findings(spec, columns, rows):
+    """A row of the register whose cells do not fill its columns."""
     for row in rows:
         unsaid = [
             column or "(no column)"
@@ -2894,15 +2284,17 @@ def check_answers_registered(specs, sources):
                 fix="say it in the cell; an empty cell reads as decided when nobody decided it",
             )
 
+
+def register_evidence_findings(spec, columns, rows):
+    """A row that cites no test and no Known cost, or one that does not resolve."""
     evidence_at = columns.index(EVIDENCE) if EVIDENCE in columns else None
     if evidence_at is None:
-        yield unreadable(
+        yield register_unreadable(
             f"`{spec.rel}` {REGISTER}'s table has no `{EVIDENCE}` column",
             f"restore the `{EVIDENCE}` column, or update `EVIDENCE` here to what it is called now",
         )
         return
     index = mechanics.TestIndex()
-    crates = mechanics.crate_directories()
     for row in rows:
         cell = row[evidence_at] if evidence_at < len(row) else ""
         cited = CITED_TEST.findall(cell)
@@ -2922,8 +2314,9 @@ def check_answers_registered(specs, sources):
                 "`accepted` with a link to the Known costs entry that admits it",
             )
         for reference in cited:
-            status, detail = index.resolve(reference, crates)
-            if status != "ok":
+            unresolved = resolve_cited(index, reference)
+            if unresolved:
+                status, detail = unresolved
                 yield finding(
                     ERROR,
                     "register-test-missing",
@@ -2937,12 +2330,7 @@ def check_answers_registered(specs, sources):
                     fix="correct the name to the test as it is now, or cite the test that replaced it",
                 )
         for target in accepted:
-            linked = spec.path.parent / target
-            headed = linked.is_file() and any(
-                line.strip() == KNOWN_COSTS
-                for line in linked.read_text(encoding="utf-8").split("\n")
-            )
-            if not headed:
+            if not known_costs_section_exists(spec, target):
                 yield finding(
                     ERROR,
                     "register-cost-missing",
@@ -2955,6 +2343,9 @@ def check_answers_registered(specs, sources):
                     fix="link the spec whose Known costs admit it, or write the entry there",
                 )
 
+
+def kept_in_findings(spec, entries, declared, named_rows):
+    """Each `kept-in` entry is readable, unique, declared and lands in a row. Returns what is listed."""
     listed = {}
     for entry in entries:
         parsed = KEPT_ENTRY.match(entry)
@@ -3024,7 +2415,11 @@ def check_answers_registered(specs, sources):
                     fix=f"name a row as its first cell spells it, add the row, or write "
                     f"`{KEEPS_NOTHING}` if the answer is kept nowhere",
                 )
+    return listed
 
+
+def unlisted_member_findings(spec, declared, listed):
+    """A declared member that no entry lists."""
     for name, members in declared.items():
         path = REGISTERED[name][0]
         for member in members:
@@ -3062,35 +2457,45 @@ def check_changes_under_a_yes(specs, sources):
     spec, _, rows, _ = register_of(specs)
     if spec is None or not rows:
         return
+    body = yield from changes_table(spec, rows)
+    if body is None:
+        return
+    yield from change_row_findings(spec, rows, body)
+    cited_cases, cases = yield from change_cell_findings(spec, body, sources)
+    yield from unlisted_case_findings(spec, cases, cited_cases)
+
+
+changes_unreadable = partial(
+    unreadable_finding,
+    "changes-unreadable",
+    "the register's table of what changes do to a kept answer could not be read, so nothing "
+    "checks that each answer says what a change to the world does to it",
+)
+
+
+def changes_table(spec, rows):
+    """The rows of the second table after the register, or None after yielding why not."""
     found = tables(clause_body(spec.lines, REGISTER))
     matrix = found[1] if len(found) > 1 else None
 
-    def unreadable(summary, fix):
-        return finding(
-            ERROR,
-            "changes-unreadable",
-            "the register's table of what changes do to a kept answer could not be read, so nothing "
-            "checks that each answer says what a change to the world does to it",
-            summary,
-            "trust",
-            "medium",
-            fix=fix,
-        )
-
     if not matrix or len(matrix) < 2:
-        yield unreadable(
+        yield changes_unreadable(
             f"`{spec.rel}` {REGISTER} has no second table after the register",
             "restore the table, one row for each row of the register",
         )
-        return
+        return None
     header, body = matrix[0], matrix[1:]
     if tuple(header[1:]) != CHANGES:
-        yield unreadable(
+        yield changes_unreadable(
             f"the columns of that table are {header[1:]}, and the check reads {list(CHANGES)}",
             "restore the columns, or update `CHANGES` here to the ones the table has now",
         )
-        return
+        return None
+    return body
 
+
+def change_row_findings(spec, rows, body):
+    """A row of the changes table that is duplicated or unknown, and a register row it lacks."""
     named_rows = [row[0] for row in rows]
     seen = set()
     for row in body:
@@ -3135,8 +2540,13 @@ def check_changes_under_a_yes(specs, sources):
                 "is how a yes comes to cover something the person was never shown",
             )
 
+
+def change_cell_findings(spec, body, sources):
+    """Each cell of the changes table says what happens and cites what pins it.
+
+    Returns the (row, change) pairs cited as the table test and the cases that test runs.
+    """
     index = mechanics.TestIndex()
-    crates = mechanics.crate_directories()
     cases = set()
     table_source = sources.get(CHANGES_TABLE_FILE)
     if table_source is not None:
@@ -3192,12 +2602,7 @@ def check_changes_under_a_yes(specs, sources):
                 cited = CITED_TEST.findall(statement)
                 if leader == "accepted":
                     for target in ACCEPTED.findall(statement):
-                        linked = spec.path.parent / target
-                        headed = linked.is_file() and any(
-                            line.strip() == KNOWN_COSTS
-                            for line in linked.read_text(encoding="utf-8").split("\n")
-                        )
-                        if not headed:
+                        if not known_costs_section_exists(spec, target):
                             yield cell_finding(
                                 "changes-cost-missing",
                                 name,
@@ -3243,8 +2648,9 @@ def check_changes_under_a_yes(specs, sources):
                                 "for that row and change",
                                 "add the case, or cite the test that pins it",
                             )
-                    status, detail = index.resolve(reference, crates)
-                    if status != "ok":
+                    unresolved = resolve_cited(index, reference)
+                    if unresolved:
+                        status, detail = unresolved
                         yield cell_finding(
                             "changes-test-missing",
                             name,
@@ -3254,6 +2660,11 @@ def check_changes_under_a_yes(specs, sources):
                             + ")",
                             "correct the name to the test as it is now",
                         )
+    return cited_cases, cases
+
+
+def unlisted_case_findings(spec, cases, cited_cases):
+    """A case the table test runs that no cell cites."""
     for name, change in sorted(cases - cited_cases):
         yield finding(
             ERROR,
@@ -3268,12 +2679,466 @@ def check_changes_under_a_yes(specs, sources):
         )
 
 
+def is_test_path(path):
+    """Whether a source file is a test, a test helper or a fixture, by where it sits and what it is
+    called, so a lane's start list holds the code that ships."""
+    text = str(path)
+    return (
+        "/tests/" in text
+        or "/test-support/" in text
+        or Path(text).name in {"tests.rs", "test_support.rs", "testutil.rs"}
+        or text.endswith(("_test.rs", "_tests.rs"))
+    )
+
+
+_TEST_LINES = {}
+
+
+def test_lines(lines):
+    """The numbers of the lines a `#[cfg(test)]` covers, whatever it is attached to.
+
+    A module, function, impl or trait runs to its closing brace, and anything else (a field, a
+    `use`, a statement) to the end of its own statement or field, so the attribute never covers the
+    next block in the file. This is the one answer to which lines are test code: a caller that
+    needs a function's extent or a site's line asks it rather than walking the file itself.
+
+    The result is computed once per file. It is kept against the list object, which the entry holds
+    alive, so a second file with the same path and other content is not answered from the first.
+    """
+    cached = _TEST_LINES.get(id(lines))
+    if cached is not None and cached[0] is lines:
+        return cached[1]
+    covered = _test_lines(lines)
+    _TEST_LINES[id(lines)] = (lines, covered)
+    return covered
+
+
+def _test_lines(lines):
+    covered = set()
+    lines = mechanics.strip_comments(lines)
+    block = re.compile(r"\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|async\s+|const\s+)*(?:mod|fn|impl|trait)\b")
+    index = 0
+    while index < len(lines):
+        if not lines[index].strip().startswith(("#[cfg(test)]", "#[cfg(all(test")):
+            index += 1
+            continue
+        start = index
+        item = index + 1
+        while item < len(lines) and lines[item].strip().startswith("#["):
+            item += 1
+        if item >= len(lines):
+            break
+        braced = bool(block.match(lines[item]))
+        depth, opened, end = 0, False, item
+        for end in range(item, len(lines)):
+            text = lines[end]
+            # Braces in a string or a character literal are not the item's.
+            code = CHAR_LITERAL.sub("", STRING_LITERAL.sub("", text))
+            depth += code.count("{") - code.count("}")
+            opened = opened or "{" in code
+            stripped = text.rstrip()
+            if opened and depth <= 0:
+                break
+            if not opened and stripped.endswith(";" if braced else (";", ",")):
+                break
+        covered.update(range(start + 1, end + 2))
+        index = end + 1
+    return covered
+
+
+def code_lines(lines):
+    """`(number, text)` for each line of a Rust file that is neither comment nor test-only, with the
+    comments blanked as `strip_comments` does."""
+    inside = test_lines(lines)
+    for number, raw in enumerate(mechanics.strip_comments(lines), start=1):
+        if number not in inside:
+            yield number, raw
+
+
+def site_at(path, lines, number, raw, **more):
+    return {
+        "path": str(path),
+        "line": number,
+        "text": raw.strip()[:200],
+        "function": enclosing(lines, number),
+        **more,
+    }
+
+
+def sites_matching(sources, pattern):
+    """Every line of code that ships which `pattern` finds, with the function it is in."""
+    return [
+        site_at(path, lines, number, raw)
+        for path, lines in sources.items()
+        if not is_test_path(path)
+        for number, raw in code_lines(lines)
+        if pattern.search(raw)
+    ]
+
+
+def identity_sites(sources):
+    """Every call outside the tests that turns a name into a thing or asks what a name is."""
+    return sites_matching(sources, IDENTITY_CALLS)
+
+
+def deny_judgements(sources):
+    """Every place outside the tests that asks a deny rule about a path by its spelling."""
+    return sites_matching(sources, DENY_JUDGEMENTS)
+
+
+def confinement_rows(sources):
+    """Each line of the file that assembles a session's sandbox rows which grants a row or names the
+    proxy's socket."""
+    lines = sources.get(CONFINEMENT)
+    return [
+        site_at(CONFINEMENT, lines, number, raw)
+        for number, raw in code_lines(lines or [])
+        if CONFINEMENT_ROWS.search(raw)
+    ]
+
+
+def layered_sites(sources):
+    """Where the settings layers are merged, the unread keys and the permission texts are read, and
+    where the names a file set are listed."""
+    found = []
+    for path, lines in sources.items():
+        if is_test_path(path):
+            continue
+        for number, raw in code_lines(lines):
+            if LAYERED_CALLS.search(raw) or (
+                path == SETTINGS_FILE and SETTINGS_NAMES.match(raw)
+            ):
+                found.append(site_at(path, lines, number, raw))
+    return found
+
+
+def settings_fields(sources):
+    """The fields of `Settings` that hold what a settings file set, read from the declaration.
+
+    The ones that record what was ignored, unreadable or misshapen, and which file said what, are
+    left out: they say what happened to a value and are not one a file can set.
+    """
+    lines = sources.get(SETTINGS_FILE)
+    inside, fields = False, []
+    for raw in lines or []:
+        if not inside:
+            inside = bool(SETTINGS_STRUCT.match(raw))
+            continue
+        if raw.startswith("}"):
+            break
+        named = SETTINGS_FIELD.match(raw)
+        if named and not named.group(1).endswith(SETTINGS_RECORDS) and named.group(1) not in (
+            "layers",
+            "contested",
+            "unread",
+            "misshapen",
+        ):
+            fields.append(named.group(1))
+    return fields
+
+
+def clause_lines(specs, ids):
+    """Where the named clauses are, as `docs/specs/x.md:12 ID: title`."""
+    return [
+        f"{spec.rel}:{clause.line} {clause.id}: {clause.title}"
+        for spec in specs
+        for clause in spec.clauses
+        if clause.id in ids and not clause.withdrawn
+    ]
+
+
+def call_arguments(lines, index, start):
+    """The arguments of the call whose opening parenthesis is `lines[index][start]`, each as the text
+    written, or `None` where the call does not close within `CALL_LINES` lines.
+
+    Strings and character literals are skipped over, so a comma or a bracket inside a format string
+    divides nothing.
+    """
+    depth = 0
+    arguments, current = [], []
+    in_string = escaped = False
+    row, column = index, start
+    while row < min(len(lines), index + CALL_LINES):
+        text = lines[row]
+        while column < len(text):
+            char = text[column]
+            if in_string:
+                current.append(char)
+                column += 1
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            literal = CHAR_LITERAL.match(text, column) if char == "'" else None
+            if literal:
+                current.append(literal.group(0))
+                column = literal.end()
+                continue
+            column += 1
+            if char == '"':
+                in_string = True
+            elif char in "([{":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif char in ")]}":
+                depth -= 1
+                if depth == 0:
+                    arguments.append("".join(current).strip())
+                    return [one for one in arguments if one]
+            elif char == "," and depth == 1:
+                arguments.append("".join(current).strip())
+                current = []
+                continue
+            current.append(char)
+        current.append("\n")
+        row, column = row + 1, 0
+    return None
+
+
+def is_literal(argument):
+    """Whether an argument is one string literal with nothing to fill in."""
+    return STRING_LITERAL.fullmatch(argument) is not None and not FORMAT_HOLE.search(argument)
+
+
+def carries_a_value(kind, arguments):
+    """Whether a macro call or a `say` can write something its source text does not spell out.
+
+    A call that never closes in view is listed, since leaving one out is the mistake a list exists to
+    avoid.
+    """
+    if arguments is None:
+        return True
+    if kind in ("write", "writeln"):
+        arguments = arguments[1:]
+    if kind == "t":
+        # The first argument names the message. What follows is `name = value`, and a value that is
+        # not a literal is somebody's text.
+        return any(
+            not is_literal(argument.partition("=")[2].strip()) for argument in arguments[1:]
+        )
+    if kind == "say":
+        return not (
+            arguments and (is_literal(arguments[0]) or re.fullmatch(r"&?t!\(\w+\)", arguments[0]))
+        )
+    return len(arguments) > 1 or any(not is_literal(one) for one in arguments)
+
+
+def output_sites(sources):
+    """Every `println!`-family macro, `t!` and `say` call in the crates that talk to a person whose
+    arguments are not all literals, one entry per line with the kinds found on it."""
+    found = {}
+    for path, lines in sources.items():
+        if is_test_path(path) or not str(path).startswith(OUTPUT_CRATES):
+            continue
+        written = mechanics.strip_comments(lines)
+        for number, raw in code_lines(lines):
+            for start in OUTPUT_START.finditer(raw):
+                kind = start.group(1) or ("say" if raw[start.start()] == "." else "t")
+                arguments = call_arguments(written, number - 1, raw.index("(", start.start()))
+                if carries_a_value(kind, arguments):
+                    site = found.setdefault(
+                        (str(path), number), site_at(path, lines, number, raw, kinds=[])
+                    )
+                    if kind not in site["kinds"]:
+                        site["kinds"].append(kind)
+    return [found[key] for key in sorted(found)]
+
+
+def window_sinks():
+    """Where the desktop window's source puts text into the page as markup or preformatted text."""
+    found = []
+    for path in sorted(WINDOW_ROOT.rglob("*")):
+        if (
+            path.suffix not in WINDOW_SOURCE_SUFFIXES
+            or "node_modules" in path.parts
+            or ".test." in path.name
+        ):
+            continue
+        lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+        component = "(top level)"
+        for number, raw in enumerate(lines, start=1):
+            named = WINDOW_COMPONENT.match(raw)
+            if named:
+                component = named.group(1)
+            if WINDOW_SINKS.search(raw) and not raw.lstrip().startswith(("*", "//", "/*")):
+                found.append(
+                    {
+                        "path": str(path),
+                        "line": number,
+                        "text": raw.strip()[:200],
+                        "function": component,
+                    }
+                )
+    return found
+
+
+def tool_files():
+    """The scripts and hooks a maintainer's tools run, as paths from the repository root."""
+    return sorted(
+        {
+            str(path)
+            for pattern in TOOL_FILES
+            for path in Path().glob(pattern)
+            if path.is_file()
+        }
+    )
+
+
+def tool_definitions():
+    """The files that tell a tool what it may run: the agent and skill definitions and the settings."""
+    return sorted(
+        {
+            str(path)
+            for pattern in TOOL_DEFINITIONS
+            for path in Path().glob(pattern)
+            if path.is_file()
+        }
+    )
+
+
+def process_starts(files):
+    """The places the scripts start a process, with the function each is in."""
+    found = []
+    for name in files:
+        if not name.endswith(".py"):
+            continue
+        lines = Path(name).read_text(encoding="utf-8", errors="replace").split("\n")
+        for number, raw in enumerate(lines, start=1):
+            if STARTS_A_PROCESS.search(raw) and not raw.lstrip().startswith("#"):
+                found.append(
+                    {
+                        "path": name,
+                        "line": number,
+                        "text": raw.strip()[:200],
+                        "function": python_function(lines, number),
+                    }
+                )
+    return found
+
+
+def python_function(lines, number):
+    """The `def` a line of Python is inside, by walking back to the nearest one at a smaller indent."""
+    indent = len(lines[number - 1]) - len(lines[number - 1].lstrip())
+    for index in range(number - 2, -1, -1):
+        raw = lines[index]
+        named = PYTHON_DEF.match(raw)
+        if named and len(named.group(1)) < indent:
+            return named.group(2)
+    return "(top level)"
+
+
+def make_recipes():
+    """The Makefile's recipe lines that set git configuration, with the target each belongs to."""
+    path = Path("Makefile")
+    if not path.is_file():
+        return []
+    found, target = [], None
+    held, first = "", 0
+    for number, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+        if held:
+            held += " " + raw.strip()
+        elif raw.startswith("\t"):
+            held, first = raw, number
+        named = None if held else MAKE_TARGET.match(raw)
+        if named:
+            target = named.group(1)
+        if held and not held.endswith("\\"):
+            # A recipe line written over several lines is one command, read from its first line.
+            matched = MAKE_RECIPE_GIT.search(held)
+            if matched:
+                # The text runs to a little past the end of the match, so a long recipe still shows the
+                # configuration it sets.
+                text = held.strip()
+                found.append(
+                    {
+                        "path": "Makefile",
+                        "line": first,
+                        "text": text[: max(200, matched.end() + 100)],
+                        "function": target,
+                    }
+                )
+            held = ""
+        elif held:
+            held = held[:-1].rstrip()
+    return found
+
+
+def plain(text, limit=200):
+    """One line of visible text: no control or invisible characters, runs of spaces collapsed, cut at
+    `limit`. A title is somebody else's text, and a lane reads the file it goes into."""
+    kept = "".join(
+        " " if one.isspace() else one
+        for one in text
+        if one.isspace() or unicodedata.category(one) not in INVISIBLE
+    )
+    return " ".join(kept.split())[:limit]
+
+
+def tracker_entries(repo, since=None):
+    """The security issues the tracker holds, as `(number, state, title)`, or why they could not be read.
+
+    Read only. Nothing in this skill posts, and a run that cannot reach the tracker still audits: the
+    verifiers search it themselves.
+    """
+    if since is not None:
+        try:
+            listed = json.loads(Path(since).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as problem:
+            return [], f"{since} could not be read: {problem}"
+    else:
+        try:
+            done = subprocess.run(  # nosemgrep: gitlab.bandit.B603
+                [
+                    "gh", "issue", "list", "--repo", repo, "--label", "security",
+                    "--state", "all", "--limit", str(TRACKER_LIMIT),
+                    "--json", "number,title,state",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=TRACKER_TIMEOUT,
+            )
+        except (OSError, subprocess.SubprocessError) as problem:
+            return [], f"gh could not be run: {problem}"
+        if done.returncode != 0:
+            return [], f"gh exited {done.returncode}: {plain(done.stderr, 300)}"
+        try:
+            listed = json.loads(done.stdout)
+        except ValueError as problem:
+            return [], f"gh printed no list: {problem}"
+    entries = []
+    for one in listed if isinstance(listed, list) else []:
+        if isinstance(one, dict) and isinstance(one.get("number"), int):
+            state, title = plain(str(one.get("state", ""))).lower(), plain(str(one.get("title", "")))
+            entries.append((one["number"], state, title))
+    return sorted(entries), None
+
+
+def write_tracker(work_dir, entries, problem):
+    """The tracker's titles as one file for the lanes to compare a candidate with."""
+    path = work_dir / TRACKER_FILE
+    if problem:
+        body = f"(the tracker could not be read: {problem})\n"
+    else:
+        body = "".join(f"#{number} {state}: {title}\n" for number, state, title in entries)
+        body = body or "(the tracker holds no security issue)\n"
+        if len(entries) >= TRACKER_LIMIT:
+            body = f"(only the newest {TRACKER_LIMIT} security issues were listed, so older ones are missing)\n" + body
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 def surface(sources, specs):
     """Everything the lanes are given, gathered once."""
     construction = []
     for constructor in CONSTRUCTORS:
         construction.extend(sites_for(constructor, sources))
     governed = {path for spec in specs for path in spec.governs}
+    tools = tool_files()
     label_touching = sorted(
         {
             site["path"]
@@ -3301,11 +3166,48 @@ def surface(sources, specs):
         ),
         "prompt_files": prompt_files(specs),
         "prompts": prompt_sites(sources, specs),
+        "other_prompts": other_prompt_sites(sources),
+        "identity": identity_sites(sources),
+        "deny_judgements": deny_judgements(sources),
+        "confinement_rows": confinement_rows(sources),
+        "layered": layered_sites(sources),
+        "settings_fields": settings_fields(sources),
+        "layer_clauses": clause_lines(specs, LAYER_CLAUSES),
+        "outputs": output_sites(sources),
+        "window_sinks": window_sinks(),
+        "tool_files": tools,
+        "tool_definitions": tool_definitions(),
+        "process_starts": process_starts(tools),
+        "make_recipes": make_recipes(),
     }
 
 
 def as_paths(paths):
     return "\n".join(f"- `{one}`" for one in paths) or "- (none)"
+
+
+def as_files(sites, limit=80):
+    """Sites as one line per file, the busiest first, with the functions to open.
+
+    A list cut after sixty sites is the first few files in the alphabet, which is not where the
+    sites are. A count per file says where to read, and `surface.json` has every site.
+    """
+    by_file = {}
+    for site in sites:
+        by_file.setdefault(site["path"], []).append(site)
+    ranked = sorted(by_file.items(), key=lambda item: (-len(item[1]), item[0]))
+    lines = []
+    for path, group in ranked[:limit]:
+        functions = list(dict.fromkeys(f"`{site['function']}`" for site in group))
+        shown = ", ".join(functions[:6])
+        more = f" and {len(functions) - 6} more" if len(functions) > 6 else ""
+        count = f"{len(group)} site" + ("" if len(group) == 1 else "s")
+        lines.append(f"- `{path}`: {count}, in {shown}{more}")
+    if len(ranked) > limit:
+        lines.append(
+            f"- ... and {len(ranked) - limit} more files; `surface.json` lists every site"
+        )
+    return "\n".join(lines) or "- (none)"
 
 
 def as_list(sites, limit=60):
@@ -3331,7 +3233,7 @@ def read_prompt(name):
     )
 
 
-def build_lane(name, found, specs, results_file, surface_file=None):
+def build_lane(name, found, specs, results_file, surface_file=None, tracker_file=None):
     """One lane's instructions, with the places it starts from filled in."""
     interesting = [
         site
@@ -3375,18 +3277,36 @@ def build_lane(name, found, specs, results_file, surface_file=None):
         "second_client": as_paths(found["second_client"]),
         "prompt_files": as_paths(found["prompt_files"]),
         "prompt_sites": as_list(found["prompts"]),
+        "other_prompt_sites": as_list(found["other_prompts"]),
         "register_rows": "\n".join("| " + " | ".join(cells) + " |" for cells in drawn)
         or "- (none)",
         "kept_in": "\n".join(f"- `{one}`" for one in entries) or "- (none)",
+        "tracker_file": str(tracker_file) if tracker_file else "(not written)",
+        "identity_count": len(found["identity"]),
+        "identity_files": as_files(found["identity"]),
+        "deny_count": len(found["deny_judgements"]),
+        "deny_files": as_files(found["deny_judgements"]),
+        "confinement_rows": as_list(found["confinement_rows"]),
+        "layer_clauses": "\n".join(f"- `{one}`" for one in found["layer_clauses"]) or "- (none)",
+        "layered_sites": as_list(found["layered"]),
+        "settings_fields": ", ".join(f"`{one}`" for one in found["settings_fields"]) or "(none)",
+        "output_count": len(found["outputs"]),
+        "output_files": as_files(found["outputs"]),
+        "window_sinks": as_list(found["window_sinks"]),
+        "tool_files": as_paths(found["tool_files"]),
+        "tool_definitions": as_paths(found["tool_definitions"]),
+        "process_starts": as_files(found["process_starts"]),
+        "make_recipes": as_list(found["make_recipes"]),
     }
     return read_prompt(name).format(**filling)
 
 
-def changed_lanes(base, specs):
+def changed_lanes(base, specs, found=None):
     """The lanes worth running for what a branch touched.
 
     A branch that edits no Rust still wants the two documentation lanes, and one that touches
-    `policy.rs` wants everything.
+    `policy.rs` wants everything. `found` is the surface, so the identity lane runs for a file that
+    makes a decision on a name, and for any Rust file where there is no surface to ask.
     """
     touched = set(mechanics.changed_files(base))
     if not touched:
@@ -3410,6 +3330,20 @@ def changed_lanes(base, specs):
         lanes.add("shown-before-answered")
     if touches_kept_answers(touched, specs):
         lanes.add("approval-binding")
+    names = {str(CONFINEMENT)}
+    if found is not None:
+        names.update(site["path"] for site in found["identity"] + found["deny_judgements"])
+    if rust and (found is None or rust & names):
+        lanes.add("identity")
+    if any(
+        one.startswith("crates/config/") or one in ("docs/specs/backends.md", str(SETTINGS_FILE))
+        for one in touched
+    ):
+        lanes.add("checkout-controls")
+    if any(one.startswith(OUTPUT_CRATES + (str(WINDOW_ROOT) + "/",)) for one in touched):
+        lanes.add("output-sinks")
+    if any(one.startswith(("agents/", "contrib/", ".githooks/")) or one == "Makefile" for one in touched):
+        lanes.add("tooling")
     return sorted(lanes) or list(LANES)
 
 
@@ -3547,6 +3481,7 @@ def mechanical_findings(specs, sources):
     findings += list(check_construction_pinned(specs, sources))
     findings += list(check_gates_pinned(specs, sources))
     findings += list(check_key_sites_exhaustive(specs, sources))
+    findings += list(check_key_steps_join_no_names(specs, sources))
     findings += list(check_pinned_actions())
     findings += list(check_pinned_images())
     findings += list(check_downloads_verified())
@@ -3568,6 +3503,13 @@ def main():
     parser.add_argument("--mechanical-only", action="store_true", help="no lanes, no model")
     parser.add_argument("--changed", metavar="BASE", default=None, help="lanes for a branch's diff")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--tracker",
+        metavar="FILE",
+        default=None,
+        help="read the security issues from this file, the JSON `gh issue list --json "
+        "number,title,state` prints, instead of asking GitHub",
+    )
     parser.add_argument(
         "--stop-hook",
         action="store_true",
@@ -3591,13 +3533,15 @@ def main():
     if unknown:
         print(f"no such lane: {', '.join(unknown)}", file=sys.stderr)
         return 2
-    chosen = args.lanes or (changed_lanes(args.changed, specs) if args.changed else list(LANES))
+    found = surface(sources, specs)
+    chosen = args.lanes or (
+        changed_lanes(args.changed, specs, found) if args.changed else list(LANES)
+    )
     if args.mechanical_only:
         chosen = []
 
     work_dir = Path(args.work_dir or tempfile.mkdtemp(prefix="security-audit-"))
     work_dir.mkdir(parents=True, exist_ok=True)
-    found = surface(sources, specs)
 
     # The surface is every site in the tree and it is already baked into the lane prompts, but a lane
     # prompt lists at most ninety of anything: past that it is a wall nobody reads and the lane spends
@@ -3605,12 +3549,25 @@ def main():
     surface_file = work_dir / "surface.json"
     surface_file.write_text(json.dumps(found, indent=2), encoding="utf-8")
 
+    # The tracker is read once, and only for a run that has lanes to give it to: `make check-security`
+    # runs the mechanical half in CI and has no use for the network.
+    tracker_file, tracker_line = None, None
+    if chosen:
+        entries, problem = tracker_entries(TRACKER_REPO, args.tracker)
+        tracker_file = write_tracker(work_dir, entries, problem)
+        tracker_line = (
+            f"the tracker could not be read, so the lanes compare with nothing: {problem}"
+            if problem
+            else f"{len(entries)} security issues written to {tracker_file} for the lanes"
+        )
+
     lanes = []
     for name in chosen:
         results_file = work_dir / f"{name}_results.json"
         prompt_file = work_dir / f"{name}_prompt.md"
         prompt_file.write_text(
-            build_lane(name, found, specs, results_file, surface_file), encoding="utf-8"
+            build_lane(name, found, specs, results_file, surface_file, tracker_file),
+            encoding="utf-8",
         )
         lanes.append(
             {
@@ -3631,7 +3588,8 @@ def main():
         "progress_lines": [
             f"{len(found['construction'])} construction sites, "
             f"{len(found['releases'])} releases, {len(lanes)} lanes",
-        ],
+        ]
+        + ([tracker_line] if tracker_line else []),
     }
     manifest_path = workdir.write_manifest(work_dir, manifest)
 

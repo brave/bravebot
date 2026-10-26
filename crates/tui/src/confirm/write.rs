@@ -42,6 +42,14 @@ pub enum WriteAnswer {
     Reject,
     /// Refuse the write and stop the turn that asked for it.
     Interrupt,
+    /// Open the body in the person's editor, where the request offered it ([WRITE-7]).
+    ///
+    /// Not an answer to the question: the question is put again for whatever they save. What the
+    /// waiting turn is told is a refusal, which is only reached by a caller with no editor to
+    /// give them, and the request offers the key to the callers that have one.
+    ///
+    /// [WRITE-7]: ../../../../docs/specs/tools/write-file.md
+    Edit,
 }
 
 impl WriteAnswer {
@@ -51,7 +59,9 @@ impl WriteAnswer {
             WriteAnswer::Approve => WriteDecision::approve(),
             WriteAnswer::ApproveAlways => WriteDecision::approve_always(),
             WriteAnswer::ApproveAndRecord => WriteDecision::approve_and_record(),
-            WriteAnswer::Reject | WriteAnswer::Interrupt => WriteDecision::reject(),
+            WriteAnswer::Reject | WriteAnswer::Interrupt | WriteAnswer::Edit => {
+                WriteDecision::reject()
+            }
         }
     }
 
@@ -67,7 +77,7 @@ impl Approves for WriteAnswer {
             WriteAnswer::Approve | WriteAnswer::ApproveAlways | WriteAnswer::ApproveAndRecord => {
                 true
             }
-            WriteAnswer::Reject | WriteAnswer::Interrupt => false,
+            WriteAnswer::Reject | WriteAnswer::Interrupt | WriteAnswer::Edit => false,
         }
     }
 }
@@ -91,6 +101,9 @@ impl Noted<WriteAnswer> {
 ///
 /// Standalone as well as available through [`TerminalConfirmer`], because a turn running on a
 /// worker thread cannot hold the terminal: the main thread calls this on its behalf.
+///
+/// A caller that cannot hand the person an editor uses this one, and the request does not offer
+/// one where it is for such a caller ([`ask_editing`] is the other).
 pub fn ask<B: Backend>(terminal: &mut Terminal<B>, request: &WriteRequest) -> Noted<WriteAnswer> {
     ask_reading(
         terminal,
@@ -108,8 +121,123 @@ pub(super) fn ask_reading<B: Backend>(
     mut next: impl FnMut() -> Next,
     mut alone: impl FnMut() -> bool,
 ) -> Noted<WriteAnswer> {
+    ask_saying(
+        terminal,
+        request,
+        &mut next,
+        &mut alone,
+        None,
+        &mut 0,
+        &mut Seen::default(),
+    )
+}
+
+/// What a person who may open their editor at a write prompt did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    /// An answer to the question, as [`ask`] gives it.
+    Answered(Noted<WriteAnswer>),
+    /// The body as the person saved it from their editor, which is no answer: the turn puts the
+    /// question again for this text ([WRITE-7]).
+    ///
+    /// [WRITE-7]: ../../../../docs/specs/tools/write-file.md
+    Edited(String),
+}
+
+impl Asked {
+    /// What to tell the waiting turn.
+    pub fn decision(self) -> WriteDecision {
+        match self {
+            Asked::Answered(noted) => noted.decision(),
+            Asked::Edited(body) => WriteDecision::edit(body),
+        }
+    }
+
+    /// Whether the turn that asked stops as well as being refused. An edit stops nothing.
+    pub fn stops_the_turn(&self) -> bool {
+        match self {
+            Asked::Answered(noted) => noted.stops_the_turn(),
+            Asked::Edited(_) => false,
+        }
+    }
+}
+
+/// [`ask`] for a caller that can hand the person an editor, which `edit` does: it is given the
+/// terminal, the body as it is drawn and the path it is bound for, and returns what they saved or
+/// the sentence saying why nothing came back.
+///
+/// An editor that returns what it was given, or none at all, leaves the question where it was, with
+/// the failure said above it where there was one, since a key that does nothing and a key that
+/// fails look the same.
+pub fn ask_editing<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &WriteRequest,
+    edit: impl FnMut(&mut Terminal<B>, &str, &str) -> Result<String, String>,
+) -> Asked {
+    ask_editing_reading(
+        terminal,
+        request,
+        super::next_press,
+        crate::input::the_last_event_arrived_alone,
+        edit,
+    )
+}
+
+/// [`ask_editing`], taking each event from `next` and asking `alone` straight after each one, so a
+/// test can stand in for the terminal.
+pub(super) fn ask_editing_reading<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &WriteRequest,
+    mut next: impl FnMut() -> Next,
+    mut alone: impl FnMut() -> bool,
+    mut edit: impl FnMut(&mut Terminal<B>, &str, &str) -> Result<String, String>,
+) -> Asked {
+    let mut said: Option<String> = None;
+    // Kept across the editor, so a person who comes back with nothing is where they were in the
+    // diff, and a yes that had been taken from a draw is still taken.
     let mut scroll = 0u16;
     let mut seen = Seen::default();
+    loop {
+        let answer = ask_saying(
+            terminal,
+            request,
+            &mut next,
+            &mut alone,
+            said.as_deref(),
+            &mut scroll,
+            &mut seen,
+        );
+        if answer.answer != WriteAnswer::Edit {
+            return Asked::Answered(answer);
+        }
+        said = match edit(terminal, &request.contents, &request.path) {
+            Ok(saved) if changed(&saved, &request.contents) => return Asked::Edited(saved),
+            Ok(_) => None,
+            Err(failure) => Some(failure),
+        };
+    }
+}
+
+/// Whether `saved` is a different body from `shown`.
+///
+/// A final newline the editor added to a body that had none is not a difference. Most editors add
+/// one on save, so a person who opened the body and changed nothing would otherwise be put the same
+/// question again for it.
+fn changed(saved: &str, shown: &str) -> bool {
+    saved != shown && (shown.ends_with('\n') || saved.strip_suffix('\n') != Some(shown))
+}
+
+/// The question, drawn with `said` above the body where the last thing tried failed, until it has
+/// an answer.
+fn ask_saying<B: Backend>(
+    terminal: &mut Terminal<B>,
+    request: &WriteRequest,
+    next: &mut impl FnMut() -> Next,
+    alone: &mut impl FnMut() -> bool,
+    said: Option<&str>,
+    scroll: &mut u16,
+    seen: &mut Seen,
+) -> Noted<WriteAnswer> {
     loop {
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather than
         // proceed unseen. How far the body can scroll, and whether a yes is taken, are only
@@ -117,7 +245,7 @@ pub(super) fn ask_reading<B: Backend>(
         // out of the draw.
         let mut drawn = Drawn::default();
         if terminal
-            .draw(|frame| drawn = draw(frame, request, scroll, &mut seen))
+            .draw(|frame| drawn = draw_saying(frame, request, *scroll, seen, said))
             .is_err()
         {
             return Noted::plain(WriteAnswer::Reject);
@@ -136,7 +264,7 @@ pub(super) fn ask_reading<B: Backend>(
                     ),
                     Some(Response::Answer(WriteAnswer::Approve))
                 );
-                if let Some(noted) = note::take_reading(terminal, may_yes, &mut next, &mut alone)
+                if let Some(noted) = note::take_reading(terminal, may_yes, &mut *next, &mut *alone)
                     .settle(
                         WriteAnswer::Approve,
                         WriteAnswer::Reject,
@@ -147,8 +275,11 @@ pub(super) fn ask_reading<B: Backend>(
                 }
             }
             Next::Press(key) => match write_answer_for(key, request, &drawn) {
+                // An editor reads the keys that arrive after the one that started it, so the key
+                // that starts one has to have arrived alone, as the one that opens a note does.
+                Some(Response::Answer(WriteAnswer::Edit)) if !alone() => continue,
                 Some(Response::Answer(answer)) => return Noted::plain(answer),
-                Some(Response::Scroll(by)) => scroll = drawn.moved(scroll, by),
+                Some(Response::Scroll(by)) => *scroll = drawn.moved(*scroll, by),
                 None => continue,
             },
         }
@@ -158,8 +289,9 @@ pub(super) fn ask_reading<B: Backend>(
 /// Interpret one key press at a write prompt, or `None` for a key that answers nothing.
 ///
 /// Takes the request for the reason [`run_answer_for`] does: `a` is bound only where the driver
-/// offered it and `r` only where it said where the answer would be written, so a key the screen
-/// does not draw is unbound rather than granting what the screen never offered. Takes the draw
+/// offered it, `r` only where it said where the answer would be written and `e` only where it
+/// offered the editor, so a key the screen does not draw is unbound rather than granting what the
+/// screen never offered. Takes the draw
 /// because none of `y`, `a` and `r` approves from one that did not show what it decides.
 pub(super) fn write_answer_for(
     key: KeyEvent,
@@ -177,6 +309,11 @@ pub(super) fn write_answer_for(
         {
             Some(Response::Answer(WriteAnswer::ApproveAndRecord))
         }
+        KeyCode::Char('e' | 'E')
+            if request.may_edit && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            Some(Response::Answer(WriteAnswer::Edit))
+        }
         _ => pressed(key, drawn.page()).map(|response| match response {
             Response::Answer(Answer::Approve) => Response::Answer(WriteAnswer::Approve),
             Response::Answer(Answer::Reject) => Response::Answer(WriteAnswer::Reject),
@@ -184,6 +321,17 @@ pub(super) fn write_answer_for(
             Response::Scroll(by) => Response::Scroll(by),
         }),
     })
+}
+
+/// [`draw_saying`] with nothing to say, which is what the tests of the prompt's own rows draw.
+#[cfg(test)]
+pub(super) fn draw(
+    frame: &mut ratatui::Frame,
+    request: &WriteRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    draw_saying(frame, request, scroll, seen, None)
 }
 
 /// Draw the confirmation over the session, returning what the draw decided for its keys.
@@ -196,11 +344,15 @@ pub(super) fn write_answer_for(
 /// Everything above the diff decides the question, the findings and what `a` and `r` settle most
 /// of all, so no key that approves is taken until all of it and the diff's first row have been
 /// drawn.
-pub(super) fn draw(
+///
+/// `said` is drawn above the body where the last thing the person tried at this question failed:
+/// the editor would not start, or returned nothing.
+pub(super) fn draw_saying(
     frame: &mut ratatui::Frame,
     request: &WriteRequest,
     scroll: u16,
     seen: &mut Seen,
+    said: Option<&str>,
 ) -> Drawn {
     let area = centred(frame.area());
     let inside = panel(frame, area, theme::brand_primary(), t!(write_title));
@@ -220,7 +372,7 @@ pub(super) fn draw(
                 Style::default().fg(colour).add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                request.path.clone(),
+                bravebot_agent::confirm::shown_name(&request.path),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
             Span::styled(
@@ -261,6 +413,20 @@ pub(super) fn draw(
             &[Span::styled(t!(write_untrusted), marked)],
             inside.width as usize,
         ));
+    }
+
+    // The driver's own words about what the person just tried, where it did not work. Drawn in the
+    // margin column like the other rows the answer waits on, so it is on the screen with them.
+    if let Some(said) = said {
+        lines.extend(marked_rows(
+            &margin,
+            &[Span::styled(
+                said.to_string(),
+                Style::default().fg(theme::fail()),
+            )],
+            inside.width as usize,
+        ));
+        lines.push(Line::raw(""));
     }
 
     // What the processor that produced the body said about it, beside the lines it describes.
@@ -451,6 +617,15 @@ fn write_keys(request: &WriteRequest, width: usize) -> impl Fn(bool) -> Vec<Line
             Span::styled("  y", approving(theme::ok(), answerable)),
             Span::raw(format!(" {}{gap}", t!(write_yes))),
         ];
+        // Not an approving key, so it is drawn however the yes is: opening the editor writes
+        // nothing, and the question comes back for whatever the person saves.
+        if request.may_edit {
+            key_spans.push(Span::styled(
+                "e",
+                Style::default().fg(theme::brand_primary()),
+            ));
+            key_spans.push(Span::raw(format!(" {}{gap}", t!(write_edit_first))));
+        }
         if request.may_always {
             key_spans.push(Span::styled("a", approving(theme::running(), answerable)));
             key_spans.push(Span::raw(format!(" {}{gap}", t!(write_always))));
@@ -468,13 +643,20 @@ fn write_keys(request: &WriteRequest, width: usize) -> impl Fn(bool) -> Vec<Line
     let mut stop = Line::from(Vec::from(stopping()));
     stop.spans.push(Span::raw("    "));
     stop.spans.extend(note::hint());
-    let wide = answers(true, "    ").width() + stop.width() > width;
-    // Both standing answers make the row wider than the box on a 100-column terminal, so the key
-    // that stops the turn gets a row of its own rather than being broken across two. A prompt
-    // offering neither keeps its one row, closing its gaps where it is still too wide, and with it
-    // every row it had for the body.
-    let stop_below = request.may_always && wide;
-    let gap = if wide && !stop_below { "  " } else { "    " };
+    let roomy = answers(true, "    ").width();
+    let wide = roomy + stop.width() > width;
+    // Both standing answers make the row wider than the box on a 100-column terminal, and so can
+    // the editor beside either, so the key that stops the turn gets a row of its own rather than
+    // being broken across two. A prompt offering none of them keeps its one row, closing its gaps
+    // where it is still too wide, and with it every row it had for the body.
+    let stop_below = (request.may_always || request.may_edit) && wide;
+    // Closed where the answers alone are wider than the box, which is a prompt offering the
+    // editor beside both standing answers: a label broken across two rows reads as two keys.
+    let gap = if (wide && !stop_below) || roomy > width {
+        "  "
+    } else {
+        "    "
+    };
     move |answerable: bool| {
         let answers = answers(answerable, gap);
         let stop = stop.clone();

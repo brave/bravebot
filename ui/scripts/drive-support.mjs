@@ -13,6 +13,16 @@ export const COMPOSER_INPUT = '.composer textarea'
 export const COMPOSER_IDLE = '.composer textarea:not([disabled])'
 /** The left column's tabs: Chats first, Bots second. */
 export const SIDEBAR_TAB = '.sidebar-tabs [role="option"]'
+/** The composer's send button, which reads Stop while a turn runs. */
+export const COMPOSER_SEND = '.composer .send'
+/** The accessible name of the composer's text box. */
+export const COMPOSER_NAME = 'Message the agent'
+/** A reply from the agent in the transcript. */
+export const ASSISTANT_BUBBLE = '.bubble.assistant'
+/** The button on a bot's row that opens its page. */
+export const BOT_OPEN_BUTTON = '.bot-open-button'
+/** The yes on a trust question. */
+export const TRUST_APPROVE = '[data-test="trust-approve"]'
 
 /** The `check` helper every driver prints with, and the list of what failed. */
 export function checker() {

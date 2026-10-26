@@ -7,6 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 # Already in the tree for the credential protocol; here it encodes the clipboard escape
 # sequence, which is base64 by specification.
@@ -15,6 +18,7 @@ bravebot-agent = { path = "../agent" }
 # The model picker lists what the endpoint offers, and asking it is this crate's own call
 # rather than something a turn does.
 bravebot-aichat = { path = "../aichat" }
+bravebot-backtrace = { path = "../backtrace" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 # What a dropped file's name says it is, which the desktop window asks as well.
@@ -38,9 +42,18 @@ unicode-width = { workspace = true }
 # stall startup on a terminal that does not answer. rustix rather than libc so the
 # same syscalls do not need unsafe at this crate. open(2) with O_NOFOLLOW and O_NONBLOCK,
 # so /checkouts reads a repository's refs without following a link or waiting on a pipe.
-rustix = { workspace = true, features = ["event", "fs"] }
+# process(2) for kill_current_process_group, which crates/tui/src/app/terminal.rs sends SIGTSTP
+# through to stop the session's whole process group on Ctrl-Z. This crate calls it directly, so it
+# enables the feature itself rather than relying on it to arrive unified in from bravebot-agent or
+# bravebot-session, either of which could stop enabling it without this crate failing to build.
+rustix = { workspace = true, features = ["event", "fs", "process"] }
 
 [dev-dependencies]
+# The tests of what the interface keeps and draws of a failed ChatGPT turn sign in to a stand-in and
+# run the turns against it. The seams are on for a build of this crate's tests alone, and a release
+# build refuses them (CHATGPT-2).
+bravebot-config = { path = "../config", features = ["test-hosts"] }
 bravebot-mcp = { path = "../mcp" }
+bravebot-skus = { path = "../skus", features = ["test-hosts"] }
 bravebot-ui-bridge = { path = "../ui-bridge" }
 tempfile = { workspace = true }

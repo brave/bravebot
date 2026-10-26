@@ -7,6 +7,8 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/agent/src/delegate.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -259,6 +261,7 @@ made the path trusted again: a copy is how untrusted bytes are laundered.
 `verified-by: bravebot_agent::delegate::a_delegates_memory_is_said_after_its_body_and_before_what_it_cannot_do`
 `verified-by: bravebot_agent::turn::an_addressed_run_is_told_where_its_memory_is_and_not_what_it_holds`
 `verified-by: bravebot_agent::turn::a_delegate_under_a_definition_keeping_a_memory_is_told_where_it_is`
+`verified-by: bravebot_agent::memory::a_run_is_told_a_memory_that_is_not_a_file_is_not_to_be_read`
 
 <a id="MEMORY-5"></a>
 ### MEMORY-5: a memory a write left untrusted is still untrusted in the next session

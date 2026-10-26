@@ -11,6 +11,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync, truncateSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { COMPOSER_NAME, COMPOSER_SEND } from './drive-support.mjs'
 
 // Each answer waits a moment, so a message can be queued behind a turn that is still running.
 const { service, rounds: requests } = await startModelService(async () => {
@@ -49,7 +50,7 @@ try {
 
   await openProject(page, app, project)
 
-  const composer = page.getByRole('textbox', { name: 'Message the agent' })
+  const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
   const chips = page.locator('[data-test="dropped-chip"]')
   const stop = page.locator('.composer .stop')
   const cdp = await page.context().newCDPSession(page)
@@ -141,7 +142,7 @@ try {
 
   // ---- sending carries what the draft still names ---------------------------------------------
   const sentBefore = requests.length
-  await page.locator('.composer .send').click()
+  await page.locator(COMPOSER_SEND).click()
   await stop.waitFor({ state: 'visible' })
   assert.equal(await chips.count(), 0, 'sending clears what was staged')
   await page.locator('.attached').filter({ hasText: 'Read notes.md' }).waitFor()
@@ -151,7 +152,7 @@ try {
   await chips.first().waitFor()
   assert.match(await composer.inputValue(), /^\[Image #6\] $/)
   await composer.fill('Queued look at [Image #6] ')
-  await composer.press('Enter')
+  await composer.press('Alt+Enter')
   await page.locator('.queued-messages').waitFor()
   assert.equal(await chips.count(), 0, 'queuing takes the drop with the message')
   await page.waitForFunction(() => document.querySelector('.queued-messages') === null, null, { timeout: 60000 })
@@ -180,7 +181,7 @@ try {
   await chips.first().waitFor()
   const marker = (await composer.inputValue()).trim()
   await composer.fill(`Requeued ${marker} with @later.md `)
-  await composer.press('Enter')
+  await composer.press('Alt+Enter')
   const tray = page.locator('.queued-messages')
   await tray.waitFor()
   await stop.waitFor({ state: 'hidden', timeout: 60000 })

@@ -7,7 +7,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::state::Session;
+use crate::command_table::OUTPUTS_COMMAND;
+use crate::state::{Session, WatchScope};
 use crate::theme;
 
 use super::dim;
@@ -75,12 +76,29 @@ fn fitted(parts: &[String], expendable: &[usize], width: u16) -> Vec<usize> {
 /// a tick the session is not free to take yet, because a turn is running or the queue is holding
 /// something, and a row counting down to `0s` and sitting there reads as a loop that has stalled
 /// rather than one waiting its turn.
-pub(super) fn loop_part(until: Option<std::time::Duration>) -> String {
-    match until {
-        Some(until) if until >= std::time::Duration::from_secs(1) => {
+pub(super) fn loop_part(count: usize, until: Option<std::time::Duration>) -> String {
+    match (count, until) {
+        (1, Some(until)) if until >= std::time::Duration::from_secs(1) => {
             t!(loop_hint_next, next = crate::loops::spell(until))
         }
-        _ => t!(loop_hint).to_string(),
+        (1, _) => t!(loop_hint).to_string(),
+        (count, Some(until)) if until >= std::time::Duration::from_secs(1) => t!(
+            loop_hint_several_next,
+            count = count,
+            next = crate::loops::spell(until)
+        ),
+        (count, _) => t!(loop_hint_several, count = count),
+    }
+}
+
+/// The same part for a line `/after` is holding, which is not looping and says what it is: a
+/// delayed send, with the moment counted down on the same terms as [`loop_part`].
+pub(super) fn after_part(until: Option<std::time::Duration>) -> String {
+    match until {
+        Some(until) if until >= std::time::Duration::from_secs(1) => {
+            t!(after_hint_next, next = crate::loops::spell(until))
+        }
+        _ => t!(after_hint).to_string(),
     }
 }
 
@@ -97,7 +115,7 @@ pub(crate) fn cache_hit_rate(session: &Session) -> Option<String> {
         t!(number_decimal_separator),
         tenths % 10
     );
-    Some(t!(hint_cache_hit_rate, rate = rate).to_string())
+    Some(t!(hint_cache_hit_rate, rate = rate))
 }
 
 /// How the context currently stands: unmeasured, compacted, or measured as a percentage.
@@ -150,7 +168,8 @@ mod shell {
 
 /// Where each part of the ordinary line sits in the array `ordinary_parts` builds.
 mod ordinary {
-    // 0 is the permission mode and 1 the vi mode, which `MODES` covers.
+    // 1 is the vi mode, which `MODES` covers with the permission mode.
+    pub const MODE: usize = 0;
     pub const TRAIL: usize = 2;
     pub const CONTEXT: usize = 3;
     pub const CACHE: usize = 4;
@@ -169,9 +188,26 @@ mod ordinary {
 fn hint_facts(session: &Session) -> HintFacts {
     // Read before the shell line as well as the ordinary one. A loop spends a turn whichever mode
     // the box is in, and shell mode is where somebody is least likely to be thinking about one.
-    let looping = session.looping().map_or_else(String::new, |running| {
-        loop_part(running.until(std::time::Instant::now()))
-    });
+    // Loops are named first. A line `/after` holds is not looping, so it is named only where no loop
+    // is live to be counted.
+    let now = std::time::Instant::now();
+    let soonest = |once: bool| {
+        let held = || {
+            session
+                .loops()
+                .iter()
+                .filter(move |running| running.once() == once)
+        };
+        (
+            held().count(),
+            held().filter_map(|running| running.until(now)).min(),
+        )
+    };
+    let looping = match (soonest(false), soonest(true)) {
+        ((0, _), (0, _)) => String::new(),
+        ((0, _), (_, until)) => after_part(until),
+        ((count, until), _) => loop_part(count, until),
+    };
 
     // Named only once a turn has left a trail to look at. Offering the key before that is a line
     // under the box inviting a press that changes nothing on screen, and what a person learns from
@@ -205,30 +241,46 @@ fn hint_facts(session: &Session) -> HintFacts {
             background_hint,
             chord = session.bindings().background_name()
         )
-        .to_string()
     } else {
         String::new()
     };
 
-    // The way into the view, for as long as it holds anything. The row that reports what the turn
-    // is doing names the key too, but that row goes when the turn ends, and what the view holds is
-    // most worth opening afterwards: the transcript keeps one sentence about a delegate and a
-    // preview of what a command printed. The count is there because a key with nothing behind it
-    // does nothing at all, and this line is read at a glance.
+    // The ways into the view, for as long as either list holds anything. The row that reports what
+    // the turn is doing names the key too, but that row goes when the turn ends, and what the view
+    // holds is most worth opening afterwards: the transcript keeps one sentence about a delegate
+    // and a preview of what a command printed. The counts are there because a key with nothing
+    // behind it does nothing at all, and this line is read at a glance.
     //
-    // Everything the view opens, not the delegates alone. A session that ran commands and spawned
-    // no delegate has a key that works and, counted the other way, no line saying so.
+    // One clause per list, each counting only what its own key opens (WATCH-11). The agents and
+    // what commands printed are different lists with different ways in, so a single figure for both
+    // would name a key and count rows it does not open.
     //
     // Read before the shell line as well as the ordinary one (WATCH-11): the view holds the same
     // things whichever mode the box is in, and this is the line that is always drawn.
-    let watchable = match session.watchable().len() {
+    let agents = match session.watchable_in(WatchScope::Agents).len() {
         0 => String::new(),
         count => t!(
             watching_hint,
             chord = session.bindings().watch_name(),
             count = count
-        ),
+        )
+        .to_string(),
     };
+    let outputs = match session.watchable_in(WatchScope::Outputs).len() {
+        0 => String::new(),
+        count => t!(
+            outputs_hint,
+            chord = session.bindings().outputs_name(),
+            command = OUTPUTS_COMMAND,
+            count = count
+        )
+        .to_string(),
+    };
+    let watchable = [agents, outputs]
+        .into_iter()
+        .filter(|clause| !clause.is_empty())
+        .collect::<Vec<_>>()
+        .join("  ·  ");
     HintFacts {
         looping,
         trail,
@@ -282,7 +334,7 @@ fn ordinary_parts(
         context_reading(session)
     };
     let info = if !session.panel_open() && crate::panel::fits(area.width) {
-        t!(panel_hint, chord = session.bindings().panel_name()).to_string()
+        t!(panel_hint, chord = session.bindings().panel_name())
     } else {
         String::new()
     };
@@ -380,7 +432,46 @@ pub(super) fn hint_spans(
 }
 
 /// The shortcut line. Keeps the bindings discoverable without a help command.
-pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
+///
+/// Gives the cells the permission mode is drawn in, when it is drawn: what a click on it acts on
+/// (MOUSE-14).
+pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> Option<Rect> {
+    // The files state names its keys in the panel and keeps the figures the panel has no section
+    // for (FILES-4, FILES-9). Where the panel is not drawn nothing else shows the keys, so the line
+    // names them, as it keeps a figure the panel does not draw (PANEL-8). Every other key does
+    // nothing there, so nothing else on the line applies.
+    if session.files_open() {
+        let keys = if crate::panel::drawn(session, area.width) {
+            String::new()
+        } else {
+            t!(files_keys).to_string()
+        };
+        let parts = [
+            keys,
+            context_reading(session),
+            cache_hit_rate(session).unwrap_or_default(),
+        ];
+        let said: Vec<&str> = parts
+            .iter()
+            .map(String::as_str)
+            .filter(|part| !part.is_empty())
+            .collect();
+        let line = crate::status::cut(&said.join("  ·  "), usize::from(area.width));
+        frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
+        return None;
+    }
+    // Words an outside link put in the box stay named as such until they are sent or cleared, and
+    // the line says how long they are, because a long one runs past what the box shows (LINK-4).
+    if let Some(characters) = session.link_prompt() {
+        let said = if characters > crate::state::LONG_LINK_PROMPT {
+            t!(deep_link_banner_long, count = characters)
+        } else {
+            t!(deep_link_banner).to_string()
+        };
+        let line = crate::status::cut(&said, usize::from(area.width));
+        frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
+        return None;
+    }
     let facts = hint_facts(session);
 
     // In shell mode the usual bindings are beside the point: the line goes to a shell, so what a
@@ -402,7 +493,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         );
         let spans = hint_spans(&parts, &kept, shell::NAME + 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
+        return None;
     }
 
     let parts = ordinary_parts(session, area, frame.area().height, facts);
@@ -460,6 +551,13 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             area,
         );
     }
+
+    // The mode leads the line and is never given up, so it is either the first part kept or the
+    // line was cleared whole.
+    (kept.first() == Some(&ordinary::MODE)).then(|| {
+        let width = u16::try_from(parts[ordinary::MODE].chars().count()).unwrap_or(u16::MAX);
+        Rect::new(area.x.saturating_add(2), area.y, width, 1).intersection(area)
+    })
 }
 
 /// What a press just did, drawn at the right of the hint row, where there is anything to say.
@@ -467,6 +565,13 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
 /// One note at a time, in this order, since they share the room: the parts of the line are fitted
 /// against the width this leaves.
 fn note_at_the_right(session: &Session) -> Option<String> {
+    // The word went to the model as the prompt it is, and a person who typed it to leave is looking
+    // at a turn starting. Nothing else on the screen says the line was a prompt or what stops it and
+    // leaves, and the turn is when they are looking for one (CMD-2).
+    if session.leave_word_sent && session.a_turn_is_running() {
+        return Some(format!("{}  ", t!(leave_word_sent)));
+    }
+
     // The line the person was writing has just gone, so the press that took it is the one thing
     // worth explaining: without this, a key they pressed to stop something emptied the box and
     // said nothing, and the next press of it ends the session.

@@ -25,6 +25,18 @@ pub enum Change {
     Elided(usize),
 }
 
+/// The line numbers of one row of a condensed diff, counted from one.
+///
+/// Made with the diff, inside the kernel, so that nothing outside it counts rows to find a line
+/// number (FILES-2).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Numbered {
+    /// The line's place in the text before the edit. `None` for an added row and an elided run.
+    pub before: Option<usize>,
+    /// The line's place in the text after the edit. `None` for a removed row and an elided run.
+    pub after: Option<usize>,
+}
+
 /// The line terminators a text uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnding {
@@ -282,6 +294,55 @@ impl Diff {
     /// The changed lines, with at most `context` unchanged lines around each run and
     /// longer unchanged stretches replaced by [`Change::Elided`].
     pub fn condensed(&self, context: usize) -> Vec<Change> {
+        self.condense(context)
+            .into_iter()
+            .map(|(change, _)| change)
+            .collect()
+    }
+
+    /// The line numbers of each row [`Diff::condensed`] gives, in the same order and of the same
+    /// length: where the row stands in the text before the edit and in the text after it, counted
+    /// from one. A kept row has both, an added row only the second, a removed row only the first,
+    /// and an elided run has neither, though the numbers after it count the lines it stands for.
+    pub fn condensed_numbers(&self, context: usize) -> Vec<Numbered> {
+        self.condense(context)
+            .into_iter()
+            .map(|(_, numbers)| numbers)
+            .collect()
+    }
+
+    fn condense(&self, context: usize) -> Vec<(Change, Numbered)> {
+        let mut before = 0usize;
+        let mut after = 0usize;
+        let numbers: Vec<Numbered> = self
+            .changes
+            .iter()
+            .map(|change| match change {
+                Change::Kept(_) => {
+                    before += 1;
+                    after += 1;
+                    Numbered {
+                        before: Some(before),
+                        after: Some(after),
+                    }
+                }
+                Change::Added(_) => {
+                    after += 1;
+                    Numbered {
+                        before: None,
+                        after: Some(after),
+                    }
+                }
+                Change::Removed(_) => {
+                    before += 1;
+                    Numbered {
+                        before: Some(before),
+                        after: None,
+                    }
+                }
+                Change::Elided(_) => Numbered::default(),
+            })
+            .collect();
         let keep: Vec<bool> = self
             .changes
             .iter()
@@ -294,19 +355,19 @@ impl Diff {
 
         let mut out = Vec::new();
         let mut skipped = 0usize;
-        for (change, keeping) in self.changes.iter().zip(keep) {
+        for ((change, numbers), keeping) in self.changes.iter().zip(numbers).zip(keep) {
             if keeping {
                 if skipped > 0 {
-                    out.push(Change::Elided(skipped));
+                    out.push((Change::Elided(skipped), Numbered::default()));
                     skipped = 0;
                 }
-                out.push(change.clone());
+                out.push((change.clone(), numbers));
             } else {
                 skipped += 1;
             }
         }
         if skipped > 0 {
-            out.push(Change::Elided(skipped));
+            out.push((Change::Elided(skipped), Numbered::default()));
         }
         out
     }
@@ -1596,5 +1657,33 @@ mod tests {
         let hunks = hunks_of("a\nb\nc\nd\n", "a\nb\nc\nD\nE\nF\n");
 
         assert_eq!(put_back("a\n", "a\n", &hunks[0]), None);
+    }
+
+    /// FILES-2: each row carries the place it has in the text before and the text after, an elided
+    /// run still counts the lines it stands for, and the numbers are as long as the rows.
+    #[test]
+    fn each_row_of_a_diff_has_the_line_number_it_has_on_each_side() {
+        let before = "a\nb\nc\nd\ne\nf\ng\nh\n";
+        // `b` goes, `x` and `y` come in after `f`, and `h` stays: the lines between are elided.
+        let after = "a\nc\nd\ne\nf\nx\ny\ng\nh\n";
+        let diff = Diff::compute(before, after);
+        let rows = diff.condensed(1);
+        let numbers = diff.condensed_numbers(1);
+        assert_eq!(rows.len(), numbers.len());
+        let at = |before: Option<usize>, after: Option<usize>| Numbered { before, after };
+        assert_eq!(
+            rows.iter().cloned().zip(numbers).collect::<Vec<_>>(),
+            vec![
+                (Change::Kept("a".into()), at(Some(1), Some(1))),
+                (Change::Removed("b".into()), at(Some(2), None)),
+                (Change::Kept("c".into()), at(Some(3), Some(2))),
+                (Change::Elided(2), at(None, None)),
+                (Change::Kept("f".into()), at(Some(6), Some(5))),
+                (Change::Added("x".into()), at(None, Some(6))),
+                (Change::Added("y".into()), at(None, Some(7))),
+                (Change::Kept("g".into()), at(Some(7), Some(8))),
+                (Change::Elided(1), at(None, None)),
+            ]
+        );
     }
 }

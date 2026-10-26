@@ -25,14 +25,8 @@ import { _electron as electron } from 'playwright-core'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { COMPOSER_INPUT, SIDEBAR_TAB } from '../drive-support.mjs'
-
-/// A pattern matching exactly this name, with every metacharacter in it taken literally.
-///
-/// A bot name is display text rather than a pattern, so a name holding a `.` or a bracket would
-/// otherwise match a row it does not name.
-// nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
-const exactly = (name) => new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`)
+import { COMPOSER_INPUT, SIDEBAR_TAB, BOT_OPEN_BUTTON, COMPOSER_SEND, TRUST_APPROVE } from '../drive-support.mjs'
+import { exactly } from './bots.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -250,7 +244,7 @@ async function ensureResidents(world) {
         }
         // The bot's page starts a conversation from its composer, in the project picked in its
         // footer. The picker is native, so it is answered with the bot's own fixture checkout.
-        await row.locator('.bot-open-button').click()
+        await row.locator(BOT_OPEN_BUTTON).click()
         await page.locator('[data-test="bot-page"]').waitFor()
         await app.evaluate(({ dialog }, where) => {
           dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [where] })
@@ -261,12 +255,12 @@ async function ensureResidents(world) {
         for (const [index, prompt] of bot.prompts.entries()) {
           console.log(`  ${bot.name}: ${prompt.slice(0, 62)}…`)
           await page.locator(COMPOSER_INPUT).fill(prompt)
-          await page.locator('.composer .send').click()
+          await page.locator(COMPOSER_SEND).click()
           // The first message starts the conversation, which asks the trust question first.
           if (index === 0) {
             await page.waitForTimeout(1600)
             if (await page.locator('.trust').isVisible().catch(() => false)) {
-              await page.locator('[data-test="trust-approve"]').click()
+              await page.locator(TRUST_APPROVE).click()
               await page.waitForTimeout(800)
             }
           }
@@ -306,8 +300,10 @@ async function settle(page, seconds = 180) {
   while (Date.now() < until) {
     const card = asking.first()
     if (await card.isVisible().catch(() => false)) {
-      // A series of questions has to be answered before it can be sent; everything else is a
-      // single button. `:not(.always)` because vouching is a broader answer than was asked for.
+      // A series of questions is put one at a time and each has to be answered before the button
+      // moves on, so the card is still asking when this loop comes back to it for the next;
+      // everything else is a single button. `:not(.always)` because vouching is a broader answer
+      // than was asked for.
       for (const block of await card.locator('.ask-question').all()) {
         const choice = block.locator('.choices .choice').first()
         if (await choice.count()) await choice.click()
@@ -369,14 +365,14 @@ async function build(world) {
       await page.locator('.new').first().click()
       await page.waitForTimeout(1500)
       if (await page.locator('.trust').isVisible().catch(() => false)) {
-        await page.locator('[data-test="trust-approve"]').click()
+        await page.locator(TRUST_APPROVE).click()
         await page.waitForTimeout(800)
       }
 
       for (const prompt of recipe.prompts) {
         console.log(`  ${recipe.project}: ${prompt.slice(0, 62)}…`)
         await page.locator(COMPOSER_INPUT).fill(prompt)
-        await page.locator('.composer .send').click()
+        await page.locator(COMPOSER_SEND).click()
         if (!(await settle(page))) {
           console.log('    the turn did not finish in time; keeping what it managed')
           break

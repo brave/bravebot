@@ -190,8 +190,9 @@ For a family:
 2. Check each on `<remote>/main` as step 5 checks the report, and say for each whether it was run
    or read. A run is a test or a reproduction, and a read is an argument from the code.
 3. File a sibling that fails and is not already posted (step 2) as an issue of its own, drafted and
-   asked about like the report's own. Do not widen the report's issue to hold it. The report did
-   not describe a sibling, so its body leaves out the HackerOne line.
+   asked about like the report's own, and filed before it, which cites the number. Do not widen the
+   report's issue to hold it. The report did not describe a sibling, so its body leaves out the
+   HackerOne line.
 4. Search open issues for one that tracks the family, with the same command and `--state open`.
    Where there is none, tell the user and offer to file one. Do not file it unasked.
 
@@ -231,7 +232,14 @@ The body, written in the repository's own words rather than the reporter's:
 - The fix, where it is clear.
 - For a family: the earlier issues and pull requests, each sibling with whether it fails or is
   handled and whether a test or a reading of the code shows it, and the issue that tracks the
-  family or that there is none.
+  family where there is one.
+- Each case the body says is left undone, such as a sibling that fails or a call site, platform or
+  program the report does not cover, with the number of the issue that tracks it. A case with no
+  issue is checked and drafted as a sibling is, with no HackerOne line, shown with this one and
+  filed first, so its number is in this body when it is posted. A case the check shows is handled is
+  left out of the body. The [issue-poster](../../agents/issue-poster.md) definition reads the body
+  for these statements again before posting, and has nothing to file where each one has its
+  number.
 - `Reported through HackerOne` and the report number if it has one. Not the reporter's name,
   handle, or contact details, and not their text pasted verbatim: the issue is public.
 
@@ -245,16 +253,20 @@ they can decide without reading the body first:
 - why the severity is what you chose, and what else you considered;
 - whether it is a defect to fix or a behaviour that could be documented instead.
 
-Then show the title, the labels, the assignee and the body, and ask whether to file it. Stop
-there. Whether a report is awarded, how severe it is, and whether it is a defect to fix or a
-behaviour to document are the user's to decide, and a public issue is hard to take back.
+Then show the title, the labels, the assignee and the body, and the same for each case issue the
+body will cite, and ask whether to file them. Stop there. Whether a report is awarded, how severe
+it is, and whether it is a defect to fix or a behaviour to document are the user's to decide, and a
+public issue is hard to take back.
 
 File only after they agree. Apply any change they ask for to the draft first, and ask again if
 they want more than the change they named. If they decide against filing, or to document the
-behaviour as a known cost instead, do that and post nothing.
+behaviour as a known cost instead, do that and post nothing. Where they decline a case issue, the
+body cites the Known costs entry that records the case or says nothing about it, since the poster
+files an issue for a statement that gives no number.
 
 Hand the filing to the [issue-poster](../../agents/issue-poster.md) definition with the title, the
-body file, the labels shown to the user, and the assignee.
+body file, the labels shown to the user, and the assignee. File each case issue first, and write its
+number into the report's body before that one is handed over.
 
 Post one issue per distinct defect, which includes each sibling that fails. A tracking issue for a
 family is drafted, shown and filed the same way, and only when the user asks for one. Nothing else
@@ -282,7 +294,7 @@ In this conversation, not on GitHub:
 4. For VALID: the explanation of the finding, the draft issue and the question whether to file
    it (see "Ask before posting"). After they agree and it is
    filed, the URL of the issue, its labels, and who it is assigned to, and the severity with its
-   reason.
+   reason, and the same for each case issue filed with it.
 5. For a family: the earlier issues and pull requests, the siblings checked with whether each was
    run or read, and the issue that tracks the family. Where there is none, say so and offer to
    file one.

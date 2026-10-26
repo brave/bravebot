@@ -12,6 +12,13 @@
 //! call's capability label, which for a connector is untrusted and private, and never read here.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        reason = "a test that unwraps fails at the line that did"
+    )
+)]
 
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::Capability;
@@ -23,7 +30,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -400,24 +407,20 @@ impl Authority {
     /// Start the authority, write `line` to it, and read its whole reply, stopping it if the run
     /// is cancelled or it outlasts the bound. The child is killed and reaped on either.
     fn exchange(&self, line: Vec<u8>) -> Result<Vec<u8>, ConnectorError> {
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the credential authority, an absolute path the person configured \
-                          (`Authority::new` refuses a name)"
-        )]
-        let mut command = Command::new(&self.program);
+        // The names the authority starts itself (an `env` shebang, a launcher) search only the
+        // entries a lookup by bravebot searches, not a directory a confined stage may write
+        // (SANDBOX-30).
+        let mut command = bravebot_sandbox::programs::start(
+            &bravebot_sandbox::programs::Resolved::named_by_person(&self.program),
+            bravebot_sandbox::programs::Inherits::Only(&PASSED),
+            bravebot_sandbox::programs::SearchPath::Reduced,
+        );
         command
             .arg("connector")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .current_dir("/")
-            .env_clear();
-        for name in PASSED {
-            if let Some(value) = std::env::var_os(name) {
-                command.env(name, value);
-            }
-        }
+            .current_dir("/");
         // A run already stopped starts nothing, so a stop that came first is never an act sent.
         if self.cancel.as_ref().is_some_and(Cancel::is_cancelled) {
             return Err(ConnectorError::Stopped);
@@ -635,6 +638,86 @@ mod tests {
             !seen.lines().any(|line| line.starts_with("CARGO_PKG_NAME=")),
             "{seen}"
         );
+    }
+
+    /// SANDBOX-30: an authority that is a script with an `env` shebang looks its interpreter up on
+    /// the `PATH` it was started with. An interpreter a confined stage wrote into a directory the
+    /// session keeps out, first on that `PATH`, must not be the one that runs: the authority is
+    /// started unconfined, and receives the request and any text an act carries. The test binary
+    /// runs again with `PATH` holding the session's `.venv/bin`, an installed directory and the
+    /// system directories, in that order. An authority started with bravebot's whole `PATH` runs
+    /// the planted `interp`.
+    #[test]
+    fn an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        const TEST: &str = "tests::an_authority_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_AUTHORITY_INTERPRETER_SESSION";
+        const INSTALLED: &str = "BRAVEBOT_TEST_AUTHORITY_INTERPRETER_INSTALLED";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+            let authority = Authority::new(PathBuf::from(std::env::var_os(INSTALLED).unwrap()))
+                .unwrap()
+                .with_limit(Duration::from_secs(30));
+            let reply = authority.exchange(b"{}".to_vec());
+            assert!(
+                !session.join("planted-ran").exists(),
+                "the authority looked its interpreter up in a directory a stage may write"
+            );
+            assert_eq!(reply.unwrap(), b"{\"ok\":1}");
+            assert!(
+                session.join("installed-ran").exists(),
+                "the authority did not run the installed interpreter"
+            );
+            return;
+        }
+
+        let program = Program::new("interp", "#!/usr/bin/env interp\n");
+        let session = program.0.join("session");
+        let installed = program.0.join("installed");
+        let planted = session.join(".venv/bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        let write = |directory: &std::path::Path, name: &str, marker: &str, reply: &str| {
+            let file = directory.join(name);
+            std::fs::write(
+                &file,
+                format!(
+                    "#!/bin/sh\ncat >/dev/null\n: > '{}'\nprintf '{reply}'\n",
+                    session.join(marker).display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        write(&planted, "interp", "planted-ran", "{\"planted\":1}");
+        write(&installed, "interp", "installed-ran", "{\"ok\":1}");
+        let path = std::env::join_paths([
+            planted,
+            installed,
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        let own = bravebot_sandbox::programs::Resolved::own_executable().unwrap();
+        let child = bravebot_sandbox::programs::start(
+            &own,
+            bravebot_sandbox::programs::Inherits::All,
+            bravebot_sandbox::programs::SearchPath::Inherited,
+        )
+        .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+        .env(SESSION, &session)
+        .env(INSTALLED, program.0.join("authority"))
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     #[test]

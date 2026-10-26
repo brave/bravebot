@@ -3,14 +3,20 @@
 // Permissions makes the next one ask again. The question has two answers and no separate one to
 // remember. Real Electron and bridge, across two launches with one home; only the file picker is
 // substituted.
+//
+// The project's name ends in a space, so the question and the list of what is kept draw the
+// directory as the agent spells it (PROMPT-1): quoted, with the space as `␣`, and not as a name
+// that reads like the one without it.
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { inheritedEnv, launchWorld } from './drive-world.mjs'
+import { TRUST_APPROVE } from './drive-support.mjs'
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'bravebot-remembered-')))
-const home = join(root, 'home'), project = join(root, 'project'), profile = join(root, 'profile')
+const home = join(root, 'home'), project = join(root, 'project '), profile = join(root, 'profile')
+const spelledProject = `"${project.slice(0, -1)}\u2423"`
 for (const path of [join(home, '.bravebot'), project, profile]) mkdirSync(path, { recursive: true })
 const shots = '/tmp/bravebot-ui'
 mkdirSync(shots, { recursive: true })
@@ -40,8 +46,9 @@ try {
     const asked = trust(page)
     const yes = asked.getByRole('button', { name: 'Trust and remember', exact: true })
     await yes.waitFor()
-    assert.equal(await asked.locator('[data-test="trust-approve"]').innerText(), 'Trust and remember', 'the yes is the one that keeps')
+    assert.equal(await asked.locator(TRUST_APPROVE).innerText(), 'Trust and remember', 'the yes is the one that keeps')
     assert.equal(await asked.locator('[data-test="trust-remember"]').count(), 0, 'there is no separate answer to remember')
+    assert.equal(await asked.locator('code.path').innerText(), spelledProject, 'the question draws the directory as spelled')
     record = (await asked.locator('.aside code').innerText()).trim()
     assert.ok(record.startsWith(join(home, '.bravebot', 'trusted')), `the question names the record: ${record}`)
     // RUN-5: the question says what a yes also grants, in the words the terminal draws.
@@ -70,6 +77,11 @@ try {
     await shown.getByRole('button', { name: 'Manage', exact: true }).click()
     const forget = page.getByRole('button', { name: 'Forget', exact: true })
     await forget.waitFor()
+    assert.equal(
+      await page.locator('[data-test="remembered-root"]').innerText(),
+      `for ${spelledProject}`,
+      'the list names the directory the answer is about as spelled',
+    )
     await page.screenshot({ path: `${shots}/remembered-4-permissions.png` })
     await forget.click()
     await page.getByText('Nothing is kept for this directory.', { exact: true }).waitFor()

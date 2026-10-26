@@ -19,17 +19,18 @@ that is merely carried.
 | [`read_git`](#read_git) | `query`, `repository`, `revision`, `path`, `pattern`, `count`, `skip`, `messages`, `since`, `until` | none | only if what it would show holds a credential |
 | [`lsp`](#lsp) | `operation`, `path`, `line`, `character`, `query` | none | **yes, to start a language server** |
 | [`write_file`](#write_file) | `path`, `path_ref`, `contents_ref` | `contents` | **yes, every time** |
-| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all` | `old_text`, `new_text`, `edits` | **yes, every time** |
+| [`edit_file`](#edit_file) | `path`, `path_ref`, `replace_all`, `cell`, `cell_action`, `cell_type` | `old_text`, `new_text`, `edits` | **yes, every time** |
 | [`apply_checkout`](#apply_checkout) | `checkout`, `paths` | none | **yes, for every file** |
 | [`run`](#run) | the compiled plan, `directory`, `background`, `deadline_seconds`, `stdin_ref`, `read`, `scopes` | stdin | **yes, unless vouched for, remembered, ruled on or proven** |
 | [`read_output`](#read_output) | `ref`, `offset`, `pattern` | none | **yes, unless the planner may already read it** |
 | [`vet_content`](#vet_content) | `ref` | none | **yes, that is what it is for** |
-| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds` | none | no |
+| [`job_output`](#job_output) | `job`, `kill`, `wait_seconds`, `until_exit` | none | no |
 | [`fetch_url`](#fetch_url) | `url` | none | **yes, unless a rule names the host** |
 | [`download_url`](#download_url) | `url`, `path` | none | **yes: the host unless a rule names it, and the destination every time** |
 | [`spawn_processor`](#spawn_processor) | `reads`, `about` | `instruction` | no |
 | [`spawn_agent`](#spawn_agent) | `kind` | `task`, `each` | not the call, but its writes and runs do |
 | [`load_skill`](#load_skill) | `name` | none | no |
+| [`search_skills`](#search_skills) | `query` | none | no |
 | [`ask_user`](#ask_user) | the questions | none | it *is* the question |
 | [`propose_plan`](#propose_plan) | the plan | none | it *is* the plan you approve |
 | [`request_path`](#request_path) | `path`, `write` | none | **yes, unless you bypass permissions** |
@@ -78,7 +79,7 @@ interpreter. [`run`](#run) takes a command line, and bravebot compiles it itself
 
 ## `read_file`
 
-Reads a UTF-8 text file from the workspace and returns its lines.
+Reads a text file from the workspace and returns its lines.
 
 | Parameter | |
 |---|---|
@@ -86,11 +87,26 @@ Reads a UTF-8 text file from the workspace and returns its lines.
 | `path_ref` | a reference to a file whose name the planner was not shown, e.g. `ref:2` |
 | `offset` | 1-based line to start at |
 | `limit` | maximum lines to return, capped so one read cannot fill the conversation |
+| `output_of` | in a `.ipynb` notebook, the number of a code cell, from 1 as a read shows them, to get that cell's saved outputs as a reference instead of the cells |
+
+A `.ipynb` notebook that the agent may read comes back as its cells instead of its JSON: a
+`[N] kind` line, numbered from 1, then the cell's source. Saved outputs are never shown, only how many
+cells hold them, because an output is text a program or a web page produced. A notebook you have not
+vouched for is a reference like any other file.
+
+`output_of` asks for one cell's saved outputs. They come back as a reference, even in a notebook you
+vouched for, and a processor reads them. A stream, an error and a result's plain text are kept, a
+picture or other data is replaced by a line giving its type and size, and the result is cut at
+20,000 characters.
 
 Long files come back one page at a time, at most 500 lines and 100,000 characters, with each line
 shortened to 2,000 characters. A page of long lines ends at the last whole line that fits under the
 character cap. The result says so and gives the offset to continue from. A
-file that is not text is reported as binary, a picture being the exception.
+file that is not text is reported as binary, a picture being the exception. A UTF-16 or UTF-32
+file that begins with a byte order mark is shown decoded, and so is a file with a few bytes that
+are not UTF-8, such as Latin-1 text, with each such byte shown as U+FFFD. The result says when it
+decoded the file, and `edit_file` refuses a file that is not UTF-8, since it would write the file
+back as UTF-8.
 
 **A picture is quarantined whatever the trust map says, and leaves quarantine only through
 [`vet_content`](#vet_content).** A file whose extension names a picture or a PDF comes back as a
@@ -344,11 +360,11 @@ deadline says it was cut.
 Asks a language server about a symbol: where it is defined, what refers to it, what implements it,
 what calls it. It also asks what the server makes of a file. **Starting a server is put to you.**
 That holds in every permission mode, bypass included, and a start is refused where nobody can be
-asked, as in a one-shot run.
+asked, as in a one-shot run. The full reference is [the lsp tool](lsp-tool.md).
 
 | Parameter | |
 |---|---|
-| `operation` | one of `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `incomingCalls`, `outgoingCalls`, `diagnostics` |
+| `operation` | one of `goToDefinition`, `findReferences`, `hover`, `documentSymbol`, `workspaceSymbol`, `goToImplementation`, `incomingCalls`, `outgoingCalls`, `diagnostics` ([details](lsp-tool.md#checking-a-file-with-diagnostics)) |
 | `path` | workspace-relative file holding the symbol, or the file to check for `diagnostics`; required for every operation but `workspaceSymbol` |
 | `line`, `character` | 1-based position of the symbol, as a search or a read reported it; not used by `diagnostics` |
 | `query` | for `workspaceSymbol`, the name to look for |
@@ -356,199 +372,9 @@ asked, as in a one-shot run.
 This answers what [`search`](#search) cannot. A search for a name finds every comment and string that
 mentions it; this finds the declaration the compiler agrees on.
 
-**Nothing works out where a name is.** A position is two numbers the planner states, taken from a
-line it was already shown. A position that no longer holds the symbol answers with nothing found
-rather than an error, since a file changes under an agent and a stale line number is ordinary.
-
-The operation list is closed and every entry on it is a read. LSP is an open protocol and a server
-advertises methods of its own, one of which applies edits to your files, so forwarding a name would
-make what this tool can reach a property of whichever server you installed.
-
-### Checking a file with `diagnostics`
-
-`diagnostics` takes a path and no position. The agent uses it to learn whether a file still compiles
-before running a build. The server is sent the file as it is on disk and the notice it
-publishes in reply is the answer:
-
-```text
-language server: 2 errors at line 12, 40; 1 warning. Fix them before moving on
-```
-
-The agent is told how many errors the server found and the line each starts on, how many warnings
-and how many other notes. These are numbers the server reports, so they are given for a file in a
-tree you have not vouched for as for one you have. **The messages are not shown to the agent.** A
-message is a sentence the server composed out of your files, and it can quote a name defined in
-another file, so the file that was checked does not vouch for it. It comes back as a reference the
-agent hands to a processor or asks you to show it, as hover text does. While a `deny` rule covers
-reading any path, the messages are left out, and the agent is told so. A file that does not exist is
-reported as such before any server is started, so you are not asked about one. A location in a file a
-`deny` rule covers is left out of any answer, and the answer does not say how many were left out.
-While a `deny` rule covers reading any path, hover text is withheld.
-
-A server that publishes nothing about the file in a few seconds is reported as not having reported,
-which is not the same as a file with no errors, and a report with no errors says "no errors reported
-yet" because a server can refine a quick pass later. A server still indexing says the report may be
-short. A server that publishes late, or only when its diagnostics change, can stay silent about an
-edit, so a build is still the check that does not depend on the server.
-
-A `write_file` or `edit_file` result already carries the same counts and lines when a server for that
-file's language is running, and never starts one. `diagnostics` is the way to ask for them for a file
-that was not just written or edited, and it starts the server after you agree to it.
-
-### Which server, and what starting one costs
-
-| Language | Server |
-|---|---|
-| Rust | `rust-analyzer` |
-| TypeScript and JavaScript | `typescript-language-server` |
-| Python | `pyright-langserver` |
-| Go | `gopls` |
-
-The binary has to be installed and on your `PATH`, in a directory that a program the agent runs cannot
-write. A server found only in the session's own directory, such as a `.venv/bin/pyright-langserver`
-or a `node_modules/.bin` entry, is reported as not installed. A command written with a path in it is
-your own choice and is not looked up. A language not in the table has no server until
-you declare one, [below](#declaring-a-server-of-your-own).
-
-**A server runs with the access your own shell would give it, and is not confined.** The prompt says
-so in those words: it reads the whole tree and the dependency sources, and starting it runs code
-from your project and its dependencies with your own access. For Rust that means `build.rs` and proc
-macros out of `Cargo.lock` execute, which is code from your dependency tree running as you. Go's
-tooling builds to answer too. The TypeScript server runs the TypeScript your project carries: it
-looks for `typescript/lib/tsserver.js` under `node_modules`, `.yarn/sdks`, `.pnpm/sdks` or
-`.vscode/pnpify` in the workspace and then in each directory above it, and runs the nearest one
-before its own copy. The Python server runs the `python3` on your `PATH`, which runs the `.pth` files
-of its environment as it starts: with your project's virtual environment active, those come from the
-project's dependencies.
-
-Confinement is not an option withheld here. A server indexes *by* running that build tooling, so a
-profile denying it a subprocess and somewhere to write gives you a server whose index never settles,
-and every answer from one says it may be short. The choice is a server with your access or no
-working tool.
-
-What does not turn on your answer is the label on what comes back, and that is the half that
-matters. Hover text is quarantined, and nothing a server reads out of a file reaches the planner as
-something bravebot said.
-
-**A filename is the exception, and it is bounded rather than denied.** A location is a path and a
-position, and a path is the answer to the question you asked, so it is reported whatever the trust
-map says about the file. A file can be named to read like an instruction, so the name is shown with
-its control characters replaced by pictures (`␊` for a newline), one location is always one line,
-and an answer stops at two hundred locations and says that it did. What that leaves is a name out of
-your tree, read as a name.
-
-A server is started by the first question that needs it, so a session that asks nothing about a
-language starts nothing.
-
-**You are asked once per language per session, not once per call.** The server that first question
-starts is kept for the session and answers every later question, and your approval is kept with it.
-It is shut down when the session ends, and killed if it does not go quietly. Indexing is the whole
-cost of a server, so paying it per request would make each call slower than the search it replaces.
-
-A `checker` or `worker` delegate asks the same servers, so a language you approved is not put to you
-again and the tree is not indexed twice. A `reader` delegate is not offered `lsp` at all: starting a
-server runs the project's build tooling, and a reader may not run programs. A delegate working in a
-[checkout](../customize/agents.md#a-checkout-of-its-own) is not offered it either, since the server
-indexes your working tree.
-
-### Declaring a server of your own
-
-A C, C++, Java, Kotlin, Ruby, PHP, Swift, Lua or C# project needs a server the table does not hold.
-Declare one in `~/.bravebot/lsp.json`:
-
-```json
-{
-  "servers": {
-    "clangd": {
-      "command": "clangd",
-      "args": ["--background-index"],
-      "extensions": { "c": "c", "h": "c", "cpp": "cpp", "hpp": "cpp" },
-      "env": { "CLANGD_FLAGS": "--log=error" },
-      "initializationOptions": {}
-    }
-  }
-}
-```
-
-| Key | |
-|---|---|
-| `command` | a program name looked up on your `PATH`, or an absolute path; a relative path is refused |
-| `args` | arguments, optional |
-| `extensions` | each file extension the server handles, with the language id the protocol wants; required |
-| `env` | variables set for it, optional |
-| `initializationOptions` | sent to the server as written, optional |
-
-**Only this file is read.** A `lsp.json`, `.lsp.json` or `.github/lsp.json` in a project changes
-nothing, because a command in a file a project carries is a command a tool call could have written.
-
-A declared extension wins over the table, so declaring `rs` replaces `rust-analyzer`. Where two
-declarations name one extension, the first by name wins. An extension nothing names answers that no
-server is configured.
-
-**The prompt names the whole command and says what starting it runs is not known.** It does not
-say the server runs nothing, and it does not say it runs your dependencies' code, because
-bravebot did not choose the program. It runs with your own access and is not confined. Your
-answer is kept for the session against the declaration as it stood: edit the file and the next
-question is put to you again.
-
-A declared server is settled once the progress it reported has ended. One that reports no progress
-is waited on for twenty seconds once, and every answer after that says it may be short.
-
-### A location is structure; the text at it is content
-
-A location is a path, a line, a column and the kind of symbol. **Those reach the planner whatever the
-trust map says about the file they name**, exactly as a line count does for a file it may not read.
-There is nowhere in a path and two integers for prose to sit, so somebody who owns `vendor/lib.js`
-cannot use `goToDefinition` to put a sentence in front of the planner.
-
-The **text** at a location takes the ordinary treatment, because it is bytes the file chose. A
-signature or a source excerpt from a file nobody vouched for comes back as a reference, so one result
-can be a visible list of locations whose text the planner may not read.
-
-**Hover text is a reference whatever you have vouched for.** A hover answer carries the prose and a
-position and never says which file wrote it, and a doc comment is written where the symbol is defined
-rather than where you asked: hovering over a call in one file shows prose out of another. With no file
-named there is no trust map entry to read, and borrowing the queried file's entry would hand the
-planner bytes out of a vendor directory you deliberately left untrusted. Unattributed text is
-untrusted, on the footing every other output of a server arrives on. Hover is where most of this
-tool's value is, which makes this its sharpest cost.
-
-A location is not made routing by having been returned. A read of a path that came back from here is
-gated as it would be had the planner guessed the path, and a write to it is put to you as a diff like
-any other. What somebody who owns a file in your tree gains is a say in which path and line the
-planner is told about, by arranging their code so a symbol resolves where they like. That costs at
-worst a wasted read of a file the planner could already read.
-
-### An answer says which kind of nothing it is
-
-A definition in a dependency, a toolchain source, or anywhere else outside the working directory
-comes back saying it is outside the workspace, with its path not spelled as though `read_file` would
-open it. Naming it does not make it readable: a read of it is refused as for any other path outside
-the tree.
-
-No server configured for the language, a missing binary, and a server that failed to start are three
-different answers, and **none of them is an empty result**. Nothing falls back to searching the tree.
-An absent server reported as "no references found" is a false negative that reads as proof, and a
-planner that believes nothing calls a function will delete it.
-
-An answer given while the server is still indexing says it may be short, in the same words a
-truncated search uses. A request waits for the index up to a bound and then answers from what there
-is rather than failing.
-
-### The index is cached, and it is not small
-
-A server keeps its index under `~/.bravebot/lsp/`, keyed by the workspace and never inside your tree,
-which is what makes the second session in a workspace fast. A question about a symbol should not
-change the tree you are working in.
-
-**Nothing prunes it.** A Rust workspace's index runs to a few hundred megabytes, and a machine that
-has been in many workspaces holds one for each. Deleting the directory costs the next session its
-indexing time and nothing else.
-
-Nothing in that cache is read as trusted, whatever else `~/.bravebot` is trusted for. The bytes
-derive from workspace files, so they carry those files' labels, and the only thing that reads them is
-the server. An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) writes
-no cache: its server still runs and still answers, and it re-indexes each time.
+Which server runs and what starting one costs, how to
+[declare a server of your own](lsp-tool.md#declaring-a-server-of-your-own), how a location and the
+text at it are labelled, and where the index is cached are in [the lsp tool](lsp-tool.md).
 
 ## `write_file`
 
@@ -570,6 +396,12 @@ possible.
 
 See [Trusted directories](../security/trust.md#what-a-write-does) for what a write does to the trust
 map.
+
+In the terminal, the prompt for a write whose `contents` the agent wrote offers `e`, which opens them in
+your editor and puts the write to you again as a diff of the text you saved
+([details](../security/permissions.md#changing-a-write-before-approving-it)). What you saved is
+scanned for credentials, and the agent is told that you changed the contents and not what they say. A
+write from a `contents_ref` does not offer it.
 
 Replacing a **trusted** file with `contents` keeps that file's line endings and its leading byte
 order mark, so a file using `\r\n` stays CRLF and a file that began with a mark still does. This
@@ -596,19 +428,23 @@ prefers this to rewriting a whole body.
 | `new_text` | what goes in its place |
 | `replace_all` | replace every occurrence instead of requiring exactly one |
 | `edits` | instead of `old_text` and `new_text`: several pairs of them for this one file |
+| `cell` | in a `.ipynb` notebook, the number of the cell to change, from 1 as a read shows them, with `new_text` as its whole source; 0 with `insert_after` puts a cell first |
+| `cell_action` | `replace` (the default), `insert_after` or `delete` |
+| `cell_type` | the kind of cell `insert_after` makes, `code` (the default) or `markdown` |
 
 `edits` is applied in order, each pair to the text the one before it left, and all or nothing: if
 one pair fails, the agent is told which and the file is not changed. You are asked once, about one
 diff of the combined result.
 
-The result gives the agent back the changed lines with three lines either side. Those lines are
-scanned for credentials as a file read is. If they hold what looks like a credential and you have not
-agreed to the agent being shown that file, you are asked, and one answer covers the file for edits
-and reads alike. A no leaves the edit in place and the lines out of the result.
+The result gives the agent back each changed region with three lines either side, fewer where many
+regions would make the result long, and says how many unchanged lines lie between two regions. Those
+lines are scanned for credentials as a file read is. If they hold what looks like a credential and
+you have not agreed to the agent being shown that file, you are asked, and one answer covers the file
+for edits and reads alike. A no leaves the edit in place and the lines out of the result.
 
 Where a language server for the file's language is already running, the result also says how many
 errors it found and on which lines, and how many warnings, as a `write_file` result does
-([details](#checking-a-file-with-diagnostics)). An edit never starts a server, and the server's own
+([details](lsp-tool.md#checking-a-file-with-diagnostics)). An edit never starts a server, and the server's own
 messages are never shown.
 
 `old_text` must occur exactly once unless `replace_all` is set. An edit **refuses rather than
@@ -621,6 +457,15 @@ looks for and in what it puts there, so the file keeps one terminator throughout
 An edit requires a **trusted** file, because locating a passage to replace is a decision and a
 decision may be taken only from trusted content. To change a file the agent may not read, the route
 is `spawn_processor` plus `write_file`.
+
+### Notebook cells
+
+A `.ipynb` file reads as its cells (see `read_file`), and `cell` changes one by its number instead of
+by a passage. `cell` is refused beside `old_text`, `edits` or `replace_all`, on a file that is not a
+notebook, and for a number the notebook has no cell for. The notebook is written back in the layout
+Jupyter writes, with every other cell, its metadata and the format version kept, and you approve the
+diff. Replacing a code cell drops that cell's saved outputs and execution count, since they describe
+source that is gone, and the diff shows them going.
 
 ## `apply_checkout`
 
@@ -746,6 +591,7 @@ Reports what a [background job](run-tool.md#leaving-a-pipeline-running) has prin
 | `job` | the job name a `run` handed back |
 | `kill` | stop the pipeline |
 | `wait_seconds` | sit and watch for up to this long ([below](#a-look-may-wait)) |
+| `until_exit` | with `wait_seconds`, wait for the job to end and not for its output ([below](#a-look-may-wait)) |
 
 Each look reports what is new, counted in bytes, and whether the job has ended. Asking about a job
 that does not exist says so. What is new is counted separately for standard output and standard error,
@@ -770,6 +616,14 @@ vouching for every stage of the exact command for the next.
 `wait_seconds` makes one look sit and watch instead of taking a snapshot. It comes back at the first of
 four things: output arriving that the planner has not been handed, the job ending, the wait running
 out, or the turn being cancelled.
+
+A job that prints more often than a round takes ends that wait at its next line, so waiting for a build
+that prints a line per crate costs a look per line. `until_exit: true`, given with `wait_seconds`, waits
+for the job to end instead. Output arriving does not end it, including output already waiting when the
+call is made. It comes back when the job ends, when `wait_seconds` runs out, when the turn is
+cancelled, or when you stop a job of the turn, with what the job printed since the last look in one
+answer: where the output is quarantined, that is one reference to all of it. `until_exit` with no
+`wait_seconds`, with `kill`, or with anything but `true` or `false`, is refused.
 
 Between 1 second and 10 minutes, and **a value outside that is refused rather than quietly shortened**.
 A wait that was silently cut short would come back with silence, and silence carries no length: a
@@ -829,7 +683,10 @@ which is naming a host rather than answering a question about one page. See
 
 **A redirect may not leave the approved host.** Every hop goes through the same gate, and a hop
 elsewhere is refused unless a rule allows that host too, since the end of a redirect chain is
-somewhere nobody was shown. That check applies only while a fetch is in flight: reaching the model
+somewhere nobody was shown. Before it is reported as refused, you are asked about the host the
+redirect named, drawn as a redirect from the host you approved. A yes sends that one fetch again
+with that host allowed for it alone and remembers nothing, and a no gives the refusal. Bypass mode
+does not answer it, and a `deny` rule refuses without asking. That check applies only while a fetch is in flight: reaching the model
 endpoint is this program operating rather than something a turn asked for, so a rule about a website
 cannot stop bravebot talking to its own backend.
 
@@ -942,7 +799,7 @@ of capabilities, and gets back one report.
 | `each` | optional; starts one delegate per entry, each told `task` followed by its own entry |
 | `mcp_servers` | optional; the [MCP servers](../customize/mcp-servers.md) a `worker` keeps, out of the ones its parent may call. `[]` keeps none |
 | `budget` | optional; the most tokens each delegate may spend, as `500000`, `500k` or `2m`. It can only lower the budget a [definition](../customize/agents.md) sets |
-| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in |
+| `isolation` | optional; `checkout` gives each delegate [a checkout of its own](../customize/agents.md#a-checkout-of-its-own) to work in, and `checkout_with_changes` also copies into it the changes your working tree has now |
 
 | Kind | Holds | For |
 |---|---|---|
@@ -968,8 +825,9 @@ what it is doing.
 path per entry, say) is repeated. Every delegate it starts is one like any other: it is approved on
 its own, takes its own number, and holds its own copy of what you vouched for, so a fan-out is
 several runs rather than one run several times. A call naming more than eight, or naming none, is
-refused and starts nothing. A call that reaches the turn's ceiling of 32 delegates part-way starts
-the ones that fit and says how many did not start, and why.
+refused and starts nothing. A call that reaches the turn's ceiling on delegates running at once (64
+unless [`maxRunningDelegates`](../customize/configuration.md#maxrunningdelegates) says otherwise)
+part-way starts the ones that fit and says how many did not start, and why.
 
 **`mcp_servers` takes servers away from a worker.** Without it a worker holds every server its
 parent may call, less any its [definition](../customize/agents.md) leaves off. With it the worker
@@ -994,6 +852,15 @@ Changes you have not committed are not in it, and what it writes stays there unt
 already in a checkout. A delegate in a checkout is not offered [`lsp`](#lsp). Checkouts share
 remote-tracking refs and tags with your working directory and with each other, so the planner is
 told to run a `git fetch` once rather than have each delegate run one.
+
+**`isolation: checkout_with_changes` gives the delegate the tree you have.** It is a checkout as
+above, with the changes in your working tree copied in as they are when the checkout is made: the
+files the session wrote, and the paths `git status` lists as changed where the session trusts the
+whole tree. A file you deleted is deleted there. A file a deny rule covers, a link, a file over
+16 MiB and anything past 1,000 files or 64 MiB is left as the commit has it, and the delegate and the
+planner are told which paths were carried, which were not and why. Nothing is written in your working
+tree, and you are not asked, since the copy goes into the checkout bravebot made. Use it for a
+`checker` that has to build what the planner just wrote.
 
 The delegate cannot see the conversation the task came from, so a task that leaves something out is a
 delegate that never learns it. It cannot come back for more, since there is no channel to ask
@@ -1029,20 +896,36 @@ approving a change whose reason is one of the tasks you did not read.
 
 ## `load_skill`
 
-Reads one of the skills the planner was listed.
+Reads one of the skills the planner was listed, or one `search_skills` found.
 
 | Parameter | |
 |---|---|
-| `name` | the name exactly as it was listed, e.g. `commit-style` |
+| `name` | the name exactly as it was listed or as `search_skills` returned it, e.g. `commit-style` |
 
 The name selects from a set fixed before the turn started and **never becomes a path**: a name holding
 `../` matches nothing and the call is refused. A name close to a real one is refused rather than
-guessed at. See [Skills](../customize/skills.md).
+guessed at. A skill whose file says `disable-model-invocation: true` is not in the set, so asking for
+it is refused the same way; you load it by naming it in your own line. See
+[Skills](../customize/skills.md).
 
 Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
 and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
 for the rest of the turn; a project's skill is read through the trust map like any other file in the
 project.
+
+## `search_skills`
+
+Finds a skill of your own or the project's by a word or phrase. Only a skill built into bravebot
+itself is listed for the planner by default; the rest are found this way.
+
+| Parameter | |
+|---|---|
+| `query` | one or more words; a skill matches only where every word is in its name or its description |
+
+A match's name and description are returned in full, never cut, with the same words
+[`load_skill`](#load_skill) then loads the body of. A query that matches more than 25 skills
+returns the first 25, in the order they would be listed, and says how many more matched: narrow
+the query rather than widening it. See [Skills](../customize/skills.md).
 
 ## `ask_user`
 
@@ -1055,6 +938,17 @@ Puts up to four questions to you and waits. More than four is refused whole rath
 Questions are put one at a time. You may choose an option, answer in your own words, or skip. A
 skipped question is an answer to work with rather than a reason to ask again. An answer is remembered
 for the session, question by question.
+
+In the terminal, a series of more than one ends in a review that lists each question beside your
+answer. Nothing has been sent until you press Enter there. Left goes back a question, a number
+reopens that question from the review, and either brings back what you had answered. A single
+question has no review.
+
+With [`askIdleSeconds`](../customize/configuration.md#askidleseconds) set, the terminal closes a question
+that sits that long with no key pressed, and every question behind it. The planner is told that no
+answer was given in the time allowed and that you may be away, not that you declined, and the answers
+you had already given stay. A question closed this way is not remembered, so the planner can ask it
+again.
 
 **Asking stops once the planner's context has met something untrusted**, because at that point the
 question itself could have been shaped by content nobody vouched for. A quarantined read does not stop
@@ -1124,14 +1018,22 @@ The whole list every time: it replaces the previous one. There is no routing her
 touched. An unrecognised status reads as outstanding work. A task marked `cancelled` is struck
 through and counted apart from the finished ones.
 
+A turn whose last list still has a task pending or in progress when the planner answers is not
+ended there. The planner is told how many tasks are open, and nothing about them, and is asked to
+send the list again with each task marked completed or cancelled. Where work remains it leaves the
+tasks open and says in its answer what is left. This happens once for each list: a list the planner
+sends in answer to the question is not asked about, in that turn or in a later one. A list the
+planner wrote in a session that has read something untrusted is not counted. A reply that stopped at
+the output limit ends the turn as it stands.
+
 ## `schedule_next`
 
 Says when this turn should be asked again: the pace of the next tick of a self-paced
 [`/loop`](commands.md#loop-interval-prompt), or, outside a loop, the first later look at something,
 which starts a loop over the line you typed. It is offered only where that later look can actually
 happen; a call from any other turn is answered the way any unoffered name is. A turn that runs a prompt
-bravebot wrote for a command, as [`/init`](commands.md#init) and [`/review`](commands.md#review-target-focus)
-do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
+bravebot wrote for a command, as [`/init`](commands.md#init), [`/review`](commands.md#review-target-focus)
+and [`/help`](commands.md#help-question) do, is not offered it, so those cannot start a loop that repeats the fixed prompt.
 
 | Parameter | |
 |---|---|

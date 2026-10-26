@@ -16,13 +16,16 @@ use bravebot_i18n::t;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
-use ratatui::crossterm::event::{self, KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event as TermEvent, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::input;
+use crate::select::{self, Click};
 use crate::theme;
 
 /// One row of a list.
@@ -97,6 +100,12 @@ impl<R: PickerRow> ListPicker<R> {
         self.selected = self.selected.saturating_sub(1);
     }
 
+    /// The index of the first row drawn in a list `height` rows tall: the cursor is kept on the
+    /// last row of the window once it moves past the end of it.
+    fn first_visible(&self, height: usize) -> usize {
+        self.selected.saturating_sub(height.max(1) - 1)
+    }
+
     /// Whether `row` is the one in force when the picker opened.
     pub fn is_current(&self, row: &R) -> bool {
         row.same_as(&self.previous)
@@ -142,6 +151,46 @@ pub fn handle_key<R: PickerRow>(
     }
 }
 
+/// What a mouse event did to the picker.
+///
+/// A left press on a row puts the cursor on it, and a second press on the same cell within
+/// [`select::MULTI_CLICK`] takes it, as Enter does. Nothing else the mouse does leaves the picker or
+/// takes a row: a press outside the list, a drag, a release, a wheel turn and a press on the border
+/// all leave it open with the cursor where it was. `list` is where [`draw`] drew the list, and
+/// `last` the press that was answered before this one (MOUSE-15).
+pub fn handle_mouse<R: PickerRow>(
+    picker: &mut ListPicker<R>,
+    list: Rect,
+    mouse: MouseEvent,
+    last: &mut Option<Click>,
+    now: std::time::Instant,
+) -> Outcome {
+    if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
+        return Outcome::Continue;
+    }
+    let inside = mouse.column >= list.x
+        && mouse.column < list.right()
+        && mouse.row >= list.y
+        && mouse.row < list.bottom();
+    if !inside {
+        *last = None;
+        return Outcome::Continue;
+    }
+    let index = picker.first_visible(usize::from(list.height)) + usize::from(mouse.row - list.y);
+    if index >= picker.rows.len() {
+        *last = None;
+        return Outcome::Continue;
+    }
+    picker.selected = index;
+    let (click, count) = select::count_click(*last, now, mouse.row, mouse.column);
+    *last = Some(click);
+    if count == 2 {
+        Outcome::Select
+    } else {
+        Outcome::Continue
+    }
+}
+
 /// Show the list as a centred panel over whatever `behind` draws, and return the row the person
 /// picked, or `None` if they kept what was in force.
 ///
@@ -153,11 +202,14 @@ pub fn choose<B: Backend, R: PickerRow + Clone>(
     panel: &Panel,
     mut behind: impl FnMut(&mut Frame),
 ) -> Option<R> {
+    let mut list = Rect::default();
+    let mut last = None;
     loop {
         if terminal
             .draw(|frame| {
                 behind(frame);
                 draw(frame, &picker, panel);
+                list = regions(frame.area(), picker.rows.len(), panel.width)[0];
             })
             .is_err()
         {
@@ -167,6 +219,13 @@ pub fn choose<B: Backend, R: PickerRow + Clone>(
         let Ok(event) = input::read() else {
             return None;
         };
+        if let TermEvent::Mouse(mouse) = event {
+            let now = std::time::Instant::now();
+            match handle_mouse(&mut picker, list, mouse, &mut last, now) {
+                Outcome::Select => return picker.chosen().cloned(),
+                Outcome::Continue | Outcome::Cancel => continue,
+            }
+        }
         let Some(key) = input::key_of(&event) else {
             continue;
         };
@@ -196,14 +255,7 @@ pub fn draw<R: PickerRow>(frame: &mut Frame, picker: &ListPicker<R>, panel: &Pan
     let inside = block.inner(area);
     frame.render_widget(block, area);
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(1),    // list
-            Constraint::Length(1), // what the row under the cursor means
-            Constraint::Length(1), // keys
-        ])
-        .split(inside);
+    let layout = split(inside);
 
     frame.render_widget(Paragraph::new(list_lines(picker, layout[0])), layout[0]);
 
@@ -230,6 +282,24 @@ pub fn draw<R: PickerRow>(frame: &mut Frame, picker: &ListPicker<R>, panel: &Pan
     );
 }
 
+/// The list, the line saying what the row under the cursor means, and the line of keys, inside the
+/// border of the panel [`draw`] draws over `frame`.
+pub fn regions(frame: Rect, rows: usize, width: u16) -> std::rc::Rc<[Rect]> {
+    let area = centred(frame, rows, width);
+    split(Block::default().borders(Borders::ALL).inner(area))
+}
+
+fn split(inside: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),    // list
+            Constraint::Length(1), // what the row under the cursor means
+            Constraint::Length(1), // keys
+        ])
+        .split(inside)
+}
+
 /// A centred panel sized to the list, never larger than the terminal and never wider than `width`.
 pub fn centred(area: Rect, rows: usize, width: u16) -> Rect {
     let available = area.width.saturating_sub(2);
@@ -252,7 +322,7 @@ pub fn centred(area: Rect, rows: usize, width: u16) -> Rect {
 
 fn list_lines<R: PickerRow>(picker: &ListPicker<R>, area: Rect) -> Vec<Line<'static>> {
     let visible = (area.height as usize).max(1);
-    let first = picker.selected.saturating_sub(visible.saturating_sub(1));
+    let first = picker.first_visible(visible);
 
     let mut lines = Vec::new();
     for (index, row) in picker.rows.iter().enumerate().skip(first).take(visible) {
@@ -462,5 +532,146 @@ mod tests {
         let output = rendered(&picker);
         assert!(!output.contains("the first"), "{output}");
         assert!(!output.contains("the last"), "{output}");
+    }
+
+    fn press(row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// The list rectangle of an 80x24 frame holding `PANEL` and `rows` rows.
+    fn list_of(rows: usize) -> Rect {
+        regions(Rect::new(0, 0, 80, 24), rows, PANEL.width)[0]
+    }
+
+    /// Rejects: `regions` laying the list out differently from `draw`, which would make every click
+    /// land a row off while the other mouse tests, built on `regions`, still passed.
+    #[test]
+    fn the_rows_are_drawn_where_regions_says_the_list_is() {
+        let picker = open_on(0);
+        let list = list_of(3);
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| draw(frame, &picker, &PANEL))
+            .expect("draw succeeds");
+        let buffer = terminal.backend().buffer();
+        for (offset, word) in ["one", "two", "three"].iter().enumerate() {
+            let row: String = (list.x..list.right())
+                .map(|x| buffer[(x, list.y + offset as u16)].symbol())
+                .collect();
+            assert!(row.contains(word), "row {offset} reads {row:?}");
+        }
+    }
+
+    /// MOUSE-15. Rejects: a press that moves nothing, a press that takes at once, and a row
+    /// found from the wrong rectangle: the first press puts the cursor on the row it landed on
+    /// and a second one on the same cell takes it.
+    #[test]
+    fn a_press_moves_the_cursor_and_a_second_press_takes_the_row() {
+        let mut picker = open_on(0);
+        let list = list_of(3);
+        let (mut last, now) = (None, std::time::Instant::now());
+
+        let outcome = handle_mouse(
+            &mut picker,
+            list,
+            press(list.y + 2, list.x + 3),
+            &mut last,
+            now,
+        );
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(picker.chosen().map(|row| row.0), Some("three"));
+
+        let outcome = handle_mouse(
+            &mut picker,
+            list,
+            press(list.y + 2, list.x + 3),
+            &mut last,
+            now,
+        );
+        assert_eq!(outcome, Outcome::Select);
+        assert_eq!(picker.chosen().map(|row| row.0), Some("three"));
+    }
+
+    /// MOUSE-15. Rejects: a second press on another row, or after the window, taking a row.
+    #[test]
+    fn two_presses_on_different_rows_or_far_apart_take_nothing() {
+        let mut picker = open_on(0);
+        let list = list_of(3);
+        let (mut last, now) = (None, std::time::Instant::now());
+        for (row, at) in [
+            (0, now),
+            (1, now),
+            (
+                1,
+                now + select::MULTI_CLICK + std::time::Duration::from_millis(1),
+            ),
+        ] {
+            let outcome = handle_mouse(
+                &mut picker,
+                list,
+                press(list.y + row, list.x),
+                &mut last,
+                at,
+            );
+            assert_eq!(outcome, Outcome::Continue, "row {row}");
+        }
+        assert_eq!(picker.chosen().map(|row| row.0), Some("two"));
+    }
+
+    /// MOUSE-15. Rejects: a press outside the list, on the border or below the last row choosing,
+    /// moving the cursor, or leaving the picker, and a wheel turn, drag or release acting.
+    #[test]
+    fn a_press_outside_the_rows_and_anything_but_a_press_leave_the_picker_alone() {
+        let list = list_of(3);
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let mut picker = open_on(1);
+        for (row, column) in [
+            (0, 0),
+            (list.y - 1, list.x),
+            (list.y + 3, list.x),
+            (list.y, list.right()),
+        ] {
+            for _ in 0..2 {
+                let outcome = handle_mouse(&mut picker, list, press(row, column), &mut last, now);
+                assert_eq!(outcome, Outcome::Continue, "({row}, {column})");
+            }
+        }
+        for kind in [
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+            MouseEventKind::Down(MouseButton::Right),
+        ] {
+            let mouse = MouseEvent {
+                kind,
+                ..press(list.y, list.x)
+            };
+            assert_eq!(
+                handle_mouse(&mut picker, list, mouse, &mut last, now),
+                Outcome::Continue
+            );
+            assert_eq!(
+                handle_mouse(&mut picker, list, mouse, &mut last, now),
+                Outcome::Continue
+            );
+        }
+        assert_eq!(picker.chosen().map(|row| row.0), Some("two"));
+    }
+
+    /// MOUSE-15. Rejects: counting rows from the top of the list when it has scrolled to keep the
+    /// cursor in view.
+    #[test]
+    fn a_press_finds_its_row_in_a_list_that_has_scrolled() {
+        let rows: Vec<Word> = (0..30).map(|_| Word("x", None)).collect();
+        let mut picker = ListPicker::open(rows.clone(), 29, rows[0].clone());
+        let list = Rect::new(10, 5, 30, 8);
+        let (now, mut last) = (std::time::Instant::now(), None);
+        handle_mouse(&mut picker, list, press(5, 11), &mut last, now);
+        assert_eq!(picker.selected, 22);
     }
 }

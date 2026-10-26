@@ -47,7 +47,8 @@
 //!
 //! # This agent's own credentials are not handed on
 //!
-//! The environment is inherited, less the names in [`scrub`]. A person approving a run reads the
+//! The environment is inherited, less the names in [`bravebot_config::scrub::withheld`], which
+//! [`bravebot_sandbox::programs::start`] removes. A person approving a run reads the
 //! binary, the argv and the directory, so a credential travelling alongside those is something they
 //! were never shown and could not have endorsed. The signing key has no use in a subprocess anyway:
 //! a program the planner chose is doing what somebody approved, not authenticating as this agent.
@@ -288,6 +289,11 @@ pub enum ExecError {
     /// Carries the program name, which is safe to report: argv was endorsed by a person, so it is
     /// not content an attacker chose.
     NotStarted { program: String, detail: String },
+    /// The directory the line was to run in no longer exists, so the pipeline was not started.
+    ///
+    /// Checked immediately before the first stage is spawned, since an approval can wait for
+    /// hours. The directory is the one the person was shown and approved.
+    DirectoryGone { directory: String },
     /// The platform could not confine the program, so it was not started.
     ///
     /// A program a person approved runs under its profile or not at all, so this is a refusal and
@@ -308,6 +314,9 @@ impl fmt::Display for ExecError {
         match self {
             Self::NotStarted { program, detail } => {
                 write!(f, "'{program}' could not be started: {detail}")
+            }
+            Self::DirectoryGone { directory } => {
+                write!(f, "the directory '{directory}' no longer exists")
             }
             Self::NotConfined { program, detail } => {
                 write!(
@@ -558,6 +567,7 @@ impl<'a> Running<'a> {
         if steps.is_empty() {
             return Err(ExecError::Io("no stages to run".to_string()));
         }
+        the_directory_exists(self.directory)?;
         still_approved(steps)?;
 
         let mut children = ForegroundChildren(Vec::with_capacity(steps.len()));
@@ -590,50 +600,7 @@ impl<'a> Running<'a> {
         let last = steps.len() - 1;
 
         for (index, step) in steps.iter().enumerate() {
-            // Exhaustive so that a field added to `Step` stops the build here. This is where a step
-            // becomes a real process, so a field this applies that no standing answer's key holds
-            // would be a line running differently from the one somebody was shown ([RUN-8]).
-            //
-            // [RUN-8]: ../../../docs/specs/tools/run.md
-            let Step {
-                program: _,
-                resolved: _,
-                started_as,
-                args: _,
-                environment: _,
-                routes: _,
-            } = step;
-            // Started by the path the name was found by, which some programs read
-            // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
-            // question decide what runs.
-            #[allow(
-                clippy::disallowed_methods,
-                reason = "the program of a `run` line, found once when the line was planned \
-                              (`Step::started_as`)"
-            )]
-            let mut command = Command::new(started_as);
-            // The vector, never a string. Nothing here builds a command line, so nothing has to
-            // unbuild one.
-            command.args(&step.args).current_dir(self.directory);
-            // Where to put an intermediate file, so a line can name one without having been told
-            // the path first. Before the step's own assignments, so a line that sets the name
-            // itself wins, which is what the same assignment in front of a program does in a
-            // shell.
-            if let Some(directory) = self.scratch {
-                command.env(bravebot_config::env_var::SCRATCH_DIR, directory);
-            } else {
-                // Removed rather than left as it arrived. Whatever an outer environment set the
-                // name to is another session's directory or none, and a program that tests the
-                // name would find one that has already been removed.
-                command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
-            }
-            // Written in front of this step's own program, so it reaches this step and no other.
-            for (name, value) in &step.environment {
-                command.env(name, value);
-            }
-            // Every step, not only the first. A credential is as reachable from the middle of a
-            // pipeline as from the front, and one step spared would be the whole of the hole.
-            crate::scrub::apply(&mut command);
+            let command = command_for(step, self.directory, self.scratch);
             // Decided before a redirection's file is opened, so a step the platform will not
             // confine is refused ahead of every effect its line has.
             let launching = crate::confine::begin(self.confinement, command, step, self.directory)?;
@@ -1251,6 +1218,18 @@ fn stop_processes(mut children: Vec<&mut Process>) {
     }
 }
 
+/// Refuse the pipeline when the directory it runs in has been removed since the line was planned
+/// or approved. Without this the spawn fails with the operating system's "No such file or
+/// directory", which reads as a missing program.
+fn the_directory_exists(directory: &std::path::Path) -> Result<(), ExecError> {
+    if directory.is_dir() {
+        return Ok(());
+    }
+    Err(ExecError::DirectoryGone {
+        directory: directory.display().to_string(),
+    })
+}
+
 /// Refuse the pipeline unless every step's start path still leads to the file that was approved.
 ///
 /// A link can be repointed after the person approved the file it led to, so each path is resolved
@@ -1483,11 +1462,32 @@ impl Background {
         cancel: &Cancel,
         stops: &[JobStop],
     ) {
+        self.wait(Some(seen), bound, cancel, stops);
+    }
+
+    /// Wait for the job to end, and return at the first of four things.
+    ///
+    /// Every step having exited, `bound` running out, `cancel` being set, and one of `stops` being
+    /// set. Output arriving ends none of it, whether it arrives during the wait or was already
+    /// there, unseen, when the wait began: that is the difference from [`Background::wait_for_more`],
+    /// whose caller gets back at the next line from a job that prints more often than a round takes.
+    ///
+    /// Of the output this asks for nothing at all, not even a byte count, so it decides on which
+    /// steps have exited and on the clock alone. What was printed is taken by the caller afterwards,
+    /// the same way [`Background::wait_for_more`]'s is, and is all of what the job printed since the
+    /// caller's last look.
+    pub fn wait_for_exit(&mut self, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
+        self.wait(None, bound, cancel, stops);
+    }
+
+    /// The loop both waits share. `seen` is where the caller's last look left off for a wait that
+    /// output ends, and `None` for one that only an exit, the bound, the token or a stop does.
+    fn wait(&mut self, seen: Option<&Seen>, bound: Duration, cancel: &Cancel, stops: &[JobStop]) {
         let until = Instant::now() + bound;
         loop {
             if cancel.is_cancelled()
                 || stops.iter().any(JobStop::is_requested)
-                || self.has_more(seen)
+                || seen.is_some_and(|seen| self.has_more(seen))
                 || self.steps_exited()
             {
                 return;
@@ -1517,6 +1517,66 @@ impl fmt::Debug for Background {
     }
 }
 
+/// The process a step becomes, before it is confined or given its descriptors. The foreground
+/// pipeline and a background job both build every step here, so the scrub of this agent's own
+/// credentials is one implementation for both.
+fn command_for(
+    step: &Step,
+    directory: &std::path::Path,
+    scratch: Option<&std::path::Path>,
+) -> Command {
+    // Exhaustive so that a field added to `Step` stops the build here. This is where a step
+    // becomes a real process, so a field this applies that no standing answer's key holds
+    // would be a line running differently from the one somebody was shown ([RUN-8]).
+    //
+    // [RUN-8]: ../../../docs/specs/tools/run.md
+    let Step {
+        program: _,
+        resolved: _,
+        started_as,
+        args: _,
+        environment: _,
+        routes: _,
+    } = step;
+    // Started by the path the name was found by, which some programs read
+    // ([`Step::started_as`]). A second lookup here would let a `$PATH` changed since the
+    // question decide what runs.
+    //
+    // Every step, not only the first, is started without this agent's own credentials. One
+    // is as reachable from the middle of a pipeline as from the front, and one step spared
+    // would be the whole of the hole.
+    let withheld = bravebot_config::scrub::withheld();
+    let inherits = bravebot_sandbox::programs::Inherits::Without(&withheld);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(started_as),
+        inherits,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
+    // The vector, never a string. Nothing here builds a command line, so nothing has to
+    // unbuild one.
+    command.args(&step.args).current_dir(directory);
+    // Where to put an intermediate file, so a line can name one without having been told
+    // the path first. Before the step's own assignments, so a line that sets the name
+    // itself wins, which is what the same assignment in front of a program does in a
+    // shell.
+    if let Some(scratch) = scratch {
+        command.env(bravebot_config::env_var::SCRATCH_DIR, scratch);
+    } else {
+        // Removed rather than left as it arrived. Whatever an outer environment set the
+        // name to is another session's directory or none, and a program that tests the
+        // name would find one that has already been removed.
+        command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
+    }
+    // Written in front of this step's own program, so it reaches this step and no other.
+    for (name, value) in &step.environment {
+        command.env(name, value);
+    }
+    // Withheld again, since the line is the planner's and a name it assigns is not the
+    // person's own: `run.scrubEnv` lists what their commands may not be handed.
+    inherits.withhold(&mut command);
+    command
+}
+
 /// Start the steps of a compiled plan and leave them running. Every step is started, chained the
 /// same way, and given the same scrubbed environment and empty stdin as in the foreground; what
 /// differs is that nothing waits for them.
@@ -1534,6 +1594,7 @@ pub fn start_steps(
     if steps.is_empty() {
         return Err(ExecError::Io("no stages to run".to_string()));
     }
+    the_directory_exists(directory)?;
     still_approved(steps)?;
 
     let mut children: Vec<Process> = Vec::with_capacity(steps.len());
@@ -1543,35 +1604,7 @@ pub fn start_steps(
     let last = steps.len() - 1;
 
     for (index, step) in steps.iter().enumerate() {
-        // Exhaustive for the reason it is in the foreground.
-        let Step {
-            program: _,
-            resolved: _,
-            started_as,
-            args: _,
-            environment: _,
-            routes: _,
-        } = step;
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "the program of a `run` line, found once when the line was planned \
-                          (`Step::started_as`)"
-        )]
-        let mut command = Command::new(started_as);
-        command.args(&step.args).current_dir(directory);
-        // In front of the step's own assignments, as in the foreground.
-        if let Some(directory) = scratch {
-            command.env(bravebot_config::env_var::SCRATCH_DIR, directory);
-        } else {
-            // Removed rather than left, as in the foreground.
-            command.env_remove(bravebot_config::env_var::SCRATCH_DIR);
-        }
-        for (name, value) in &step.environment {
-            command.env(name, value);
-        }
-        // Every step, as in the foreground: a credential is as reachable from the middle of a
-        // pipeline as from the front, and one spared would be the whole of the hole.
-        crate::scrub::apply(&mut command);
+        let command = command_for(step, directory, scratch);
         let launching = match crate::confine::begin(confinement, command, step, directory) {
             Ok(launching) => launching,
             Err(error) => {

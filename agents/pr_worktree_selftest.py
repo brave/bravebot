@@ -585,12 +585,162 @@ def test_a_step_says_which_worktree_it_works_in_and_then_where_that_came_from():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         clone = a_plain_clone(root)
+        pr_worktree.hooks_dir(clone).mkdir()
         pr = the_pull_request_in(clone)
         assert quietly(pr_worktree.announce, pr) == (None, f"worktree {clone / '.worktrees' / 'pr-9'}\n")
         feature_in(clone, root / "elsewhere")
         _, out = quietly(pr_worktree.announce, the_pull_request_in(clone))
         first, second = out.splitlines()
         assert first == f"worktree {root / 'elsewhere'}" and second.startswith("reused: feature is already"), out
+
+
+def test_a_step_says_when_no_hooks_run_because_make_hooks_has_not_filled_the_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        clone = a_plain_clone(Path(tmp).resolve())
+        directory = pr_worktree.hooks_dir(clone)
+        _, out = quietly(pr_worktree.announce, the_pull_request_in(clone))
+        said = f"hooks: none run, {directory} does not exist; `make hooks` in {clone} creates it"
+        assert out.splitlines()[1:] == [said], out
+        directory.mkdir()
+        _, out = quietly(pr_worktree.announce, the_pull_request_in(clone))
+        assert "hooks:" not in out, "a clone that has run `make hooks` has nothing to be told"
+
+
+def test_the_hooks_directory_is_the_clones_whatever_worktree_asks_and_is_none_outside_a_repository():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        feature_in(clone, root / "elsewhere")
+        assert pr_worktree.hooks_dir(clone) == clone / ".git" / pr_worktree.HOOKS_DIR
+        assert pr_worktree.hooks_dir(root / "elsewhere") == pr_worktree.hooks_dir(clone), "a worktree shares it"
+        assert pr_worktree.hooks_dir(root) is None, "no repository, no directory git could read hooks from"
+        assert pr_worktree.hooks_dir(root / "missing") is None
+
+
+BRANCH_HOOKS = (
+    "pre-commit", "commit-msg", "post-commit", "pre-rebase", "post-rewrite", "post-checkout", "post-merge",
+    "pre-push", "reference-transaction",
+)
+
+
+def a_hook(directory, name, label, marker):
+    directory.mkdir(exist_ok=True)
+    hook = directory / name
+    hook.write_text(f'#!/bin/sh\necho "{label}" >> "{marker}"\nexit 0\n')
+    hook.chmod(0o755)
+
+
+def a_hostile_pull_request(root, trusted=()):
+    """A clone whose `core.hooksPath` is `.githooks`, and pull request 9 whose branch tracks a hook of every kind.
+
+    Each hook appends `branch <name>` to the returned marker file. The branch is on `one` while the base moved to
+    `two`, so a rebase has work to do, and a local `feature` behind the head gives the fast-forward something to
+    merge. `trusted` names hooks the clone's own checkout holds, untracked, which append `trusted <name>`.
+    """
+    marker = root / "ran.txt"
+    upstream, fork, clone = root / "upstream.git", root / "fork.git", root / "clone"
+    git("init", "-q", "--bare", "-b", "main", str(upstream), cwd=root)
+    git("init", "-q", "--bare", "-b", "main", str(fork), cwd=root)
+    git("clone", "-q", str(upstream), str(clone), cwd=root)
+    (clone / "a.txt").write_text("one\n")
+    git("add", "a.txt", cwd=clone)
+    git("commit", "-q", "-m", "one", cwd=clone)
+    git("push", "-q", "origin", "HEAD:main", cwd=clone)
+    git("branch", "feature", cwd=clone)
+    git("remote", "rename", "origin", "upstream", cwd=clone)
+    git("remote", "add", "origin", str(fork), cwd=clone)
+    git("switch", "-q", "-c", "head-of-the-pull-request", cwd=clone)
+    for name in BRANCH_HOOKS:
+        a_hook(clone / ".githooks", name, f"branch {name}", marker)
+    git("add", "-A", cwd=clone)
+    git("commit", "-q", "-m", "feature", cwd=clone)
+    git("push", "-q", "origin", "HEAD:refs/heads/feature", cwd=clone)
+    git("switch", "-q", "main", cwd=clone)
+    git("branch", "-q", "-D", "head-of-the-pull-request", cwd=clone)
+    (clone / "a.txt").write_text("two\n")
+    git("commit", "-q", "-am", "two", cwd=clone)
+    git("push", "-q", "upstream", "HEAD:main", cwd=clone)
+    git("config", "core.hooksPath", ".githooks", cwd=clone)
+    for name in trusted:
+        a_hook(clone / ".githooks", name, f"trusted {name}", marker)
+    return clone, marker
+
+
+def the_steps_a_pull_request_goes_through(clone, push=True):
+    """What `start` and `push` do in the pull request's worktree: check it out, catch up with its head, rebase, push."""
+    pr = the_pull_request_in(clone)
+    steps = [
+        (pr_worktree.add_worktree, (pr,)),
+        (pr_worktree.catch_up_with_pull, (pr, pr.tree)),
+        (pr_worktree.rebase_onto, (pr, pr.tree)),
+    ]
+    if push:
+        steps.append((pr_worktree.push, (pr, "python3 script.py")))
+    for step, args in steps:
+        with contextlib.redirect_stdout(io.StringIO()):
+            step(*args)
+    return pr
+
+
+def lines_of(marker):
+    return marker.read_text().splitlines() if marker.is_file() else []
+
+
+def make(target, cwd):
+    done = subprocess.run(
+        ["make", "-f", str(HERE.parent / "Makefile"), target], cwd=cwd, capture_output=True, text=True
+    )
+    assert done.returncode == 0, done.stderr
+    return done
+
+
+def test_the_hooks_a_pull_request_tracks_do_not_run_in_the_steps_the_scripts_take():
+    """A hook is a file of the branch, so a pull request from anyone would otherwise run as the person running git."""
+    with tempfile.TemporaryDirectory() as tmp:
+        clone, marker = a_hostile_pull_request(Path(tmp).resolve())
+        pr = the_steps_a_pull_request_goes_through(clone)
+        assert lines_of(marker) == [], lines_of(marker)
+        assert git("rev-parse", "origin/feature", cwd=clone) == git("rev-parse", "HEAD", cwd=pr.tree), "the push landed"
+        assert git("rev-parse", "upstream/main", cwd=clone) == git("rev-parse", "HEAD~1", cwd=pr.tree), "the rebase ran"
+        # Git run without the override reads the branch's file, so the empty marker above is not an unusable fixture.
+        git("commit", "-q", "--allow-empty", "-m", "control", cwd=pr.tree)
+        assert "branch pre-commit" in lines_of(marker), lines_of(marker)
+
+
+def test_a_push_says_when_no_hooks_run_and_still_pushes():
+    with tempfile.TemporaryDirectory() as tmp:
+        clone, _ = a_hostile_pull_request(Path(tmp).resolve())
+        pr = the_steps_a_pull_request_goes_through(clone, push=False)
+        code, out = quietly(pr_worktree.push, pr, "python3 script.py")
+        assert code == 0 and out.splitlines()[0].startswith("hooks: none run, "), out
+        assert git("rev-parse", "origin/feature", cwd=clone) == git("rev-parse", "HEAD", cwd=pr.tree), "the push landed"
+
+
+def test_the_hooks_make_hooks_installed_still_run_in_the_steps_the_scripts_take():
+    """The person's own hooks are what guard a push, so leaving out the pull request's must leave those running."""
+    with tempfile.TemporaryDirectory() as tmp:
+        clone, marker = a_hostile_pull_request(Path(tmp).resolve(), trusted=("pre-rebase", "pre-push"))
+        make("hooks", clone)
+        the_steps_a_pull_request_goes_through(clone)
+        assert lines_of(marker) == ["trusted pre-rebase", "trusted pre-push"], lines_of(marker)
+
+
+def test_make_hooks_copies_the_hooks_out_of_the_tree_and_a_linked_worktree_cannot_replace_the_copy():
+    with tempfile.TemporaryDirectory() as tmp:
+        clone, marker = a_hostile_pull_request(Path(tmp).resolve(), trusted=("pre-commit",))
+        make("hooks", clone)
+        installed = clone / ".git" / pr_worktree.HOOKS_DIR
+        assert Path(git("config", "core.hooksPath", cwd=clone)) == installed, "an absolute path, so every worktree reads it"
+        assert os.access(installed / "pre-commit", os.X_OK) and not (installed / "pre-rebase").exists()
+
+        pr = the_steps_a_pull_request_goes_through(clone)
+        git("commit", "-q", "--allow-empty", "-m", "by hand", cwd=pr.tree)
+        assert lines_of(marker) == ["trusted pre-commit"], "git run by hand there reads the copy, not the branch"
+
+        make("hooks", pr.tree)
+        assert Path(git("config", "core.hooksPath", cwd=pr.tree)) == installed
+        assert "branch" not in (installed / "pre-commit").read_text(), "the copy is not taken from a pull request"
+        assert not (installed / "pre-rebase").exists(), "the branch's hooks were not copied in"
 
 
 def test_the_worktree_line_comes_before_the_error_that_follows_it_when_both_are_captured_together():
@@ -711,7 +861,7 @@ def an_ssh_remote(root):
     git("commit", "-q", "--amend", "--allow-empty", "-m", "two again", cwd=clone)
     git("remote", "set-url", "--push", "origin", f"ssh://git@example.invalid{remote}", cwd=clone)
     pr = SimpleNamespace(
-        number=9, url="https://github.com/brave/bravebot/pull/9", tree=clone, branch="feature",
+        number=9, url="https://github.com/brave/bravebot/pull/9", main=clone, tree=clone, branch="feature",
         head="feature", head_remote="origin", onto="origin/main", tip="origin/feature",
     )
     return pr, remote

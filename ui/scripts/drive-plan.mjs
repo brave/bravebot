@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND, TRUST_APPROVE } from './drive-support.mjs'
 
 /** A line of the file the plan reads and releases. It may reach a screen and no model. */
 const SENTINEL = 'SENTINEL-README-BYTES'
@@ -97,14 +97,14 @@ try {
   })
   assert.ok(!outside.includes(SENTINEL), 'and nowhere outside a marked container')
   assert.ok(rounds.every((round) => !round.includes(SENTINEL)), 'and was never sent to a model')
-  assert.equal(await page.locator('.bubble.assistant').count(), 0, 'the run added no reply to the conversation')
+  assert.equal(await page.locator(ASSISTANT_BUBBLE).count(), 0, 'the run added no reply to the conversation')
   await page.screenshot({ path: join(output, 'plan-ran.png') })
 
   // ---- an ordinary message afterwards, which is a turn and knows nothing of the run ------------
   assert.match(await mode.innerText(), /Agent/, 'the menu is back on Agent: no mode is held')
   await composer.fill('Say done.')
-  await page.locator('.composer .send button').click()
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(`${COMPOSER_SEND} button`).click()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
   await ended()
   assert.equal(rounds.length, 3)
   assert.ok(!rounds[2].includes('SENTINEL-TASK'), 'the turn was not sent what the run was asked')
@@ -167,7 +167,7 @@ try {
   await conversations.first().locator('.session').click()
   await composer.waitFor()
   assert.equal(await page.locator('.run-record-body').count(), 0)
-  assert.equal(await page.locator('.bubble.assistant').count(), 1)
+  assert.equal(await page.locator(ASSISTANT_BUBBLE).count(), 1)
   assert.equal(await cards.count(), 2, 'with both plans it was asked about')
 
   // Starting again from a record makes a chat in the record's project.
@@ -175,7 +175,7 @@ try {
   await record.getByRole('button', { name: 'New chat here', exact: true }).click()
   await composer.waitFor()
   if (await trust.isVisible().catch(() => false)) {
-    await trust.locator('[data-test="trust-approve"]').click()
+    await trust.locator(TRUST_APPROVE).click()
     await trust.waitFor({ state: 'hidden' })
   }
   assert.equal(await page.locator('.bubble').count(), 0, 'the new session holds nothing the run said')

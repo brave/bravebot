@@ -4,8 +4,15 @@
 //! turns that wrote the record and the trail, the request that removes them, and the refusals that
 //! keep a session a window is using from being deleted under it.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "record, Chat::Refuses and BACKEND_WORDS are helpers shared with history.rs that no test here calls"
+)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -353,7 +360,7 @@ fn a_deleted_session_is_gone_with_its_trail_and_its_neighbour_is_not() {
     let project = scratch.project();
     let doomed = take_turn(&home, &project, &endpoint, None, "first question");
     let kept = take_turn(&home, &project, &endpoint, None, "second question");
-    assert_eq!(stored(&home).len(), 4, "{:?}", stored(&home));
+    assert_eq!(stored(&home).len(), 6, "{:?}", stored(&home));
 
     let mut window = Window::open(&home, &project, &endpoint, None);
     let answered = delete(&mut window, &project, &doomed);
@@ -361,7 +368,11 @@ fn a_deleted_session_is_gone_with_its_trail_and_its_neighbour_is_not() {
     assert_eq!(answered["ok"]["deleted"], true, "{answered}");
     assert_eq!(
         stored(&home),
-        vec![format!("{kept}.audit.jsonl"), format!("{kept}.json")],
+        vec![
+            format!("{kept}.audit.jsonl"),
+            format!("{kept}.json"),
+            format!("{kept}.lock")
+        ],
         "what is left on disk is not exactly the other session"
     );
     let listed = window.call(

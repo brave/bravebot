@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
+import { ASSISTANT_BUBBLE, BOT_OPEN_BUTTON, COMPOSER_NAME, TRUST_APPROVE } from './drive-support.mjs'
 
 // While set, the next reply waits until the test resolves it, so a turn stays running.
 let held = null
@@ -38,7 +39,7 @@ try {
   await openProject(page, app, project)
   const trust = page.getByRole('dialog', { name: 'Project trust', exact: true })
 
-  const field = page.getByRole('textbox', { name: 'Message the agent' })
+  const field = page.getByRole('textbox', { name: COMPOSER_NAME })
   const list = page.locator('[data-test="mention-list"]')
   const options = list.getByRole('option')
   const offered = async () => (await options.allInnerTexts()).map((text) => text.trim())
@@ -56,17 +57,20 @@ try {
   assert.deepEqual(await offered(), ['scripts/', 'src/', 'README.md'], 'node_modules is not offered')
   await page.screenshot({ path: join(output, 'at-mentions-light.png') })
 
-  // ---- a prefix narrows, the arrows walk, Esc closes and leaves the text -----------------------
+  // ---- a prefix narrows and the names found below follow, the arrows walk the whole list, Esc
+  // closes and leaves the text ----------------------------------------------------------------
   await page.keyboard.type('s')
-  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 2)
+  await page.waitForFunction(() => document.querySelectorAll('[data-test="mention-option"]').length === 5)
+  assert.deepEqual(await offered(), ['scripts/', 'src/', 'src/main.rs', 'src/nested/', 'src/nested/deep.md'], 'the prefix first, then what was found below')
   await selected('scripts/')
-  await page.keyboard.press('ArrowDown')
-  await selected('src/')
-  await page.keyboard.press('ArrowDown')
-  await selected('src/')
-  await page.keyboard.press('ArrowUp')
-  await page.keyboard.press('ArrowUp')
-  await selected('scripts/')
+  for (const row of ['src/', 'src/main.rs', 'src/nested/', 'src/nested/deep.md', 'src/nested/deep.md']) {
+    await page.keyboard.press('ArrowDown')
+    await selected(row)
+  }
+  for (const row of ['src/nested/', 'src/main.rs', 'src/', 'scripts/']) {
+    await page.keyboard.press('ArrowUp')
+    await selected(row)
+  }
   await page.keyboard.press('Escape')
   await list.waitFor({ state: 'hidden' })
   assert.equal(await value(), 'What colour is in @s', 'Escape closed the list and kept the line')
@@ -102,7 +106,7 @@ try {
   assert.equal(await value(), 'What colour is in @src/nested/deep.md')
   await list.waitFor()
   await page.keyboard.press('Enter')
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
   await page.locator('.composer .stop').waitFor({ state: 'hidden' })
   assert.equal(rounds.length, 1)
   const sent = JSON.stringify(JSON.parse(rounds[0]).messages)
@@ -111,6 +115,14 @@ try {
   await page.locator('.attached', { hasText: 'Read src/nested/deep.md' }).waitFor()
   const rows = await page.locator('.entries .attached').allInnerTexts()
   assert.deepEqual(rows.map((text) => text.trim()), ['Read src/nested/deep.md'], 'one Read row, drawn before the reply came back')
+
+  // ---- a fragment of a name finds the file below, and Tab writes its whole path ----------------
+  await field.fill('Open @dp')
+  await list.waitFor()
+  assert.deepEqual(await offered(), ['src/nested/deep.md'], 'a fragment found the file in a directory below')
+  await page.keyboard.press('Tab')
+  await valueIs('Open @src/nested/deep.md ')
+  await field.fill('')
 
   // ---- a name with a space is completed to the escaped text, and Enter completes a half of one ---
   mkdirSync(join(project, 'My Documents'))
@@ -156,7 +168,7 @@ try {
   await field.fill('Read @README.md')
   await field.press('Enter')
   await refusal.waitFor({ state: 'hidden' })
-  await page.locator('.bubble.assistant').nth(1).waitFor()
+  await page.locator(ASSISTANT_BUBBLE).nth(1).waitFor()
   assert.equal(rounds.length, 2, 'the corrected message went')
 
   // ---- a refused queued message goes back to the head of the queue, which pauses ---------------
@@ -168,9 +180,9 @@ try {
   assert.equal(rounds.length, 3, 'the held turn reached the model')
   await page.locator('.composer .stop').waitFor()
   await field.fill('Read @../outside.txt')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   await field.fill('After the refused one')
-  await field.press('Enter')
+  await field.press('Alt+Enter')
   const tray = page.locator('.queued-messages')
   await tray.waitFor()
   held = null
@@ -194,16 +206,16 @@ try {
   writeFileSync(join(bot.home, 'notes.txt'), 'The bot word is lantern.\n')
   await page.reload()
   await page.locator('[data-test="sidebar-tabs"] [role="option"]').nth(1).click()
-  await page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: /^Scribe$/ }) }).locator('.bot-open-button').click()
+  await page.locator('.bot').filter({ has: page.locator('.bot-name', { hasText: /^Scribe$/ }) }).locator(BOT_OPEN_BUTTON).click()
   await page.locator('[data-test="bot-page"]').waitFor()
   await field.click()
   await page.keyboard.type('Read @notes.txt')
   await page.waitForTimeout(500)
   assert.equal(await list.count(), 0, 'a bot page with no conversation yet has no folder to list')
   await page.keyboard.press('Enter')
-  await trust.locator('[data-test="trust-approve"]').click()
+  await trust.locator(TRUST_APPROVE).click()
   await trust.waitFor({ state: 'hidden' })
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
   await page.locator('.composer .stop').waitFor({ state: 'hidden' })
   assert.equal(rounds.length, 4)
   const botSent = JSON.stringify(JSON.parse(rounds[3]).messages)
@@ -221,7 +233,7 @@ try {
   assert.equal(rounds.length, 4, 'a project file is not named from the home folder')
 
   assert.deepEqual(errors, [])
-  console.log(`PASS: @ offers the project, narrows, walks and completes; Enter completes a half name and sends a finished one; the model got the file and the transcript drew its Read row; @../outside.txt was refused at send, by turn.send itself too, and a queued one went back to the head of a paused queue; a bot conversation in its home folder read and listed that folder and refused a project file. Screenshots in ${output}/at-mentions-{light,dark}.png`)
+  console.log(`PASS: @ offers the project, narrows, finds a fragment in a directory below, walks and completes; Enter completes a half name and sends a finished one; the model got the file and the transcript drew its Read row; @../outside.txt was refused at send, by turn.send itself too, and a queued one went back to the head of a paused queue; a bot conversation in its home folder read and listed that folder and refused a project file. Screenshots in ${output}/at-mentions-{light,dark}.png`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'at-mentions-failure.png') }).catch(() => undefined)
   throw error

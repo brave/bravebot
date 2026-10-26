@@ -48,7 +48,10 @@ impl Scratch {
     /// that asserts the ordinary behaviour and passes for the wrong reason.
     fn incognito(name: &str) -> Self {
         let lock = HOME.lock().unwrap_or_else(|held| held.into_inner());
-        let root = std::env::temp_dir().join(format!("bravebot-incognito-test-{name}"));
+        let root = std::env::temp_dir().join(format!(
+            "bravebot-incognito-test-{}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&root);
         let home = root.join("home");
         let project = root.join("project");
@@ -181,21 +184,38 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
     let scratch = Scratch::incognito("choices");
     scratch.seed("model", "claude-sonnet-4-5\n");
     scratch.seed("theme", "nord\n");
+    scratch.seed("language", "fr\n");
 
     // Reading is the half that must keep working: a private session still opens with the model and
     // theme the person chose, which is what makes it a private session rather than a fresh install.
     assert_eq!(store::load_model().as_deref(), Some("claude-sonnet-4-5"));
     assert_eq!(store::load_theme().as_deref(), Some("nord"));
+    assert_eq!(store::load_language().as_deref(), Some("fr"));
 
     store::save_model("some-other-model");
     store::save_theme("brave");
     store::save_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
     store::save_editing(bravebot_tui::vim::Editing::Vi.as_str());
+    // The language is the one choice that applies from the next start, so a save that reports
+    // having kept it is the only sign of a choice nothing recorded.
+    assert!(
+        !store::save_language(Some("en-US")),
+        "an incognito session said it had saved a language"
+    );
+    assert!(
+        !store::save_language(None),
+        "an incognito session said it had forgotten the language"
+    );
 
     assert_eq!(
         store::load_model().as_deref(),
         Some("claude-sonnet-4-5"),
         "an incognito session overwrote the recorded model"
+    );
+    assert_eq!(
+        store::load_language().as_deref(),
+        Some("fr"),
+        "an incognito session replaced or removed the recorded language"
     );
     assert_eq!(
         store::load_theme().as_deref(),
@@ -213,7 +233,11 @@ fn a_choice_applies_to_the_session_and_is_not_recorded() {
         "an incognito session recorded a style of editing"
     );
 
-    let mut expected = vec!["model".to_string(), "theme".to_string()];
+    let mut expected = vec![
+        "language".to_string(),
+        "model".to_string(),
+        "theme".to_string(),
+    ];
     expected.sort();
     assert_eq!(scratch.contents(), expected);
 }
@@ -240,6 +264,7 @@ fn no_session_record_is_written() {
             conversation: &conversation.snapshot(),
             turns: 1,
             tokens: 1_200,
+            split: Default::default(),
             spend: &BTreeMap::new(),
             timing: &BTreeMap::new(),
             model: None,
@@ -426,4 +451,38 @@ fn the_standing_answer_about_vetting_is_not_read() {
     let mut expected = vec!["model".to_string(), "vetting".to_string()];
     expected.sort();
     assert_eq!(scratch.contents(), expected);
+}
+
+/// CMD-12: an incognito session neither reads the `/caffeinate` agreement nor writes it.
+///
+/// The sessions persist, so the only thing between them and the file is the mode: a swapped
+/// condition in the read or the write would hand a private session a warning somebody else
+/// acknowledged. The seeded model read back first shows the directory is the one being looked at.
+#[test]
+fn the_caffeinate_agreement_is_neither_read_nor_written() {
+    let scratch = Scratch::incognito("caffeinate");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+    scratch.seed("caffeinate", "confirmed\n");
+    assert_eq!(
+        store::load_model().as_deref(),
+        Some("claude-sonnet-4-5"),
+        "the seeded directory is not the one being read"
+    );
+
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_caffeinate();
+    session.toggle_caffeinate();
+    let said = session.transcript.last().expect("a note").text.clone();
+    assert_eq!(
+        said,
+        bravebot_i18n::t!(caffeinate_explained),
+        "an incognito session inherited the agreement"
+    );
+
+    // Agreeing here reaches the file no more than reading it did.
+    std::fs::remove_file(scratch.own_directory().join("caffeinate")).expect("remove the seed");
+    session.toggle_caffeinate();
+    let said = session.transcript.last().expect("a note").text.clone();
+    assert_eq!(said, bravebot_i18n::t!(caffeinate_on));
+    assert_eq!(scratch.contents(), vec!["model".to_string()]);
 }

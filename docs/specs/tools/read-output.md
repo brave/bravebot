@@ -9,6 +9,7 @@ guards:
 documented-by:
   - docs/website/docs/reference/tools.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
 ---
 
 ## Scope
@@ -24,7 +25,9 @@ program's output is labelled in the first place is [run.md](run.md).
 <a id="OUTPUT-1"></a>
 ### OUTPUT-1: this is an assertion about bytes, and is not a relabel
 
-A person is shown the bytes themselves with the command that printed them, and decides.
+A person is shown the bytes themselves with the command that printed them, and decides. A
+character in them that draws as nothing is written out, so that what the person cannot see is
+among what they decide about ([prompting.md](../prompting.md)).
 
 ```
 ╭ let the model read this? ────────────────────────────────╮
@@ -74,6 +77,7 @@ stderr, and a planner that cannot see it will report that the command worked.
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_that_asks_to_read_is_handed_its_output_in_the_same_result`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
 `verified-by: bravebot_agent::turn::output_a_person_refuses_stays_out_of_the_planner`
+`verified-by: bravebot_agent::turn::an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_cli::plain::every_line_of_an_output_is_shown_before_a_yes_releases_it`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_shown_every_line_of_an_output_before_a_yes_releases_it`
 
@@ -165,6 +169,7 @@ it, and paging hands over the part it names without running anything again.
 `verified-by: bravebot_agent::turn::an_offset_into_output_nobody_vouched_for_is_refused_and_nobody_is_asked`
 `verified-by: bravebot_agent::turn::what_an_ended_job_printed_is_capped_with_the_whole_of_it_kept`
 `verified-by: bravebot_agent::turn::output_a_person_reads_and_approves_reaches_the_planner`
+`verified-by: bravebot_agent::turn::a_page_of_output_the_planner_may_read_is_no_release_and_keeps_the_slots_label`
 
 <a id="OUTPUT-5"></a>
 ### OUTPUT-5: a pattern searches output the planner may read, and is refused on output it may not

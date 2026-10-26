@@ -31,60 +31,10 @@ use bravebot_core::ask::{Answer, Asking};
 use bravebot_core::todo::Row;
 use std::sync::mpsc::{Receiver, Sender};
 
-/// Prompts typed while a turn runs, waiting for it to reach a round boundary.
-///
-/// Shared between the two threads rather than sent down a channel, and the reason is that a queued
-/// prompt can be taken back. A line posted into a channel is gone: Up would appear to retrieve it
-/// and it would arrive at the planner anyway, a moment later, having been un-queued on the screen.
-/// One buffer both ends hold makes taking it back mean what it says.
-///
-/// The turn takes from the front and the interface adds to the back, so they stay in the order they
-/// were typed. Poisoning is treated as empty: a lock this shallow is only poisoned by a panic
-/// elsewhere, the turn is ending either way, and nothing is worth failing a turn over here.
-#[derive(Debug, Clone, Default)]
-pub struct Interjections(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
-
-impl Interjections {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Add a line for the turn to take at its next boundary.
-    pub fn push(&self, said: String) {
-        if let Ok(mut waiting) = self.0.lock() {
-            waiting.push_back(said);
-        }
-    }
-
-    /// Take the oldest, or `None`. Never waits: see [`Confirmer::interjection`].
-    pub fn take(&self) -> Option<String> {
-        self.0.lock().ok()?.pop_front()
-    }
-
-    /// Take every line, oldest first, leaving the buffer empty.
-    pub fn drain(&self) -> Vec<String> {
-        self.0
-            .lock()
-            .map(|mut waiting| waiting.drain(..).collect())
-            .unwrap_or_default()
-    }
-
-    /// Drop the newest, for a prompt the person is taking back off the queue.
-    ///
-    /// The newest rather than the oldest because that is the end Up takes from: the queue is taken
-    /// back from the end the person is typing at.
-    ///
-    /// `false` where there was nothing to drop, which is how a caller learns that the turn has
-    /// already taken every line there was. A prompt the planner is holding cannot be taken back,
-    /// and this is the only place that can tell: the two threads move independently, so a line can
-    /// be taken between the key press and the moment anything looks at the queue.
-    pub fn forget_last(&self) -> bool {
-        self.0
-            .lock()
-            .map(|mut waiting| waiting.pop_back().is_some())
-            .unwrap_or(false)
-    }
-}
+/// Prompts typed while a turn runs are held in the shared buffer of `bravebot_agent`, which both
+/// the terminal and the desktop bridge use. The buffer is shared between the two threads rather
+/// than sent down a channel because a queued prompt can be taken back (`Interjections::forget_last`).
+pub use bravebot_agent::interjections::Interjections;
 
 /// What a worker sends the main thread.
 #[derive(Debug)]
@@ -143,6 +93,8 @@ pub enum ToMain {
     Notice(String),
     /// What the model has written since the last frame. No reply.
     Streaming(String),
+    /// What the model has thought since the last frame. No reply.
+    Thinking(String),
     /// The call the model is writing, by the word its row will start with, or none once the
     /// attempt writing it was thrown away. No reply.
     Composing(Option<&'static str>),
@@ -436,6 +388,10 @@ impl Reporter for RemoteReporter {
         let _ = self.outbound.send(ToMain::Streaming(text));
     }
 
+    fn thinking(&mut self, text: String) {
+        let _ = self.outbound.send(ToMain::Thinking(text));
+    }
+
     fn composing(&mut self, call: Option<&'static str>) {
         let _ = self.outbound.send(ToMain::Composing(call));
     }
@@ -543,6 +499,7 @@ mod tests {
             credentials: Vec::new(),
             may_always: false,
             record: None,
+            may_edit: false,
         }
     }
 
@@ -749,6 +706,29 @@ mod tests {
         responder.join().expect("responder finished");
     }
 
+    /// WRITE-7: the text a person saved from their editor travels back to the worker as the answer
+    /// to the write, since the worker is where the turn puts the question again. It is no approval.
+    #[test]
+    fn saved_text_travels_back_to_the_worker_and_approves_nothing() {
+        let (outbound, inbound) = channel::<ToMain>();
+        let (answer_tx, answer_rx) = channel();
+
+        let responder = thread::spawn(move || {
+            inbound.recv().expect("a write question arrived");
+            answer_tx
+                .send(Reply::Write(WriteDecision::edit(
+                    "the saved text\n".to_string(),
+                )))
+                .expect("answered");
+        });
+
+        let mut confirmer = RemoteConfirmer::new(outbound, answer_rx, Interjections::new());
+        let write = confirmer.confirm_write(&request());
+        assert!(!write.approved());
+        assert_eq!(write.edited(), Some("the saved text\n"));
+        responder.join().expect("responder finished");
+    }
+
     /// A yes to a server's list is not a yes to a call of one of its tools, nor the other way round:
     /// one promotes the server's words and the other sends the planner's to it.
     #[test]
@@ -853,6 +833,7 @@ mod tests {
             expects: "the release notes".into(),
             content: "the notes".into(),
             lines: 1,
+            hidden: 0,
             verdict: bravebot_core::vetting::Verdict::Safe,
             reason: None,
             picture: None,
@@ -1153,6 +1134,7 @@ mod tests {
                     ToMain::Narration(_) => seen.push("narration"),
                     ToMain::Notice(_) => seen.push("notice"),
                     ToMain::Streaming(_) => seen.push("streaming"),
+                    ToMain::Thinking(_) => seen.push("thinking"),
                     ToMain::Composing(_) => seen.push("composing"),
                     ToMain::Started(_) => seen.push("started"),
                     ToMain::Finished(_) => seen.push("finished"),
@@ -1189,6 +1171,7 @@ mod tests {
         reporter.narration("about to write".into());
         reporter.notice("AGENTS.md was not loaded".into());
         reporter.streaming("about".into());
+        reporter.thinking("weighing it".into());
         reporter.composing(Some("Write"));
         reporter.delegate_waiting(DelegateId::nth(1));
         reporter.tool_started(Activity::running("Write", "notes.md"));
@@ -1206,6 +1189,7 @@ mod tests {
                 "narration",
                 "notice",
                 "streaming",
+                "thinking",
                 "composing",
                 "delegate waiting",
                 "started",

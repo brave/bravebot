@@ -81,7 +81,7 @@ fn asking(tool: &str, count: usize) -> Asking {
     static ASKED: AtomicU64 = AtomicU64::new(0);
     let mut asking = bravebot_core::ask::asking(&Series::new(vec![Question::new(
         t!(repeated_call_header),
-        t!(repeated_call_reached, tool = tool, count = count).to_string(),
+        t!(repeated_call_reached, tool = tool, count = count),
         vec![
             Choice::new(t!(repeated_call_refuse), None),
             Choice::new(t!(repeated_call_run_it), None),
@@ -153,6 +153,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ASK-9: a repeated call runs only on the person's say, so its question waits for them.
+    /// Rejects: a flag set on every question the driver puts.
+    #[test]
+    fn the_repeated_call_question_is_never_closed_when_nobody_answers() {
+        assert!(!asking("read_file", 3).closes_when_idle);
+    }
 
     fn call(name: &str, arguments: &str) -> ToolCall {
         serde_json::from_value(serde_json::json!({

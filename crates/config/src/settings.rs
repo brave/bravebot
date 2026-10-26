@@ -37,6 +37,10 @@
 //!   that a person asking for none of it says so once in a file rather than in prose an agent
 //!   has to be reading at the moment it writes one. Its text is stated to the planner, so it is read
 //!   from the person's own files alone, as `references` is.
+//! - `language`, this program's own: the catalog the interface is read in, as a locale tag such as
+//!   `fr` or `fr-CA`, or `auto` for what the environment says. It is read from the person's own
+//!   file alone and before the command line is read, so a file the command line names cannot carry
+//!   it: see [`Settings::language`].
 //! - `vetting`, this program's own, since nothing else has the idea. It is the one block read from
 //!   the **home layer alone**: see [`Settings::auto_vetting`].
 //!
@@ -74,6 +78,10 @@
 //! - `model` picks which of those providers answers, so a line in a checkout's file could direct
 //!   the person's traffic through a backend they never chose. It is read from the home layer
 //!   alone, for the same reason.
+//! - `retentionDays` says how long session records, language server indexes and findings are kept
+//!   before startup removes them, so a line in a checkout's file could have the person's own
+//!   records deleted by opening it. It is read from the home layer alone, and every other layer
+//!   naming it is reported rather than obeyed. See [`Retention`] and `docs/specs/state-directory.md`.
 //!
 //! Two more names in that block are read from every layer and merged unlike anything else here.
 //! `permissions.readsStayInWorkspace` and `permissions.bypassUnreachable` only ever refuse, so a
@@ -89,6 +97,7 @@
 use crate::sandbox::{SANDBOX_BLOCK, Stated};
 use bravebot_sandbox::SandboxMode;
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -124,6 +133,25 @@ const PROVIDER_BLOCK: &str = "provider";
 /// parse of the merged root both spell it here.
 const REFERENCES_BLOCK: &str = "references";
 
+/// The key naming how many days the state directory keeps a record, which the home layer alone may
+/// state.
+///
+/// Named as a constant because the per-layer look that removes it from a checkout's file, the read
+/// of the home layer's value and the list of keys this build reads all spell it here.
+const RETENTION_KEY: &str = "retentionDays";
+
+/// The key that turns crash reports off, which only the person's own settings file is asked.
+///
+/// Named as a constant because the read of the home layer's value and the list of keys this build
+/// reads both spell it here.
+const CRASH_REPORTS_KEY: &str = "crashReports";
+
+/// The number of days a record is kept when no `retentionDays` is stated.
+///
+/// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
+/// since [`Retention::Days`] cannot hold zero.
+pub const DEFAULT_RETENTION_DAYS: NonZeroU32 = NonZeroU32::new(30).unwrap();
+
 /// The block holding the rules and the two keys that refuse without naming what they refuse.
 ///
 /// Named as a constant for the reason [`VETTING_BLOCK`] is: the rule lists and [`narrowing_stated`]
@@ -138,9 +166,12 @@ const PERMISSIONS_BLOCK: &str = "permissions";
 const READ_KEYS: &[&str] = &[
     "advisorModel",
     "agent",
+    "askIdleSeconds",
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
+    CRASH_REPORTS_KEY,
+    "deepLinks",
     "deferMcpToolsAbove",
     "download",
     "editorMode",
@@ -149,15 +180,21 @@ const READ_KEYS: &[&str] = &[
     "fallbackModel",
     crate::git_identities::BLOCK,
     "keybindings",
+    "language",
     "limit",
+    "maxRunningDelegates",
     "mcp",
     "mcpServers",
     "model",
+    "notificationCondition",
+    "notificationMethod",
+    "planModel",
     PERMISSIONS_BLOCK,
     "processorModel",
     "promptCacheTtl",
     PROVIDER_BLOCK,
     REFERENCES_BLOCK,
+    RETENTION_KEY,
     "run",
     SANDBOX_BLOCK,
     "search",
@@ -256,6 +293,10 @@ pub struct Settings {
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
     summary_model: Option<String>,
+    /// What the top-level `planModel` key named, if it named anything.
+    ///
+    /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
+    plan_model: Option<String>,
     /// What the top-level `processorModel` key named, if it named anything but `inherit`.
     ///
     /// The name as the file spelled it. Resolving a tier word is the configuration's to do.
@@ -307,6 +348,51 @@ pub struct Settings {
     /// `None` is the built-in idle time, which belongs to the interface that decides when a recap
     /// is owed, for the reason [`Settings::wheel_rows`] gives about its own count.
     away_summary_idle_seconds: Option<u64>,
+    /// What the top-level `askIdleSeconds` key said, if it said a whole positive count.
+    ///
+    /// `None` is a question that waits for as long as it takes, which is what a session does when
+    /// nobody has said otherwise (ASK-9). It is read from the layers entitled to say it only: see
+    /// `ask_idle_ignored`.
+    ask_idle_seconds: Option<u64>,
+    /// The layers that named `askIdleSeconds` and were not obeyed, weakest first.
+    ///
+    /// Kept because a question closed on a clock is one the person was not asked, which is what
+    /// `vetting.auto` is kept from a checkout for: a file that arrived with a clone does not get to
+    /// answer for the person.
+    ask_idle_ignored: Vec<PathBuf>,
+    /// What the top-level `maxRunningDelegates` key said, if it said a whole positive count.
+    ///
+    /// `None` is the built-in bound, which belongs to the kernel that holds a turn's tree of
+    /// delegates, for the reason [`Settings::wheel_rows`] gives about its own count.
+    max_running_delegates: Option<u32>,
+    /// What the top-level `notificationMethod` key named, if it named anything.
+    ///
+    /// The word as the file spelled it, for the reason `editor_mode` above keeps one: which words
+    /// name a method is the interface's to say, since it is the one that writes to the terminal.
+    notification_method: Option<String>,
+    /// What the top-level `notificationCondition` key named, if it named anything, kept as
+    /// [`Settings::notification_method`] keeps its word.
+    notification_condition: Option<String>,
+    /// What the home layer's `retentionDays` said, if it said a whole number of days above zero.
+    ///
+    /// `None` is the built-in period, which [`Settings::retention`] supplies, and it is also what a
+    /// value the key held in a shape this cannot read leaves: that case is reported in
+    /// [`Settings::retention_unreadable`] and pauses the sweep rather than falling back to the
+    /// built-in period. Read from the home layer alone, so [`Settings::layered`] removes the key
+    /// from every other layer before the merge.
+    retention_days: Option<NonZeroU32>,
+    /// The layers that named `retentionDays` and were not obeyed, weakest first.
+    ///
+    /// Kept because a checkout's file choosing when the person's own records are deleted is the
+    /// case this key is read from the home layer alone to prevent.
+    retention_ignored: Vec<PathBuf>,
+    /// The home layer's file, when the period it states cannot be determined.
+    ///
+    /// Either the file is there and could not be read as a settings document, or its
+    /// `retentionDays` is not a whole number of days above zero. A sweep that guessed the period
+    /// would delete on a figure the person did not choose, so [`Settings::retention`] answers
+    /// [`Retention::Paused`] while this is not empty.
+    retention_unreadable: Vec<PathBuf>,
     /// What `vetting.auto` said, where the layer that said it was entitled to.
     ///
     /// Read from the **home** layer and no other, which is why [`Settings::layered`] settles this
@@ -403,6 +489,11 @@ pub struct Settings {
     /// Kept for the same reason: the model it names is sent the conversation to summarise and the
     /// exchange to judge, which makes it a destination, and a checkout cannot choose one.
     summary_ignored: Vec<PathBuf>,
+    /// The layers that named `planModel` and were not obeyed, weakest first.
+    ///
+    /// Kept for the same reason: the model it names is sent the whole conversation while the
+    /// session is in plan mode, which makes it a destination, and a checkout cannot choose one.
+    plan_ignored: Vec<PathBuf>,
     /// The layers that named `processorModel` and were not obeyed, weakest first.
     ///
     /// Kept for the same reason: the model it names is sent the files a processor reads, which
@@ -423,6 +514,14 @@ pub struct Settings {
     /// Kept because a style's words open the system prompt, so which one a session starts in is the
     /// person's to say and not a checkout's.
     style_ignored: Vec<PathBuf>,
+    /// The catalog the person's own file asked the interface to be read in, as the file spelled it.
+    language: Option<String>,
+    /// The layers that named `language` and were not obeyed, weakest first.
+    ///
+    /// Kept because the interface is in one language for the whole process and is chosen before
+    /// the command line is read, so the one file that can say which is the person's own: a
+    /// checkout's file would be choosing the language for whoever opened the checkout.
+    language_ignored: Vec<PathBuf>,
     /// The layers that named `references` and were not obeyed, weakest first.
     ///
     /// Kept because an entry makes a directory reachable and puts its description in front of the
@@ -550,9 +649,28 @@ pub struct Settings {
     /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
     /// mouse to the terminal.
     tui_mouse: Option<bool>,
+    /// What `deepLinks` said, if it said a boolean. `Some(false)` is a `bravebot://` link being
+    /// refused by the handler (LINK-6).
+    deep_links: Option<bool>,
     providers: Vec<crate::provider::Provider>,
+    /// The models a `provider` entry named `chatgpt` names where it states no endpoint, which is
+    /// the ChatGPT account's roster rather than a gateway's.
+    chatgpt_models: Vec<crate::provider::AccountModel>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
+}
+
+/// How long the state directory keeps a session record, a language server index and a findings file.
+///
+/// The age of a file is its modification time and nothing else, so no byte a file holds decides
+/// whether it is kept. One day is the least a period can be, which is what protects whatever was
+/// written recently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retention {
+    /// Remove what has not been written for this many days.
+    Days(NonZeroU32),
+    /// The period cannot be determined, so nothing is removed.
+    Paused,
 }
 
 /// The `attribution` block: what a commit message or a pull request this program writes may carry.
@@ -803,6 +921,47 @@ impl Settings {
         self
     }
 
+    /// The language the person's own settings file asks the interface to be read in, and nothing
+    /// else the files say.
+    ///
+    /// Read ahead of the command line, because every sentence the program says after that is in the
+    /// catalog this chooses and the first of them can be a refusal of a flag. Only the home layer
+    /// exists for it: no checkout is read and no file the command line names is known yet, which is
+    /// also why neither of them may carry the key (LOCALE-8).
+    pub fn written_language() -> Option<String> {
+        Self::language_in(home())
+    }
+
+    /// As [`Settings::written_language`], for a named home, so a test needs no ambient one.
+    ///
+    /// The one key out of the one file, through the reader every layer goes through, so the file is
+    /// held to the same bound and the document clears itself when this returns. Nothing else the
+    /// file says is built: this runs for every command, before the ones that need the rest.
+    fn language_in(home: Option<PathBuf>) -> Option<String> {
+        let document = read(&user_settings_file(&home?))?;
+        word(&document.root, "language")
+    }
+
+    /// What the person's own settings file says about crash reports, and nothing else the files say.
+    ///
+    /// A boolean and nothing else: the key exists to turn reports off, so a quoted `"false"` is
+    /// absence and reports stay on. Only the home layer is read. A checkout's file is a thing a
+    /// person did not write, so it can neither turn reports off for them nor turn them back on
+    /// after they did (CRASH-4). Read before the first panic could happen, which is before the
+    /// merged layers exist.
+    pub fn written_crash_reports() -> Option<bool> {
+        Self::crash_reports_in(home())
+    }
+
+    /// As [`Settings::written_crash_reports`], for a named home, so a test needs no ambient one.
+    fn crash_reports_in(home: Option<PathBuf>) -> Option<bool> {
+        let document = read(&user_settings_file(&home?))?;
+        match document.root.get(CRASH_REPORTS_KEY) {
+            Some(serde_json::Value::Bool(on)) => Some(*on),
+            _ => None,
+        }
+    }
+
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
     /// no ambient ones.
     ///
@@ -899,9 +1058,16 @@ impl Settings {
         let mut advisor_ignored = Vec::new();
         let mut fallback_ignored = Vec::new();
         let mut summary_ignored = Vec::new();
+        let mut plan_ignored = Vec::new();
         let mut processor_ignored = Vec::new();
         let mut agent_ignored = Vec::new();
         let mut style_ignored = Vec::new();
+        let mut language_ignored = Vec::new();
+        let mut ask_idle_ignored = Vec::new();
+        // Settled per layer for the reason `model` is: how long the person's own records are kept is
+        // theirs to state, and the merge keeps whichever file spoke last.
+        let mut retention_ignored = Vec::new();
+        let mut retention_unreadable = Vec::new();
         let mut references_ignored = Vec::new();
         let mut attribution_ignored = Vec::new();
         let mut misshapen = Vec::new();
@@ -953,11 +1119,30 @@ impl Settings {
             if found.contains(&path) {
                 continue;
             }
+            let own = Some(&path) == home_layer.as_ref();
             let Some(mut root) = read(&path) else {
+                // A person's own file that is there and cannot be read may state a period this
+                // run would otherwise replace with the built-in one, so the sweep waits. A name
+                // that leads nowhere, as a link to a file that is not there does, states none.
+                if own
+                    && !std::fs::metadata(&path)
+                        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+                {
+                    retention_unreadable.push(path.clone());
+                }
                 continue;
             };
-            let own = Some(&path) == home_layer.as_ref();
             let named_here = Some(&path) == named_path.as_ref();
+            if !own && root.remove(RETENTION_KEY) {
+                retention_ignored.push(path.clone());
+            }
+            if own
+                && root
+                    .get(RETENTION_KEY)
+                    .is_some_and(|stated| retention_days(stated).is_none())
+            {
+                retention_unreadable.push(path.clone());
+            }
             if !own && !named_here {
                 // The keys that pick a backend are the person's to pick, not a checkout's: removed
                 // here rather than read and dropped later, because the merge unions every name a
@@ -977,6 +1162,9 @@ impl Settings {
                 if root.remove("summaryModel") {
                     summary_ignored.push(path.clone());
                 }
+                if root.remove("planModel") {
+                    plan_ignored.push(path.clone());
+                }
                 if root.remove("processorModel") {
                     processor_ignored.push(path.clone());
                 }
@@ -986,6 +1174,11 @@ impl Settings {
                 if root.remove("style") {
                     style_ignored.push(path.clone());
                 }
+            }
+            // Read before the command line is, so the file a flag names is not yet known to the
+            // reader that answers for the interface: the home layer alone says which language.
+            if !own && root.remove("language") {
+                language_ignored.push(path.clone());
             }
             // Entitled the way an allow rule is rather than the way `model` is: a named file that
             // resolves inside the workspace is a checkout's file, and a reference makes a
@@ -998,6 +1191,11 @@ impl Settings {
             // planner's standing instructions, so a checkout's file cannot put it there.
             if !granting && root.remove("attribution") {
                 attribution_ignored.push(path.clone());
+            }
+            // The same entitlement, for the reason `vetting.auto` has it: a clock that closes the
+            // person's questions is theirs to set, and not the checkout's.
+            if !granting && root.remove("askIdleSeconds") {
+                ask_idle_ignored.push(path.clone());
             }
             if root.contains_key(VETTING_BLOCK) {
                 match own {
@@ -1239,9 +1437,14 @@ impl Settings {
         settings.advisor_ignored = advisor_ignored;
         settings.fallback_ignored = fallback_ignored;
         settings.summary_ignored = summary_ignored;
+        settings.plan_ignored = plan_ignored;
         settings.processor_ignored = processor_ignored;
         settings.agent_ignored = agent_ignored;
         settings.style_ignored = style_ignored;
+        settings.language_ignored = language_ignored;
+        settings.ask_idle_ignored = ask_idle_ignored;
+        settings.retention_ignored = retention_ignored;
+        settings.retention_unreadable = retention_unreadable;
         settings.references_ignored = references_ignored;
         settings.attribution_ignored = attribution_ignored;
         // `merged` goes here, and clears what every layer stated as it does: the settings hold what
@@ -1291,10 +1494,11 @@ impl Settings {
             advisor_model: word(root, "advisorModel"),
             fallback_model: word(root, "fallbackModel"),
             summary_model: word(root, "summaryModel"),
+            plan_model: word(root, "planModel"),
             // `inherit` is how other agents' definitions name no model, so it reads back as none,
             // as it does in a definition (DELEGATE-22).
             processor_model: word(root, "processorModel")
-                .filter(|name| !name.eq_ignore_ascii_case("inherit")),
+                .and_then(|name| processor_model_named(&name)),
             agent: word(root, "agent"),
             references_ignored: Vec::new(),
             attribution_ignored: Vec::new(),
@@ -1345,6 +1549,23 @@ impl Settings {
                 .get("awaySummaryIdleSeconds")
                 .and_then(serde_json::Value::as_u64)
                 .filter(|seconds| *seconds > 0),
+            ask_idle_seconds: root
+                .get("askIdleSeconds")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|seconds| *seconds > 0),
+            ask_idle_ignored: Vec::new(),
+            // A count past what a `u32` holds is more delegates than a turn could start, which is
+            // no bound at all, so it is read as the largest the kernel counts rather than dropped.
+            max_running_delegates: root
+                .get("maxRunningDelegates")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|count| *count > 0)
+                .map(|count| u32::try_from(count).unwrap_or(u32::MAX)),
+            notification_method: word(root, "notificationMethod"),
+            notification_condition: word(root, "notificationCondition"),
+            retention_days: root.get(RETENTION_KEY).and_then(retention_days),
+            retention_ignored: Vec::new(),
+            retention_unreadable: Vec::new(),
             // Read here so one file's worth can be parsed on its own, and overwritten by
             // [`Settings::layered`], which is the only caller that knows which layer this came
             // from and so the only one entitled to answer.
@@ -1383,6 +1604,7 @@ impl Settings {
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
+            deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
             run_network: match network_word(root) {
@@ -1414,6 +1636,7 @@ impl Settings {
             git_identities_ignored: Vec::new(),
             git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
+            chatgpt_models: crate::provider::account_models(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
             provider_ignored: Vec::new(),
@@ -1421,10 +1644,13 @@ impl Settings {
             advisor_ignored: Vec::new(),
             fallback_ignored: Vec::new(),
             summary_ignored: Vec::new(),
+            plan_ignored: Vec::new(),
             processor_ignored: Vec::new(),
             agent_ignored: Vec::new(),
             style: word(root, "style"),
             style_ignored: Vec::new(),
+            language: word(root, "language"),
+            language_ignored: Vec::new(),
         }
     }
 
@@ -1488,6 +1714,15 @@ impl Settings {
     /// [`Settings::model`] is.
     pub fn summary_model(&self) -> Option<&str> {
         self.summary_model.as_deref()
+    }
+
+    /// The model the settings in force name for a turn that begins in plan mode, if they name one
+    /// (BACKEND-56).
+    ///
+    /// Read from the person's own file and the file `--settings` names only, for the reason
+    /// [`Settings::model`] is.
+    pub fn plan_model(&self) -> Option<&str> {
+        self.plan_model.as_deref()
     }
 
     /// The model the settings in force name for isolated processors, if they name one.
@@ -1601,6 +1836,54 @@ impl Settings {
     /// absence, and so is anything that is not a whole count.
     pub fn away_summary_idle_seconds(&self) -> Option<u64> {
         self.away_summary_idle_seconds
+    }
+
+    /// The most delegates the settings in force let one turn have running at once, if they say.
+    ///
+    /// `None` where nobody named a usable count, which is the built-in bound: that belongs to the
+    /// kernel that holds the tree, and answering with it here would put a second copy of it in
+    /// this crate. Zero would let a turn start no delegate at all, which is what turning
+    /// delegation off is for, so it is absence, and so is anything that is not a whole count.
+    pub fn max_running_delegates(&self) -> Option<u32> {
+        self.max_running_delegates
+    }
+
+    /// The way the settings in force ask the terminal to be told a turn ended or a question is
+    /// waiting, if they named one.
+    ///
+    /// The word the file spelled, unrecognised words and all, so the interface that writes to the
+    /// terminal decides which words name a method and reports one it does not know.
+    pub fn notification_method(&self) -> Option<&str> {
+        self.notification_method.as_deref()
+    }
+
+    /// When the settings in force ask for that notice, if they named a condition, as the word the
+    /// file spelled.
+    pub fn notification_condition(&self) -> Option<&str> {
+        self.notification_condition.as_deref()
+    }
+
+    /// How long the state directory keeps a session record, a language server index and a findings
+    /// file before startup removes it.
+    ///
+    /// The home layer's `retentionDays`, or [`DEFAULT_RETENTION_DAYS`] where it states none. A home
+    /// file that cannot be read, or a value in it that is not a whole number of days above zero,
+    /// answers [`Retention::Paused`]: the period cannot be determined, so nothing is removed.
+    pub fn retention(&self) -> Retention {
+        if !self.retention_unreadable.is_empty() {
+            return Retention::Paused;
+        }
+        Retention::Days(self.retention_days.unwrap_or(DEFAULT_RETENTION_DAYS))
+    }
+
+    /// The files that named `retentionDays` from a layer not entitled to, weakest first.
+    pub fn retention_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.retention_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The home layer's file when [`Settings::retention`] is paused for want of a readable period.
+    pub fn retention_unreadable(&self) -> impl Iterator<Item = &Path> {
+        self.retention_unreadable.iter().map(PathBuf::as_path)
     }
 
     /// What `vetting.auto` said in the home layer, if it said anything.
@@ -1979,6 +2262,12 @@ impl Settings {
         self.tui_mouse
     }
 
+    /// Whether `deepLinks` said anything: `Some(false)` is a person who does not want a link to
+    /// open a session (LINK-6), and absent is on.
+    pub fn deep_links(&self) -> Option<bool> {
+        self.deep_links
+    }
+
     /// Whether anything was set at all.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
@@ -1997,6 +2286,12 @@ impl Settings {
             && self.update_check.is_none()
             && self.away_summary_enabled.is_none()
             && self.away_summary_idle_seconds.is_none()
+            && self.max_running_delegates.is_none()
+            && self.notification_method.is_none()
+            && self.notification_condition.is_none()
+            && self.retention_days.is_none()
+            && self.retention_ignored.is_empty()
+            && self.retention_unreadable.is_empty()
             && self.vetting.is_none()
             && self.narrowing.is_empty()
             // A key named as something other than a boolean said something too, and `doctor` names
@@ -2016,6 +2311,7 @@ impl Settings {
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.tui_mouse.is_none()
+            && self.deep_links.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
             && self.run_network_unreadable.is_empty()
@@ -2029,6 +2325,7 @@ impl Settings {
             && self.git_identities_ignored.is_empty()
             && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
+            && self.chatgpt_models.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
             // settings.json" one line above the path of the file that holds it.
@@ -2052,12 +2349,28 @@ impl Settings {
             && self.advisor_ignored.is_empty()
             && self.fallback_ignored.is_empty()
             && self.summary_ignored.is_empty()
+            && self.plan_ignored.is_empty()
             && self.processor_ignored.is_empty()
             && self.agent_ignored.is_empty()
             && self.style_ignored.is_empty()
             && self.style.is_none()
+            && self.language_ignored.is_empty()
+            && self.language.is_none()
+            && self.ask_idle_ignored.is_empty()
+            && self.ask_idle_seconds.is_none()
             && self.references_ignored.is_empty()
             && self.attribution_ignored.is_empty()
+            // A file that holds only a reference, or only a name `doctor` reports as ignored, is
+            // listed as a settings layer a few lines under this answer, so it cannot be absence.
+            && self.references.is_empty()
+            && self.references_unread.is_empty()
+            && self.network_ignored.is_empty()
+            && self.advisor_model.is_none()
+            && self.fallback_model.is_none()
+            && self.summary_model.is_none()
+            && self.plan_model.is_none()
+            && self.processor_model.is_none()
+            && self.agent.is_none()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -2068,6 +2381,14 @@ impl Settings {
     /// The gateways these settings configured, in the order they were listed.
     pub fn providers(&self) -> &[crate::provider::Provider] {
         &self.providers
+    }
+
+    /// The models the ChatGPT account is offered as, where a `provider` entry named `chatgpt`
+    /// states no endpoint and names some ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    ///
+    /// Read from the layers a `provider` block is read from, since it is the same block.
+    pub fn chatgpt_models(&self) -> &[crate::provider::AccountModel] {
+        &self.chatgpt_models
     }
 
     /// The files that named a `provider` block from a layer not entitled to, weakest first.
@@ -2098,6 +2419,12 @@ impl Settings {
     pub fn summary_ignored(&self) -> impl Iterator<Item = &Path> {
         self.summary_ignored.iter().map(PathBuf::as_path)
     }
+
+    /// The files that named `planModel` from a layer not entitled to, weakest first.
+    pub fn plan_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.plan_ignored.iter().map(PathBuf::as_path)
+    }
+
     /// The files that named `processorModel` from a layer not entitled to, weakest first.
     pub fn processor_ignored(&self) -> impl Iterator<Item = &Path> {
         self.processor_ignored.iter().map(PathBuf::as_path)
@@ -2111,6 +2438,36 @@ impl Settings {
     /// The files that named `style` from a layer not entitled to, weakest first.
     pub fn style_ignored(&self) -> impl Iterator<Item = &Path> {
         self.style_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// The language the person's own file asked the interface to be read in, as the file spelled it
+    /// (LOCALE-8).
+    ///
+    /// A locale tag or `auto`, neither of which is matched to a catalog here: `bravebot-i18n` owns
+    /// which catalogs shipped.
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
+    /// The files that named `language` from a layer other than the person's own, weakest first.
+    pub fn language_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.language_ignored.iter().map(PathBuf::as_path)
+    }
+
+    /// How many seconds a question the planner puts waits with no key pressed before it is closed
+    /// without an answer, if the settings in force said (ASK-9).
+    ///
+    /// `None` where nobody named a usable count, which is a question that waits for as long as it
+    /// takes. Zero would close every question before it could be read, so it is absence, and so is
+    /// anything that is not a whole count. A checkout's file is never obeyed: see
+    /// [`Settings::ask_idle_ignored`].
+    pub fn ask_idle_seconds(&self) -> Option<u64> {
+        self.ask_idle_seconds
+    }
+
+    /// The files that named `askIdleSeconds` from a layer not entitled to, weakest first.
+    pub fn ask_idle_ignored(&self) -> impl Iterator<Item = &Path> {
+        self.ask_idle_ignored.iter().map(PathBuf::as_path)
     }
 
     /// The files that named `agent` from a layer not entitled to, weakest first.
@@ -2205,10 +2562,13 @@ impl Settings {
             .chain(self.advisor_model.is_some().then_some("advisorModel"))
             .chain(self.fallback_model.is_some().then_some("fallbackModel"))
             .chain(self.summary_model.is_some().then_some("summaryModel"))
+            .chain(self.plan_model.is_some().then_some("planModel"))
             .chain(self.processor_model.is_some().then_some("processorModel"))
             .chain(self.agent.is_some().then_some("agent"))
             .chain(self.effort.is_some().then_some("effort"))
             .chain(self.style.is_some().then_some("style"))
+            .chain(self.ask_idle_seconds.is_some().then_some("askIdleSeconds"))
+            .chain(self.language.is_some().then_some("language"))
             .chain(self.prompt_cache_ttl.is_some().then_some("promptCacheTtl"))
             .chain(self.editor_mode.is_some().then_some("editorMode"))
             .chain(self.limit.is_some().then_some("limit"))
@@ -2230,6 +2590,22 @@ impl Settings {
                     .is_some()
                     .then_some("awaySummaryIdleSeconds"),
             )
+            .chain(
+                self.max_running_delegates
+                    .is_some()
+                    .then_some("maxRunningDelegates"),
+            )
+            .chain(
+                self.notification_method
+                    .is_some()
+                    .then_some("notificationMethod"),
+            )
+            .chain(
+                self.notification_condition
+                    .is_some()
+                    .then_some("notificationCondition"),
+            )
+            .chain(self.retention_days.is_some().then_some(RETENTION_KEY))
             .chain(self.vetting.is_some().then_some("vetting.auto"))
             .chain(self.narrowing.named())
             .chain(
@@ -2270,6 +2646,7 @@ impl Settings {
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
+            .chain(self.deep_links.is_some().then_some("deepLinks"))
             .chain(self.env.keys().map(String::as_str))
     }
 
@@ -2377,6 +2754,17 @@ pub fn check_document(path: &Path) -> Result<(), NotADocument> {
     Document::parse(&mut text).map(|_| ())
 }
 
+/// How many days a stored record is kept, as `retentionDays` states it.
+///
+/// A whole number above zero. Zero would keep nothing, which is a different request from keeping
+/// what was written today, and every shape that is not a count (a string, a fraction, a negative
+/// number, `null`) is refused rather than coerced. A count past what a `u32` holds is read as the
+/// largest one, which is longer than a machine is used.
+fn retention_days(stated: &serde_json::Value) -> Option<NonZeroU32> {
+    let days = stated.as_u64()?;
+    NonZeroU32::new(u32::try_from(days).unwrap_or(u32::MAX))
+}
+
 impl Document {
     /// The document some text holds, or which way the text is not one.
     fn of(text: &str) -> Result<Self, NotADocument> {
@@ -2478,6 +2866,18 @@ impl Drop for Document {
         crate::scrub_document(&mut self.root);
         self.displaced.iter_mut().for_each(crate::scrub_value);
     }
+}
+
+/// The model `processorModel` or `--processor-model` names, as written but for its edges, or `None`
+/// where it names none.
+///
+/// `inherit` is how other agents' definitions name no model, so it reads back as none, as it does
+/// in a definition (DELEGATE-22). One place for the setting and the flag, so the two cannot differ
+/// on which words name nothing.
+pub fn processor_model_named(word: &str) -> Option<String> {
+    Some(word.trim())
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("inherit"))
+        .map(str::to_string)
 }
 
 /// A top-level key holding one word, or `None` where the file said nothing usable.
@@ -3347,6 +3747,10 @@ fn slash_anchor(file: &Path, a_checkouts_file: bool, workspace: Option<&Path>) -
 /// ([PERM-3](../../../docs/specs/permissions.md#PERM-3)), and the rule language anchors that at one
 /// directory it is handed for every rule it reads, so a rule from any other file is told where it
 /// starts before the layers merge. Any other rule, and any other specifier, comes back as it was.
+///
+/// The specifier is taken as written, not trimmed. Whitespace at an end of a path specifier is what
+/// the rule language reports, and it cannot once the rewrite has trimmed it away: `/x ` is spelled
+/// `./x ` and `/ x` is not a single-slash rule.
 fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     let Some((name, rest)) = rule.trim().split_once('(') else {
         return rule.to_string();
@@ -3354,7 +3758,6 @@ fn anchor_slash_rule(rule: &str, anchor: &str) -> String {
     let Some(specifier) = rest.strip_suffix(')') else {
         return rule.to_string();
     };
-    let specifier = specifier.trim();
     let name = name.trim_end();
     let mut characters = specifier.chars();
     let single_slash =
@@ -3542,14 +3945,38 @@ pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME", "USERPROFILE"];
 #[cfg(not(windows))]
 pub(crate) const PROFILE_VARIABLES: &[&str] = &["HOME"];
 
-/// The global state directory, or `None` when the platform names no profile directory to look in.
+/// The variable that names the state directory itself, ahead of the profile directory's.
+///
+/// Spelled here for the same reason as [`PROFILE_VARIABLES`]. It is read from the environment alone
+/// and never from a settings file, so a checkout cannot move the one directory whose contents are
+/// trusted. A value that is empty or not an absolute path names nothing and is passed over.
+pub(crate) const STATE_VARIABLE: &str = "BRAVEBOT_HOME";
+
+/// The global state directory, or `None` when nothing names a directory to look in.
 ///
 /// No fallback to a relative `.bravebot`, which is the project layer and reached deliberately rather
 /// than by a home directory going missing. Resolving the weakest layer to the strongest one's
 /// location would silently read a checkout's file as though a person had put it in their own
 /// directory.
 pub(crate) fn home() -> Option<PathBuf> {
-    home_named(PROFILE_VARIABLES.iter().map(std::env::var_os))
+    state_named(
+        std::env::var_os(STATE_VARIABLE),
+        PROFILE_VARIABLES.iter().map(std::env::var_os),
+    )
+}
+
+/// The same answer from the values, `stated` being what [`STATE_VARIABLE`] holds.
+///
+/// The directory it names is the answer as it stands, and a value that names nothing falls through
+/// to the profile directory's, so no location is invented where none was stated.
+fn state_named(
+    stated: Option<std::ffi::OsString>,
+    named: impl IntoIterator<Item = Option<std::ffi::OsString>>,
+) -> Option<PathBuf> {
+    stated
+        .map(PathBuf::from)
+        .filter(|stated| stated.is_absolute())
+        .or_else(|| home_named(named))
 }
 
 /// The same answer, from the values rather than from the variables.
@@ -3767,6 +4194,62 @@ mod tests {
             home_named([named("/somebody"), named("C:\\Users\\someone")]),
             Some(PathBuf::from("/somebody/.bravebot"))
         );
+    }
+
+    /// STATE-2: a directory a person names in `BRAVEBOT_HOME` is the one the settings are read from,
+    /// answering before `HOME`, and is the directory itself. Joined onto, the settings of a job given
+    /// its own state would be looked for in a hidden directory nobody made, and where `HOME` answered
+    /// first they would be the person's own.
+    #[test]
+    fn a_directory_named_in_the_environment_is_the_one_settings_are_read_from() {
+        #[cfg(windows)]
+        const NAMED: &str = "C:\\srv\\ci\\state";
+        #[cfg(not(windows))]
+        const NAMED: &str = "/srv/ci/state";
+        assert_eq!(
+            state_named(named(NAMED), [named("/somebody")]),
+            Some(PathBuf::from(NAMED))
+        );
+    }
+
+    /// STATE-2: a directory a person names is the one settings are read from byte for byte, and one
+    /// whose name is not UTF-8 is not the directory its U+FFFD rendering spells. A resolver that went
+    /// through text would read the settings of the second, or pass the first over and read `HOME`'s,
+    /// and settings decide which model answers and which commands run without being asked about.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_that_is_not_text_is_the_one_settings_are_read_from_and_not_its_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let invalid = OsStr::from_bytes(b"/srv/state-\xff");
+        let lookalike = OsStr::new("/srv/state-\u{FFFD}");
+        let answer =
+            |stated: &OsStr| state_named(Some(stated.to_os_string()), [named("/somebody")]);
+
+        assert_eq!(answer(invalid), Some(PathBuf::from(invalid)));
+        assert_eq!(answer(lookalike), Some(PathBuf::from(lookalike)));
+        assert_ne!(answer(invalid), answer(lookalike));
+    }
+
+    /// STATE-2: a value that is empty or not an absolute path names nothing and is passed over, so
+    /// `HOME` answers as it would have, and a machine that names nothing else has no directory. A
+    /// relative value would otherwise read settings from under wherever the process started, which
+    /// can be a checkout that supplied them.
+    #[test]
+    fn a_value_that_names_no_directory_is_passed_over() {
+        for value in ["", "state", "./state", "../state", "~/state", "$HOME/state"] {
+            assert_eq!(
+                state_named(named(value), [named("/somebody")]),
+                Some(PathBuf::from("/somebody/.bravebot")),
+                "{value:?} was taken as a directory"
+            );
+            assert_eq!(
+                state_named(named(value), [None]),
+                None,
+                "{value:?} produced a location nothing stated"
+            );
+        }
     }
 
     /// The point of the file: a block copied from `~/.claude/settings.json` configures this agent
@@ -4083,6 +4566,36 @@ mod tests {
         assert!(settings.is_empty());
     }
 
+    /// A file whose only content is a reference, a reference that could not be read, or one of the
+    /// model and agent keys is still a file that said something, and `doctor` lists it as a layer.
+    /// The regression it rejects is `is_empty` drifting from the fields of `Settings`.
+    #[test]
+    fn a_file_holding_only_one_of_these_keys_is_not_empty() {
+        for text in [
+            r#"{"references": {"docs": "/tmp"}}"#,
+            r#"{"references": {"bad alias!": "/tmp"}}"#,
+            r#"{"advisorModel": "a"}"#,
+            r#"{"fallbackModel": "a"}"#,
+            r#"{"summaryModel": "a"}"#,
+            r#"{"planModel": "a"}"#,
+            r#"{"processorModel": "a"}"#,
+            r#"{"agent": "a"}"#,
+        ] {
+            assert!(!Settings::parse(text).is_empty(), "{text}");
+        }
+    }
+
+    /// A checkout's file that states only a proxy name has it removed from `env`, so the name is
+    /// recorded as ignored and nothing else is left to say the file was read.
+    #[test]
+    fn a_checkout_stating_only_a_proxy_is_not_empty() {
+        let settings = Layers::new("proxy-only-not-empty")
+            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1"}}"#)
+            .read();
+        assert!(settings.network_ignored().count() > 0);
+        assert!(!settings.is_empty());
+    }
+
     /// Every other shape is absence, on the same footing as the rest of this file: a half-typed
     /// settings file leaves the built-in cap in force rather than stopping a session.
     #[test]
@@ -4267,6 +4780,32 @@ mod tests {
             0,
             "the block was reported as a key nothing reads"
         );
+    }
+
+    /// LINK-6: only a real `false` stops a link opening a session, so a quoted `"false"` leaves the
+    /// handler registered and working.
+    #[test]
+    fn only_a_boolean_turns_deep_links_off() {
+        let off = Settings::parse(r#"{"deepLinks": false}"#);
+        assert_eq!(off.deep_links(), Some(false));
+        assert_eq!(off.names().collect::<Vec<_>>(), ["deepLinks"]);
+        assert_eq!(
+            off.unread_keys().count(),
+            0,
+            "the key was reported as unread"
+        );
+        for text in [
+            r#"{"deepLinks": "false"}"#,
+            r#"{"deepLinks": 0}"#,
+            r#"{"deepLinks": null}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).deep_links(),
+                None,
+                "{text:?} turned links off"
+            );
+        }
     }
 
     /// MOUSE-4: only a real `false` turns mouse capture off, so a quoted `"false"` or a misplaced key
@@ -5252,6 +5791,20 @@ mod tests {
         assert_eq!(settings.permissions().deny, ["Read(./secrets/**)"]);
     }
 
+    /// PERM-3, TRUST-2: the step that starts a `/x` rule where its layer says takes the specifier as
+    /// written. Whitespace at the end of the name stays in the rule, where the rule language reports
+    /// it, and whitespace in front of the slash is not a single slash that an anchor applies to.
+    #[test]
+    fn a_slash_rule_keeps_the_whitespace_at_an_end_of_its_specifier() {
+        let settings = Layers::new("slash-rule-whitespace")
+            .project(r#"{"permissions": {"deny": ["Read(/secrets \t)", "Edit( /notes.md)"]}}"#)
+            .read();
+        assert_eq!(
+            settings.permissions().deny,
+            ["Read(./secrets \t)", "Edit( /notes.md)"]
+        );
+    }
+
     /// PERM-3: a `/x` rule whose start is inside the workspace is spelled from the workspace, since
     /// a gate holds a file there by its relative name and a full path would never meet it. A named
     /// file in a subdirectory starts there however its path was spelled, and the person's own file
@@ -5551,6 +6104,37 @@ mod tests {
         assert_eq!(settings.providers_ignored().count(), 1);
     }
 
+    /// A checkout that stretches a timeout or multiplies attempts would spend the person's account
+    /// and time on its own say-so, so a project or local layer's `provider` block is ignored
+    /// whole, retry count and quiet gap with it, and the home layer's figures stay in force.
+    #[test]
+    fn a_project_layer_cannot_change_a_gateways_retry_count_or_idle_gap() {
+        let settings = Layers::new("provider-patience")
+            .global(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "maxRetries": 1, "idleTimeoutMs": 30000}}}}"#,
+            )
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "maxRetries": 7, "idleTimeoutMs": 600000}}}}"#,
+            )
+            .local(
+                r#"{"provider": {"other": {"options": {
+                    "baseURL": "https://other.invalid/v1", "maxRetries": 7}}}}"#,
+            )
+            .read();
+        assert_eq!(settings.providers().len(), 1);
+        let patience = settings.providers()[0].patience;
+        assert_eq!(patience.max_retries, Some(1));
+        assert_eq!(
+            patience.idle_timeout,
+            Some(std::time::Duration::from_secs(30))
+        );
+        assert_eq!(settings.providers_ignored().count(), 2);
+    }
+
     /// A file the command line named beats every file that was found (BACKEND-24), and naming it
     /// is the person's own act, so it picks a backend the way the home layer's own file does.
     #[test]
@@ -5584,6 +6168,36 @@ mod tests {
         assert_eq!(settings.providers_ignored().count(), 1);
     }
 
+    /// CHATGPT-9: the models an entry named `chatgpt` offers the account are read from the layers a
+    /// `provider` block is read from and no others, since it is the same block. A checkout arrives
+    /// with its files, so it does not choose which of the account's models a person is offered.
+    #[test]
+    fn only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models() {
+        let block = r#"{"provider": {"chatgpt": {"models": {"gpt-5": {}}}}}"#;
+        let settings = Layers::new("provider-chatgpt-project")
+            .project(block)
+            .local(block)
+            .read();
+        assert!(
+            settings.chatgpt_models().is_empty(),
+            "a checkout chose the account's models"
+        );
+        assert_eq!(settings.providers_ignored().count(), 2);
+
+        for settings in [
+            Layers::new("provider-chatgpt-home").global(block).read(),
+            Layers::new("provider-chatgpt-named").named(block).read(),
+        ] {
+            let ids: Vec<&str> = settings
+                .chatgpt_models()
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect();
+            assert_eq!(ids, ["gpt-5"]);
+            assert_eq!(settings.providers_ignored().count(), 0);
+        }
+    }
+
     /// The home layer may name a provider and the variables read as its credential, which is the
     /// whole point of the block: the person's own file is the one thing entitled to pick both.
     #[test]
@@ -5598,6 +6212,110 @@ mod tests {
         assert_eq!(settings.providers().len(), 1);
         assert_eq!(settings.providers()[0].env, ["GATEWAY_KEY"]);
         assert_eq!(settings.providers_ignored().count(), 0);
+    }
+
+    /// BACKEND-24: `options.headers` goes on every request to that gateway, so a layer able to add
+    /// one could send the session's credential and the context of the conversation to a service
+    /// the person never named. A checkout's layers arrive with the checkout, so the header a
+    /// request carries is the person's own file's to name.
+    #[test]
+    fn a_project_layer_cannot_add_a_request_header() {
+        let layers = Layers::new("provider-headers")
+            .global(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"X-Tenant-Id": "team-7"}
+                }}}}"#,
+            )
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"x-copy-to": "this-checkout.invalid"}
+                }}}}"#,
+            )
+            .local(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://personal.invalid/v1",
+                    "headers": {"x-also-copy-to": "this-machine.invalid"}
+                }}}}"#,
+            );
+        let settings = layers.read();
+
+        let mut sent: Vec<(String, String)> = settings
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.request_headers(|_| None))
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        sent.sort();
+        assert_eq!(
+            sent,
+            [("x-tenant-id".to_string(), "team-7".to_string())],
+            "a header a checkout wrote is on the request"
+        );
+        // A name a checkout wrote is not read at all, so it is not among the names refused either:
+        // reporting it as a refusal would mean the block had been read.
+        let refused: Vec<&str> = settings
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.headers_refused.iter())
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            refused.is_empty(),
+            "a checkout's header was read: {refused:?}"
+        );
+
+        let dropped: Vec<PathBuf> = settings
+            .providers_ignored()
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(
+            dropped,
+            [
+                layers.cwd.join(PROJECT_DIR).join(SETTINGS_FILE),
+                layers.cwd.join(PROJECT_DIR).join(LOCAL_SETTINGS_FILE),
+            ]
+        );
+
+        let only_project = Layers::new("provider-headers-only-project")
+            .project(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://this-checkout.invalid/v1",
+                    "headers": {"x-copy-to": "this-checkout.invalid"}
+                }}}}"#,
+            )
+            .read();
+        assert!(
+            only_project
+                .providers()
+                .iter()
+                .all(|provider| provider.request_headers(|_| None).is_empty()),
+            "a checkout with no home layer above it configured a header"
+        );
+        assert_eq!(only_project.providers_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it names headers as the home
+        // file does and is not reported.
+        let named = Layers::new("provider-headers-named")
+            .named(
+                r#"{"provider": {"gw": {"options": {
+                    "baseURL": "https://flag.invalid/v1",
+                    "headers": {"x-route": "named-eu"}
+                }}}}"#,
+            )
+            .read();
+        let from_named: Vec<(String, String)> = named
+            .providers()
+            .iter()
+            .flat_map(|provider| provider.request_headers(|_| None))
+            .map(|(name, value)| (name, value.expose().to_string()))
+            .collect();
+        assert_eq!(
+            from_named,
+            [("x-route".to_string(), "named-eu".to_string())]
+        );
+        assert_eq!(named.providers_ignored().count(), 0);
     }
 
     /// A mistake in a checkout must not decide that somebody's own profile no longer applies, which
@@ -6875,6 +7593,89 @@ mod tests {
         assert_eq!(only_global.away_summary_idle_seconds(), Some(90));
     }
 
+    /// DELEGATE-7: the most delegates a turn may have running is a whole positive count. Zero
+    /// would be a turn that may start none, and anything that is not a whole count is no figure,
+    /// so each leaves the built-in bound in force. A count too large to hold is the largest one,
+    /// not the built-in bound, and the nearest layer that named one wins.
+    #[test]
+    fn a_settings_file_names_how_many_delegates_a_turn_may_have_running() {
+        let settings = Settings::parse(r#"{"maxRunningDelegates": 12}"#);
+        assert_eq!(settings.max_running_delegates(), Some(12));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["maxRunningDelegates"]
+        );
+
+        assert_eq!(
+            Settings::parse(r#"{"maxRunningDelegates": 5000000000}"#).max_running_delegates(),
+            Some(u32::MAX),
+            "a count past what the kernel holds was not read as the largest it holds"
+        );
+
+        for text in [
+            r#"{"maxRunningDelegates": 0}"#,
+            r#"{"maxRunningDelegates": -5}"#,
+            r#"{"maxRunningDelegates": 1.5}"#,
+            r#"{"maxRunningDelegates": "12"}"#,
+            r#"{"maxRunningDelegates": null}"#,
+            r#"{"agents": {"maxRunningDelegates": 12}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).max_running_delegates(),
+                None,
+                "{text:?} named a bound"
+            );
+        }
+
+        let layered = Layers::new("delegates-layers")
+            .global(r#"{"maxRunningDelegates": 12}"#)
+            .project(r#"{"maxRunningDelegates": 4}"#)
+            .read();
+        assert_eq!(layered.max_running_delegates(), Some(4));
+        assert_eq!(layered.unread_keys().count(), 0);
+
+        let only_global = Layers::new("delegates-global")
+            .global(r#"{"maxRunningDelegates": 12}"#)
+            .project(r#"{"env": {"AWS_PROFILE": "this-checkout"}}"#)
+            .read();
+        assert_eq!(only_global.max_running_delegates(), Some(12));
+    }
+
+    /// VIEW-31: the two keys are words the interface interprets, so each is handed on as written, a
+    /// blank is absence, the nearest layer that named one wins, and this build reads both.
+    #[test]
+    fn a_settings_file_names_how_and_when_the_terminal_is_notified() {
+        let settings = Settings::parse(
+            r#"{"notificationMethod": " bel ", "notificationCondition": "always"}"#,
+        );
+        assert_eq!(settings.notification_method(), Some("bel"));
+        assert_eq!(settings.notification_condition(), Some("always"));
+        assert!(!settings.is_empty());
+        assert_eq!(
+            settings.names().collect::<Vec<_>>(),
+            ["notificationMethod", "notificationCondition"]
+        );
+
+        for text in [
+            r#"{"notificationMethod": ""}"#,
+            r#"{"notificationMethod": true}"#,
+            r#"{"tui": {"notificationMethod": "bel"}}"#,
+            "{}",
+        ] {
+            assert_eq!(Settings::parse(text).notification_method(), None, "{text}");
+        }
+
+        let layered = Layers::new("notification-layers")
+            .global(r#"{"notificationMethod": "osc9", "notificationCondition": "always"}"#)
+            .project(r#"{"notificationMethod": "off"}"#)
+            .read();
+        assert_eq!(layered.notification_method(), Some("off"));
+        assert_eq!(layered.notification_condition(), Some("always"));
+        assert_eq!(layered.unread_keys().count(), 0);
+    }
+
     /// INPUT-43: the key turns a request that spends on, so only a real `true` does it. A quoted
     /// `"true"` read as true would spend for somebody who wrote something else.
     #[test]
@@ -7158,6 +7959,46 @@ mod tests {
         assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
     }
 
+    /// A checkout names the region of an account the person's own file turned on, and the region
+    /// is written into the host the signed request goes to. A value that would move the host
+    /// configures no account, and the same layers with a real region do, which is what tells the
+    /// two apart from a checkout whose region is never read.
+    #[test]
+    fn a_checkouts_region_that_would_move_the_request_configures_no_account() {
+        let person = r#"{"env": {"BRAVEBOT_USE_BEDROCK": "1",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "sonnet-arn"}}"#;
+        let account = |name: &str, checkout: &str| {
+            let settings = Layers::new(name).global(person).project(checkout).read();
+            crate::Config::from_sources(
+                &settings,
+                &crate::managed::Managed::default(),
+                &crate::keys::Keys::default(),
+                |_| None,
+                |key| match key {
+                    crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
+                    crate::env_var::KEY_ID => Some("test-key-id".into()),
+                    crate::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                    _ => None,
+                },
+            )
+            .expect("configured")
+            .bedrock
+        };
+
+        let real = account(
+            "region-checkout-real",
+            r#"{"env": {"AWS_REGION": "eu-west-1"}}"#,
+        )
+        .expect("a checkout's real region reaches the account");
+        assert_eq!(real.host(), "bedrock-runtime.eu-west-1.amazonaws.com");
+
+        let moved = account(
+            "region-checkout-moves-the-host",
+            r#"{"env": {"AWS_REGION": "x.attacker.example/"}}"#,
+        );
+        assert_eq!(moved, None, "a checkout chose the host the request goes to");
+    }
+
     /// A file the command line named is the person's act unless it sits in the checkout, which is
     /// the rule `model` follows (BACKEND-24).
     #[test]
@@ -7425,6 +8266,34 @@ mod tests {
         assert_eq!(inherit.processor_model(), None);
     }
 
+    /// BACKEND-56: the plan model is a destination for the conversation, so a checkout's layers
+    /// cannot name it, and the layers that can are reported for the ones that could not.
+    #[test]
+    fn a_project_layer_cannot_name_the_plan_model() {
+        let settings = Layers::new("plan-layers")
+            .global(r#"{"planModel": "  personal-plan "}"#)
+            .project(r#"{"planModel": "this-checkout"}"#)
+            .local(r#"{"planModel": "also-this-checkout"}"#)
+            .read();
+        assert_eq!(settings.plan_model(), Some("personal-plan"));
+        assert_eq!(settings.plan_ignored().count(), 2);
+
+        let only_project = Layers::new("plan-only-project")
+            .project(r#"{"planModel": "this-checkout"}"#)
+            .read();
+        assert_eq!(only_project.plan_model(), None);
+        assert_eq!(only_project.plan_ignored().count(), 1);
+
+        // The file `--settings` named is the person's own act, so it may name one and wins over the
+        // home file.
+        let named = Layers::new("plan-named")
+            .global(r#"{"planModel": "personal-plan"}"#)
+            .named(r#"{"planModel": "named-plan"}"#)
+            .read();
+        assert_eq!(named.plan_model(), Some("named-plan"));
+        assert_eq!(named.plan_ignored().count(), 0);
+    }
+
     /// ADDRESS-13: a definition chosen for every turn narrows and prompts them all, so a checkout's
     /// layers cannot choose one, and the layers that can are reported for the ones that could not.
     #[test]
@@ -7449,6 +8318,66 @@ mod tests {
             .read();
         assert_eq!(named.agent(), Some("named-reviewer"));
         assert_eq!(named.agent_ignored().count(), 0);
+    }
+
+    /// ASK-9: the time is a whole positive count of seconds. Zero would close every question before
+    /// it could be read, so it and anything that is not a whole count leave a question waiting for
+    /// as long as it takes.
+    #[test]
+    fn a_settings_file_names_how_long_a_question_waits() {
+        let settings = Settings::parse(r#"{"askIdleSeconds": 300}"#);
+        assert_eq!(settings.ask_idle_seconds(), Some(300));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["askIdleSeconds"]);
+
+        for text in [
+            r#"{"askIdleSeconds": 0}"#,
+            r#"{"askIdleSeconds": -5}"#,
+            r#"{"askIdleSeconds": 1.5}"#,
+            r#"{"askIdleSeconds": "300"}"#,
+            r#"{"askIdleSeconds": null}"#,
+            r#"{"tui": {"askIdleSeconds": 300}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).ask_idle_seconds(),
+                None,
+                "{text:?} named a time"
+            );
+        }
+    }
+
+    /// ASK-9: a question closed on a clock is one the person was not asked, so a checkout's layers
+    /// cannot set the clock and each is reported; the home layer and a named file outside the
+    /// workspace can.
+    #[test]
+    fn a_checkout_layer_cannot_set_how_long_a_question_waits() {
+        let settings = Layers::new("ask-idle-layers")
+            .global(r#"{"askIdleSeconds": 600}"#)
+            .project(r#"{"askIdleSeconds": 5}"#)
+            .local(r#"{"askIdleSeconds": 7}"#)
+            .read();
+        assert_eq!(settings.ask_idle_seconds(), Some(600));
+        assert_eq!(settings.ask_idle_ignored().count(), 2);
+
+        let only_project = Layers::new("ask-idle-only-project")
+            .project(r#"{"askIdleSeconds": 5}"#)
+            .read();
+        assert_eq!(only_project.ask_idle_seconds(), None);
+        assert_eq!(only_project.ask_idle_ignored().count(), 1);
+
+        let named = Layers::new("ask-idle-named")
+            .global(r#"{"askIdleSeconds": 600}"#)
+            .named(r#"{"askIdleSeconds": 120}"#)
+            .read();
+        assert_eq!(named.ask_idle_seconds(), Some(120));
+        assert_eq!(named.ask_idle_ignored().count(), 0);
+
+        let inside = Layers::new("ask-idle-named-inside")
+            .named_inside_the_workspace(r#"{"askIdleSeconds": 5}"#)
+            .read();
+        assert_eq!(inside.ask_idle_seconds(), None);
+        assert_eq!(inside.ask_idle_ignored().count(), 1);
     }
 
     /// INSTR-12: a style opens the system prompt, so a checkout's layers cannot pick one.
@@ -7476,6 +8405,125 @@ mod tests {
         assert_eq!(named.style_ignored().count(), 0);
     }
 
+    /// LOCALE-8: the catalog is chosen once for the process and before the command line is read, so
+    /// the person's own file is the only one that can name it, and every other layer that does is
+    /// reported.
+    #[test]
+    fn only_the_persons_own_file_can_name_the_language() {
+        let settings = Layers::new("language-layers")
+            .global(r#"{"language": " fr "}"#)
+            .project(r#"{"language": "ja"}"#)
+            .local(r#"{"language": "en-US"}"#)
+            .named(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(settings.language(), Some("fr"));
+        assert_eq!(settings.language_ignored().count(), 3);
+
+        let only_project = Layers::new("language-only-project")
+            .project(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(only_project.language(), None);
+        assert_eq!(only_project.language_ignored().count(), 1);
+
+        let named = Layers::new("language-named")
+            .named(r#"{"language": "ja"}"#)
+            .read();
+        assert_eq!(named.language(), None);
+        assert_eq!(named.language_ignored().count(), 1);
+    }
+
+    /// LOCALE-8: the reader that answers before the command line is read sees the home layer and
+    /// nothing else, so a checkout the process happens to start in cannot choose the language.
+    #[test]
+    fn the_language_read_ahead_of_the_command_line_is_the_home_layers() {
+        let layers = Layers::new("language-ahead")
+            .global(r#"{"language": "fr"}"#)
+            .project(r#"{"language": "ja"}"#);
+        assert_eq!(
+            Settings::language_in(Some(layers.home.clone())).as_deref(),
+            Some("fr")
+        );
+
+        let only_project =
+            Layers::new("language-ahead-project-only").project(r#"{"language": "ja"}"#);
+        assert_eq!(Settings::language_in(Some(only_project.home.clone())), None);
+        assert_eq!(Settings::language_in(None), None);
+    }
+
+    /// CRASH-4: only the person's own file is asked, so a checkout can neither turn reports off for
+    /// them nor turn them back on after they turned them off.
+    #[test]
+    fn only_the_persons_own_file_says_whether_crash_reports_go() {
+        let layers = Layers::new("crash-reports-layers")
+            .global(r#"{"crashReports": false}"#)
+            .project(r#"{"crashReports": true}"#)
+            .local(r#"{"crashReports": true}"#);
+        assert_eq!(
+            Settings::crash_reports_in(Some(layers.home.clone())),
+            Some(false)
+        );
+
+        let only_project =
+            Layers::new("crash-reports-project-only").project(r#"{"crashReports": false}"#);
+        assert_eq!(
+            Settings::crash_reports_in(Some(only_project.home.clone())),
+            None
+        );
+        assert_eq!(Settings::crash_reports_in(None), None);
+    }
+
+    /// CRASH-4: a value that is not a boolean is no answer, so reports stay as they were.
+    #[test]
+    fn only_a_boolean_turns_crash_reports_off() {
+        for (text, wanted) in [
+            (r#"{"crashReports": false}"#, Some(false)),
+            (r#"{"crashReports": true}"#, Some(true)),
+            (r#"{"crashReports": "false"}"#, None),
+            (r#"{"crashReports": 0}"#, None),
+            (r#"{"crashReports": null}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            let layers = Layers::new("crash-reports-values").global(text);
+            assert_eq!(
+                Settings::crash_reports_in(Some(layers.home.clone())),
+                wanted,
+                "{text}"
+            );
+        }
+    }
+
+    /// The key is one this build reads, so the person who wrote it is not told it does nothing.
+    #[test]
+    fn the_crash_reports_key_is_not_reported_as_unread() {
+        let settings = Layers::new("crash-reports-read")
+            .global(r#"{"crashReports": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
+    }
+
+    /// LOCALE-8: a blank or non-string `language` names nothing, so the environment answers.
+    #[test]
+    fn a_language_that_is_blank_or_not_a_string_names_nothing() {
+        for text in [
+            r#"{"language": ""}"#,
+            r#"{"language": "  "}"#,
+            r#"{"language": 1}"#,
+            r#"{"language": ["fr"]}"#,
+        ] {
+            assert_eq!(
+                Settings::parse(text).language(),
+                None,
+                "{text} named a language"
+            );
+        }
+        assert_eq!(
+            Settings::parse(r#"{"language": "fr"}"#)
+                .names()
+                .collect::<Vec<_>>(),
+            ["language"]
+        );
+    }
+
     /// INSTR-12: a blank or non-string `style` names nothing.
     #[test]
     fn a_style_that_is_blank_or_not_a_string_names_nothing() {
@@ -7493,6 +8541,171 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["style"]
         );
+    }
+
+    /// The period as the setting reports it, for comparing against what a file said.
+    fn kept_for(days: u32) -> Retention {
+        Retention::Days(NonZeroU32::new(days).expect("a period above zero"))
+    }
+
+    /// STATE-4: with nothing stated, a record is kept for the built-in period, so a person who never
+    /// opened a settings file is swept on the same terms as one who did.
+    #[test]
+    fn with_no_retention_stated_the_built_in_period_applies() {
+        let none = Layers::new("retention-none").read();
+        assert_eq!(none.retention(), Retention::Days(DEFAULT_RETENTION_DAYS));
+        assert_eq!(none.retention_unreadable().count(), 0);
+
+        let elsewhere = Layers::new("retention-elsewhere")
+            .global(r#"{"model": "personal-choice"}"#)
+            .read();
+        assert_eq!(
+            elsewhere.retention(),
+            Retention::Days(DEFAULT_RETENTION_DAYS)
+        );
+    }
+
+    /// STATE-4: the home layer's count of days is the period, from one day up to a count too large
+    /// to be a period at all, which is read as the longest there is rather than dropped.
+    #[test]
+    fn the_home_layer_names_the_period_in_whole_days() {
+        for (written, expected) in [
+            (r#"{"retentionDays": 1}"#, 1),
+            (r#"{"retentionDays": 7}"#, 7),
+            (r#"{"retentionDays": 365}"#, 365),
+            (r#"{"retentionDays": 99999999999}"#, u32::MAX),
+        ] {
+            let settings = Layers::new("retention-home").global(written).read();
+            assert_eq!(settings.retention(), kept_for(expected), "{written}");
+            assert_eq!(
+                Settings::parse(written).names().collect::<Vec<_>>(),
+                ["retentionDays"],
+                "{written}"
+            );
+        }
+    }
+
+    /// STATE-4: a checkout's files arrive with the clone, so one that named a period of a day would
+    /// delete the records of whoever opened it. Only the home layer is read, and the files that
+    /// named it are reported; the file the command line named is not the person's own file either.
+    #[test]
+    fn a_checkout_cannot_choose_when_the_persons_records_are_deleted() {
+        let settings = Layers::new("retention-layers")
+            .global(r#"{"retentionDays": 90}"#)
+            .project(r#"{"retentionDays": 1}"#)
+            .local(r#"{"retentionDays": 1}"#)
+            .read();
+        assert_eq!(settings.retention(), kept_for(90));
+        assert_eq!(settings.retention_ignored().count(), 2);
+
+        let only_project = Layers::new("retention-only-project")
+            .project(r#"{"retentionDays": 1}"#)
+            .read();
+        assert_eq!(
+            only_project.retention(),
+            Retention::Days(DEFAULT_RETENTION_DAYS)
+        );
+        assert_eq!(only_project.retention_ignored().count(), 1);
+
+        let named = Layers::new("retention-named")
+            .global(r#"{"retentionDays": 90}"#)
+            .named(r#"{"retentionDays": 1}"#)
+            .read();
+        assert_eq!(named.retention(), kept_for(90));
+        assert_eq!(named.retention_ignored().count(), 1);
+
+        let named_home = Layers::new("retention-named-home")
+            .global(r#"{"retentionDays": 90}"#)
+            .naming_the_home_layer()
+            .read();
+        assert_eq!(named_home.retention(), kept_for(90));
+        assert_eq!(named_home.retention_ignored().count(), 0);
+    }
+
+    /// STATE-4: a value that is not a whole number of days above zero cannot be turned into a period
+    /// without guessing, and a guess would delete on a figure the person never chose. The sweep waits
+    /// and the file is named, where reading the value as absent would apply the built-in period over
+    /// what they meant.
+    #[test]
+    fn a_period_that_cannot_be_read_pauses_the_sweep() {
+        for written in [
+            r#"{"retentionDays": 0}"#,
+            r#"{"retentionDays": -5}"#,
+            r#"{"retentionDays": 1.5}"#,
+            r#"{"retentionDays": 30.0}"#,
+            r#"{"retentionDays": "30"}"#,
+            r#"{"retentionDays": true}"#,
+            r#"{"retentionDays": null}"#,
+            r#"{"retentionDays": [30]}"#,
+            r#"{"retentionDays": {"days": 30}}"#,
+        ] {
+            let settings = Layers::new("retention-unreadable").global(written).read();
+            assert_eq!(settings.retention(), Retention::Paused, "{written}");
+            assert_eq!(settings.retention_unreadable().count(), 1, "{written}");
+        }
+    }
+
+    /// STATE-4: a home settings file that is there and cannot be read as a document may state any
+    /// period, so it pauses the sweep as an unreadable value does. A file that is not there states
+    /// none, and the built-in period applies.
+    #[test]
+    fn a_home_file_that_cannot_be_read_pauses_the_sweep() {
+        let not_json = Layers::new("retention-not-json")
+            .global(r#"{"retentionDays": 7"#)
+            .read();
+        assert_eq!(not_json.retention(), Retention::Paused);
+
+        let empty = Layers::new("retention-empty").global("").read();
+        assert_eq!(empty.retention(), Retention::Paused);
+
+        let not_an_object = Layers::new("retention-not-object")
+            .global(r#"[{"retentionDays": 7}]"#)
+            .read();
+        assert_eq!(not_an_object.retention(), Retention::Paused);
+
+        let too_large = Layers::new("retention-too-large")
+            .global(&format!(
+                r#"{{"retentionDays": 7, "model": "{}"}}"#,
+                "x".repeat(MAX_BYTES as usize)
+            ))
+            .read();
+        assert_eq!(too_large.retention(), Retention::Paused);
+
+        let layers = Layers::new("retention-a-directory");
+        std::fs::create_dir(layers.home.join(SETTINGS_FILE)).expect("a directory by that name");
+        assert_eq!(layers.read().retention(), Retention::Paused);
+    }
+
+    /// STATE-4: a link to a settings file that is not there states no period, as no file does, so the
+    /// built-in one applies. Dotfile managers leave such links, and pausing on one would stop the
+    /// sweep for good with nothing the person ever wrote to put right.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_settings_file_that_is_not_there_states_no_period() {
+        let layers = Layers::new("retention-dangling");
+        std::os::unix::fs::symlink(
+            layers.home.join("moved-away.json"),
+            layers.home.join(SETTINGS_FILE),
+        )
+        .expect("a link to nothing");
+
+        assert_eq!(
+            layers.read().retention(),
+            Retention::Days(DEFAULT_RETENTION_DAYS)
+        );
+    }
+
+    /// STATE-4: only the person's own file decides whether the sweep waits. A checkout's file that
+    /// is half typed leaves the home layer's period in force, as it leaves every other key.
+    #[test]
+    fn a_broken_checkout_file_does_not_pause_the_sweep() {
+        let settings = Layers::new("retention-broken-project")
+            .global(r#"{"retentionDays": 7}"#)
+            .project(r#"{"retentionDays": "#)
+            .local(r#"{"retentionDays": "soon"}"#)
+            .read();
+        assert_eq!(settings.retention(), kept_for(7));
+        assert_eq!(settings.retention_unreadable().count(), 0);
     }
 
     /// REFER-1: an entry is a path or an object, and one that cannot be used is named and leaves

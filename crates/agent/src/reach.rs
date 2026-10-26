@@ -212,6 +212,13 @@ impl Grant {
     ///
     /// A step with an assignment in front of it is covered by none, as it carries no scope: every
     /// program a scope names reads a variable that moves the directory or names a program to run.
+    ///
+    /// A credential scope for a program the scope table gives that scope to covers only a step
+    /// whose whole argument vector the table gives it to as well ([`Scope::of`]). The key is the
+    /// program and the operation word, and the arguments after it can name a program to run
+    /// (`git push --receive-pack=<file>`) or another configuration file (`kubectl --kubeconfig`),
+    /// which a scope the table would refuse is not lent to. A scope for a program the table does
+    /// not name (`/reach aws -- make check`) is keyed on the shape alone.
     pub fn covers(&self, step: &Step) -> bool {
         let Step {
             program: _,
@@ -226,6 +233,14 @@ impl Grant {
             && match &self.operation {
                 Some(operation) => operation_of(args).as_ref() == Some(operation),
                 None => args.is_empty(),
+            }
+            && match &self.reached {
+                Reached::Scope(scope)
+                    if Self::is_global(&self.binary, self.operation.as_deref(), &self.reached) =>
+                {
+                    Scope::of(resolved, args, &[]) == Some(*scope)
+                }
+                _ => true,
             }
     }
 
@@ -267,13 +282,11 @@ impl Grant {
             (Lifetime::Session(_), Some(workspace)) => t!(
                 reach_lifetime_session_in,
                 workspace = workspace.root.display().to_string()
-            )
-            .to_string(),
+            ),
             (Lifetime::Always, Some(workspace)) => t!(
                 reach_lifetime_always_in,
                 workspace = workspace.root.display().to_string()
-            )
-            .to_string(),
+            ),
         }
     }
 }
@@ -749,7 +762,6 @@ pub fn requested_paths_listed(held: &[crate::workspace::PathReach]) -> Vec<Strin
                 access = path_access(row),
                 path = row.path.display().to_string()
             )
-            .to_string()
         })
         .collect()
 }
@@ -784,9 +796,8 @@ pub fn requested_paths_command(
             path_removed,
             access = path_access(&ended),
             path = ended.path.display().to_string()
-        )
-        .to_string(),
-        None => t!(path_refused_number, number = number.to_string()).to_string(),
+        ),
+        None => t!(path_refused_number, number = number.to_string()),
     })
 }
 
@@ -809,7 +820,6 @@ fn keys_command(store: &Store, rest: &str) -> String {
                     key = chosen.display(),
                     date = chosen.allowed.as_str()
                 )
-                .to_string()
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -821,12 +831,12 @@ fn keys_command(store: &Store, rest: &str) -> String {
         return t!(reach_key_usage).to_string();
     };
     let Some(chosen) = number.checked_sub(1).and_then(|at| held.get(at)) else {
-        return t!(reach_key_refused_number, number = number.to_string()).to_string();
+        return t!(reach_key_refused_number, number = number.to_string());
     };
     if !store.forget_key(chosen) {
         return t!(reach_refused_incognito).to_string();
     }
-    t!(reach_key_removed, owner = chosen.owner()).to_string()
+    t!(reach_key_removed, owner = chosen.owner())
 }
 
 fn listing(held: &[Grant]) -> String {
@@ -857,7 +867,6 @@ fn rows(held: &[Grant]) -> Vec<String> {
                 date = grant.allowed.as_str(),
                 lifetime = grant.lasting()
             )
-            .to_string()
         })
         .collect()
 }
@@ -865,7 +874,7 @@ fn rows(held: &[Grant]) -> Vec<String> {
 fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
     let held = store.read(Some(session), root);
     let Some(grant) = number.checked_sub(1).and_then(|at| held.get(at)) else {
-        return t!(reach_refused_number, number = number.to_string()).to_string();
+        return t!(reach_refused_number, number = number.to_string());
     };
     if !store.revoke(grant) {
         return t!(reach_refused_incognito).to_string();
@@ -876,7 +885,6 @@ fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
         access = grant.access(),
         entry = grant.reached.display()
     )
-    .to_string()
 }
 
 fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
@@ -911,7 +919,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
             };
             match judged_directory(&named, profile, write) {
                 Some(path) => Reached::Directory(path),
-                None => return t!(reach_refused_entry, entry = entry).to_string(),
+                None => return t!(reach_refused_entry, entry = entry),
             }
         }
     };
@@ -1177,6 +1185,51 @@ mod tests {
         assert!(!bare.covers(&step("make", "/usr/bin/make", &["check"])));
     }
 
+    /// A scope for a program the table names covers a step only where the table gives the whole
+    /// argv that scope. The regression it rejects: covering on the program and operation word
+    /// alone, so an argv that names a program to run, or another configuration file, takes the
+    /// scope a fresh stage would be refused. A scope for a program the table does not name stays
+    /// keyed on the shape.
+    #[test]
+    fn a_grant_for_a_program_the_table_names_covers_only_an_argv_the_table_gives_the_scope() {
+        let push = scope_grant("/usr/bin/git", Some("push"), Lifetime::Always);
+        assert!(push.covers(&step("git", "/usr/bin/git", &["push", "origin", "main"])));
+        assert!(!push.covers(&step(
+            "git",
+            "/usr/bin/git",
+            &["push", "--receive-pack=hook", "origin"]
+        )));
+        assert!(!push.covers(&step("git", "/usr/bin/git", &["push", "origin", "ext::sh"])));
+
+        let kubectl = scope_grant("/usr/bin/kubectl", Some("get"), Lifetime::Always);
+        assert!(kubectl.covers(&step("kubectl", "/usr/bin/kubectl", &["get", "pods"])));
+        assert!(!kubectl.covers(&step(
+            "kubectl",
+            "/usr/bin/kubectl",
+            &["get", "pods", "--kubeconfig=k"]
+        )));
+
+        let gh = scope_grant("/usr/bin/gh", Some("repo"), Lifetime::Always);
+        assert!(gh.covers(&step("gh", "/usr/bin/gh", &["repo", "view", "o/r"])));
+        assert!(!gh.covers(&step(
+            "gh",
+            "/usr/bin/gh",
+            &["repo", "clone", "o/r", "--", "--upload-pack=hook"]
+        )));
+
+        let docker = scope_grant("/usr/bin/docker", Some("ps"), Lifetime::Always);
+        assert!(docker.covers(&step("docker", "/usr/bin/docker", &["ps", "-a"])));
+        assert!(!docker.covers(&step("docker", "/usr/bin/docker", &["ps", "--config=dir"])));
+
+        let make = bound_grant(
+            "/usr/bin/make",
+            Reached::Scope(Scope::named("remote").expect("a scope")),
+            Lifetime::Always,
+            &fresh("covers-table"),
+        );
+        assert!(make.covers(&step("make", "/usr/bin/make", &[])));
+    }
+
     /// A step with an assignment in front of it is covered by no grant. The regression it rejects
     /// is a variable such as `GIT_SSH_COMMAND` naming a program to run with the reach a person
     /// gave the command without it.
@@ -1343,6 +1396,66 @@ mod tests {
         assert_eq!(held[0].reached, Reached::Directory(place.project.clone()));
         let tilde = place.say("s", "~/project -- sh");
         assert_eq!(place.held("s").len(), 3, "{tilde}");
+    }
+
+    /// `/forget-trust` withdraws the answers kept about the working directory and about the root of
+    /// the git worktree around it. `/reach` writes `reach.jsonl` and no file an answer is kept in,
+    /// starts no program and makes no `.git` entry, so a grant made, listed or removed, and a key
+    /// listed or forgotten, leave the answers and the root as they were, and `/forget-trust`
+    /// withdraws the same before it as after it. The regression it rejects is a form of `/reach`
+    /// that also keeps or withdraws an answer, or makes a `.git` entry, which would make
+    /// `/forget-trust` typed behind a waiting `/reach` act on something other than what it finds once
+    /// the `/reach` has been carried out. `/reach paths` changes the workspace's list in memory and
+    /// reads and writes no file, so it is not run here.
+    #[test]
+    fn a_reach_leaves_the_answer_kept_about_the_directory_as_it_was() {
+        let place = Place::new("leaves-the-kept-answer");
+        let root = place.home.parent().expect("the scratch").join("repository");
+        let package = root.join("packages/api");
+        std::fs::create_dir_all(root.join(".git")).expect("a repository");
+        std::fs::create_dir_all(&package).expect("a package");
+        let Some(identity) = Identity::of(&root) else {
+            return;
+        };
+        let store = crate::trusted::Store::new(&place.home, &root);
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
+        // Every file the answers are kept in, whichever directory one is about.
+        let answers = store.path().parent().expect("the answers' directory");
+        let kept = || {
+            let mut files: Vec<_> = std::fs::read_dir(answers)
+                .expect("the answers' directory")
+                .map(|entry| {
+                    let path = entry.expect("an entry").path();
+                    let bytes = std::fs::read(&path).expect("an answer's file");
+                    (path, String::from_utf8_lossy(&bytes).into_owned())
+                })
+                .collect();
+            files.sort();
+            files
+        };
+        let before = kept();
+        let named = place.project.display().to_string();
+
+        let granted = place.say_in("s", &package, &format!("{named} write always -- ls"));
+        assert_eq!(place.held_in("s", &package).len(), 1, "{granted}");
+        place.say_in("s", &package, "");
+        let removed = place.say_in("s", &package, "remove 1");
+        assert!(place.held_in("s", &package).is_empty(), "{removed}");
+        assert!(Store::new(&place.home).choose_key(&chosen("github.com", "acme", None)));
+        let listed = place.say_in("s", &package, "keys");
+        assert!(listed.contains("github.com/acme"), "{listed}");
+        let forgotten = place.say_in("s", &package, "keys remove 1");
+        assert!(forgotten.contains("github.com/acme"), "{forgotten}");
+        assert!(Store::new(&place.home).chosen_keys().is_empty());
+
+        assert_eq!(kept(), before);
+        assert_eq!(
+            crate::trusted::worktree_root_above(&package),
+            std::fs::canonicalize(&root).ok()
+        );
     }
 
     /// The home, what is above it, `~/.ssh`, `~/.bravebot` and a place in it, a path that is not

@@ -564,35 +564,21 @@ pub fn request_from(
     messages: &[bravebot_aichat::protocol::Message],
     tools: Option<&[bravebot_aichat::protocol::Tool]>,
 ) -> ConverseRequest {
-    use bravebot_aichat::protocol::Role;
-
     // An empty list is no list. This API refuses `tools: []` rather than reading it as a request
     // to use none, so a turn offering nothing has to omit the field entirely.
     let tools = tools.filter(|tools| !tools.is_empty());
-    // This API refuses a `toolUse` or `toolResult` block in a request with no `toolConfig`.
-    let calls_as_text = tools.is_none();
+    // This API refuses a `toolUse` or `toolResult` block in a request with no `toolConfig`, so the
+    // walk writes a conversation's calls and results as text where no tool is offered.
+    let walked = bravebot_aichat::conversation::walk(&Converse, messages, tools.is_some());
 
-    let mut system: Vec<String> = Vec::new();
-    let mut converted: Vec<ConverseMessage> = Vec::new();
-
-    for message in messages {
-        match message.role {
-            // Hoisted rather than sent as a turn. Several may accumulate over a session, and they
-            // are joined in order, which is the order they would have been read in.
-            Role::System => system.push(message.content.text()),
-            Role::User => push(&mut converted, "user", user_blocks(message)),
-            Role::Tool => push(
-                &mut converted,
-                "user",
-                tool_result_blocks(message, calls_as_text),
-            ),
-            Role::Assistant => push(
-                &mut converted,
-                "assistant",
-                assistant_blocks(message, calls_as_text),
-            ),
-        }
-    }
+    let mut converted: Vec<ConverseMessage> = walked
+        .turns
+        .into_iter()
+        .map(|turn| ConverseMessage {
+            role: turn.role,
+            content: turn.blocks,
+        })
+        .collect();
 
     // Two breakpoints, which is what this conversation is shaped like. The prompt and the tool
     // schemas are the same bytes on every round of every turn, and the messages in front of the
@@ -603,9 +589,9 @@ pub fn request_from(
     //
     // The prefix runs tools, then system, then messages, so the breakpoint on the system prompt
     // covers the schemas too and the one on the last message covers everything.
-    let system = (!system.is_empty()).then(|| {
+    let system = walked.system.map(|system| {
         vec![
-            SystemBlock::Text(system.join("\n\n")),
+            SystemBlock::Text(system),
             SystemBlock::CachePoint(CachePoint::new()),
         ]
     });
@@ -621,6 +607,56 @@ pub fn request_from(
             tools: tools.iter().map(tool_from).collect(),
         }),
         additional_model_request_fields: None,
+    }
+}
+
+/// How Converse names the blocks of a turn, for [`bravebot_aichat::conversation::walk`].
+struct Converse;
+
+impl bravebot_aichat::conversation::Spelling for Converse {
+    type Block = Block;
+
+    fn text(&self, text: &str) -> Block {
+        Block::Text(text.to_string())
+    }
+
+    /// A picture and a document are different members of this API's union and it takes different
+    /// formats for each, so which one a media type names decides which block it becomes.
+    fn attachment(&self, media_type: &str, data: &str, position: usize) -> Option<Block> {
+        if let Some((_, format)) = IMAGE_FORMATS.iter().find(|(known, _)| *known == media_type) {
+            return Some(Block::Image(Image {
+                format,
+                source: AttachmentSource {
+                    bytes: data.to_string(),
+                },
+            }));
+        }
+
+        let (_, format) = DOCUMENT_FORMATS
+            .iter()
+            .find(|(known, _)| *known == media_type)?;
+        Some(Block::Document(Document {
+            format,
+            name: format!("attachment {position}"),
+            source: AttachmentSource {
+                bytes: data.to_string(),
+            },
+        }))
+    }
+
+    fn call(&self, id: &str, name: &str, input: Value) -> Block {
+        Block::ToolUse(ToolUse {
+            tool_use_id: id.to_string(),
+            name: name.to_string(),
+            input,
+        })
+    }
+
+    fn result(&self, id: &str, text: String) -> Block {
+        Block::ToolResult(ToolResult {
+            tool_use_id: id.to_string(),
+            content: vec![ToolResultBlock::Text(text)],
+        })
     }
 }
 
@@ -640,138 +676,6 @@ fn mark_the_end(messages: &mut [ConverseMessage]) {
     ) {
         last.content.push(Block::CachePoint(CachePoint::new()));
     }
-}
-
-/// Add blocks to the conversation, merging into the previous turn when the role repeats.
-///
-/// The API refuses two consecutive turns of the same role, and this conversion creates them: two
-/// tool results in a row were two `Role::Tool` messages, and both become user turns.
-fn push(messages: &mut Vec<ConverseMessage>, role: &'static str, blocks: Vec<Block>) {
-    if blocks.is_empty() {
-        return;
-    }
-    match messages.last_mut() {
-        Some(last) if last.role == role => last.content.extend(blocks),
-        _ => messages.push(ConverseMessage {
-            role,
-            content: blocks,
-        }),
-    }
-}
-
-fn user_blocks(message: &bravebot_aichat::protocol::Message) -> Vec<Block> {
-    use bravebot_aichat::protocol::{Content, Part};
-
-    match &message.content {
-        Content::Text(text) => text_block(text),
-        Content::Parts(parts) => {
-            let mut blocks = Vec::new();
-            let mut attachments = 0;
-            for part in parts {
-                match part {
-                    // Through the same guard a whole turn's text goes through: a part carrying no
-                    // text is an empty block, which the API rejects.
-                    Part::Text { text } => blocks.extend(text_block(text)),
-                    // A data URI, which is the only form attachments take here:
-                    // `data:<media>;base64,<data>`. Anything else is dropped rather than sent as a
-                    // link, because asking the service to fetch a URL is an effect nobody endorsed.
-                    Part::ImageUrl { image_url } => {
-                        attachments += 1;
-                        blocks.extend(attachment_block(&image_url.url, attachments));
-                    }
-                }
-            }
-            blocks
-        }
-    }
-}
-
-fn tool_result_blocks(message: &bravebot_aichat::protocol::Message, as_text: bool) -> Vec<Block> {
-    let Some(id) = message.tool_call_id.clone() else {
-        // A result with no id cannot be matched to its call, and the API rejects one. Sent as plain
-        // text it would read as something the user said, so it is dropped.
-        return Vec::new();
-    };
-    if as_text {
-        return vec![Block::Text(format!(
-            "[result of call {id}]\n{}",
-            message.content.text()
-        ))];
-    }
-    vec![Block::ToolResult(ToolResult {
-        tool_use_id: id,
-        content: vec![ToolResultBlock::Text(message.content.text())],
-    })]
-}
-
-fn assistant_blocks(
-    message: &bravebot_aichat::protocol::Message,
-    calls_as_text: bool,
-) -> Vec<Block> {
-    let mut blocks = text_block(&message.content.text());
-    for call in message.tool_calls.iter().flatten() {
-        if calls_as_text {
-            blocks.push(Block::Text(format!(
-                "[call {}: {} {}]",
-                call.id, call.function.name, call.function.arguments
-            )));
-            continue;
-        }
-        blocks.push(Block::ToolUse(ToolUse {
-            tool_use_id: call.id.clone(),
-            name: call.function.name.clone(),
-            // Arguments cross as a string in the other protocol and as an object here. An
-            // unparseable string becomes an empty object: the call is preserved so it can still be
-            // answered, which keeps the conversation well-formed.
-            input: serde_json::from_str(&call.function.arguments).unwrap_or_else(|_| json!({})),
-        }));
-    }
-    blocks
-}
-
-/// A text block, or nothing at all for empty text.
-///
-/// The API rejects an empty text block, and an assistant turn that only asked for tools has no text.
-fn text_block(text: &str) -> Vec<Block> {
-    if text.is_empty() {
-        Vec::new()
-    } else {
-        vec![Block::Text(text.to_string())]
-    }
-}
-
-/// An attachment block from a data URI, or nothing if it is not one this API takes.
-///
-/// A picture and a document are different members of this API's union and it takes different
-/// formats for each, so which one a media type names decides which block it becomes. `position` is
-/// the attachment's place in the turn, which is the only name a document can be given: a data URI
-/// carries no filename.
-fn attachment_block(url: &str, position: usize) -> Option<Block> {
-    let rest = url.strip_prefix("data:")?;
-    let (media_type, data) = rest.split_once(";base64,")?;
-    if data.is_empty() {
-        return None;
-    }
-
-    if let Some((_, format)) = IMAGE_FORMATS.iter().find(|(known, _)| *known == media_type) {
-        return Some(Block::Image(Image {
-            format,
-            source: AttachmentSource {
-                bytes: data.to_string(),
-            },
-        }));
-    }
-
-    let (_, format) = DOCUMENT_FORMATS
-        .iter()
-        .find(|(known, _)| *known == media_type)?;
-    Some(Block::Document(Document {
-        format,
-        name: format!("attachment {position}"),
-        source: AttachmentSource {
-            bytes: data.to_string(),
-        },
-    }))
 }
 
 fn tool_from(tool: &bravebot_aichat::protocol::Tool) -> ToolEntry {
@@ -873,6 +777,33 @@ mod tests {
         assert_eq!(json["system"][0]["text"], "be helpful");
         assert_eq!(request.messages.len(), 1);
         assert_eq!(request.messages[0].role, "user");
+    }
+
+    /// Converse refuses a text block with no word in it and takes nothing but an object as a call's
+    /// arguments, and the walk that builds these requests is shared with another service that refuses
+    /// the same. Blank lines another model wrote before a call are no block, and a call recorded with
+    /// `null` or a list is kept with an empty object so the result that answers it still has a call.
+    #[test]
+    fn text_with_no_word_in_it_and_arguments_that_are_not_an_object_are_not_sent_as_written() {
+        let tools = offered();
+        let request = request_from(
+            &[
+                Message::user("go"),
+                Message::assistant_calling(
+                    "\n\n",
+                    vec![call("a", "read", "null"), call("b", "read", "[1]")],
+                ),
+                Message::tool_result("a", "one"),
+                Message::tool_result("b", "two"),
+            ],
+            Some(&tools),
+        );
+        let json = body_of(&request);
+        let assistant = json["messages"][1]["content"].as_array().expect("blocks");
+        assert_eq!(assistant.len(), 2, "{assistant:?}");
+        for block in assistant {
+            assert_eq!(block["toolUse"]["input"], json!({}), "{block}");
+        }
     }
 
     /// A build nobody has asked for a level must send the body it always sent, or adding the

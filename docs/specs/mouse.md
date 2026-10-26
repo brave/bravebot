@@ -11,8 +11,12 @@ documented-by: docs/website/docs/using/transcript.md
 
 Dragging across the screen to copy text. The mouse is captured so the wheel can scroll, which
 takes the terminal's own selection away, so a drag is answered by the interface itself. What a
-drag selects is spelled out here. Clicking things on the screen, a context menu, edge scrolling,
-word and line selection are proposed in
+drag selects is spelled out here. Clicking a call or a delegate in the scroller, and the model, effort,
+context, MCP server and Files rows of the info panel, the permission mode under the box, the panel's hide row, the rows of
+the `/effort` and `/config` pickers, a place in the prompt box's text, a file of the list, the close
+control and the edit bar in the files state of the info panel, and the wheel over that state, is
+built. Clicking other things on the screen, a context menu, edge
+scrolling and copying a selection longer than the screen are proposed in
 [brave/bravebot#2685](https://github.com/brave/bravebot/issues/2685) and not built.
 
 ## Clauses
@@ -85,3 +89,293 @@ line.
 `verified-by: bravebot_tui::select::a_panel_highlight_covers_the_text_and_not_the_chrome_or_padding`
 `verified-by: bravebot_tui::select::a_joined_row_runs_on_into_the_next_without_a_break`
 `verified-by: bravebot_tui::app::a_drag_over_the_session_id_copies_the_id_alone`
+
+<a id="MOUSE-6"></a>
+### MOUSE-6: a double click takes a word and a triple click a row
+
+Two presses of the left button on the same cell within 400 milliseconds select the word there, and
+a third the whole row, inside the pane the press belongs to. A word is a run of letters, digits and
+underscores, a run of blanks, or a run of anything else. A character drawn two cells wide is one
+character: both of its cells belong to the word it is in. A row is taken up to its last character,
+without the blanks the widget padded it with. Dragging on from such a press grows the selection by
+whole words or whole rows at the loose end. A fourth press starts the count again, and a press on
+another cell or after the interval is a single press.
+
+`verified-by: bravebot_tui::select::a_double_click_takes_the_word_under_it`
+`verified-by: bravebot_tui::select::a_word_stops_at_punctuation`
+`verified-by: bravebot_tui::select::a_word_of_wide_characters_is_taken_whole`
+`verified-by: bravebot_tui::select::a_drag_after_a_double_click_grows_by_words`
+`verified-by: bravebot_tui::select::a_triple_click_takes_the_row_without_its_padding`
+`verified-by: bravebot_tui::select::a_drag_after_a_triple_click_grows_by_rows`
+`verified-by: bravebot_tui::select::a_word_never_leaves_its_pane`
+`verified-by: bravebot_tui::select::a_press_counts_as_part_of_a_run_only_on_the_same_cell_in_time`
+`verified-by: bravebot_tui::app::a_double_click_selects_a_word_and_a_triple_click_a_row`
+`verified-by: bravebot_tui::app::two_presses_on_different_cells_are_not_a_double_click`
+
+<a id="MOUSE-7"></a>
+### MOUSE-7: a shift-click extends the selection held
+
+A press with shift held, inside the pane the selection held belongs to, moves the selection's loose
+end to the pointer and keeps its anchor. A shift-press anywhere else, or with no selection held, is
+an ordinary press. Terminals that keep shift for their own selection never report it.
+
+`verified-by: bravebot_tui::app::a_shift_click_extends_the_selection_held`
+`verified-by: bravebot_tui::app::a_shift_click_in_another_pane_begins_a_new_selection`
+
+<a id="MOUSE-8"></a>
+### MOUSE-8: a wrapped line copies as one line
+
+A line the transcript is wider than is drawn over several rows. A copy that spans those rows reads
+them as the one line they are, so a wrapped paragraph is pasted as a paragraph and not with a line
+break at every row the screen cut it at. A row the wrap broke at a word is joined to the next with
+one space, even when the word ended in the last column and the blank after it was dropped, and a
+row cut inside a word with none. Lines
+the author broke are still separate lines. This holds in the transcript and in the scroller, and it is not applied to any other pane: the rows are screen rows, and the info
+panel is drawn on the same ones.
+
+`verified-by: bravebot_tui::select::a_wrapped_row_joins_the_row_below_it`
+`verified-by: bravebot_tui::select::a_blank_dropped_at_the_last_column_is_still_a_space`
+`verified-by: bravebot_tui::render::transcript::a_break_is_told_from_one_inside_a_word`
+`verified-by: bravebot_tui::select::a_wrap_in_the_transcript_does_not_join_the_rows_of_another_pane`
+`verified-by: bravebot_tui::app::a_wrapped_reply_copies_as_one_paragraph`
+
+<a id="MOUSE-9"></a>
+### MOUSE-9: a click on a call in the scroller expands it
+
+In the scroller, a left click that sweeps nothing on a row of a call that has more to show than it
+draws expands that call, and a second click collapses it, as `x` does ([SCROLL-10](scroller.md#SCROLL-10)).
+The press and the release are on one cell and the press is a single click, so a drag, a double click
+and a triple click are selections and copy as before. A click on a row that belongs to no call, with
+the key list open over the transcript, or in a delegate's view, does nothing to any call. The key
+stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_a_call_in_the_scroller_expands_and_collapses_it`
+`verified-by: bravebot_tui::app::a_click_off_a_call_or_a_drag_over_one_expands_nothing`
+`verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_expands_nothing`
+`verified-by: bravebot_tui::app::a_click_in_a_delegates_view_expands_nothing`
+
+<a id="MOUSE-10"></a>
+### MOUSE-10: a click on a delegate in the scroller opens its view
+
+In the scroller, a left click that sweeps nothing on a row of a delegate's block opens the view of
+that delegate, as the watch key does on it, and the key that closes the view returns to the
+scroller. The press and the release are on one cell and the press is a single click, so a drag, a
+double click and a triple click are selections and copy as before. A click on a row that belongs to
+no delegate, with the key list open over the transcript, or where a view is already open, opens
+nothing. The watch key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_a_delegate_in_the_scroller_opens_that_delegates_view`
+`verified-by: bravebot_tui::app::a_drag_over_a_delegate_or_a_click_off_one_opens_no_view`
+`verified-by: bravebot_tui::app::a_click_with_the_scroller_help_open_opens_no_delegate`
+
+<a id="MOUSE-11"></a>
+### MOUSE-11: a click on the panel's model or effort row asks what the command asks
+
+In the info panel, a left click that sweeps nothing on the row that names the model asks for the
+model picker, as `/model` does, and one on the row that names the effort asks for the effort picker,
+as `/effort` does. The commands are typed at the plain prompt, so a click over the scroller or a history search asks for nothing. Where a definition in force names the model the click is refused as the command
+is ([CLI-17](cli.md#CLI-17)), with the same note. The press and the release are on one cell and the
+press is a single click, so a drag, a double click and a triple click are selections and copy as
+before, and a press that began elsewhere and was let go on the row is not a click on it. The border
+column is the panel's resize handle ([PANEL-6](info-panel.md#PANEL-6)) and a row that is not drawn,
+for want of room or because the effort is not one the model reads, is not a target. The command
+stays the way to do it without a mouse, and the click acts only on rows the person's own choices
+put there ([PANEL-11](info-panel.md#PANEL-11)).
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_model_or_effort_row_opens_that_picker`
+`verified-by: bravebot_tui::app::a_click_off_the_models_rows_asks_for_no_picker`
+`verified-by: bravebot_tui::app::a_drag_or_a_double_click_over_the_model_row_opens_no_picker`
+`verified-by: bravebot_tui::app::a_press_elsewhere_let_go_on_the_model_row_opens_no_picker`
+`verified-by: bravebot_tui::app::a_click_on_the_model_row_over_the_scroller_opens_no_picker`
+`verified-by: bravebot_tui::app::a_click_on_the_model_row_under_a_standing_definition_is_refused_as_the_command_is`
+`verified-by: bravebot_tui::panel::only_the_drawn_model_and_effort_rows_are_click_targets`
+
+<a id="MOUSE-12"></a>
+### MOUSE-12: a click on the panel's context reading asks what `/context` asks
+
+In the info panel, a left click that sweeps nothing on the row that reads how full the context is
+says what `/context` says. As for [MOUSE-11](#MOUSE-11), the press and the release are on one cell
+and the press is a single click, so a drag, a double click and a triple click are selections, and a
+click over the scroller or a history search asks for nothing. The heading and the rows below the
+reading are not targets, nor is a reading cut for want of room. The command stays the way to do it
+without a mouse, and what the click says is the session's own reading, with nothing a tool returned
+in it ([PANEL-11](info-panel.md#PANEL-11)).
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_context_reading_reports_the_context`
+`verified-by: bravebot_tui::app::a_drag_over_the_context_reading_or_a_click_in_the_scroller_reports_nothing`
+`verified-by: bravebot_tui::panel::only_the_context_reading_is_a_context_click_target`
+
+<a id="MOUSE-13"></a>
+### MOUSE-13: a click on a panel's MCP server row asks what `/mcp` asks
+
+In the info panel, a left click that sweeps nothing on the row of a started MCP server lists the
+servers, as a bare `/mcp` does. As for [MOUSE-12](#MOUSE-12), the press and the release are on one
+cell and the press is a single click, so a drag, a double click and a triple click are selections,
+and a click over the scroller or a history search asks for nothing. The heading, the rows around
+the servers and a language server's row are not targets, nor is a row cut for want of room. The
+command stays the way to do it without a mouse, and the listing is the session's own, with nothing
+a tool returned in it ([PANEL-11](info-panel.md#PANEL-11)).
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_mcp_server_row_lists_the_servers`
+`verified-by: bravebot_tui::app::a_drag_over_an_mcp_server_row_or_a_click_in_the_scroller_lists_nothing`
+`verified-by: bravebot_tui::panel::only_a_started_mcp_servers_rows_are_click_targets`
+
+<a id="MOUSE-14"></a>
+### MOUSE-14: a click on the permission mode under the box cycles it
+
+On the row under the box, a left click that sweeps nothing on the permission mode, where the row
+draws one, moves to the next mode, as the key that cycles it does ([MODE-8](permission-modes.md#MODE-8)).
+As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and the press is a single
+click, so a drag, a double click and a triple click are selections, and a click over the scroller or
+a history search does nothing. The rest of the row is not a target, nor is a mode the row does not
+draw: the ordinary mode has no name there, and a row too narrow for the mode is cleared whole. The
+cycle reaches bypass only where the key does. The key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_the_footers_permission_mode_cycles_it`
+`verified-by: bravebot_tui::app::a_drag_over_the_mode_or_a_click_beside_it_leaves_the_permission_mode_alone`
+
+<a id="MOUSE-15"></a>
+### MOUSE-15: a click on a row of an `/effort` or `/config` picker moves the cursor, and a second takes it
+
+In the list picker that `/effort` and `/config` open at rest, a left press on a row of the list
+puts the cursor on it, and a second press on the same cell within the double-click interval takes
+the row, as Enter does. A press outside the list, on the border, or below the last row, a press of
+another button, a drag, a release and a wheel turn leave the picker open with the cursor where it
+was, and no mouse event cancels it. Rows are counted from the first row drawn, so a list that has
+scrolled to keep the cursor in view is read as it is drawn. The keys stay the way to do it without
+a mouse. `/theme` is [MOUSE-17](#MOUSE-17); `/model` and the pickers opened while a turn runs are not covered.
+
+`verified-by: bravebot_tui::list_picker::a_press_moves_the_cursor_and_a_second_press_takes_the_row`
+`verified-by: bravebot_tui::list_picker::two_presses_on_different_rows_or_far_apart_take_nothing`
+`verified-by: bravebot_tui::list_picker::a_press_outside_the_rows_and_anything_but_a_press_leave_the_picker_alone`
+`verified-by: bravebot_tui::list_picker::a_press_finds_its_row_in_a_list_that_has_scrolled`
+
+<a id="MOUSE-16"></a>
+### MOUSE-16: a click in the prompt box puts the caret there
+
+In the prompt box, a left click that sweeps nothing on a cell of its text puts the caret before the
+character drawn there. As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and
+the press is a single click, so a drag, a double click and a triple click are selections. The cell is
+read as the box drew it: the same wrap, the window of rows around the caret and the prompt character
+or indent that opens each row. A cell on the prompt character lands at the start of its row and a cell
+past the end of a row at its end; the border is not text. A cell on a marker lands at the marker's
+start, because the arrows never rest inside one. A click over the scroller, a history search or a
+picker, in the vi style of box, and in the files state does nothing to the caret. The arrow keys stay
+the way to move it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_in_the_box_puts_the_caret_where_it_landed`
+`verified-by: bravebot_tui::app::a_click_in_the_box_counts_a_wide_character_as_one`
+`verified-by: bravebot_tui::app::a_click_on_a_marker_puts_the_caret_before_it`
+`verified-by: bravebot_tui::app::a_drag_a_double_click_or_a_click_off_the_text_leaves_the_caret_alone`
+`verified-by: bravebot_tui::app::a_click_in_the_box_does_nothing_where_another_mode_is_in_use`
+
+<a id="MOUSE-17"></a>
+### MOUSE-17: a click on a row of the `/theme` picker previews it, and a second takes it
+
+In the `/theme` picker at rest, a left press on a row of the list puts the cursor on it, with the
+theme under the cursor in force as it is for a key, and a second press on the same cell within the
+double-click interval takes the theme. As for [MOUSE-15](#MOUSE-15), a press outside the list, a
+drag, a release, a wheel turn and a press of another button leave the picker open on the theme it
+had, and no mouse event cancels it. The keys stay the way to do it without a mouse. `/model` and the
+pickers opened while a turn runs are not covered.
+
+`verified-by: bravebot_tui::theme_prompt::a_click_previews_the_row_and_a_second_click_takes_it`
+`verified-by: bravebot_tui::theme_prompt::two_presses_on_a_drawn_row_return_its_theme`
+`verified-by: bravebot_tui::theme_prompt::a_press_outside_the_list_leaves_the_theme_alone`
+
+<a id="MOUSE-18"></a>
+### MOUSE-18: a click on a file's row, the `x` or a control of the bar in the files state acts as the key does
+
+In the files state of the info panel ([FILES-4](files-mode.md#FILES-4)), a left click that sweeps
+nothing acts on what the layout drew under it:
+
+- On a file's row of the list it highlights that file, as Up and Down do
+  ([FILES-5](files-mode.md#FILES-5)): the edits of another file open at their top, and a click on
+  the file that is highlighted leaves its edits where they are scrolled to. The rows of the list
+  stay where they were drawn.
+- On the `x` at the right end of the heading row, which is the `x` and the space on each side of it,
+  it ends the state as `q` does, and the panel goes back to what it was before the state
+  ([FILES-3](files-mode.md#FILES-3)).
+- On the control for the previous or the next edit in the bar under the file's name, which is the
+  control and the space on each side of it, it puts that edit's header at the top, as Left and Right
+  do ([FILES-6](files-mode.md#FILES-6)). Two quick clicks on one control take one step, since the
+  second press of a double click is a selection.
+
+Nothing else is a target: not the rows that count the files left out or the edit rows out of view,
+the rest of the heading, the rule, the edits, the position in the bar, a control that is dim, the
+border column, a row the height of the panel is too short to draw, or the last row of the panel,
+which names the keys. As for [MOUSE-12](#MOUSE-12), the press and the release are on one cell and
+the press is a single click, so a drag, a double click and a triple click are selections and copy as
+before, and a press that began elsewhere and was let go on a target is not a click on it. A press on
+a row whose file has left the list since the frame was drawn is ignored. A press is mapped by the
+rows the layout drew and never by a file's name or an edit's text
+([FILES-10](files-mode.md#FILES-10)). The keys stay the way to do it without a mouse.
+
+`verified-by: bravebot_tui::files_mode::a_click_on_a_file_row_highlights_it_and_shows_its_edits_from_the_top`
+`verified-by: bravebot_tui::files_mode::a_drag_a_press_from_elsewhere_or_a_double_click_highlights_no_file`
+`verified-by: bravebot_tui::files_mode::a_click_on_a_row_that_is_not_a_file_highlights_nothing`
+`verified-by: bravebot_tui::files_mode::a_click_on_a_file_that_has_left_the_list_selects_nothing`
+`verified-by: bravebot_tui::files_mode::only_the_drawn_file_rows_are_click_targets`
+`verified-by: bravebot_tui::files_mode::the_click_targets_of_every_frame_are_exactly_the_controls_it_drew`
+`verified-by: bravebot_tui::files_mode::a_click_on_a_row_leaves_the_rows_of_the_list_where_they_were_drawn`
+`verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
+`verified-by: bravebot_tui::files_mode::a_click_on_the_close_control_ends_the_state_as_q_does`
+`verified-by: bravebot_tui::files_mode::a_click_on_the_heading_beside_the_close_control_leaves_the_state_open`
+`verified-by: bravebot_tui::files_mode::the_close_control_ends_the_heading_row_beside_a_cut_note_about_earlier_edits`
+`verified-by: bravebot_tui::files_mode::the_bar_names_the_edit_at_the_top_and_stepping_moves_it`
+`verified-by: bravebot_tui::files_mode::left_right_h_and_l_step_between_edits_as_the_clicks_do`
+`verified-by: bravebot_tui::files_mode::only_the_enabled_controls_of_the_bar_are_click_targets`
+`verified-by: bravebot_tui::files_in_french::a_cut_note_leaves_the_close_control_at_the_end_of_the_heading_row_in_french`
+
+<a id="MOUSE-19"></a>
+### MOUSE-19: the wheel scrolls the pane of the files state under the pointer
+
+With the pointer over the panel in the files state ([FILES-4](files-mode.md#FILES-4)), a turn of the
+wheel scrolls the pane under it: over the heading, the list and the rule it scrolls the rows of the
+list, and over every row under the rule it scrolls the edits. One turn moves the rows
+`tui.wheelRows` names ([SCROLL-3](scroller.md#SCROLL-3)), and each pane stops at its ends. Scrolling
+the list does not move the highlight, and a key that moves the highlight brings it back into view. A
+list that fits its rows has nothing to scroll and stays drawn around the highlight. Over the
+transcript, or where the panel is not drawn, the wheel scrolls the transcript. Which pane the
+pointer is over is read from the rows the layout drew.
+
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
+`verified-by: bravebot_tui::files_mode::a_key_that_moves_the_highlight_brings_it_back_into_view`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_transcript_scrolls_the_transcript_and_not_the_panel`
+`verified-by: bravebot_tui::files_mode::the_wheel_scrolls_the_pane_under_the_pointer_on_every_row_of_every_frame`
+`verified-by: bravebot_tui::files_mode::the_geometry_places_each_row_where_rows_draws_it`
+`verified-by: bravebot_tui::files_mode::a_wheel_turn_over_a_list_that_fits_leaves_it_following_the_highlight`
+`verified-by: bravebot_tui::files_mode::a_wheel_turn_with_the_panel_not_drawn_scrolls_the_transcript_and_nothing_else`
+
+<a id="MOUSE-20"></a>
+### MOUSE-20: a click on the Files section of the panel opens the files state
+
+In the ordinary state of the panel, a left click that sweeps nothing on the heading of the Files
+section or on the row under it, which reads `{n} files`, does what `/diff` does
+([FILES-3](files-mode.md#FILES-3)): it draws the files state, or answers with the note `/diff`
+gives. As for [MOUSE-11](#MOUSE-11), the press and the release are on one cell and the press is a
+single click, so a drag, a double click and a triple click are selections, and a click over the
+scroller or a history search asks for nothing, since the command is typed at the plain prompt. The
+rows around the section are not targets, nor is a heading or a totals row cut for want of room. The
+command stays the way to do it without a mouse, and what the click draws is what the session's own
+write calls changed ([FILES-10](files-mode.md#FILES-10)).
+
+`verified-by: bravebot_tui::files_mode::a_click_on_the_files_heading_or_the_row_under_it_opens_the_state`
+`verified-by: bravebot_tui::files_mode::a_drag_a_double_click_or_a_click_over_the_scroller_or_a_search_opens_no_state`
+`verified-by: bravebot_tui::panel::only_the_files_heading_and_its_totals_row_are_click_targets`
+
+<a id="MOUSE-21"></a>
+### MOUSE-21: a click on the panel's hide row hides the panel
+
+In the ordinary state of the info panel, a left click that sweeps nothing on the row that names the
+key hiding the panel hides it, as the key does ([PANEL-5](info-panel.md#PANEL-5),
+[PANEL-7](info-panel.md#PANEL-7)). As for [MOUSE-12](#MOUSE-12), the press and the release are on one
+cell and the press is a single click, so a drag, a double click and a triple click are selections,
+and a click over the scroller or a history search does nothing. The border column is the resize
+handle, no other row is a target for this, and the files state has none
+([MOUSE-18](#MOUSE-18)). The key stays the way to do it without a mouse.
+
+`verified-by: bravebot_tui::app::a_click_on_the_panels_hide_row_hides_the_panel`
+`verified-by: bravebot_tui::app::a_drag_over_the_hide_row_or_a_click_in_the_scroller_leaves_the_panel_open`
+`verified-by: bravebot_tui::panel::only_the_hide_row_is_a_hide_target`

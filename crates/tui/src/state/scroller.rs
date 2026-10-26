@@ -34,8 +34,17 @@ pub struct Laid {
     /// The first row, the last row and the transcript index of each call that has more to show
     /// than it draws, top to bottom. Empty unless the scroller is open.
     pub expandable: Vec<(u16, u16, usize)>,
+    /// The first row, the last row and the transcript index of each delegate's block, top to
+    /// bottom. Empty unless the scroller is open.
+    pub delegates: Vec<(u16, u16, usize)>,
+    /// The screen rows of the transcript that continue the line drawn above them, because the
+    /// line was wider than the transcript and wrapped, each with whether the wrap broke the line
+    /// at a blank. A copy joins them without a line break, and with a space where it did.
+    pub continued: Vec<(u16, bool)>,
     /// The regions of the screen a selection can begin in, empty for a view that has none.
     pub panes: Vec<(crate::select::Pane, ratatui::layout::Rect)>,
+    /// The cells the permission mode is drawn in on the hint row, where it is drawn (MOUSE-14).
+    pub mode: Option<ratatui::layout::Rect>,
 }
 
 impl Laid {
@@ -454,6 +463,81 @@ impl Session {
         else {
             return;
         };
+        self.flip_call(index, start, relaid);
+    }
+
+    /// Expand or collapse the call drawn on the screen row `row`, as a click on it does (MOUSE-9).
+    ///
+    /// Says whether a call was there. The scroller draws the transcript from the first screen row,
+    /// so the row clicked is the view's top row plus `row`. A click on a call's rows beneath its
+    /// heading acts on that call as well, since they are the call's.
+    pub fn toggle_expanded_at(&mut self, row: u16, relaid: impl Fn(&Session) -> Laid) -> bool {
+        if self.watched_delegate().is_some()
+            || row >= self.laid.height
+            || self.scroller().is_none_or(|scroller| scroller.help)
+        {
+            return false;
+        }
+        let at = self.top_row().saturating_add(row);
+        let Some(&(start, _, index)) = self
+            .laid
+            .expandable
+            .iter()
+            .find(|(start, end, _)| (*start..=*end).contains(&at))
+        else {
+            return false;
+        };
+        self.flip_call(index, start, relaid);
+        true
+    }
+
+    /// Open the view of the delegate whose block is drawn on the screen row `row`, as a click on
+    /// it does (MOUSE-10).
+    ///
+    /// Says whether a delegate was there. The view it opens is the one the watch key opens on that
+    /// delegate, and it closes the same way. Nothing happens where a view is already open, the
+    /// key list is over the transcript, or the row belongs to no delegate.
+    pub fn watch_delegate_at(&mut self, row: u16) -> bool {
+        if self.watching.is_some()
+            || row >= self.laid.height
+            || self.scroller().is_none_or(|scroller| scroller.help)
+        {
+            return false;
+        }
+        let at = self.top_row().saturating_add(row);
+        let Some(&(_, _, index)) = self
+            .laid
+            .delegates
+            .iter()
+            .find(|(start, end, _)| (*start..=*end).contains(&at))
+        else {
+            return false;
+        };
+        let Some(id) = self
+            .transcript
+            .get(index)
+            .and_then(|entry| entry.delegate.as_ref())
+            .map(|delegate| delegate.id)
+        else {
+            return false;
+        };
+        let Some(place) = self.delegates().iter().position(|held| held.id == id) else {
+            return false;
+        };
+        self.held_view = Some(self.scroll);
+        self.scroll = 0;
+        self.watching = Some(Watching {
+            scope: WatchScope::Agents,
+            at: self.asides.len() + place,
+            listing: false,
+            on_session: false,
+        });
+        true
+    }
+
+    /// Flip one call and lay the transcript out again, keeping the view on the call.
+    fn flip_call(&mut self, index: usize, start: u16, relaid: impl Fn(&Session) -> Laid) {
+        let top = self.top_row();
         if let Some(entry) = self.transcript.get_mut(index) {
             entry.expanded = !entry.expanded;
         }

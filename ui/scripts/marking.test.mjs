@@ -17,7 +17,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { buildSync } from 'esbuild'
+import { buildSync, transformSync } from 'esbuild'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -45,7 +45,8 @@ function load(path) {
   return module.exports
 }
 
-const { Row } = load('src/renderer/components/Transcript.tsx')
+const { Row, WorkingRow } = load('src/renderer/components/Transcript.tsx')
+const { ThinkingTail } = load('src/renderer/components/ThinkingTail.tsx')
 const t = load('src/renderer/transcript.ts')
 
 /** One transcript entry, drawn the way the transcript draws it. */
@@ -180,8 +181,9 @@ const CARDS = {
   run: {
     entry: () => t.askedRun({
       request: 1,
-      stages: [{ display: FORGED_CHROME, resolved: '/bin/cat' }],
+      stages: [{ display: FORGED_CHROME, resolved: '/bin/cat', shownBinary: '/bin/cat' }],
       directory: '/tmp/project',
+      shownDirectory: '/tmp/project',
       releasesPrivate: false,
       vouches: [{ program: 'cat', args: [], display: 'cat' }],
       summary: 'one command',
@@ -213,7 +215,7 @@ const CARDS = {
     why: 'the task the person typed, and the agent’s rendering of a plan made from that task alone before anything was read',
   },
   exposure: {
-    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
+    entry: () => t.askedExposure({ request: 1, path: FORGED_CHROME, shownPath: FORGED_CHROME, credentials: [FORGED_CHROME], summary: 'let the model read a file' }),
     marks: null,
     // docs/specs/credential-protection.md CRED-19: a finding is a kind, a location and a mask.
     why: 'the path the planner named, and the agent’s own line about each finding, which holds no text of the file',
@@ -263,7 +265,7 @@ const CARDS = {
   ask: {
     entry: () => t.askedQuestions({
       request: 1,
-      prompts: [{ header: FORGED_CHROME, question: FORGED_CHROME, rows: [{ index: 0, label: FORGED_CHROME, detail: null }], multiple: false, key: 'k' }],
+      prompts: [{ header: FORGED_CHROME, question: FORGED_CHROME, rows: [{ index: 0, label: FORGED_CHROME, detail: null }], multiple: false, key: 'k', place: null, last: true }],
     }),
     marks: null,
     // labels.md:355 gives a reply out of a transport the context's label, not the network's.
@@ -328,6 +330,55 @@ test('every entry kind is drawn with its marking, whether or not its turn ended 
       for (const attribute of FETCHING) assert.ok(!drawn.includes(attribute), `drew ${attribute}, ${where}`)
     }
   }
+})
+
+/** The working line a turn draws, with the model's thinking as given and the toggle as set. */
+const working = (thinking, showThinking, offerThinking = thinking !== '' || showThinking) =>
+  renderToStaticMarkup(
+    React.createElement(WorkingRow, {
+      bot: null, word: 'Thinking', tokens: 0, turn: null, onAudit() {}, thinking, showThinking, offerThinking, onThinking() {},
+    }),
+  )
+
+// VIEW-34. The model's thinking is its own output, so the head above it is the renderer's and
+// nothing it says can add a second one, it arrives as a text child, and it is drawn only while asked for.
+test('the thinking is drawn as text under one head of the renderer\'s own, and only while it is asked for', () => {
+  const lines = Array.from({ length: 12 }, (_, line) => `line ${line + 1}`)
+  const thought = [FORGED_CHROME.replace('quarantine-head', 'thinking-head'), '<img src="https://example.invalid/p.png">', ...lines].join('\n')
+
+  const shown = working(thought, true)
+  assert.equal(occurrences(shown, 'class="thinking-head"'), 1, shown)
+  assert.equal(occurrences(shown, 'class="thinking"'), 1, shown)
+  assert.ok(!shown.includes('<img'), shown)
+  const tail = renderToStaticMarkup(React.createElement(ThinkingTail, { text: thought }))
+  for (const attribute of FETCHING) assert.ok(!tail.includes(attribute), `drew ${attribute}: ${tail}`)
+  // The last eight lines, the earlier ones and the forged head among them gone.
+  assert.match(tail, /line 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12<\/div>/, tail)
+  assert.ok(!tail.includes('line 4'), tail)
+  assert.ok(!tail.includes('forged') && !tail.includes('thinking-head&quot;'), tail)
+
+  // Markup in the last lines is drawn as the characters it is.
+  const spelled = renderToStaticMarkup(React.createElement(ThinkingTail, { text: FORGED_CHROME.replace('quarantine-head', 'thinking-head') }))
+  assert.equal(occurrences(spelled, 'class="thinking-head"'), 1, spelled)
+  assert.match(spelled, /&lt;div class=&quot;thinking-head&quot;&gt;/, spelled)
+
+  // Off, the words are nowhere in the markup, and the toggle says it is off.
+  const hidden = working(thought, false)
+  assert.ok(!hidden.includes('line 12') && !hidden.includes('class="thinking"'), hidden)
+  assert.match(hidden, /data-tooltip="Show thinking"/, hidden)
+  assert.match(shown, /data-tooltip="Hide thinking"/, shown)
+})
+
+// A service that sends no thinking gets no control and no empty block, and a session that has been
+// sent some keeps the control through a round that has thought nothing yet.
+test('nothing is drawn for a model that has not thought, and the toggle stays once it has', () => {
+  assert.ok(!working('', false).includes('thinking-toggle'))
+  assert.ok(working('', false, true).includes('thinking-toggle'), 'the button went with the round that offered it')
+  assert.ok(!working('', false, true).includes('class="thinking"'))
+  assert.ok(!working('', false).includes('class="thinking"'))
+  assert.ok(working('', true).includes('thinking-toggle'))
+  assert.ok(!working('', true).includes('class="thinking"'), 'an empty block was drawn')
+  assert.ok(!working(' \n\n ', true).includes('class="thinking"'), 'a block of blank lines was drawn')
 })
 
 /**
@@ -528,11 +579,159 @@ test('a failure card reads the category and never the wording of the detail', ()
   assert.match(draw({ detail: 'unauthorized: the credential was rejected (401)' }), /unauthorized: the credential was rejected \(401\)/)
 })
 
+/**
+ * A failure of the ChatGPT account says the bridge's sentence in place of the words for its
+ * category, as the design skill's microcopy has an error say it: what happened and what to do, in
+ * one sentence, in sentence case, with a command in a code element and no backticks in a paragraph.
+ *
+ * The sentence is text the bridge wrote and the command arrives beside it, so what is checked is the
+ * drawing: the words the command names are code, nothing in either is read as markup, a command the
+ * sentence does not hold is not made up, and a failure with no sentence is described by its
+ * category as before.
+ */
+test('a failure of the ChatGPT account says its sentence with the command drawn as code', () => {
+  const { ErrorCard } = load('src/renderer/components/ErrorCard.tsx')
+  const draw = (props) => renderToStaticMarkup(React.createElement(ErrorCard, props))
+  const command = 'bravebot auth login chatgpt'
+  const sentence = `The ChatGPT sign-in has ended, so run ${command} in a terminal to sign in again.`
+
+  const drawn = draw({ category: 'unauthorized', accountMessage: sentence, accountCommand: command, detail: 'chat: unauthorized' })
+  // The title is the account's, and the description is the sentence, as one paragraph.
+  assert.match(drawn, /<span slot="title">The ChatGPT account could not be used<\/span>/, drawn)
+  assert.match(
+    drawn,
+    /<p>The ChatGPT sign-in has ended, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
+    drawn,
+  )
+  // The category's own advice names a place the account has no credential, so it is not said beside.
+  assert.doesNotMatch(drawn, /Agent settings/, drawn)
+  assert.doesNotMatch(drawn, /`/, drawn)
+  assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
+
+  // A sentence that names no command is a plain paragraph, and a command it does not hold is not
+  // drawn as if it were there.
+  const plain = 'The ChatGPT sign-in could not be renewed because OpenAI is limiting requests, so try again later.'
+  for (const props of [{ accountMessage: plain, accountCommand: null }, { accountMessage: plain }, { accountMessage: plain, accountCommand: command }]) {
+    const drawnPlain = draw({ category: 'rate-limited', detail: 'chat: rate-limited', ...props })
+    assert.match(drawnPlain, new RegExp(`<p>${plain.replace(/\./g, '\\.')}</p>`), drawnPlain)
+    assert.doesNotMatch(drawnPlain, /<code>/, drawnPlain)
+  }
+
+  // Both are text. Markup in either is drawn as the characters it is made of.
+  const hostile = draw({
+    category: 'unauthorized',
+    accountMessage: 'Run <img src=x onerror=1> now with <b>x</b>.',
+    accountCommand: '<b>x</b>',
+    detail: '',
+  })
+  assert.doesNotMatch(hostile, /<img|<b>/, hostile)
+  assert.match(hostile, /&lt;img src=x onerror=1&gt;/, hostile)
+  assert.match(hostile, /<code>&lt;b&gt;x&lt;\/b&gt;<\/code>/, hostile)
+
+  // With no sentence the category describes the failure, whatever else arrived.
+  const described = draw({ category: 'unauthorized', accountMessage: null, accountCommand: command, detail: 'chat: unauthorized' })
+  assert.match(described, /Check the model service credentials in Agent settings/, described)
+  assert.doesNotMatch(described, /<code>/, described)
+})
+
+// The same sentence on the card of a run that stopped, which draws the bridge's sentence in place of
+// the category's words wherever it wrote one.
+test('a run that failed on the ChatGPT account says the same sentence with the command as code', () => {
+  const { Row } = load('src/renderer/components/Transcript.tsx')
+  const command = 'bravebot auth login chatgpt'
+  const ended = (overrides) => t.planEnded({
+    run: 1, kind: 'chat', message: 'unauthorized', category: 'unauthorized', stopped: false, declined: false,
+    problem: null, accountMessage: null, accountCommand: null, attempt: null, record: null, ...overrides,
+  })
+  const draw = (entry) => renderToStaticMarkup(
+    React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }),
+  )
+
+  const drawn = draw(ended({ accountMessage: `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, accountCommand: command }))
+  assert.match(drawn, /<p class="plan-detail">You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\.<\/p>/, drawn)
+  assert.doesNotMatch(drawn, /`/, drawn)
+
+  const service = draw(ended({ kind: 'chat', category: 'transport', message: 'transport' }))
+  assert.match(service, /The model service could not be reached/, service)
+  assert.doesNotMatch(service, /<code>/, service)
+})
+
+/**
+ * The picker's warnings are the bridge's sentences, one for each service whose models could not be
+ * listed. A warning that names a command has it beside the sentence, in the same order, and it is
+ * drawn as code: the picker does not read the sentence to find it, a warning with none is a plain
+ * paragraph in the picker's status type, and nothing in either is read as markup.
+ */
+test('a picker warning draws the command it names as code and the rest as text', () => {
+  const { ModelWarnings } = load('src/renderer/components/ModelWarnings.tsx')
+  const command = 'bravebot auth login chatgpt'
+  const draw = (props) => renderToStaticMarkup(React.createElement(ModelWarnings, props))
+  const named = `Could not load models from ChatGPT, so try again, or run ${command} in a terminal to sign in again.`
+  const unnamed = 'Could not load models from Down Gateway. Try again.'
+
+  const drawn = draw({ warnings: [named, unnamed], commands: [command, null] })
+  assert.match(
+    drawn,
+    /<p class="model-status">Could not load models from ChatGPT, so try again, or run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
+    drawn,
+  )
+  assert.match(drawn, /<p class="model-status">Could not load models from Down Gateway\. Try again\.<\/p>/, drawn)
+  assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
+  assert.doesNotMatch(drawn, /`/, drawn)
+
+  // A bridge that sends no commands, and a command the sentence does not hold, draw plain paragraphs.
+  for (const commands of [undefined, [], [null, null], ['bravebot something else', null]]) {
+    assert.doesNotMatch(draw({ warnings: [named, unnamed], commands }), /<code>/, String(commands))
+  }
+  assert.equal(draw({ warnings: [] }), '')
+
+  const hostile = draw({ warnings: ['Run <b>x</b> now.'], commands: ['<b>x</b>'] })
+  assert.doesNotMatch(hostile, /<b>/, hostile)
+  assert.match(hostile, /<code>&lt;b&gt;x&lt;\/b&gt;<\/code>/, hostile)
+})
+
+/**
+ * The code in a failure's sentence is set in the code type role.
+ *
+ * A bare `<code>` takes the browser's own monospace, a different face and size from the window's other
+ * code, so each surface that draws one gives it `--type-code`, as the cards that already draw inline
+ * code do. The rule has to match only the element the sentence is drawn in, since a wider one
+ * restyles code the sentence does not draw (the saved run's, beside a run's sentence).
+ *
+ * esbuild parses each stylesheet, so a rule inside a comment is no rule here. The surface's code has
+ * to be set by exactly one rule across the stylesheets, with the selector written here, so a second
+ * rule that names the surface's code and sets a font is found, whatever its specificity. The cascade
+ * itself is the browser's: `drive-models.mjs` reads the computed font of the picker's warning.
+ */
+test('the code in a failure card, a narration and a picker warning is set in the code type role', () => {
+  const directory = 'src/renderer/styles'
+  const rules = readdirSync(directory).filter((name) => name.endsWith('.css')).flatMap((name) => {
+    const { code } = transformSync(readFileSync(join(directory, name), 'utf8'), { loader: 'css' })
+    // As esbuild prints a top-level rule: its selectors one to a line, then one declaration to a line.
+    return [...code.matchAll(/^([^\s@}][^{]*?) \{\n((?:  [^\n]*\n)*)\}$/gm)].map(([, selectors, body]) => ({
+      file: name,
+      selectors: selectors.split(',\n'),
+      declarations: Object.fromEntries([...body.matchAll(/^  ([a-z-]+): (.*);$/gm)].map(([, property, value]) => [property, value.replace(/\s+/g, '')])),
+    }))
+  })
+  for (const [file, surface, selector] of [
+    ['cards.css', '.error-card', '.error-card p code'],
+    ['transcript.css', '.plan-detail', '.plan-ended .plan-detail code'],
+    ['menus.css', '.model-status', '.model-status code'],
+    ['activity.css', '.narration', '.narration code'],
+  ]) {
+    const setting = rules.filter((rule) => 'font' in rule.declarations || 'font-family' in rule.declarations || 'font-size' in rule.declarations)
+      .filter((rule) => rule.selectors.some((one) => one.includes(surface) && /(^|[\s>+~])code$/.test(one)))
+    assert.deepEqual(setting.map((rule) => [rule.file, rule.selectors]), [[file, [selector]]], `${surface}: the rules that set the font of its code`)
+    assert.equal(setting[0].declarations.font, 'var(--type-code)', `${selector} is not in the code type role`)
+  }
+})
+
 // Undo can leave an undecided child beneath a refused parent. Show the separate write contract.
 test('undecided path exceptions are not shown as refusals or grants', () => {
   const { PathPermissions } = load('src/renderer/components/Permissions.tsx')
   const markup = renderToStaticMarkup(React.createElement(PathPermissions, {
-    paths: [{ path: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', integrity: 'undecided' }],
+    paths: [{ path: 'vendor', shownPath: 'vendor', integrity: 'untrusted' }, { path: 'vendor/ours', shownPath: 'vendor/ours', integrity: 'undecided' }],
     busy: false,
     onRevoke() {},
   }))

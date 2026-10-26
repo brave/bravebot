@@ -7,9 +7,12 @@ governs:
   - crates/agent/src/preamble.rs
   - crates/tui/src/goals.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/app/keys.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/queue.rs
   - crates/tui/src/state/entry.rs
   - crates/tui/src/command_table.rs
 guards:
@@ -31,6 +34,8 @@ Not how a turn goes about it: what a turn is told about the condition is here, a
 is a turn like any other. The judge is one request over a copy of the exchange, which is the shape
 [watching.md](watching.md) describes for a question asked beside the work. That a `/` line is a
 command at all, and that only a key press produces one, is [commands.md](commands.md).
+
+`bravebot --goal` runs the same loop in a one-shot run, which [cli.md](cli.md) specifies.
 
 **A goal never gets ahead of the person.** A prompt they queued while a turn ran is sent before the
 judge is asked, so the condition is judged against an exchange holding everything they have said.

@@ -5,11 +5,14 @@
 //! state. None reads a report, which is why they can live apart from the presentation of one in
 //! `collect_delegates`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bravebot_core::delegate::{DelegateId, Finish};
+use bravebot_core::event::Sink;
+use bravebot_core::policy::Policy;
 
-use super::{TOOL_BUDGET_SPENT, TurnError};
+use super::{TOOL_BUDGET_SPENT, TurnError, Worked, Working};
+use crate::report::Reporter;
 use crate::tools;
 
 /// How a delegate's run came back, from the way the result arrived, the run's own counts and the
@@ -196,6 +199,162 @@ fn stuck_checkout(id: &str, commit: &str, path: &std::path::Path) -> (String, St
         ),
         "its checkout could not be removed".to_string(),
     )
+}
+
+/// The bounds a delegate's spec fixed, which how it ended is counted against.
+#[derive(Clone, Copy)]
+pub(super) struct Limit {
+    /// The most rounds of tool calls its spec allows (TRACE-8).
+    pub rounds: usize,
+    /// The most tokens its spec allows (DELEGATE-29).
+    pub budget: Option<u64>,
+}
+
+/// A delegate taken back: how it ended, what it cost, and the checkout it leaves to account for.
+///
+/// What `collect_delegates` presents from, once the decisions, clock and record of the run are
+/// already taken back. Nothing here is a report that has been presented.
+pub(super) struct Joined {
+    pub id: DelegateId,
+    pub limit: Limit,
+    pub stop: bravebot_core::cancel::DelegateStop,
+    /// The run's result, or why none came back.
+    pub delegated: Result<crate::delegate::Delegated, TurnError>,
+    /// How long the run took and how many rounds it made, where it came back at all.
+    pub ran: Option<(Duration, usize)>,
+    /// What its own backend reported it spent on a failed run: the part that completed.
+    pub partial: crate::outcome::Spent,
+    pub finish: Finish,
+    /// What its own backend reported it spent.
+    pub tokens: u64,
+    /// The checkout it worked in, and what retiring it did.
+    pub retired: Option<(
+        crate::workspace::Retired,
+        std::sync::Arc<crate::workspace::CheckoutInfo>,
+    )>,
+}
+
+/// Join a delegate's thread and take back what it decided, how long it waited and how it ended.
+///
+/// Nothing here reads a report: the presentation of one stays with `collect_delegates`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the delegate, policy, reporter and the turn's wait, spend, notice and workspace tallies are separate state"
+)]
+pub(super) fn join_delegate<S: Sink, R: Reporter>(
+    working: Working<'_>,
+    policy: &mut Policy<'_, S>,
+    reporter: &mut R,
+    waits: &mut crate::timing::DelegateWait,
+    spent: &mut crate::timing::Elapsed,
+    notices: &mut Vec<String>,
+    worked: &mut Worked,
+    round: usize,
+) -> Joined {
+    let id = working.id;
+    reporter.delegate_waiting(id);
+    // After the report above, not before it: what a delegate's requests are clipped to is the
+    // wait itself, and a reporter that draws a screen or blocks on the lock another delegate
+    // holds is the parent's own overhead. Starting the window first would charge whatever a
+    // request happened to overlap of it as inference the parent never spent waiting.
+    let joined_at = Instant::now();
+    #[cfg(test)]
+    if let Some(started) = working.join_started {
+        // A closed receiver means the test observer has already exited.
+        let _ = started.send(());
+    }
+    let (delegated, ran, partial, requests) = match working.handle.join() {
+        Ok((ended, partial, requests)) => {
+            // Before anything else, and on both of the ways a run can end. A person who
+            // vouched for the build inside this delegate is not asked again by a delegate
+            // spawned after it, and one whose run failed had the same person answer the same
+            // question (DELEGATE-11): taking the record back only from a delegate that
+            // reported would leave the next run asking.
+            policy.adopt_from_delegate(&working.seeded, &ended.vouched);
+            // Also on both of the ways a run can end, and for a reason of the same shape:
+            // the person whose formatter would not start is owed the sentence whether or not
+            // the delegate that fired it went on to report.
+            notices.extend(ended.notices);
+            // On both of the ways a run can end too, since a stopped delegate leaves the files
+            // it changed and has run what it ran. Only from one that shares this turn's
+            // workspace, or from one in a checkout given its changes: a delegate in a checkout
+            // of its own built the commit the checkout holds, which has none of this turn's
+            // changes in it (TURN-4).
+            match working.checkout.as_deref() {
+                None => worked.adopt(round, ended.worked),
+                // A checkout given the working directory's changes was built and tested with
+                // them, so a program run there counts as run against this turn's change, and
+                // what it wrote there is not this turn's (CHECKOUT-23).
+                Some(checkout)
+                    if checkout
+                        .carried()
+                        .is_some_and(|carried| carried.changed_anything()) =>
+                {
+                    worked.adopt_run(ended.worked)
+                }
+                Some(_) => {}
+            }
+            let ran = Some((ended.took, ended.rounds));
+            (ended.delegated, ran, partial, requests)
+        }
+        // A thread that panicked is a delegate that stopped, which is all anybody can be
+        // told about it: what it was doing died with it, and the turn is still running.
+        // Nothing came back, not even a record, so there is no adoption either: "nothing
+        // moved" and "nothing is known" are different things, and the trail should not
+        // record the second as the first.
+        Err(_) => (
+            Err(TurnError::Precommit(
+                "the delegate stopped without finishing".to_string(),
+            )),
+            None,
+            Default::default(),
+            Vec::new(),
+        ),
+    };
+
+    spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
+
+    let finish = finish_of(&delegated, ran);
+    // What its own backend reported it spent, which on a failed run is the part that completed.
+    let tokens = match &delegated {
+        Ok(delegated) => delegated.usage.total(),
+        Err(_) => partial.tokens,
+    };
+    policy.record_delegate_end_within(
+        id,
+        working.rounds,
+        working.budget.map(|budget| (budget, tokens)),
+        finish,
+    );
+
+    // After the decisions it made are taken back, so a rule that distrusts a path survives the
+    // withdrawal of the rest (CHECKOUT-12).
+    let retired = working
+        .checkout
+        .as_ref()
+        .map(|checkout| (checkout.retire(&policy.file_authority()), checkout.clone()));
+    if let Some((crate::workspace::Retired::Removed, checkout)) = &retired {
+        crate::workspace::record_checkout(
+            policy.sink(),
+            crate::workspace::Happened::Removed,
+            checkout.path(),
+        );
+    }
+
+    Joined {
+        id,
+        limit: Limit {
+            rounds: working.rounds,
+            budget: working.budget,
+        },
+        stop: working.stop,
+        delegated,
+        ran,
+        partial,
+        finish,
+        tokens,
+        retired,
+    }
 }
 
 #[cfg(test)]

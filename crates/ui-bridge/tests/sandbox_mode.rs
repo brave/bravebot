@@ -6,6 +6,10 @@
 //! to its profile is read off what the tool handed back to the model.
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -593,6 +597,9 @@ fn another_session_opens_under_the_settings_and_not_the_choice() {
     );
     assert_eq!(front.question_or_the_end()["event"], "turn.done");
 
+    // The open sessions end, so nothing holds the record they wrote.
+    front.call("session.close", json!({"session": session}));
+    front.call("session.close", json!({"session": child}));
     let listed = front.call(
         "session.list",
         json!({"directory": scratch.project().display().to_string()}),

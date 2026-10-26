@@ -2,10 +2,12 @@
 //! that build each of its sections.
 
 use crate::exit::{Ending, fail};
+use crate::flags::sandbox_refusal;
 use crate::model::{how_to_configure_a_model, managed_refusal, model_for_this_run};
 use crate::workspace::{confinement_name, current_workspace, unattended_trust_with};
-use crate::{auth, import, mcp, progress, sandbox_refusal};
+use crate::{auth, import, mcp, progress};
 use bravebot_agent::Workspace;
+use bravebot_agent::chatgpt::AccountFile;
 use bravebot_config::{Config, Managed, env_var};
 use bravebot_i18n::t;
 use bravebot_net::Transport;
@@ -34,17 +36,16 @@ pub(crate) fn sandbox_mode_line(
         Ok(choice) => {
             let detail = match choice.source {
                 Source::Default => {
-                    t!(doctor_sandbox_default, mode = choice.mode.name()).to_string()
+                    t!(doctor_sandbox_default, mode = choice.mode.name())
                 }
                 Source::Flag => {
-                    t!(session_sandbox_from_flag, mode = choice.mode.name()).to_string()
+                    t!(session_sandbox_from_flag, mode = choice.mode.name())
                 }
                 Source::File(path) | Source::Managed(path) => t!(
                     doctor_sandbox_from,
                     mode = choice.mode.name(),
                     path = path.display().to_string()
-                )
-                .to_string(),
+                ),
             };
             Ok(aligned(label, detail, DETAIL))
         }
@@ -169,7 +170,7 @@ pub(crate) fn sandbox_filesystem_lines(
     capabilities: Option<&Capabilities>,
 ) -> Vec<String> {
     let source = |entry: &bravebot_sandbox::rules::Entry| match &entry.by {
-        Some(path) => path.display().to_string(),
+        Some(path) => progress::printable_path(path),
         None => t!(doctor_sandbox_filesystem_source_flag).to_string(),
     };
     bravebot_agent::permissions::filesystem_standing(rules, directory, capabilities)
@@ -178,18 +179,16 @@ pub(crate) fn sandbox_filesystem_lines(
             None => t!(
                 doctor_sandbox_filesystem_entry,
                 key = item.list.key(),
-                path = item.entry.path.clone(),
+                path = progress::printable(&item.entry.path),
                 source = source(&item.entry)
-            )
-            .to_string(),
+            ),
             Some(reason) => t!(
                 doctor_sandbox_filesystem_refused,
                 key = item.list.key(),
-                path = item.entry.path.clone(),
+                path = progress::printable(&item.entry.path),
                 reason = reason,
                 source = source(&item.entry)
-            )
-            .to_string(),
+            ),
         })
         .collect()
 }
@@ -207,6 +206,28 @@ fn ignored<'a>(paths: impl IntoIterator<Item = &'a Path>, say: impl Fn(String) -
     each(t!(doctor_settings_ignored), paths, |path| {
         say(path.display().to_string())
     });
+}
+
+/// What `doctor` says about the retention period: a line for each file that named `retentionDays`
+/// and was not obeyed, and one while the period cannot be determined and the sweep is paused
+/// (STATE-4). Nothing while the sweep runs, which is the ordinary case.
+fn retention_facts(settings: &bravebot_config::Settings) -> Vec<(String, String)> {
+    let not_obeyed = settings.retention_ignored().map(|path| {
+        (
+            t!(doctor_settings_ignored).to_string(),
+            t!(
+                doctor_settings_retention_ignored,
+                path = path.display().to_string()
+            ),
+        )
+    });
+    let paused = settings.retention_unreadable().map(|path| {
+        (
+            t!(doctor_retention).to_string(),
+            t!(doctor_retention_paused, path = path.display().to_string()),
+        )
+    });
+    not_obeyed.chain(paused).collect()
 }
 
 /// The `doctor` facts for `sandbox.filesystem`: each entry of the four lists with the file or flag
@@ -241,10 +262,9 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
             t!(
                 doctor_managed_sandbox_unread,
                 key = list.key(),
-                path = entry.path.clone(),
+                path = progress::printable(&entry.path),
                 managed = managed_file.clone()
             )
-            .to_string()
         },
     );
     each(
@@ -256,7 +276,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -268,7 +287,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -280,7 +298,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -292,11 +309,10 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     ignored(settings.git_identities_ignored(), |path| {
-        t!(doctor_settings_git_identities_ignored, path = path).to_string()
+        t!(doctor_settings_git_identities_ignored, path = path)
     });
     each(
         t!(doctor_settings_ignored),
@@ -307,7 +323,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     // Judged as a stage judges it, so a key a push would not be given is named before the push.
@@ -344,7 +359,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = list.key(),
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
     each(
@@ -356,7 +370,6 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
                 key = key,
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
 }
@@ -364,19 +377,21 @@ fn doctor_sandbox_filesystem(settings: &bravebot_config::Settings, managed: &Man
 /// Names only. On some machines a value here is a credential, and a diagnostic that prints one is a
 /// diagnostic people paste into issues.
 ///
+/// The value of the `settings` line: the names the files hold, or what a file with none said.
+fn settings_sources_line(settings: &bravebot_config::Settings) -> String {
+    let named: Vec<String> = settings.names().map(progress::printable).collect();
+    match (named.is_empty(), settings.is_empty()) {
+        (false, _) => t!(doctor_settings_names, names = named.join(", ")).to_string(),
+        (true, false) => t!(doctor_settings_no_variables).to_string(),
+        (true, true) => t!(doctor_settings_absent).to_string(),
+    }
+}
+
 /// The variables the file names, not everything it configured: a gateway is a block rather than a
 /// variable and gets a section of its own. A file that only configures one therefore names nothing
 /// here, which is absence rather than an empty list.
 fn report_settings_sources(settings: &bravebot_config::Settings) {
-    let named: Vec<&str> = settings.names().collect();
-    match (named.is_empty(), settings.is_empty()) {
-        (false, _) => fact(
-            t!(doctor_settings),
-            t!(doctor_settings_names, names = named.join(", ")),
-        ),
-        (true, false) => fact(t!(doctor_settings), t!(doctor_settings_no_variables)),
-        (true, true) => fact(t!(doctor_settings), t!(doctor_settings_absent)),
-    }
+    fact(t!(doctor_settings), settings_sources_line(settings));
 
     // What a pattern in `run.scrubEnv` reached on this machine. An exact entry withholds what it
     // says and needs no line; a pattern's effect depends on the variables this process holds, so
@@ -391,7 +406,6 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
                 pattern = pattern,
                 variable = name
             )
-            .to_string()
         },
     );
 
@@ -407,10 +421,9 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
         |(name, path)| {
             t!(
                 doctor_settings_overridden,
-                name = name,
+                name = progress::printable(name),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
 }
@@ -424,38 +437,67 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     // asked, and somebody who wrote it into one has to be told rather than left wondering why the
     // prompt still appears.
     ignored(settings.vetting_ignored(), |path| {
-        t!(doctor_settings_vetting_ignored, path = path).to_string()
+        t!(doctor_settings_vetting_ignored, path = path)
     });
     ignored(settings.providers_ignored(), |path| {
-        t!(doctor_settings_provider_ignored, path = path).to_string()
+        t!(doctor_settings_provider_ignored, path = path)
     });
     ignored(settings.model_ignored(), |path| {
-        t!(doctor_settings_model_ignored, path = path).to_string()
+        t!(doctor_settings_model_ignored, path = path)
     });
     ignored(settings.advisor_ignored(), |path| {
-        t!(doctor_settings_advisor_ignored, path = path).to_string()
+        t!(doctor_settings_advisor_ignored, path = path)
     });
     ignored(settings.fallback_ignored(), |path| {
-        t!(doctor_settings_fallback_ignored, path = path).to_string()
+        t!(doctor_settings_fallback_ignored, path = path)
     });
     ignored(settings.summary_ignored(), |path| {
-        t!(doctor_settings_summary_ignored, path = path).to_string()
+        t!(doctor_settings_summary_ignored, path = path)
+    });
+    ignored(settings.plan_ignored(), |path| {
+        t!(doctor_settings_plan_ignored, path = path)
     });
     ignored(settings.processor_ignored(), |path| {
-        t!(doctor_settings_processor_ignored, path = path).to_string()
+        t!(doctor_settings_processor_ignored, path = path)
     });
     ignored(settings.agent_ignored(), |path| {
-        t!(doctor_settings_agent_ignored, path = path).to_string()
+        t!(doctor_settings_agent_ignored, path = path)
     });
     ignored(settings.style_ignored(), |path| {
-        t!(doctor_settings_style_ignored, path = path).to_string()
+        t!(doctor_settings_style_ignored, path = path)
+    });
+    ignored(settings.language_ignored(), |path| {
+        t!(doctor_settings_language_ignored, path = path)
+    });
+    // A tag no catalog answers is read as the reference, as it is from the environment, so a typo
+    // would otherwise show English and say nothing.
+    each(
+        t!(doctor_settings_ignored),
+        settings.language().filter(|language| {
+            !language.eq_ignore_ascii_case(bravebot_i18n::AUTO)
+                && bravebot_i18n::find(language).is_none()
+        }),
+        |language| {
+            t!(
+                doctor_settings_language_unmatched,
+                language = progress::printable(language),
+                reference = bravebot_i18n::DEFAULT.tag(),
+                available = bravebot_i18n::tags().join(", ")
+            )
+        },
+    );
+    ignored(settings.ask_idle_ignored(), |path| {
+        t!(doctor_settings_ask_idle_ignored, path = path)
     });
     ignored(settings.references_ignored(), |path| {
-        t!(doctor_settings_references_ignored, path = path).to_string()
+        t!(doctor_settings_references_ignored, path = path)
     });
     ignored(settings.attribution_ignored(), |path| {
-        t!(doctor_settings_attribution_ignored, path = path).to_string()
+        t!(doctor_settings_attribution_ignored, path = path)
     });
+    for (label, line) in retention_facts(settings) {
+        fact(label, line);
+    }
 
     each(
         t!(doctor_settings_ignored),
@@ -466,7 +508,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 mode = mode.name(),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -479,11 +520,10 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 mode = mode.name(),
                 held = held.display().to_string()
             )
-            .to_string()
         },
     );
     ignored(settings.sandbox_unreadable(), |path| {
-        t!(doctor_settings_sandbox_unreadable, path = path).to_string()
+        t!(doctor_settings_sandbox_unreadable, path = path)
     });
     each(
         t!(doctor_settings_ignored),
@@ -493,7 +533,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 doctor_settings_sandbox_unreadable,
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
 
@@ -509,10 +548,9 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
         |(path, key)| {
             t!(
                 doctor_settings_unread_key,
-                key = key,
+                key = progress::printable(key),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
 
@@ -530,7 +568,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 key = format!("permissions.{key}"),
                 path = path.display().to_string()
             )
-            .to_string()
         },
     );
     each(
@@ -542,7 +579,6 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
                 key = format!("permissions.{key}"),
                 path = managed_file.clone()
             )
-            .to_string()
         },
     );
 }
@@ -565,10 +601,10 @@ fn report_run_network(
         );
     }
     ignored(settings.run_network_ignored(), |path| {
-        t!(doctor_settings_network_ignored, path = path).to_string()
+        t!(doctor_settings_network_ignored, path = path)
     });
     ignored(settings.run_network_unreadable(), |path| {
-        t!(doctor_settings_network_unreadable, path = path).to_string()
+        t!(doctor_settings_network_unreadable, path = path)
     });
     each(
         t!(doctor_settings_ignored),
@@ -578,7 +614,6 @@ fn report_run_network(
                 doctor_managed_network_unreadable,
                 path = bravebot_config::managed_file().display().to_string()
             )
-            .to_string()
         },
     );
 }
@@ -617,31 +652,24 @@ fn report_allow_rules(
             _ => Vec::new(),
         };
     for rule in &proposed {
-        let path = rule.path.display().to_string();
+        let path = progress::printable_path(&rule.path);
+        let written = progress::printable(&rule.rule);
         match granted.contains(rule) {
             true => fact(
                 t!(doctor_settings_granted),
-                t!(
-                    doctor_settings_allow_granted,
-                    rule = &rule.rule,
-                    path = path
-                ),
+                t!(doctor_settings_allow_granted, rule = written, path = path),
             ),
             false => fact(
                 t!(doctor_settings_ignored),
-                t!(
-                    doctor_settings_allow_ignored,
-                    rule = &rule.rule,
-                    path = path
-                ),
+                t!(doctor_settings_allow_ignored, rule = written, path = path),
             ),
         }
     }
     granted
 }
 
-/// Counted rather than listed: a rule is the user's own text and printing it back says nothing they
-/// cannot read in the file. What is worth saying is which of them this build could not act on,
+/// Counted rather than listed: a rule can be read in the file, so printing it back says nothing the
+/// file does not. What is worth saying is which of them this build could not act on,
 /// because those are the ones that look like protection and are not.
 fn report_permissions(
     settings: &bravebot_config::Settings,
@@ -677,7 +705,7 @@ fn report_permissions(
         *ending = ends_on(*ending, Ending::Failed);
         fact(
             t!(doctor_permissions_unreadable),
-            bravebot_agent::permissions::describe(problem),
+            progress::described(problem),
         );
     }
 }
@@ -725,27 +753,60 @@ fn report_backends(
     // configuration and the file the batch sits in is a fact about the machine.
     let subscription = bravebot_skus::store::load().ok();
     for held in config.held(subscription.is_some()) {
-        fact(t!(doctor_ends), what_would_end(held));
-        fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
-        if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
-            fact(t!(doctor_noticed), noticed);
-        }
-        if let Some(binding) = how_it_is_bound(held) {
-            fact(t!(doctor_binding), binding);
-        }
-        if let Some(survives) = what_outlives_revoking(held) {
-            fact(t!(doctor_outlives), survives);
-        }
-        // How it got here, after what would end it: the lines above name the credential
-        // and the address somebody acts on, and these say which gate each drop failed and
-        // whether anybody could have done otherwise.
-        for drop in held.walk() {
-            if let Some(dropped) = why_it_dropped(held, *drop) {
-                fact(t!(doctor_dropped), dropped);
-            }
+        report_held(held);
+    }
+    report_chatgpt_sign_in(ending);
+    subscription
+}
+
+/// The account of one held credential: what would end it, the tier its walk stopped at, and the
+/// rest of what the record holds for it.
+fn report_held(held: bravebot_config::Held<'_>) {
+    fact(t!(doctor_ends), what_would_end(held));
+    fact(t!(doctor_tier), what_tier_it_stands_at(held.tier()));
+    if let Some(noticed) = how_soon_a_leak_is_noticed(held) {
+        fact(t!(doctor_noticed), noticed);
+    }
+    if let Some(binding) = how_it_is_bound(held) {
+        fact(t!(doctor_binding), binding);
+    }
+    if let Some(survives) = what_outlives_revoking(held) {
+        fact(t!(doctor_outlives), survives);
+    }
+    // How it got here, after what would end it: the lines above name the credential
+    // and the address somebody acts on, and these say which gate each drop failed and
+    // whether anybody could have done otherwise.
+    for drop in held.walk() {
+        if let Some(dropped) = why_it_dropped(held, *drop) {
+            fact(t!(doctor_dropped), dropped);
         }
     }
-    subscription
+}
+
+/// What `doctor` says of a ChatGPT sign-in (CHATGPT-11): that one is stored and when its access token
+/// expires, then the account of the credential like any other that is held.
+///
+/// Nothing at all where none is stored, as for a gateway block that names no credential: a line
+/// saying so on every machine that never signed in is one to learn to skip, and `auth status chatgpt`
+/// is the command that answers the question. A file that cannot be read is reported with its remedy
+/// and ends the run in failure, as a file of gateway keys does, since the sign-in it held has stopped
+/// being used. Only the instant is shown: the file also holds the tokens, the identifier of the
+/// client OpenAI issued and a host identifier, and none of them belongs in a report people paste.
+fn report_chatgpt_sign_in(ending: &mut Ending) {
+    match crate::chatgpt::standing() {
+        crate::chatgpt::Standing::SignedIn { expires } => {
+            fact(
+                t!(doctor_chatgpt),
+                t!(doctor_chatgpt_signed_in, expires = expires),
+            );
+            report_held(bravebot_config::Held::ChatgptAccount);
+        }
+        crate::chatgpt::Standing::Unusable(reason) => {
+            *ending = ends_on(*ending, Ending::Failed);
+            fact(t!(doctor_chatgpt), reason);
+        }
+        crate::chatgpt::Standing::NotSignedIn | crate::chatgpt::Standing::Nowhere => {}
+    }
 }
 
 /// What a run would actually request, and the subscription where one means something.
@@ -822,15 +883,24 @@ fn report_serving(config: &Config, ending: &mut Ending) {
         bravebot_agent::backend::Serving::NothingConfigured {
             subscription,
             a_service_is_configured,
+            chatgpt,
         } => {
             *ending = ends_on(*ending, Ending::Configuration);
+            // A sign-in file that cannot be read has its own line above, with the remedy, so the
+            // how-to does not say it a second time.
+            let chatgpt = match chatgpt {
+                AccountFile::Unreadable => AccountFile::NotStored,
+                other => other,
+            };
             println!();
             println!(
                 "{}",
                 how_to_configure_a_model(
                     subscription.as_deref(),
                     a_service_is_configured,
+                    chatgpt,
                     &import::looked(a_service_is_configured),
+                    None,
                 )
             );
         }
@@ -898,6 +968,10 @@ pub(crate) fn doctor() -> ExitCode {
             // Said here too, since a layer that tried to declare a server is wrong whatever else
             // the configuration is, and its author is not told anywhere else.
             report_mcp_declared(&settings, &mut ending);
+            // And the sign-in, which is a fact about the machine rather than about this
+            // configuration: a held credential is missing from the report exactly when somebody is
+            // debugging a setup that does not load.
+            report_chatgpt_sign_in(&mut ending);
             // The one line from the section above that still has to be printed. A pin is the case
             // where the person reading this can do nothing about the error, so the file that holds
             // it is the only actionable thing in the report.
@@ -915,10 +989,23 @@ pub(crate) fn doctor() -> ExitCode {
         resolved
             .as_ref()
             .map(|(variable, path)| (*variable, path.as_path())),
-        bravebot_agent::home::PROFILE_VARIABLES,
+        bravebot_agent::home::STATE_VARIABLES,
         RESTRICTED,
     ) {
         println!("{line}");
+    }
+    if bravebot_agent::home::passed_over() {
+        println!(
+            "{}",
+            aligned(
+                t!(doctor_state_directory_passed_over),
+                t!(
+                    doctor_state_directory_passed_over_detail,
+                    variable = bravebot_agent::home::STATE_VARIABLE
+                ),
+                DETAIL,
+            )
+        );
     }
 
     println!();
@@ -968,11 +1055,13 @@ pub(crate) fn doctor() -> ExitCode {
     for line in network(transport, &settings) {
         println!("{line}");
     }
-    // Any of the three is a statement about this machine that the program is not honouring,
-    // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, or
-    // a proxy was named that requests are not taking. CLI-7 calls each of them a configuration
+    // Any of these is a statement about this machine that the program is not honouring,
+    // which is what a report exits non-zero over: nothing is trusted, a named path holds nothing, a
+    // client certificate was named that cannot be presented, or a proxy was named that requests are
+    // not taking. CLI-7 calls each of them a configuration
     // error rather than a finding, which is the status CLI-6 gives them.
     if !transport.trust_problems().is_empty()
+        || !transport.client_problems().is_empty()
         || transport.unusable_proxy().is_some()
         || !transport.unparseable_proxies().is_empty()
     {
@@ -1174,9 +1263,10 @@ fn report_aws_session(profile: Option<&str>) {
     );
 }
 
-/// The URL `doctor` gives for a gateway's chat endpoint, without the userinfo a `baseURL` may state.
+/// The URL `doctor` gives for a gateway's endpoint for a reply, without the userinfo a `baseURL` may
+/// state.
 fn gateway_endpoint(provider: &bravebot_config::provider::Provider) -> String {
-    bravebot_config::provider::without_userinfo(&provider.chat_completions_url())
+    bravebot_config::provider::without_userinfo(&provider.completion_url())
 }
 
 /// The URLs `doctor` gives for the Brave backend's free and premium endpoints, without the userinfo
@@ -1206,6 +1296,12 @@ fn report_gateway(provider: &bravebot_config::provider::Provider) {
         t!(doctor_key_name),
         gateway_credential(provider, |name| std::env::var(name).ok()),
     );
+    // A header the block asked for and this build does not send. Worth a line, because a gateway
+    // that routes on a header it never receives answers about the request rather than about the
+    // line in the file, and nothing else says the line was read and dropped.
+    for (name, fault) in &provider.headers_refused {
+        fact(t!(doctor_settings_ignored), refused_header(name, *fault));
+    }
     if let Some(bedrock) = provider.bedrock.as_ref() {
         // A block naming no profile is on the one the `aws` it starts inherits, and asked about
         // by that name so a profile the CLI does not have is told from a lapsed session.
@@ -1240,7 +1336,7 @@ pub(crate) fn gateway_models(provider: &bravebot_config::provider::Provider) -> 
                 .map(|id| format!("{}/{id}", provider.id))
                 .collect::<Vec<_>>()
                 .join(", ");
-            t!(doctor_gateway_models_compiled, models = models).to_string()
+            t!(doctor_gateway_models_compiled, models = models)
         }
         None => t!(doctor_gateway_models_absent).to_string(),
     }
@@ -1274,6 +1370,26 @@ pub(crate) fn gateway_credential(
     }
 }
 
+/// What `doctor` says about one header a gateway block named and this build does not send.
+///
+/// Separate from the printing so the wording is testable, and a `match` over the fault rather than a
+/// field on it because `bravebot-config` holds no words a person reads: a fault added there does not
+/// compile until it has one here.
+///
+/// The name as the file wrote it, through [`progress::printable`], since a settings file can hold an
+/// escape sequence and one here would redraw the lines around it. Never the value: the header a
+/// gateway routes on is often a second credential (BACKEND-60).
+pub(crate) fn refused_header(name: &str, fault: bravebot_config::provider::HeaderFault) -> String {
+    use bravebot_config::provider::HeaderFault;
+    let name = progress::printable(name);
+    match fault {
+        HeaderFault::Reserved => t!(doctor_header_reserved, name = name),
+        HeaderFault::NotAName => t!(doctor_header_not_a_name, name = name),
+        HeaderFault::NotAValue => t!(doctor_header_not_a_value, name = name),
+        HeaderFault::Substitution => t!(doctor_header_substitution, name = name),
+    }
+}
+
 /// What `doctor` says would end one credential: its issuer, the surface that revokes it, and
 /// anything minted from it that revoking it would not reach, which is what CRED-25 asks be
 /// recorded.
@@ -1295,6 +1411,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
             t!(doctor_ends_gateway_token, gateway = host)
         }
         bravebot_config::Held::SubscriptionBatch => t!(doctor_ends_subscription_batch).to_string(),
+        bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
     }
 }
 
@@ -1342,7 +1459,8 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
-        | bravebot_config::Held::SubscriptionBatch => None,
+        | bravebot_config::Held::SubscriptionBatch
+        | bravebot_config::Held::ChatgptAccount => None,
     }
 }
 
@@ -1458,6 +1576,21 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::ChatgptAccount, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_chatgpt_account_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::ChatgptAccount, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_chatgpt_account_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::ChatgptAccount, Condition::RenewableWithoutAuthority) => t!(
+            doctor_dropped_chatgpt_account_renewable_without_authority,
+            gate = gate,
+            answer = answer
+        ),
         // The conditions each credential's walk does not hold. Gate 2 is passed by the
         // subscription batch, which is why it has no account of the gates below the one it
         // stopped at; the rest are the other conditions of the gates each credential does drop
@@ -1472,6 +1605,14 @@ pub(crate) fn why_it_dropped(
         )
         | (
             Held::AwsSession,
+            Condition::NothingCanRefuseAUse
+            | Condition::BoundEnforcedWithinReach
+            | Condition::BoundWithNoEnd
+            | Condition::NotMintedForOneStep
+            | Condition::IssuerEndsNothing,
+        )
+        | (
+            Held::ChatgptAccount,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -1516,6 +1657,7 @@ fn whether_anybody_asked(attempt: bravebot_config::Attempt) -> &'static str {
 pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<&'static str> {
     match held {
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
+        bravebot_config::Held::ChatgptAccount => Some(t!(doctor_outlives_chatgpt_account)),
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }
@@ -1578,13 +1720,12 @@ pub(crate) fn managed_layer(managed: &Managed) -> Vec<String> {
     vec![aligned(
         t!(doctor_managed),
         match pinned.is_empty() {
-            true => t!(doctor_managed_nothing, path = &path).to_string(),
+            true => t!(doctor_managed_nothing, path = &path),
             false => t!(
                 doctor_managed_pinned,
                 names = pinned.join(", "),
                 path = &path
-            )
-            .to_string(),
+            ),
         },
         FACT,
     )]
@@ -1653,7 +1794,7 @@ pub(crate) fn state_directory(
     let Some((variable, path)) = found else {
         let variables = variables.join(" or ");
         return vec![
-            t!(doctor_state_directory_absent, variables = &variables).to_string(),
+            t!(doctor_state_directory_absent, variables = &variables),
             aligned(
                 t!(doctor_state_directory_not_kept),
                 t!(doctor_state_directory_forgotten),
@@ -1671,21 +1812,15 @@ pub(crate) fn state_directory(
             ),
         ];
     };
-    let mut lines = vec![
-        t!(
-            doctor_state_directory,
-            path = path.display().to_string(),
-            variable = variable
-        )
-        .to_string(),
-    ];
-    lines.push(
-        t!(
-            doctor_state_directory_logs,
-            path = path.join(bravebot_diag::DIRECTORY).display().to_string()
-        )
-        .to_string(),
-    );
+    let mut lines = vec![t!(
+        doctor_state_directory,
+        path = path.display().to_string(),
+        variable = variable
+    )];
+    lines.push(t!(
+        doctor_state_directory_logs,
+        path = path.join(bravebot_diag::DIRECTORY).display().to_string()
+    ));
     if !restricted {
         lines.push(aligned(
             t!(doctor_state_directory_unprotected),
@@ -1728,8 +1863,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
         (TrustRoots::Bundled, _) => t!(
             doctor_trust_roots_bundled,
             variables = listed(&[CERTIFICATE_FILE, CERTIFICATE_DIRECTORY])
-        )
-        .to_string(),
+        ),
         (_, true) => t!(doctor_trust_roots_none).to_string(),
         (named, false) => t!(
             doctor_trust_roots_named,
@@ -1739,8 +1873,7 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        )
-        .to_string(),
+        ),
     };
 
     let mut lines = vec![
@@ -1761,12 +1894,12 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
     }
 
     let proxy = match (transport.proxy_summary(), transport.unusable_proxy()) {
-        (_, Some(protocol)) => t!(doctor_proxy_unsupported, protocol = protocol).to_string(),
-        (None, None) => t!(doctor_proxy_absent, variables = listed(PROXY_VARIABLES)).to_string(),
+        (_, Some(protocol)) => t!(doctor_proxy_unsupported, protocol = protocol),
+        (None, None) => t!(doctor_proxy_absent, variables = listed(PROXY_VARIABLES)),
         (Some(proxy), None) if transport.proxy_is_authenticated() => {
-            t!(doctor_proxy_authenticated, proxy = proxy).to_string()
+            t!(doctor_proxy_authenticated, proxy = proxy)
         }
-        (Some(proxy), None) => t!(doctor_proxy_in_force, proxy = proxy).to_string(),
+        (Some(proxy), None) => t!(doctor_proxy_in_force, proxy = proxy),
     };
     lines.push(aligned(t!(doctor_proxy), proxy, DETAIL));
 
@@ -1780,6 +1913,37 @@ pub(crate) fn network(transport: &Transport, settings: &bravebot_config::Setting
             t!(doctor_proxy_unparseable_detail, variable = name.as_str()),
             DETAIL,
         ));
+    }
+
+    // A certificate is reported only where one was named: most machines name none, and a row saying
+    // so would be noise on every report. The paths, never the key, and one line for each file that
+    // cannot be used, as the roots are, since the two files are two decisions.
+    let paths = transport.client_paths();
+    if let (Some(certificate), Some(key)) = (&paths.certificate, &paths.key)
+        && transport.presents_client_certificate()
+    {
+        lines.push(aligned(
+            t!(doctor_client_certificate),
+            t!(
+                doctor_client_certificate_loaded,
+                certificate = certificate.display().to_string(),
+                key = key.display().to_string()
+            ),
+            DETAIL,
+        ));
+    } else if !transport.client_problems().is_empty() {
+        lines.push(aligned(
+            t!(doctor_client_certificate),
+            t!(doctor_client_certificate_refused),
+            DETAIL,
+        ));
+        for problem in transport.client_problems() {
+            lines.push(aligned(
+                t!(doctor_client_certificate_unusable),
+                problem.to_string(),
+                DETAIL,
+            ));
+        }
     }
 
     // Which hosts the proxy is not used for, since that is what decides whether a proxy in force
@@ -1877,7 +2041,7 @@ pub(crate) fn confinement(found: Result<Capabilities, SandboxError>) -> Confinem
     match found {
         Ok(caps) => Confinement {
             lines: [
-                t!(doctor_confinement, level = confinement_name(caps.level)).to_string(),
+                t!(doctor_confinement, level = confinement_name(caps.level)),
                 aligned(t!(doctor_mechanisms), caps.mechanisms.join(", "), DETAIL),
                 aligned(
                     t!(doctor_network_denial),
@@ -1912,7 +2076,7 @@ pub(crate) fn confinement(found: Result<Capabilities, SandboxError>) -> Confinem
 /// where it can.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn network_namespace_note(unavailable: Option<&str>) -> Option<String> {
-    unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason).to_string())
+    unavailable.map(|reason| t!(doctor_no_network_namespace, reason = reason))
 }
 
 #[cfg(test)]
@@ -1969,6 +2133,55 @@ mod tests {
         assert!(!report.contains("alice"), "{report}");
         assert!(
             report.contains("http://proxy.corp.example:8080"),
+            "{report}"
+        );
+    }
+
+    /// STATE-4: a sweep that is waiting is the one thing about retention a person cannot see from the
+    /// directory, because nothing is removed and nothing says why. A file that named a period it was
+    /// not allowed to is named as well, and a machine where the sweep runs says nothing.
+    #[test]
+    fn the_retention_section_names_a_paused_sweep_and_a_file_that_was_not_obeyed() {
+        let root = scratch("retention-facts");
+        let home = root.join("home");
+        let cwd = root.join("cwd");
+        let project_file = bravebot_config::project_settings_file(&cwd);
+        std::fs::create_dir_all(&home).expect("home");
+        std::fs::create_dir_all(project_file.parent().expect("project directory")).expect("cwd");
+        let own = bravebot_config::user_settings_file(&home);
+
+        let quiet = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        assert!(retention_facts(&quiet).is_empty());
+
+        std::fs::write(&own, r#"{"retentionDays": 7}"#).expect("user file");
+        std::fs::write(&project_file, r#"{"retentionDays": 1}"#).expect("project file");
+        let ignored = bravebot_config::Settings::layered(Some(home.clone()), Some(&cwd), None);
+        let report = retention_facts(&ignored)
+            .into_iter()
+            .map(|(label, line)| format!("{label} {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            report.contains(&format!(
+                "retentionDays in {} is not obeyed",
+                project_file.display()
+            )),
+            "{report}"
+        );
+        assert!(!report.contains("nothing is removed"), "{report}");
+
+        std::fs::write(&own, r#"{"retentionDays": "a week"}"#).expect("user file");
+        let paused = bravebot_config::Settings::layered(Some(home), None, None);
+        let report = retention_facts(&paused)
+            .into_iter()
+            .map(|(label, line)| format!("{label} {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            report.contains(&format!(
+                "nothing is removed for age until {} is readable",
+                own.display()
+            )),
             "{report}"
         );
     }
@@ -2102,6 +2315,88 @@ mod tests {
         assert_eq!(named.len(), 2, "one line each: {lines:?}");
         assert!(named[0].contains("/etc/corp/absent.pem"), "{lines:?}");
         assert!(named[1].contains("/etc/corp/absent-dir"), "{lines:?}");
+    }
+
+    /// NET-11: a certificate that loaded is named by path and the key is never printed, and a report
+    /// of a machine that names none has no row for it.
+    #[test]
+    fn the_network_section_names_a_client_certificate_that_loaded_and_never_its_key() {
+        let root = scratch("doctor-client-loaded");
+        let certificate = root.join("client.crt");
+        let key = root.join("client.key");
+        let pem = |kind: &str, body: &[&str]| {
+            format!(
+                "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+                body.join("\n")
+            )
+        };
+        std::fs::write(
+            &certificate,
+            pem(
+                "CERTIFICATE",
+                &[
+                    "MIIBmTCCAT+gAwIBAgIUGoEm4tLRujtRq+Z9SYoo7mpaVTgwCgYIKoZIzj0EAwIw",
+                    "ITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1jbGllbnQtYTAgFw0yNjEwMjIxNjQ5",
+                    "MjJaGA8yMTI2MDkyODE2NDkyMlowITEfMB0GA1UEAwwWYnJhdmVib3QtdGVzdC1j",
+                    "bGllbnQtYTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABC/GcNDcBgcN5ka3+sg2",
+                    "SitB1Hb2ewhYttjW1f288agg+KLdGhEfad2e7iq/fmlM4vlk+hPpbxkXi0S57YrN",
+                    "pbujUzBRMB0GA1UdDgQWBBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAfBgNVHSMEGDAW",
+                    "gBSiEIAHwsbVA0ZZsQ1BDSeQ1FBAfjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49",
+                    "BAMCA0gAMEUCIQDV/pEMcyED9IfcGuf4pke2It4Kj4yubw6uM0lrqz5ymgIgRKEK",
+                    "slJ1+wh5R7cmgoS2bui3Umrk+r+pU9FokD8FYZM=",
+                ],
+            ),
+        )
+        .expect("certificate");
+        std::fs::write(
+            &key,
+            pem(
+                &format!("{} KEY", "PRIVATE"),
+                &[
+                    "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgNI5exiW0VUAX6Zlh",
+                    "2xpQpP9Ul/tkSYnXIk0Ew/P6G1qhRANCAAQvxnDQ3AYHDeZGt/rINkorQdR29nsI",
+                    "WLbY1tX9vPGoIPii3RoRH2ndnu4qv35pTOL5ZPoT6W8ZF4tEue2KzaW7",
+                ],
+            ),
+        )
+        .expect("key");
+        let transport = Transport::stated_with_client_pair(Some(&certificate), Some(&key));
+
+        let report = network(&transport, &Default::default()).join("\n");
+
+        assert!(
+            report.contains(&certificate.display().to_string()),
+            "{report}"
+        );
+        assert!(report.contains(&key.display().to_string()), "{report}");
+        assert!(report.contains("loaded"), "{report}");
+        assert!(!report.contains("MIGHAgEAMBMGByqGSM49"), "{report}");
+        let bare = network(
+            &Transport::stated(TrustRoots::Bundled, None, None),
+            &Default::default(),
+        );
+        assert!(!bare.join("\n").contains("client certificate"), "{bare:?}");
+    }
+
+    /// NET-11: a named file that cannot be used is a line of its own, and ends the report on a
+    /// configuration error as an unusable root does.
+    #[test]
+    fn the_network_section_names_each_client_file_that_cannot_be_used() {
+        let transport = Transport::stated_with_client_pair(
+            Some(Path::new("/etc/corp/absent.crt")),
+            Some(Path::new("/etc/corp/absent.key")),
+        );
+
+        let lines = network(&transport, &Default::default());
+
+        let named: Vec<&String> = lines
+            .iter()
+            .filter(|line| line.contains("/etc/corp/"))
+            .collect();
+        assert_eq!(named.len(), 2, "one line each: {lines:?}");
+        assert!(named[0].contains("absent.crt"), "{lines:?}");
+        assert!(named[1].contains("absent.key"), "{lines:?}");
+        assert!(lines.join("\n").contains("refused"), "{lines:?}");
     }
 
     /// A protocol this build cannot connect through is not the route requests take, so naming it as
@@ -2530,7 +2825,7 @@ mod tests {
     /// left that out would send somebody looking for why a file that is in force is ignored.
     #[test]
     fn a_missing_state_directory_is_reported_with_what_it_costs() {
-        let variables = bravebot_agent::home::PROFILE_VARIABLES;
+        let variables = bravebot_agent::home::STATE_VARIABLES;
         let lines = state_directory(None, variables, RESTRICTED);
         let section = lines.join("\n");
 
@@ -2911,6 +3206,60 @@ mod tests {
         );
     }
 
+    /// BACKEND-60: a header the block named and this build will not send is reported by the name the
+    /// file wrote, which is the name there is to go and edit, and by which reason refused it. The
+    /// value is withheld, because the header a gateway routes on is often a second credential. A
+    /// control character in a name is shown as a picture rather than sent to the terminal.
+    #[test]
+    fn a_refused_header_is_reported_with_its_name_and_reason_and_never_its_value() {
+        let provider = configured_gateway(
+            r#"{"provider": {"gw": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://example.invalid/v1", "headers": {
+                    "Host": "a-routing-secret",
+                    "x tenant": "a-second-credential",
+                    "x-bell\u0007": "a-third-value"
+                }}
+            }}}"#,
+        );
+
+        let reported: Vec<String> = provider
+            .headers_refused
+            .iter()
+            .map(|(name, fault)| refused_header(name, *fault))
+            .collect();
+
+        assert_eq!(reported.len(), 3, "{reported:?}");
+        for name in ["Host", "x tenant", "x-bell"] {
+            assert!(
+                reported.iter().any(|line| line.contains(name)),
+                "{name} is not named: {reported:?}"
+            );
+        }
+        for withheld in [
+            "a-routing-secret",
+            "a-second-credential",
+            "a-third-value",
+            "\u{7}",
+        ] {
+            assert!(
+                !reported.iter().any(|line| line.contains(withheld)),
+                "a refusal carries what it withholds: {reported:?}"
+            );
+        }
+
+        assert_eq!(
+            refused_header("Host", bravebot_config::provider::HeaderFault::Reserved),
+            t!(doctor_header_reserved, name = "Host")
+        );
+        // Two faults with one wording would leave the reader unable to tell a name this program
+        // sets itself from a name no header may have.
+        assert_ne!(
+            refused_header("x tenant", bravebot_config::provider::HeaderFault::NotAName),
+            refused_header("x tenant", bravebot_config::provider::HeaderFault::Reserved)
+        );
+    }
+
     /// CRED-25: a key `bravebot auth login gateway` stored is named as stored, since neither the
     /// environment nor the settings file shows it, and is withheld like any other. A variable the
     /// block names is sent before it, and is what the report then names.
@@ -3191,6 +3540,23 @@ mod tests {
         );
     }
 
+    /// A home file holding only `references` names no variables but is a file that was read. The
+    /// regression it rejects is `doctor` printing `no settings.json` above that file's own path.
+    #[test]
+    fn doctor_reports_a_file_holding_only_references_as_naming_no_variables() {
+        let home = scratch("references-only");
+        std::fs::write(
+            home.join("settings.json"),
+            r#"{"references": {"docs": "/tmp"}}"#,
+        )
+        .expect("home layer");
+        let settings = bravebot_config::Settings::layered(Some(home), None, None);
+
+        let line = settings_sources_line(&settings);
+        assert_eq!(line, t!(doctor_settings_no_variables).to_string());
+        assert_ne!(line, t!(doctor_settings_absent).to_string());
+    }
+
     /// SANDBOX-22: a setting under the managed floor is reported with both files rather than as
     /// the pin. The regression it rejects is `doctor` calling a machine fine whose next session
     /// would be refused.
@@ -3231,6 +3597,18 @@ mod tests {
         assert_eq!(
             gateway_endpoint(&provider),
             "https://gateway.invalid/v1/chat/completions"
+        );
+    }
+
+    /// An Anthropic entry is reached at the route its protocol has, so that is the endpoint `doctor`
+    /// names. Naming chat completions there would send somebody to look for a route that service does
+    /// not have.
+    #[test]
+    fn doctor_names_the_messages_route_an_anthropic_entry_is_reached_at() {
+        let provider = configured_gateway(r#"{"provider": {"anthropic": {"env": ["A_KEY"]}}}"#);
+        assert_eq!(
+            gateway_endpoint(&provider),
+            "https://api.anthropic.com/v1/messages"
         );
     }
 

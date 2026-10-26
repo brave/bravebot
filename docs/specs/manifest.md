@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/manifest.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/finish.rs
   - crates/cli/src/one_shot.rs
@@ -17,6 +18,7 @@ governs:
   - crates/tui/src/confirm/grants.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs
@@ -28,6 +30,7 @@ guards:
 documented-by:
   - docs/website/docs/using/headless.md
   - docs/website/docs/using/sessions.md
+  - docs/website/docs/using/manifest-mode.md
 ---
 
 ## Scope
@@ -324,6 +327,32 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_tui::confirm::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
 
+<a id="MANIFEST-12"></a>
+### MANIFEST-12: planning runs on the run's model and each processing step on the processor model
+
+Both planning calls ([MANIFEST-1](#MANIFEST-1)) run on the model the run was given. A processing
+step's call runs on the model [PROC-13](processors.md#PROC-13) names, which is the `processorModel`
+setting or the `--processor-model` flag ([CLI-34](cli.md#CLI-34)), and on the run's own model where
+neither names one. A plan can then be made on a model chosen for reasoning and carried out on one
+chosen for cost, so a run with several transforms over long text is not billed at the planner's price
+for each.
+
+The choice is the person's configuration. No plan, step, instruction or file content names a model,
+so nothing the run reads decides where a processor's input goes. A processing step is the call it is
+in a turn ([PROC-1](processors.md#PROC-1)): no tools, no history and one request. A weaker model can
+write a transform worse, and a write of the result is approved from the diff of the real bytes. The
+trail records the model each call names ([TRACE-10](trace.md#TRACE-10)).
+
+A processor model that needs a sign-in this machine has not made fails the step that would have used
+it. The failure names the model, and nothing is sent to it or to the run's model in its place. A model
+the managed layer refuses or that no configured service answers for is refused the same way
+([PROC-13](processors.md#PROC-13)).
+
+`verified-by: bravebot_agent::manifest::a_manifest_run_plans_on_the_runs_model_and_processes_on_the_processor_model`
+`verified-by: bravebot_agent::manifest::a_manifest_run_with_no_processor_model_processes_on_the_runs_own`
+`verified-by: bravebot_agent::manifest::a_manifest_processor_model_needing_a_sign_in_fails_the_step_and_sends_nothing`
+`verified-by: bravebot_agent::manifest::a_manifest_processor_answered_by_another_model_than_the_configured_one_says_so`
+
 ## Known costs
 
 - **A plan answered at a terminal is answered on one line, with no way back to the steps above it.**
@@ -337,3 +366,10 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
   is why it is a cost rather than a hole in MANIFEST-10: a processor's output is a slot, and every
   step that lands a slot anywhere names the destination on its own line and is put to the person
   again as its turn comes.
+- **A processor model that needs a sign-in, or that only the setting names and nothing can use,
+  fails the run at its first processing step.** The two planning calls come first and have been
+  spent on the run's model by then. A model named with `--processor-model` is checked before the run
+  for a refusal by the machine and for no service answering for it ([CLI-34](cli.md#CLI-34)). The
+  setting, and a sign-in for either, are met when a processor is first asked
+  ([PROC-13](processors.md#PROC-13)): a run that starts no processor has no use for the model and is
+  not refused for it, and the run's own sign-in comes first and may cover the model.

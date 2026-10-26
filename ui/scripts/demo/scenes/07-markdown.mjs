@@ -5,9 +5,10 @@
 // is no `rehype-raw`, no `dangerouslySetInnerHTML`, an allow-list of link schemes and no
 // images, which is why a reply can be formatted without a reply being able to reach anything.
 import { findSession, openSession, openNewest } from '../pick.mjs'
+import { ASSISTANT_BUBBLE } from '../../drive-support.mjs'
 
 /** Something in the reply that is unmistakably *rendered* rather than printed. */
-const RICH = ['.bubble.assistant .md-table-wrap', '.bubble.assistant pre code', '.bubble.assistant h2', '.bubble.assistant ul']
+const RICH = [`${ASSISTANT_BUBBLE} .md-table-wrap`, `${ASSISTANT_BUBBLE} pre code`, `${ASSISTANT_BUBBLE} h2`, `${ASSISTANT_BUBBLE} ul`]
 
 export default {
   id: '07-markdown',
@@ -23,7 +24,7 @@ export default {
     if (wordy) await openSession(s, wordy, { hold: 1.2 })
     else await openNewest(s, { hold: 1.2 })
 
-    const reply = page.locator('.bubble.assistant').first()
+    const reply = page.locator(ASSISTANT_BUBBLE).first()
     if (!(await reply.count())) s.skip('this session has no reply in it')
 
     await s.glideTo(reply)

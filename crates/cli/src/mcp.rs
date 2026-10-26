@@ -13,6 +13,7 @@
 use crate::exit::{Ending, fail};
 use crate::progress::printable;
 pub(crate) use bravebot_agent::mcp::{shown, unreadable};
+use bravebot_agent::servers::{Foreseen, OwnHome};
 pub(crate) use bravebot_agent::servers::{
     Home, Person, drawn, indent, no_state_directory, problem, say,
 };
@@ -111,9 +112,10 @@ fn run<R: BufRead, W: Write>(
             [path] => forget(Some(path), home, person),
             [_, extra, ..] => Err(unexpected(command, extra)),
         },
-        other => Err(refused_with_the_forms(
-            t!(mcp_unknown_command, command = shown(other)).to_string(),
-        )),
+        other => Err(refused_with_the_forms(t!(
+            mcp_unknown_command,
+            command = shown(other)
+        ))),
     }
 }
 
@@ -146,8 +148,7 @@ fn unexpected(command: &str, argument: &str) -> Stopped {
             mcp_unexpected_argument,
             command = command,
             argument = shown(argument)
-        )
-        .to_string(),
+        ),
     )
 }
 
@@ -158,10 +159,7 @@ fn unexpected(command: &str, argument: &str) -> Stopped {
 fn one_alias<'a>(command: &str, rest: &'a [String]) -> Result<&'a str, Stopped> {
     match rest {
         [alias] => Ok(alias),
-        [] => Err((
-            Ending::Argument,
-            t!(mcp_needs_an_alias, command = command).to_string(),
-        )),
+        [] => Err((Ending::Argument, t!(mcp_needs_an_alias, command = command))),
         [_, extra, ..] => Err(unexpected(command, extra)),
     }
 }
@@ -184,10 +182,7 @@ fn add<R: BufRead, W: Write>(
         start += 2;
     }
     let Some((alias, flags)) = rest[start..].split_first() else {
-        return Err((
-            Ending::Argument,
-            t!(mcp_needs_an_alias, command = "add").to_string(),
-        ));
+        return Err((Ending::Argument, t!(mcp_needs_an_alias, command = "add")));
     };
     // Refused as Claude Code refuses it, and without repeating the word, which may hold a value.
     if alias.starts_with("-e") || alias.starts_with("--env") {
@@ -195,15 +190,15 @@ fn add<R: BufRead, W: Write>(
     }
     if !mcp::is_alias(alias) {
         let said = match may_be_a_value(alias) {
-            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64).to_string(),
-            false => t!(mcp_not_an_alias, alias = shown(alias)).to_string(),
+            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64),
+            false => t!(mcp_not_an_alias, alias = shown(alias)),
         };
         return Err((Ending::Argument, said));
     }
     let not_added = |found: Problem| {
         (
             Ending::Argument,
-            t!(mcp_not_added, alias = alias, problem = problem(&found)).to_string(),
+            t!(mcp_not_added, alias = alias, problem = problem(&found)),
         )
     };
     let declaration = declared(flags, start + 1, &mut scope).map_err(|refusal| match refusal {
@@ -662,12 +657,7 @@ fn may_be_a_value(word: &str) -> bool {
 }
 
 fn checkout(cwd: Cwd<'_>) -> Result<&Path, Stopped> {
-    cwd.map_err(|error| {
-        (
-            Ending::Failed,
-            t!(mcp_no_current_directory, error = error).to_string(),
-        )
-    })
+    cwd.map_err(|error| (Ending::Failed, t!(mcp_no_current_directory, error = error)))
 }
 
 /// The directory `--dir` named, as the absolute path of the place it is.
@@ -725,7 +715,50 @@ fn get<R: BufRead, W: Write>(
     if let Some(refused) = refused(managed, &declaration) {
         say(person, format!("{indent}{refused}"));
     }
+    for line in confinement_lines(alias, &declaration, home) {
+        say(person, format!("{indent}{line}"));
+    }
     Ok(())
+}
+
+/// What a session would confine `declaration` to, as the lines `get` ends with (SERVERS-20): the
+/// policy [`bravebot_agent::servers::foreseen`] builds the way a launch does, in the words
+/// `/status` uses for one that was started, or the sentence a launch would say for a server it does
+/// not start. Nothing for a server reached over HTTP, which no session confines.
+fn confinement_lines(alias: &str, declaration: &Declaration, home: &Home) -> Vec<String> {
+    let hosts = bravebot_config::sandbox_network::settled().map(|settled| &settled.hosts);
+    match bravebot_agent::servers::foreseen(
+        alias,
+        declaration,
+        home,
+        bravebot_config::run_network(),
+        hosts,
+        &|name| std::env::var_os(name),
+    ) {
+        Foreseen::Remote => Vec::new(),
+        Foreseen::Unstarted(sentence) => vec![sentence],
+        Foreseen::Confined { policy, home } => {
+            let mut described = policy.described();
+            if home == OwnHome::Throwaway {
+                described.push((
+                    t!(mcp_get_policy_home).to_string(),
+                    t!(mcp_get_policy_home_throwaway).to_string(),
+                ));
+            }
+            let width = described
+                .iter()
+                .map(|(label, _)| label.chars().count())
+                .max()
+                .unwrap_or(0);
+            std::iter::once(t!(mcp_get_policy).to_string())
+                .chain(
+                    described
+                        .into_iter()
+                        .map(|(label, value)| format!("  {label:<width$}  {value}")),
+                )
+                .collect()
+        }
+    }
 }
 
 /// What `get` and `list` add for a server the managed layer keeps from starting, which is the line
@@ -735,7 +768,7 @@ fn refused(managed: &Managed, declaration: &Declaration) -> Option<String> {
     bravebot_agent::servers::refused_declaration(managed, declaration, &|name| {
         std::env::var_os(name)
     })
-    .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
+    .map(|reason| t!(mcp_refused_by_managed, reason = reason))
 }
 
 /// SERVERS-14's `list`: [`report`] under the file it read and the directory it was read for.
@@ -774,7 +807,7 @@ fn list<R: BufRead, W: Write>(
         0 => Ok(()),
         count => Err((
             Ending::Configuration,
-            t!(mcp_list_unusable, count = count, path = &path).to_string(),
+            t!(mcp_list_unusable, count = count, path = &path),
         )),
     }
 }
@@ -807,7 +840,7 @@ pub(crate) fn examined(
         true => t!(doctor_mcp_none, path = path, project = project),
         false => t!(doctor_mcp_servers, path = path, project = project),
     };
-    let mut lines = vec![heading.to_string()];
+    let mut lines = vec![heading];
     lines.extend(rows);
     (lines, unusable > 0)
 }
@@ -957,7 +990,7 @@ fn answered(alias: &str, project: bool, standing: &[String]) -> Vec<String> {
         lines.push(t!(mcp_standing_project).to_string());
     }
     if !tools.is_empty() {
-        lines.push(t!(mcp_standing_tools, tools = tools.join(", ")).to_string());
+        lines.push(t!(mcp_standing_tools, tools = tools.join(", ")));
     }
     if lines.is_empty() {
         lines.push(t!(mcp_standing_none).to_string());
@@ -988,16 +1021,10 @@ fn approve<R: BufRead, W: Write>(
             say(person, recorded(alias, &declaration));
         }
         Asked::No => {
-            return Err((
-                Ending::Refused,
-                t!(mcp_left_unapproved, alias = alias).to_string(),
-            ));
+            return Err((Ending::Refused, t!(mcp_left_unapproved, alias = alias)));
         }
         Asked::Nobody => {
-            return Err((
-                Ending::Refused,
-                t!(mcp_nobody_to_ask, alias = alias).to_string(),
-            ));
+            return Err((Ending::Refused, t!(mcp_nobody_to_ask, alias = alias)));
         }
     }
     Ok(())
@@ -1040,16 +1067,13 @@ fn enable<R: BufRead, W: Write>(
             return Err((Ending::Refused, still_requested(&settings, alias)));
         }
         Asked::No => {
-            return Err((
-                Ending::Refused,
-                t!(mcp_not_enabled, alias = alias).to_string(),
-            ));
+            return Err((Ending::Refused, t!(mcp_not_enabled, alias = alias)));
         }
         Asked::Nobody => {
             let command = enable_command(alias, scope);
             return Err((
                 Ending::Refused,
-                t!(mcp_nobody_to_enable, alias = alias, command = command).to_string(),
+                t!(mcp_nobody_to_enable, alias = alias, command = command),
             ));
         }
     }
@@ -1138,12 +1162,8 @@ fn alias_and_scope<'a>(
         }
         index += 1;
     }
-    let alias = alias.ok_or_else(|| {
-        (
-            Ending::Argument,
-            t!(mcp_needs_an_alias, command = command).to_string(),
-        )
-    })?;
+    let alias =
+        alias.ok_or_else(|| (Ending::Argument, t!(mcp_needs_an_alias, command = command)))?;
     Ok((alias, scope))
 }
 
@@ -1177,7 +1197,7 @@ fn unlinked(path: &Path, directory: &Path) -> Result<(), Stopped> {
     match [project, path].into_iter().find(|at| is_link(at)) {
         Some(link) => Err((
             Ending::Configuration,
-            t!(mcp_settings_link, path = file_named(link)).to_string(),
+            t!(mcp_settings_link, path = file_named(link)),
         )),
         None => Ok(()),
     }
@@ -1199,7 +1219,7 @@ fn requested(settings: &mut Destination, alias: &str) -> Result<bool, Stopped> {
     if !settings.request(alias) {
         return Err((
             Ending::Configuration,
-            t!(mcp_settings_not_a_list, path = file_named(settings.path())).to_string(),
+            t!(mcp_settings_not_a_list, path = file_named(settings.path())),
         ));
     }
     settings
@@ -1235,7 +1255,6 @@ fn still_requested(settings: &Destination, alias: &str) -> String {
         alias = alias,
         path = file_named(settings.path())
     )
-    .to_string()
 }
 
 /// Say so where the managed layer keeps a server just enabled from starting, which is the line
@@ -1282,8 +1301,7 @@ fn write_settings(settings: &Destination, directory: &Path, command: &str) -> Re
                     mcp_not_written,
                     path = parent.display().to_string(),
                     error = error.to_string()
-                )
-                .to_string(),
+                ),
             )
         })?;
     }
@@ -1295,15 +1313,15 @@ fn settings_unwritable(why: Unwritable, path: &Path, command: &str) -> Stopped {
     match why {
         Unwritable::NotADocument => (
             Ending::Configuration,
-            t!(mcp_settings_not_a_document, path = path).to_string(),
+            t!(mcp_settings_not_a_document, path = path),
         ),
         Unwritable::TooLarge => (
             Ending::Configuration,
-            t!(mcp_settings_too_large, path = path).to_string(),
+            t!(mcp_settings_too_large, path = path),
         ),
         Unwritable::Changed => (
             Ending::Failed,
-            t!(mcp_settings_changed, path = path, command = command).to_string(),
+            t!(mcp_settings_changed, path = path, command = command),
         ),
     }
 }
@@ -1349,8 +1367,7 @@ fn forget<R: BufRead, W: Write>(
                 mcp_unreadable,
                 path = shown(&file.display().to_string()),
                 reason = bravebot_agent::mcp::unreadable_record(&why)
-            )
-            .to_string(),
+            ),
         )
     };
     let mut projects = Projects::to_change(directory)
@@ -1386,7 +1403,7 @@ fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
     let here = std::env::current_dir().map_err(|error| {
         (
             Ending::Failed,
-            t!(mcp_no_current_directory, error = error.to_string()).to_string(),
+            t!(mcp_no_current_directory, error = error.to_string()),
         )
     })?;
     let typed = match path {
@@ -1491,7 +1508,6 @@ fn already(alias: &str, declaration: &Declaration) -> String {
         alias = alias,
         digest = declaration.digest().short()
     )
-    .to_string()
 }
 
 fn recorded(alias: &str, declaration: &Declaration) -> String {
@@ -1500,21 +1516,17 @@ fn recorded(alias: &str, declaration: &Declaration) -> String {
         alias = alias,
         digest = declaration.digest().short()
     )
-    .to_string()
 }
 
 fn unusable(alias: &str, found: &Problem) -> Stopped {
     (
         Ending::Configuration,
-        t!(mcp_unusable, alias = shown(alias), problem = problem(found)).to_string(),
+        t!(mcp_unusable, alias = shown(alias), problem = problem(found)),
     )
 }
 
 fn not_declared(alias: &str) -> Stopped {
-    (
-        Ending::Argument,
-        t!(mcp_not_declared, alias = shown(alias)).to_string(),
-    )
+    (Ending::Argument, t!(mcp_not_declared, alias = shown(alias)))
 }
 
 /// The state directory, where this run of `command` may write to it.
@@ -1523,7 +1535,7 @@ fn writable<'a>(home: &'a Home, command: &str) -> Result<&'a Path, Stopped> {
         (Some(directory), true) => Ok(directory),
         (Some(_), false) => Err((
             Ending::Failed,
-            t!(mcp_not_while_incognito, command = command).to_string(),
+            t!(mcp_not_while_incognito, command = command),
         )),
         (None, _) => Err((Ending::Configuration, no_state_directory())),
     }
@@ -1542,7 +1554,7 @@ fn read(directory: &Path) -> Result<Declarations, Stopped> {
         let path = mcp::declarations_file(directory).display().to_string();
         (
             Ending::Configuration,
-            t!(mcp_unreadable, path = path, reason = unreadable(&why)).to_string(),
+            t!(mcp_unreadable, path = path, reason = unreadable(&why)),
         )
     })
 }
@@ -1561,8 +1573,7 @@ fn save(
                 mcp_not_written,
                 path = directory.display().to_string(),
                 error = error.to_string()
-            )
-            .to_string(),
+            ),
         )
     })?;
     replace(&mcp::declarations_file(directory), &declarations.to_text())?;
@@ -1573,15 +1584,14 @@ fn save(
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
 pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
-    bravebot_agent::mcp::replace(path, text).map_err(|error| {
+    bravebot_agent::home::replace(path, text).map_err(|error| {
         (
             Ending::Failed,
             t!(
                 mcp_not_written,
                 path = path.display().to_string(),
                 error = error.to_string()
-            )
-            .to_string(),
+            ),
         )
     })
 }
@@ -1690,6 +1700,127 @@ mod tests {
         };
         let outcome = run(&words(args), Ok(&cwd), &home, &managed, &here, &mut person);
         (outcome, String::from_utf8(person.screen).unwrap())
+    }
+
+    /// SERVERS-20: `get` says what a session would confine a local server to, before one starts it.
+    /// The rows are the ones a session lists under `/status` for it, in the same words, and a row is
+    /// there for the directory the declaration names, so a person can check a refusal from inside
+    /// the server against what it was granted. A server a session would not start has the
+    /// sentence the session says, and no policy it would never be started under; one reached over
+    /// HTTP has none.
+    #[test]
+    fn get_lists_the_policy_a_session_would_confine_a_local_server_to() {
+        let (Ok(_), Some(_)) = (
+            bravebot_sandbox::for_current_platform(),
+            bravebot_sandbox::base::Prelude::current(),
+        ) else {
+            eprintln!("SKIPPED (no confinement here)");
+            return;
+        };
+        let directory = outside_any_repository("get-policy");
+        let work = outside_any_repository("get-policy-work");
+        let work_text = work.display().to_string();
+        let (outcome, _) = typing(
+            &directory,
+            &[
+                "add",
+                "weather",
+                "--dir",
+                &work_text,
+                "-e",
+                "PATH=/usr/bin:/bin",
+                "--",
+                "/bin/sh",
+            ],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+
+        let (outcome, got) = typing(&directory, &["get", "weather"], "");
+
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let indent = " ".repeat(2 + "weather".len() + 3);
+        let lines: Vec<&str> = got.lines().collect();
+        let heading = lines
+            .iter()
+            .position(|line| line.trim() == t!(mcp_get_policy))
+            .unwrap_or_else(|| panic!("no policy under the declaration: {got}"));
+        let rows = &lines[heading + 1..];
+        assert!(rows.iter().all(|line| line.starts_with(&indent)), "{got}");
+        let said = |label: &str, value: &str| {
+            let spelled = format!("{label} {value}");
+            rows.iter()
+                .any(|line| line.split_whitespace().collect::<Vec<_>>().join(" ") == spelled)
+        };
+        assert!(
+            said(t!(status_server_policy_starts_in), &work_text),
+            "the directory it starts in: {got}"
+        );
+        assert!(
+            said(t!(status_server_policy_read_write), &work_text),
+            "the directory it may write: {got}"
+        );
+        assert!(
+            rows.iter().any(|line| line
+                .trim_start()
+                .starts_with(t!(status_server_policy_egress))),
+            "{got}"
+        );
+        let home = mcp::server_home(&directory, &declaration_of(&directory, "weather").digest());
+        assert!(
+            !home.exists(),
+            "get made the server's home, {}",
+            home.display()
+        );
+        assert!(
+            rows.iter()
+                .any(|line| line.contains(&home.display().to_string())),
+            "the home a launch makes is a row before it is made: {got}"
+        );
+
+        let (outcome, _) = typing(
+            &directory,
+            &[
+                "add",
+                "nowhere",
+                "-e",
+                "PATH=/nonexistent",
+                "--",
+                "no-such-program",
+            ],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (_, missing) = typing(&directory, &["get", "nowhere"], "");
+        assert!(
+            missing.contains("nowhere was not started"),
+            "a program no session finds has no policy to show: {missing}"
+        );
+        assert!(!missing.contains(t!(mcp_get_policy)), "{missing}");
+
+        let (outcome, _) = typing(
+            &directory,
+            &["add", "remote", "--http", "https://a.example.com"],
+            "n\n",
+        );
+        assert!(outcome.is_ok(), "{outcome:?}");
+        let (_, remote) = typing(&directory, &["get", "remote"], "");
+        assert!(!remote.contains(t!(mcp_get_policy)), "{remote}");
+        assert!(!remote.contains("not started"), "{remote}");
+    }
+
+    /// `alias` as the state directory declares it.
+    fn declaration_of(directory: &Path, alias: &str) -> Declaration {
+        let (_, declarations) = readable(&Home {
+            directory: Some(directory.to_path_buf()),
+            writable: true,
+        })
+        .expect("readable");
+        declarations
+            .get(alias)
+            .expect("declared")
+            .declaration
+            .expect("usable")
     }
 
     /// No session starts a server the machine's administrator refused, whatever its approval says,

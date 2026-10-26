@@ -2,7 +2,8 @@
 
 The [issue-poster](../../agents/agents/issue-poster.md) definition is the only thing that files an
 issue from a session or a skill. It holds the procedure: search the backlog, apply the labels below,
-assign, post, and read the issue back. A skill hands each draft to it, and no script under
+assign, cite or file an issue for each case the body says is left undone, post, and read the issue
+back. A skill hands each draft to it, and no script under
 `agents/skills` runs `gh issue create`. This page holds what the labels mean, and the definition
 links here rather than copying it. `make check-spec` fails when the definition writes a label this
 page does not describe, and when a file under `agents/skills` files an issue itself.
@@ -150,6 +151,27 @@ previously named `blocked`:
 gh label edit blocked --repo brave/bravebot --name blocked/needs-planning
 ```
 
+## Flaky tests
+
+`flaky-test` says the issue is about a test whose outcome changes between runs of the same build.
+It marks what the issue is about and is not a kind, so `is:open label:flaky-test` lists every flake
+however it was filed.
+
+The Test determinism workflow files one issue per flaky test, titled `Flaky test: <name>`, through
+`contrib/measure-flakes.py`. It applies `flaky-test` and no other label, because nobody has read
+what it files, so no kind, `area` or axis is claimed for it. Those issues are authored by
+`app/github-actions`, a bot, and the [triage-issues skill](../../agents/skills/triage-issues/SKILL.md)
+skips a bot's issues except ones carrying `flaky-test`, so a triage run reads them, applies the
+kind, the `area` and the three axes, and closes one whose test no longer flakes. The poster applies `flaky-test` to an
+issue about a flaky test filed from a session, in addition to the kind and the `area` that issue
+would otherwise get. The poster refuses to post while `flaky-test` does not exist, because a person
+creates labels:
+
+```bash
+gh label create flaky-test --repo brave/bravebot --color 5ff714 \
+  --description "A test whose outcome changes between runs of the same build"
+```
+
 ## Security
 
 `security` says the issue is about the guarantee this repository exists for, and it goes on with a
@@ -207,8 +229,34 @@ gh label create session-analysis --repo brave/bravebot --color 8cad49 \
   --description "Found by reading a recorded bravebot session"
 ```
 
+Issues labelled `BraveBot-Researcher` are filed from the BraveBot researcher, a tool kept outside
+this repository that reads papers, release notes and other tools' documentation for capabilities
+bravebot lacks. Before it files, it checks each finding against main the way the
+[peer-features skill](../../agents/skills/peer-features/SKILL.md) verifier does: it opens the sources,
+searches the specs and the code for the capability under other names, searches the tracker open and
+closed, and drops what the rule declines. It applies `BraveBot-Researcher`, a kind (`parity`, or
+`enhancement` where bravebot already has most of the capability), an `area` where one is clear, and no
+axis. Close its issues the usual way: completed when implemented, not planned when not wanted,
+including when bravebot already has it, and as a duplicate when another issue holds the work. The
+researcher reads which, and learns from it. A person creates the label:
+
+```bash
+gh label create BraveBot-Researcher --repo brave/bravebot --color c5def5 \
+  --description "Filed from the BraveBot researcher's findings"
+```
+
+Where an open issue already holds the work, the researcher files nothing. It adds its new sources
+to that issue as a comment and applies `BraveBot-Researcher-evidence`, which says the researcher
+added evidence to an issue it did not file. `is:issue label:BraveBot-Researcher,BraveBot-Researcher-evidence`
+lists everything it filed or added to. A person creates that label too:
+
+```bash
+gh label create BraveBot-Researcher-evidence --repo brave/bravebot --color e4ecf7 \
+  --description "The BraveBot researcher added evidence to this issue"
+```
+
 The [maintenance skill](../../agents/skills/maintenance/SKILL.md), which files dead code,
-duplication and files or functions past a length, applies the existing `refactor` label, or `bug`
+duplication, files or functions past a length, and the other smells its lanes list, applies the existing `refactor` label, or `bug`
 where a reviewer found a defect, an `area` or `infrastructure` where one is clear, and no axis.
 It assigns every issue to netzenbot. If a required label is missing, the poster refuses and prints
 a creation command for a person. Do not create or use a `maintenance` label for these findings.

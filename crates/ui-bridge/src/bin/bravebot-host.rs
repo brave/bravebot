@@ -39,6 +39,12 @@ fn main() {
         return;
     };
 
+    // As soon as this process knows it is serving, so a panic in anything that follows is covered.
+    // A build with nowhere to send reports, or a person who switched them off, gets nothing from
+    // this call (CRASH-3, CRASH-4). The directory is the one `home::writable` names, which is none
+    // under incognito mode, so nothing would start if this process ever engaged it.
+    bravebot_backtrace::start(bravebot_backtrace::Process::Host);
+
     // The host serves real sessions, so it does not run where a process of the same user may be
     // able to copy the descriptors of its channel.
     let inspection = match bravebot_ui_bridge::host::inspection_report(outcome) {
@@ -72,6 +78,7 @@ fn main() {
     // The host works in several workspaces and is started from wherever its person was, so the
     // directory it was started in contributes no settings of its own.
     bravebot_ui_bridge::settings::settle_for_process(None, settings.as_deref());
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(None, settings.as_deref());
 
     let mut host = bravebot_ui_bridge::host::Host::new(bravebot_ui_bridge::host::Setup {
         workspaces,
@@ -204,12 +211,11 @@ fn run_client(
     client: &[std::ffi::OsString],
     current: &Current,
 ) {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the client the person named by an absolute path after `--` on this binary's \
-                      command line"
-    )]
-    let mut command = std::process::Command::new(&client[0]);
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(&client[0]),
+        bravebot_sandbox::programs::Inherits::All,
+        bravebot_sandbox::programs::SearchPath::Inherited,
+    );
     command.args(&client[1..]);
     let mut linked = match bravebot_ui_bridge::control_link::launch(command) {
         Ok(linked) => linked,

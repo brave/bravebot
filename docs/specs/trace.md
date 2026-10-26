@@ -46,18 +46,39 @@ its name, a turn that confines none of its runs, a workspace not trusted, a mana
 a delegate, and for `scopes` a platform with no sandbox or a session with no profile directory. The
 sentence the planner reads names none of them.
 
+A `run` line put to the person and not approved, by an answer of no, Ctrl-C or nobody being there
+to ask, is recorded as a refusal under `approval` saying the line was not approved and did not run.
+Its `sandbox` entry, which names the mode the programs ran in, is written only once the line is
+approved, so a line that did not start is not recorded as having run.
+
 A `run` line that asked for `unconfined` or `scopes` and was accepted is given `(U,priv)` for its
 output whatever vouched for the same line without the request, and its `provenance` entry states
 `(U,priv)`.
 
 A delegate the gate approved and its checkout then refused is recorded as a refusal under
 `delegate`, not as a permission. The entry gives the delegate's number, one fixed cause (the
-isolation argument was not `checkout`, a reader asked for one, the run already works in one, the
+isolation argument was neither `checkout` nor `checkout_with_changes`, a reader asked for one, the run already works in one, the
 sandbox mode is `read-only`, no state directory, the checkouts would sit inside the working
 directory, an opened directory holds the working directory, an opened directory holds the checkouts, the directory for checkouts is
 unusable, or the repository was refused), the directory a person opened where that was the cause,
 and how many of the call's delegates were not started, the withdrawn one included. The delegate
 still takes no number and no place under the ceiling ([DELEGATE-7](delegation.md#DELEGATE-7)).
+
+A write, an edit, a fetch or a save (`write_file`, `edit_file`, `fetch_url` and `download_url`)
+that is put to a person who does not approve it is recorded as a refusal under `approval`, and so is
+each file `apply_checkout` brings back and a write a manifest run plans. The entry names the tool, or
+the step and its tool, and says the write or the fetch was not approved and nothing was written or
+fetched. A no, a Ctrl-C and a question nobody could be asked are one answer to the policy, so the
+entry does not tell them apart. A write the credential scan raised doubts about is recorded the same
+way when it is not approved. A `download_url` asks about its host and then about its file, and
+records the question that was answered no: a host that is refused as a fetch, and a file that is
+refused as a write, with the second question not put once the first is refused.
+
+A call to a server's tool ([SERVERS-7](mcp-servers.md#SERVERS-7)) that is put to a person who does
+not approve it is recorded the same way, as a refusal under `approval`. The entry names the call as
+`alias:tool`, the alias the person gave the server and the word on the list they vouched for, and
+says the call was not approved and the server was not called. A call a `deny` rule refuses was never
+put to a person and is recorded under `mcp_call` alone.
 
 **Why.** A trail that logged only what happened would not answer "why did it not do the thing I
 asked", which is most of what anyone asks it.
@@ -98,11 +119,22 @@ asked", which is most of what anyone asks it.
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_on_a_vouched_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_asked_about_on_a_vouched_line_and_remembers_nothing`
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
+`verified-by: bravebot_agent::turn::a_run_line_the_person_does_not_approve_is_recorded_as_not_run`
+`verified-by: bravebot_agent::turn::an_unconfined_line_the_person_does_not_approve_is_not_recorded_as_unconfined`
+`verified-by: bravebot_core::policy::a_write_or_a_fetch_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::turn::a_write_or_an_edit_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_fetch_or_a_save_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::turn::a_file_of_an_apply_the_person_does_not_approve_is_recorded_under_the_apply`
+`verified-by: bravebot_agent::manifest::a_planned_write_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_core::policy::an_mcp_call_the_person_did_not_approve_is_a_refusal_under_approval`
+`verified-by: bravebot_agent::mcp::a_call_the_person_does_not_approve_is_recorded_as_a_refusal`
+`verified-by: bravebot_agent::mcp::a_call_a_rule_refuses_is_not_recorded_as_one_the_person_did_not_approve`
 
 <a id="TRACE-2"></a>
 ### TRACE-2: the trail holds no content
 
-Every field is a gate name, a capability, a label, a path, a destination host or a slot id.
+Every field is a gate name, a capability, a label, a path, a destination host, a slot id or a model
+name. A model name is one a setting, the command line or an agent definition chose.
 Network decisions omit URL userinfo, paths, queries and fragments. A host a confined program asked
 a proxy for is recorded only where it is a host name or an address ([SANDBOX-24](sandboxing.md#SANDBOX-24)),
 and so is a host the person answered a question about, under `host_grant`.
@@ -210,11 +242,18 @@ BLOCK   confine: read_file.path: '/etc/hosts' resolves outside the workspace; re
 one gate that ran: what it checked, the label it saw, and what it allowed. It is the fastest way to
 find out why something was refused.
 
+On a one-shot run each line is written to stderr as the gate takes the decision, not after the
+run ends, so a run that is slow or stuck shows what it had decided so far. The trail is not
+written a second time at the end. The sink writes the gate names, labels, paths and slot ids the
+event carries and branches on none of them, and a failed write to stderr is dropped.
+
 `verified-by: bravebot_tui::app::ctrl_t_toggles_the_trail`
 `verified-by: bravebot_tui::render::the_trail_is_hidden_by_default`
 `verified-by: bravebot_tui::render::a_blocked_gate_is_shown_in_the_trail`
 `verified-by: bravebot_cli::main::the_trail_renders_a_line_for_every_event`
 `verified-by: bravebot_cli::running::a_one_shot_run_that_failed_prints_its_trail_under_trace`
+`verified-by: bravebot_cli::running::a_traced_run_writes_its_decisions_to_stderr_while_it_is_still_going`
+`verified-by: bravebot_cli::json::a_decision_is_traced_when_the_gate_takes_it`
 
 <a id="TRACE-6"></a>
 ### TRACE-6: each planning call is recorded, like any other gate
@@ -232,7 +271,8 @@ with ([permission-modes.md](permission-modes.md)) by its name, before any tool i
 policy decides a command or a write is to be put to the person, a second entry under `approval`
 says what answered: the mode that answered in their place and so drew nothing, or no mode, which
 leaves it to whatever confirms (a person, or nothing that can ask). The entries before it that end
-in "asking" say what the policy decided, and they read as a person having been asked.
+in "asking" say what the policy decided, and they read as a person having been asked. A write that
+is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
 Other prompts a mode answers, such as a fetch or a server start, are not named here.
 
@@ -339,6 +379,26 @@ label is a claim about authority, so it comes from where the text was composed.
 `verified-by: bravebot_tui::state::the_request_view_opens_on_the_last_request_and_closing_restores_the_transcript`
 `verified-by: bravebot_tui::app::the_key_that_writes_the_transcript_out_does_nothing_in_the_request_view`
 
+<a id="TRACE-10"></a>
+### TRACE-10: the trail names the model each processor call asked for
+
+Each processor call, in a turn and in a manifest run, records the model its request names before the
+request is sent. The entry is under the gate `processor_model` and reads `<id>: the request names
+<model>`, with the id the call has in the trail ([PROC-1](processors.md#PROC-1)). The model is the
+one the driver resolved for the call: the model [PROC-13](processors.md#PROC-13) names, a tier word
+as the model it names and a gateway model with its provider's prefix, or the model of the turn or
+run where none is named. An entry can therefore differ from the name a gateway is sent. A call
+refused for a model that cannot be used sends no request and has no entry.
+
+**Why.** The model a processor runs on can differ from the planner's, and the screen shows only the
+model of the turn. A person accounting for what a run spent, or for where a file's contents were
+sent, reads the trail. A model name is chosen by configuration, so the entry holds no content
+([TRACE-2](#TRACE-2)).
+
+`verified-by: bravebot_agent::turn::the_audit_trail_names_the_model_a_turns_processor_call_asked_for`
+`verified-by: bravebot_agent::turn::a_processor_call_that_failed_in_transit_is_in_the_trail_with_its_model`
+`verified-by: bravebot_agent::manifest::the_audit_trail_names_the_model_each_manifest_processor_call_asked_for`
+
 ## Known costs
 
 - **A message restored from a saved session is `unrecorded`.** The origin is kept in memory beside
@@ -348,3 +408,7 @@ label is a claim about authority, so it comes from where the text was composed.
 - **A prompt sent with dropped pictures or PDFs is one `typed, with dropped files` span.** The
   line and the files go in one message, so the label says the bytes in it are not all typed.
 - **The view is of the planner's request, not of a delegate's, a summariser's or an advisor's.**
+- **A processor call refused for its model is not in the trail.** The refusal comes before the call
+  becomes a request ([PROC-13](processors.md#PROC-13)) and reaches the person as a refusal of the
+  call, not as a gate decision, so an account of where a file's contents were sent has to read the
+  sentence the person was shown for the calls that sent nothing.

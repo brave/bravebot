@@ -7,6 +7,10 @@
 //! start there.
 #![forbid(unsafe_code)]
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

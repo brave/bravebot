@@ -21,7 +21,15 @@
     test,
     allow(clippy::disallowed_methods, reason = "the test names its program")
 )]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        reason = "a test that unwraps fails at the line that did"
+    )
+)]
 
+mod account_words;
 pub mod acp;
 pub mod allowlist;
 mod answerers;

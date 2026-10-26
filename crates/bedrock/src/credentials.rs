@@ -82,17 +82,13 @@ fn absent(command: &Command) -> bool {
 }
 
 fn command_for(program: &Path) -> Command {
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "the `aws` that `installed` found with \
-                      `bravebot_sandbox::programs::find_on`, which leaves out every directory a \
-                      stage may write (SANDBOX-30)"
-    )]
-    let mut command = Command::new(program);
-    for name in bravebot_config::scrub::own_credentials() {
-        command.env_remove(name);
-    }
-    command
+    // The names the CLI starts itself (an `env` shebang, a `credential_process` command) search
+    // only the entries the lookup above searches (SANDBOX-30).
+    bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::found_earlier(program),
+        bravebot_sandbox::programs::Inherits::Without(&bravebot_config::scrub::own_credentials()),
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    )
 }
 
 /// The export, as a command, so what it is handed can be read without running it.
@@ -825,6 +821,78 @@ mod tests {
         let path = std::env::join_paths([&system]).unwrap();
 
         assert_eq!(installed_in(&path), real);
+    }
+
+    /// SANDBOX-30: an `aws` that is a script with an `env` shebang looks its interpreter up on the
+    /// `PATH` it was started with, as does a `credential_process` command named bare. An
+    /// interpreter a confined stage wrote into a directory the session keeps out, first on that
+    /// `PATH`, must not be the one that runs: the CLI is started unconfined, with the person's
+    /// access to `~/.aws`, `~/.ssh` and `~/.bravebot`. The test binary runs again with `PATH`
+    /// holding the session's `.venv/bin`, an installed directory and the system directories, in
+    /// that order. `aws` is `#!/usr/bin/env interp` and sits in the installed directory, where each
+    /// `interp` records that it ran. An `aws` started with bravebot's whole `PATH` runs the planted
+    /// `interp`.
+    #[cfg(unix)]
+    #[test]
+    fn an_aws_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written() {
+        use std::os::unix::fs::PermissionsExt;
+        const TEST: &str = "credentials::tests::an_aws_that_starts_another_program_by_name_never_runs_one_a_stage_may_have_written";
+        const SESSION: &str = "BRAVEBOT_TEST_AWS_INTERPRETER_SESSION";
+
+        if let Some(session) = std::env::var_os(SESSION) {
+            let session = PathBuf::from(session);
+            bravebot_sandbox::programs::keep_out(&session);
+            std::fs::write(session.join("ran"), "").unwrap();
+
+            // The interpreter produces no credentials, so the export is refused; what matters is
+            // which interpreter ran.
+            let _ = export(None);
+
+            assert!(
+                !session.join("planted-ran").exists(),
+                "the CLI looked its interpreter up in a directory a stage may write"
+            );
+            assert!(
+                session.join("installed-ran").exists(),
+                "the CLI did not run the installed interpreter"
+            );
+            return;
+        }
+
+        let session = fresh_directory("credentials-interpreter-session");
+        let installed = fresh_directory("credentials-interpreter-installed");
+        let planted = session.join(".venv").join("bin");
+        std::fs::create_dir_all(&planted).unwrap();
+        let write = |directory: &Path, name: &str, body: String| {
+            let file = directory.join(name);
+            std::fs::write(&file, body).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let records =
+            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", session.join(marker).display());
+        write(&planted, "interp", records("planted-ran"));
+        write(&installed, "interp", records("installed-ran"));
+        write(&installed, "aws", "#!/usr/bin/env interp\n".to_string());
+        let path = std::env::join_paths([
+            planted,
+            installed.clone(),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ])
+        .unwrap();
+
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let child = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--test-threads=1", "--nocapture"])
+            .env(SESSION, &session)
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        let ran = session.join("ran").exists();
+        let report = String::from_utf8_lossy(&child.stderr).into_owned();
+        assert!(ran, "the child did not run the test: {report}");
+        assert!(child.status.success(), "{report}");
     }
 
     /// The machine's own AWS configuration is the credential the CLI is being asked to resolve, so

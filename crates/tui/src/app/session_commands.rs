@@ -52,6 +52,7 @@ pub(super) fn effort_picked(
     session.choose_effort(level);
     session.note(said_of(level));
     say_if_unread(session);
+    say_if_kept_for_account(session);
 }
 
 /// Open the effort picker as a mode of the session, for a turn that is running.
@@ -102,6 +103,30 @@ pub(super) fn say_if_unread(session: &mut Session) {
     }
 }
 
+/// Say that the model in force is the ChatGPT account's and is sent the level the session began
+/// with, where the level chosen is another.
+///
+/// The choice is kept either way: it is the level of the next session, and of every model but the
+/// account's. Said when the level is chosen and when a model of the account is picked, the two moves
+/// that can leave the choice and the level sent apart, so that what was asked for is not reported as
+/// what is sent (CHATGPT-10). Not said where the model reads no level, since nothing is sent then and
+/// [`say_if_unread`] has said so.
+pub(super) fn say_if_kept_for_account(session: &mut Session) {
+    let began = session.account_session().effort();
+    if !session.model_is_account() || !session.model_reads_effort() || session.effort() == began {
+        return;
+    }
+    let word = |level: Option<bravebot_aichat::protocol::Effort>| match level {
+        Some(level) => level.as_str().to_string(),
+        None => t!(effort_unset).to_string(),
+    };
+    session.note(t!(
+        session_effort_kept_for_account,
+        began = word(began),
+        chosen = word(session.effort())
+    ));
+}
+
 /// Take a level by name without opening the picker.
 ///
 /// A word this program does not know changes nothing and says so. It must not reach a request
@@ -110,6 +135,48 @@ pub(super) fn set_effort(session: &mut Session, word: &str) {
     match bravebot_aichat::protocol::Effort::named(word) {
         Some(level) => effort_picked(session, Some(level)),
         None => session.note(t!(session_no_such_effort, effort = word)),
+    }
+}
+
+/// Say which language the interface is in, choose one for the next start, or give the choice back
+/// to the settings file and the environment (LOCALE-8).
+///
+/// A tag that names no catalog changes nothing and says so, with the catalogs there are: the
+/// environment's own answer for one is the reference, which is right for a shell that was set up
+/// for something else and wrong for somebody who has just typed a language, who would be told they
+/// were reading it while they read English. What is saved is the tag of the catalog that answered,
+/// so the word on disk is one the build knows, whatever spelling was typed.
+pub(super) fn set_language(session: &mut Session, word: &str) {
+    let word = word.trim();
+    let available = bravebot_i18n::tags().join(", ");
+    let kept = |session: &mut Session, tag: Option<&str>| match tag {
+        Some(tag) if session.choose_language(Some(tag)) => {
+            t!(session_language_set, language = tag)
+        }
+        None if session.choose_language(None) => t!(session_language_auto).to_string(),
+        _ => t!(session_language_not_saved).to_string(),
+    };
+    if word.is_empty() {
+        session.note(t!(
+            session_language_in_use,
+            language = bravebot_i18n::locale().tag(),
+            available = available
+        ));
+        if let Some(saved) = session.saved_language() {
+            session.note(t!(session_language_saved, language = saved));
+        }
+    } else if word.eq_ignore_ascii_case(bravebot_i18n::AUTO) {
+        let said = kept(session, None);
+        session.note(said);
+    } else if let Some(locale) = bravebot_i18n::find(word) {
+        let said = kept(session, Some(locale.tag()));
+        session.note(said);
+    } else {
+        session.note(t!(
+            session_no_such_language,
+            language = word,
+            available = available
+        ));
     }
 }
 
@@ -281,7 +348,7 @@ pub(super) fn set_style_in(
                 style = style.name.as_ref(),
                 styles = styles
             ),
-            None => t!(session_style_none, styles = styles).to_string(),
+            None => t!(session_style_none, styles = styles),
         };
         session.note(note);
     } else if word == STYLE_OFF {
@@ -330,6 +397,45 @@ pub(super) fn rename_session(
         session.note(t!(session_renamed, title = stored.title()));
     } else {
         session.note(t!(session_rename_needs_something));
+    }
+}
+
+/// Say which skill is the session's mode, put one in force by name, or leave it (SKILL-21).
+///
+/// A name is compared whole against the skills a turn starting now would resolve, read the way the
+/// box offers them: through the trust map and the rules, so a skill from a project nobody vouched
+/// for is no mode and is not named here. Nothing typed after `/mode` reaches a path or the prompt,
+/// and the choice is written to the record so a resume puts it back. The turn reads the skill again
+/// when it begins, under its own map.
+pub(super) fn set_mode(
+    session: &mut Session,
+    stored: &mut bravebot_session::sessions::Handle,
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+    word: &str,
+) {
+    let skills: Vec<String> = crate::skills::resolved(workspace, trust, permissions)
+        .into_iter()
+        .map(|skill| skill.name)
+        .collect();
+    let available = skills.join(", ");
+    if word.is_empty() {
+        let note = match session.skill_mode() {
+            Some(skill) => t!(session_mode_in_force, skill = skill, skills = available),
+            None => t!(session_mode_none, skills = available),
+        };
+        session.note(note);
+    } else if word == MODE_OFF {
+        session.choose_skill_mode(None);
+        stored.set_skill_mode(None);
+        session.note(t!(session_mode_cleared));
+    } else if let Some(name) = skills.iter().find(|name| name.as_str() == word) {
+        session.choose_skill_mode(Some(name.clone()));
+        stored.set_skill_mode(Some(name.clone()));
+        session.note(t!(session_mode_set, skill = name.as_str()));
+    } else {
+        session.note(t!(session_mode_unknown, skill = word, skills = available));
     }
 }
 
@@ -409,7 +515,7 @@ pub(super) fn record_to_resume(
         }
         let chosen = crate::resume::choose_other(terminal, root, current);
         match chosen {
-            crate::resume::Choice::Resume(record) => crate::resume::continuable(record),
+            crate::resume::Choice::Resume(record) => crate::resume::continuable(root, record),
             // Leaving the picker, by Escape or by Ctrl-C, stays where the person is.
             crate::resume::Choice::Fresh | crate::resume::Choice::Quit => return None,
         }
@@ -457,7 +563,7 @@ pub(super) fn branch_session(
     match stored.branch_off(name) {
         Ok(original) => {
             session.rewind.close();
-            session.stop_loop();
+            session.stop_loops();
             session.clear_goal();
             session.stop_watches();
             let title = stored.title().to_string();
@@ -477,7 +583,7 @@ pub(super) fn branch_session(
             ));
             answers.forget_what_no_record_keeps();
             workspace.forget_reach_and_hosts();
-            session.answers.clear();
+            session.answers.forget();
             true
         }
         Err(refused) => {

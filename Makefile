@@ -32,13 +32,14 @@ DEB_IMAGE = debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed
 RPM_IMAGE = fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814
 # Every file that states the version, which is what a bump rewrites and commits. The two under
 # ui/ are the desktop application's: it is packaged from its own manifest, so a version left
-# behind there is an app bundle naming a release that does not exist.
-VERSION_FILES = Cargo.toml Cargo.lock package.json ui/package.json
+# behind there is an app bundle naming a release that does not exist. The lock under fuzz/ records
+# the version of every bravebot crate the fuzz targets build, so `check-fuzz` fails on a stale one.
+VERSION_FILES = Cargo.toml Cargo.lock fuzz/Cargo.lock package.json ui/package.json
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
             BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVEBOT_DEFAULT_MODEL \
-            BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
+            BACKTRACE_SUBMIT_URL BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
 
 .PHONY: help
 help:
@@ -46,7 +47,7 @@ help:
 	@echo
 	@echo "Development:"
 	@echo "  make init                  Configure bravebot, Claude Code, Codex and Cursor; install hooks"
-	@echo "  make hooks                 Point git at the checked-in git hooks"
+	@echo "  make hooks                 Copy the checked-in git hooks into the git directory and point git at them"
 	@echo "  make build                 Debug build"
 	@echo "  make test                  Run all tests"
 	@echo "  make check                 Format check, clippy, tests, and toolchain age"
@@ -55,10 +56,12 @@ help:
 	@echo "  make check-affected-containers  The Docker checks they need [BASE=ref]"
 	@echo "  make check-spec            Check docs/specs against the implementation"
 	@echo "  make check-security        The security audit's deterministic half"
-	@echo "  make check-maintenance     Dead code, repeated code and long files, as candidates for the maintenance skill"
+	@echo "  make check-maintenance     Dead, repeated, deeply nested, coupled or untested code, as candidates for the maintenance skill"
 	@echo "  make check-locales         Hold the catalogs to contrib/untranslated-messages.txt"
 	@echo "  make check-versions        Whether every file stating the version states the same one"
+	@echo "  make check-lint-increase   Whether this branch adds sites of the clippy lints held to the base"
 	@echo "  make check-narration       Whether this branch's commits and lines narrate their writer's process [BASE=ref]"
+	@echo "  make check-pr-body         Whether a pull request body (PR_BODY) has a Not covered line, with an issue per case"
 	@echo "  make check-docs            Build the documentation website under docs/website"
 	@echo "  make docs-changes          What has landed in the specs since the site was updated"
 	@echo "  make docs-updated-to-sha   The commit the documentation site is current as of"
@@ -68,6 +71,10 @@ help:
 	@echo "  make check-reviewdog-full  The same scan, over the whole tree"
 	@echo "  make check-npm             The npm package tests, the pnpm lockfiles in sync with their manifests, and their lint"
 	@echo "  make check-deps            Advisories, licences, duplicate versions, and sources"
+	@echo "  make check-fuzz            Lint, build, replay and briefly run every fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; needs the nightly toolchain and cargo-fuzz"
+	@echo "  make fuzz TARGET=<name>    Run one fuzz target [FUZZ_SECONDS=$(FUZZ_SECONDS)]; the targets are $(FUZZ_TARGETS)"
+	@echo "  make fuzz-cmin TARGET=<name>  Reduce fuzz/corpus/<name> to the inputs that each reach something new"
+	@echo "  make fuzz-install          Install cargo-fuzz $(CARGO_FUZZ_VERSION), the version CI runs"
 	@echo "  make check-msrv            Build against the declared minimum toolchain ($(MSRV))"
 	@echo "  make check-windows         Lint the Windows target that ships, cross-compiled"
 	@echo "  make check-ui              Build the desktop UI, run the tests pinning what it marks, drive it"
@@ -94,6 +101,7 @@ help:
 	@echo "Releasing:"
 	@echo "  make bump-version BUMP=bugfix|minor|major   Set the next version"
 	@echo "  make github-release                         Tag it; Jenkins and npm publish are later"
+	@echo "  make npm-bootstrap                          Create the name of each new platform package, before its first publish"
 	@echo "  make publish-npm [TAG=v<version>]           Publish npm for TAG, or the latest GitHub release"
 	@echo "  make package-manifests TAG=v<version>       Write the Homebrew cask and WinGet manifests into dist/packages"
 	@echo "  make app-bundle                             Package the desktop application, release build"
@@ -114,9 +122,22 @@ init: hooks
 
 # .git/hooks is not versioned, so a fresh clone commits with nothing checking it
 # until this runs. Idempotent, and part of `init` so nobody has to know it exists.
+#
+# The hooks are copied into the repository's common git directory and git is pointed at the
+# copy by absolute path. A relative path is resolved against each worktree's own top level, so
+# in the worktree of a pull request git would run the hooks that pull request tracks, as
+# whoever runs git there. No branch tracks the copy. Run this again after .githooks changes.
+# A linked worktree installs nothing, since the copy would come from its branch. The directory
+# name is the one agents/pr_worktree.py reads (HOOKS_DIR).
 .PHONY: hooks
 hooks:
-	git config core.hooksPath .githooks
+	@common="$$(cd "$$(git rev-parse --git-common-dir)" && pwd -P)" && \
+	if [ "$$(git rev-parse --absolute-git-dir)" != "$$common" ]; then \
+		echo "hooks: nothing installed from a linked worktree, whose branch may track hooks nobody reviewed; run make hooks in the main checkout" >&2; \
+	else \
+		mkdir -p "$$common/bravebot-hooks" && cp -p .githooks/* "$$common/bravebot-hooks/" && \
+		git config core.hooksPath "$$common/bravebot-hooks" && echo "hooks: $$common/bravebot-hooks"; \
+	fi
 
 .PHONY: build
 build:
@@ -149,6 +170,7 @@ RUST_TEST_THREADS ?= 4
 check:
 	cargo fmt --all -- --check
 	cargo clippy --all-targets --all-features -- -D warnings
+	@python3 contrib/check-lint-increase.py
 	RUST_TEST_THREADS="$(RUST_TEST_THREADS)" cargo test --all --locked
 	@python3 contrib/check-versions.py
 	@python3 contrib/check-toolchain.py
@@ -162,6 +184,14 @@ check:
 check-versions:
 	@python3 contrib/check-versions.py --selftest
 	@python3 contrib/check-versions.py
+
+# Whether this branch adds sites of a clippy lint the tree has hundreds of: clippy runs over the
+# libraries and binaries at the merge base and here, and a lint with more sites in a crate than it
+# had fails. Nothing is recorded in the tree. Run by `check` and, on a pull request, by CI. It
+# compiles the workspace twice, so it skips a change that touches nothing clippy reads.
+.PHONY: check-lint-increase
+check-lint-increase:
+	@python3 contrib/check-lint-increase.py
 
 # Whether clippy here knows the lints CI will fail on. Run by `check`; on its own it costs
 # nothing and answers immediately.
@@ -224,13 +254,17 @@ check-security:
 	python3 agents/skills/security-audit/security-audit.py --mechanical-only
 
 # The scan half of the maintenance skill: public items nothing names, items only tests name,
-# allowances silencing the dead-code lint, blocks and string literals repeated across files, and
-# files and functions past a length. It reads no code, so a candidate may be wrong in either
-# direction, and it exits zero whatever it finds. Deciding which candidates are worth an issue
-# needs a reading of the code: run the maintenance skill for that half.
+# allowances silencing a lint, blocks and string literals repeated across files, files and
+# functions past a length, deeply nested functions, modules that use many others, public functions
+# no test names, shared mutable state, commented-out code and string-typed errors. It reads no
+# code, so a candidate may be wrong in either direction, and it exits zero whatever it finds.
+# Candidates that docs/maintenance-reviewed holds a verdict for are left out. The clippy lane is
+# left out, because it compiles and this target needs no toolchain: the skill runs it. Deciding
+# which candidates are worth an issue needs a reading of the code: run the maintenance skill for
+# that half.
 .PHONY: check-maintenance
 check-maintenance: check-maintenance-selftest
-	python3 agents/skills/maintenance/maintenance.py --mechanical-only
+	python3 agents/skills/maintenance/maintenance.py --mechanical-only --no-clippy
 
 # agents/unverified-clauses.txt, written from the specs. It is the list of clauses nothing pins, and
 # check-spec fails while it and the specs disagree, so this is what to run after giving a clause
@@ -306,6 +340,13 @@ check-npm:
 # matches is a recorded reason for a duplicate that is no longer there. --locked for the same
 # reason every other cargo command here takes it: the answer is about the versions Cargo.lock
 # pins, not the ones a resolve on the spot would pick.
+#
+# The fuzz package is a workspace of its own, so the first run does not read its graph, and the
+# second reads it with the same policy. The skip entries describe the root graph: the first run
+# fails on one that matches nothing, and the second does not report them. The one licence exception
+# is for a crate only the fuzz graph has, so the second run fails on an exception that matches
+# nothing and the first does not report it. An exception for a crate only the root graph has would
+# need the flags the other way round.
 CARGO_DENY_VERSION = 0.20.2
 CARGO_DENY_ROOT = $(HOME)/.cache/bravebot-deny
 .PHONY: check-deps
@@ -316,7 +357,111 @@ check-deps:
 		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
 	}
-	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip --allow license-exception-not-encountered
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+		--allow unmatched-skip --allow unnecessary-skip --deny license-exception-not-encountered
+
+# The fuzz targets in fuzz/, which is a package of its own with its own workspace and lockfile, so
+# nothing above compiles libFuzzer's C++.
+#
+# libFuzzer needs a nightly toolchain, and the date of the one the targets are built with is
+# written here and nowhere else. Moving to a newer one is an edit to this line, which
+# `make check-fuzz` then checks the targets still build with.
+#
+# Targets are built with debug assertions and overflow checks, which `-a` asks for by name so that
+# it does not depend on cargo-fuzz's default, and with AddressSanitizer. A release build of
+# bravebot sets no `overflow-checks`, so a sum that overflows there wraps and the function goes on
+# with a wrong number: built this way, an input that reaches one is reported instead.
+#
+# `-max_len` is the longest input the fuzzer makes. `diff` reads two texts, so it is given room
+# for both. bravebot-config's build script refuses to build without credentials unless told that a
+# binary configured at run time is acceptable, which is all a fuzz target needs.
+FUZZ_TOOLCHAIN = nightly-2026-10-01
+# The cargo-fuzz CI installs, and the one `make fuzz-install` installs for a person.
+CARGO_FUZZ_VERSION = 0.13.2
+FUZZ_TARGETS = regex diff event_stream sse
+FUZZ_SECONDS = 20
+FUZZ_FLAGS = -timeout=10 -rss_limit_mb=2048
+FUZZ_ENV = BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1
+fuzz_max_len = $$([ "$(1)" = diff ] && echo 65536 || echo 4096)
+# cargo-fuzz does not read a dictionary by itself, so each target that has one is handed it.
+fuzz_dict = $$([ -f fuzz/dictionaries/$(1).dict ] && echo -dict=fuzz/dictionaries/$(1).dict)
+
+# The toolchain, for the commands in docs/development/fuzzing.md to name without writing its date.
+.PHONY: fuzz-toolchain
+fuzz-toolchain:
+	@echo $(FUZZ_TOOLCHAIN)
+
+# Built from source into cargo's own bin directory. taiki-e/install-action has no manifest for
+# cargo-fuzz, and its fallback fetches whichever cargo-binstall is current.
+.PHONY: fuzz-install
+fuzz-install:
+	cargo install --locked cargo-fuzz@$(CARGO_FUZZ_VERSION)
+
+.PHONY: fuzz-prerequisites
+fuzz-prerequisites:
+	@command -v rustup >/dev/null 2>&1 && rustup toolchain list | grep -q '^$(FUZZ_TOOLCHAIN)' || { \
+		echo "fuzz: the $(FUZZ_TOOLCHAIN) toolchain is not installed: rustup toolchain install $(FUZZ_TOOLCHAIN) --profile minimal -c rustfmt -c clippy -c rust-src" >&2; \
+		exit 1; \
+	}
+	@cargo fuzz --version >/dev/null 2>&1 || { \
+		echo "fuzz: cargo-fuzz is not installed: make fuzz-install" >&2; \
+		exit 1; \
+	}
+	@[ "$$(cargo fuzz list | sort | tr '\n' ' ')" = "$$(printf '%s\n' $(FUZZ_TARGETS) | sort | tr '\n' ' ')" ] || { \
+		echo "fuzz: FUZZ_TARGETS in the Makefile ($(FUZZ_TARGETS)) differs from the [[bin]] entries in fuzz/Cargo.toml ($$(cargo fuzz list | tr '\n' ' '))" >&2; \
+		exit 1; \
+	}
+
+# The targets one to a line, which .github/workflows/fuzz.yml makes a leg of each from.
+.PHONY: fuzz-targets
+fuzz-targets:
+	@printf '%s\n' $(FUZZ_TARGETS)
+
+# What `fuzz` and `fuzz-cmin` need of TARGET.
+.PHONY: fuzz-named-target
+fuzz-named-target:
+	@echo "$(FUZZ_TARGETS)" | tr ' ' '\n' | grep -qxF -- '$(TARGET)' || { \
+		echo "fuzz: name a target, as in make fuzz TARGET=regex. They are: $(FUZZ_TARGETS)" >&2; \
+		exit 1; \
+	}
+
+# One target, with the flags CI uses: make fuzz TARGET=regex [FUZZ_SECONDS=60]. New inputs go to
+# fuzz/corpus/<target>, which is not committed; the seeds and the reproducers of fixed crashes are
+# read from their own directories.
+.PHONY: fuzz
+fuzz: fuzz-prerequisites fuzz-named-target
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $(TARGET) fuzz/corpus/$(TARGET) fuzz/seeds/$(TARGET) fuzz/regressions/$(TARGET) -- \
+		-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$(TARGET)) $(call fuzz_dict,$(TARGET))
+
+# Replaces fuzz/corpus/<target> with the inputs of it that each reach something new, which is what
+# the weekly run saves. cargo-fuzz leaves the corpus as it was and exits 0 where the merge fails.
+.PHONY: fuzz-cmin
+fuzz-cmin: fuzz-prerequisites fuzz-named-target
+	@mkdir -p fuzz/corpus/$(TARGET)
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz cmin -a $(TARGET) fuzz/corpus/$(TARGET) -- -max_len=$(call fuzz_max_len,$(TARGET))
+
+# Formatting, clippy and the unit tests of the code the targets share, a build of every target, a
+# replay of the seeds and the reproducers of fixed crashes with -runs=0, and then each target for
+# FUZZ_SECONDS. Stops at the first failure.
+.PHONY: check-fuzz
+check-fuzz: fuzz-prerequisites
+	cargo +$(FUZZ_TOOLCHAIN) fmt --manifest-path fuzz/Cargo.toml -- --check
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) clippy --manifest-path fuzz/Cargo.toml --all-targets --locked -- -D warnings
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) test --manifest-path fuzz/Cargo.toml --lib --locked
+	$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz build -a
+	@set -e; for target in $(FUZZ_TARGETS); do \
+		echo "replay $$target"; \
+		$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $$target fuzz/seeds/$$target fuzz/regressions/$$target -- \
+			-runs=0 $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target); \
+	done
+	@set -e; for target in $(FUZZ_TARGETS); do \
+		echo "run $$target for $(FUZZ_SECONDS)s"; \
+		mkdir -p fuzz/corpus/$$target; \
+		$(FUZZ_ENV) cargo +$(FUZZ_TOOLCHAIN) fuzz run -a $$target fuzz/corpus/$$target fuzz/seeds/$$target fuzz/regressions/$$target -- \
+			-max_total_time=$(FUZZ_SECONDS) $(FUZZ_FLAGS) -max_len=$(call fuzz_max_len,$$target) $(call fuzz_dict,$$target); \
+	done
 
 # The minimum-toolchain job. Built in a container pinned to the declared MSRV, because
 # rustup is not a given here and a Homebrew or distro Rust cannot switch toolchains.
@@ -400,7 +545,7 @@ clean-worktrees:
 # All local checks before pushing, including the UI and Linux code paths.
 # Requires Docker and the desktop runtime dependencies described in checks.md.
 .PHONY: check-all-local check-all
-check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
+check-all-local: check-scripts check check-spec check-security check-locales check-versions check-narration check-pr-body check-docs check-npm check-deps check-ui check-agent-client check-mobile check-reviewdog
 check-all: check-all-local check-msrv check-windows check-linux
 
 # The gates this branch's changes need, against its merge base with BASE, which check-reviewdog
@@ -421,10 +566,10 @@ check-affected-containers:
 
 .PHONY: check-scripts check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 check-scripts: check-all-selftest check-reviewdog-selftest check-rebase-selftest check-affected-selftest \
 	check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest \
-	check-maintenance-selftest check-session-review-selftest
+	check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest
 
 check-all-selftest:
 	python3 contrib/check-all-selftest.py
@@ -455,6 +600,9 @@ check-maintenance-selftest:
 
 check-session-review-selftest:
 	python3 agents/skills/session-review/selftest.py
+
+check-lint-increase-selftest:
+	python3 contrib/check-lint-increase.py --selftest
 
 check-release-preflight-selftest:
 	python3 contrib/release-preflight.py --selftest
@@ -540,6 +688,16 @@ locales:
 check-narration:
 	python3 contrib/check-narration.py --selftest
 	python3 contrib/check-narration.py $(if $(BASE),--base '$(BASE)')
+
+# Whether a pull request body has a Not covered line, which is `none` or a bullet per case, each
+# naming the issue that tracks it. The body is read from PR_BODY, as check-narration reads it, and
+# a run with no PR_BODY and not in a pull request has no body to read, so locally this runs the
+# selftest and checks a draft only where it is given one: PR_BODY="$(cat body.md)" make check-pr-body.
+# Only pull requests opened by netzenbot are held to the line, and PR_AUTHOR says who opened one.
+.PHONY: check-pr-body
+check-pr-body:
+	python3 contrib/check-pr-body.py --selftest
+	python3 contrib/check-pr-body.py
 
 # Whether every catalog matches contrib/untranslated-messages.txt, which records the messages each
 # translation is knowingly missing. A gap is allowed and silence about one is not: falling back to
@@ -1089,6 +1247,8 @@ bump-version:
 		exit 1; \
 	fi; \
 	cargo update --workspace --offline >/dev/null 2>&1 || cargo update --workspace >/dev/null; \
+	cargo update --workspace --manifest-path fuzz/Cargo.toml --offline >/dev/null 2>&1 \
+		|| cargo update --workspace --manifest-path fuzz/Cargo.toml >/dev/null; \
 	python3 contrib/check-versions.py --set "$$next"; \
 	python3 contrib/check-versions.py; \
 	git commit -q -m "Bump version to $$next" -- $(VERSION_FILES); \
@@ -1146,7 +1306,15 @@ github-release:
 	echo "then publish npm: make publish-npm TAG=$(TAG)"; \
 	echo "watch CI with: gh run watch --repo brave/bravebot"
 
+# Publishes a placeholder under each platform package name the registry has no package of, so
+# that package can be given a trusted publisher on npmjs.com. Needs npm login as a maintainer who
+# can publish @brave. Does nothing when every name exists. publish-npm refuses until it has run.
+.PHONY: npm-bootstrap
+npm-bootstrap:
+	node npm/scripts/bootstrap-platform-packages.js
+
 # Without TAG on the command line, the latest GitHub release: this tree may be bumped past it.
+# Refuses first when the registry has no package of a platform's name (make npm-bootstrap).
 .PHONY: publish-npm
 publish-npm:
 	@set -eu; \
@@ -1155,6 +1323,7 @@ publish-npm:
 	else \
 		tag="$$(gh release view --repo brave/bravebot --json tagName --jq .tagName)"; \
 	fi; \
+	node npm/scripts/bootstrap-platform-packages.js --check; \
 	echo "dispatching publish-npm.yml for $$tag"; \
 	gh workflow run publish-npm.yml --repo brave/bravebot --ref "$$tag" -f tag="$$tag"; \
 	echo "watch it with: gh run watch --repo brave/bravebot"

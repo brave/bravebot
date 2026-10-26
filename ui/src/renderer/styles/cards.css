@@ -358,10 +358,6 @@
   padding: 0;
   border: 0;
 }
-.ask-question + .ask-question {
-  padding-top: var(--leo-spacing-l);
-  border-top: 1px solid var(--border-hairline);
-}
 .ask-question legend {
   display: flex;
   align-items: baseline;
@@ -512,6 +508,8 @@
   font: var(--type-meta);
 }
 .error-card p { margin: var(--leo-spacing-xs) 0 var(--leo-spacing-m); }
+/* A command in the sentence is code, in the code type role like the rest of the window's code. */
+.error-card p code { font: var(--type-code); overflow-wrap: anywhere; }
 .error-card pre {
   margin: 0;
   max-height: 200px;

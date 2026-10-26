@@ -14,18 +14,18 @@
 
 use crate::rewind::CoverageTracker;
 pub use crate::rewind::{CoverageGap, RewindCoverage};
+use crate::scratch::ScratchDirectory;
 use base64::Engine;
 use bravebot_core::capability::Capability;
 use bravebot_core::delegate::CheckoutRefusal;
 use bravebot_core::event::{Role, Sink};
 use bravebot_core::label::Label;
-use bravebot_core::policy::{Denial, Policy};
+use bravebot_core::policy::Policy;
 use bravebot_core::spelling::to_key;
-use bravebot_core::trust::is_absolute_key;
 use bravebot_core::value::Labelled;
-use bravebot_filetype::{SNIFF_BYTES, looks_binary};
-use std::ffi::OsString;
-use std::fmt;
+use bravebot_filetype::{Decoded, Decoding, SNIFF_BYTES, decode_text, looks_binary};
+#[cfg(unix)]
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -40,11 +40,38 @@ fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+mod carry;
 mod checkouts;
+mod error;
 #[path = "../../ui-files/src/names.rs"]
 mod names;
+mod other_names;
 mod reach;
+mod resolve;
+mod results;
+mod touched;
+mod volume;
 
+use error::{ENDS_CHECKOUTS, io_detail};
+pub use error::{Remedy, WorkspaceError};
+#[cfg(unix)]
+use other_names::{LinkNames, directory_identity};
+pub(crate) use resolve::destination;
+use resolve::{expand_home, named_home, refuse_unkeyable, written_below};
+pub(crate) use results::MAX_ENTRIES;
+pub use results::{
+    ContextLine, FileTally, Listing, MAX_SEARCH_CONTEXT, MAX_SEARCH_FILES, Match, Matches, Page,
+    Paging, RepoMap, SearchOutput,
+};
+use results::{
+    MAX_CONTEXT_LINES, MAX_LINE, MAX_MAP_BYTES, MAX_MAP_FILE_BYTES, MAX_MATCH_LINE, MAX_MATCHES,
+    MAX_PAGE_CHARS, MAX_PAGE_LINES, MAX_SEARCH_TIME, MAX_TALLIED_FILES,
+};
+use touched::{Touched, place_by_spelling};
+pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
+pub(crate) use volume::{on_disk, one_file};
+
+pub use carry::{Carried, CarryBound, CarryPlan, NotCarried, StatusRead};
 pub use checkouts::{
     Candidates, CheckoutInfo, CheckoutRead, Happened, Retired, SessionCheckout, Unremoved,
     record_checkout,
@@ -87,374 +114,6 @@ pub struct GitQuestion<'a> {
     pub messages: bool,
     pub since: Option<i64>,
     pub until: Option<i64>,
-}
-
-/// Whether the first component of `named` is exactly `~`.
-fn named_home(named: &str) -> bool {
-    Path::new(named).components().next() == Some(Component::Normal(std::ffi::OsStr::new("~")))
-}
-
-/// `named` with a leading `~` replaced by `home`, or `None` where it does not start with one.
-///
-/// Only a whole first component counts, so `~notes/x` stays a relative path (CMD-5). A machine
-/// naming no home refuses the `~` rather than reading it as a directory named `~` (CMDLINE-4).
-fn expand_home(named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'static str> {
-    if !named_home(named) {
-        return Ok(None);
-    }
-    let path = Path::new(named);
-    let home = home.ok_or("`~` stands for the home directory and this user has none")?;
-    let rest = path.components().skip(1).collect::<PathBuf>();
-    Ok(Some(match rest.as_os_str().is_empty() {
-        true => home.to_path_buf(),
-        false => home.join(rest),
-    }))
-}
-
-/// What a failed read says, where a missing file also says what a relative path was joined to.
-///
-/// "No such file or directory" alone reads as the file being absent, when the writer may have
-/// meant another directory than the one the path was joined to.
-///
-/// Names the directory and not the path joined to it. [`WorkspaceError::describe`] passes the
-/// detail through as it is, and a read through a reference was made on a filename the planner is
-/// never told (LIST-2).
-fn io_detail(error: &std::io::Error, named: &str, root: &Path) -> String {
-    if error.kind() == std::io::ErrorKind::NotFound
-        && !Path::new(named).is_absolute()
-        && !named_home(named)
-    {
-        return format!(
-            "{error}; a relative path is looked up under the working directory, {}",
-            root.display()
-        );
-    }
-    error.to_string()
-}
-
-#[derive(Debug)]
-pub enum WorkspaceError {
-    /// The policy refused the operation.
-    Denied(Denial),
-    /// The path resolved outside the workspace root.
-    Escapes { path: String, remedy: Remedy },
-    /// The path was not usable as a relative workspace path.
-    Invalid { path: String, reason: &'static str },
-    /// The operation failed on disk.
-    Io { path: String, detail: String },
-    /// The file changed after it was read, so the approved change no longer applies.
-    Stale { path: String },
-    /// Another effect already holds the path, so this write was refused rather than interleaved.
-    Contended { path: String },
-    /// The file is not text, so there is nothing useful to return.
-    Binary { path: String },
-    /// The attachment is larger than a request should carry.
-    TooLarge { path: String, limit: usize },
-    /// The search pattern is not a regular expression this engine can match.
-    Pattern { detail: String },
-    /// `read_git` did not answer, for the reason carried.
-    Git {
-        path: String,
-        declined: crate::git::Declined,
-    },
-    /// No checkout was made, for the reason carried.
-    Checkout {
-        path: String,
-        refused: crate::git::checkout::Refused,
-    },
-    /// The working directory was not changed because the session keeps the checkouts carried, by
-    /// their numbers (CHECKOUT-16).
-    KeepsCheckouts { ids: Vec<String> },
-}
-
-impl WorkspaceError {
-    /// Word this failure about `named`, which is the name the caller may say out loud.
-    ///
-    /// The path a failure carries is the one the call was made on, and a call made through a
-    /// reference was made on a filename out of a directory nobody vouched for. A filename is
-    /// content, which is LIST-1, and the reference exists so that the planner is never told
-    /// one, which is LIST-2. A tool result that interpolated the name would put bytes an
-    /// attacker chose into the planner's context inside a sentence the driver signs for, which
-    /// is what LABEL-3 forbids. So every caller that reports one of these to the planner words
-    /// it from here and passes the name it is entitled to say: `ref:1` for a reference, the
-    /// path the planner typed otherwise.
-    ///
-    /// Written as a match over the whole enum rather than a substitution over what
-    /// [`fmt::Display`] produced, so a variant added later with a path of its own has to say
-    /// here which name it reports instead of inheriting a wording that leaks.
-    ///
-    /// [`WorkspaceError::Denied`] is the arm `named` does not reach: a denial carries a sentence
-    /// the policy layer composed, and what may be in one is that layer's question rather than
-    /// this one's.
-    pub fn describe(&self, named: &str) -> String {
-        match self {
-            Self::Denied(d) => d.to_string(),
-            Self::Escapes {
-                remedy: Remedy::Nothing,
-                ..
-            } => format!("'{named}' resolves outside the workspace; refusing to touch it"),
-            Self::Escapes {
-                remedy: Remedy::Inside,
-                ..
-            } => format!(
-                "'{named}' is inside the workspace, and a path there is named relative to the \
-                 workspace root; refusing to touch it as typed. Name it without the workspace's \
-                 own directory in front, or as '.' for the root itself"
-            ),
-            // What the person can do is part of the sentence, since the planner cannot do it and has
-            // otherwise been seen to reach the same file through `run` instead.
-            Self::Escapes {
-                remedy: Remedy::Open,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
-                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
-                 starting bravebot, after which this path reaches it"
-            ),
-            Self::Escapes {
-                remedy: Remedy::OpenOrDrop,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
-                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
-                 starting bravebot, after which this path reaches it, or drop the file on the \
-                 window to have it read with their next message"
-            ),
-            Self::Escapes {
-                remedy: Remedy::OpenItself,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
-                 open the directory this path names, with /add-dir in the terminal or --add-dir \
-                 when starting bravebot, after which this path reaches it"
-            ),
-            Self::Escapes {
-                remedy: Remedy::OpenItselfEndsCheckouts,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
-                 open the directory this path names, with /add-dir in the terminal or --add-dir \
-                 when starting bravebot, after which this path reaches it. That directory holds \
-                 the working directory, and {ENDS_CHECKOUTS}"
-            ),
-            Self::Escapes {
-                remedy: Remedy::OpenEndsCheckouts,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
-                 open the directory it is in, with /add-dir in the terminal or --add-dir when \
-                 starting bravebot, after which this path reaches it. That directory holds the \
-                 working directory, and {ENDS_CHECKOUTS}"
-            ),
-            Self::Escapes {
-                remedy: Remedy::DropOrOpenEndsCheckouts,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace; refusing to touch it. The person can \
-                 drop the file on the window to have it read with their next message. Opening the \
-                 directory it is in, with /add-dir in the terminal or --add-dir when starting \
-                 bravebot, would also make this path reach it, but that directory holds the \
-                 working directory, and {ENDS_CHECKOUTS}"
-            ),
-            Self::Escapes {
-                remedy: Remedy::Credential,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace, in a place that holds credentials, \
-                 which cannot be opened to the file tools; refusing to touch it"
-            ),
-            Self::Escapes {
-                remedy: Remedy::CredentialDrop,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace, in a place that holds credentials, \
-                 which cannot be opened to the file tools; refusing to touch it. The person can \
-                 drop the file on the window to have it read with their next message"
-            ),
-            Self::Escapes {
-                remedy: Remedy::Kept,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace, and permissions.readsStayInWorkspace \
-                 keeps the file tools inside it; refusing to touch it"
-            ),
-            Self::Escapes {
-                remedy: Remedy::Drop,
-                ..
-            } => format!(
-                "'{named}' resolves outside the workspace, and permissions.readsStayInWorkspace \
-                 keeps the file tools inside it; refusing to touch it. The person can drop the \
-                 file on the window to have it read with their next message"
-            ),
-            Self::Invalid { reason, .. } => format!("'{named}' is not usable: {reason}"),
-            Self::Io { detail, .. } => format!("'{named}': {detail}"),
-            Self::Stale { .. } => {
-                format!("'{named}' changed after it was read; read it again before editing")
-            }
-            Self::Contended { .. } => {
-                format!("another write to '{named}' is still in progress, so nothing was written")
-            }
-            Self::Binary { .. } => {
-                format!("'{named}' is a binary file, so it cannot be read as text")
-            }
-            Self::TooLarge { limit, .. } => format!(
-                "'{named}' is larger than the {} MiB an attachment may be",
-                limit / (1024 * 1024)
-            ),
-            Self::Pattern { detail } => format!("the search pattern is not usable: {detail}"),
-            Self::Git { declined, .. } => declined.describe(named),
-            Self::Checkout { refused, .. } => refused.describe(named),
-            Self::KeepsCheckouts { ids } => {
-                let (noun, them) = if ids.len() == 1 {
-                    ("checkout", "it")
-                } else {
-                    ("checkouts", "them")
-                };
-                format!(
-                    "the session keeps {noun} {}; moving would leave {them} keyed under the \
-                     directory the session is in, so remove {them} with /checkouts remove first",
-                    ids.join(", "),
-                )
-            }
-        }
-    }
-
-    /// The path this failure carries, which is the one the call was made on.
-    ///
-    /// Only [`fmt::Display`] reads it, and what [`fmt::Display`] writes is for a log, a trail or
-    /// a person: all three are entitled to the real path, and a trail saying a file could not be
-    /// read without saying which file would be the opposite problem. Every sentence the planner
-    /// reads is worded through [`WorkspaceError::describe`] instead, for the reason written
-    /// there.
-    /// This refusal as a call that reads the file reports it, which may also name a drop.
-    fn for_a_read(self) -> Self {
-        let Self::Escapes { path, remedy } = self else {
-            return self;
-        };
-        let remedy = match remedy {
-            Remedy::Open => Remedy::OpenOrDrop,
-            Remedy::OpenEndsCheckouts => Remedy::DropOrOpenEndsCheckouts,
-            Remedy::Kept => Remedy::Drop,
-            Remedy::Credential => Remedy::CredentialDrop,
-            other => other,
-        };
-        Self::Escapes { path, remedy }
-    }
-
-    fn carried_path(&self) -> &str {
-        match self {
-            Self::Denied(_) | Self::Pattern { .. } | Self::KeepsCheckouts { .. } => "",
-            Self::Escapes { path, .. }
-            | Self::Invalid { path, .. }
-            | Self::Io { path, .. }
-            | Self::Stale { path }
-            | Self::Contended { path }
-            | Self::Binary { path }
-            | Self::TooLarge { path, .. }
-            | Self::Git { path, .. }
-            | Self::Checkout { path, .. } => path,
-        }
-    }
-}
-
-/// What opening a directory that holds the working directory costs, in the words every sentence
-/// the planner reads uses for it (CHECKOUT-7).
-const ENDS_CHECKOUTS: &str = "while one is open no delegate is given a checkout";
-
-/// What a person can do so that a path refused for leaving the workspace reaches its file.
-///
-/// Chosen where the refusal is made, since only there is it known whether opening a directory would
-/// make the same path work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Remedy {
-    /// None is offered: the path climbs with `..` through a link, off the top of the file system
-    /// or to a place inside the root; a link carries it out; it names a credential location, which
-    /// cannot be opened; or what was refused is a command's redirection or a rewind.
-    Nothing,
-    /// The path lands inside the root and in no opened directory, where a directory cannot be
-    /// opened. It is named in some other way than relative to the root: from the top of the file
-    /// system, through a link to the root or through `~`. The relative spelling reaches the file,
-    /// so the planner is told that and not that the path leaves the workspace, which it does not.
-    Inside,
-    /// Opening the directory a file is in, or a name nothing is at yet would be created in, makes
-    /// the same path reach it, for whatever the call does to it.
-    Open,
-    /// [`Remedy::Open`] for a call that reads the file, where dropping it is a second way to have
-    /// it read. A drop only ever reads (DROP-3), so no other call is told of it.
-    OpenOrDrop,
-    /// [`Remedy::Open`] where the directory holds the working directory, so opening it leaves no
-    /// delegate a checkout (CHECKOUT-7).
-    OpenEndsCheckouts,
-    /// [`Remedy::OpenOrDrop`] where the directory holds the working directory. The drop is named
-    /// first, since it reaches the file and costs nothing.
-    DropOrOpenEndsCheckouts,
-    /// The path names a directory, which is opened as itself rather than through the directory it
-    /// is in. This remedy names no drop for any call, since a directory cannot be dropped.
-    OpenItself,
-    /// [`Remedy::OpenItself`] where the directory holds the working directory, so opening it leaves
-    /// no delegate a checkout (CHECKOUT-7).
-    OpenItselfEndsCheckouts,
-    /// The directory a file is in, or a name nothing is at yet would be created in, is or lies
-    /// inside a credential location, which `/add-dir` and `request_path` both refuse (SANDBOX-18),
-    /// so no directory is offered. A write is still pointed at the unconfined line where the
-    /// session accepts one. A path that names such a directory is [`Remedy::Nothing`].
-    Credential,
-    /// [`Remedy::Credential`] for a call that reads the file, where a drop is the one way to have
-    /// it read.
-    CredentialDrop,
-    /// `permissions.readsStayInWorkspace` refuses opening a directory, and the call is not a read,
-    /// which a drop would not serve (PERM-16).
-    Kept,
-    /// [`Remedy::Kept`] for a call that reads the file, where a drop is the one way to have it read.
-    Drop,
-}
-
-impl Remedy {
-    /// The remedy as the trail records it, beside the refusal the planner was told of.
-    pub fn offered(self) -> &'static str {
-        match self {
-            Self::Nothing => "none",
-            Self::Inside => "name it relative to the workspace root",
-            Self::Open => "open its directory",
-            Self::OpenOrDrop => "open its directory, or drop the file",
-            Self::OpenEndsCheckouts => {
-                "open its directory, which holds the working directory and so ends checkouts"
-            }
-            Self::DropOrOpenEndsCheckouts => {
-                "drop the file, or open its directory, which holds the working directory and so \
-                 ends checkouts"
-            }
-            Self::OpenItself => "open the directory itself",
-            Self::OpenItselfEndsCheckouts => {
-                "open the directory itself, which holds the working directory and so ends \
-                 checkouts"
-            }
-            Self::Credential => "none, since its directory is or lies inside a credential location",
-            Self::CredentialDrop => {
-                "drop the file, since its directory is or lies inside a credential location"
-            }
-            Self::Kept => {
-                "none, since permissions.readsStayInWorkspace refuses opening its directory"
-            }
-            Self::Drop => {
-                "drop the file, since permissions.readsStayInWorkspace refuses opening its directory"
-            }
-        }
-    }
-}
-
-impl fmt::Display for WorkspaceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.describe(self.carried_path()))
-    }
-}
-
-impl std::error::Error for WorkspaceError {}
-
-impl From<Denial> for WorkspaceError {
-    fn from(value: Denial) -> Self {
-        Self::Denied(value)
-    }
 }
 
 /// How far a read of a file may reach.
@@ -502,7 +161,7 @@ pub struct Workspace {
     /// `added` because the user did not name it: `/status` says what it is rather than listing it
     /// among the directories they opened, and `/cd` leaves it alone rather than closing it for
     /// overlapping the directory being moved to.
-    scratch: Option<PathBuf>,
+    scratch: Option<ScratchDirectory>,
     /// The state directory a write that leaves a definition's memory untrusted is recorded in,
     /// where the session has one ([MEMORY-5]).
     ///
@@ -561,37 +220,18 @@ pub struct Workspace {
     rewind: Arc<Mutex<CoverageTracker>>,
     /// The checkout this workspace is the root of, where it is a delegate's (CHECKOUT-7).
     checkout: Option<Arc<CheckoutInfo>>,
-    /// The roots of the checkouts the session made whose rules a history answer meets
-    /// (CHECKOUT-12): those still there, and those removed with a rule that distrusts a path.
-    ///
-    /// Shared by every clone, since a delegate's workspace is a clone and its checkout is the
-    /// session's.
-    checkouts: Arc<Mutex<Vec<PathBuf>>>,
-    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21). Shared for
-    /// the reason `checkouts` is.
-    session_checkouts: Arc<Mutex<Vec<Made>>>,
-    /// The number the next checkout takes, shared for the reason `checkouts` is.
-    checkout_numbers: Arc<AtomicU64>,
-    /// The directory checkouts are made in where the session has no state directory to put them
-    /// in, made when the first is asked for (CHECKOUT-6). Shared for the reason `checkouts` is,
-    /// so it goes with the last clone and not with the first delegate's.
-    temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
-    /// The writes the session made to the working directory by a name the planner typed, in the
-    /// order they were made (CHECKOUT-14). Shared for the reason `checkouts` is.
-    working_writes: Arc<Mutex<WorkingWrites>>,
+    /// The handles a delegate's workspace, which is a clone, and the next turn's workspace share
+    /// with this one, since the checkout is the session's.
+    kept: KeptBetweenTurns,
     /// The paths the person let programs reach for this session, oldest first (SANDBOX-28).
     ///
     /// Held here and nowhere else: not in the trust map, not on disk, and not in `added`, because a
     /// path reached by a program is not a path the file tools open or a directory vouched for.
-    /// Shared for the reason `checkouts` is.
+    /// Shared for the reason `kept` is.
     path_reach: Arc<Mutex<Vec<PathReach>>>,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`, and the
     /// ones they declined (SANDBOX-24). Held here and nowhere else, for the reason `path_reach` is.
     host_grants: Arc<Mutex<HostGrants>>,
-    /// The directories below the root that a file tool has read from or written to, each by the
-    /// spelling the planner typed, with every directory above it down to the root's child
-    /// (INSTR-14). Shared for the reason `checkouts` is, so a delegate's reads count.
-    touched: Arc<Mutex<std::collections::BTreeSet<String>>>,
     /// The directories the person's own settings named, in alias order (REFER-3).
     ///
     /// Each is also in `added`, which is what makes it reachable, so a reference is exactly as
@@ -602,34 +242,6 @@ pub struct Workspace {
     reference_problems: Vec<(String, ReferenceProblem)>,
 }
 
-/// The most directories [`Workspace::record_touch`] keeps, so a planner reading through a large
-/// tree cannot make every turn look for instructions in thousands of directories.
-const TOUCHED_LIMIT: usize = 64;
-
-/// `typed`, a name a planner gave a file, placed under `root` by its spelling alone, as the
-/// `/`-joined path relative to `root`. `None` where it lands outside `root` or names `root`.
-///
-/// Following a link to where the file landed would give a name the planner never typed and the
-/// repository supplied.
-fn place_by_spelling(root: &Path, typed: &str) -> Option<String> {
-    let mut placed = root.to_path_buf();
-    for component in Path::new(typed).components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                placed.pop();
-            }
-            other => placed.push(other),
-        }
-    }
-    let inside = placed.strip_prefix(root).ok()?;
-    let relative: Vec<String> = inside
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy().into_owned())
-        .collect();
-    (!relative.is_empty()).then(|| relative.join("/"))
-}
-
 /// A session's checkouts, with the numbers and the write log they are judged by, for a front end
 /// that builds a workspace for each turn (CHECKOUT-16).
 ///
@@ -637,13 +249,39 @@ fn place_by_spelling(root: &Path, typed: &str) -> Option<String> {
 /// working directory's writes against the same record as the one it was taken from, as a
 /// delegate's clone does. Holding it keeps each checkout's lock and the temporary directory for as
 /// long as the session does, and not for one turn.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct KeptBetweenTurns {
+    /// The roots of the checkouts the session made whose rules a history answer meets
+    /// (CHECKOUT-12): those still there, and those removed with a rule that distrusts a path.
     checkouts: Arc<Mutex<Vec<PathBuf>>>,
+    /// The checkouts the session made and has not removed, oldest first (CHECKOUT-21).
     session_checkouts: Arc<Mutex<Vec<Made>>>,
+    /// The number the next checkout takes.
     checkout_numbers: Arc<AtomicU64>,
+    /// The directory checkouts are made in where the session has no state directory to put them
+    /// in, made when the first is asked for (CHECKOUT-6), so it goes with the last clone and not
+    /// with the first delegate's.
     temporary_checkouts: Arc<Mutex<Option<TemporaryCheckouts>>>,
+    /// The writes the session made to the working directory by a name the planner typed, in the
+    /// order they were made (CHECKOUT-14).
     working_writes: Arc<Mutex<WorkingWrites>>,
+    /// What a file tool has read or written, and what the person named with `@`, each by the
+    /// spelling it was typed in (INSTR-14, INSTR-16): a workspace built for each turn would start
+    /// every turn with none, and a delegate's reads count.
+    touched: Arc<Mutex<Touched>>,
+}
+
+impl Default for KeptBetweenTurns {
+    fn default() -> Self {
+        Self {
+            checkouts: Arc::default(),
+            session_checkouts: Arc::default(),
+            checkout_numbers: Arc::new(AtomicU64::new(1)),
+            temporary_checkouts: Arc::default(),
+            working_writes: Arc::default(),
+            touched: Arc::default(),
+        }
+    }
 }
 
 impl KeptBetweenTurns {
@@ -715,122 +353,6 @@ pub enum Before {
     NotKept,
 }
 
-/// Refuse a directory whose resolved name the trust map cannot key a rule under.
-///
-/// A directory is opened by handing the map the name it resolved to, and the map reads a name
-/// without a leading slash as a path under the working directory (TRUST-18), where the rule
-/// covering the project covers it. So a rule about a directory named any other way would be keyed
-/// inside the project, and the answer given about the project at startup would decide files in a
-/// directory nobody vouched for. Refusing is the fail-closed half of that clause, and it is here
-/// rather than in the map because canonicalising a name is filesystem work.
-///
-/// Every door that opens a directory by name has to refuse it, `/cd` as much as `/add-dir`: the
-/// working directory a map reads its relative names under is replaced by the destination, so one
-/// the map cannot key would read every one of them under a name inside the project instead.
-///
-/// The name is spelled the way [`key_of`] spells it for the caller building the key, so the two
-/// cannot disagree about whether the directory has one. A drive letter has one and a share does
-/// not ([`bravebot_core::spelling::to_key`]).
-fn refuse_unkeyable(
-    canonical: &Path,
-    named: &str,
-    backslash_separates: bool,
-) -> Result<(), WorkspaceError> {
-    match is_absolute_key(&to_key(&canonical.to_string_lossy(), backslash_separates)) {
-        true => Ok(()),
-        false => Err(WorkspaceError::Invalid {
-            path: named.to_string(),
-            reason: "is not spelled from '/', so no trust rule can be keyed under it",
-        }),
-    }
-}
-
-/// The most symlinks one path may be followed through by name before it is treated as a cycle.
-///
-/// A link the operating system can resolve is resolved by it, under a limit of its own. Only the
-/// ones it will not resolve are followed here, and two of those in a row is already pathological.
-const MAX_LINKS_FOLLOWED: usize = 8;
-
-/// Refuse a name Windows would read as something other than the one file it spells, on a host
-/// that does: a stream, a device, a trailing dot or space, an 8.3 short name.
-///
-/// Asked about each name as typed, so the rules see the file the operation will open and not a
-/// spelling of it. A short name is accepted in a root, which is a directory a person chose. The
-/// host is a parameter so the refusal is exercised everywhere.
-fn refuse_misleading_names(
-    path: &Path,
-    named: &str,
-    root: bool,
-    windows: bool,
-) -> Result<(), WorkspaceError> {
-    if !windows {
-        return Ok(());
-    }
-    let misleading = path.components().any(|component| match component {
-        Component::Normal(name) => names::misleads(&name.to_string_lossy(), root),
-        _ => false,
-    });
-    match misleading {
-        true => Err(WorkspaceError::Invalid {
-            path: named.to_string(),
-            reason: "names something other than the file it spells on Windows",
-        }),
-        false => Ok(()),
-    }
-}
-
-/// Where an operation on `path` would land, with every symlink on the way already followed.
-///
-/// A path that does not exist cannot be canonicalised, so the deepest ancestor that can is, and
-/// the components that do not exist yet are appended to it. Those components are created by the
-/// operation itself, so nothing can redirect them; the ones that already exist are resolved
-/// before the comparison rather than after, which is what catches a directory symlink leaving
-/// the tree. A link the operating system will not resolve is followed by name instead, since a
-/// write follows a dangling one too and creates its target.
-///
-/// `None` where no destination can be named: a cycle, or an entry that is there and will not
-/// resolve, including one whose directory cannot be searched. A caller confining an operation
-/// refuses that, because it cannot say where the operation would go.
-///
-/// Says where an operation goes now, not where it goes when it happens; the window between the
-/// two is a known cost against the clause this serves.
-pub(crate) fn destination(path: &Path) -> Option<PathBuf> {
-    let mut missing: Vec<OsString> = Vec::new();
-    let mut existing = path.to_path_buf();
-    let mut followed = 0usize;
-
-    loop {
-        // Asked about the entry rather than what it points at, so that a link with nothing at
-        // the other end is not taken for a name nothing occupies.
-        match existing.symlink_metadata() {
-            Ok(entry) => {
-                if let Ok(canonical) = existing.canonicalize() {
-                    let mut resolved = canonical;
-                    resolved.extend(missing.iter().rev());
-                    return Some(resolved);
-                }
-                if !entry.is_symlink() || followed >= MAX_LINKS_FOLLOWED {
-                    return None;
-                }
-                followed += 1;
-                let target = existing.read_link().ok()?;
-                existing = if target.is_absolute() {
-                    target
-                } else {
-                    existing.parent()?.join(target)
-                };
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                missing.push(existing.file_name()?.to_os_string());
-                existing = existing.parent()?.to_path_buf();
-            }
-            // A component whose directory cannot be searched is not a free name either, and
-            // treating it as one would name a destination for a link this cannot see.
-            Err(_) => return None,
-        }
-    }
-}
-
 impl Workspace {
     /// Create a workspace at `root`, which must exist.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, WorkspaceError> {
@@ -857,14 +379,9 @@ impl Workspace {
             backups: Arc::new(Mutex::new(Vec::new())),
             rewind: Arc::default(),
             checkout: None,
-            checkouts: Arc::default(),
-            session_checkouts: Arc::default(),
-            checkout_numbers: Arc::new(AtomicU64::new(1)),
-            temporary_checkouts: Arc::default(),
-            working_writes: Arc::default(),
+            kept: KeptBetweenTurns::default(),
             path_reach: Arc::default(),
             host_grants: Arc::default(),
-            touched: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),
         })
@@ -961,112 +478,26 @@ impl Workspace {
     /// `None` is a session that could not be given one, and then nothing outside the project and
     /// the directories the user opened is reachable. Set as the session opens rather than asked for
     /// by a tool, so a turn cannot widen its own reach by calling this: the caller is the code that
-    /// made the directory.
-    pub fn open_scratch(&mut self, directory: Option<PathBuf>) {
+    /// made the directory, and hands over [`SessionScratch::directory`], which carries the identity
+    /// of the directory it locked.
+    ///
+    /// [`SessionScratch::directory`]: crate::SessionScratch::directory
+    pub fn open_scratch(&mut self, directory: Option<ScratchDirectory>) {
         if let Some(directory) = &directory {
-            bravebot_sandbox::programs::keep_out(directory);
+            bravebot_sandbox::programs::keep_out(directory.path());
         }
         self.scratch = directory;
     }
 
     /// The session's own directory outside the project, where it has one.
     pub fn scratch(&self) -> Option<&Path> {
-        self.scratch.as_deref()
+        self.scratch.as_ref().map(ScratchDirectory::path)
     }
 
-    /// Whether a resolved path lands in a directory reached by its absolute name.
-    ///
-    /// The directories the user opened and the session's own. They are reached the same way and
-    /// differ in who asked for them, so every test of where a path lands has to cover both or the
-    /// session would be handed a directory it cannot write to.
-    /// A directory a person opened counts for nothing where the settings keep the tools inside the
-    /// root (PERM-16). Resolution is where that has to hold rather than only the door a directory is
-    /// opened at: one already open when the restriction was read, which a resume reopening its own
-    /// record is, would otherwise stay reachable for the rest of the session.
-    fn is_opened(&self, resolved: &Path) -> bool {
-        let added = !self.reads_stay_inside
-            && self
-                .added_directories()
-                .iter()
-                .any(|dir| resolved.starts_with(dir));
-        added
-            || self
-                .scratch
-                .as_deref()
-                .is_some_and(|dir| resolved.starts_with(dir))
-    }
-
-    /// Whether a resolved path lands where this workspace's file tools may write: the root or a
-    /// directory reached by its absolute name.
-    pub(crate) fn lands_in_reach(&self, resolved: &Path) -> bool {
-        resolved.starts_with(&self.root) || self.is_opened(resolved)
-    }
-
-    /// Whether an absolute path is one this workspace may touch.
-    ///
-    /// For a destination something else opens, which is what a redirection in a command line is:
-    /// the plan names the file and the run opens it directly, so the confinement every other write
-    /// goes through has to be applied to the path rather than to a call through here.
-    ///
-    /// The file need not exist yet, so the destination is what is tested rather than the name:
-    /// the same test every write through this workspace gets, so the two cannot come apart.
-    pub fn confines(&self, path: &Path) -> Result<(), WorkspaceError> {
-        let escapes = || WorkspaceError::Escapes {
-            path: path.display().to_string(),
-            remedy: Remedy::Nothing,
-        };
-        let resolved = destination(path).ok_or_else(escapes)?;
-        if self.lands_in_reach(&resolved) {
-            return Ok(());
-        }
-        Err(escapes())
-    }
-
-    /// Other names of the file something else opens at the absolute `path`, spelled as
-    /// [`Workspace::relative_display`] spells them.
-    ///
-    /// [`Workspace::landing`] resolves a name as the file tools do, which refuses a `..` inside
-    /// the root, so it gives no second name for `config/sub/../app.env`. A rule is about the file
-    /// (PERM-7), and it can be written in either of two names here. One is the spelling with each
-    /// `..` taken out ([`Workspace::climbed`]), which is the rule's own name where a link is on
-    /// the way (`config` a link, or `app.env` one). The other is where the path lands once
-    /// everything is followed, as [`Workspace::confines`] tests it, which is the only name there is
-    /// where a `..` leaves a link.
-    pub(crate) fn names_reached(&self, path: &Path) -> Vec<String> {
-        self.climbed(path)
-            .into_iter()
-            .chain(destination(path))
-            .map(|reached| self.relative_display(&reached))
-            .collect()
-    }
-
-    /// Refuse an absolute path something else opens where Windows would read a name in it as
-    /// another file (PERM-7), the names [`Workspace::resolve`] refuses in a file tool's path.
-    ///
-    /// A redirection in a command line is such a path, read or written. The open directory it
-    /// lands in may be spelled by a short name, which names that one directory, and the rules are
-    /// asked about the file under the name it reaches as well ([`Workspace::names_reached`]). What
-    /// is written below that directory may not be, and a path that reaches no open directory
-    /// through an ancestor of its own, because it lands in none or arrives through a link into the
-    /// middle of one, is exempt nowhere.
-    pub(crate) fn refuse_misleading(&self, path: &Path) -> Result<(), WorkspaceError> {
-        self.refuse_misleading_on(path, self.windows_names)
-    }
-
-    /// [`Workspace::refuse_misleading`] with the host supplied, so either answer is exercised.
-    fn refuse_misleading_on(&self, path: &Path, windows: bool) -> Result<(), WorkspaceError> {
-        if !windows {
-            return Ok(());
-        }
-        let named = path.display().to_string();
-        let below = destination(path)
-            .and_then(|resolved| self.landed_in(&resolved))
-            .and_then(|opened| written_below(path, &opened));
-        let Some(below) = below else {
-            return refuse_misleading_names(path, &named, false, windows);
-        };
-        refuse_misleading_names(path, &named, true, windows)?;
-        refuse_misleading_names(&below, &named, false, windows)
+    /// The same directory with the identity it had when the session made it, which is what a
+    /// grant of it is held to.
+    pub fn scratch_made(&self) -> Option<&ScratchDirectory> {
+        self.scratch.as_ref()
     }
 
     /// For starting over inside one process (`/clear`, `/resume`): everything the ending session
@@ -1086,303 +517,6 @@ impl Workspace {
         *locked(&self.host_grants) = HostGrants::default();
     }
 
-    /// Resolve a path against the workspace.
-    ///
-    /// A relative path always means the primary root. An absolute path is legal only inside a
-    /// directory the user added by name, and is refused otherwise: an absolute path was refused
-    /// outright before `/add-dir` existed, and naming a directory is what makes one reachable.
-    ///
-    /// A `..` is resolved only into a directory that is open, and then as the absolute path it
-    /// lands on, which is checked as any other ([`Workspace::climb_lands`]). A `..` through a link,
-    /// or that lands inside the root, is refused: taking it out there would admit a path that
-    /// climbs out of the root and back in by its own name, which lands inside and would pass a
-    /// test on where it lands.
-    ///
-    /// Containment is then decided against where the path lands and not against how it is spelled,
-    /// so it holds for a path that does not exist yet: a write creates what it names, and a
-    /// directory symlink on the way out of the tree would otherwise carry the bytes outside a
-    /// lexical test that saw nothing wrong. What comes back is that destination, so a caller that
-    /// needs the file rather than the name has it.
-    pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
-        self.resolve_with_home(relative, self.home.as_deref())
-    }
-
-    /// `named` with a leading `~` spelled out as the home directory, and as given otherwise,
-    /// including where no home is known, which [`Workspace::resolve`] refuses.
-    ///
-    /// For a caller that hands a path to something that does not resolve it as the file tools do:
-    /// a `deny` rule is anchored at the home directory and never matches the spelling `~/x`, and
-    /// a watch is looked at later from a working directory that may have moved, where `~/x` reads
-    /// as relative and the watch is ended.
-    pub(crate) fn expanded(&self, named: &str) -> String {
-        match self.spelled(named, self.home.as_deref()) {
-            Ok(Some(path)) => path.to_string_lossy().into_owned(),
-            _ => named.to_string(),
-        }
-    }
-
-    /// `named` as the absolute path it is resolved as, where that is not how it was written: a
-    /// leading `~` spelled out, or the `..` of a path that climbs out of the root taken out
-    /// ([`Workspace::climb_lands`]). `None` where the name stands as written.
-    fn spelled(&self, named: &str, home: Option<&Path>) -> Result<Option<PathBuf>, &'static str> {
-        let expanded = expand_home(named, home)?;
-        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
-        Ok(self.climb_lands(candidate).or(expanded))
-    }
-
-    /// `named` as the absolute path of the open directory a `..` in it lands in, where the call
-    /// is to be reported under that spelling, and `None` for any other name, including a `~`
-    /// with no `..` (whose messages keep the spelling that was written) and a `..` that is
-    /// refused.
-    pub(crate) fn climbed_to(&self, named: &str) -> Option<String> {
-        let expanded = expand_home(named, self.home.as_deref()).ok()?;
-        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
-        let lands = self.climb_lands(candidate)?;
-        self.is_opened(&destination(&lands)?)
-            .then(|| lands.to_string_lossy().into_owned())
-    }
-
-    /// Stand in for the environment's home directory, so a test does not depend on whose machine
-    /// it runs on.
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn with_home(mut self, home: Option<PathBuf>) -> Self {
-        self.home = home;
-        self
-    }
-
-    /// [`Workspace::resolve`] with the home directory a leading `~` stands for supplied, so the
-    /// rule is testable without whose machine the test runs on.
-    ///
-    /// A first component that is exactly `~` is the person's home directory, expanded before any
-    /// check is made so what follows sees an absolute path like any other: reachable only inside
-    /// an opened directory, and refused otherwise. A `..` that lands in an opened directory is
-    /// taken out the same way. Messages keep the spelling that was written.
-    fn resolve_with_home(
-        &self,
-        relative: &str,
-        home: Option<&Path>,
-    ) -> Result<PathBuf, WorkspaceError> {
-        let expanded = self
-            .spelled(relative, home)
-            .map_err(|reason| WorkspaceError::Invalid {
-                path: relative.to_string(),
-                reason,
-            })?;
-        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
-
-        if candidate.is_absolute() {
-            return self.resolve_added(candidate, relative);
-        }
-
-        for component in candidate.components() {
-            match component {
-                Component::ParentDir => {
-                    return Err(Self::refuse_climb(relative));
-                }
-                Component::Prefix(_) | Component::RootDir => {
-                    return Err(WorkspaceError::Invalid {
-                        path: relative.to_string(),
-                        reason: "must not name a root or drive",
-                    });
-                }
-                Component::CurDir | Component::Normal(_) => {}
-            }
-        }
-
-        refuse_misleading_names(candidate, relative, false, cfg!(windows))?;
-
-        let escapes = || WorkspaceError::Escapes {
-            path: relative.to_string(),
-            remedy: Remedy::Nothing,
-        };
-        let resolved = destination(&self.root.join(candidate)).ok_or_else(escapes)?;
-        if !resolved.starts_with(&self.root) {
-            return Err(escapes());
-        }
-        Ok(resolved)
-    }
-
-    /// The name `named` lands on, spelled as [`Workspace::relative_display`] spells it, where that
-    /// is not the name it was typed as.
-    ///
-    /// A permission rule is written about a file (PERM-7), and a name reaches the file it lands on
-    /// by more routes than its own spelling: a symbolic link, a case variant on a volume that
-    /// ignores case, an 8.3 short name. `None` where the name lands on itself, and where
-    /// [`Workspace::resolve`] refuses it. A file tool resolves the name and so refuses it on its
-    /// own; a path something else opens has to be held to [`Workspace::confines`] and
-    /// [`Workspace::refuse_misleading`] instead.
-    ///
-    /// Asked of the file system, not of any file's contents, and it is only ever used to ask the
-    /// rules a second question, so the answer can add a refusal or an approval and can never
-    /// remove one.
-    pub(crate) fn landing(&self, named: &str) -> Option<String> {
-        let landed = self.relative_display(&self.resolve(named).ok()?);
-        let typed = Path::new(named)
-            .components()
-            .filter(|component| !matches!(component, Component::CurDir));
-        (!Path::new(&landed).components().eq(typed)).then_some(landed)
-    }
-
-    /// The other names of the file `named` opens, where it has a hard link, by device and inode
-    /// (PERM-7). A hard link canonicalizes to its own name, so [`Workspace::landing`] cannot reach
-    /// the name a rule is written about.
-    ///
-    /// Found by walking the open directories for a file with the same identity, which is asked
-    /// only of a file whose link count is above one. `None` where the walk stopped at the search
-    /// cap or could not list a directory, so the caller does not read it as "no other name". A
-    /// symbolic link is not followed, and every directory is walked, an ignored one included,
-    /// because a link can be made anywhere a stage may write. Always empty off Unix, where the
-    /// file index is not in the standard library.
-    #[cfg(unix)]
-    pub(crate) fn hard_links(&self, named: &str) -> Option<Vec<String>> {
-        use std::os::unix::fs::MetadataExt;
-
-        let Ok(resolved) = self.resolve(named) else {
-            return Some(Vec::new());
-        };
-        let Ok(found) = std::fs::metadata(&resolved) else {
-            return Some(Vec::new());
-        };
-        if !found.is_file() || found.nlink() < 2 {
-            return Some(Vec::new());
-        }
-        let mut names = Vec::new();
-        let mut budget = self.search_files;
-        let roots = std::iter::once(self.root.clone()).chain(self.added_directories());
-        for root in roots {
-            let mut pending = vec![root];
-            while let Some(directory) = pending.pop() {
-                let entries = std::fs::read_dir(&directory).ok()?;
-                for entry in entries.flatten() {
-                    budget = budget.checked_sub(1)?;
-                    let Ok(kind) = entry.file_type() else {
-                        continue;
-                    };
-                    if kind.is_dir() {
-                        pending.push(entry.path());
-                    } else if kind.is_file()
-                        && entry.metadata().is_ok_and(|other| {
-                            other.dev() == found.dev() && other.ino() == found.ino()
-                        })
-                    {
-                        // A name that is not UTF-8 has no spelling a rule can be written about, and
-                        // its lossy rendering would be matched as a different file's name, so the
-                        // walk gives up on it like any other it cannot finish.
-                        let path = entry.path();
-                        path.to_str()?;
-                        names.push(self.relative_display(&path));
-                    }
-                }
-            }
-        }
-        Some(names)
-    }
-
-    #[cfg(not(unix))]
-    pub(crate) fn hard_links(&self, _named: &str) -> Option<Vec<String>> {
-        Some(Vec::new())
-    }
-
-    /// The names `named` has under the other open directories that are the same directory, found by
-    /// device and inode (PERM-7). A macOS firmlink and a Linux bind mount give a tree a second
-    /// absolute name, and a file in it a second spelling no rule written about the first one
-    /// matches, so [`Workspace::landing`] cannot reach it: the second name canonicalizes to itself.
-    ///
-    /// Every ancestor of where the name lands is compared with every open directory, so a tree
-    /// opened by one name inside another's is found as well. Always empty off Unix, where the file
-    /// index is not in the standard library.
-    ///
-    /// `None` where one of the names is not UTF-8, which no rule can be written about and whose
-    /// lossy rendering would be matched as a different file's name, so the caller does not read it
-    /// as "no other name".
-    #[cfg(unix)]
-    pub(crate) fn same_tree_names(&self, named: &str) -> Option<Vec<String>> {
-        use std::os::unix::fs::MetadataExt;
-
-        if self.added_directories().is_empty() {
-            return Some(Vec::new());
-        }
-        let Ok(resolved) = self.resolve(named) else {
-            return Some(Vec::new());
-        };
-        let roots: Vec<PathBuf> = std::iter::once(self.root.clone())
-            .chain(self.added_directories())
-            .collect();
-        let identity = |directory: &Path| {
-            std::fs::metadata(directory)
-                .ok()
-                .filter(|found| found.is_dir())
-                .map(|found| (found.dev(), found.ino()))
-        };
-        let opened: Vec<_> = roots
-            .iter()
-            .filter_map(|root| Some((root, identity(root)?)))
-            .collect();
-        self.displayed_if_utf8(&Self::names_in_the_same_directories(
-            &resolved, &opened, identity,
-        ))
-    }
-
-    #[cfg(not(unix))]
-    pub(crate) fn same_tree_names(&self, _named: &str) -> Option<Vec<String>> {
-        Some(Vec::new())
-    }
-
-    /// `paths` spelled relative to the workspace root, or `None` if any is not UTF-8.
-    #[cfg(unix)]
-    fn displayed_if_utf8(&self, paths: &[PathBuf]) -> Option<Vec<String>> {
-        paths
-            .iter()
-            .map(|path| path.to_str().map(|_| self.relative_display(path)))
-            .collect()
-    }
-
-    /// `resolved` re-rooted at each open directory that is the same directory as one of its
-    /// ancestors, other than as it is already spelled. `identity` is what makes two directories
-    /// one, so the rule is testable where the host has no second path to a tree.
-    #[cfg(unix)]
-    fn names_in_the_same_directories<I: Copy + PartialEq>(
-        resolved: &Path,
-        opened: &[(&PathBuf, I)],
-        identity: impl Fn(&Path) -> Option<I>,
-    ) -> Vec<PathBuf> {
-        let mut names = Vec::new();
-        for ancestor in resolved.ancestors().skip(1) {
-            let Some(held) = identity(ancestor) else {
-                continue;
-            };
-            let Ok(rest) = resolved.strip_prefix(ancestor) else {
-                continue;
-            };
-            for (root, root_identity) in opened {
-                let name = root.join(rest);
-                if *root_identity == held && name != resolved && !names.contains(&name) {
-                    names.push(name);
-                }
-            }
-        }
-        names
-    }
-
-    /// `named` spelled relative to the workspace root, without asking the file system: `./docs/a.md`
-    /// and `<root>/docs/a.md` are `docs/a.md`, and a link is not followed.
-    ///
-    /// `None` for an absolute name that is not under the root as written, which has no
-    /// workspace-relative spelling; [`Workspace::landing`] is the name it reaches.
-    pub(crate) fn spelled_in_workspace(&self, named: &str) -> Option<String> {
-        let expanded = self.expanded(named);
-        let path = Path::new(&expanded);
-        if path.is_absolute() && !path.starts_with(&self.root) {
-            return None;
-        }
-        let plain: PathBuf = path
-            .components()
-            .filter(|component| !matches!(component, Component::CurDir))
-            .collect();
-        Some(self.relative_display(&plain))
-    }
-
     /// Whether a `deny` rule covers reading `named`, under that name or the one it lands on
     /// (PERM-7), asked without refusing anything.
     ///
@@ -1393,6 +527,17 @@ impl Workspace {
             || self
                 .landing(named)
                 .is_some_and(|landed| policy.read_is_denied(&landed))
+    }
+
+    /// Whether a rule covers reading any of `names`, the other names a file has. Where they could
+    /// not be found (`None`), a rule about a path may be about the file, so it is covered while
+    /// any rule about reading a path is in force, as for a call that names the file.
+    #[cfg(unix)]
+    fn any_name_denied<S: Sink>(policy: &Policy<'_, S>, names: Option<Vec<String>>) -> bool {
+        match names {
+            Some(names) => names.iter().any(|name| policy.read_is_denied(name)),
+            None => policy.any_read_is_denied(),
+        }
     }
 
     /// Where an attachment's bytes are.
@@ -1425,214 +570,6 @@ impl Workspace {
         Ok(resolved)
     }
 
-    /// Resolve an absolute path, which is legal only inside a directory reached by its absolute
-    /// name: one the user added, or the session's own.
-    ///
-    /// The containment test is against where the path lands, so a symlink inside an added
-    /// directory pointing elsewhere is refused exactly as one in the primary root is, whether or
-    /// not the file it names exists yet.
-    fn resolve_added(&self, candidate: &Path, named: &str) -> Result<PathBuf, WorkspaceError> {
-        if candidate
-            .components()
-            .any(|c| matches!(c, Component::ParentDir))
-        {
-            return Err(Self::refuse_climb(named));
-        }
-
-        refuse_misleading_names(candidate, named, true, cfg!(windows))?;
-
-        let escapes = |remedy| WorkspaceError::Escapes {
-            path: named.to_string(),
-            remedy,
-        };
-        let resolved = destination(candidate).ok_or_else(|| escapes(Remedy::Nothing))?;
-        if !self.is_opened(&resolved) {
-            return Err(escapes(self.remedy_outside(&resolved)));
-        }
-        if let Some(below) = self
-            .landed_in(&resolved)
-            .and_then(|opened| written_below(candidate, &opened))
-        {
-            refuse_misleading_names(&below, named, false, cfg!(windows))?;
-        }
-        Ok(resolved)
-    }
-
-    /// [`Workspace::resolve`], and for a read alone also a file under the directory of a skill of the
-    /// user's own that was loaded this turn.
-    ///
-    /// Only where the name is absolute and lands, once links are followed, inside one of `skills`:
-    /// a file beside the loaded `SKILL.md`, which is the reach `load_skill` offers. Never for a
-    /// write, an edit or a listing, which resolve through [`Workspace::resolve`] and refuse the
-    /// directory as before, since a file there is the user's own configuration and an instruction
-    /// the next session trusts. Never where a settings layer kept the file tools inside the
-    /// workspace (PERM-16). The directories are the driver's, named by a load that already
-    /// happened, so nothing a file or a planner said widens this.
-    fn resolve_for_reading(
-        &self,
-        relative: &str,
-        skills: &[PathBuf],
-    ) -> Result<PathBuf, WorkspaceError> {
-        let refused = match self.resolve(relative) {
-            Ok(resolved)
-                if Self::leaves_loaded_skill(relative, &resolved, skills, self.home.as_deref()) =>
-            {
-                WorkspaceError::Escapes {
-                    path: relative.to_string(),
-                    remedy: Remedy::Nothing,
-                }
-            }
-            Ok(resolved) => return Ok(resolved),
-            Err(refused) => refused,
-        };
-        if self.reads_stay_inside || skills.is_empty() {
-            return Err(refused);
-        }
-        let Ok(expanded) = expand_home(relative, self.home.as_deref()) else {
-            return Err(refused);
-        };
-        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(relative));
-        if !candidate.is_absolute()
-            || candidate
-                .components()
-                .any(|part| matches!(part, Component::ParentDir))
-        {
-            return Err(refused);
-        }
-        let Some(resolved) = destination(candidate) else {
-            return Err(refused);
-        };
-        let inside = skills.iter().any(|directory| {
-            destination(directory).is_some_and(|landed| resolved.starts_with(landed))
-        });
-        if inside { Ok(resolved) } else { Err(refused) }
-    }
-
-    /// Whether `named`, spelled inside the directory of a loaded skill, lands outside it once links
-    /// are followed.
-    ///
-    /// The policy labels such a name by provenance, from its spelling alone (LOAD-5), so a link
-    /// from the directory into one this workspace opened would hand a file the trust map has not
-    /// vouched for to the planner as the user's own. `resolved` is where [`Workspace::resolve`]
-    /// says the name lands, and it accepts any opened directory.
-    fn leaves_loaded_skill(
-        named: &str,
-        resolved: &Path,
-        skills: &[PathBuf],
-        home: Option<&Path>,
-    ) -> bool {
-        let Ok(expanded) = expand_home(named, home) else {
-            return false;
-        };
-        let candidate = expanded.as_deref().unwrap_or_else(|| Path::new(named));
-        if !candidate.is_absolute()
-            || candidate
-                .components()
-                .any(|part| matches!(part, Component::ParentDir))
-        {
-            return false;
-        }
-        let mut spelled_in = skills
-            .iter()
-            .filter(|directory| candidate.starts_with(directory))
-            .peekable();
-        spelled_in.peek().is_some()
-            && !spelled_in.any(|directory| {
-                destination(directory).is_some_and(|landed| resolved.starts_with(landed))
-            })
-    }
-
-    /// What a person can do so that `resolved`, which no opened directory holds, is reached.
-    /// Inside the root a directory cannot be opened, and the relative path reaches the file.
-    ///
-    /// The directory to open is `resolved` itself where it is a directory, and the directory it is
-    /// in for a file or for a name nothing is at yet. A directory that is or lies inside a credential
-    /// location is refused by [`Workspace::resolve_directory`], so none is offered. The warning
-    /// about checkouts is asked of that directory.
-    fn remedy_outside(&self, resolved: &Path) -> Remedy {
-        if resolved.starts_with(&self.root) {
-            return Remedy::Inside;
-        }
-        if self.reads_stay_inside {
-            return Remedy::Kept;
-        }
-        let itself = resolved.is_dir();
-        let to_open = if itself {
-            Some(resolved)
-        } else {
-            resolved.parent()
-        };
-        if let (Some(directory), Some(home)) = (to_open, self.home.as_deref())
-            && bravebot_sandbox::rules::inside_a_credential_location(directory, home)
-        {
-            return if itself {
-                Remedy::Nothing
-            } else {
-                Remedy::Credential
-            };
-        }
-        let ends_checkouts = to_open.is_some_and(|directory| self.ends_checkouts(directory));
-        match (itself, ends_checkouts) {
-            (false, false) => Remedy::Open,
-            (false, true) => Remedy::OpenEndsCheckouts,
-            (true, false) => Remedy::OpenItself,
-            (true, true) => Remedy::OpenItselfEndsCheckouts,
-        }
-    }
-
-    /// Where a path with a `..` in it lands once each `..` is taken out, for a path that leaves
-    /// the root: the absolute spelling its file is reached by, which is then resolved and confined
-    /// as any other absolute path, so this decides how a name is spelled and nothing more.
-    ///
-    /// `None` for a path [`Workspace::climbed`] leaves alone, for one that lands inside the root,
-    /// which the relative spelling reaches, and for one that lands on a name that is not UTF-8.
-    /// The key, the rules and the result carry the absolute spelling as text, and a lossy one would
-    /// name a different file.
-    fn climb_lands(&self, candidate: &Path) -> Option<PathBuf> {
-        let lands = self.climbed(candidate)?;
-        (!lands.starts_with(&self.root) && lands.to_str().is_some()).then_some(lands)
-    }
-
-    /// `candidate`, against the root, with each `..` taken out of the text against the entry
-    /// before it, which is what the kernel does with it wherever that entry is not a link.
-    ///
-    /// `None` for a path with no `..`, for one whose `..` leaves a link (where the kernel would
-    /// follow the link and the text would not), and for one that climbs off the top of the file
-    /// system.
-    fn climbed(&self, candidate: &Path) -> Option<PathBuf> {
-        if !candidate
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-        {
-            return None;
-        }
-        let mut lands = PathBuf::new();
-        for component in self.root.join(candidate).components() {
-            match component {
-                Component::ParentDir => {
-                    let through_a_link = lands
-                        .symlink_metadata()
-                        .is_ok_and(|found| found.file_type().is_symlink());
-                    if through_a_link || !lands.pop() {
-                        return None;
-                    }
-                }
-                Component::CurDir => {}
-                other => lands.push(other.as_os_str()),
-            }
-        }
-        Some(lands)
-    }
-
-    /// The refusal of a path with a `..` that [`Workspace::climb_lands`] does not take out.
-    /// Nothing is offered, since no directory a person opens makes such a path reach its file.
-    fn refuse_climb(named: &str) -> WorkspaceError {
-        WorkspaceError::Escapes {
-            path: named.to_string(),
-            remedy: Remedy::Nothing,
-        }
-    }
-
     /// Read a file in full. The path is checked as routing, so it must be `(T,pub)`.
     ///
     /// The contents are private, being the user's data, and their integrity comes from
@@ -1642,6 +579,9 @@ impl Workspace {
     /// replaces text in the whole file and compares against it to detect a concurrent
     /// change, so a truncated read here would write back a shortened file. The tool the
     /// model calls uses [`Workspace::read_page`] instead.
+    ///
+    /// Only text that is UTF-8 as it stands, for the same reason: the text is written back. A
+    /// file in another encoding is refused as [`WorkspaceError::NotUtf8`].
     pub fn read<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1716,17 +656,7 @@ impl Workspace {
             detail: io_detail(&e, &relative, &self.root),
         })?;
 
-        // Named as binary rather than surfacing a decoding error. "stream did not contain
-        // valid UTF-8" is an implementation detail that leaves a reader unable to tell a
-        // binary file from a corrupt one.
-        if looks_binary(&raw) {
-            return Err(WorkspaceError::Binary { path: relative });
-        }
-        let contents = String::from_utf8(raw).map_err(|_| WorkspaceError::Binary {
-            path: relative.clone(),
-        })?;
-
-        Ok(Labelled::new(contents, label))
+        Ok(Labelled::new(exact_text(raw, &relative)?, label))
     }
 
     /// Read a file as a `data:` URI, confined to the workspace like every other read.
@@ -1862,6 +792,11 @@ impl Workspace {
     ///
     /// `offset` is 1-based to match how the lines are reported back, so a model can ask
     /// for the next page using the number it was just shown.
+    ///
+    /// Only a file that is UTF-8 as it stands, because a plan puts these lines in a slot that a
+    /// later step writes to a file or hands to a program. A file in another encoding is read
+    /// decoded by [`Workspace::read_page_unless_unchanged`], which is the read the planner is
+    /// shown.
     pub fn read_page<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -1871,7 +806,7 @@ impl Workspace {
     ) -> Result<Labelled<Page>, WorkspaceError> {
         self.gated_read(policy, path, |relative, label, skills| {
             Ok(self
-                .labelled_page(relative, label, offset, limit, skills)?
+                .labelled_page(relative, label, offset, limit, skills, Decode::Exact)?
                 .0)
         })
     }
@@ -1887,8 +822,15 @@ impl Workspace {
         offset: usize,
         limit: usize,
         skills: &[PathBuf],
+        decode: Decode,
     ) -> Result<(Labelled<Page>, String), WorkspaceError> {
-        let page = self.page_reaching(relative, offset, limit, skills)?;
+        // A notebook the planner may read is shown as its cells (READ-9). Only under a trusted
+        // label and only for the read the planner is shown: a slot is filled with the file's own
+        // bytes, and a file nobody vouched for is never opened here at all.
+        let cells = label.is_trusted()
+            && matches!(decode, Decode::Allowed)
+            && crate::notebook::is_notebook_path(relative);
+        let page = self.page_reaching(relative, offset, limit, skills, decode, cells)?;
         let token = page.change_token.clone();
         Ok((Labelled::new(page, label), token))
     }
@@ -1919,7 +861,8 @@ impl Workspace {
     }
 
     /// [`Workspace::read_page`], answering `Unchanged` where the file is the one a window was
-    /// already shown from.
+    /// already shown from, and reading a file in another encoding decoded (READ-3). The planner is
+    /// shown what this returns and nothing writes it back.
     ///
     /// Every gate runs exactly as it does for a read that returns lines, so a repeat is held to the
     /// same capability, routing and path checks as the first look. Only what comes back differs.
@@ -1946,7 +889,8 @@ impl Workspace {
                     return Ok(Reading::Unchanged);
                 }
             }
-            let (page, token) = self.labelled_page(relative, label, offset, limit, skills)?;
+            let (page, token) =
+                self.labelled_page(relative, label, offset, limit, skills, Decode::Allowed)?;
             Ok(Reading::Page { page, token })
         })
     }
@@ -1958,22 +902,29 @@ impl Workspace {
     /// [`bravebot_core::policy::Policy::materialise`], which observes the path again itself. What
     /// comes back is therefore unlabelled, and the kernel labels it: this returns the shape of a
     /// file and never decides what it means.
+    ///
+    /// Only a file that is UTF-8 as it stands: what a deferred read fills a slot with is written
+    /// back to a file or handed to a program as the file, so a decoding of another encoding is
+    /// refused here and shown only by [`Workspace::read_page`].
     pub fn page(
         &self,
         relative: &str,
         offset: usize,
         limit: usize,
     ) -> Result<Page, WorkspaceError> {
-        self.page_reaching(relative, offset, limit, &[])
+        self.page_reaching(relative, offset, limit, &[], Decode::Exact, false)
     }
 
-    /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn.
+    /// [`Workspace::page`] that may also land in the directory of a skill loaded this turn, and
+    /// that reads a file in another encoding decoded where `decode` allows it.
     fn page_reaching(
         &self,
         relative: &str,
         offset: usize,
         limit: usize,
         skills: &[PathBuf],
+        decode: Decode,
+        cells: bool,
     ) -> Result<Page, WorkspaceError> {
         let resolved = self
             .resolve_for_reading(relative, skills)
@@ -1992,15 +943,24 @@ impl Workspace {
 
         let raw = std::fs::read(&resolved).map_err(io)?;
 
-        if looks_binary(&raw) {
-            return Err(WorkspaceError::Binary {
-                path: relative.to_string(),
-            });
-        }
+        let (contents, decoding) = match decode {
+            Decode::Exact => (exact_text(raw, relative)?, Decoding::Utf8),
+            Decode::Allowed => {
+                let Decoded { text, decoding } =
+                    decode_text(raw).ok_or_else(|| WorkspaceError::Binary {
+                        path: relative.to_string(),
+                    })?;
+                (text, decoding)
+            }
+        };
 
-        let contents = String::from_utf8(raw).map_err(|_| WorkspaceError::Binary {
-            path: relative.to_string(),
-        })?;
+        // The cells of a version 4 notebook stand in for its JSON; any other file is shown as the
+        // lines it is.
+        let contents = if cells {
+            crate::notebook::cells_view(&contents).unwrap_or(contents)
+        } else {
+            contents
+        };
 
         let (first, limit) = window_of(offset, limit);
         let start = first - 1;
@@ -2034,6 +994,7 @@ impl Workspace {
             long_lines,
             ends_with_newline: contents.ends_with('\n'),
             change_token,
+            decoding,
         })
     }
 
@@ -2048,6 +1009,10 @@ impl Workspace {
     /// The sniff reads the same prefix [`looks_binary`] would have seen, so it reaches the same
     /// verdict on the same file. A file that turns to rubbish after that prefix is caught when
     /// the bytes are actually read, which is where an eager read would have caught it too.
+    ///
+    /// A byte order mark is not honoured here. The slot this answer reserves is filled as
+    /// [`Workspace::page`] reads, which refuses a UTF-16 file, so honouring the mark would report
+    /// the file as text now and refuse it when something needs its bytes.
     pub fn survey(&self, relative: &str) -> Result<usize, WorkspaceError> {
         let resolved = self.resolve(relative).map_err(WorkspaceError::for_a_read)?;
         let io = |e: std::io::Error| WorkspaceError::Io {
@@ -2787,97 +1752,6 @@ impl FileFormat {
     }
 }
 
-/// Caps on directory walks, so a large tree cannot stall a turn or flood the model's
-/// context. Truncation is size hygiene, not filtering: nothing is inspected to decide
-/// what to drop.
-pub(crate) const MAX_ENTRIES: usize = 2_000;
-
-/// How many files a *search* may walk before it gives up on the rest.
-///
-/// Far above [`MAX_ENTRIES`] because the two caps guard different things. A listing's paths
-/// are the answer and every one of them is spent on context, so a listing is capped at what
-/// is worth reading. A search's paths are never shown: only matching lines are, and those
-/// have their own cap in [`MAX_MATCHES`]. Holding a search to a listing's budget bought no
-/// context back and cost whole subtrees, which is the failure that matters: a search that
-/// stops after a couple of thousand files reports nothing for a needle it never looked for,
-/// and nothing reads as an answer.
-///
-/// Walking is cheap: a path is a stat and a string. Reading is not, which is what
-/// [`MAX_SEARCH_TIME`] is for.
-///
-/// Past what a tree a person works in usually holds, which is not the same as past every tree:
-/// a monorepo or a checkout of generated sources reaches this, and
-/// [`Workspace::with_search_caps`] is how one says so.
-pub const MAX_SEARCH_FILES: usize = 100_000;
-
-/// The largest source file a repository map reads, in bytes. Past it a file is generated or data.
-const MAX_MAP_FILE_BYTES: usize = 512 * 1024;
-
-/// The most source a repository map reads in all, in bytes.
-const MAX_MAP_BYTES: usize = 32 * 1024 * 1024;
-
-const MAX_MATCHES: usize = 200;
-const MAX_MATCH_LINE: usize = 500;
-
-/// The most lines a search shows on each side of a match, whatever it asked for.
-pub const MAX_SEARCH_CONTEXT: usize = 10;
-
-/// How many context lines one search returns in all, beside the matches.
-///
-/// A cap of its own because the match cap cannot bound them: two hundred matches with the most
-/// context each would be four thousand lines, a result the planner pays for in every later round.
-/// Reached, the search keeps the matches and stops adding the lines around them, and says so.
-const MAX_CONTEXT_LINES: usize = 1_000;
-
-/// How many files a `files` or `count` result lists.
-///
-/// The match cap does not bound them, since neither shape returns a match, and a common word can
-/// name a hundred thousand files. A count's total is exact past it; the listing is what stops.
-const MAX_TALLIED_FILES: usize = 200;
-
-/// How long a search may spend opening files, where nothing configured otherwise.
-///
-/// The match cap already stops a *productive* search early. This is for the other one: a
-/// pattern that matches nothing is read to the end of the tree, so on a large repository the
-/// worst case is every file. A wall-clock budget bounds that without bounding the useful
-/// case, and stopping is reported the same way the entry cap is, since the answer is partial
-/// either way, and what the reader must not do is take it for complete.
-///
-/// Ten seconds is a guess about a filesystem rather than a fact about one, which is why
-/// [`Workspace::with_search_caps`] exists: a network mount reads an order of magnitude slower
-/// than a local disk, and nothing here can tell which it is on.
-const MAX_SEARCH_TIME: Duration = Duration::from_secs(10);
-
-/// Caps on a single paged read.
-///
-/// A turn re-sends the whole message history each round, so the cost of one oversized read
-/// is paid repeatedly. These bound a page rather than the file: the rest stays reachable by
-/// asking for a later offset.
-///
-/// The line cap counts characters, not bytes, for the reason READ-2 gives: a cap in bytes is
-/// a different cap for every script, since 2000 bytes is 2000 characters of English and 666
-/// of Japanese, so a line the clause allows in full comes back cut to a third and reported as
-/// shortened. The price is that a page of four-byte characters costs up to four times the
-/// bytes a page of ASCII does.
-const MAX_PAGE_LINES: usize = 500;
-const MAX_LINE: usize = 2_000;
-/// Characters in a whole page, counting a newline after each line. Without it the worst page is
-/// `MAX_PAGE_LINES` x `MAX_LINE`, a million characters, which a minified bundle reaches in one read.
-const MAX_PAGE_CHARS: usize = 100_000;
-// A shortened line and its notice always fit, so a page is never empty because of the budget.
-const _: () = assert!(MAX_LINE + 64 < MAX_PAGE_CHARS);
-
-/// Whether the directory `name`, found inside `parent`, is one a walk from above steps over.
-///
-/// A name on its own, or a two-segment name: `.claude/worktrees` holds linked worktrees, each a
-/// full copy of the tree, so a walk that entered it would report every match twice. Decided from
-/// the two names alone, as the single names are. A search that names a directory inside it still
-/// reaches it, because the walk then starts below the skipped name.
-fn is_ignored_in(parent: &Path, name: &str) -> bool {
-    bravebot_filetype::is_ignored_directory(name)
-        || (name == "worktrees" && parent.file_name().is_some_and(|p| p == ".claude"))
-}
-
 /// A path inside the repository the planner called `named`, spelled the way it spelled the
 /// repository, so the trust map is asked about the name it would be asked about for a read.
 pub(crate) fn in_repository(named: &str, inside: &str) -> String {
@@ -2988,265 +1862,38 @@ pub(crate) fn window_of(offset: usize, limit: usize) -> (usize, usize) {
     (offset.max(1), limit.clamp(1, MAX_PAGE_LINES))
 }
 
-/// A bounded window of a file's lines.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Page {
-    /// The lines in this window, each capped at [`MAX_LINE`] characters and all together at
-    /// [`MAX_PAGE_CHARS`], so a page can end before the line limit does.
-    pub lines: Vec<String>,
-    /// Whether the file ends with a newline.
-    ///
-    /// Lost otherwise: the lines are joined back together with newlines between them and none
-    /// after, so a file that went through a slot came back a byte shorter than it went in. That
-    /// is a change to every file processed this way, and it shows up in the next diff somebody
-    /// reads as "no newline at end of file".
-    pub ends_with_newline: bool,
-    /// 1-based number of the first line returned.
-    pub first_line: usize,
-    /// Lines in the whole file, so a caller can tell there is more to ask for.
-    pub total_lines: usize,
-    /// How many returned lines were individually shortened.
-    pub long_lines: usize,
-    /// What to compare against the next look to see whether the file was written.
-    ///
-    /// See [`change_token`]. Of the whole file rather than of this window, so a paged read and a
-    /// whole one describe the same file the same way: what is being watched is the file, and a
-    /// window of it changing is not a different question.
-    pub change_token: String,
+/// Whether a page of a file in another encoding is read decoded.
+#[derive(Clone, Copy)]
+enum Decode {
+    /// Only text that is UTF-8 as it stands. A slot is read this way, because what it holds is
+    /// written back to a file or handed to a program as the file's own text.
+    Exact,
+    /// UTF-16 and UTF-32 with a byte order mark, and UTF-8 with a few invalid bytes, read as the
+    /// text they decode to. The planner is shown a page this way.
+    Allowed,
 }
 
-impl Page {
-    /// 1-based line number just past this window, when the file continues.
-    pub fn next_line(&self) -> Option<usize> {
-        let past = self.first_line + self.lines.len();
-        (past <= self.total_lines).then_some(past)
-    }
-}
-
-/// One grep hit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Match {
-    /// Workspace-relative path.
-    pub path: String,
-    /// 1-based line number.
-    pub line: usize,
-    /// The matching line, truncated to [`MAX_MATCH_LINE`].
-    pub text: String,
-}
-
-/// What shape a search's result takes.
+/// A file's bytes as the UTF-8 text they are, and the refusal where they are not.
 ///
-/// A choice about the call and never about what was read, so it is routing: the walk and the match
-/// loop are the same for all three, and what differs is what is kept from them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SearchOutput {
-    /// The matching lines, as a search always returned them.
-    #[default]
-    Lines,
-    /// Each file holding a match, once, and no line.
-    Files,
-    /// How many lines match in each file, and in all.
-    Count,
-}
-
-impl SearchOutput {
-    /// The mode a name asks for, or `None` for a name that is not one.
-    pub fn named(name: &str) -> Option<Self> {
-        match name {
-            "lines" => Some(Self::Lines),
-            "files" => Some(Self::Files),
-            "count" => Some(Self::Count),
-            _ => None,
+/// Named as binary, or as another encoding, rather than surfacing a decoding error. "stream did
+/// not contain valid UTF-8" is an implementation detail that leaves a reader unable to tell a
+/// binary file from a corrupt one.
+fn exact_text(raw: Vec<u8>, relative: &str) -> Result<String, WorkspaceError> {
+    let refused = |is_text| {
+        let path = relative.to_string();
+        if is_text {
+            WorkspaceError::NotUtf8 { path }
+        } else {
+            WorkspaceError::Binary { path }
         }
+    };
+    match String::from_utf8(raw) {
+        Ok(text) if looks_binary(text.as_bytes()) => Err(refused(false)),
+        Ok(text) => Ok(text),
+        // Not UTF-8: text in another encoding, or binary. Only here is the file decoded, to say
+        // which, and the decoding is thrown away.
+        Err(invalid) => Err(refused(decode_text(invalid.into_bytes()).is_some())),
     }
-
-    /// Whether this result is a summary of the matches rather than the matches themselves.
-    pub fn summarises(self) -> bool {
-        self != Self::Lines
-    }
-}
-
-/// A file holding matches, and how many lines in it match.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileTally {
-    /// Workspace-relative path.
-    pub path: String,
-    /// How many lines of the file match. 1 in a `files` result, which stops reading the file at the
-    /// first.
-    pub lines: usize,
-}
-
-/// A line shown beside a match because it is near one, and not because it matched.
-///
-/// Kept apart from [`Match`] so that it counts toward neither [`MAX_MATCHES`] nor an offset.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ContextLine {
-    /// Workspace-relative path.
-    pub path: String,
-    /// 1-based line number.
-    pub line: usize,
-    /// The line, truncated to [`MAX_MATCH_LINE`].
-    pub text: String,
-}
-
-/// The result of a directory listing.
-///
-/// Carries whether a cap was reached, because a model shown exactly [`MAX_ENTRIES`] paths
-/// with no notice will reason as though it saw the whole tree. Silent truncation is worse
-/// than a short answer: it looks like completeness.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Listing {
-    pub files: Vec<String>,
-    /// Directories the walk stopped at because it had reached the depth it was given.
-    ///
-    /// Empty when the walk was unbounded, where every directory is descended into and the files
-    /// beneath it are the listing. A bounded walk reports them because a listing of names with
-    /// nothing said about the directories beside them describes a tree with no branches, and a
-    /// planner reading one concludes the project has no source directory.
-    pub directories: Vec<String>,
-    /// Whether files were left out because a cap was reached.
-    pub truncated: bool,
-    /// Whether a directory beneath the one named could not be opened and was left out.
-    ///
-    /// A fact about the shape of the walk and never the directory's name: the error that opening
-    /// it produced spells that name, which is a name out of the tree and would reach the planner
-    /// as a sentence the driver wrote (LIST-2).
-    pub unreadable: bool,
-}
-
-/// The result of a repository map.
-///
-/// Labelled by the files it was built from, which are only ever files the trust map vouches for,
-/// so a map is trusted whenever it is returned. What it says of the files it left out is a count
-/// and never a name.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RepoMap {
-    /// Files with their declarations, most referenced first. Empty when none was found.
-    pub body: String,
-    /// Declarations found in the files read.
-    pub found: usize,
-    /// Declarations the body shows.
-    pub shown: usize,
-    /// Source files read.
-    pub files: usize,
-    /// Source files left out because the trust map does not vouch for them.
-    pub unvouched: usize,
-    /// Source files left out for another reason: unreadable, over the size caps, or holding what
-    /// looks like a credential. One count for the three, so the planner is not told which file
-    /// held one.
-    pub skipped: usize,
-    /// Whether a cap on files or bytes stopped the walk or the reading short.
-    pub truncated: bool,
-    /// Whether a directory beneath the one named could not be opened.
-    pub unreadable: bool,
-}
-
-/// The result of a content search. Reports truncation for the same reason as [`Listing`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Matches {
-    pub matches: Vec<Match>,
-    /// The lines around the matches that were asked for, in file and line order, without a line
-    /// that is itself one of `matches`. Empty for a search that asked for no context.
-    pub context: Vec<ContextLine>,
-    /// Whether the cap on context lines stopped the lines around some match being added.
-    ///
-    /// The matches are all there; it is the lines beside the later ones that are missing, which
-    /// reads as those matches having nothing near them unless it is said.
-    pub context_truncated: bool,
-    /// What this result is: the lines in `matches`, or a summary in `tallies`.
-    pub output: SearchOutput,
-    /// Each file holding a match, in walk order, for a `files` or `count` search. Empty for lines.
-    pub tallies: Vec<FileTally>,
-    /// Whether the cap on listed files cut `tallies` short. `matched` still counts every match the
-    /// walk read, so a `count` total stays whole.
-    pub tallies_truncated: bool,
-    /// Whether matches were left out because the match cap was reached.
-    pub truncated: bool,
-    /// Whether files were left unopened because the walk hit its entry cap.
-    ///
-    /// A separate fact from `truncated` and the more dangerous of the two: a search that stopped
-    /// short of the tree reports no matches for a needle it never looked for, which reads exactly
-    /// like the needle not being there.
-    pub unvisited: bool,
-    /// Whether reading stopped because [`MAX_SEARCH_TIME`] ran out.
-    ///
-    /// Dangerous in the same way as `unvisited`, and for the same reason: what was not read
-    /// cannot have matched.
-    pub timed_out: bool,
-    /// How many files the `include` glob selected.
-    ///
-    /// The number that separates the two ways a search comes back empty. Zero means the glob
-    /// picked no files at all, so nothing was ever read and the result says nothing about
-    /// whether the needle is in the tree: a broken query, not evidence. Anything above zero
-    /// means files were read and the needle was not in them, which is evidence. Rendered as
-    /// one message, those two are indistinguishable, and a reader who cannot tell them apart
-    /// treats a typo as proof of absence.
-    pub considered: usize,
-    /// How many of the selected files were actually opened.
-    ///
-    /// Below `considered` when a cap or the clock stopped the read early. Reported so the
-    /// question "was this search complete?" has an answer in the result rather than in
-    /// another call.
-    pub searched: usize,
-    /// Whether a permission rule kept files out of the walk.
-    ///
-    /// The third reason a search read nothing, and the one the other two must not be mistaken
-    /// for: a glob that selected no files is a query to rewrite, and a rule is not. Whether, never
-    /// which: the names are what the rule is keeping back.
-    pub withheld: bool,
-    /// 1-based position of the first match returned, within all the matches found.
-    ///
-    /// 1 for a search that started at the beginning, and whatever offset was asked for otherwise.
-    pub first_match: usize,
-    /// What was returned plus what an offset passed over.
-    ///
-    /// Where `truncated` is set this is how far the search counted rather than how many matches the
-    /// tree holds. It answers the one question a page cannot: an offset past the last match returns
-    /// nothing, and nothing reads as the pattern being absent unless the count says otherwise.
-    pub matched: usize,
-}
-
-impl Matches {
-    /// Whether the search returned nothing to show, in whichever shape it was asked for.
-    pub fn is_empty(&self) -> bool {
-        self.matches.is_empty() && self.tallies.is_empty()
-    }
-
-    /// Where a further search continues, or that this page fell past the last match.
-    ///
-    /// `None` for an ordinary complete answer, and for one a cap other than the cap on matches
-    /// stopped: a walk that gave up on the tree or ran out of time reached neither the end of the
-    /// matches nor a count of them, so it has no page to offer and nothing to say about the end.
-    /// Narrowing the search is the only advice left there.
-    pub fn paging(&self) -> Option<Paging> {
-        if self.unvisited || self.timed_out {
-            return None;
-        }
-        if self.truncated {
-            return Some(Paging::Continue(self.first_match + self.matches.len()));
-        }
-        (self.first_match > 1 && self.matches.is_empty() && self.matched > 0).then_some(
-            Paging::PastTheEnd {
-                found: self.matched,
-            },
-        )
-    }
-}
-
-/// What a paged result has to say about the matches it did not return.
-///
-/// Either reaches the planner beside the reference rather than only inside the body, for the reason
-/// a truncation notice does: by default the body is quarantined and the planner reads a reference
-/// instead, so a sentence written into it reaches nobody who could act on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Paging {
-    /// The match cap cut the result short, and this offset asks for the rest.
-    Continue(usize),
-    /// The offset asked for is past the last match, and this many were found in all.
-    ///
-    /// Carried so that an empty page cannot be read as the pattern having gone from the tree
-    /// between two calls. The count discloses no more than the body's own line count already does.
-    PastTheEnd { found: usize },
 }
 
 /// What a walk is collecting into.
@@ -3272,6 +1919,131 @@ impl Collected<'_> {
     /// How much of the cap has been spent.
     fn len(&self) -> usize {
         self.files.len() + self.stopped_at.len()
+    }
+}
+
+/// The permission rules a walk holds each entry to.
+///
+/// A rule is about a file (PERM-7), so an entry is covered when any name the file has is. The
+/// walk reads a file's own name from the directory it is in. The others are a hard link's, from a
+/// map of the files with more than one name built the first time the walk meets such a file, and
+/// the file's name beneath a second path to an open tree. Neither is looked up unless a rule about
+/// reading a path is in force.
+struct WalkRules<'a, 'p, S: Sink> {
+    policy: &'a Policy<'p, S>,
+    /// Whether any rule about reading a path is in force. With none, no name covers a file, so no
+    /// other name is looked up.
+    #[cfg(unix)]
+    any_rule: bool,
+    /// Whether a directory is open beside the root, so a file can have a name under another path
+    /// to the same tree.
+    #[cfg(unix)]
+    second_trees: bool,
+    /// The names of each file that has more than one, or `None` where the walk for them could not
+    /// finish.
+    #[cfg(unix)]
+    links: std::cell::OnceCell<Option<HashMap<(u64, u64), LinkNames>>>,
+    /// What the rules said of each file with more than one name, so the walk asks once per file
+    /// whichever of its names it meets first.
+    #[cfg(unix)]
+    verdicts: std::cell::RefCell<HashMap<(u64, u64), bool>>,
+    /// The device and inode of each directory asked about, so the directories above the entries
+    /// of one directory are looked up once for the walk.
+    #[cfg(unix)]
+    identities: std::cell::RefCell<HashMap<PathBuf, Option<(u64, u64)>>>,
+}
+
+impl<'a, 'p, S: Sink> WalkRules<'a, 'p, S> {
+    fn of(workspace: &Workspace, policy: &'a Policy<'p, S>) -> Self {
+        #[cfg(not(unix))]
+        let _ = workspace;
+        Self {
+            policy,
+            #[cfg(unix)]
+            any_rule: policy.any_read_is_denied(),
+            #[cfg(unix)]
+            second_trees: !workspace.added_directories().is_empty(),
+            #[cfg(unix)]
+            links: std::cell::OnceCell::new(),
+            #[cfg(unix)]
+            verdicts: std::cell::RefCell::default(),
+            #[cfg(unix)]
+            identities: std::cell::RefCell::default(),
+        }
+    }
+
+    /// Whether a rule covers reading the directory at `path`, spelled `relative`, under that name
+    /// or under its name beneath a second path to an open tree.
+    fn covers_directory(&self, workspace: &Workspace, path: &Path, relative: &str) -> bool {
+        self.policy.read_is_denied(relative) || self.covers_under_another_tree(workspace, path)
+    }
+
+    /// Whether a rule covers reading the file at `path`, spelled `relative`, under that name or
+    /// under another name of the file.
+    fn covers_file(&self, workspace: &Workspace, path: &Path, relative: &str) -> bool {
+        self.policy.read_is_denied(relative) || self.covers_another_name(workspace, path)
+    }
+
+    /// Whether a rule covers the file at `path` under a hard link's name, or under its name
+    /// beneath a second path to an open tree.
+    ///
+    /// A file whose other names cannot be found, or that has a name no rule can be written about,
+    /// is covered: a rule about a path may be about it, as for a call that names the file.
+    #[cfg(unix)]
+    fn covers_another_name(&self, workspace: &Workspace, path: &Path) -> bool {
+        use std::os::unix::fs::MetadataExt;
+
+        if !self.any_rule {
+            return false;
+        }
+        let Ok(found) = std::fs::symlink_metadata(path) else {
+            return true;
+        };
+        self.covers_under_another_tree(workspace, path)
+            || (found.nlink() >= 2
+                && self.covers_a_hard_link(workspace, (found.dev(), found.ino())))
+    }
+
+    /// Whether a rule covers the entry at `path` under its name beneath a second path to an open
+    /// tree.
+    #[cfg(unix)]
+    fn covers_under_another_tree(&self, workspace: &Workspace, path: &Path) -> bool {
+        if !self.any_rule || !self.second_trees {
+            return false;
+        }
+        let identity = |directory: &Path| {
+            *self
+                .identities
+                .borrow_mut()
+                .entry(directory.to_path_buf())
+                .or_insert_with(|| directory_identity(directory))
+        };
+        Workspace::any_name_denied(self.policy, workspace.same_tree_names_of(path, identity))
+    }
+
+    #[cfg(unix)]
+    fn covers_a_hard_link(&self, workspace: &Workspace, identity: (u64, u64)) -> bool {
+        if let Some(&verdict) = self.verdicts.borrow().get(&identity) {
+            return verdict;
+        }
+        let verdict = match self.links.get_or_init(|| workspace.multi_link_names()) {
+            Some(index) => index
+                .get(&identity)
+                .is_some_and(|names| names.covered_by(|name| self.policy.read_is_denied(name))),
+            None => true,
+        };
+        self.verdicts.borrow_mut().insert(identity, verdict);
+        verdict
+    }
+
+    #[cfg(not(unix))]
+    fn covers_another_name(&self, _workspace: &Workspace, _path: &Path) -> bool {
+        false
+    }
+
+    #[cfg(not(unix))]
+    fn covers_under_another_tree(&self, _workspace: &Workspace, _path: &Path) -> bool {
+        false
     }
 }
 
@@ -3359,7 +2131,7 @@ impl Workspace {
                 patterns,
                 under: &under,
             });
-            let denied = |path: &str| policy.read_is_denied(path);
+            let rules = WalkRules::of(self, policy);
             let mut collected = Collected {
                 files: &mut found,
                 stopped_at: &mut stopped_at,
@@ -3367,7 +2139,7 @@ impl Workspace {
                 unreadable: false,
             };
             let _ =
-                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &denied, &mut collected)?;
+                self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &rules, &mut collected)?;
             let unreadable = collected.unreadable;
             found.sort();
             stopped_at.sort();
@@ -3447,7 +2219,7 @@ impl Workspace {
             });
             let mut paths = Vec::new();
             let mut ignored = Vec::new();
-            let denied = |path: &str| policy.read_is_denied(path);
+            let rules = WalkRules::of(self, policy);
             let mut collected = Collected {
                 files: &mut paths,
                 stopped_at: &mut ignored,
@@ -3459,7 +2231,7 @@ impl Workspace {
                 wanted,
                 None,
                 self.search_files,
-                &denied,
+                &rules,
                 &mut collected,
             )?;
             let unreadable = collected.unreadable;
@@ -3581,7 +2353,10 @@ impl Workspace {
     /// The lines come from the file the walk already read, so they carry the label the matches do
     /// and nothing is opened or decided for them. They are not matches: they count toward neither
     /// the match cap nor the offset, and a cap of their own bounds how many are returned.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "grep's arguments plus the context line count, which grep passes as 0"
+    )]
     pub fn grep_around<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -3611,7 +2386,10 @@ impl Workspace {
     /// on them. The file cap and the time cap apply as they do to lines. The match cap, the offset
     /// and context do not: no line is returned, so a count totals every match the walk read, and a
     /// walk that stopped short says so through `unvisited` and `timed_out` as a lower bound.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "grep_around's arguments plus the output shape, which grep_around passes as lines"
+    )]
     pub fn grep_shaped<S: Sink>(
         &self,
         policy: &mut Policy<'_, S>,
@@ -3725,7 +2503,7 @@ impl Workspace {
                     patterns,
                     under: &under,
                 });
-                let denied = |path: &str| policy.read_is_denied(path);
+                let rules = WalkRules::of(self, policy);
                 let mut collected = Collected {
                     files: &mut paths,
                     stopped_at: &mut ignored,
@@ -3737,7 +2515,7 @@ impl Workspace {
                     wanted,
                     None,
                     self.search_files,
-                    &denied,
+                    &rules,
                     &mut collected,
                 )?;
                 (unvisited, collected.withheld)
@@ -4001,7 +2779,7 @@ impl Workspace {
                 .iter()
                 .map(|inside| self.trust_key(&spelled(inside)))
                 .collect();
-            let checkouts: Vec<String> = self.checkouts.lock().map_or_else(
+            let checkouts: Vec<String> = self.kept.checkouts.lock().map_or_else(
                 |_| Vec::new(),
                 |listed| {
                     listed
@@ -4379,20 +3157,12 @@ impl Workspace {
         if !candidate {
             return Err(CheckoutRead::NotACandidate);
         }
-        let mut file = made.path.clone();
-        for component in Path::new(relative).components() {
-            let Component::Normal(part) = component else {
-                return Err(CheckoutRead::NotACandidate);
-            };
-            file.push(part);
-            let kind = std::fs::symlink_metadata(&file)
-                .map_err(|_| CheckoutRead::NotAFile)?
-                .file_type();
-            if kind.is_symlink() {
-                return Err(CheckoutRead::Linked);
-            }
-        }
-        let metadata = std::fs::metadata(&file).map_err(|_| CheckoutRead::NotAFile)?;
+        let (file, metadata) =
+            carry::walk_plain(&made.path, relative).map_err(|walked| match walked {
+                carry::Walked::NotNormal => CheckoutRead::NotACandidate,
+                carry::Walked::Missing | carry::Walked::Unreadable => CheckoutRead::NotAFile,
+                carry::Walked::Linked => CheckoutRead::Linked,
+            })?;
         if !metadata.is_file() {
             return Err(CheckoutRead::NotAFile);
         }
@@ -4410,23 +3180,13 @@ impl Workspace {
     /// What this workspace's checkouts are kept in, for the workspace of the next turn to be given
     /// by [`Workspace::with_kept_between_turns`] (CHECKOUT-16).
     pub fn kept_between_turns(&self) -> KeptBetweenTurns {
-        KeptBetweenTurns {
-            checkouts: self.checkouts.clone(),
-            session_checkouts: self.session_checkouts.clone(),
-            checkout_numbers: self.checkout_numbers.clone(),
-            temporary_checkouts: self.temporary_checkouts.clone(),
-            working_writes: self.working_writes.clone(),
-        }
+        self.kept.clone()
     }
 
     /// Keep the checkouts in `kept`, taken from the workspace of an earlier turn, in place of this
     /// workspace's own (CHECKOUT-16).
     pub fn with_kept_between_turns(mut self, kept: &KeptBetweenTurns) -> Self {
-        self.checkouts = kept.checkouts.clone();
-        self.session_checkouts = kept.session_checkouts.clone();
-        self.checkout_numbers = kept.checkout_numbers.clone();
-        self.temporary_checkouts = kept.temporary_checkouts.clone();
-        self.working_writes = kept.working_writes.clone();
+        self.kept = kept.clone();
         self
     }
 
@@ -4500,7 +3260,7 @@ impl Workspace {
                 .join("checkouts")
                 .join(crate::home::key_for(&self.root)),
             None => {
-                let mut held = locked(&self.temporary_checkouts);
+                let mut held = locked(&self.kept.temporary_checkouts);
                 if held.is_none() {
                     *held = Some(TemporaryCheckouts {
                         directory: crate::scratch::SessionScratch::for_checkouts()
@@ -4530,7 +3290,7 @@ impl Workspace {
         }
         let mut tries = 0;
         let (id, target, made) = loop {
-            let number = self.checkout_numbers.fetch_add(1, Ordering::SeqCst);
+            let number = self.kept.checkout_numbers.fetch_add(1, Ordering::SeqCst);
             let id = format!("c{number}");
             let target = made_directory.join(&id);
             match self.make_checkout(policy, &target, &id, crate::git::checkout::Bound::FIXED) {
@@ -4562,7 +3322,7 @@ impl Workspace {
 
         let key = self.trust_key(&target.to_string_lossy());
         policy.file_authority().copy_beneath("", &key);
-        if let Ok(mut listed) = self.checkouts.lock() {
+        if let Ok(mut listed) = self.kept.checkouts.lock() {
             listed.push(target.clone());
         }
         let entry = Made {
@@ -4573,10 +3333,10 @@ impl Workspace {
             delegate: made_for,
             git_dir: self.root.join(".git"),
             record: Arc::default(),
-            after: locked(&self.working_writes).count,
+            after: locked(&self.kept.working_writes).count,
             _claim: made.claim.clone(),
         };
-        locked(&self.session_checkouts).push(entry.clone());
+        locked(&self.kept.session_checkouts).push(entry.clone());
 
         let mut delegate = self.clone();
         delegate.added = Arc::new(Mutex::new(self.added_directories()));
@@ -4588,39 +3348,9 @@ impl Workspace {
             made: entry,
             left_out: made.left_out,
             source: self.clone(),
-            listed: self.checkouts.clone(),
-            session_checkouts: self.session_checkouts.clone(),
+            carried: std::sync::OnceLock::new(),
         }));
         Ok(delegate)
-    }
-
-    /// Record that a file tool read from or wrote to `typed`, a name the planner gave (INSTR-14).
-    ///
-    /// Only the directories are kept, placed by the spelling alone as a write is: no file is
-    /// opened and nothing a file holds is consulted, so what is recorded is the planner's own
-    /// choice of names. A name outside the root, or naming it, records nothing. The record stops
-    /// growing at [`TOUCHED_LIMIT`] directories.
-    pub fn record_touch(&self, typed: &str) {
-        let Some(relative) = place_by_spelling(&self.root, typed) else {
-            return;
-        };
-        let mut parts: Vec<&str> = relative.split('/').collect();
-        parts.pop();
-        let mut touched = locked(&self.touched);
-        for end in 1..=parts.len() {
-            if touched.len() >= TOUCHED_LIMIT {
-                return;
-            }
-            touched.insert(parts[..end].join("/"));
-        }
-    }
-
-    /// The directories below the root the session has read from or written to, `/`-joined and
-    /// relative to it, shallowest first and in name order within a depth (INSTR-14).
-    pub fn touched_directories(&self) -> Vec<String> {
-        let mut directories: Vec<String> = locked(&self.touched).iter().cloned().collect();
-        directories.sort_by_key(|directory| directory.matches('/').count());
-        directories
     }
 
     /// Collect workspace-relative paths of regular files beneath `directory`.
@@ -4638,11 +3368,12 @@ impl Workspace {
     /// Filtering afterwards would make a narrow pattern return nothing in a large tree, which
     /// looks identical to the file being absent.
     ///
-    /// `denied` answers whether a permission rule covers reading a path, and an entry it covers is
+    /// `rules` answer whether a permission rule covers reading an entry, and an entry they cover is
     /// left out. Asked of every entry rather than of the root alone, because a rule names a file
-    /// and a walk arrives at that file from whichever directory the call happened to name. A
-    /// directory the rule covers is not descended into at all, so nothing under it is opened or
-    /// reported. The root is the caller's to gate: it is the argument a call named, so it is
+    /// and a walk arrives at that file from whichever directory the call happened to name. A file
+    /// is covered under any name it has, so a hard link to a covered file is left out as the file
+    /// is. A directory the rule covers is not descended into at all, so nothing under it is opened
+    /// or reported. The root is the caller's to gate: it is the argument a call named, so it is
     /// refused where the call is rather than filtered out from under it.
     ///
     /// Answers whether it stopped at the cap with entries still unvisited, which the length of
@@ -4662,13 +3393,13 @@ impl Workspace {
     /// reaches contributes its own contents before the walk disappears into the first subtree
     /// under it. A partial answer cannot be helped once the cap is reached. Which part it
     /// is can.
-    fn walk_filtered(
+    fn walk_filtered<S: Sink>(
         &self,
         directory: &Path,
         wanted: Option<Wanted<'_>>,
         remaining: Option<usize>,
         limit: usize,
-        denied: &dyn Fn(&str) -> bool,
+        rules: &WalkRules<'_, '_, S>,
         collected: &mut Collected<'_>,
     ) -> Result<bool, WorkspaceError> {
         let entries = std::fs::read_dir(directory).map_err(|e| WorkspaceError::Io {
@@ -4693,7 +3424,7 @@ impl Workspace {
                 // Version control, build output and vendored dependencies would dominate a
                 // listing without adding anything a task needs.
                 let name = entry.file_name();
-                if is_ignored_in(directory, name.to_string_lossy().as_ref()) {
+                if bravebot_filetype::is_ignored_in(directory, name.to_string_lossy().as_ref()) {
                     continue;
                 }
                 directories.push(entry.path());
@@ -4709,24 +3440,24 @@ impl Workspace {
                 return Ok(true);
             }
             let relative = self.relative_display(&path);
-            // A rule is about the file, not about the directory the call named, so a walk that
-            // reached this one from above drops it exactly as a read of it by name is refused.
-            // Dropped before the pattern is consulted and never charged to the cap: a denied
-            // file is not a file this walk may report, so it is not one the budget is spent on
-            // either.
-            if denied(&relative) {
-                // Only a file the include selected is one the rule kept from this search. One it
-                // did not select is not what the empty answer is about, and saying a rule is the
-                // reason would tell the planner not to rewrite a glob that is the actual problem.
-                if wanted.is_none_or(|wanted| wanted.admits(&relative)) {
-                    collected.withheld = true;
-                }
+            // A file the include does not select is left out whatever a rule says of it, so the
+            // rules, which look the file up on disk, are not asked.
+            if wanted.is_some_and(|wanted| !wanted.admits(&relative)) {
                 continue;
             }
-            match wanted {
-                Some(wanted) if !wanted.admits(&relative) => continue,
-                _ => collected.files.push(relative),
+            // A rule is about the file, not about the directory the call named, so a walk that
+            // reached this one from above drops it exactly as a read of it by name is refused.
+            // Dropped before it is collected and never charged to the cap: a denied file is not a
+            // file this walk may report, so it is not one the budget is spent on either.
+            //
+            // Only a file the include selected is one the rule kept from this search. One it did
+            // not select is not what the empty answer is about, and saying a rule is the reason
+            // would tell the planner not to rewrite a glob that is the actual problem.
+            if rules.covers_file(self, &path, &relative) {
+                collected.withheld = true;
+                continue;
             }
+            collected.files.push(relative);
         }
 
         for path in directories {
@@ -4737,7 +3468,7 @@ impl Workspace {
             // A rule that covers a directory fences the tree under it, so the walk neither
             // descends into it nor names it: a rule reaching one file of a directory is written
             // against the files, and one reaching the directory is written against all of them.
-            if denied(&relative) {
+            if rules.covers_directory(self, &path, &relative) {
                 if wanted.is_none_or(|wanted| self.selects_beneath(&path, wanted)) {
                     collected.withheld = true;
                 }
@@ -4759,7 +3490,7 @@ impl Workspace {
                 wanted,
                 remaining.map(|left| left - 1),
                 limit,
-                denied,
+                rules,
                 collected,
             ) {
                 Ok(true) => return Ok(true),
@@ -4786,8 +3517,10 @@ impl Workspace {
             if kind.is_symlink() {
                 false
             } else if kind.is_dir() {
-                !is_ignored_in(directory, entry.file_name().to_string_lossy().as_ref())
-                    && self.selects_beneath(&entry.path(), wanted)
+                !bravebot_filetype::is_ignored_in(
+                    directory,
+                    entry.file_name().to_string_lossy().as_ref(),
+                ) && self.selects_beneath(&entry.path(), wanted)
             } else {
                 kind.is_file() && wanted.admits(&self.relative_display(&entry.path()))
             }
@@ -4917,206 +3650,10 @@ impl Workspace {
         }
         self.added_directories()
             .into_iter()
-            .chain(self.scratch.clone())
+            .chain(self.scratch().map(Path::to_path_buf))
             .filter(|dir| resolved.starts_with(dir))
             .max_by_key(|dir| dir.components().count())
     }
-}
-
-/// Whether this host separates one segment of a path from the next with a backslash as well as with
-/// a slash.
-///
-/// The one place the question is asked. The kernel takes the answer as data rather than asking for
-/// itself, since it has no filesystem, so this is what [`crate::permissions::from_settings`] hands
-/// it for the rules, what [`Workspace::trust_key`] and [`Workspace::relative_display`] hand it for
-/// the map's keys, what a turn's policy spells every name it asks the map about under, and what a
-/// resumed session's record is replayed under.
-///
-/// Every key the map holds is `/`-spelled (TRUST-18) and the host hands a path back separated its
-/// own way, so without the respelling a name below the workspace root is one opaque segment
-/// wherever the two differ: a rule the map holds about a directory does not reach the files under
-/// it, the rule a write recorded about a path is invisible to the next read of that path, and the
-/// broader answer given about the project at startup decides both.
-pub const BACKSLASH_SEPARATES: bool = cfg!(windows);
-
-/// The key the trust map holds a rule about `resolved` under, for a name the workspace resolved:
-/// the primary root, a directory opened by name, or a file below either.
-///
-/// What a front end hands [`bravebot_core::TrustStore::new`] as the working directory and trusts a
-/// directory added by name under, so the root's key is spelled as every key below it is and a rule
-/// about a directory above the project reaches the project as it does where paths begin with `/`.
-///
-/// A name with no `/`-spelling, a share or a device path, is not one the workspace opens a
-/// directory under ([`refuse_unkeyable`]), which is the direction that trusts nothing.
-pub fn key_of(resolved: &Path) -> String {
-    to_key(&resolved.to_string_lossy(), BACKSLASH_SEPARATES).into_owned()
-}
-
-/// The path the map key `key` names on this host, where it is a full one.
-fn host_path(key: &str) -> Option<&Path> {
-    let path = match BACKSLASH_SEPARATES {
-        true => key.strip_prefix('/').filter(|rest| {
-            matches!(rest.as_bytes(), [letter, b':', b'/', ..] if letter.is_ascii_alphabetic())
-        })?,
-        false => Some(key).filter(|key| key.starts_with('/'))?,
-    };
-    Some(Path::new(path))
-}
-
-/// The map key `key`, spelled as the volume spells each part of it that exists and through every
-/// link, which is how [`key_of`] spells a working directory there.
-///
-/// `None` for a key that names no full path on this host, or one that does not resolve.
-pub(crate) fn on_disk(key: &str) -> Option<String> {
-    destination(host_path(key)?).map(|resolved| key_of(&resolved))
-}
-
-/// Whether the map keys `one` and `other` name one file that is there now, as the volume says.
-pub(crate) fn one_file(one: &str, other: &str) -> bool {
-    let id = |key| host_path(key).map(file_id);
-    matches!((id(one), id(other)), (Some(Ok(one)), Some(Ok(other))) if one == other)
-}
-
-/// An empty trust map for the workspace at `root`, comparing names the way the volume it is on
-/// does (TRUST-2).
-///
-/// What a front end makes a map with, in place of [`bravebot_core::TrustStore::new`] and
-/// [`key_of`] separately: the map cannot ask the volume, since `bravebot-core` performs no I/O.
-#[must_use]
-pub fn trust_store(root: &Path) -> bravebot_core::TrustStore {
-    bravebot_core::TrustStore::new(key_of(root)).folding_case(volume_folds_case(root))
-}
-
-/// Whether the volume `root` is on holds two spellings differing only in case as one file.
-///
-/// `false` whenever that cannot be told, because the answer only widens what a rule reaches: a
-/// rule about `Docs` covers `docs` where they are one file and would cover a different file where
-/// they are two. A volume that folds and is read as one that does not costs a missed distrust
-/// rule, which is why the answer is asked of the volume instead of being read from the platform.
-///
-/// The question is put with the working directory's own name, a path the person chose, and only
-/// the answer of the filesystem is used. No file is created and no name in the tree is read.
-#[must_use]
-pub fn volume_folds_case(root: &Path) -> bool {
-    static ANSWERS: std::sync::OnceLock<Mutex<std::collections::HashMap<PathBuf, bool>>> =
-        std::sync::OnceLock::new();
-    let answers = ANSWERS.get_or_init(Default::default);
-    if let Some(known) = answers.lock().ok().and_then(|held| held.get(root).copied()) {
-        return known;
-    }
-    let Some(answer) = folds_case_by(root, &file_id) else {
-        return false;
-    };
-    if let Ok(mut held) = answers.lock() {
-        held.insert(root.to_path_buf(), answer);
-    }
-    answer
-}
-
-/// What the filesystem says a path is: the volume it is on and which file it names there.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct FileId {
-    volume: u64,
-    file: String,
-}
-
-#[cfg(unix)]
-fn file_id(path: &Path) -> std::io::Result<FileId> {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::symlink_metadata(path)?;
-    Ok(FileId {
-        volume: meta.dev(),
-        file: meta.ino().to_string(),
-    })
-}
-
-#[cfg(windows)]
-fn file_id(path: &Path) -> std::io::Result<FileId> {
-    // A canonical path spells a file as the volume stores it, so two spellings of one file
-    // canonicalise alike and two files never do.
-    Ok(FileId {
-        volume: 0,
-        file: std::fs::canonicalize(path)?.to_string_lossy().into_owned(),
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn file_id(_path: &Path) -> std::io::Result<FileId> {
-    Err(std::io::ErrorKind::Unsupported.into())
-}
-
-/// `name` with the case of every letter reversed.
-fn swapped_case(name: &str) -> String {
-    name.chars()
-        .flat_map(|c| -> Vec<char> {
-            if c.is_lowercase() {
-                c.to_uppercase().collect()
-            } else if c.is_uppercase() {
-                c.to_lowercase().collect()
-            } else {
-                vec![c]
-            }
-        })
-        .collect()
-}
-
-/// Ask `id` whether the name of `root`, or of the nearest directory above it with a letter in its
-/// name, is also the file named by the same name in the other case.
-///
-/// `None` where nothing could be asked or the filesystem gave no answer: an error, a name with no
-/// letter anywhere on the path, or a directory that is a mount point, whose name lives on the
-/// volume above it and so says nothing about the volume `root` is on. A caller reads that as
-/// "does not fold" and does not remember it.
-fn folds_case_by(root: &Path, id: &dyn Fn(&Path) -> std::io::Result<FileId>) -> Option<bool> {
-    let volume = id(root).ok()?.volume;
-    let mut dir = root;
-    while let Some(parent) = dir.parent() {
-        let here = id(dir).ok()?;
-        if here.volume != volume || id(parent).ok()?.volume != volume {
-            return None;
-        }
-        if let Some(name) = dir.file_name().and_then(|name| name.to_str()) {
-            let flipped = swapped_case(name);
-            if flipped != name {
-                // A miss is the volume saying they are two names; another file under the other
-                // spelling is the volume saying the same. Only the same file is one name.
-                return match id(&parent.join(flipped)) {
-                    Ok(other) => Some(other == here),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
-                    Err(_) => None,
-                };
-            }
-        }
-        dir = parent;
-    }
-    None
-}
-
-/// The part of `named` written below `opened`, for a name that reaches it through an ancestor.
-///
-/// The ancestor is matched on where it lands, so any spelling of the open directory is found, and
-/// the shallowest one is taken: as much of the name as possible is left as it was written, since
-/// what is under it is a name the map may hold a rule of its own about. Walking `ancestors` rather
-/// than counted components is what keeps a Windows prefix whole, since `C:` alone names the current
-/// directory on that drive and not its root.
-///
-/// `None` where no ancestor lands there, which is a link straight into the middle of the tree. Such
-/// a name has no spelling under the recorded one, and taking the destination's instead is the
-/// resolution [`Workspace::trust_key`] rules out.
-fn written_below(named: &Path, opened: &Path) -> Option<PathBuf> {
-    let mut ancestors: Vec<&Path> = named.ancestors().collect();
-    ancestors.reverse();
-    for walked in ancestors {
-        // A prefix that cannot be resolved is skipped rather than ending the search, since it is
-        // this walk's own question and not the caller's.
-        let Some(reached) = destination(walked) else {
-            continue;
-        };
-        if reached == opened {
-            return named.strip_prefix(walked).ok().map(PathBuf::from);
-        }
-    }
-    None
 }
 
 /// A file being filled beside the one it will replace, so a body that stops half-way leaves no
@@ -5178,6 +3715,8 @@ impl Drop for Staged {
 
 #[cfg(test)]
 mod tests {
+    use super::resolve::refuse_misleading_names;
+    use super::volume::{FileId, folds_case_by};
     use super::*;
     use std::collections::HashMap;
     use std::io;
@@ -5232,13 +3771,42 @@ mod tests {
             .expect("added");
         assert!(!found_in(&added, "bravebot-probe-added", &recorded()));
 
-        workspace.open_scratch(Some(session.clone()));
+        workspace.open_scratch(ScratchDirectory::observed(session.clone()));
         assert!(!found_in(&session, "bravebot-probe-session", &recorded()));
 
         workspace
             .change_root(&moved.display().to_string())
             .expect("moved");
         assert!(!found_in(&moved, "bravebot-probe-moved", &recorded()));
+    }
+
+    /// CHECKOUT-23. A name the driver recorded for a write is relative to the root it was written
+    /// under, so moving the working directory forgets it, as it forgets the directories touched.
+    /// Carried under the new root, it would name a file that was never written there.
+    #[test]
+    fn moving_the_working_directory_forgets_the_writes_recorded_under_the_old_one() {
+        let first = crate::testutil::scratch_dir("recorded-writes-first");
+        let second = crate::testutil::scratch_dir("recorded-writes-second");
+        for directory in [&first, &second] {
+            std::fs::create_dir_all(directory).expect("scratch");
+        }
+        let mut workspace = Workspace::new(&first).expect("workspace");
+        workspace.record_write(Some("src/main.rs"));
+        assert!(
+            locked(&workspace.kept.working_writes)
+                .last
+                .contains_key("src/main.rs"),
+            "the write was not recorded, so this is not the case under test"
+        );
+
+        workspace
+            .change_root(&second.display().to_string())
+            .expect("moved");
+
+        assert!(
+            locked(&workspace.kept.working_writes).last.is_empty(),
+            "a name recorded under the old root was kept under the new one"
+        );
     }
 
     /// SANDBOX-28: reach is held by the workspace, in the order it was given and numbered from one,
@@ -5539,7 +4107,7 @@ mod tests {
 
     /// Lists a checkout under `id` as kept at `path`, which need not exist.
     fn keep_checkout(workspace: &Workspace, id: &str, path: PathBuf) {
-        locked(&workspace.session_checkouts).push(Made {
+        locked(&workspace.kept.session_checkouts).push(Made {
             id: id.to_string(),
             path,
             key: String::new(),
@@ -6324,6 +4892,41 @@ mod tests {
         assert_eq!(
             workspace.displayed_if_utf8(&[lookalike]),
             Some(vec!["x-\u{FFFD}".to_string()])
+        );
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    /// A file with a name that is not UTF-8 is covered where a walk is held to rules, since no rule
+    /// can be written about that name and its lossy rendering is the name of a different file
+    /// (PATH-003). A file whose names are all text is covered by a name the rules cover.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_with_a_name_that_is_not_utf8_is_covered_and_not_spelled_as_its_lossy_lookalike() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let (path, workspace) = tree("link-names-bytes");
+        let invalid = workspace.root().join(OsStr::from_bytes(b"x-\xff"));
+        let lookalike = workspace.root().join("x-\u{FFFD}");
+
+        let mut names = LinkNames::default();
+        names.record(&workspace, &lookalike);
+        assert_eq!(names.spelled, ["x-\u{FFFD}"]);
+        assert!(
+            !names.covered_by(|_| false),
+            "a file whose names are all text was covered by no rule"
+        );
+        assert!(names.covered_by(|name| name == "x-\u{FFFD}"));
+
+        names.record(&workspace, &invalid);
+        assert_eq!(
+            names.spelled,
+            ["x-\u{FFFD}"],
+            "a name that is not UTF-8 was spelled as its lossy rendering"
+        );
+        assert!(
+            names.covered_by(|_| false),
+            "a file with a name no rule can be written about was covered by no rule"
         );
         let _ = std::fs::remove_dir_all(path);
     }

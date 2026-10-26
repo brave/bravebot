@@ -14,6 +14,7 @@
 use crate::confirm::{Carried, Confined, KeyChoice, Offered, Remembered};
 use crate::exec::ExecError;
 use crate::reach::{ChosenKey, Grant, Reached};
+use crate::scratch::ScratchDirectory;
 use bravebot_config::git_identities::Identities;
 use bravebot_config::sandbox_network::Hosts;
 use bravebot_core::command::Step;
@@ -63,6 +64,10 @@ pub struct Confinement {
     home: Option<PathBuf>,
     roots: Vec<PathBuf>,
     scratch: Option<PathBuf>,
+    /// The directory `scratch` was made as. `scratch` is a row only while its name leads to this
+    /// directory, and each stage is refused as it starts once the name leads to a link or a file
+    /// (SANDBOX-18). None where the confinement was built from a path alone.
+    scratch_made: Option<ScratchDirectory>,
     /// Where the run is, for the `[includeIf]` blocks of the person's git configuration: the
     /// session's first directory, and every directory the session may write.
     place: signing::Place,
@@ -125,15 +130,28 @@ impl Confinement {
     ///
     /// `roots` are the directories the person opened the session on, each read and written. `home`
     /// is the account's profile directory, which is what `~` means and what no row reaches.
-    pub fn here(roots: Vec<PathBuf>, scratch: Option<&Path>, home: Option<&Path>) -> Option<Self> {
+    ///
+    /// `scratch` is the session's own directory as the session made it. It is a row only while its
+    /// name still leads to that directory (SANDBOX-18), since `canonical` would turn the row for a
+    /// name that has become a link into wherever the link leads, and it is no row where it is or
+    /// lies inside a credential location.
+    pub fn here(
+        roots: Vec<PathBuf>,
+        scratch: Option<&ScratchDirectory>,
+        home: Option<&Path>,
+    ) -> Option<Self> {
         let prelude = Prelude::current()?;
-        let confinement = Self::new(
-            prelude,
-            canonical(&temporary_directory()),
-            home,
-            roots,
-            scratch,
-        );
+        // Resolved first and compared second, so the row is the path that was checked and not a
+        // second reading of a name a stage may have changed in between.
+        let row = scratch.and_then(|made| {
+            let named = canonical(made.path());
+            made.stands_as_made_at(&named).then_some(named)
+        });
+        let confinement = Self::built(prelude, canonical(&temporary_directory()), home, roots, row);
+        let confinement = Self {
+            scratch_made: scratch.cloned(),
+            ..confinement
+        };
         #[cfg(target_os = "macos")]
         let confinement = Self {
             user_cache: bravebot_sandbox::macos::user_cache_directory(),
@@ -152,12 +170,28 @@ impl Confinement {
         roots: Vec<PathBuf>,
         scratch: Option<&Path>,
     ) -> Self {
+        Self::built(prelude, temporary, home, roots, scratch.map(canonical))
+    }
+
+    /// [`Confinement::new`] for a scratch row that is already resolved, so nothing reads the name a
+    /// second time. A row that is or lies inside a credential location is left out, since it is a
+    /// read and write one and is held to what a session directory is.
+    fn built(
+        prelude: Prelude,
+        temporary: PathBuf,
+        home: Option<&Path>,
+        roots: Vec<PathBuf>,
+        scratch: Option<PathBuf>,
+    ) -> Self {
         let roots: Vec<PathBuf> = roots.iter().map(|root| canonical(root)).collect();
-        let scratch = scratch.map(canonical);
+        let home = home.map(canonical);
+        let scratch = scratch.filter(|row| {
+            reaching_credentials(prelude, home.as_deref(), std::iter::once(row)).is_none()
+        });
         Self {
             prelude,
             temporary,
-            home: home.map(canonical),
+            home,
             place: signing::Place {
                 directory: roots.first().cloned(),
                 sessions: roots.iter().chain(scratch.iter()).cloned().collect(),
@@ -165,6 +199,7 @@ impl Confinement {
             },
             roots,
             scratch,
+            scratch_made: None,
             user_cache: None,
             developer: None,
             network: Network::Open,
@@ -340,9 +375,11 @@ impl Confinement {
     /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
     /// a `request_path` for writing would be granted when a stage starts (SANDBOX-28).
     ///
-    /// `bypass` is whether the permission mode answers a request in the person's place and the
-    /// caller is the lead session, which is the only one offered the tool. Nothing a program wrote
-    /// or printed is among its inputs.
+    /// `bypass` is whether the permission mode answers a request in the person's place, the caller
+    /// is the lead session, which is the only one offered the tool, and the session accepts a
+    /// request at all. A workspace the person has not trusted accepts none (PATHREQ-5), so its
+    /// stages are given no row a request would have added. Nothing a program wrote or printed is
+    /// among its inputs.
     #[must_use]
     pub fn with_unasked_writes(mut self, bypass: bool) -> Self {
         self.unasked_writes = bypass;
@@ -526,27 +563,27 @@ impl Confinement {
         }
     }
 
-    /// Whether one of the words of `step`'s arguments names a regular file under a directory the
-    /// plan may write to, where the step is an interpreter or a wrapper, or the file is executable.
+    /// Whether an argument of `step`, or one of the words in it, names a regular file under a
+    /// directory the plan may write to, where the step is an interpreter or a wrapper, or the file
+    /// is executable.
     ///
-    /// An argument is cut into words at white space, shell punctuation and `=`, so `sh -c "./gen.sh
-    /// a"` and `node --require=./hook.js` name the file they run. A word is looked up as spelled,
-    /// under `directory` where it is relative. That reads whether a file exists, what kind it is and
+    /// An argument is looked up whole, since a file name may hold a space or any other character
+    /// the words are cut at, and as the words in it ([`any_name_in`]), so `sh -c "./gen.sh a"` and
+    /// `node --require=./hook.js` name the file they run. A name is looked up as spelled, under
+    /// `directory` where it is relative. That reads whether a file exists, what kind it is and
     /// whether it is executable, never what is in it, and a stage that creates or removes it can
     /// only change whether this asks about the line that names it.
     fn hands_over_a_file_the_plan_could_write(&self, step: &Step, directory: &Path) -> bool {
         let interpreter =
             program_name(&step.resolved).is_some_and(|name| runs_what_it_is_given(&name));
-        step.args
-            .iter()
-            .flat_map(|arg| arg.split(|c: char| c.is_whitespace() || ";&|()<>\"'`$=".contains(c)))
-            .filter(|word| !word.is_empty())
-            .map(|word| directory.join(word))
-            .any(|file| {
+        step.args.iter().any(|arg| {
+            any_name_in(arg, |name| {
+                let file = directory.join(name);
                 file.is_file()
                     && (interpreter || is_executable(&file))
                     && self.writable_by_the_plan(&file)
             })
+        })
     }
 
     /// What the trail records about the network for the stages of one run, or `None` where the
@@ -1742,34 +1779,15 @@ impl Confinement {
     /// refused path lifts the refusal. Names are compared without regard to case on Windows and
     /// macOS, whose file systems fold it, and exactly on Linux.
     fn root_reaching_credentials(&self) -> Option<(&Path, PathBuf)> {
-        // The locations under the home need one to name them; `/Library/Keychains` does not.
-        let mut locations = self
-            .home
-            .as_deref()
-            .map(|home| credential_locations(self.prelude, home))
-            .unwrap_or_default();
-        if self.prelude == Prelude::MacOs {
-            locations.push(PathBuf::from(
-                bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
-            ));
-        }
-        let reaches = |root: &Path, candidate: &Path| match self.prelude {
-            Prelude::Windows => overlaps(root, candidate),
-            Prelude::MacOs => {
-                overlaps(root, candidate)
-                    && root.components().count() >= candidate.components().count()
-            }
-            Prelude::Linux => root.starts_with(candidate),
-        };
-        self.roots.iter().find_map(|root| {
-            locations.iter().find_map(|location| {
-                let resolved = canonical(location);
-                [location, &resolved]
-                    .into_iter()
-                    .any(|candidate| reaches(root, candidate))
-                    .then(|| (root.as_path(), location.clone()))
-            })
-        })
+        reaching_credentials(self.prelude, self.home.as_deref(), self.roots.iter())
+    }
+
+    /// The scratch directory, if its name now leads to a link or a file.
+    fn scratch_linked(&self) -> Option<&Path> {
+        self.scratch_made
+            .as_ref()
+            .filter(|made| made.leads_elsewhere())
+            .map(ScratchDirectory::path)
     }
 
     /// What `command` is started as under this confinement, or the reason it cannot be.
@@ -1802,6 +1820,14 @@ impl Confinement {
                     location.display()
                 ),
             }));
+        }
+        if let Some(linked) = self.scratch_linked() {
+            return Err(not_confined(format!(
+                "the session's scratch directory `{}` has been replaced by a link or a file, so a \
+                 stage given it to write could reach wherever its name now leads; start a new \
+                 session to be given another",
+                linked.display()
+            )));
         }
         let proxy = self.host_proxy(step).map_err(not_confined)?;
         let proxied = proxy.as_deref().map(Proxy::environment).unwrap_or_default();
@@ -2535,6 +2561,60 @@ pub fn held_to_the_session_network(
     hosts: Option<&Hosts>,
     capabilities: &bravebot_sandbox::policy::Capabilities,
 ) -> Result<(SandboxPolicy, Vec<(String, String)>), String> {
+    held_under_the_session_network(
+        policy,
+        program,
+        network,
+        hosts,
+        capabilities,
+        &|policy, list| {
+            let proxy = crate::host_proxy::proxy_for(list)
+                .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
+            let held = policy.allow_network_egress_only_to(proxy.addr().port());
+            #[cfg(target_os = "linux")]
+            let held = match proxy.socket_path() {
+                Some(socket) => held.with_egress_through(socket),
+                None => held,
+            };
+            Ok((held, proxy.environment()))
+        },
+    )
+}
+
+/// The policy [`held_to_the_session_network`] would give a server, for a caller that must start no
+/// proxy: where a host list holds the server to one, the policy is limited to a port that is not
+/// any proxy's, which is all a view of it reads. Every refusal is the one a launch would make.
+pub fn foreseen_under_the_session_network(
+    policy: SandboxPolicy,
+    program: &Path,
+    network: Network,
+    hosts: Option<&Hosts>,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+) -> Result<SandboxPolicy, String> {
+    held_under_the_session_network(
+        policy,
+        program,
+        network,
+        hosts,
+        capabilities,
+        &|policy, _| Ok((policy.allow_network_egress_only_to(0), Vec::new())),
+    )
+    .map(|(held, _)| held)
+}
+
+/// A server's policy under the session network, and the variables that point it at the proxy.
+type Held = Result<(SandboxPolicy, Vec<(String, String)>), String>;
+
+/// The decision [`held_to_the_session_network`] makes, with the way a host list is applied left to
+/// `limit`, so that a launch and a view of one cannot decide differently.
+fn held_under_the_session_network(
+    policy: SandboxPolicy,
+    program: &Path,
+    network: Network,
+    hosts: Option<&Hosts>,
+    capabilities: &bravebot_sandbox::policy::Capabilities,
+    limit: &dyn Fn(SandboxPolicy, &bravebot_sandbox::hosts::HostList) -> Held,
+) -> Held {
     if network.is_closed() {
         let closed = policy.without_network_egress();
         return match cannot_close_the_network(&closed, capabilities) {
@@ -2558,17 +2638,10 @@ pub fn held_to_the_session_network(
         false,
         &toolchains,
     )?;
-    let proxy = crate::host_proxy::proxy_for(&list)
-        .map_err(|error| format!("the allowed-hosts proxy could not start: {error}"))?;
-    let held = policy.allow_network_egress_only_to(proxy.addr().port());
-    #[cfg(target_os = "linux")]
-    let held = match proxy.socket_path() {
-        Some(socket) => held.with_egress_through(socket),
-        None => held,
-    };
+    let (held, environment) = limit(policy, &list)?;
     match cannot_hold_to_the_proxy(&held, capabilities) {
         Some(detail) => Err(detail),
-        None => Ok((held, proxy.environment())),
+        None => Ok((held, environment)),
     }
 }
 
@@ -2691,6 +2764,40 @@ fn lookup(environment: &[(String, String)], name: &str, fold_case: bool) -> Opti
         .filter(|value| !value.is_empty())
 }
 
+/// The first of `directories` that is or lies inside a credential location, or on Windows holds
+/// one, and that location (SANDBOX-18). See [`Confinement::root_reaching_credentials`].
+fn reaching_credentials<'a>(
+    prelude: Prelude,
+    home: Option<&Path>,
+    directories: impl Iterator<Item = &'a PathBuf>,
+) -> Option<(&'a Path, PathBuf)> {
+    // The locations under the home need one to name them; `/Library/Keychains` does not.
+    let mut locations = home
+        .map(|home| credential_locations(prelude, home))
+        .unwrap_or_default();
+    if prelude == Prelude::MacOs {
+        locations.push(PathBuf::from(
+            bravebot_sandbox::base::MACOS_SYSTEM_KEYCHAINS,
+        ));
+    }
+    let reaches = |root: &Path, candidate: &Path| match prelude {
+        Prelude::Windows => overlaps(root, candidate),
+        Prelude::MacOs => {
+            overlaps(root, candidate) && root.components().count() >= candidate.components().count()
+        }
+        Prelude::Linux => root.starts_with(candidate),
+    };
+    directories.into_iter().find_map(|root| {
+        locations.iter().find_map(|location| {
+            let resolved = canonical(location);
+            [location, &resolved]
+                .into_iter()
+                .any(|candidate| reaches(root, candidate))
+                .then(|| (root.as_path(), location.clone()))
+        })
+    })
+}
+
 fn canonical(path: &Path) -> PathBuf {
     without_verbatim_prefix(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
 }
@@ -2741,6 +2848,92 @@ fn runs_what_it_is_given(name: &str) -> bool {
         .strip_prefix("python")
         .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit() || c == '.'));
     versioned || WRAPPERS.contains(&name) || INTERPRETERS.contains(&name)
+}
+
+/// Whether `found` accepts one of the names an argument could be a file under: the argument
+/// whole, the pieces left after cutting it at white space, shell punctuation and `=`, and the words
+/// a shell would read in it ([`shell_words`]). The argument and each word is also read as an
+/// option, so what follows each `=` in it is a name, and so is each piece between two.
+///
+/// The whole argument is a name because a file's name may hold any character the others cut at.
+/// The words read with quoting are names because a command string may quote a name that holds
+/// one, as `sh -c "'run script.sh'"` does, and a cut at every quote would split it. A name that is
+/// not a file is looked up and found nothing, so more names only ever ask about more lines. The
+/// names are slices of the text and are offered one at a time, so a long argument is not copied
+/// once for each `=` in it.
+fn any_name_in(arg: &str, mut found: impl FnMut(&str) -> bool) -> bool {
+    let mut found = |name: &str| !name.is_empty() && found(name);
+    if arg
+        .split(|c: char| c.is_whitespace() || ";&|()<>\"'`$=".contains(c))
+        .any(&mut found)
+    {
+        return true;
+    }
+    std::iter::once(arg.to_string())
+        .chain(shell_words(arg))
+        .any(|text| {
+            found(&text)
+                || text
+                    .match_indices('=')
+                    .any(|(at, _)| found(&text[at + 1..]))
+                || text.split('=').any(&mut found)
+        })
+}
+
+/// The words a POSIX shell reads in `text`: cut at unquoted white space and `;&|()<>` and a
+/// backtick, with single quotes holding every character, double quotes holding every character but
+/// `\` before `"`, `\`, `$` or a backtick, and a `\` outside quotes holding the next character. A
+/// `\` before a newline joins the lines. A quote left open runs to the end of the text. Nothing is
+/// expanded, so `$HOME` stays the characters it is spelled with.
+fn shell_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => {
+                in_word = true;
+                word.extend(chars.by_ref().take_while(|&held| held != '\''));
+            }
+            '"' => {
+                in_word = true;
+                while let Some(held) = chars.next() {
+                    match held {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(escaped @ ('"' | '\\' | '$' | '`')) => word.push(escaped),
+                            Some('\n') => {}
+                            Some(other) => word.extend(['\\', other]),
+                            None => word.push('\\'),
+                        },
+                        _ => word.push(held),
+                    }
+                }
+            }
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                escaped => {
+                    in_word = true;
+                    word.extend(escaped);
+                }
+            },
+            c if c.is_whitespace() || ";&|()<>`".contains(c) => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            c => {
+                in_word = true;
+                word.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    words
 }
 
 /// Whether `file` has an execute bit set for anybody, which is how a program a stage wrote and made
@@ -3176,6 +3369,148 @@ mod tests {
         }
     }
 
+    /// RUN-5: a file whose name holds a character the argument is cut at is looked up as one name,
+    /// so an interpreter handed it, or a program of any kind handed it where it is executable, is
+    /// not held. The regression it rejects: reading an argument only as the pieces left after the
+    /// cut, which never names `run script.sh` and so let `sh "run script.sh"` run unasked. Every
+    /// name that is not there is the control, so a name is not asked about for its characters.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_name_holding_a_separator_is_looked_up_as_one_name() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-held-separator-names");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).expect("scratch root");
+        let root = root.canonicalize().expect("canonical");
+        let confined = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![root.clone()],
+            None,
+        )
+        .with_network(Network::Closed);
+        let held_here = |step: Step| confined.holds(&[&step], &root);
+
+        for separator in [
+            " ", "\t", "\n", ";", "&", "|", "(", ")", "<", ">", "\"", "'", "`", "$", "=",
+        ] {
+            let name = format!("sub/a{separator}b.sh");
+            let absolute = root.join(&name).to_string_lossy().into_owned();
+            for interpreter in ["/bin/sh", "/usr/bin/python3", "/usr/bin/env"] {
+                assert_eq!(
+                    held_here(step(interpreter, &[&name])),
+                    Containment::Held,
+                    "the control: {interpreter} given {name:?} where it is not a file"
+                );
+            }
+            std::fs::write(root.join(&name), "").expect("script");
+            for interpreter in ["/bin/sh", "/usr/bin/python3", "/usr/bin/env"] {
+                for argument in [&name, &absolute] {
+                    assert_eq!(
+                        held_here(step(interpreter, &[argument])),
+                        Containment::Unknown,
+                        "{interpreter} ran {argument:?}, a file the session could have written"
+                    );
+                }
+            }
+            assert_eq!(
+                held_here(step("/usr/bin/cat", &[&name])),
+                Containment::Held,
+                "a program that does not run its operand was refused for naming {name:?}"
+            );
+            use std::os::unix::fs::PermissionsExt;
+            let tool = root.join(format!("sub/tool{separator}x"));
+            std::fs::write(&tool, "").expect("tool");
+            let launched = |mode| {
+                std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(mode))
+                    .expect("mode");
+                held_here(step(
+                    "/usr/bin/some-launcher",
+                    &[&format!("sub/tool{separator}x")],
+                ))
+            };
+            assert_eq!(
+                launched(0o644),
+                Containment::Held,
+                "the control: a launcher given {separator:?} in the name of a file that is \
+                 not executable"
+            );
+            assert_eq!(
+                launched(0o755),
+                Containment::Unknown,
+                "a program this list does not know ran an executable file with \
+                 {separator:?} in its name"
+            );
+        }
+    }
+
+    /// RUN-5: a command string is read with the quoting a shell applies, so a quoted or escaped
+    /// name inside it stays one word, and an option's value, which may hold an `=` itself, is a name
+    /// too. The regressions it rejects: cutting the string at every quote, which turned
+    /// `'sub/run script.sh'` into `sub/run` and `script.sh`, and cutting an option's value at every
+    /// `=`, which never names `key=value run.sh`.
+    #[test]
+    fn a_quoted_name_in_a_command_string_names_the_file_it_runs() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch/confine-held-quoted-names");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub")).expect("scratch root");
+        let root = root.canonicalize().expect("canonical");
+        std::fs::write(root.join("sub/run script.sh"), "").expect("script");
+        std::fs::write(root.join("sub/key=value run.sh"), "").expect("script");
+        std::fs::write(root.join("sub/runscript.sh"), "").expect("script");
+        let confined = Confinement::new(
+            Prelude::MacOs,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![root.clone()],
+            None,
+        )
+        .with_network(Network::Closed);
+        let held_here = |step: Step| confined.holds(&[&step], &root);
+
+        for (program, args) in [
+            ("/bin/sh", vec!["-c", "'sub/run script.sh'"]),
+            ("/bin/sh", vec!["-c", "\"sub/run script.sh\" --flag"]),
+            ("/bin/sh", vec!["-c", "sub/run\\ script.sh"]),
+            ("/bin/sh", vec!["-c", "echo hi; 'sub/run script.sh'"]),
+            ("/bin/sh", vec!["-c", "true&&\"sub/run script.sh\""]),
+            ("/bin/sh", vec!["-c", "`'sub/run script.sh'`"]),
+            ("/bin/sh", vec!["-c", "sub/run\\\nscript.sh"]),
+            ("/bin/sh", vec!["-c", "\"sub/runscr\\\nipt.sh\""]),
+            (
+                "/usr/bin/node",
+                vec!["--require=sub/run script.sh", "-e", "1"],
+            ),
+            (
+                "/usr/bin/node",
+                vec!["--require='sub/run script.sh'", "-e", "1"],
+            ),
+            (
+                "/usr/bin/node",
+                vec!["--require=sub/key=value run.sh", "-e", "1"],
+            ),
+        ] {
+            assert_eq!(
+                held_here(step(program, &args)),
+                Containment::Unknown,
+                "{program} {args:?} ran a file the session could have written"
+            );
+        }
+        for (program, args) in [
+            ("/bin/sh", vec!["-c", "echo 'sub/run script.sh is a name'"]),
+            ("/bin/sh", vec!["-c", "'sub/run script.sh.bak'"]),
+            ("/bin/sh", vec!["-c", "\"sub/run\" 'script.sh'"]),
+        ] {
+            assert_eq!(
+                held_here(step(program, &args)),
+                Containment::Held,
+                "the control: {program} {args:?} names no file"
+            );
+        }
+    }
+
     fn refuses(policy: &SandboxPolicy, path: &str) -> bool {
         policy
             .unreadable
@@ -3382,6 +3717,278 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A confinement on `prelude` whose scratch row is `scratch`, with a session directory that is
+    /// beside every credential location.
+    fn scratch_confinement(prelude: Prelude, scratch: &str) -> Confinement {
+        Confinement::new(
+            prelude,
+            PathBuf::from("/tmp"),
+            Some(Path::new(HOME)),
+            vec![PathBuf::from("/people/person/project")],
+            Some(Path::new(scratch)),
+        )
+    }
+
+    /// What `confinement` refuses a stage for when it is about the scratch directory, and nothing
+    /// otherwise.
+    fn refused_for_the_scratch_directory(confinement: &Confinement) -> Option<String> {
+        match prepared_in(confinement) {
+            Err(ExecError::NotConfined { detail, .. }) if detail.contains("scratch directory") => {
+                Some(detail)
+            }
+            _ => None,
+        }
+    }
+
+    /// SANDBOX-18: the scratch row is a read and write row as a session directory is, so it is not
+    /// granted where it is or lies inside a credential location, on every platform, and the stage
+    /// still starts. The regressions it rejects: the row left out of the comparison the session
+    /// directories go through, and a refusal of every stage for a temporary directory that lies in
+    /// such a place, which no new session can clear.
+    #[test]
+    fn a_scratch_directory_inside_a_credential_location_gets_no_row_on_every_platform() {
+        let rows = |prelude, scratch: &str| {
+            let confinement = scratch_confinement(prelude, scratch);
+            let policy = confinement.policy(
+                &step("/bin/cat", &["f"]),
+                Path::new("/people/person/project"),
+                &[],
+            );
+            (
+                reads(&policy, scratch) || writes(&policy, scratch),
+                refused_for_the_scratch_directory(&confinement),
+            )
+        };
+        for prelude in [Prelude::MacOs, Prelude::Linux, Prelude::Windows] {
+            for scratch in [
+                "/people/person/.ssh",
+                "/people/person/.ssh/keys",
+                "/people/person/.bravebot",
+                "/people/person/.aws/sso",
+            ] {
+                assert_eq!(
+                    rows(prelude, scratch),
+                    (false, None),
+                    "{prelude:?}: {scratch}"
+                );
+            }
+            for scratch in ["/var/scratch", "/people/person/.sshfoo"] {
+                assert_eq!(
+                    rows(prelude, scratch),
+                    (true, None),
+                    "{prelude:?}: {scratch}"
+                );
+            }
+        }
+    }
+
+    /// The scratch directory of a session, made as the session makes it, and a confinement on
+    /// `prelude` holding it to the directory it was made as.
+    #[cfg(unix)]
+    fn made_scratch(prelude: Prelude) -> (crate::SessionScratch, Confinement) {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let confinement = Confinement {
+            scratch_made: session.directory(),
+            ..Confinement::new(
+                prelude,
+                PathBuf::from("/tmp"),
+                Some(Path::new(HOME)),
+                vec![PathBuf::from("/people/person/project")],
+                Some(session.path()),
+            )
+        };
+        (session, confinement)
+    }
+
+    /// What a stage with a write row on the temporary directory can put at the scratch directory's
+    /// name that leads somewhere else: a link to each kind of place, and a file.
+    #[cfg(unix)]
+    fn what_leads_elsewhere(outside: &Path) -> Vec<(&'static str, crate::testutil::PutThere<'_>)> {
+        use std::os::unix::fs::symlink;
+        vec![
+            (
+                "a link to a credential directory",
+                Box::new(|name| symlink(outside.join(".ssh"), name).expect("link")),
+            ),
+            (
+                "a link to a shell startup file",
+                Box::new(|name| symlink(outside.join(".bashrc"), name).expect("link")),
+            ),
+            (
+                "a link to a directory no row names",
+                Box::new(|name| symlink(outside.join("elsewhere"), name).expect("link")),
+            ),
+            (
+                "a file",
+                Box::new(|name| std::fs::write(name, "x").expect("a file")),
+            ),
+        ]
+    }
+
+    /// What a stage can put at the name that leads nowhere else: another directory, or nothing.
+    #[cfg(unix)]
+    fn what_leads_nowhere_else() -> Vec<(&'static str, crate::testutil::PutThere<'static>)> {
+        vec![
+            (
+                "an empty directory made in its place",
+                Box::new(|name| std::fs::create_dir(name).expect("a directory")),
+            ),
+            ("nothing", Box::new(|_| {})),
+        ]
+    }
+
+    /// The directories a link can lead to, under a directory of their own.
+    #[cfg(unix)]
+    fn somewhere_to_link_to(name: &str) -> PathBuf {
+        let outside = crate::testutil::scratch_dir(name);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(outside.join(".ssh")).expect("a credential directory");
+        std::fs::create_dir_all(outside.join("elsewhere")).expect("a directory");
+        std::fs::write(outside.join(".bashrc"), "export X=1\n").expect("a startup file");
+        outside
+    }
+
+    /// SANDBOX-18: a stage is refused once the scratch directory's name leads to a link or a file,
+    /// wherever it leads, on every platform that reads the machine. The check is made as each
+    /// stage starts, since the confinement is built before the first stage of a line and a later
+    /// stage of the same line starts after an earlier one changed the name. The regressions it
+    /// rejects: the check made only when the confinement is built, which lets the second stage of
+    /// `a && b` through, and one that compares where the name leads with the credential table
+    /// alone, which passes a link to a directory that holds none.
+    #[cfg(unix)]
+    #[test]
+    fn a_stage_is_refused_once_the_scratch_directory_leads_to_a_link_or_a_file() {
+        let outside = somewhere_to_link_to("confine-scratch-linked");
+        for prelude in [Prelude::MacOs, Prelude::Linux] {
+            for (change, put_there) in what_leads_elsewhere(&outside) {
+                let (session, confinement) = made_scratch(prelude);
+                assert_eq!(
+                    refused_for_the_scratch_directory(&confinement),
+                    None,
+                    "{prelude:?}: refused before it was changed"
+                );
+
+                let aside = crate::testutil::moved_aside_and_replaced(session.path(), put_there);
+
+                let refused = refused_for_the_scratch_directory(&confinement)
+                    .unwrap_or_else(|| panic!("{prelude:?}: {change} was not refused"));
+                assert!(
+                    refused.contains(&session.path().display().to_string()),
+                    "{prelude:?}: {refused}"
+                );
+                let _ = std::fs::remove_file(session.path());
+                let _ = std::fs::remove_dir_all(&aside);
+            }
+        }
+    }
+
+    /// SANDBOX-18: a scratch directory that was removed, or replaced by another directory, is no
+    /// longer the one the session made and gets no row, and the stage still starts. The
+    /// regressions it rejects: the row kept for a directory that is not the one made, which grants
+    /// whatever a stage made there, and a refusal for a name that leads nowhere else, which ends
+    /// every later `run` of a session whose temporary directory was cleaned or whose scratch
+    /// directory a program made again.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_that_is_replaced_or_gone_gets_no_row_and_stops_no_stage() {
+        for (change, put_there) in what_leads_nowhere_else() {
+            let session = crate::SessionScratch::create().expect("a scratch directory");
+            let made = session.directory().expect("the directory as made");
+            let confinement = |made: &ScratchDirectory| {
+                Confinement::here(
+                    vec![PathBuf::from("/people/person/project")],
+                    Some(made),
+                    Some(Path::new(HOME)),
+                )
+                .expect("a platform with a base")
+            };
+            let scratch = session.path().canonicalize().expect("canonical");
+            let scratch = scratch.display().to_string();
+            let policy = |confinement: &Confinement| {
+                confinement.policy(
+                    &step("/bin/cat", &["f"]),
+                    Path::new("/people/person/project"),
+                    &[],
+                )
+            };
+            let before = confinement(&made);
+            assert!(reads(&policy(&before), &scratch), "{change}: before");
+
+            let aside = crate::testutil::moved_aside_and_replaced(session.path(), put_there);
+            let after = confinement(&made);
+
+            let policy = policy(&after);
+            assert!(!reads(&policy, &scratch), "{change}: read");
+            assert!(!writes(&policy, &scratch), "{change}: written");
+            assert_eq!(refused_for_the_scratch_directory(&before), None, "{change}");
+            assert_eq!(refused_for_the_scratch_directory(&after), None, "{change}");
+            let _ = std::fs::remove_dir_all(session.path());
+            let _ = std::fs::remove_dir_all(&aside);
+        }
+    }
+
+    /// SANDBOX-18: a scratch directory already a link when the next line's confinement is built
+    /// gets no row, so the confirmation of that line does not describe a grant of wherever the
+    /// name now leads, and the stage is refused. The regression it rejects: the row built from the
+    /// name as `canonical` resolves it, which is the target of the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_scratch_directory_linked_before_the_confinement_is_built_gets_no_row() {
+        let outside = somewhere_to_link_to("confine-scratch-linked-first");
+        let target = outside
+            .join(".ssh")
+            .canonicalize()
+            .expect("a canonical target");
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let made = session.directory().expect("the directory as made");
+        let aside = crate::testutil::moved_aside_and_replaced(session.path(), |name| {
+            std::os::unix::fs::symlink(&target, name).expect("link")
+        });
+
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            Some(&made),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let policy = confinement.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+
+        let target = target.display().to_string();
+        assert!(!reads(&policy, &target) && !writes(&policy, &target));
+        assert!(refused_for_the_scratch_directory(&confinement).is_some());
+        let _ = std::fs::remove_file(session.path());
+        let _ = std::fs::remove_dir_all(&aside);
+    }
+
+    /// The directory the session made is a row and starts a stage. The control for the three
+    /// above: a check that refuses every stage, or grants no row, rejects them for the wrong
+    /// reason.
+    #[cfg(unix)]
+    #[test]
+    fn the_scratch_directory_the_session_made_is_a_row_and_starts_a_stage() {
+        let session = crate::SessionScratch::create().expect("a scratch directory");
+        let confinement = Confinement::here(
+            vec![PathBuf::from("/people/person/project")],
+            session.directory().as_ref(),
+            Some(Path::new(HOME)),
+        )
+        .expect("a platform with a base");
+        let policy = confinement.policy(
+            &step("/bin/cat", &["f"]),
+            Path::new("/people/person/project"),
+            &[],
+        );
+
+        let scratch = session.path().canonicalize().expect("canonical");
+        let scratch = scratch.display().to_string();
+        assert!(reads(&policy, &scratch) && writes(&policy, &scratch));
+        assert_eq!(refused_for_the_scratch_directory(&confinement), None);
     }
 
     /// SANDBOX-12, SANDBOX-18: a macOS session on the home directory or above it grants a row that
@@ -3730,6 +4337,7 @@ mod tests {
             for held_back in [
                 format!("{HOME}/.bravebot/gateway-keys.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
+                format!("{HOME}/.bravebot/chatgpt-account.json"),
                 format!("{HOME}/.bravebot/mcp.json"),
                 format!("{HOME}/.bravebot-browser/secret"),
                 format!("{HOME}/.ssh/id_ed25519"),
@@ -5666,6 +6274,162 @@ mod tests {
         assert!(!reads(&make, &format!("{HOME}/.ssh/id_ed25519")));
         for policy in [&ls, &other_make, &target] {
             assert!(!reads(policy, &known_hosts));
+        }
+    }
+
+    /// A remembered scope is attached to a stage only where the scope table would give the stage
+    /// that scope for its whole argv. The regression it rejects: keying on the program and the
+    /// operation word alone, so a remembered `git push` lends the credential rows and the closed
+    /// network's egress to `git push --receive-pack=<file>`, which a fresh scope is refused. Each
+    /// row is an argv the table refuses for its program, with the grant a person would remember
+    /// for the same program and operation word; `git push origin` is the argv it is given to.
+    #[test]
+    fn a_remembered_scope_is_not_attached_to_an_argv_the_table_refuses() {
+        let netrc = format!("{HOME}/.netrc");
+        let rows: &[(&str, Option<&str>, &str, &[&str])] = &[
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--receive-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--rec=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--exec=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &[
+                    "push",
+                    "--config=core.sshCommand=/work/project/hook.sh",
+                    "origin",
+                ],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "origin", "ext::sh -c id"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("push"),
+                "remote",
+                &["push", "foo://host/repo"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("pull"),
+                "remote",
+                &["pull", "--strategy=hook", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("pull"),
+                "remote",
+                &["pull", "-s", "hook", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("fetch"),
+                "remote",
+                &["fetch", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("clone"),
+                "remote",
+                &["clone", "-u", "/work/project/hook.sh", "o"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("clone"),
+                "remote",
+                &["clone", "--template=/work/project/dir", "o"],
+            ),
+            (
+                "/usr/bin/git",
+                Some("ls-remote"),
+                "remote",
+                &["ls-remote", "--upload-pack=/work/project/hook.sh", "origin"],
+            ),
+            (
+                "/usr/bin/gh",
+                Some("repo"),
+                "remote",
+                &[
+                    "repo",
+                    "clone",
+                    "o/r",
+                    "--",
+                    "--upload-pack=/work/project/hook.sh",
+                ],
+            ),
+            (
+                "/usr/bin/kubectl",
+                Some("get"),
+                "kubernetes",
+                &["get", "pods", "--kubeconfig=/work/project/config"],
+            ),
+            (
+                "/usr/bin/docker",
+                Some("ps"),
+                "docker",
+                &["ps", "--config=/work/project/dir"],
+            ),
+        ];
+        for (binary, operation, scope, argv) in rows {
+            let confined = confinement(&["/work/project"])
+                .with_network(Network::Closed)
+                .with_grants(vec![remembered(binary, *operation, a_scope(scope), false)]);
+            let refused = step(binary, argv);
+            let given = step(binary, &[argv[0], "origin"]);
+            let wanted = |confined: &Confinement, step: &Step| {
+                let policy = confined.policy(step, Path::new("/work"), &[]);
+                (
+                    reads(&policy, &netrc) || reads(&policy, &format!("{HOME}/.config/gh")),
+                    confined.egress(step),
+                    confined.describe(&[step]).sentences(),
+                )
+            };
+
+            let (read, egress, sentences) = wanted(&confined, &refused);
+            assert!(!read, "{argv:?} read a credential row");
+            assert!(!egress, "{argv:?} kept the network");
+            assert!(
+                sentences
+                    .iter()
+                    .all(|sentence| !sentence.contains("remembered for this command")),
+                "{argv:?} named a remembered scope: {sentences:?}"
+            );
+
+            let (read, egress, sentences) = wanted(&confined, &given);
+            assert!(
+                egress
+                    && sentences
+                        .iter()
+                        .any(|sentence| sentence.contains("remembered for this command")),
+                "{binary} {operation:?} was not given the scope it was remembered for: {egress} {sentences:?}"
+            );
+            if *scope == "remote" {
+                assert!(read, "{binary} {operation:?} read no credential row");
+            }
         }
     }
 

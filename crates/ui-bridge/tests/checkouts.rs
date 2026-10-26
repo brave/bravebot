@@ -2,8 +2,15 @@
 //! the session's record, and is taken back when the session is opened again (CHECKOUT-16).
 
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a test that unwraps fails at the line that did"
+)]
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "undo_endpoint.rs is shared by several test binaries, and checkouts does not use endpoint"
+)]
 #[path = "../../tui/src/undo_endpoint.rs"]
 mod endpoint;
 #[path = "../../session/test-support/profile.rs"]
@@ -336,7 +343,14 @@ fn a_reopened_session_keeps_its_checkout_and_numbers_the_next_after_it() {
     let first = window.turn(&session, "ASK-FOR-ONE");
     let id = session_id(&first);
 
-    let mut reopened = Window::with_settings(window.settings.clone());
+    let settings = window.settings.clone();
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(settings);
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
     let session = opened["session"].as_str().unwrap().to_string();
     let second = reopened.turn(&session, "ASK-FOR-TWO");
@@ -376,7 +390,14 @@ fn a_reopened_session_keeps_a_checkout_it_cannot_place_in_the_record_and_numbers
     let id = session_id(&first);
     std::fs::remove_dir_all(standing(&project, "c1")).unwrap();
 
-    let mut reopened = Window::with_settings(window.settings.clone());
+    let settings = window.settings.clone();
+    // The first window closes and waits for what it was still doing, so the record it held is free.
+    assert!(
+        window.bridge.shut_down(std::time::Duration::from_secs(10)),
+        "the first window's work did not end"
+    );
+    drop(window);
+    let mut reopened = Window::with_settings(settings);
     let opened = reopened.call("session.open", json!({"directory": project, "id": id}));
     let session = opened["session"].as_str().unwrap().to_string();
     let second = reopened.turn(&session, "ASK-FOR-TWO");
