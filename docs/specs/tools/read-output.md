@@ -9,6 +9,7 @@ guards:
 documented-by:
   - docs/website/docs/reference/tools.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
 ---
 
 ## Scope

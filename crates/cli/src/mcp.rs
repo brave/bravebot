@@ -112,9 +112,10 @@ fn run<R: BufRead, W: Write>(
             [path] => forget(Some(path), home, person),
             [_, extra, ..] => Err(unexpected(command, extra)),
         },
-        other => Err(refused_with_the_forms(
-            t!(mcp_unknown_command, command = shown(other)).to_string(),
-        )),
+        other => Err(refused_with_the_forms(t!(
+            mcp_unknown_command,
+            command = shown(other)
+        ))),
     }
 }
 
@@ -147,8 +148,7 @@ fn unexpected(command: &str, argument: &str) -> Stopped {
             mcp_unexpected_argument,
             command = command,
             argument = shown(argument)
-        )
-        .to_string(),
+        ),
     )
 }
 
@@ -159,10 +159,7 @@ fn unexpected(command: &str, argument: &str) -> Stopped {
 fn one_alias<'a>(command: &str, rest: &'a [String]) -> Result<&'a str, Stopped> {
     match rest {
         [alias] => Ok(alias),
-        [] => Err((
-            Ending::Argument,
-            t!(mcp_needs_an_alias, command = command).to_string(),
-        )),
+        [] => Err((Ending::Argument, t!(mcp_needs_an_alias, command = command))),
         [_, extra, ..] => Err(unexpected(command, extra)),
     }
 }
@@ -185,10 +182,7 @@ fn add<R: BufRead, W: Write>(
         start += 2;
     }
     let Some((alias, flags)) = rest[start..].split_first() else {
-        return Err((
-            Ending::Argument,
-            t!(mcp_needs_an_alias, command = "add").to_string(),
-        ));
+        return Err((Ending::Argument, t!(mcp_needs_an_alias, command = "add")));
     };
     // Refused as Claude Code refuses it, and without repeating the word, which may hold a value.
     if alias.starts_with("-e") || alias.starts_with("--env") {
@@ -196,15 +190,15 @@ fn add<R: BufRead, W: Write>(
     }
     if !mcp::is_alias(alias) {
         let said = match may_be_a_value(alias) {
-            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64).to_string(),
-            false => t!(mcp_not_an_alias, alias = shown(alias)).to_string(),
+            true => t!(mcp_not_an_alias_unshown, position = (start + 1) as i64),
+            false => t!(mcp_not_an_alias, alias = shown(alias)),
         };
         return Err((Ending::Argument, said));
     }
     let not_added = |found: Problem| {
         (
             Ending::Argument,
-            t!(mcp_not_added, alias = alias, problem = problem(&found)).to_string(),
+            t!(mcp_not_added, alias = alias, problem = problem(&found)),
         )
     };
     let declaration = declared(flags, start + 1, &mut scope).map_err(|refusal| match refusal {
@@ -663,12 +657,7 @@ fn may_be_a_value(word: &str) -> bool {
 }
 
 fn checkout(cwd: Cwd<'_>) -> Result<&Path, Stopped> {
-    cwd.map_err(|error| {
-        (
-            Ending::Failed,
-            t!(mcp_no_current_directory, error = error).to_string(),
-        )
-    })
+    cwd.map_err(|error| (Ending::Failed, t!(mcp_no_current_directory, error = error)))
 }
 
 /// The directory `--dir` named, as the absolute path of the place it is.
@@ -779,7 +768,7 @@ fn refused(managed: &Managed, declaration: &Declaration) -> Option<String> {
     bravebot_agent::servers::refused_declaration(managed, declaration, &|name| {
         std::env::var_os(name)
     })
-    .map(|reason| t!(mcp_refused_by_managed, reason = reason).to_string())
+    .map(|reason| t!(mcp_refused_by_managed, reason = reason))
 }
 
 /// SERVERS-14's `list`: [`report`] under the file it read and the directory it was read for.
@@ -818,7 +807,7 @@ fn list<R: BufRead, W: Write>(
         0 => Ok(()),
         count => Err((
             Ending::Configuration,
-            t!(mcp_list_unusable, count = count, path = &path).to_string(),
+            t!(mcp_list_unusable, count = count, path = &path),
         )),
     }
 }
@@ -851,7 +840,7 @@ pub(crate) fn examined(
         true => t!(doctor_mcp_none, path = path, project = project),
         false => t!(doctor_mcp_servers, path = path, project = project),
     };
-    let mut lines = vec![heading.to_string()];
+    let mut lines = vec![heading];
     lines.extend(rows);
     (lines, unusable > 0)
 }
@@ -1001,7 +990,7 @@ fn answered(alias: &str, project: bool, standing: &[String]) -> Vec<String> {
         lines.push(t!(mcp_standing_project).to_string());
     }
     if !tools.is_empty() {
-        lines.push(t!(mcp_standing_tools, tools = tools.join(", ")).to_string());
+        lines.push(t!(mcp_standing_tools, tools = tools.join(", ")));
     }
     if lines.is_empty() {
         lines.push(t!(mcp_standing_none).to_string());
@@ -1032,16 +1021,10 @@ fn approve<R: BufRead, W: Write>(
             say(person, recorded(alias, &declaration));
         }
         Asked::No => {
-            return Err((
-                Ending::Refused,
-                t!(mcp_left_unapproved, alias = alias).to_string(),
-            ));
+            return Err((Ending::Refused, t!(mcp_left_unapproved, alias = alias)));
         }
         Asked::Nobody => {
-            return Err((
-                Ending::Refused,
-                t!(mcp_nobody_to_ask, alias = alias).to_string(),
-            ));
+            return Err((Ending::Refused, t!(mcp_nobody_to_ask, alias = alias)));
         }
     }
     Ok(())
@@ -1084,16 +1067,13 @@ fn enable<R: BufRead, W: Write>(
             return Err((Ending::Refused, still_requested(&settings, alias)));
         }
         Asked::No => {
-            return Err((
-                Ending::Refused,
-                t!(mcp_not_enabled, alias = alias).to_string(),
-            ));
+            return Err((Ending::Refused, t!(mcp_not_enabled, alias = alias)));
         }
         Asked::Nobody => {
             let command = enable_command(alias, scope);
             return Err((
                 Ending::Refused,
-                t!(mcp_nobody_to_enable, alias = alias, command = command).to_string(),
+                t!(mcp_nobody_to_enable, alias = alias, command = command),
             ));
         }
     }
@@ -1182,12 +1162,8 @@ fn alias_and_scope<'a>(
         }
         index += 1;
     }
-    let alias = alias.ok_or_else(|| {
-        (
-            Ending::Argument,
-            t!(mcp_needs_an_alias, command = command).to_string(),
-        )
-    })?;
+    let alias =
+        alias.ok_or_else(|| (Ending::Argument, t!(mcp_needs_an_alias, command = command)))?;
     Ok((alias, scope))
 }
 
@@ -1221,7 +1197,7 @@ fn unlinked(path: &Path, directory: &Path) -> Result<(), Stopped> {
     match [project, path].into_iter().find(|at| is_link(at)) {
         Some(link) => Err((
             Ending::Configuration,
-            t!(mcp_settings_link, path = file_named(link)).to_string(),
+            t!(mcp_settings_link, path = file_named(link)),
         )),
         None => Ok(()),
     }
@@ -1243,7 +1219,7 @@ fn requested(settings: &mut Destination, alias: &str) -> Result<bool, Stopped> {
     if !settings.request(alias) {
         return Err((
             Ending::Configuration,
-            t!(mcp_settings_not_a_list, path = file_named(settings.path())).to_string(),
+            t!(mcp_settings_not_a_list, path = file_named(settings.path())),
         ));
     }
     settings
@@ -1279,7 +1255,6 @@ fn still_requested(settings: &Destination, alias: &str) -> String {
         alias = alias,
         path = file_named(settings.path())
     )
-    .to_string()
 }
 
 /// Say so where the managed layer keeps a server just enabled from starting, which is the line
@@ -1326,8 +1301,7 @@ fn write_settings(settings: &Destination, directory: &Path, command: &str) -> Re
                     mcp_not_written,
                     path = parent.display().to_string(),
                     error = error.to_string()
-                )
-                .to_string(),
+                ),
             )
         })?;
     }
@@ -1339,15 +1313,15 @@ fn settings_unwritable(why: Unwritable, path: &Path, command: &str) -> Stopped {
     match why {
         Unwritable::NotADocument => (
             Ending::Configuration,
-            t!(mcp_settings_not_a_document, path = path).to_string(),
+            t!(mcp_settings_not_a_document, path = path),
         ),
         Unwritable::TooLarge => (
             Ending::Configuration,
-            t!(mcp_settings_too_large, path = path).to_string(),
+            t!(mcp_settings_too_large, path = path),
         ),
         Unwritable::Changed => (
             Ending::Failed,
-            t!(mcp_settings_changed, path = path, command = command).to_string(),
+            t!(mcp_settings_changed, path = path, command = command),
         ),
     }
 }
@@ -1393,8 +1367,7 @@ fn forget<R: BufRead, W: Write>(
                 mcp_unreadable,
                 path = shown(&file.display().to_string()),
                 reason = bravebot_agent::mcp::unreadable_record(&why)
-            )
-            .to_string(),
+            ),
         )
     };
     let mut projects = Projects::to_change(directory)
@@ -1430,7 +1403,7 @@ fn project(path: Option<&str>) -> Result<PathBuf, Stopped> {
     let here = std::env::current_dir().map_err(|error| {
         (
             Ending::Failed,
-            t!(mcp_no_current_directory, error = error.to_string()).to_string(),
+            t!(mcp_no_current_directory, error = error.to_string()),
         )
     })?;
     let typed = match path {
@@ -1535,7 +1508,6 @@ fn already(alias: &str, declaration: &Declaration) -> String {
         alias = alias,
         digest = declaration.digest().short()
     )
-    .to_string()
 }
 
 fn recorded(alias: &str, declaration: &Declaration) -> String {
@@ -1544,21 +1516,17 @@ fn recorded(alias: &str, declaration: &Declaration) -> String {
         alias = alias,
         digest = declaration.digest().short()
     )
-    .to_string()
 }
 
 fn unusable(alias: &str, found: &Problem) -> Stopped {
     (
         Ending::Configuration,
-        t!(mcp_unusable, alias = shown(alias), problem = problem(found)).to_string(),
+        t!(mcp_unusable, alias = shown(alias), problem = problem(found)),
     )
 }
 
 fn not_declared(alias: &str) -> Stopped {
-    (
-        Ending::Argument,
-        t!(mcp_not_declared, alias = shown(alias)).to_string(),
-    )
+    (Ending::Argument, t!(mcp_not_declared, alias = shown(alias)))
 }
 
 /// The state directory, where this run of `command` may write to it.
@@ -1567,7 +1535,7 @@ fn writable<'a>(home: &'a Home, command: &str) -> Result<&'a Path, Stopped> {
         (Some(directory), true) => Ok(directory),
         (Some(_), false) => Err((
             Ending::Failed,
-            t!(mcp_not_while_incognito, command = command).to_string(),
+            t!(mcp_not_while_incognito, command = command),
         )),
         (None, _) => Err((Ending::Configuration, no_state_directory())),
     }
@@ -1586,7 +1554,7 @@ fn read(directory: &Path) -> Result<Declarations, Stopped> {
         let path = mcp::declarations_file(directory).display().to_string();
         (
             Ending::Configuration,
-            t!(mcp_unreadable, path = path, reason = unreadable(&why)).to_string(),
+            t!(mcp_unreadable, path = path, reason = unreadable(&why)),
         )
     })
 }
@@ -1605,8 +1573,7 @@ fn save(
                 mcp_not_written,
                 path = directory.display().to_string(),
                 error = error.to_string()
-            )
-            .to_string(),
+            ),
         )
     })?;
     replace(&mcp::declarations_file(directory), &declarations.to_text())?;
@@ -1617,15 +1584,14 @@ fn save(
 /// Write `text` over `path` through a temporary file beside it, so an interrupted write leaves the
 /// file as it was rather than half of it.
 pub(crate) fn replace(path: &Path, text: &str) -> Result<(), Stopped> {
-    bravebot_agent::mcp::replace(path, text).map_err(|error| {
+    bravebot_agent::home::replace(path, text).map_err(|error| {
         (
             Ending::Failed,
             t!(
                 mcp_not_written,
                 path = path.display().to_string(),
                 error = error.to_string()
-            )
-            .to_string(),
+            ),
         )
     })
 }

@@ -46,6 +46,7 @@ jobs:
       installers: ${{ steps.affected.outputs.installers }}
       docs: ${{ steps.affected.outputs.docs }}
       npm: ${{ steps.affected.outputs.npm }}
+      fuzz: ${{ steps.affected.outputs.fuzz }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -434,6 +435,56 @@ jobs:
 
       - name: Build
         run: cargo build --all --locked
+
+  # The fuzz targets in fuzz/, which build with a nightly toolchain and AddressSanitizer in a
+  # workspace of their own, so no job above compiles them. `make check-fuzz` lints them, builds
+  # them, replays the committed seeds and the reproducers of fixed crashes, and runs each target
+  # for a short time. On a pull request, only where fuzz/, the root manifest or a crate the targets
+  # build changed.
+  fuzz:
+    name: Fuzz build and replay
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.fuzz != 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The date of the nightly is written once, in the Makefile.
+      - name: Read the fuzz toolchain
+        id: toolchain
+        run: echo "version=$(make -s fuzz-toolchain)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Rust ${{ steps.toolchain.outputs.version }}
+        # Pinned to a full commit SHA; see the note in the `check` job above.
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ steps.toolchain.outputs.version }}
+          components: rustfmt, clippy, rust-src
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          workspaces: fuzz
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install cargo-fuzz
+        run: make fuzz-install
+
+      - name: Lint, build, replay and run the fuzz targets
+        run: make check-fuzz
+
+      # The short run starts from a seed of its own each time, so it can find a defect the code
+      # already had. A crash, a timeout and an out-of-memory stop each leave a file here.
+      - name: Keep what a target stopped on
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts-${{ github.run_attempt }}
+          path: fuzz/artifacts/
+          retention-days: 30
+          if-no-files-found: ignore
 
   # On a pull request, only where what is linked or how it is built could have changed: a
   # manifest, the lockfile, a build script or the Dockerfile. Nothing in the tree is gated on an

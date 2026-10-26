@@ -37,6 +37,7 @@ pub mod home;
 pub mod hooks;
 pub mod host_proxy;
 pub mod hunks;
+pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
 pub mod lsp;
@@ -63,6 +64,7 @@ pub mod repo_map;
 pub mod report;
 pub mod request_view;
 pub mod rewind;
+pub mod roster;
 pub mod rules;
 pub mod sandbox_reason;
 pub mod scratch;

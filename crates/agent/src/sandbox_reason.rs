@@ -20,7 +20,6 @@ pub fn looser(refused: &Refused) -> String {
         // A mode is refused only where it is looser than the pin, so `None` is not reached.
         Some(Looser::Both) | None => t!(sandbox_looser_both, asked = asked, pinned = pinned),
     }
-    .to_string()
 }
 
 #[cfg(all(test, not(windows)))]

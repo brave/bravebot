@@ -40,7 +40,9 @@ guards:
     sites:
       - crates/sandbox/src/programs.rs: 11
       - crates/tui/src/clipboard.rs: 4
-documented-by: docs/website/docs/security/security.md
+documented-by:
+  - docs/website/docs/security/security.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope
@@ -3308,21 +3310,22 @@ file. A new spawn that looks a name up through
   activated virtualenv's `bin` among them, is told it is not installed
   (Known costs in [backends.md](backends.md#known-costs)); the clipboard tool reads as absent and the next tool is
   tried.
-- **The editor's, a hook's, the credential authority's, the inhibitor's, a clipboard tool's,
-  `doctor --push-identity`'s and the AWS CLI's own lookups search only those entries.** A started
-  program looks up the names it starts itself through the `PATH` it inherits. The editor Ctrl-G
-  opens, a hook's program, the credential authority, the inhibitor `/caffeinate` starts, a clipboard
-  tool or `osascript`, the `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, and the AWS
-  CLI are started with bravebot's `PATH` reduced to the entries the lookup searches, in the order
-  they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool or an
-  `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
+- **The editor's, a hook's, the credential authority's, the inhibitor's, a clipboard tool's, the
+  browser opener's, `doctor --push-identity`'s and the AWS CLI's own lookups search only those
+  entries.** A started program looks up the names it starts itself through the `PATH` it inherits.
+  The editor Ctrl-G opens, a hook's program, the credential authority, the inhibitor `/caffeinate`
+  starts, a clipboard tool or `osascript`, the browser opener `auth login chatgpt` starts, the
+  `ssh-keygen`, `ssh` and `git` of `doctor --push-identity`, and the AWS CLI are started with
+  bravebot's `PATH` reduced to the entries the lookup searches, in the order
+  they were written, so a `#!/usr/bin/env` shebang in the editor, the hook, a clipboard tool, the
+  browser opener or an `aws` that is a script, a launcher script, an `$EDITOR` of `env vim`, a `ProxyCommand` in the
   person's ssh configuration that names a bare program, or the program a `unixexec:` address in the
   person's `DBUS_SYSTEM_BUS_ADDRESS` names to `systemd-inhibit` finds the program it starts only
   among them. The authority is always an absolute path
   ([CONNECTOR-2](connectors.md#CONNECTOR-2)). A hook named by a path gets the same `PATH` as one
   named bare. Where no entry is searched the program is started with no `PATH` variable. An empty
   `PATH` would be read as the current directory. A program the editor, a hook, a clipboard tool,
-  `ssh`, `systemd-inhibit` or the AWS CLI starts by name that is found only in a directory left out
+  the browser opener, `ssh`, `systemd-inhibit` or the AWS CLI starts by name that is found only in a directory left out
   is not found by it, such as a bare `credential_process` command in the person's `~/.aws/config`.
   A path in a `unixexec:` address, relative or not, is the person's own and is started as written.
   A `PATH` names directories, so a file in a searched entry that links into a directory left out
@@ -3350,7 +3353,8 @@ file. A new spawn that looks a name up through
   a program for it to start, so that argument is still passed as an absolute path by the caller, as
   the inhibitor's `cat` is, and PATH-005 has a reviewer read it.
 - **What each start inherits is stated here.** The programs a `run` stage, a background job, a hook, a
-  language server, the AWS CLI, `doctor --push-identity` and `doctor --sandbox-check` start get this
+  language server, the AWS CLI, the browser opener `auth login chatgpt` starts,
+  `doctor --push-identity` and `doctor --sandbox-check` start get this
   process's environment without this agent's own credentials
   ([CRED-14](credential-protection.md#CRED-14)). Those of a `run` stage, a background job, a hook, a
   language server and `doctor --sandbox-check` are also given none of the names a person's
@@ -3373,6 +3377,7 @@ file. A new spawn that looks a name up through
   | `gh`, `sh` and the programs of a workflow's setup stages, and a workflow run again without the sandbox, in `doctor --sandbox-check` | reduced to the entries the lookup searches |
   | `ssh-keygen`, `ssh` and `git` in `doctor --push-identity` | reduced to the entries the lookup searches |
   | The connector authority | reduced to the entries the lookup searches |
+  | The browser opener `auth login chatgpt` starts | reduced to the entries the lookup searches |
   | A language server | bravebot's own, accepted: it runs code the project carries, and pyright is meant to use the virtualenv's `python3` ([LSP-5](tools/lsp.md#LSP-5), [Known costs](tools/lsp.md#known-costs)) |
   | The clipboard tools and `osascript` | reduced to the entries the lookup searches, on every platform: a tool that is a script or a launcher starts its interpreter by name |
   | The inhibitor `/caffeinate` starts | reduced to the entries the lookup searches, on every platform. On Linux the one name it is given, `cat`, is resolved first, and the other name `systemd-inhibit` can start is the program a `unixexec:` address in `DBUS_SYSTEM_BUS_ADDRESS` names. |
@@ -3479,6 +3484,9 @@ reconnect. A program named by an absolute path is not judged by any lookup and s
 `verified-by: bravebot_tui::editor::an_editor_with_no_searched_path_entry_left_does_not_search_the_current_directory`
 `verified-by: bravebot_bedrock::credentials::an_aws_only_in_a_directory_a_stage_may_write_is_reported_as_not_installed`
 `verified-by: bravebot_agent::workspace::every_directory_a_stage_may_write_is_kept_out_of_the_search_for_programs`
+`verified-by: bravebot_cli::chatgpt::the_opener_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_cli::chatgpt::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
+`verified-by: bravebot_cli::chatgpt::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_agent::confine::a_directory_a_policy_grants_writes_in_is_kept_out_of_the_search_for_programs`
 `verified-by: bravebot_agent::confine::describing_a_line_keeps_nothing_out_of_the_search_for_programs`
 `verified-by: bravebot_tui::clipboard::a_copy_tool_found_only_in_a_directory_a_stage_may_write_is_not_started`

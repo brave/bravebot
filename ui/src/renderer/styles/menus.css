@@ -49,3 +49,5 @@ leo-menu-item[aria-disabled='true'] { color: var(--ink-disabled); cursor: defaul
   --leo-icon-color: var(--ink-accent);
 }
 .menu-detail { color: var(--ink-tertiary); }
+/* A command a picker warning names is code, in the code type role like the rest of the window's code. */
+.model-status code { font: var(--type-code); overflow-wrap: anywhere; }

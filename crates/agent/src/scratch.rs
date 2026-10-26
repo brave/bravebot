@@ -189,17 +189,18 @@ impl ScratchDirectory {
         &self.path
     }
 
-    /// Whether the name still leads to the directory the session made: a directory and not a link,
-    /// and the one its lock is held on.
-    ///
-    /// The name is not followed, so a link at it is judged as a link and not as the directory it
-    /// leads to. A name that is gone is not that directory either.
+    /// [`ScratchDirectory::stands_as_made_at`] for the path the session made the directory at.
+    #[cfg(test)]
     pub fn stands_as_made(&self) -> bool {
         self.stands_as_made_at(&self.path)
     }
 
-    /// [`ScratchDirectory::stands_as_made`] for `path`, which a caller resolved first so that the
-    /// answer is about the path it goes on to use.
+    /// Whether `path` still leads to the directory the session made: a directory and not a link,
+    /// and the one its lock is held on. A caller resolves `path` first so that the answer is about
+    /// the path it goes on to use.
+    ///
+    /// The name is not followed, so a link at it is judged as a link and not as the directory it
+    /// leads to. A name that is gone is not that directory either.
     pub fn stands_as_made_at(&self, path: &Path) -> bool {
         let Ok(found) = std::fs::symlink_metadata(path) else {
             return false;

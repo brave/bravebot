@@ -421,17 +421,24 @@ onboarding-import-many =
 # where somebody following that route lands, and what they have to do is name one of their own.
 onboarding-name-a-configured-model =
     A service is configured, but the model in force is one of Brave's: name one of your own with the `model` key in ~/.bravebot/settings.json, or with --model on a one-shot run. `bravebot doctor` lists what each configured service offers.
+# Said instead of the routes where a ChatGPT sign-in is stored and the model in force is one of
+# Brave's. The sign-in is the service that is configured, so what is left is naming one of its
+# models, which chatgpt-use-by-name says on the line after.
+onboarding-chatgpt-signed-in = A ChatGPT sign-in is stored, but the model in force is one of Brave's.
 onboarding-pick-one = Configure one of these, then run bravebot again:
 onboarding-bedrock =
     AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.
 onboarding-openrouter =
     OpenRouter, or any other OpenAI-compatible gateway: put a `provider` block named for it in ~/.bravebot/settings.json, with the variable that holds its API key and the models to offer.
-# Last of the three, and said to be last, because these models are reached through Brave's AI
+# The ChatGPT route: a person types the command and signs in in the browser it opens.
+onboarding-chatgpt =
+    A ChatGPT Plus or Pro account, if you have one: run `bravebot auth login chatgpt` in a terminal and sign in in the browser it opens. Its models are then offered in /model as chatgpt/<model>.
+# Last of the four, and said to be last, because these models are reached through Brave's AI
 # gateway, which has open problems of its own. It is still the shortest route for somebody who
 # already subscribes, so it is offered rather than left out.
 onboarding-leo =
-    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the two above for now.
-# Said after either, so it reads after the three routes and after the one line alike.
+    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the three above for now.
+# Said after either, so it reads after the routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -511,7 +518,7 @@ doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
 doctor-outlives-chatgpt-account =
-    an access token OpenAI already issued from the refresh token, which may run to its own expiry: whether revoking the sign-in reaches it has not been observed
+    an access token OpenAI already issued from the refresh token: it was refused within seconds after the refresh token was revoked at OpenAI's revocation endpoint (one account, one revocation, a call this program does not make), and whether signing out of the account or removing this program's access in its settings ends it has not been observed
 # Whether a derived credential is bound to the party that presents it. Shown only for the
 # credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
 # two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
@@ -973,6 +980,8 @@ repeated-call-refused = { $tool } was not run: the same call { $count } times in
 repeated-call-stopped = stopped at a repeated call: { $tool } made { $count } times in a row
 # Said when a turn's model kept failing and the person's fallbackModel takes over for the rest of it.
 fallback-model-in-use = { $from } failed as { $category }; this turn moves to { $to }
+# The same where the failure was the ChatGPT account's, which is said in its own sentence.
+fallback-model-in-use-account = { $from } failed ({ $problem }); this turn moves to { $to }
 # Said instead where the turn has no tools left, so the model is asked for an answer rather than
 # for the work.
 ceiling-stop-answer-now = the model reached its output limit of { $tokens } tokens; asking it for a shorter answer
@@ -1084,7 +1093,8 @@ auth-ways-heading = Ways to sign in to a model service:
 auth-way-leo = Brave Leo Premium, from a Brave install that subscribes
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-auth-way-gateway = A key for a gateway a provider block in settings names, typed here and kept by bravebot
+# The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
+auth-way-gateway = A key for { $services } or a gateway a provider block in settings names, typed here and kept by bravebot
 auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
@@ -1139,22 +1149,39 @@ auth-logout-import =
 # likely the key.
 auth-gateway-key-argument =
     a key is never a command-line argument, where other programs can read it and the shell keeps it: run bravebot auth login gateway { $id } and type the key when asked
+auth-gateway-extra-word =
+    { $command } takes an id and nothing after it: a word there is not repeated, since it may be a key
 auth-gateway-not-while-incognito =
     an incognito session writes nothing to disk, and storing a key is a write: run bravebot auth login gateway without --incognito
+# The path is the machine-level settings file an administrator writes, which names no gateway.
 auth-gateway-none-configured =
-    no gateway is configured: add a provider block to settings.json, or run bravebot auth login import, then store its key here
-auth-gateway-not-configured = that is not the id of a provider block; the gateways configured are { $ids }
+    { $path } names the gateways for every user of this machine and names none, so there is no gateway to store a key for
+# The ids are the ones a key can be stored for: the gateways configured, then the services bravebot
+# knows that no provider block names.
+auth-gateway-not-configured = that is not the id of a gateway a key can be stored for; they are { $ids }
+# As auth-gateway-not-configured, where the machine-level settings file names the gateways, so the
+# services bravebot knows are not offered. The path is that file.
+auth-gateway-not-configured-managed =
+    that is not the id of one of the gateways { $path } names for every user of this machine, which are the only ones a key can be stored for; they are { $ids }
 auth-gateway-needs-a-terminal =
     a gateway key is typed at a terminal with nothing drawn, so bravebot auth login gateway needs a terminal
 auth-gateway-no-home = there is no home directory to store the key in
 auth-gateway-keys-unreadable =
     { $path } is not a file of keys bravebot wrote, so it was left as it is and nothing was changed
-auth-gateways-heading = Gateways configured:
+auth-gateways-heading = Services a key can be stored for:
+# As auth-gateways-heading, where the machine-level settings file names the gateways. The path is
+# that file.
+auth-gateways-heading-managed =
+    The gateways { $path } names for every user of this machine, which are the only ones a key can be stored for:
 # Beside a gateway in the list under auth-gateways-heading.
 auth-gateway-key-stored = a key stored
 auth-which-gateway = Which one? Type its number or its id, or nothing to stop:
 auth-not-a-listed-gateway = { $answer } is not one of the gateways listed
 auth-gateway-key-held = A key is already stored for { $id }.
+# Said where no provider block names the id, so no session sends the key. Answering no keeps the
+# key and has the block recorded.
+auth-gateway-key-held-unrecorded =
+    A key is already stored for { $id }, and no provider block names it, so no session sends it. Answering no keeps it and records the block in settings.
 auth-gateway-replace = Replace it?
 # Asked with echo off, so nothing appears as the key is typed or pasted.
 auth-gateway-key-question = Key for { $id }, sent to { $host } (not shown as you type):
@@ -1163,6 +1190,25 @@ auth-gateway-not-read = the key could not be read from the terminal: { $error }
 auth-gateway-not-stored = the key was not stored: { $path }: { $error }
 auth-gateway-stored =
     the key for { $id } is stored in { $path }, and sessions started from now on send it to { $host }
+# Said where no provider block named the id, once the block is recorded for a key already stored.
+# The file is the person's own settings file, and the host is the one compiled in for the id.
+auth-gateway-recorded =
+    { $file } names { $id } under provider now, so sessions started from now on send the key stored for it to { $host }
+# Said where no provider block named the id, once its key is stored and the block recorded.
+auth-gateway-stored-and-recorded =
+    the key for { $id } is stored in { $path }, and { $file } names { $id } under provider now, so sessions started from now on send it to { $host }
+# Said before the key is asked for, where a block naming the id would have to be recorded and the
+# settings file cannot take one. The problem is one sentence about that file.
+auth-gateway-cannot-record =
+    a key for { $id } is sent only once a provider block names { $id }, and none can be recorded, so no key was asked for: { $problem }
+# Said once the key is stored and the block naming its id could not be recorded. The entry is the
+# text to add under provider by hand, and the problem is one sentence about the file.
+auth-gateway-not-recorded =
+    the key for { $id } is stored, and no session sends it until a provider block names { $id }: add { $entry } to { $file } ({ $problem })
+# Where provider holds something that is not a block of entries, or an entry for the id that
+# configures no service.
+auth-gateway-entry-not-a-service =
+    { $file } has a provider that is not a block of entries, or an entry for { $id } that configures no service
 # The variable is one the provider block's env names.
 auth-gateway-variable-wins =
     { $variable } is set, and while it is, a session sends its value instead of the stored key
@@ -1183,9 +1229,15 @@ auth-status-not-signed-in = not signed in: { $detail }
 auth-status-unusable = unusable: { $detail }
 auth-status-none-usable = no sign-in is usable
 auth-status-not-all-usable = a sign-in asked about is not usable
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock or gateway
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway or chatgpt
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
+# Said of a gateway when no key is stored for any service and no provider block names a gateway.
+auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
+# The id is a service bravebot knows that no provider block names, so no session sends a key to it.
+auth-status-gateway-none-stored = no key is stored for { $id }; run bravebot auth login gateway { $id }
+auth-status-gateway-unrecorded =
+    a key is stored for { $id } and no provider block names it, so no session sends it; run bravebot auth login gateway { $id } to record the block
 # The instant is the one the access token expires, written as 2026-10-22T21:05:27Z. The token is
 # replaced when it is next used, so a past instant is still signed in.
 auth-status-chatgpt-expires = the access token expires { $expires }
@@ -1216,7 +1268,26 @@ chatgpt-replace = Replace it?
 chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
-chatgpt-use-by-name = Pick one of the account's models in /model to use this sign-in, or name one, as in bravebot --model chatgpt/<model>
+# What the sign-in command ends with where the account lists models and a start would ask which one to
+# use (chatgpt-start-question): running bravebot is the way to choose. The commands name a model together
+# with the prompt or the task that starts something.
+chatgpt-use-by-asking = Run bravebot to be asked which of the account's models to use, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them.
+# The same where a start would not ask, because a service of the person's own is configured or a model
+# is already in force: nothing is said of being asked.
+chatgpt-use-by-naming = Name one of the account's models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them.
+# What a refusal says. A refusal is also what a one-shot run, a start that names a model and `doctor` end
+# in, and none of those asks, so the last sentence says which start does: one on its own. Both commands
+# name a model together with the prompt or the task that starts something, since
+# `bravebot --model chatgpt/<model>` alone starts nothing. /model is reached once a session is open.
+chatgpt-use-by-name = Name one of the account's models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them. Started on its own, in a terminal outside an incognito session, bravebot asks which one to use when the account lists its models.
+# What the command says after the sign-in is stored when the account's listing answered with no model,
+# could not be had, or was refused in a code that names the account. The sign-in is stored in each. Of the
+# two for a listing that could not be had, the second is for an account whose picker offers the built-in
+# list in its place.
+chatgpt-reaches-no-model = This ChatGPT account reaches no model through bravebot, so /model offers none. The sign-in stays stored.
+chatgpt-listing-unreadable = The account's models could not be listed. Name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
+chatgpt-listing-compiled = The account's models could not be listed, and once a session is open /model offers a built-in list that may name a model the account cannot reach. Name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
+chatgpt-listing-refused = The account's models could not be listed: { $refusal }
 chatgpt-forgotten =
     forgot the stored ChatGPT sign-in. It stays valid at OpenAI until it is ended there: sign out of ChatGPT, or remove bravebot's access in the account's settings
 chatgpt-nothing-to-forget = no ChatGPT sign-in is stored
@@ -1234,6 +1305,11 @@ chatgpt-failed-client-changed =
     the browser returned a different client from the one stored, so the sign-in stopped and nothing was changed; run bravebot auth logout chatgpt and sign in again
 chatgpt-failed-no-use-scope =
     the sign-in did not allow bravebot to use the subscription's tokens, so nothing was stored; run bravebot auth login chatgpt and allow it, or use an API key with the openai gateway
+chatgpt-failed-id-token =
+    the ID token the authorization server returned did not verify, so the sign-in stopped and nothing was stored; run bravebot auth login chatgpt to try again
+chatgpt-failed-clock =
+    the clock of this computer is set before 1970, so the sign-in cannot tell when the ID token expires and nothing was stored; set the clock, then run bravebot auth login chatgpt to try again
+chatgpt-failed-key-set = the keys that verify the sign-in could not be fetched: { $reason }; nothing was stored
 chatgpt-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
 chatgpt-class-refused = the authorization server refused the request
 chatgpt-class-rate-limited = the authorization server is limiting requests; try again later
@@ -1247,6 +1323,9 @@ chatgpt-account-unusable =
 chatgpt-account-malformed =
     the stored ChatGPT sign-in is unusable: { $defect }; run bravebot auth login chatgpt to sign in again, or bravebot auth logout chatgpt to forget it
 chatgpt-account-unwritable = the ChatGPT sign-in could not be stored: { $detail }; nothing was changed
+# Said once in the turn that renewed the sign-in, where the file could not take the renewal. It names no
+# path and quotes nothing the file or the system said.
+chatgpt-renewal-unwritten = the ChatGPT sign-in was renewed and could not be saved, so it lasts only until bravebot exits; check that the folder it is kept in has room and can be written to, and if the next start says the sign-in ended, run bravebot auth login chatgpt
 chatgpt-defect-empty = the file holds nothing, which an interrupted write leaves behind
 chatgpt-defect-not-json = the file is not valid JSON
 chatgpt-defect-other-version = it was written by another version, and this build reads version 1
@@ -1781,6 +1860,8 @@ model-picker-heading = Select model
 model-picker-keys = ↑↓ choose  ·  Enter select  ·  type to search  ·  Esc keep current
 model-picker-search-placeholder = Search
 model-picker-nothing-matches = nothing matches that
+model-picker-loading = loading models…
+model-picker-listing-lost = the model list was not delivered
 picker-current = current
 
 # Choosing how hard to think. The level names are the words sent and stored, so they are not
@@ -2373,6 +2454,9 @@ status-effort = Effort
 status-effort-chosen = chosen with /effort
 status-effort-default = whatever the service does on its own
 status-effort-not-read = chosen with /effort, but this model reads none
+# The level shown is the one a ChatGPT session began with, which that account is sent for the whole
+# session. The level chosen since is a level word or the word for the default.
+status-effort-kept-for-account = the level this ChatGPT session began with; { $chosen } was chosen with /effort and applies from the next session
 status-theme = Theme
 status-theme-chosen = chosen with /theme
 status-served = Answered by
@@ -2791,6 +2875,8 @@ watching-keys-stop = x stops it
 watching-nothing-yet = nothing yet
 # The list of every delegate this turn has spawned, with the session above them.
 watching-list-title = delegates
+# The list of what commands printed, opened by /outputs and its chord and not by the watch key.
+watching-outputs-title = command output
 watching-list-keys = up / down moves  ·  enter opens  ·  q closes
 # The first row of the list: the conversation the delegates were spawned from.
 watching-list-session = session
@@ -2799,11 +2885,16 @@ watching-calls = { $count ->
     [one] { $count } call
    *[other] { $count } calls
     }
-# Said on the bottom line once the view has anything to open, which is the one row that outlasts
-# the turn that drew it. The count is there because a key with nothing behind it is not worth
-# pressing. Every kind of row is counted together, since one key opens the list holding all of
-# them and naming one kind here would undercount the rest.
+# Said on the bottom line once the agents list has anything to open, which is the one row that
+# outlasts the turn that drew it. The count is there because a key with nothing behind it is not
+# worth pressing. It counts the asides and the delegates, which the key opens, and nothing a
+# command printed: those have their own clause below.
 watching-hint = { $chord } { $count } to open
+# The same line's clause for what commands printed, said while there is any. The chord and the
+# slash command both open them, and the count is of what they open.
+outputs-hint = { $chord } or { $command } { $count } to open
+# Left in the transcript by /outputs when no command has run.
+outputs-none = no command has run in this session, so there is no output to open
 # Said on the bottom line for as long as a command the turn is waiting on can be moved, and gone
 # the moment it ends or is moved. Short, because it shares the line with everything else there.
 background-hint = { $chord } to background
@@ -2852,19 +2943,41 @@ panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
-# Where the info panel has no room for the whole plan.
-panel-more = +{ $count } more
-# Where the info panel's plan starts past its first rows, counting those it left out above.
-panel-earlier = +{ $count } earlier
-# The same, with rows left out below as well.
-panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+# Where the info panel has no room for the whole plan, a row after the rows it draws says how many
+# rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
+# The forms of the other two are the same in English and differ in other languages.
+panel-hidden-to-do = +{ $count } to do
+panel-hidden-done = { $count ->
+    [one] +{ $count } done
+   *[other] +{ $count } done
+    }
+panel-hidden-cancelled = { $count ->
+    [one] +{ $count } cancelled
+   *[other] +{ $count } cancelled
+    }
+# The info panel's plan names the key that prints it whole, as its last row names the key that hides the panel.
+panel-todos = { $chord } whole plan
+# What the `?` list says the key that prints the whole plan does, after the key.
+shortcut-todos = print the whole plan
+# What /todos puts in the transcript above the plan it prints, and what it says where there is none.
+todos-heading = plan: { $done } of { $total } done
+# The same where some of its tasks were cancelled, which are counted apart from the done ones.
+todos-heading-cancelled = plan: { $done } of { $total } done, { $cancelled } cancelled
+todos-none = there is no plan in this session yet
+# The status each task of a printed plan carries beside its mark.
+todos-status-pending = pending
+todos-status-active = in progress
+todos-status-done = completed
+todos-status-cancelled = cancelled
 
-# The files state of the info panel, which lists what the session wrote (`/files`).
+# The files state of the info panel, which lists what the session wrote (`/diff`).
 # Its heading, above the list: how many files the session's write calls changed.
 files-heading = { $count ->
     [one] { $count } file changed
    *[other] { $count } files changed
     }
+# The control at the right end of that heading, which ends the state.
+files-close = x
 # Beside that heading after a resume, since the session record holds no write's changes.
 files-earlier-not-kept = earlier edits are not kept
 # The first and last rows of a list longer than its room, counting the files left out.
@@ -2872,19 +2985,35 @@ files-more-above = ↑ { $count } more above
 files-more-below = ↓ { $count } more below
 # The last row of that list when files arrived after the reader last pressed a key.
 files-more-below-new = ↓ { $count } more below, { $new } new
+# The row above the edits when some of their rows are scrolled out of view above, and the row below
+# them for those out of view below.
+files-rows-above = { $count ->
+    [one] ↑ { $count } row above
+   *[other] ↑ { $count } rows above
+    }
+files-rows-below = { $count ->
+    [one] ↓ { $count } row below
+   *[other] ↓ { $count } rows below
+    }
 # Over each edit to the highlighted file: its place among them and the turn it was made in.
 files-edit-header = edit { $index } of { $total }, turn { $turn }
+# The bar above the edits: the control for the edit before the one at the top, the place of that
+# edit among them, and the control for the edit after it.
+files-previous-edit = ← previous
+files-edit-position = edit { $index } of { $total }
+files-next-edit = next →
 # After the highlighted file's name.
 files-edit-count = { $count ->
     [one] { $count } edit
    *[other] { $count } edits
     }
-# Left in the transcript by /files before the session has written a file.
+# Left in the transcript by /diff before the session has written a file.
 files-nothing-written = no file has been written in this session yet
-# Left in the transcript by /files on a terminal too narrow for the state.
+# Left in the transcript by /diff on a terminal too narrow for the state.
 files-too-narrow = The files view needs a terminal at least { $columns } columns wide.
-# Said on the bottom line while the state is open, naming its keys.
-files-hint = ↑↓ file  ·  PgUp PgDn scroll  ·  [ ] edit  ·  q back
+# The last row of the panel while the state is open, naming its keys, and the hint line's where
+# the panel is not drawn.
+files-keys = ↑↓ file  ←→ edit  PgUp PgDn scroll  q back
 # The info panel's Files section: its heading, and how many files the session wrote.
 panel-files = Files
 panel-files-total = { $count ->
@@ -2972,8 +3101,10 @@ command-after = Send a prompt once, after a delay
 command-goal = Keep working until a condition you set is judged met
 command-watch = List the files this session is watching, and stop one by its number
 command-jobs = List this turn's background jobs, and stop one by its name
+command-outputs = Open what the commands this session ran printed, background jobs included
 command-panel = Show or hide the info panel beside the transcript
-command-files = List the files the session wrote and show every edit to the one highlighted
+command-diff = List the files the session wrote and show every edit to the one highlighted
+command-todos = Print the whole plan, every task with its status
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one
@@ -3062,6 +3193,7 @@ session-resume-already-here = that is the session already open
 session-resume-no-such = no session with that id in this directory
 # Left in the transcript when /resume names a session a running background session holds.
 session-resume-held-by-background = that session is held by a running background session, so it cannot be resumed here
+session-resume-held-by-another-process = that session is open in another terminal or window, so it cannot be resumed here
 # Left in the transcript when a prompt named a session with @session:<id> and part of it was added.
 session-mention-added = added { $chars } characters of session { $id } to the message
 session-mention-added-cut = added the newest { $chars } characters of session { $id } to the message, and left out older turns
@@ -3218,6 +3350,9 @@ session-permissions-skipped =
     --dangerously-skip-permissions: nothing will be asked before a write, a command, or reading a
     file nobody vouched for. shift-tab to change
 session-directory-not-added = could not add { $directory }: { $problem }
+# The reason given for a name relative to a working directory whose own name is not text. Nothing
+# written as text names that directory, so no path is made from it.
+session-directory-root-not-text = the working directory's name is not text, so a name relative to it cannot be resolved; give the path in full
 # Said when the session has nowhere of its own to write. Not a failure to start, but a person whose
 # turn is told there is nowhere to put an intermediate file has nothing else to read it off.
 session-scratch-unavailable = no scratch directory this session: { $problem }
@@ -3230,6 +3365,17 @@ session-using-model-from = using { $model } from { $service }
 session-signing-in = signing in to AWS; follow the instructions below, and this returns when it is done
 session-context-budget = compacting above { $budget } tokens, as this model advertises
 session-models-unavailable = could not list models: { $problem }
+# Said when the picker opens with a ChatGPT sign-in stored and its listing could not be had. The first
+# is for a sign-in file that could not be read where a settings entry names the models, which offers no
+# row. The second is for a listing that could not be had, where the picker shows the built-in list. The
+# third is for a listing the service refused in a code that names the account, where signing in again
+# is no remedy.
+session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
+session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
+session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
+# Said when the picker opens and a gateway whose settings name no models could not be asked for its list,
+# so none of its models are offered. A gateway whose key is missing is not asked and is not said here.
+session-gateway-models-unreadable = could not read the list of models from { $gateway }, so none of its models are offered; try again, or name one, as in `bravebot -i "<prompt>" --model { $id }/<model>` or `bravebot "<task>" --model { $id }/<model>`
 session-theme-set = theme { $theme }
 session-no-such-theme = no theme named { $theme }; try /theme for the list
 session-editing-vi = editing the way vi does; esc for commands, i to type
@@ -3238,6 +3384,9 @@ session-effort-set = thinking at { $effort }
 session-effort-unset = thinking as the service decides
 session-no-such-effort = no effort level named { $effort }; try /effort for the list
 session-effort-not-read = this model reads no effort level, so requests carry none
+# Said where the level chosen is not the one a session on a ChatGPT model began with, because that
+# account is sent one level for a whole session. Both are level words or the word for the default.
+session-effort-kept-for-account = a ChatGPT session keeps the effort level it began with, { $began }, so { $chosen } applies from the next session, which /clear begins
 session-language-in-use = the interface is in { $language }; catalogs: { $available }; /language <tag> saves a choice for the next start and /language auto drops it
 session-language-saved = saved choice: { $language }
 session-language-set = the interface will be in { $language } from the next start, unless BRAVEBOT_LOCALE is set, which answers first
@@ -3316,6 +3465,13 @@ update-how = update with: { $command }
 update-not-installed-by-us =
     this copy was not installed by the npm package or by the install script, so there is no update
     command for it. A build from source is updated by pulling and building again.
+# Said once, on the startup screen of the first launch that sends crash reports (CRASH-9). The key
+# and the variable are the two ways of turning it off, and are not a translator's to reword.
+crash-reports-notice =
+    if bravebot crashes, a report is sent to Brave on the next launch. It holds the version, your
+    operating system and the line of bravebot's source that failed, and never your prompts, files
+    or keys. To turn this off, set crashReports to false in your settings file, or set
+    BRAVEBOT_CRASH_REPORTS=0.
 session-started-server = running the { $language } language server for this session ({ $program })
 # Said when a person agrees to offer a server's tools to the model. The list is recorded, so it
 # is offered again in later sessions until the server's list changes.
@@ -3380,6 +3536,79 @@ failure-internal = something went wrong here
 # is said the same way whatever went wrong.
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, after { $attempts } attempts
+# A failure of a ChatGPT account is said in the sentence of its own step, the one a one-shot run
+# reports for it (CHATGPT-8). No count of tries is added, and a status follows only the sentence of a
+# refusal that came with one.
+failure-account-not-signed-in = not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in
+failure-account-ended = the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again
+failure-account-token-refused = OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login chatgpt` to sign in again
+failure-account-unusable = the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why
+failure-account-usage-limit = OpenAI says this ChatGPT account has reached its usage limit
+failure-account-not-permitted = OpenAI does not allow this ChatGPT account to be used this way
+# A refusal that came as a 429 with a wait it asked for says the wait after its sentence. The request is
+# not sent again, so the whole of the wait is ahead.
+failure-account-wait =
+    { $minutes ->
+        [one] { $what }, and the service asked for a wait of about 1 minute
+       *[other] { $what }, and the service asked for a wait of about { $minutes } minutes
+    }
+failure-account-renewal-refused = the ChatGPT sign-in could not be renewed: the request was refused
+failure-account-renewal-rate-limited = the ChatGPT sign-in could not be renewed: the request was rate-limited
+failure-account-renewal-unavailable = the ChatGPT sign-in could not be renewed: the request was met with an unavailable service
+failure-account-renewal-incomplete = the ChatGPT sign-in could not be renewed: the request was answered in a shape that could not be read
+failure-account-renewal-transport = the ChatGPT sign-in could not be renewed: the request was not completed
+
+
+## What the desktop window says of the ChatGPT account
+
+# One sentence each, in sentence case, saying what happened and what to do, for the window's error card,
+# its run card and the model picker. They are chosen from the step that failed and repeat nothing OpenAI,
+# the sign-in file or a settings file said. The window draws { $command } as code, so it is passed in and
+# sent beside the sentence and is not written into the words with backticks. The terminal's sentences for
+# the same failures are lower case and take the status of a refusal after them, which a card cannot.
+#
+# The window and an editor read the reference catalog whatever language the machine is set to
+# (`bravebot-rpc` chooses en-US, `bravebot-host` and `bravebot-acp` choose none), so no program reads the
+# French of these messages. They are kept so that both catalogs hold the same messages and
+# contrib/untranslated-messages.txt lists no gap.
+desktop-chatgpt-not-signed-in = You are not signed in to ChatGPT, so run { $command } in a terminal to sign in.
+desktop-chatgpt-ended = The ChatGPT sign-in has ended, so run { $command } in a terminal to sign in again.
+desktop-chatgpt-token-refused = OpenAI refused the ChatGPT sign-in's access token, so run { $command } in a terminal to sign in again.
+desktop-chatgpt-unusable = The stored ChatGPT sign-in could not be read, so run { $command } in a terminal to see why.
+desktop-chatgpt-renewal-refused = OpenAI refused to renew the ChatGPT sign-in, so try again later.
+desktop-chatgpt-renewal-rate-limited = The ChatGPT sign-in could not be renewed because OpenAI is limiting requests, so try again later.
+desktop-chatgpt-renewal-unavailable = The ChatGPT sign-in could not be renewed because OpenAI's sign-in service is unavailable, so try again later.
+desktop-chatgpt-renewal-incomplete = The ChatGPT sign-in could not be renewed because the reply from OpenAI was incomplete, so try again.
+desktop-chatgpt-renewal-transport = The ChatGPT sign-in could not be renewed because OpenAI could not be reached, so check the connection and try again.
+desktop-chatgpt-usage-limit = OpenAI says this ChatGPT account has reached its usage limit, so try again later.
+# Said where the refusal came as a 429 that asked for a wait, for either refusal, as the terminal says it.
+# The request is not sent again, so the whole of the wait is ahead.
+desktop-chatgpt-usage-limit-wait =
+    { $minutes ->
+        [one] OpenAI says this ChatGPT account has reached its usage limit, so try again in about 1 minute.
+       *[other] OpenAI says this ChatGPT account has reached its usage limit, so try again in about { $minutes } minutes.
+    }
+desktop-chatgpt-not-permitted = OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.
+desktop-chatgpt-not-permitted-wait =
+    { $minutes ->
+        [one] OpenAI does not allow this ChatGPT account to be used this way and asked for a wait of about 1 minute, so use another account or another service's model.
+       *[other] OpenAI does not allow this ChatGPT account to be used this way and asked for a wait of about { $minutes } minutes, so use another account or another service's model.
+    }
+# What the window narrates where a turn goes on or moves on after the account failed on the way: a summary
+# it could not make, and the model it moved off for the person's fallbackModel. The first is followed by the
+# account's sentence above, so each line is one sentence.
+desktop-compaction-failed = The conversation could not be summarised, so the turn goes on with the messages it has.
+desktop-chatgpt-fell-back-rate-limited = This turn moves from { $from } to { $to } because the ChatGPT sign-in could not be renewed while OpenAI is limiting requests.
+desktop-chatgpt-fell-back-unavailable = This turn moves from { $from } to { $to } because the ChatGPT sign-in could not be renewed while OpenAI's sign-in service is unavailable.
+desktop-chatgpt-fell-back = This turn moves from { $from } to { $to } because the ChatGPT account could not be used.
+# The model picker's warnings, one for each way the account's models could not be listed. The first is for a
+# sign-in file that could not be read where a settings entry names the models, which offers no row. The
+# second is for a listing that could not be read, where the picker shows the built-in list. The last two are
+# for a listing the service refused in a code that names the account, where signing in again is no remedy.
+desktop-chatgpt-models-unreadable = Could not load models from ChatGPT, so try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-models-compiled = Could not load models from ChatGPT, so the list shown is built in and may name a model the account cannot reach; try again, or run { $command } in a terminal to sign in again.
+desktop-chatgpt-models-usage-limit = Could not load models from ChatGPT because the account has reached its usage limit, so try again later.
+desktop-chatgpt-models-not-permitted = Could not load models from ChatGPT because OpenAI does not allow this account to be used this way, so use another account or another service's model.
 
 
 ## Repeating a prompt
@@ -3696,6 +3925,8 @@ compact-done =
     summarised { $summarised } earlier messages, keeping the last { $kept } as they are
 compact-nothing-to-do = there is nothing to summarise yet
 compact-failed = the conversation could not be summarised: { $problem }
+# Said by a turn that asked for a summary and did not get one, which carries on with the history it has.
+compact-failed-and-continuing = the conversation could not be summarised: { $problem }; continuing with the existing context
 turn-ended-unexpectedly = the turn ended unexpectedly
 
 
@@ -4025,6 +4256,9 @@ turn-named-skill-not-shown = { $skill } was named but could not be shown to the 
 # they did not make.
 skill-asks-a-model = { $skill } asks the rest of this turn of { $model }
 skill-asks-an-effort = { $skill } asks the rest of this turn at { $effort } effort
+# The same skill on a ChatGPT model, whose account is sent the level the session began with for all
+# of it, so the turn goes on as it was. The skill and the level are its file's own words.
+skill-effort-kept-for-account = { $skill } asks the rest of this turn at { $effort } effort, but a ChatGPT session keeps the level it began with, so this turn does not change
 # The skill loads and the turn goes on as it was, rather than stopping: a skill is not the thing the
 # person asked for, so a model they cannot reach is a line of its file that does nothing.
 skill-model-needs-sign-in = { $skill } asks for { $model }, which needs a sign-in first, so its rounds keep this session's model
@@ -4249,6 +4483,8 @@ bg-restart-needs-a-terminal = { $name } is stopped, and only a terminal can star
 bg-interrupted-needs-a-terminal = { $name } was interrupted, and only a terminal can start it again.
 bg-interrupted-not-repeated = { $name } was interrupted in the middle of a turn. Starting it again does not repeat that turn.
 resume-held-by-background = { $name } is held by a running background session. Join it with: bravebot attach { $id }
+resume-held-by-another-process = { $id } is open in another terminal or window, so it cannot be resumed here. Copy it with: bravebot --fork { $id }
+resume-changed-while-opening = { $id } was written by another process while it was being opened. Resume it again.
 
 # `bravebot doctor --sandbox-check`: git, gh, make, cargo and the other everyday programs, run the way a
 # session runs them. A row is a workflow; a row that failed says where, what to do, and where the
@@ -4346,3 +4582,26 @@ deep-link-started-in-home = The link named { $dir }, which is not a directory yo
 # Under the box while the words an outside link put there are still in it.
 deep-link-banner = Prompt from an external link, not sent yet  ·  read it, then Enter sends it
 deep-link-banner-long = Prompt from an external link, { $count } characters, not sent  ·  scroll and review it all first
+
+## Choosing one of a ChatGPT account's models at a start that nothing serves
+
+# Said above the numbered rows at a start where a ChatGPT sign-in is stored, the model in force is one of
+# Brave's and the account lists models.
+chatgpt-start-heading = A ChatGPT sign-in is stored, and the account offers these models:
+# One row: the name the service shows and the name to give --model. Both are the service's text.
+chatgpt-start-row = { $name } ({ $key })
+chatgpt-start-question = Which one will bravebot use? Type its number, or nothing to stop:
+# Said after the pick is recorded. The name is the service's text.
+chatgpt-start-chosen = Using { $name }. It is remembered for the next start, and /model changes it.
+# Said instead where what the start reads back is not the pick: the name is one that is not kept or the write
+# failed. The start is then refused as it is where nothing is picked.
+chatgpt-start-not-remembered = Could not remember { $name }, so no model is chosen.
+
+## A model the ChatGPT account does not offer
+
+# Said where the serving host refuses the model of a turn because the account does not offer it
+# (CHATGPT-8). The first is the terminal's and the one-shot run's, lower case with a second sentence for
+# the remedy, and the second is the window's, one sentence in sentence case. Neither names the model or
+# quotes the service, and neither sends the person to sign in again: the refusal is of the model.
+failure-account-model-not-offered = OpenAI does not offer that model to this ChatGPT account. Choose another model
+desktop-chatgpt-model-not-offered = OpenAI does not offer that model to this ChatGPT account, so choose another model.

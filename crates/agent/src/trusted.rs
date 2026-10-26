@@ -463,7 +463,7 @@ impl Store {
         if left.is_empty() {
             std::fs::remove_file(&self.path)?;
         } else {
-            crate::mcp::replace(&self.path, left)?;
+            crate::home::replace(&self.path, left)?;
         }
         Ok(true)
     }

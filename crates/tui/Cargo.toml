@@ -18,6 +18,7 @@ bravebot-agent = { path = "../agent" }
 # The model picker lists what the endpoint offers, and asking it is this crate's own call
 # rather than something a turn does.
 bravebot-aichat = { path = "../aichat" }
+bravebot-backtrace = { path = "../backtrace" }
 bravebot-config = { path = "../config" }
 bravebot-core = { path = "../core" }
 # What a dropped file's name says it is, which the desktop window asks as well.
@@ -48,6 +49,11 @@ unicode-width = { workspace = true }
 rustix = { workspace = true, features = ["event", "fs", "process"] }
 
 [dev-dependencies]
+# The tests of what the interface keeps and draws of a failed ChatGPT turn sign in to a stand-in and
+# run the turns against it. The seams are on for a build of this crate's tests alone, and a release
+# build refuses them (CHATGPT-2).
+bravebot-config = { path = "../config", features = ["test-hosts"] }
 bravebot-mcp = { path = "../mcp" }
+bravebot-skus = { path = "../skus", features = ["test-hosts"] }
 bravebot-ui-bridge = { path = "../ui-bridge" }
 tempfile = { workspace = true }

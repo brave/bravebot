@@ -64,6 +64,7 @@ fn draft(
     let done = turn::commit_message(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &workspace,
         source,
         format,

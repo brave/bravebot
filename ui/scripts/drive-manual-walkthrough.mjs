@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { inheritedEnv, launchWorld, listening } from './drive-world.mjs'
+import { COMPOSER_NAME } from './drive-support.mjs'
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const root = mkdtempSync(join(tmpdir(), 'bravebot-walkthrough-'))
@@ -74,7 +75,7 @@ try {
   const send = async prompt => {
     const before = await completed()
     await page.getByRole('dialog', { name: 'Project trust', exact: true }).waitFor({ state: 'hidden' })
-    await page.getByRole('textbox', { name: 'Message the agent' }).fill(prompt)
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).fill(prompt)
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     return before
   }

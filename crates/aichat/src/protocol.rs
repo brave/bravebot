@@ -1100,13 +1100,36 @@ impl StreamAccumulator {
     }
 }
 
+/// The longest line [`SseDecoder`] reads, counted in the bytes before the `\n` that ends it, so the
+/// `\r` of a CRLF ending is counted.
+///
+/// The limit applies to every line, not only to `data:` ones, and a `data:` line is one payload,
+/// so it is also the largest event a service can send. A line is held until its newline arrives,
+/// so without a bound of the decoder's own, how much it holds is whatever its caller capped the
+/// body at. Every caller leaves that at `MAX_RESPONSE_BYTES` (2 MiB), so none reaches this one.
+/// Set far above any real event, as `MAX_FRAME_BYTES` is for the event stream Bedrock sends: the
+/// largest event is a reply's worth of text.
+const MAX_LINE_BYTES: usize = 16 * 1024 * 1024;
+
+// A limit below the cap would end a stream the transport had let through whole.
+const _: () = assert!(MAX_LINE_BYTES >= bravebot_net::MAX_RESPONSE_BYTES);
+
 /// Pull `data:` payloads out of an SSE byte stream.
 ///
 /// Framing only. This decides where one event ends and the next begins, which is transport
 /// structure exactly like a JSON envelope, and never looks at what a payload says.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SseDecoder {
     buffer: Vec<u8>,
+    limit: usize,
+    /// A line passed `limit`, so nothing more is read.
+    overrun: bool,
+}
+
+impl Default for SseDecoder {
+    fn default() -> Self {
+        Self::with_limit(MAX_LINE_BYTES)
+    }
 }
 
 impl SseDecoder {
@@ -1114,17 +1137,50 @@ impl SseDecoder {
         Self::default()
     }
 
+    /// A decoder that ends at a line longer than `limit`.
+    ///
+    /// The `sse` fuzz target builds one with a small limit. At the real one, which is far above
+    /// what any input the fuzzer builds can reach, the bound would never be tested.
+    #[doc(hidden)]
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            buffer: Vec::new(),
+            limit,
+            overrun: false,
+        }
+    }
+
+    /// How many bytes are buffered waiting for their newline, which is at most the limit after any
+    /// call to [`SseDecoder::push`].
+    #[doc(hidden)]
+    pub fn held(&self) -> usize {
+        self.buffer.len()
+    }
+
     /// Add bytes and take whatever complete `data:` payloads they finish.
     ///
     /// Events are separated by a blank line, and a payload split across reads stays buffered
     /// until it is whole: emitting a partial line would hand out truncated JSON.
+    ///
+    /// A line longer than `MAX_LINE_BYTES`, of any kind, ends the decoding. Payloads from the
+    /// lines before it are returned, and it and every byte after it are discarded, whatever the
+    /// reads were split into. Every caller accepts a reply only once a payload says it ended, so
+    /// the reply is reported as incomplete. Skipping only that line would let a reply with a line
+    /// missing finish.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
-        self.buffer.extend_from_slice(bytes);
         let mut payloads = Vec::new();
+        if self.overrun {
+            return payloads;
+        }
+        self.buffer.extend_from_slice(bytes);
 
         // Lines are self-delimiting here, so events are taken a line at a time rather than by
         // scanning for a blank-line boundary: a `data:` line is complete on its own.
         while let Some(position) = self.buffer.iter().position(|b| *b == b'\n') {
+            if position > self.limit {
+                self.give_up();
+                return payloads;
+            }
             let line: Vec<u8> = self.buffer.drain(..=position).collect();
             let line = String::from_utf8_lossy(&line);
             let line = line.trim_end_matches(['\r', '\n']);
@@ -1137,7 +1193,17 @@ impl SseDecoder {
             }
         }
 
+        if self.buffer.len() > self.limit {
+            self.give_up();
+        }
+
         payloads
+    }
+
+    /// Stop reading and let go of what is buffered.
+    fn give_up(&mut self) {
+        self.overrun = true;
+        self.buffer = Vec::new();
     }
 }
 
@@ -1385,6 +1451,119 @@ mod tests {
                 decode(&mut decoder, "data: {\"a\":1}\r\n\r\n"),
                 vec!["{\"a\":1}"]
             );
+        }
+
+        /// A reply with a line missing is not the reply the service wrote. If only the long line
+        /// were skipped, the lines after it could carry the reply's ending and the gap would be
+        /// accepted as a whole answer.
+        #[test]
+        fn a_line_over_the_limit_ends_the_decoding() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decode(&mut decoder, "data: 1\n"), vec!["1"]);
+            assert!(decode(&mut decoder, "data: 123456789\n").is_empty());
+            assert!(decode(&mut decoder, "data: 2\n").is_empty());
+            assert!(decode(&mut decoder, "data: 3\n").is_empty());
+        }
+
+        /// Lines before the long one in the same read are whole events, and are handed over.
+        #[test]
+        fn lines_read_before_a_line_over_the_limit_are_kept() {
+            let mut decoder = SseDecoder::with_limit(8);
+            let events = decode(&mut decoder, "data: 1\ndata: 2\ndata: 123456789\ndata: 3\n");
+            assert_eq!(events, vec!["1", "2"]);
+        }
+
+        /// The limit counts the bytes before the `\n`, so a line of exactly that length is read
+        /// and one byte more is not, and the `\r` of a CRLF ending is one of the bytes. A decoder
+        /// that refused a line of exactly the limit would be refusing lines it was set to accept.
+        #[test]
+        fn a_line_of_exactly_the_limit_is_read() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decode(&mut decoder, "data: 12\n"), vec!["12"]);
+            assert_eq!(decode(&mut decoder, "data: 1\r\n"), vec!["1"]);
+            assert!(decode(&mut decoder, "data: 123\n").is_empty());
+            assert!(decode(&mut decoder, "data: 4\n").is_empty());
+
+            let mut crlf = SseDecoder::with_limit(8);
+            assert!(decode(&mut crlf, "data: 12\r\n").is_empty());
+        }
+
+        /// A decoder built the way the callers build one takes its bound from the constant. The
+        /// other tests set a small limit of their own, so a default that applied no bound would
+        /// pass all of them.
+        #[test]
+        fn a_decoder_made_the_ordinary_way_is_bounded_by_the_constant() {
+            assert_eq!(SseDecoder::new().limit, MAX_LINE_BYTES);
+            assert_eq!(SseDecoder::default().limit, MAX_LINE_BYTES);
+        }
+
+        /// The fuzz target reads the buffer through `held`, so it has to be the bytes waiting for a
+        /// newline: not the limit, not the bytes ever received, and nothing once the decoding ended.
+        #[test]
+        fn held_counts_the_bytes_waiting_for_their_newline() {
+            let mut decoder = SseDecoder::with_limit(8);
+            assert_eq!(decoder.held(), 0);
+            decode(&mut decoder, "data: a");
+            assert_eq!(decoder.held(), 7);
+            decode(&mut decoder, "\n");
+            assert_eq!(decoder.held(), 0);
+            decode(&mut decoder, "data: 123456789");
+            assert_eq!(decoder.held(), 0, "an overrun lets go of what it held");
+        }
+
+        /// A service that never sends a newline must not be able to grow the buffer past the
+        /// limit, and what it sent after the limit is not read when the newline comes.
+        #[test]
+        fn a_line_with_no_newline_is_held_only_up_to_the_limit() {
+            let mut decoder = SseDecoder::with_limit(64);
+            for _ in 0..40 {
+                assert!(decode(&mut decoder, "data: xxxxxxxxx").is_empty());
+                assert!(decoder.buffer.len() <= 64, "held {}", decoder.buffer.len());
+            }
+            assert!(decode(&mut decoder, "\ndata: 1\n").is_empty());
+            assert_eq!(decoder.buffer.capacity(), 0, "the buffer is let go of");
+        }
+
+        /// The reads a stream arrives in belong to the network, so the payloads, and which line
+        /// is too long, cannot depend on where they fall. A line complete in one read is checked
+        /// when its newline is found, and one in pieces is checked as it grows, so each is
+        /// exercised at every split of streams holding both kinds of line, both line endings and
+        /// a line at the limit. The payloads of the unsplit stream are stated, because splits that
+        /// all gave the same wrong payloads would pass a comparison with each other.
+        #[test]
+        fn any_split_of_a_stream_gives_the_same_payloads() {
+            let streams: [(&[u8], &[&str]); 5] = [
+                (
+                    b"data: 1\r\n\r\n: hi\n\ndata: 12\ndata: \xc3\xa9\n",
+                    &["1", "12", "\u{e9}"],
+                ),
+                (b"data: 1\ndata: 123456789\ndata: 2\n", &["1"]),
+                (b"data: 12\ndata: 123\ndata: 2\n", &["12"]),
+                (b"data: 1\r\ndata: 12\r\ndata: 2\n", &["1"]),
+                (b"data: 123456789\r\n", &[]),
+            ];
+            for (stream, expected) in streams {
+                let whole = SseDecoder::with_limit(8).push(stream);
+                assert_eq!(whole, expected, "unsplit, {stream:?}");
+
+                for at in 0..=stream.len() {
+                    let (first, second) = stream.split_at(at);
+                    let mut decoder = SseDecoder::with_limit(8);
+                    let mut split = decoder.push(first);
+                    assert!(decoder.buffer.len() <= 8, "held {}", decoder.buffer.len());
+                    split.extend(decoder.push(second));
+                    assert!(decoder.buffer.len() <= 8, "held {}", decoder.buffer.len());
+                    assert_eq!(split, whole, "split at {at} of {stream:?}");
+                }
+
+                let mut decoder = SseDecoder::with_limit(8);
+                let mut bytewise = Vec::new();
+                for byte in stream {
+                    bytewise.extend(decoder.push(&[*byte]));
+                    assert!(decoder.buffer.len() <= 8, "held {}", decoder.buffer.len());
+                }
+                assert_eq!(bytewise, whole, "byte at a time, {stream:?}");
+            }
         }
 
         fn chunk(raw: &str) -> ChatChunk {

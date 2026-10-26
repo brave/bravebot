@@ -64,12 +64,12 @@ impl Unmet {
             }
             Self::Stalled { last: reason } => format!("{}{}", t!(cli_goal_stalled), last(reason)),
             Self::Impossible { reason } => {
-                t!(cli_goal_impossible, reason = drawn(reason)).to_string()
+                t!(cli_goal_impossible, reason = drawn(reason))
             }
             Self::Unreadable => t!(cli_goal_unreadable).to_string(),
             Self::Quarantined => t!(cli_goal_quarantined).to_string(),
             Self::Unchecked { problem, .. } => {
-                t!(cli_goal_failed, problem = drawn(problem)).to_string()
+                t!(cli_goal_failed, problem = drawn(problem))
             }
         }
     }
@@ -232,6 +232,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
         let judged = turn::goal(
             towards.config,
             towards.egress,
+            towards.task.account_session(),
             check,
             Some(towards.model),
             &mut Progress::new(std::io::sink()),
@@ -362,6 +363,29 @@ mod tests {
             "the first round's task changed"
         );
         assert_eq!(first.files, ["notes.txt"]);
+    }
+
+    /// CHATGPT-10: the rounds of a goal run are made from the first round's task, and they are one
+    /// session to the ChatGPT account with it, whether the first request has been made when a round
+    /// is made or not. The regression it rejects is a round made from the first one's fields in a
+    /// task of its own, which would begin a session of its own and make each round a cache the next
+    /// never hits.
+    #[test]
+    fn the_rounds_of_a_goal_run_are_one_session_to_the_account() {
+        let first = Task::new("get the build green");
+
+        let next = without_the_prompts_extras(&first);
+
+        assert_eq!(
+            next.account_session().identifier(),
+            first.account_session().identifier()
+        );
+        assert_eq!(
+            without_the_prompts_extras(&first)
+                .account_session()
+                .identifier(),
+            first.account_session().identifier()
+        );
     }
 
     /// An unmet condition has a status of its own, and a check that could not be made has the one

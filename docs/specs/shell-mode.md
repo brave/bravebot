@@ -9,6 +9,8 @@ governs:
   - crates/tui/src/app/keys.rs
   - crates/tui/src/render/transcript.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
+  - crates/tui/src/state/queue.rs
 guards:
   - symbol: Policy::label_user_command_output
 documented-by: docs/website/docs/using/shell-mode.md

@@ -46,8 +46,10 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
+| `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
-| `/files` | | List the files the session wrote and show every edit to the highlighted one |
+| `/diff` | | List the files the session wrote and show every edit to the highlighted one |
+| `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -184,7 +186,7 @@ outlives the session and applies in every directory, except one whose own settin
 `~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
-them. See [Configuration](../customize/configuration.md#choosing-a-model).
+them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
@@ -201,7 +203,7 @@ cursor and Escape restores the one that was in force when the picker opened.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
-[Choosing a theme](../customize/configuration.md#choosing-a-theme) and
+[Choosing a theme](../customize/theme.md) and
 [Themes](../using/transcript.md#themes).
 
 ## `/advisor [model | off]`
@@ -292,15 +294,16 @@ Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) a
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
 directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
 field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
-is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
-for the turn to end.
+is the first sent at it, since the running one keeps the level it began with. On a model of a ChatGPT
+account the level is fixed for the whole session instead: the account is sent the level the session began
+with, and the choice applies from the next session. The bare `/effort` waits for the turn to end.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
 is recorded. Picking the row for none removes the record, so from the next session your own file's
 level answers again. See
-[Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
+[Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
 
@@ -332,7 +335,7 @@ carried out at once.
 
 The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
-[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+[Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`
@@ -367,7 +370,7 @@ goes.
 Your permission rules do not come with you. The new directory's rules are read, and anything its
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
-[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
 the file's name from the directory you left, which here can name another file, so such a file is asked
@@ -740,8 +743,17 @@ left to stop. Between turns nothing reads the flag, so a stop kills the job at o
 told at the next turn's first round that you stopped it. A stop still waiting when a turn ends, as when
 the model's last reply made no tool call, is carried out as the turn finishes. If a row still reads
 `being stopped` with no turn running, typing `/jobs stop` for it again carries the stop out. A kept
-job you stopped between turns keeps its own row in the watching display, and does not appear a
+job you stopped between turns keeps its own row in the `/outputs` list, and does not appear a
 second time as a plain command row.
+
+## `/outputs`
+
+Opens what the commands this session ran printed, background jobs included, one row each in the order
+they ran. Alt-L does the same and is one of the [chords you can move](../customize/configuration.md#keybindings). Over the commands, Alt-L closes the view, and over the delegates it switches to the commands. It is the same mode [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
+opens over delegates and asides, with the same keys. Each row opens on what the command printed, says
+how the run ended and whether the model read it, and a running job's row shows the lines it has
+printed since the model last looked. Where no command has run, it says so and opens nothing. Nothing
+it shows is sent to the model or written to the session's record.
 
 ## `/panel`
 
@@ -751,13 +763,41 @@ the plan. It needs a terminal at least 100 columns wide, and says so on a narrow
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
 has the rest.
 
-## `/files`
+## `/diff`
 
 Draws the info panel in its files state, opening the panel if it is closed: a list of every file the
 session wrote, with the lines added and removed, and every edit to the highlighted one under it. `q`,
-Escape or `/files` again leave the state and put the panel back as it was. It needs a terminal at
+Escape or Ctrl-C leave the state and put the panel back as it was. Typing `/diff` does not, since no
+character reaches the box while the state is open; a second `/diff` queued earlier, while a compaction
+or an aside ran, does leave it. Clicking the Files section of
+the panel draws it too. It needs a terminal at
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
-nothing. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+nothing. It shows what the session's own write calls changed. A change another program made is not
+in it. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+
+## `/todos`
+
+Prints the session's plan in the transcript: every task, in the plan's order, with its status in
+words beside its mark (`pending`, `in progress`, `completed` or `cancelled`) and its text wrapped
+to the width and never cut. A heading above it says how many tasks are done, and how many are
+cancelled where any are. The info panel draws only the rows it has room for, each cut to its width,
+and this is the whole plan. A session with no plan says so.
+
+The plan is the one the panel draws, and while a turn runs it is the list that turn has reported so
+far. A task that is neither completed nor cancelled is drawn with the mark and ink the panel gives it
+when you type the command: filled while a turn is running, and hollow and dim while none is, when the
+whole row matches the panel's. What is printed is the
+plan as it stood then, so a later report from the planner, or the end of the turn, does not change
+it. It is no part of the conversation: no turn starts, nothing is sent, and it is not saved with the
+session or put in an export. The text of a task is the planner's, so a control character in it is
+drawn as a visible character, and every row of it has a margin of the interface's own that the text
+cannot draw. The word takes no argument: `/todos` followed by words is a prompt. It touches nothing
+a running turn holds, so typed while a turn runs it is carried out at once. A prompt file or skill
+named `todos` is shadowed by the command.
+
+Alt-A does the same and is one of the [chords you can move](../customize/configuration.md#keybindings), the `todos`
+action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
+the chord in force, where the plan has room for it.
 
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 
@@ -835,7 +875,7 @@ and `--resume` brings none back.
 
 ## `/plan [task]`
 
-Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+Sets [plan mode](../security/permission-modes.md), as the mode key does when it
 reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
 
 ```
@@ -867,9 +907,9 @@ declined plan leaves the workspace.
 run you stopped is not written down, because there is nothing in it to read. The run is recorded as its
 own record and the session records its name, so the session still resumes as a conversation.
 
-In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
+In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
-[Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+[Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 
 ## `/memory`
 
@@ -1113,7 +1153,7 @@ the answer, and no later turn reads either.
 
 The answer opens in the mode
 [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
-opens, as a row of its own before the delegates and the commands, which is the one screen it exists
+opens, as a row of its own before the delegates, which is the one screen it exists
 on. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
 is one a reader takes the planner to have had.
 
@@ -1187,7 +1227,7 @@ left comes with you, and its loop, goal and watches end. The session you left is
 turn left it and stays resumable. Servers started for this process keep running.
 
 It is refused, with a line saying why, for an id that is no session of this directory, for the
-session already open, for a [manifest run](../using/sessions.md#a-manifest-run-is-recorded-but-cannot-be-continued),
+session already open, for a [manifest run](../using/manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued),
 and for a session a running background session holds. Where this directory records no other session
 it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
@@ -1415,7 +1455,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

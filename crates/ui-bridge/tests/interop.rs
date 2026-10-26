@@ -221,7 +221,10 @@ fn resuming_a_session_started_under_a_definition_stops_recording_it() {
         "the fixture session was not recorded under its definition"
     );
 
-    let mut state = bravebot_ui_bridge::running::State::resumed(&project, &record, trust.clone());
+    // The first session has ended, so nothing holds the record it left.
+    drop(handle);
+    let mut state = bravebot_ui_bridge::running::State::resumed(&project, &record, trust.clone())
+        .expect("the record is free");
     state
         .handle
         .as_mut()
@@ -325,7 +328,10 @@ fn resuming_a_session_writes_back_to_it_rather_than_forking() {
 
     // What `session.open` does with what it found on disk.
     let record = sessions::load(&project, &original).expect("the record should load");
-    let mut state = bravebot_ui_bridge::running::State::resumed(&project, &record, trust.clone());
+    // The first session has ended, so nothing holds the record it left.
+    drop(handle);
+    let mut state = bravebot_ui_bridge::running::State::resumed(&project, &record, trust.clone())
+        .expect("the record is free");
 
     // What the worker does at the end of a turn: the same call, through the same handle.
     state.turns = 2;
@@ -553,6 +559,8 @@ fn a_session_holding_imported_words_is_not_forked() {
         },
     );
     let parent = handle.id().to_string();
+    // The first session has ended, so nothing holds the record it left.
+    drop(handle);
 
     let (mut bridge, _) = harness();
     let opened = call(

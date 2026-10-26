@@ -719,6 +719,7 @@ mod tests {
 
     #[test]
     fn a_triple_click_takes_the_row_without_its_padding() {
+        let _held = theme::exclusive();
         let buffer = screen(&["hello there", "second line"]);
         let selection = Selection::started_at(0, 3).by(Unit::Line);
         assert_eq!(text(&buffer, &selection), "hello there");
@@ -743,6 +744,7 @@ mod tests {
     /// has to take both, or a double click on CJK text selects one character.
     #[test]
     fn a_word_of_wide_characters_is_taken_whole() {
+        let _held = theme::exclusive();
         let buffer = screen(&["ab 你好嗎 cd"]);
         let marked = theme::picked_out().bg;
         let painted = |column: u16| {

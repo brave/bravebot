@@ -12,6 +12,7 @@ governs:
   - crates/agent/src/shared.rs
 guards:
   - symbol: Policy::before_delegate
+  - symbol: Policy::before_delegate_within
   - symbol: Policy::adopt_from_delegate
   - symbol: Policy::sink
   - symbol: Task::delegated

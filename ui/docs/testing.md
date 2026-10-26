@@ -153,7 +153,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:columns` | Folding each side column, and what is remembered |
 | `pnpm run drive:panels` | The context panels, the row of buttons that turns them on and off, and the transcript's tool runs |
 | `pnpm run drive:markdown` | Markdown rendering, light and dark |
-| `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
+| `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. A warning of the model list, drawn with the command it names as code in the code type role, at the window's size and at its minimum. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
 | `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
@@ -220,9 +220,12 @@ launch through `scripts/drive-support.mjs`, whose `launch` and `launchLive` use 
 `drive-export`, `drive-fork`, `drive-markdown`, `drive-menu`, `drive-packaged`, `drive-panels`,
 `drive-resize`, `drive-run`, `drive-smoke`, `drive-theme`, `drive-tree` and `drive-turn`.
 
-`drive-support.mjs` also exports the selectors the drivers share for the composer's text box
-(`COMPOSER_INPUT`, `COMPOSER_IDLE`) and the left column's tabs (`SIDEBAR_TAB`), so a markup
-change to either is made there and in the test that pins them to the renderer.
+`drive-support.mjs` also exports the selectors the drivers share: the composer's text box
+(`COMPOSER_INPUT`, `COMPOSER_IDLE`, and its accessible name `COMPOSER_NAME`), its send button
+(`COMPOSER_SEND`), the left column's tabs (`SIDEBAR_TAB`), an agent reply in the transcript
+(`ASSISTANT_BUBBLE`), a bot row's open button (`BOT_OPEN_BUTTON`) and the yes on a trust question
+(`TRUST_APPROVE`). A markup change to any of them is made there and in the test that pins them to
+the renderer.
 
 Of those, **`drive-run`, `drive-ask` and `drive-markdown` send live model turns** against the
 real profile (and so do `drive-bot-turn`, `drive-bot-memory` and `drive-turn`), which spends

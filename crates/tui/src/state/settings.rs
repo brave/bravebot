@@ -170,7 +170,7 @@ impl Session {
     pub fn choose_model(&mut self, model: impl Into<String>, config: &bravebot_config::Config) {
         let model = model.into();
         if self.persist {
-            bravebot_session::store::save_model(config.name_to_record(&model));
+            bravebot_session::store::record_model(config, &model);
         }
         self.model = Some(model);
     }
@@ -275,9 +275,47 @@ impl Session {
     /// The level a turn will actually send, which is nothing where the model does not read one.
     ///
     /// Sending a level to a model whose roster row says it reads none is a field that is dropped at
-    /// the far end, so the choice is kept and the request is not given it.
+    /// the far end, so the choice is kept and the request is not given it. A ChatGPT model is sent
+    /// the level the session began with and not the one chosen since, so the choice applies to the
+    /// next session and to every other model (CHATGPT-10).
     pub fn effort_in_force(&self) -> Option<Effort> {
-        self.effort.filter(|_| self.model_reads_effort)
+        let level = match self.model_is_account {
+            true => self.account.effort(),
+            false => self.effort,
+        };
+        level.filter(|_| self.model_reads_effort)
+    }
+
+    /// Begin the session the ChatGPT account sees, at the level in force now.
+    ///
+    /// Called once the level is settled, where the session starts, and where `/clear` and a handoff
+    /// begin another. A level chosen after that is not this session's for the account.
+    pub fn begin_account_session(&mut self) {
+        self.account = bravebot_agent::chatgpt::AccountSession::begin_with(self.effort);
+    }
+
+    /// Whether the model in force is one of the ChatGPT account's.
+    pub fn model_is_account(&self) -> bool {
+        self.model_is_account
+    }
+
+    /// The level the session began with, where the model in force is the account's, which is the
+    /// level that account is sent. `None` for any other model, and `Some(None)` where the session
+    /// began with no level.
+    pub fn account_level(&self) -> Option<Option<Effort>> {
+        self.model_is_account.then(|| self.account.effort())
+    }
+
+    /// Record whether the model now in force is one of the ChatGPT account's.
+    pub fn note_model_is_account(&mut self, account: bool) {
+        self.model_is_account = account;
+    }
+
+    /// What this session carries into its requests to the ChatGPT account, which every request it
+    /// makes is made in: a turn, a summary, a question beside the work, a goal check, a commit
+    /// message and an MCP server's prompt.
+    pub fn account_session(&self) -> &bravebot_agent::chatgpt::AccountSession {
+        &self.account
     }
 
     /// Whether the model in force reads a level at all.
@@ -599,15 +637,19 @@ impl Session {
     /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
     /// against the panel's rectangle as the last frame recorded it.
     pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
-        if self.files.is_some() {
-            return None;
-        }
         let (_, area) = self
             .laid
             .panes
             .iter()
             .find(|(pane, _)| *pane == crate::select::Pane::Panel)?;
         crate::panel::target_at(self, *area, row, column)
+    }
+
+    /// Whether the cell is one the permission mode is drawn in, as the last frame drew it.
+    pub fn on_the_mode(&self, row: u16, column: u16) -> bool {
+        self.laid
+            .mode
+            .is_some_and(|rect| rect.contains(ratatui::layout::Position::new(column, row)))
     }
 
     /// Begin dragging the panel's border where the button went down, and say whether it was

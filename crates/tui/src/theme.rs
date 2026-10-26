@@ -21,7 +21,9 @@ use std::sync::{Mutex, OnceLock};
 /// two of them, and for the inks that change with the terminal's background.
 pub type Rgb = (u8, u8, u8);
 
-/// Brave orange, which opens the wordmark and draws every note the session makes under `brave`.
+/// Brave orange, which opens the wordmark and draws the notes the session makes under `brave`,
+/// except those of `/add-dir`, `/add-dir close` and the opening of a settings file's directories,
+/// which are drawn in the inks for finished and failed (VIEW-8).
 ///
 /// A literal because the sixteen named colours have nothing near it.
 pub const BRAND: Rgb = (255, 86, 1);
@@ -359,7 +361,7 @@ pub fn paints_background() -> bool {
 /// Distinctions this interface draws in colour alone are lost here, and that is the request. The
 /// margin down a block of untrusted content, the bar, the glyphs and the words are all still
 /// drawn, because none of them is a colour.
-fn plain_palette() -> Palette {
+pub(crate) fn plain_palette() -> Palette {
     Palette {
         background: Color::Reset,
         text: Color::Reset,

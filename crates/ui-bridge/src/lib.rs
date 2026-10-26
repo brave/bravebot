@@ -29,6 +29,7 @@
     )
 )]
 
+mod account_words;
 pub mod acp;
 pub mod allowlist;
 mod answerers;

@@ -187,6 +187,12 @@ and recently chosen models appear near the top. Pricing is not supplied by the c
 Refresh retries discovery if a provider is unavailable; the configured default remains
 selectable. Choosing a model does not change the agent's global default.
 
+Where the models of a service could not be listed, the picker says so above the list, one sentence
+for each service, in the picker's status type. The bridge words each sentence. A sentence that names
+a command to run, such as the one that signs in to ChatGPT again, has that command drawn as code. The
+bridge sends it beside the sentence (`warningCommands`, in the order of `warnings`), so the picker does
+not read a sentence to find it. A warning that names no command is a plain line.
+
 ### Turn notices, usage and audit
 
 **Turn notices** appear beneath the prompt when the turn finishes. New or changed
@@ -838,5 +844,18 @@ processor remarks directly above the diff, labelled untrusted, with any omitted-
 
 The context line reports an unmeasured, measured or unavailable last-request size and
 whether earlier messages were summarised. This is distinct from total billed usage.
-Turn errors use stable categories with specific recovery guidance. Cancellation remains a
-separate outcome, and request-attempt counts and HTTP status appear only when known.
+Turn errors use stable categories with specific recovery guidance. A failure of the ChatGPT
+account says the bridge's own sentence for the step that failed in place of the category's
+guidance, one sentence with the command it names drawn as code, on the error card and on the card
+of a run that stopped. Cancellation remains a separate outcome, and request-attempt counts and HTTP
+status appear only when known.
+
+A **narration** is a line of the transcript between a turn's tool calls, set in italics beside a file
+icon, with its line breaks kept. It is what the model said between two calls, the goal and plan a
+manifest run narrates, or a notice the bridge wrote: that a summary of the conversation could not be
+made, or that the turn moved to the fallback model. The bridge words a notice about a failure of the
+ChatGPT account itself, as one sentence in sentence case. The command such a sentence names arrives
+beside it as `command` and is drawn as code. A failure of any other service is narrated in the
+terminal's words, which are not in sentence case, name the failure's category and name no command, so
+the row mixes the two styles. What the model said is drawn as text whatever it holds: a word in it that
+looks like a command is not drawn as code, since only the bridge sends a `command`.

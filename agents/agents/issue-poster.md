@@ -43,6 +43,8 @@ Apply these and no others:
 - One `area/*` where the area is clear from the issue, and none where it is not. `infrastructure`
   for the build and the tracker.
 - When the issue is about the guarantee: `security`, `needs-security-review`, and a `severity/*`.
+- `flaky-test`, in addition to the labels above, when the issue is about a test whose outcome
+  changes between runs of the same build.
 - The axes `importance/*`, `urgency/*` and `size/*`, proposed from the scales in
   `labelling-issues.md`, when the task says a person asked for this issue. Never `urgency/p1`.
   Apply no axis to a security issue, or when the task says the issue is a finding nobody has read.
@@ -79,7 +81,8 @@ For each other case whose statement gives no issue number:
    and report the statement.
 4. Once every case has been through steps 1 to 3, file an issue for each that none covers, by this
    procedure, so a case you could not settle leaves nothing filed. Where the task says to file none,
-   or more than three cases need an issue, post nothing and report the statements instead. The body
+   file no issue for any case, post the draft, and list the cases in the report. Where more than
+   three cases need an issue, post nothing and report the statements instead. The body
    is about that case as its subject, says what the draft says of it and claims no more. Choose its
    labels from its own content under "Labels", pass the assignee the task named, and apply no
    `importance`, `urgency` or `size`, since the task did not say a person asked for it. Write its

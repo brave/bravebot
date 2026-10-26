@@ -146,7 +146,7 @@ function stars(count, keepOut, width, height, { seed = 'readme-banner-stars', co
   return out.join('')
 }
 
-export const TAGLINE = 'A general-purpose agent that a web page cannot redirect.'
+export const TAGLINE = 'A general-purpose agent that untrusted data cannot redirect.'
 
 /**
  * The row of bots marching above the wordmark, centred in a picture `width` wide, with the bots

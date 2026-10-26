@@ -263,7 +263,7 @@ stop no prompt:
 | a line setting a variable in front of a program | asked about whatever is recorded |
 | a line running anywhere but the workspace root | including one that names a directory |
 | a line a `deny` or `ask` rule matches | a keypress must not overturn a rule you wrote |
-| an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) | it adds nothing to `~/.bravebot` |
+| an [incognito session](../using/incognito.md) | it adds nothing to `~/.bravebot` |
 | bypassing | no run prompt is drawn for a key to reach |
 
 A rule you write **afterwards** takes a remembered line back: an `ask` rule puts it to you again and a
@@ -331,303 +331,20 @@ because consent to talk to a host is not a claim about what it returns. See
 
 ## Answering in advance: modes
 
-**Shift-Tab** walks the session through four modes, and the one in force is drawn under the input
-box. A mode is a standing answer to the questions above, given once instead of one at a time.
-
-| Mode | What it answers |
-|---|---|
-| **asking** | nothing: every write, run, command output and unvouched file is put to you |
-| **accepting edits** | the write prompt, except for a write that would create a credential |
-| **plan mode** | it refuses a write rather than asking about one |
-| **bypassing** | every permission question, including the two that decide trust |
-
-**Asking is where a session opens**, and it is what holds when nobody has chosen. The key comes round
-to the first again, so no mode is one you cannot press your way out of, and it works while a turn
-runs: the turn in flight follows it from its next question or tool call, and a diff already on your
-screen does not have its question withdrawn from under you.
-
-**A session started with `--dangerously-skip-permissions` says so when it stops bypassing.** The line
-under the input box and `/status` name asking there, where a session started without the flag draws
-nothing for it, including one that reached bypassing with the key. Nothing is printed in the
-transcript when you press the key.
-
-**Accepting edits stops at writes on purpose.** A write lands in a tree you can read afterwards and
-`git diff` shows you all of it; a program runs with everything your own shell has, leaves no diff,
-and what it prints is what the next round reads. A mode named for edits that also stopped asking
-about programs would be granting the larger thing quietly. It does accept a write to any path the
-workspace reaches, since the prompt was the only thing that would have shown you the path. A rule in
-the settings file is what narrows that. Under the sandbox mode `read-only`
-([confinement](security.md#confinement)) the agent's file tools write nothing, in this mode or in
-bypassing.
-
-**A write that would create a credential is still put to you.** A file that is one rare value and
-nothing else is how a generated key reaches a tree, so a write the credential scan finds such a value
-in is shown to you with what it found, under accepting edits as under asking. A rule or a vouched path
-does not answer it. A value that announces itself as a credential is refused in every mode, before
-any prompt. The prompt offers two answers that last longer than yes:
-
-```
-  y write it    a always this session    r remember it    n leave it alone    ctrl-c stop the turn
-```
-
-`a` stops the asking about that file for the rest of the session. `r` stops it for every session
-begun in this directory, and is written where [remembered lines](#remembering-a-line-past-the-session)
-are, on the same terms. Both are about the file the write lands in, not the name the planner used, so
-the same name after `/cd`, in another checkout or behind a link is asked about again. `a` ends at
-`/cd`, `/clear` and `--resume`, and a delegate and a manifest run start without it. `r` is not offered
-in an incognito session or for a file outside the directory. Both settle the secret only: a write a
-rule asks about is still asked about. With nobody to ask, the write is refused unless the run is
-bypassing, even where a rule allows it. The desktop application and `--plain` offer yes and no only.
-
-**Plan mode refuses a write rather than asking**, whatever you would have answered, and the planner
-is told so and why, so a run of refusals reads as a constraint to work inside rather than as a series
-of mistakes. It refuses where the prompt would have been approved and equally where there would have
-been no prompt: a path the trust map already covers, or one a rule allows, is refused too. Commands are
-still asked about, because research is most of what planning is. It constrains the write tools rather
-than making the turn incapable of changing anything: a command you approve may write whatever it likes.
-
-A [manifest run](../using/headless.md) is refused from its frozen plan, before the plan is put to you,
-where any step in it writes a file. A plan that writes nothing runs. The plan is where the mode has to
-be answered, because a body the plan carried going to a path you vouched for raises no write prompt at
-all, so a refusal that waited for one would let the whole run through.
-
-:::note
-**`defaultMode` in the settings file selects no mode.** The key is parsed so a file carrying it is not
-rejected, and nothing is chosen from it: if you wrote `acceptEdits` there you get the prompts you would
-have got without it. The command line and Shift-Tab are what choose a mode.
-:::
-
-### Bypassing
-
-```sh
-bravebot --dangerously-skip-permissions
-```
-
-The flag opens the session in that mode. Without it a session opens asking, and Shift-Tab reaches the
-mode on the third press, after plan mode. Nothing is asked when it gets there: the line under the
-input box names it in colour, and one more press is back to asking. A settings file that sets
-`permissions.bypassUnreachable` takes the mode off the key and refuses the flag.
-
-The flag may go anywhere in the command line and composes with `-p`, `--resume`, `--continue`,
-`--mode` and `--incognito` alike. A one-shot run has no key to press, so the flag is the whole of
-what can say.
-
-It answers the two questions that decide trust as well as the others, and those are the ones that
-cost the most. Vouching is what decides whether a file's contents are shown to the planner or held
-behind a reference, so in this mode every file the planner asks to read is shown to it, and a file
-holding instructions rather than data is read as instructions. The [startup trust
-question](trust.md) is not put either: the session starts with the rule a yes would have written,
-since the tree becomes trusted a file at a time in any case. A directory your settings file asked for
-is opened and vouched for without being put to you. So are the three questions about a server a
-checkout asks for: whether to start it, whether to offer its tools, and whether to make a call to
-one of them. Each is answered yes and none is written to the files that remember an answer, so a
-later run without the flag asks. A remote server whose reply points somewhere else is still not
-followed: a yes would rewrite your declaration to an address the server chose, so the hop is refused
-without asking. See [MCP servers](../customize/mcp-servers.md#approving-one).
-
-Starting a language server is still put to you in this mode, and is refused where nobody can be asked.
-
-**No check runs where nothing would read its word.** A [vetting check](vetting.md) normally sits in front
-of every prompt whose answer would promote quarantined content, and this is the one mode where those
-prompts are answered without being shown to anybody. A check there would be a model call whose word
-nobody reads, so it is not made. This is the only exemption, and `--vet` is what takes it back for the
-two prompts that release one slot: with that flag the check's word is what answers in your place, and a
-word that objects refuses. The vouch offer reads no word in this mode either way.
-
-**Command output can come back in the result that ran it.** What a run prints is still quarantined in
-this mode, but with no check asked for, `read_output` releases it without showing it to anybody. So a
-run that sets [`read: true`](../reference/run-tool.md#reading-the-output-in-the-same-result) gets the
-output at once, unless it is longer than one result may hold, and the audit trail records the release
-as the mode's, as it would for `read_output`.
-With `--vet` the check still reads it first, through `read_output`, and `read` changes nothing. The
-result for such a run says the argument was not applied.
-
-What stays is the structural guarantee, that untrusted content cannot *decide* what happens. What
-goes is the narrower protection of not showing the planner bytes nobody vouched for. **This is a mode
-for a container with no network and nothing in it worth losing**, which is what its spelling is
-for.
-
-**A write that would create a credential is written.** Accepting edits puts it to you; here the flag
-is your answer, as it is to every other question, and nothing is recorded for a later session. A
-value that announces itself as a credential is still refused.
-
-A run approved this way vouches for no program. The list of commands you said to stop asking about is
-written into the session record and outlives the mode, so a record claiming you approved programs you
-were never shown would be a standing permission nobody granted.
-
-### Two things no mode answers
-
-**A `deny` rule holds in every mode**, including the one that asks about nothing. It refuses before
-there is a prompt, so there is nothing for a mode to answer. A flag that quietly undid a rule you
-wrote down would take protection away at the moment you were relying on a mode to save keystrokes.
-
-**A question the planner posed reaches you in every mode**, and so does a line you type unprompted.
-Neither asks for consent: the first asks for information, and the second is you speaking. An answer
-invented on your behalf is reported to the planner as your own words.
-
-**The same call three times running is held and asked about**, in every mode, bypassing included. When
-the planner asks for a call whose tool and arguments equal those of the two calls before it, with no
-different call between them, it does not run. You are asked whether to refuse it and tell the planner
-to try another approach (the default, so a bare Enter is safe), run it this once, or stop the turn.
-A yes covers that one call and starts the count again. Only the tool name and the arguments are
-compared, never a result, so polling the same `read_output` or running the same test again with no
-edit between is held at the third call, and a different call between two identical ones starts the
-count again. A call that differs by one argument each time is not caught. Where nobody can be asked (a
-one-shot run, a planned run or a delegate) the call is dropped and the planner is told. The trail
-records the round, the count and your answer, and nothing of the call. There is no setting for the
-number.
-
-### In the desktop application
-
-The control beside the model in the composer offers asking, accepting edits and plan mode, and
-`⇧⌘M` (`Ctrl+Shift+M` on Windows and Linux) walks them in that order. Bypassing is not offered: the
-desktop has no command line for the flag to be given on. The mode belongs to the open session and
-every session opens asking, a resumed one and a fork included. A change made while a turn
-runs applies to the rest of that turn.
-
-### A mode belongs to the sitting it was chosen in
-
-A resumed session opens by asking, whatever the session that wrote the record was doing when it
-ended. The mode is not written into the session record. `--resume` with the flag opens in bypass,
-because the flag was given again.
-
-A [delegate](../reference/tools.md#spawn_agent) inherits the mode of the turn that spawned it, since
-a delegate is that turn's work done somewhere else.
+**Shift-Tab** walks the session through four modes (asking, accepting edits, plan mode and
+bypassing), and the one in force is drawn under the input box. A mode is a standing answer to the
+questions above, given once instead of one at a time. [Permission modes](permission-modes.md) has what
+each one answers, what accepting edits stops at, what `--dangerously-skip-permissions` skips, and the
+two things no mode answers.
 
 ## Rules you write down in advance
 
 The `permissions` block of `~/.bravebot/settings.json` holds three lists (`deny`, `ask` and `allow`)
 saying which actions to refuse outright and which to stop and ask you about. They are the same three
-lists Claude Code keeps, with the same spellings, so a block copied out of `~/.claude/settings.json`
-governs bravebot unedited. See
-[Configuration](../customize/configuration.md#permissions) for how a rule is written.
-
-**A rule decides whether you are asked, and whether an action happens at all. Nothing else.**
-
-**A deny rule refuses before the file is opened or the program is looked for.** A denied file is not
-read, not enumerated, not searched and not written, and a `Read` deny rule also stops a write to the
-path it covers. A file whose contents are off limits is not protected if it can be overwritten.
-Naming the path through a reference reaches the same refusal, including on the one route allowed to
-read what nobody vouched for: a processor is handed no denied file either. The planner is told the
-rule refused and that retrying is not the answer.
-
-**A rule covers the file, not only the spelling used to ask for it.** A call is checked under the name
-it gave and again under the name it reaches once every link on the way is followed, so a link to a
-denied file is refused, and an `ask` rule still asks for a write that comes through one. On Linux and macOS a
-file with more than one hard link is also checked under each other name the open directories hold for
-it, so a hard link to a denied file is refused in a read and in a write. If that search hits its cap or
-cannot list a directory while a `Read` or `Edit` deny rule is in force, the call is refused. The second
-name can add a refusal or a question and never removes one. A `deny` or `ask` rule written through a
-link covers the place the link reaches: with `linked` a link to `real`, `Read(linked/**)` refuses
-`real/secret.txt`. A `deny` or `ask` rule written as a full path, or from `~/`, that lies inside the
-project also covers the file under the relative name the file tools ask by, so in a session opened in
-your home directory `Read(~/.ssh/**)` refuses `.ssh/id_ed25519`. On Linux and macOS a `deny` or `ask`
-rule also covers the name a file has under a second path to an open directory, such as a macOS
-firmlink or a Linux bind mount once you have opened it with `/add-dir`; the file is matched by its
-device and inode. An `allow` rule is matched as written, so a grant reaches no further than the
-spelling you approved.
-
-- **Unicode spellings.** A `deny` or `ask` path rule covers every spelling Unicode treats as the
-  same name, so a rule written with a precomposed `é` refuses the file named with a letter and a
-  combining accent, and the reverse. A compatibility form is not the same name: a full-width letter
-  is not the plain letter. An `allow` rule is matched as written.
-- **Case.** On a volume that treats `.env` and `.ENV` as one file, a rule written one way covers the
-  other, in every list. On a volume that keeps them apart, or where it cannot be told, a rule about
-  `Docs` says nothing about `docs`.
-- **Windows names.** A name that reads as something other than the file it spells, such as a stream, a
-  device, a trailing dot or space, or an 8.3 short name, is refused outright, in a call's path or a
-  redirection's target, since no rule can be matched against it. A path on a drive is a full path:
-  `Read(//D:/added/**)` covers `d:\added\secret`.
-- **Hosts.** A host written with a trailing dot, `https://evil.example./`, is the host without it, so
-  a `WebFetch(domain:evil.example)` rule covers both.
-- **Commands.** A command rule is matched against the program and each argument as the line was split,
-  not against the line run together. A space in an `allow` rule covers only the gap between two words,
-  so `Bash(ls *)` does not cover `"ls /x"`, a script named `ls /x`. In `deny` and `ask` a space also
-  covers a space inside a word, and a `*` covers any text in every list.
-  A `deny` or `ask` rule also covers the program under a leading `timeout`, `time`, `nice`, `nohup`,
-  `stdbuf`, `command`, `builtin`, `noglob` or `env`, so `Bash(git push *)` refuses `timeout 30 git push`.
-  An `allow` rule does not look through them, and `npx`, `devbox run` and `docker exec` are not looked
-  through by any list.
-- **Redirections.** A `deny` rule on a file refuses a redirection to it or from it, as it refuses a
-  write. It holds when the redirection reaches the file through `..`, as `config/sub/../app.env`
-  does, whether or not a link is on the path.
-- **Files read on your behalf.** A denied `AGENTS.md`, a file it points at, a skill or an agent
-  definition is left out of the turn, and you are told. A checkout cannot put a denied file into the
-  system prompt by committing a link to it.
-- **Files you name.** A file named with `@` or `--file`, or dropped, is checked against the rules
-  before it is vouched for or opened. A covered one is left out of the turn and you are told.
-- **`lsp` answers.** A location in a covered file is left out of the answer, without a count of how
-  many were left out. Hover text names no file, so it is withheld whenever any rule covers reading a
-  path.
-
-Two settings go further than any list of rules: `readsStayInWorkspace` refuses every path outside the
-working directory, and `bypassUnreachable` takes the mode that asks about nothing out of reach. See
-[Configuration](../customize/configuration.md#permissions).
-
-A deny rule also holds against **a workspace you trusted**, which is what makes one worth writing:
-saying yes at startup trusts the whole tree, and a rule is how one file is kept out of that answer
-without declining the rest of it.
-
-**An allow rule stops the asking and grants nothing else.** It does not make a command's output
-trusted: output carries what it would have carried. Pressing `a` grants those two together because
-you are looking at one command and can answer for both; a pattern covers commands nobody has read, so
-it cannot carry the second claim. If a rule could trust output, one line in a settings file would turn
-fetched bytes into routing, which is the whole thing labels exist to prevent. Nor does an allow rule
-extend reach: it cannot open a path the workspace and the directories you opened do not already cover.
-
-**An allow rule has to be yours.** `deny` and `ask` work from any settings file, including the
-`.bravebot/settings.json` and `.bravebot/settings.local.json` that arrive with a repository, because
-both of those only ever take something away. `allow` is the one list that hands something back, so it
-is read from `~/.bravebot/settings.json`, and from a file you passed to `--settings` that sits outside
-the project you are working in and the one you started in. An `allow` entry in a checkout's file takes effect on nothing by
-itself: whoever last edited the repository would otherwise be answering an approval prompt on your
-behalf, which is a program run with your privileges, a file written without the question, or a
-redirect to a host you were never shown.
-
-**A project asks, and you grant.** When a session opens in a checkout whose settings carry `allow`
-entries, one box lists every one of them and the file each came from. Saying yes grants exactly those
-rules; saying no grants none and the session carries on asking about each action as it would have.
-The answer is kept per project, in `~/.bravebot/granted/`, so the next session there does not ask
-again, and a project that edits a rule after you granted it asks about the new one. Delete the file,
-or the line in it, to take a grant back.
-
-A grant stays with the project it was given in. `/cd` into another checkout reads that checkout's
-rules and puts its own box where it proposes something, so a rule you granted for the first one
-answers nothing in the second, and the second's `deny` rules are in force from the first turn there.
-A subdirectory has no rules of its own to read, so `/cd` into one leaves the checkout's behind, as
-starting there would. `/clear` reads the rules again for the directory you are in.
-
-`bravebot doctor` names every such rule and says which of the two it is, for the directory you run it
-in, so neither the prompt you still get nor the one you no longer get is a mystery. Waiving a prompt
-for *every* project is still your own file, or a file passed on the command line for one run.
-
-**Four prompts no rule can answer.** A run that would put your private data into a program asks
-whatever the rules say, because a rule saying which commands may run is not consent to hand one your
-data. A call that would put your private data into an [MCP server's](../customize/mcp-servers.md#each-call)
-tool asks for the same reason, and a standing answer to that server does not cover it. That is every
-call once something private was let out of quarantine for the model. A write whose
-destination is known only through a reference asks too: that prompt is the only
-moment such a path is shown to anybody, so nothing a pattern says can stand in for having looked. And a
-run carrying a variable set in front of one of its programs asks, because a rule is matched against the
-program and its arguments: `Bash(git log)` matches `LD_PRELOAD=./evil.so git log`, and no rule you could
-write tells the two apart.
-
-**A rule that cannot be read is dropped, named, and takes nothing with it.** A line that is not a rule,
-names no tool family, or has no anchor to resolve is skipped and the rest of the file still applies.
-Every one dropped is reported, both by `bravebot doctor` and in the session that read the file, because
-a misspelled `deny` rule reads as protection that is not there. Refusing the whole file instead would
-mean a typo in an `allow` rule quietly removed a `deny` rule's protection.
-
-Rules are read **once per session**, so a file you edit while a session is open describes the next one.
-
-:::note
-**A `deny` list is not a sandbox.** A rule is matched against a program's argv rather than against
-what the program then does, so `Bash(git *)` covers `git -c core.fsmonitor=<script> diff`, which runs
-a program the rule never named. And a path rule does not reach a program's own file access at all:
-`run cat .env` is checked against the `Bash` rules and against the run prompt, not against a `Read`
-rule covering `.env`. What confines a process is [confinement](security.md#confinement); what holds
-regardless is the label on the output.
-:::
+lists Claude Code keeps, with the same spellings. A rule decides whether you are asked, and whether
+an action happens at all. Nothing else. [Permission rules](permission-rules.md) has what a deny rule
+refuses, what a rule covers beyond the spelling used to ask, why an allow rule has to be yours, and
+the prompts no rule can answer.
 
 ## What survives, and what does not
 
@@ -707,7 +424,7 @@ want to answer is Ctrl-C, which starts no session. No box grants anything by its
 
 ## Approving a whole run in advance
 
-A [manifest run](../using/headless.md) is the one prompt about a whole run rather than about one thing at
+A [manifest run](../using/manifest-mode.md) is the one prompt about a whole run rather than about one thing at
 the moment it is due. It can be, because that mode fixes every step while your task is still the only
 input, so nothing the run goes on to read can change the plan.
 

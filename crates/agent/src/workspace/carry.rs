@@ -145,8 +145,11 @@ impl Workspace {
     /// The status is answered on the terms of `read_git`'s (GIT-11): the map has to trust the whole
     /// working tree and `.git`, and no deny rule may cover a file it reads.
     pub fn plan_carry<S: Sink>(&self, policy: &mut Policy<'_, S>) -> CarryPlan {
-        let mut recorded: BTreeSet<String> =
-            locked(&self.working_writes).last.keys().cloned().collect();
+        let mut recorded: BTreeSet<String> = locked(&self.kept.working_writes)
+            .last
+            .keys()
+            .cloned()
+            .collect();
         let mut listed = BTreeSet::new();
         let mut remove = BTreeSet::new();
         let status = match self.working_status(policy) {

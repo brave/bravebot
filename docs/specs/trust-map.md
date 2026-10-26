@@ -12,16 +12,22 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/dropped.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/other_names.rs
   - crates/agent/src/workspace/reach.rs
+  - crates/agent/src/workspace/resolve.rs
+  - crates/agent/src/workspace/volume.rs
   - crates/agent/src/rewind.rs
   - crates/agent/src/scratch.rs
   - crates/agent/src/trusted.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/one_shot.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/app/actions.rs
   - crates/ui-files/src/main.rs
   - crates/ui-files/src/names.rs
@@ -54,7 +60,6 @@ guards:
   - symbol: TrustStore::trust
   - symbol: TrustStore::distrust
   - symbol: TrustStore::rebased
-  - symbol: Policy::reconcile_after_write
   - symbol: Policy::vouch_for_named_path
 documented-by: docs/website/docs/security/trust.md
 ---
@@ -318,10 +323,10 @@ has not entered its filesystem effect records no write.
 
 | data | destination | prompt? | effect on the map |
 |---|---|---|---|
-| trusted | trusted | no | unchanged |
+| trusted | trusted | no | a rule at that path, effective trust unchanged |
 | untrusted | trusted | **yes** | that path becomes untrusted |
 | trusted | untrusted | no | that path becomes trusted |
-| untrusted | untrusted | no | unchanged |
+| untrusted | untrusted | no | a rule at that path, effective trust unchanged |
 | either | never mentioned | **yes** | that path takes the data's trust |
 
 A prompt asks one question and only this one: **may this path stop being trusted?** That is the
@@ -394,10 +399,10 @@ untrusted: the first has no decision behind it, so the first write there is the 
 This is also what makes declining at startup meaningful, since with nothing vouched for every
 write is shown.
 
-`verified-by: bravebot_core::policy::trusted_data_into_a_trusted_path_is_silent_and_changes_nothing`
+`verified-by: bravebot_core::policy::trusted_data_into_a_trusted_path_is_silent_and_records_the_path_as_it_was`
 `verified-by: bravebot_core::policy::untrusted_data_into_a_trusted_path_prompts_and_distrusts_the_path`
 `verified-by: bravebot_core::policy::trusted_data_into_an_untrusted_path_is_silent_and_trusts_the_path`
-`verified-by: bravebot_core::policy::untrusted_data_into_an_untrusted_path_is_silent_and_changes_nothing`
+`verified-by: bravebot_core::policy::untrusted_data_into_an_untrusted_path_is_silent_and_records_the_path_as_it_was`
 `verified-by: bravebot_core::policy::an_unvouched_path_prompts_either_way`
 `verified-by: bravebot_core::policy::a_file_written_with_untrusted_data_reads_back_untrusted`
 `verified-by: bravebot_core::policy::a_file_read_back_under_another_spelling_is_still_untrusted`
@@ -405,8 +410,8 @@ write is shown.
 <a id="TRUST-5"></a>
 ### TRUST-5: reconciliation marks the exact path, never the parent
 
-Reconciliation records the file written, and no directory above it. This holds for both routes a
-write takes: the effect a live write completes, and the reconciliation a snapshot takes.
+Reconciliation records the file written, and no directory above it. A write takes one route: the
+effect it completes.
 
 **Why.** One untrusted file does not taint its siblings. Marking the parent would turn a single
 fetched page into a project nobody may edit.
@@ -429,12 +434,15 @@ the session chosen; a record from before maps were kept has none, and is asked a
 A continuing caller keeps the current map after success, returned error or cancellation, after
 joining the turn's children. This includes grants made while loading context before a later load
 fails and downgrades recorded by effects. The caller adopts that map before saving or starting
-another turn; a pre-turn copy cannot replace it.
+another turn; a pre-turn copy cannot replace it. A record is written by one process at a time
+([SESSION-38](sessions.md#SESSION-38)), so the map one process recorded is not replaced by a copy
+another process made before it.
 
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`
 `verified-by: bravebot_ui_bridge::retention::worker::bridge_ordinary_endings_keep_decisions_live_and_resumed`
+`verified-by: bravebot_session::sessions::a_second_resume_cannot_erase_the_distrust_the_first_recorded`
 
 A kept yes is the yes and nothing else the session held. The session it settles starts from the rule
 a yes writes and from no other: a path an earlier session's writes marked untrusted, a directory it
@@ -628,6 +636,29 @@ map says, and it is recorded as trusted. It lasts the session, `--resume` carrie
 A directory already inside the project is refused. A directory a resume cannot open again, because
 it has moved or gone, is said so rather than passed over.
 
+The path is absolute, begins with `~` for the home directory, or is relative to the working
+directory, which is the primary root and is the directory `/cd` moves. A `~` is read first, so
+`~/notes` is the home directory's `notes`, and where no home directory is known it is a name under
+the working directory, as `/cd` and a settings file read it. A relative path is resolved against the
+working directory before anything is opened. Its leading `.` and `..` are taken out against the
+working directory's own path, which is canonical and so holds no link for a `..` to step over, and
+its remaining components are appended in order, so `/add-dir ../notes` opens the directory beside
+the project and `/add-dir ../` the directory that holds it. A `..` after a name is left in place for
+the file system, which takes it from the target if the name is a link ([TRUST-10](#TRUST-10)). A
+relative path is refused where the working directory's name is not text, since no text names that
+directory, and `/add-dir close` refuses it the same way.
+
+The directory opened, the rule recorded and the note that names it are the directory the path
+resolves to. A relative name that goes through a link inside the working directory opens and trusts
+what the link points to, as the absolute spelling of the link does, and the note names the target.
+A refusal begins with the name as it was typed and then quotes the absolute spelling the command
+made of it, with `~` expanded and a leading `.` and `..` taken out, which is not a canonical path.
+The refusal for a working directory that is not text quotes the name as typed, and the refusal for
+no path quotes none. Every refusal in this clause applies to the resolved path as it applies to an
+absolute one, including a directory that is missing, a file, a directory inside the project, a
+credential location and `permissions.readsStayInWorkspace`. The workspace still refuses a name that
+is not absolute, so the command resolves the path before it asks the workspace to open it.
+
 `/add-dir close ~/notes` closes that one directory and takes both halves back together: a file that
 only it reached is refused again, and the trusted rule at its own path is removed, under every
 spelling the volume reads as that path and every canonically equivalent one (TRUST-2). Where a
@@ -638,7 +669,11 @@ directory stays open, a directory opened beneath it included, and a name that is
 refused. The name is matched as it is spelled and then as
 it resolves now, through what still exists of it, so a link put there since cannot redirect the
 close and a directory that has gone closes under any name that reached it. The session record is
-written again at once wherever one is on disk, so a resume does not reopen it.
+written again at once wherever one is on disk, so a resume does not reopen it. The name takes the
+same spellings as `/add-dir` does, a relative one against the working directory, so a directory
+opened under one spelling closes under another. A relative name with no `..` after a name is made
+the absolute spelling the directory was opened under before the name is matched, so a link put where
+the directory was cannot redirect its close any more than that of an absolute name.
 
 A directory that *holds* the project is not refused, and the rule it records covers the project's
 files as it covers everything else in that tree. Vouching for a directory is a standing statement
@@ -672,6 +707,20 @@ outlive the answer that allowed it. Closing one takes both halves for the same r
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_spelling_a_folding_volume_reads_as_one`
 `verified-by: bravebot_core::trust::withdrawing_trust_reaches_every_canonically_equivalent_spelling`
 `verified-by: bravebot_tui::app::add_dir_close_withdraws_the_reach_and_the_rule_together`
+`verified-by: bravebot_tui::app::add_dir_opens_a_relative_name_as_it_opens_the_absolute_one`
+`verified-by: bravebot_tui::app::add_dir_records_trust_under_the_directory_a_relative_name_resolves_to`
+`verified-by: bravebot_tui::app::add_dir_of_the_parent_opens_and_trusts_the_directory_holding_the_project`
+`verified-by: bravebot_tui::app::a_relative_name_means_the_working_directory_after_a_cd`
+`verified-by: bravebot_tui::app::add_dir_refuses_a_relative_name_as_it_refuses_the_absolute_one`
+`verified-by: bravebot_tui::app::add_dir_refuses_a_relative_name_that_reaches_a_credential_location`
+`verified-by: bravebot_tui::app::add_dir_close_takes_a_relative_name_as_it_takes_the_absolute_one`
+`verified-by: bravebot_tui::app::add_dir_close_by_a_relative_name_is_not_redirected_by_a_link_put_where_the_directory_was`
+`verified-by: bravebot_tui::app::a_climbing_relative_name_opens_and_closes_the_directory_it_names`
+`verified-by: bravebot_tui::app::a_relative_name_is_cleaned_of_its_leading_dots_and_of_nothing_after_a_name`
+`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
+`verified-by: bravebot_tui::app::add_dir_reads_a_leading_tilde_as_the_home_before_a_name_under_the_project`
+`verified-by: bravebot_tui::app::add_dir_refuses_a_relative_name_where_reads_stay_in_the_workspace`
+`verified-by: bravebot_agent::workspace::opening_and_moving_to_a_directory_refuse_a_bad_name_the_same_way`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
 `verified-by: bravebot_tui::app::add_dir_of_a_directory_holding_the_project_says_it_ends_checkouts`
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
@@ -894,6 +943,9 @@ names the file it always named, and what changes is which of them a relative nam
 each is spelled back. The new directory is then vouched for, on the same footing as `/add-dir`:
 the person typed the path, and a later decision replaces an earlier one.
 
+A relative name is taken against the working directory as `/add-dir` takes one ([TRUST-9](#TRUST-9)),
+and where that directory's name is not text it is refused and the working directory stays.
+
 The permission rules do not travel. They are read again for the new directory, and an `allow` rule
 granted for the checkout left behind stays with it ([PERM-15](permissions.md#PERM-15)).
 
@@ -930,6 +982,7 @@ them.
 `verified-by: bravebot_tui::app::moving_into_a_directory_keeps_the_answers_given_inside_it`
 `verified-by: bravebot_tui::app::a_rule_granted_in_one_checkout_is_not_in_force_after_moving_to_another`
 `verified-by: bravebot_tui::app::an_answer_to_show_a_file_does_not_cover_the_file_by_that_name_after_moving`
+`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
 
 ## A scratch directory outside the workspace
 

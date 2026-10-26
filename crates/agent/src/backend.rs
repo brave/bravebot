@@ -65,6 +65,11 @@ pub enum BackendError {
 impl fmt::Display for BackendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            // The sentence is the catalog's, since the crate that names the condition has none. The
+            // status of a refusal is said after it, as the status of any other refusal is said.
+            Self::Aichat(ChatError::Account(failure)) => {
+                f.write_str(&crate::chatgpt::told_of_failure(*failure))
+            }
             Self::Aichat(e) => write!(f, "{e}"),
             Self::Bedrock(e) => write!(f, "{e}"),
             Self::NoGatewayToken { provider } => write!(
@@ -147,12 +152,20 @@ impl BackendError {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
                 ChatError::Subscription(_) => Category::Unauthorized,
-                ChatError::BodyTooLarge { .. } => Category::Refused,
                 ChatError::Account(failure) => match failure {
                     AccountFailure::NotSignedIn
                     | AccountFailure::Ended
                     | AccountFailure::Refused
                     | AccountFailure::Unusable => Category::Unauthorized,
+                    // The service answered and said the account has reached a limit or may not be
+                    // used this way, which a new sign-in does not change, so it is no failure of the
+                    // credential. A refusal is a category no fallback model is used for, and the
+                    // account answers for every model it serves.
+                    AccountFailure::Named { .. } => Category::Refused,
+                    // The service answered and said the account does not offer this model, which
+                    // a new sign-in or another request does not change, so it is no failure of
+                    // the credential.
+                    AccountFailure::ModelNotOffered => Category::Refused,
                     AccountFailure::Renewal(class) => match class {
                         RenewalFailure::Refused => Category::Refused,
                         RenewalFailure::RateLimited => Category::RateLimited,
@@ -205,7 +218,27 @@ impl BackendError {
                 BedrockError::Egress(egress) => return of_egress(egress),
             },
         };
-        Diagnosis::of(category)
+        match self {
+            // Beside the category, which is the class of the failure, for a front end that words
+            // it as the account's own sentence (CHATGPT-8). The value was chosen by the step that
+            // failed, or by the client that sent the request comparing a code with the closed
+            // list, so it is passed on and compared with nothing.
+            Self::Aichat(ChatError::Account(failure)) => {
+                let diagnosis = Diagnosis::of(category).with_account(*failure);
+                // A refusal that names the account keeps the status it came with and the wait it
+                // asked for, as any other refusal does, so every line that says a failure can say
+                // them. One that arrived as an event of a stream came with neither.
+                let diagnosis = match failure.status() {
+                    Some(status) => diagnosis.with_status(status),
+                    None => diagnosis,
+                };
+                match failure.wait() {
+                    Some(wait) => diagnosis.asking_for_a_wait_of(wait),
+                    None => diagnosis,
+                }
+            }
+            _ => Diagnosis::of(category),
+        }
     }
 
     /// Whether the request never reached the service.
@@ -247,7 +280,8 @@ impl BackendError {
     /// Decided from the status alone, never from what the reply wrote. The same statuses cover a
     /// field the service dislikes as readily as a prompt too long, so this says only that the request
     /// as written was refused, and a caller acting on it has to be one for whom a wrong guess costs
-    /// little.
+    /// little. A 400 that the ChatGPT account's client has told as a model not offered arrives as
+    /// another error, so it is not this and no compaction is spent on it.
     pub fn refused_the_body(&self) -> bool {
         use bravebot_net::EgressError;
         match self {
@@ -261,9 +295,6 @@ impl BackendError {
             Self::Aichat(ChatError::Reported {
                 failure: Failure::ContextFull,
             }) => true,
-            // Not sent for its size: the same remedy as a body the service refused, and the
-            // service was not asked.
-            Self::Aichat(ChatError::BodyTooLarge { .. }) => true,
             Self::Attempted { cause, .. } => cause.refused_the_body(),
             _ => false,
         }
@@ -320,6 +351,9 @@ pub(crate) mod scripted {
             const { RefCell::new(None) };
         static ASKED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
         static THOUGHT: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static SESSIONS: RefCell<Vec<Option<String>>> = const { RefCell::new(Vec::new()) };
+        static LEVELS: RefCell<Vec<Option<Option<bravebot_aichat::protocol::Effort>>>> =
+            const { RefCell::new(Vec::new()) };
     }
 
     /// Answer the next requests on this thread with `replies`, and forget what was asked before.
@@ -327,6 +361,8 @@ pub(crate) mod scripted {
         REPLIES.with(|scripted| *scripted.borrow_mut() = Some(replies.into()));
         ASKED.with(|asked| asked.borrow_mut().clear());
         THOUGHT.with(|thought| thought.borrow_mut().clear());
+        SESSIONS.with(|sessions| sessions.borrow_mut().clear());
+        LEVELS.with(|levels| levels.borrow_mut().clear());
     }
 
     /// Report `pieces` as the thinking a service streamed, one report each, ahead of every scripted
@@ -339,6 +375,20 @@ pub(crate) mod scripted {
     /// The body of each request a scripted reply answered, in order.
     pub(crate) fn asked() -> Vec<String> {
         ASKED.with(|asked| asked.borrow().clone())
+    }
+
+    /// The identifier of the session each request a scripted reply answered would have carried to
+    /// the ChatGPT account, in order. `None` where the backend was not the account or the request
+    /// belonged to no session.
+    pub(crate) fn sessions() -> Vec<Option<String>> {
+        SESSIONS.with(|sessions| sessions.borrow().clone())
+    }
+
+    /// The effort level each request a scripted reply answered would have been held to, in order.
+    /// `None` where the backend was not the account or the request belonged to no session, and
+    /// `Some(None)` where the session began with no level.
+    pub(crate) fn levels() -> Vec<Option<Option<bravebot_aichat::protocol::Effort>>> {
+        LEVELS.with(|levels| levels.borrow().clone())
     }
 
     /// Stop answering from a script, so a test that fails part way leaves nothing for the next
@@ -365,13 +415,22 @@ pub(crate) mod scripted {
     /// The scripted reply to `request`, where this thread has a script. A script that has run out
     /// is a turn asking more than the test expected, which is a failure rather than a request to
     /// go and send.
-    pub(super) fn next(request: &ChatRequest) -> Option<Result<Completion, BackendError>> {
+    pub(super) fn next(
+        request: &ChatRequest,
+        session: Option<(String, Option<bravebot_aichat::protocol::Effort>)>,
+    ) -> Option<Result<Completion, BackendError>> {
         REPLIES.with(|scripted| {
             let mut scripted = scripted.borrow_mut();
             let replies = scripted.as_mut()?;
             let reply = replies
                 .pop_front()
                 .unwrap_or_else(|| panic!("asked once more than the script answers"));
+            let (identifier, level) = match session {
+                Some((identifier, level)) => (Some(identifier), Some(level)),
+                None => (None, None),
+            };
+            SESSIONS.with(|sessions| sessions.borrow_mut().push(identifier));
+            LEVELS.with(|levels| levels.borrow_mut().push(level));
             ASKED.with(|asked| {
                 asked
                     .borrow_mut()
@@ -475,6 +534,10 @@ pub enum Backend<'a> {
         wire_model: String,
         egress: &'a Egress,
         cancel: Option<Cancel>,
+        /// The session the request belongs to, whose identifier it carries
+        /// ([`Backend::in_session`]). `None` is a request of no session, which gets an identifier
+        /// of its own.
+        session: Option<crate::chatgpt::AccountSession>,
     },
 }
 
@@ -573,7 +636,16 @@ pub enum Serving {
         /// models and name no default, so the model in force stays the one this build baked in,
         /// which Brave's endpoint answers. Worth telling apart, because what that person has to do
         /// is name one of their own models rather than set a service up.
+        ///
+        /// A stored ChatGPT sign-in is such a service
+        /// ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)).
         a_service_is_configured: bool,
+        /// What the ChatGPT sign-in file holds, which decides what the person is told: a sign-in
+        /// that is stored is the service configured, and one that cannot be read is said so.
+        ///
+        /// Not read where a Bedrock or gateway block is configured, and then `NotStored`, so a
+        /// stored sign-in is the whole of the service configured only where nothing else is.
+        chatgpt: crate::chatgpt::AccountFile,
     },
     /// The machine-level layer does not let this machine request the model (BACKEND-48).
     ///
@@ -596,9 +668,22 @@ pub enum Serving {
 /// [`Backend::spends_a_subscription`]'s question, asked here for the same reason
 /// [`crate::turn::discover_subscription`] asks it.
 ///
-/// The store is read only where nothing before it has answered, since it is a file in somebody's
-/// home directory and a read that cannot change the answer is a read for nothing.
+/// The store and the ChatGPT sign-in file are read only where nothing before them has answered, since
+/// each is a file in somebody's home directory and a read that cannot change the answer is a read
+/// for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
+    serving_with(config, egress, model, crate::chatgpt::account_file)
+}
+
+/// [`serving`] with the sign-in file read by `chatgpt`, so a test is not answered by the file of
+/// whoever runs it. Called only where nothing before it has answered and no Bedrock or gateway
+/// block is configured, as the store is.
+fn serving_with(
+    config: &Config,
+    egress: &Egress,
+    model: &str,
+    chatgpt: impl FnOnce() -> crate::chatgpt::AccountFile,
+) -> Serving {
     // First, because it is the one answer no configuration changes: a model the machine-level layer
     // refuses is refused whichever service would have answered for it, and asking which service that
     // is would report a working Bedrock account for a request that is never sent (BACKEND-48).
@@ -631,12 +716,24 @@ pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
         return Serving::Configured;
     }
 
+    // A sign-in that is stored is a service configured for the models it names, and the model in
+    // force is not one of them. It is read only where no Bedrock or gateway block is configured:
+    // somebody who has one is told to name a model with the `model` key, and a sign-in beside it
+    // must not take that line from them. One that cannot be read configures nothing and is said.
+    let configured_elsewhere = config.bedrock.is_some() || !config.providers.is_empty();
+    let chatgpt = if configured_elsewhere {
+        crate::chatgpt::AccountFile::NotStored
+    } else {
+        chatgpt()
+    };
     Serving::NothingConfigured {
         subscription: stored
             .as_ref()
             .and_then(|found| found.complaint())
             .map(str::to_string),
-        a_service_is_configured: config.bedrock.is_some() || !config.providers.is_empty(),
+        a_service_is_configured: configured_elsewhere
+            || chatgpt == crate::chatgpt::AccountFile::Stored,
+        chatgpt,
     }
 }
 
@@ -718,8 +815,8 @@ pub fn answering(
 pub fn refusal_reason(file: &Path, why: ModelRefusal) -> String {
     let path = file.display().to_string();
     match why {
-        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path).to_string(),
-        ModelRefusal::Denied => t!(managed_model_denied, path = path).to_string(),
+        ModelRefusal::NotAllowed => t!(managed_model_not_allowed, path = path),
+        ModelRefusal::Denied => t!(managed_model_denied, path = path),
     }
 }
 
@@ -802,6 +899,19 @@ fn sets_aside(pick: Serving, default: impl FnOnce() -> Serving) -> bool {
     gives_way && default() == Serving::Configured
 }
 
+/// The failure of a call to `client`, with the requests it took and what they cost.
+macro_rules! counted {
+    ($client:expr, $result:expr) => {
+        $result.map_err(|error| {
+            BackendError::from(error).counted(
+                $client.attempts(),
+                $client.completed_usage(),
+                $client.last_request_tokens(),
+            )
+        })
+    };
+}
+
 impl<'a> Backend<'a> {
     /// The backend that serves `model`.
     ///
@@ -835,6 +945,7 @@ impl<'a> Backend<'a> {
                 wire_model: wire_model.to_string(),
                 egress,
                 cancel: None,
+                session: None,
             };
         }
         Self::Aichat {
@@ -1005,6 +1116,18 @@ impl<'a> Backend<'a> {
         self
     }
 
+    /// Make the requests this backend sends the ones of `session`, where it is the ChatGPT account
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Ignored by every other backend, which carries no session identifier. A request sent with no
+    /// session given carries an identifier of its own, so it shares no cache with another.
+    pub fn in_session(mut self, session: &crate::chatgpt::AccountSession) -> Self {
+        if let Self::Account { session: held, .. } = &mut self {
+            *held = Some(session.clone());
+        }
+        self
+    }
+
     /// Send a request and wait for the whole reply.
     pub fn complete<S: Sink>(
         &mut self,
@@ -1018,37 +1141,17 @@ impl<'a> Backend<'a> {
                 subscription,
                 cancel,
             } => {
-                let mut client = AichatClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                if let Some(subscription) = subscription.as_mut() {
-                    client = client.with_subscription(*subscription);
-                }
-                client.complete(policy, request).map_err(|error| {
-                    BackendError::from(error).counted(
-                        client.attempts(),
-                        client.completed_usage(),
-                        client.last_request_tokens(),
-                    )
-                })
+                let mut client =
+                    aichat_client(config, egress, subscription.as_mut(), cancel.as_ref());
+                counted!(client, client.complete(policy, request))
             }
             Self::Bedrock {
                 config,
                 egress,
                 cancel,
             } => {
-                let mut client = BedrockClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                client.complete(policy, request).map_err(|error| {
-                    BackendError::from(error).counted(
-                        client.attempts(),
-                        client.completed_usage(),
-                        client.last_request_tokens(),
-                    )
-                })
+                let mut client = bedrock_client(config, egress, cancel.as_ref());
+                counted!(client, client.complete(policy, request))
             }
             Self::Gateway {
                 config,
@@ -1067,9 +1170,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in);
+                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1086,7 +1190,16 @@ impl<'a> Backend<'a> {
         progress: impl FnMut(Progress),
     ) -> Result<Completion, BackendError> {
         #[cfg(test)]
-        if let Some(reply) = scripted::next(request) {
+        if let Some(reply) = scripted::next(
+            request,
+            match self {
+                Self::Account {
+                    session: Some(session),
+                    ..
+                } => Some((session.identifier().to_string(), session.effort())),
+                _ => None,
+            },
+        ) {
             scripted::report_thinking(progress);
             return reply;
         }
@@ -1097,41 +1210,17 @@ impl<'a> Backend<'a> {
                 subscription,
                 cancel,
             } => {
-                let mut client = AichatClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                if let Some(subscription) = subscription.as_mut() {
-                    client = client.with_subscription(*subscription);
-                }
-                client
-                    .complete_streaming(policy, request, progress)
-                    .map_err(|error| {
-                        BackendError::from(error).counted(
-                            client.attempts(),
-                            client.completed_usage(),
-                            client.last_request_tokens(),
-                        )
-                    })
+                let mut client =
+                    aichat_client(config, egress, subscription.as_mut(), cancel.as_ref());
+                counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Bedrock {
                 config,
                 egress,
                 cancel,
             } => {
-                let mut client = BedrockClient::new(config, egress);
-                if let Some(cancel) = cancel {
-                    client = client.with_cancel(cancel.clone());
-                }
-                client
-                    .complete_streaming(policy, request, progress)
-                    .map_err(|error| {
-                        BackendError::from(error).counted(
-                            client.attempts(),
-                            client.completed_usage(),
-                            client.last_request_tokens(),
-                        )
-                    })
+                let mut client = bedrock_client(config, egress, cancel.as_ref());
+                counted!(client, client.complete_streaming(policy, request, progress))
             }
             Self::Gateway {
                 config,
@@ -1150,9 +1239,10 @@ impl<'a> Backend<'a> {
                 wire_model,
                 egress,
                 cancel,
+                session,
             } => {
                 let mut sign_in = crate::chatgpt::StoredSignIn;
-                let mut client = account_client(wire_model, egress, &mut sign_in);
+                let mut client = account_client(wire_model, egress, &mut sign_in, session.as_ref());
                 if let Some(cancel) = cancel {
                     client = client.with_cancel(cancel.clone());
                 }
@@ -1162,23 +1252,67 @@ impl<'a> Backend<'a> {
     }
 }
 
+/// A client for the aichat endpoint, stopped by `cancel` and spending `subscription` where either
+/// is given.
+fn aichat_client<'a>(
+    config: &'a Config,
+    egress: &'a Egress,
+    subscription: Option<&'a mut &mut dyn Subscription>,
+    cancel: Option<&Cancel>,
+) -> AichatClient<'a> {
+    let mut client = AichatClient::new(config, egress);
+    if let Some(cancel) = cancel {
+        client = client.with_cancel(cancel.clone());
+    }
+    if let Some(subscription) = subscription {
+        client = client.with_subscription(*subscription);
+    }
+    client
+}
+
+/// A client for an AWS Bedrock account, stopped by `cancel` where one is given.
+fn bedrock_client<'a>(
+    config: &'a bravebot_config::bedrock::Bedrock,
+    egress: &'a Egress,
+    cancel: Option<&Cancel>,
+) -> BedrockClient<'a> {
+    let mut client = BedrockClient::new(config, egress);
+    if let Some(cancel) = cancel {
+        client = client.with_cancel(cancel.clone());
+    }
+    client
+}
+
 /// A client for the ChatGPT account, asking `sign_in` for a token before each request.
 ///
-/// The service, its protocol and its headers are constants, and the session identifier is the
-/// process's own ([`crate::chatgpt::session_id`]). Nothing a settings file, a variable or a gateway
-/// block says reaches it, so no key but the sign-in's is ever the account's.
+/// The service, its protocol and its headers are constants, and the session identifier is the one of
+/// `session`, or one of its own where the request belongs to none. A request that asks for an effort
+/// level is sent the level `session` began with, where it belongs to one
+/// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)). Nothing a settings file, a
+/// variable or a gateway block says reaches it, so no key but the sign-in's is ever the account's.
 fn account_client<'a>(
     wire_model: &str,
     egress: &'a Egress,
     sign_in: &'a mut crate::chatgpt::StoredSignIn,
+    session: Option<&crate::chatgpt::AccountSession>,
 ) -> GatewayClient<'a> {
-    GatewayClient::Responses(ResponsesClient::for_account(
+    let identifier = match session {
+        Some(session) => session.identifier().to_string(),
+        None => crate::chatgpt::AccountSession::begin()
+            .identifier()
+            .to_string(),
+    };
+    let client = ResponsesClient::for_account(
         egress,
         crate::chatgpt::account_provider(),
         wire_model,
         sign_in,
-        crate::chatgpt::session_id(),
-    ))
+        identifier,
+    );
+    GatewayClient::Responses(match session {
+        Some(session) => client.holding_the_level(session.effort()),
+        None => client,
+    })
 }
 
 /// A client pointed at `provider`, with its token resolved, in the protocol the provider speaks.
@@ -1248,19 +1382,6 @@ enum GatewayClient<'a> {
     Messages(AnthropicClient<'a>),
     GenerateContent(GenerateContentClient<'a>),
     Responses(ResponsesClient<'a>),
-}
-
-/// The failure of a call to `client`, with the requests it took and what they cost.
-macro_rules! counted {
-    ($client:expr, $result:expr) => {
-        $result.map_err(|error| {
-            BackendError::from(error).counted(
-                $client.attempts(),
-                $client.completed_usage(),
-                $client.last_request_tokens(),
-            )
-        })
-    };
 }
 
 impl GatewayClient<'_> {
@@ -1335,6 +1456,8 @@ fn gateway_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chatgpt::AccountFile;
+    use bravebot_aichat::responses::protocol::Refusal;
     use bravebot_config::DEFAULT_MODEL;
     use bravebot_config::env_var;
 
@@ -1510,12 +1633,107 @@ mod tests {
     fn braves_endpoint_with_nothing_beside_it_has_no_service_configured() {
         let egress = Egress::new();
         assert_eq!(
-            serving(&braves_endpoint_without_premium(), &egress, DEFAULT_MODEL),
+            serving_with(
+                &braves_endpoint_without_premium(),
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored
+            ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: false,
+                chatgpt: AccountFile::NotStored,
             }
         );
+    }
+
+    /// BACKEND-39: a stored ChatGPT sign-in is a service configured, so a person who has just signed
+    /// in and still has Brave's model in force is told to name a model and not shown the routes
+    /// again. A file that cannot be read configures nothing and is said, and the sign-in is read
+    /// only where nothing before it has answered.
+    #[test]
+    fn a_stored_chatgpt_sign_in_is_a_service_configured_and_an_unreadable_one_is_not() {
+        let egress = Egress::new();
+        let config = braves_endpoint_without_premium();
+        for (found, configured) in [
+            (AccountFile::Stored, true),
+            (AccountFile::NotStored, false),
+            (AccountFile::Unreadable, false),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || found),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: configured,
+                    chatgpt: found,
+                },
+                "{found:?}"
+            );
+        }
+
+        // A model a configured service serves never asks about the file.
+        assert_eq!(
+            serving_with(
+                &braves_endpoint_with_a_gateway(),
+                &egress,
+                "z-ai/glm-4.6",
+                || panic!("the sign-in file was read for a model a gateway serves")
+            ),
+            Serving::Configured
+        );
+    }
+
+    /// BACKEND-39: a Bedrock or gateway block that is configured while Brave's own model is in force
+    /// keeps the line that names the `model` key, whatever else is stored, so the sign-in file is
+    /// not read and nothing it holds can replace that line. Reading it for them would tell a person
+    /// who set up an AWS account or a gateway and also signed in to ChatGPT to pick a model of the
+    /// account, and say nothing of the service they configured.
+    #[test]
+    fn a_configured_bedrock_or_gateway_block_keeps_its_line_whatever_a_sign_in_holds() {
+        let egress = Egress::new();
+        let tier_variables = Config::from_lookup(|key| {
+            match key {
+                env_var::SIGNING_KEY => Some("test-signing-key"),
+                env_var::KEY_ID => Some("test-key-id"),
+                env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
+                env_var::USE_BEDROCK => Some("1"),
+                env_var::AWS_REGION => Some("us-west-2"),
+                env_var::BEDROCK_OPUS_MODEL => Some("opus-arn"),
+                env_var::AWS_PROFILE => Some("a-profile-no-machine-has"),
+                _ => None,
+            }
+            .map(str::to_string)
+        })
+        .expect("configured");
+        assert!(tier_variables.bedrock.is_some());
+        let mut an_aws_block = braves_endpoint_without_premium();
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                "models": {"openai.gpt-5.6-sol": {}}
+            }}}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        an_aws_block.providers = bravebot_config::provider::Provider::all(&root);
+        for (config, configured) in [
+            (braves_endpoint_with_a_gateway(), "a gateway block"),
+            (tier_variables, "the Bedrock tier variables"),
+            (an_aws_block, "an AWS block"),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || panic!(
+                    "the sign-in file was read beside {configured}"
+                )),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: true,
+                    chatgpt: AccountFile::NotStored,
+                },
+                "{configured}"
+            );
+        }
     }
 
     /// A model a configured service serves has a service, whatever the aichat fields hold. The
@@ -1544,10 +1762,16 @@ mod tests {
     fn a_service_configured_while_the_model_is_braves_own_has_none_for_that_model() {
         let egress = Egress::new();
         assert_eq!(
-            serving(&braves_endpoint_with_a_gateway(), &egress, DEFAULT_MODEL),
+            serving_with(
+                &braves_endpoint_with_a_gateway(),
+                &egress,
+                DEFAULT_MODEL,
+                || AccountFile::NotStored
+            ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: true,
+                chatgpt: AccountFile::NotStored,
             }
         );
     }
@@ -1684,6 +1908,7 @@ mod tests {
         let refused = |subscription: Option<&str>| Serving::NothingConfigured {
             subscription: subscription.map(str::to_string),
             a_service_is_configured: true,
+            chatgpt: AccountFile::NotStored,
         };
         assert!(sets_aside(refused(None), || Serving::Configured));
         assert!(!sets_aside(
@@ -1850,6 +2075,132 @@ mod tests {
         assert_eq!(wire_model, "gpt-5.5");
     }
 
+    /// CHATGPT-9: a gateway of another id that lists a model named `chatgpt/gpt-5.5` does not take
+    /// that name from the account. The bare name selects the account and is sent as `gpt-5.5`, with
+    /// the account's token and not the gateway's key. The gateway's model is the one its row is
+    /// keyed by, `litellm/chatgpt/gpt-5.5`, which sends the gateway the name it lists, so the two
+    /// rows are two services and one conversation does not move between them. An entry that has the
+    /// account's id and states an endpoint keeps the name.
+    #[test]
+    fn a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account() {
+        let config = with_providers(
+            r#"{"provider": {"litellm": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                "models": {"chatgpt/gpt-5.5": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        let Backend::Account { wire_model, .. } =
+            Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+        else {
+            panic!("the gateway's listing took the account's name");
+        };
+        assert_eq!(wire_model, "gpt-5.5");
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&config, &egress, "litellm/chatgpt/gpt-5.5")
+        else {
+            panic!("the gateway's own spelling did not reach the gateway");
+        };
+        assert_eq!(provider.id, "litellm");
+        assert_eq!(wire_model, "chatgpt/gpt-5.5");
+
+        assert!(!Backend::serves_both(
+            &config,
+            "chatgpt/gpt-5.5",
+            "litellm/chatgpt/gpt-5.5"
+        ));
+        assert_eq!(
+            Backend::name_as_asked(&config, "chatgpt/gpt-5.5"),
+            "gpt-5.5"
+        );
+        assert_eq!(
+            Backend::name_as_asked(&config, "litellm/chatgpt/gpt-5.5"),
+            "chatgpt/gpt-5.5"
+        );
+
+        let config = with_providers(
+            r#"{"provider": {
+                "litellm": {
+                    "env": ["A_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                    "models": {"chatgpt/gpt-5.5": {}}
+                },
+                "chatgpt": {
+                    "env": ["ANOTHER_TOKEN_VARIABLE"],
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                    "models": {"gpt-5.5": {}}
+                }
+            }}"#,
+        );
+        let Backend::Gateway { provider, .. } =
+            Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+        else {
+            panic!("the entry that holds the id did not keep the name");
+        };
+        assert_eq!(provider.id, "chatgpt");
+    }
+
+    /// CHATGPT-9: a Bedrock account that lists a model under the name `chatgpt/gpt-5.5`, in a block
+    /// or in a tier variable, does not take that name from the account either. The turn goes to the
+    /// account and not to AWS, asks for no AWS sign-in, and is no pair with a Bedrock model of
+    /// another name. The Bedrock model that has an ordinary id is still Bedrock's.
+    #[test]
+    fn a_bedrock_account_listing_a_chatgpt_name_does_not_take_it_from_the_account() {
+        let named_by_a_tier_variable = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".to_string()),
+            env_var::AWS_REGION => Some("us-west-2".to_string()),
+            env_var::BEDROCK_OPUS_MODEL => Some("chatgpt/gpt-5.5".to_string()),
+            env_var::AWS_PROFILE => Some("a-profile-no-machine-has".to_string()),
+            other => aichat_only(other),
+        })
+        .expect("configured");
+        let named_by_a_block = with_providers(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        for (config, listed_by) in [
+            (named_by_a_tier_variable, "a tier variable"),
+            (named_by_a_block, "a block"),
+        ] {
+            let Backend::Account { wire_model, .. } =
+                Backend::select(&config, &egress, "chatgpt/gpt-5.5")
+            else {
+                panic!("the name {listed_by} lists was not the account's");
+            };
+            assert_eq!(wire_model, "gpt-5.5", "{listed_by}");
+            assert!(
+                !Backend::needs_sign_in(&config, "chatgpt/gpt-5.5"),
+                "{listed_by}: the account asked for an AWS sign-in"
+            );
+            assert!(
+                !Backend::serves_both(&config, "chatgpt/gpt-5.5", "openai.gpt-5.6-sol"),
+                "{listed_by}"
+            );
+        }
+        assert!(matches!(
+            Backend::select(
+                &with_providers(
+                    r#"{"provider": {"amazon-bedrock": {
+                    "options": {"region": "us-west-2", "profile": "a-profile-no-machine-has"},
+                    "models": {"chatgpt/gpt-5.5": {}, "openai.gpt-5.6-sol": {}}
+                }}}"#
+                ),
+                &egress,
+                "openai.gpt-5.6-sol"
+            ),
+            Backend::Bedrock { .. }
+        ));
+    }
+
     /// CHATGPT-9: the account answers for its own models alone. One conversation moves between two
     /// of them and no further, the name a reply reports is not compared with the qualified name, and
     /// the account spends no Leo credential and asks for no AWS sign-in.
@@ -1886,6 +2237,71 @@ mod tests {
         assert!(!Backend::needs_sign_in(&config, "chatgpt/gpt-5.5"));
     }
 
+    /// A refusal that names the account, with neither a status nor a wait, as one reported on a
+    /// stream is.
+    fn refused(refusal: Refusal) -> AccountFailure {
+        AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    /// CHATGPT-8: a refusal that names the account keeps the status it came with in the diagnosis,
+    /// and the wait it asked for where it came as a 429, so every line that says the failure can say
+    /// them as it does for any other refusal. The category is the refusal's whatever the status, so a
+    /// retry or a fallback is decided as before. A refusal reported on a stream came with neither,
+    /// and a wait that came with another status is not carried into the diagnosis.
+    ///
+    /// The regressions it rejects are a refusal that loses its status and its wait, which says only
+    /// that the account was refused where a usage limit that came as a 429 used to say when to ask
+    /// again, a wait carried for a status that did not ask for one, and a status invented for a
+    /// refusal that came on a stream.
+    #[test]
+    fn a_refusal_that_names_the_account_keeps_its_status_and_wait_in_the_diagnosis() {
+        use std::time::Duration;
+        let named = |status, retry_after| AccountFailure::Named {
+            refusal: Refusal::UsageLimit,
+            status,
+            retry_after,
+        };
+        let ten_minutes = Some(Duration::from_secs(600));
+
+        let waiting = BackendError::from(ChatError::Account(named(Some(429), ten_minutes)))
+            .counted(3, None, None);
+        let diagnosis = waiting.diagnosis();
+        assert_eq!(diagnosis.category, Category::Refused);
+        assert_eq!(diagnosis.status, Some(429));
+        assert_eq!(diagnosis.retry_after, ten_minutes);
+        assert_eq!(diagnosis.attempts, Some(3));
+
+        // A wait that came with another status is carried by the failure and not said.
+        let forbidden = BackendError::from(ChatError::Account(named(Some(403), ten_minutes)));
+        assert_eq!(forbidden.diagnosis().status, Some(403));
+        assert_eq!(forbidden.diagnosis().retry_after, None);
+
+        // Neither status nor wait where the refusal came on a stream.
+        let streamed = BackendError::from(ChatError::Account(named(None, None)));
+        let diagnosis = streamed.diagnosis();
+        assert_eq!((diagnosis.status, diagnosis.retry_after), (None, None));
+
+        // No other failure of the account carries a status or a wait.
+        for other in [
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+        ] {
+            let diagnosis = BackendError::from(ChatError::Account(other)).diagnosis();
+            assert_eq!(
+                (diagnosis.status, diagnosis.retry_after),
+                (None, None),
+                "{other:?}"
+            );
+        }
+    }
+
     /// CHATGPT-8: each failure of the sign-in is diagnosed from its step, and where signing in
     /// again is the remedy the sentence says which command to type. None holds text from a reply.
     #[test]
@@ -1895,6 +2311,9 @@ mod tests {
             (AccountFailure::Ended, Category::Unauthorized, true),
             (AccountFailure::Refused, Category::Unauthorized, true),
             (AccountFailure::Unusable, Category::Unauthorized, false),
+            (refused(Refusal::UsageLimit), Category::Refused, false),
+            (refused(Refusal::NotPermitted), Category::Refused, false),
+            (AccountFailure::ModelNotOffered, Category::Refused, false),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),
                 Category::Refused,
@@ -1931,15 +2350,192 @@ mod tests {
         }
     }
 
-    /// CHATGPT-10: a body not sent for its size is refused as the body is where a service refuses
-    /// it, so the turn shortens the conversation once, and it is no failure of the sign-in.
+    /// CHATGPT-8: which of the account's failures it was travels with the category, so a front end
+    /// can say it in the sentence of that failure and not in the category's. Every value reaches
+    /// the diagnosis as itself, including where the call was counted, and the usage limit and the
+    /// refusal that says the account may not be used stay two values.
     #[test]
-    fn a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in() {
-        let error = BackendError::from(ChatError::BodyTooLarge { limit: 1 << 20 });
-        assert!(error.refused_the_body());
-        assert_eq!(error.diagnosis().category, Category::Refused);
-        assert!(!error.to_string().contains("auth login"), "{error}");
-        assert!(!BackendError::from(ChatError::Account(AccountFailure::Ended)).refused_the_body());
+    fn a_diagnosis_carries_which_failure_of_the_account_it_was() {
+        let every = [
+            AccountFailure::NotSignedIn,
+            AccountFailure::Ended,
+            AccountFailure::Refused,
+            AccountFailure::Unusable,
+            refused(Refusal::UsageLimit),
+            refused(Refusal::NotPermitted),
+            AccountFailure::ModelNotOffered,
+            AccountFailure::Renewal(RenewalFailure::Refused),
+            AccountFailure::Renewal(RenewalFailure::RateLimited),
+            AccountFailure::Renewal(RenewalFailure::Unavailable),
+            AccountFailure::Renewal(RenewalFailure::Incomplete),
+            AccountFailure::Renewal(RenewalFailure::Transport),
+        ];
+        for failure in every {
+            let error = BackendError::from(ChatError::Account(failure));
+            assert_eq!(error.diagnosis().account, Some(failure), "{failure:?}");
+            let counted = error.counted(2, None, None).diagnosis();
+            assert_eq!(counted.account, Some(failure), "{failure:?} counted");
+            assert_eq!(counted.attempts, Some(2), "{failure:?} counted");
+        }
+    }
+
+    /// A failure of any other kind carries no account value, so a front end says what its category
+    /// says: a gateway's refused key is not the sign-in failing, and a request the service refused
+    /// with a status is not a refusal that names the account.
+    #[test]
+    fn a_failure_with_no_account_in_it_carries_no_account_value() {
+        let status = |status: u16| {
+            BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://api.example.invalid/v1/responses".to_string(),
+                status,
+                retry_after: None,
+                body: None,
+            }))
+        };
+        let errors = [
+            status(401),
+            status(429),
+            status(503),
+            BackendError::from(ChatError::Subscription("none".to_string())),
+            BackendError::from(ChatError::NoContent),
+            BackendError::from(ChatError::Incomplete),
+            BackendError::from(ChatError::Cancelled),
+            BackendError::from(ChatError::Reported {
+                failure: Failure::Authentication,
+            }),
+            BackendError::NoGatewayToken {
+                provider: "a-gateway".to_string(),
+            },
+            BackendError::from(BedrockError::Incomplete),
+            status(401).counted(3, None, None),
+        ];
+        for error in errors {
+            assert_eq!(error.diagnosis().account, None, "{error}");
+        }
+    }
+
+    /// CHATGPT-8: a refusal that says something about the account, and a refusal of a model the
+    /// account does not offer, are not a refusal of the body, so no summary is spent on them and the
+    /// conversation is not shortened for them, though the service answered the model's with a 400.
+    /// The sentences of the three are told apart and quote nothing.
+    #[test]
+    fn a_refusal_of_the_account_is_not_a_refusal_of_the_body() {
+        let mut sentences = Vec::new();
+        for failure in [
+            refused(Refusal::UsageLimit),
+            refused(Refusal::NotPermitted),
+            AccountFailure::ModelNotOffered,
+        ] {
+            let error = BackendError::from(ChatError::Account(failure));
+            assert!(!error.refused_the_body(), "{failure:?}");
+            assert!(!error.is_unreachable(), "{failure:?}");
+            assert!(!error.is_cancelled(), "{failure:?}");
+            sentences.push(error.to_string());
+        }
+        assert_ne!(sentences[0], sentences[1]);
+        assert_ne!(sentences[0], sentences[2]);
+        assert_ne!(sentences[1], sentences[2]);
+        assert!(sentences[0].contains("usage limit"), "{}", sentences[0]);
+        assert!(!sentences[1].contains("usage limit"), "{}", sentences[1]);
+        assert!(!sentences[2].contains("usage limit"), "{}", sentences[2]);
+        assert!(
+            sentences[2].contains("does not offer that model"),
+            "{}",
+            sentences[2]
+        );
+    }
+
+    /// CHATGPT-10: a request to the account that asks for a level is sent the one its session began
+    /// with, whatever it asks for, and one sent in no session is sent what it asks for. The
+    /// regressions it rejects are a client not told the session's level, and one told it by a
+    /// session that has none.
+    #[test]
+    fn a_request_to_the_account_is_held_to_the_level_the_session_began_with() {
+        use bravebot_aichat::protocol::Effort;
+        let egress = Egress::new();
+        let mut sign_in = crate::chatgpt::StoredSignIn;
+        let asks = ChatRequest::new("m", Vec::new()).with_effort(Some(Effort::High));
+        let mut sent = |session: Option<&crate::chatgpt::AccountSession>| {
+            let GatewayClient::Responses(client) =
+                account_client("m", &egress, &mut sign_in, session)
+            else {
+                panic!("the account is spoken to in the Responses protocol");
+            };
+            client.level_for(&asks)
+        };
+
+        assert_eq!(
+            sent(Some(&crate::chatgpt::AccountSession::begin_with(Some(
+                Effort::Low
+            )))),
+            Some(Effort::Low)
+        );
+        assert_eq!(
+            sent(Some(&crate::chatgpt::AccountSession::begin())),
+            None,
+            "a session that began with no level was sent the one a request asked for"
+        );
+        assert_eq!(sent(None), Some(Effort::High));
+    }
+
+    /// CHATGPT-8 and BACKEND-53: a refusal that names the account is a refusal among the failure
+    /// categories, which no fallback model is used for: the account answers for every model it
+    /// serves, so the fallback would be refused the same way. The model named as a fallback is moved
+    /// to after a rate limit by status, so the category is why it is not used here.
+    #[test]
+    fn a_refusal_that_names_the_account_never_falls_back_to_another_model_of_it() {
+        let mut config = with_providers("{}");
+        config.fallback_model = Some("chatgpt/gpt-b".to_string());
+        let by_status = BackendError::from(ChatError::Egress(bravebot_net::EgressError::Status {
+            url: "https://api.example.invalid/v1/responses".to_string(),
+            status: 429,
+            retry_after: None,
+            body: None,
+        }));
+        assert_eq!(
+            fallback_after(&config, "chatgpt/gpt-a", &by_status),
+            Some(("chatgpt/gpt-b".to_string(), Category::RateLimited))
+        );
+
+        for failure in [refused(Refusal::UsageLimit), refused(Refusal::NotPermitted)] {
+            let refused = BackendError::from(ChatError::Account(failure));
+            assert_eq!(
+                refused.diagnosis().category,
+                Category::Refused,
+                "{failure:?}"
+            );
+            assert_eq!(
+                fallback_after(&config, "chatgpt/gpt-a", &refused),
+                None,
+                "{failure:?}"
+            );
+            let after_attempts = refused.counted(3, None, None);
+            assert_eq!(
+                fallback_after(&config, "chatgpt/gpt-a", &after_attempts),
+                None,
+                "{failure:?} after attempts"
+            );
+        }
+    }
+
+    /// CHATGPT-8 and BACKEND-53: a refusal of a model the account does not offer is a refusal among the
+    /// failure categories, which no fallback model is used for. Only a rate limit and an unavailable
+    /// service move a turn to the model named as the fallback, so the category is why it is not used
+    /// here, counted or not.
+    #[test]
+    fn a_model_the_account_does_not_offer_takes_no_fallback_model() {
+        let mut config = with_providers("{}");
+        config.fallback_model = Some("chatgpt/gpt-b".to_string());
+        let refused = BackendError::from(ChatError::Account(AccountFailure::ModelNotOffered));
+
+        assert_eq!(refused.diagnosis().category, Category::Refused);
+        assert_eq!(fallback_after(&config, "chatgpt/gpt-a", &refused), None);
+        let after_attempts = refused.counted(3, None, None);
+        assert_eq!(
+            fallback_after(&config, "chatgpt/gpt-a", &after_attempts),
+            None,
+            "after attempts"
+        );
     }
 
     /// A gateway authenticates with a bearer token and has nothing to sign in for. Deciding
@@ -2256,6 +2852,303 @@ mod tests {
             .map(|(_, value)| value.as_str())
     }
 
+    /// A server that refuses any body carrying a level with a 400 and answers every other one, as
+    /// a service that does not read the field does. The address it listens on is what a refusal is
+    /// remembered against, so every call gets a service of its own.
+    fn a_service_that_refuses_the_level() -> String {
+        use std::io::{BufRead, BufReader, Read, Write};
+
+        const WHOLE: &str = r#"{"model":"served","choices":[{"message":{"content":"hi"},
+            "finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("address").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut length = 0usize;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 || header.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.trim().eq_ignore_ascii_case("content-length")
+                    {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; length];
+                if reader.read_exact(&mut body).is_err() {
+                    continue;
+                }
+                let (status, reply) =
+                    match String::from_utf8_lossy(&body).contains("reasoning_effort") {
+                        true => (
+                            "400 Bad Request",
+                            r#"{"error":{"message":"unknown field"}}"#,
+                        ),
+                        false => ("200 OK", WHOLE),
+                    };
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    /// One turn of `model` at `config`'s service with a level asked for, which the service answers
+    /// by refusing the field and then taking the request without it: the way a refusal is learned.
+    fn ask_with_a_level(config: &Config, model: &str) {
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            &mut sink,
+        )
+        .expect("policy");
+        let request = ChatRequest::new(model, vec![bravebot_aichat::protocol::Message::user("hi")])
+            .with_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        Backend::select(config, &egress, model)
+            .complete(&mut policy, &request)
+            .expect("the request without the level was answered");
+    }
+
+    /// Two gateways offering one slug, a Bedrock account, and Brave's endpoint at a server of its
+    /// own, so each of the services `refused_a_level` asks has a record of its own.
+    fn every_service_with_the_same_slug() -> (Config, [String; 3]) {
+        let [one, other, brave] = std::array::from_fn(|_| a_service_that_refuses_the_level());
+        let block = format!(
+            r#"{{"provider": {{
+                "gateway-a": {{"options": {{"baseURL": "{one}/v1", "apiKey": "a-key"}},
+                    "models": {{"shared-slug": {{}}}}}},
+                "gateway-b": {{"options": {{"baseURL": "{other}/v1", "apiKey": "a-key"}},
+                    "models": {{"shared-slug": {{}}}}}}
+            }}}}"#
+        );
+        let mut config = with_providers(&block);
+        config.endpoint = brave.clone();
+        (config, [one, other, brave])
+    }
+
+    /// BACKEND-22: no branch reports a refusal nobody has made, and a refusal is reported for the
+    /// service and model that made it. Nothing is asked of a service here.
+    #[test]
+    fn before_any_refusal_every_service_reads_the_level() {
+        let (config, _) = every_service_with_the_same_slug();
+        for model in [
+            "gateway-a/shared-slug",
+            "gateway-b/shared-slug",
+            "opus-arn",
+            "chatgpt/shared-slug",
+            DEFAULT_MODEL,
+        ] {
+            assert!(!refused_a_level(&config, model), "{model}");
+        }
+    }
+
+    /// A refusal is remembered against the service as well as the model, so one gateway refusing a
+    /// slug is not the other gateway's, the ChatGPT account's or Brave's endpoint's refusing it.
+    ///
+    /// The faults this rejects: asking by the model name alone, which reports every service that
+    /// offers the slug as refusing it, and asking the wrong service for a model.
+    #[test]
+    fn a_level_one_gateway_refused_is_not_refused_at_another_service_with_the_slug() {
+        let (config, _) = every_service_with_the_same_slug();
+        assert!(!refused_a_level(&config, "gateway-a/shared-slug"));
+
+        ask_with_a_level(&config, "gateway-a/shared-slug");
+
+        assert!(refused_a_level(&config, "gateway-a/shared-slug"));
+        for elsewhere in [
+            "gateway-b/shared-slug",
+            "chatgpt/shared-slug",
+            "shared-slug-on-brave",
+            "opus-arn",
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
+        // The other gateway then refuses it too, and is told so for itself.
+        ask_with_a_level(&config, "gateway-b/shared-slug");
+        assert!(refused_a_level(&config, "gateway-b/shared-slug"));
+    }
+
+    /// The last branch: a model no gateway, Bedrock account or ChatGPT sign-in answers for is
+    /// Brave's endpoint's, and its record is the one the endpoint's own refusal wrote.
+    #[test]
+    fn a_level_the_default_endpoint_refused_is_reported_for_its_model_only() {
+        let (config, _) = every_service_with_the_same_slug();
+        let model = "a-model-on-the-default-endpoint";
+        assert!(!refused_a_level(&config, model));
+
+        ask_with_a_level(&config, model);
+
+        assert!(refused_a_level(&config, model));
+        assert!(!refused_a_level(
+            &config,
+            "another-model-on-the-default-endpoint"
+        ));
+        assert!(!refused_a_level(&config, "gateway-a/shared-slug"));
+        assert!(!refused_a_level(&config, "gateway-b/shared-slug"));
+    }
+
+    /// The ChatGPT account's branch: a level one of its models refused is reported for that model
+    /// and for no other service offering the same slug, and the account's refusal is read from the
+    /// account's own host, not Brave's endpoint or a gateway.
+    ///
+    /// The faults this rejects: the branch dropped, so the account's model falls through to Brave's
+    /// endpoint and reads false after a refusal, and the account's refusal asked at the wrong
+    /// service's address.
+    #[test]
+    fn a_level_the_chatgpt_account_refused_is_reported_for_its_model_only() {
+        use crate::testutil::{Answer, serving_host};
+        let (mut config, _) = every_service_with_the_same_slug();
+        config.endpoint = "http://127.0.0.1:9/never-asked".into();
+        let host = serving_host(vec![Answer::Status(400), Answer::Words("ok")]);
+        let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+        assert!(!refused_a_level(&config, "chatgpt/shared-slug"));
+
+        ask_with_a_level(&config, "chatgpt/shared-slug");
+
+        assert_eq!(host.header("authorization").len(), 2, "sent again once");
+        assert!(refused_a_level(&config, "chatgpt/shared-slug"));
+        assert!(!refused_a_level(&config, "chatgpt/another-account-model"));
+        for elsewhere in [
+            "gateway-a/shared-slug",
+            "gateway-b/shared-slug",
+            "shared-slug",
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
+    }
+
+    /// The default endpoint's record is the default endpoint's alone: a slug it refused is not
+    /// refused at a gateway that offers the same bare name. The name selects the gateway there,
+    /// and the gateway has not been asked.
+    ///
+    /// The faults this rejects: asking the default endpoint's record first, and asking by the model
+    /// name alone, either of which reports a gateway's model as refusing a level it was never sent.
+    #[test]
+    fn a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug() {
+        let [brave, gateway] = std::array::from_fn(|_| a_service_that_refuses_the_level());
+        let slug = "a-slug-both-the-default-endpoint-and-a-gateway-answer-to";
+
+        let mut alone = with_providers("{}");
+        alone.endpoint = brave.clone();
+        ask_with_a_level(&alone, slug);
+        assert!(
+            refused_a_level(&alone, slug),
+            "the default endpoint refused"
+        );
+
+        let mut offered = with_providers(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "{gateway}/v1", "apiKey": "a-key"}},
+                "models": {{"{slug}": {{}}}}}}}}}}"#
+        ));
+        offered.endpoint = brave;
+        assert!(
+            !refused_a_level(&offered, slug),
+            "the gateway was reported as refusing what only the default endpoint refused"
+        );
+
+        ask_with_a_level(&offered, slug);
+        assert!(refused_a_level(&offered, slug), "the gateway then refused");
+    }
+
+    /// A model both a Bedrock account and a gateway answer to is Bedrock's, as
+    /// [`Backend::select`] has it, so a refusal the gateway recorded for the same name is not
+    /// reported for it. The gateway's own spelling of the model still reports it.
+    ///
+    /// The Bedrock record itself is written by the Bedrock client and cannot be reached from
+    /// outside that crate (its host is fixed and its recorder is private), so what is pinned here
+    /// is the order of the lookups and that a Bedrock model is asked of Bedrock's record, which
+    /// `bravebot_bedrock`'s `a_request_refused_on_a_parameter_is_asked_again_without_the_effort_level`
+    /// and its neighbours hold.
+    ///
+    /// The fault this rejects: asking a gateway before Bedrock, which reports the gateway's
+    /// refusal for a model Bedrock serves.
+    #[test]
+    fn a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name() {
+        let gateway = a_service_that_refuses_the_level();
+        let mut config = with_providers(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "{gateway}/v1", "apiKey": "a-key"}},
+                "models": {{"opus-arn": {{}}}}}}}}}}"#
+        ));
+        config.endpoint = a_service_that_refuses_the_level();
+        let egress = Egress::new();
+        assert!(
+            matches!(
+                Backend::select(&config, &egress, "opus-arn"),
+                Backend::Bedrock { .. }
+            ),
+            "Backend::select no longer sends the name to Bedrock, so this is not the case"
+        );
+        assert!(
+            matches!(
+                Backend::select(&config, &egress, "gateway-a/opus-arn"),
+                Backend::Gateway { .. }
+            ),
+            "the gateway's own spelling is not the gateway's"
+        );
+        assert!(bedrock_reads_effort("opus-arn"), "nothing refused it yet");
+        assert!(!refused_a_level(&config, "opus-arn"));
+
+        ask_with_a_level(&config, "gateway-a/opus-arn");
+
+        assert!(refused_a_level(&config, "gateway-a/opus-arn"));
+        assert!(
+            !refused_a_level(&config, "opus-arn"),
+            "Bedrock's model was reported refused on the strength of a gateway's record"
+        );
+        assert!(bedrock_reads_effort("opus-arn"));
+    }
+
+    /// The ChatGPT account's branch: a level its model refused is reported for that model alone,
+    /// and no other service's model or the account's other models are reported with it.
+    ///
+    /// The faults this rejects: reading the account's record by the model name alone, or from the
+    /// default endpoint's, which reports every model that shares the wire name.
+    #[test]
+    fn a_level_the_account_refused_is_reported_for_its_model_only() {
+        use crate::testutil::{Answer, serving_host};
+        let host = serving_host(vec![Answer::Status(400), Answer::Words("ok")]);
+        let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+        let (config, _) = every_service_with_the_same_slug();
+        assert!(config.offers_chatgpt_account());
+        assert!(!refused_a_level(&config, "chatgpt/shared-slug"), "before");
+
+        ask_with_a_level(&config, "chatgpt/shared-slug");
+
+        assert_eq!(host.header("authorization").len(), 2, "sent again once");
+        assert!(refused_a_level(&config, "chatgpt/shared-slug"));
+        for elsewhere in [
+            "chatgpt/another-model-of-the-account",
+            "gateway-a/shared-slug",
+            "gateway-b/shared-slug",
+            "shared-slug",
+            "opus-arn",
+            DEFAULT_MODEL,
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
+    }
+
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
         "content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",
         "usage":{"input_tokens":3,"output_tokens":1}}"#;
@@ -2529,6 +3422,79 @@ mod tests {
                         failure: Failure::Refusal
                     })
                 ),
+                "{said}"
+            );
+        }
+    }
+
+    /// A call to the aichat endpoint that came back with nothing in it fails, and the failure
+    /// carries the one request it took and the prompt size the endpoint reported, whether the reply
+    /// was read whole or as it arrived. The turn spends and records its usage from that, so an arm
+    /// that returned the bare error would charge nothing for a request that was sent.
+    #[test]
+    fn a_failed_aichat_call_keeps_its_attempts_and_what_the_service_counted() {
+        const WHOLE: &str = r#"{"model":"served","choices":[],
+            "usage":{"prompt_tokens":50,"completion_tokens":0}}"#;
+        const STREAM: &str = concat!(
+            "data: {\"model\":\"served\",\"choices\":[{\"delta\":{}}],",
+            "\"usage\":{\"prompt_tokens\":50,\"completion_tokens\":0}}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        for (streamed, reply, content_type) in [
+            (false, WHOLE, "application/json"),
+            (true, STREAM, "text/event-stream"),
+        ] {
+            let (endpoint, _received) = answer_once(reply, content_type);
+            let config = Config::from_lookup(|key| match key {
+                env_var::ENDPOINT => Some(endpoint.clone()),
+                other => aichat_only(other),
+            })
+            .expect("configured");
+            let egress = Egress::new();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = bravebot_core::policy::Policy::begin(
+                {
+                    let mut routing = bravebot_core::policy::Routing::new();
+                    routing.insert_trusted("task", "say hello");
+                    routing
+                },
+                bravebot_core::policy::ReleasePlan::new(),
+                bravebot_core::capability::CapabilitySet::from_iter([
+                    bravebot_core::capability::Capability::WebFetch,
+                ]),
+                &mut sink,
+            )
+            .expect("policy");
+            let request = ChatRequest::new(
+                DEFAULT_MODEL,
+                vec![bravebot_aichat::protocol::Message::user("hi")],
+            );
+
+            let mut backend = Backend::select(&config, &egress, DEFAULT_MODEL);
+            assert!(matches!(backend, Backend::Aichat { .. }));
+            let outcome = if streamed {
+                backend.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                backend.complete(&mut policy, &request)
+            };
+
+            let error = outcome.expect_err("the reply had nothing in it");
+            let said = format!("streamed: {streamed}: {error:?}");
+            let BackendError::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                cause,
+            } = &error
+            else {
+                panic!("the failure carries no count: {said}");
+            };
+            assert_eq!(*attempts, 1, "{said}");
+            assert_eq!(usage.map(|usage| usage.prompt_tokens), Some(50), "{said}");
+            assert_eq!(*context_tokens, Some(50), "{said}");
+            assert!(
+                matches!(**cause, BackendError::Aichat(ChatError::NoContent)),
                 "{said}"
             );
         }
@@ -2838,6 +3804,7 @@ mod tests {
             url: "https://ai-chat.example/v1".to_string(),
             status: 401,
             retry_after: None,
+            body: None,
         };
         assert!(!BackendError::from(ChatError::Egress(refused_credential)).is_unreachable());
         assert!(!BackendError::from(ChatError::NoContent).is_unreachable());
@@ -2961,6 +3928,7 @@ mod tests {
             url: "https://bedrock-runtime.example/model/invoke".into(),
             status: 403,
             retry_after: None,
+            body: None,
         }));
         let why = refused.diagnosis();
         assert_eq!(why.category, Category::Unauthorized, "{why:?}");
@@ -2988,6 +3956,7 @@ mod tests {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
                 retry_after: None,
+                body: None,
             }))
             .diagnosis()
         };
@@ -3007,6 +3976,7 @@ mod tests {
                 url: "https://service.example/v1/chat/completions".into(),
                 status,
                 retry_after,
+                body: None,
             }))
             .diagnosis()
             .retry_after
@@ -3110,6 +4080,7 @@ mod tests {
             url: "https://service.example/v1".to_string(),
             status,
             retry_after: None,
+            body: None,
         };
         for refused in [400, 422] {
             assert!(

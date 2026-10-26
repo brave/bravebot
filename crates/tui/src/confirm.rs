@@ -190,6 +190,94 @@ impl Answer {
     }
 }
 
+/// What the loop that asked a question needs from the answer, whichever question it was.
+///
+/// Each answer type decides for itself whether it stops the turn and what the waiting turn is told.
+/// This names those two decisions so the loop handles every question the same way once it has the
+/// answer, and a question added later cannot leave out the stop.
+pub trait Answered {
+    /// What the waiting turn is told.
+    type Decision;
+
+    /// Whether the turn that asked stops as well as being refused.
+    fn stops_the_turn(&self) -> bool;
+
+    /// What to tell the waiting turn.
+    fn decision(self) -> Self::Decision;
+}
+
+impl Answered for Answer {
+    type Decision = Decision;
+
+    fn stops_the_turn(&self) -> bool {
+        Answer::stops_the_turn(*self)
+    }
+
+    fn decision(self) -> Decision {
+        Answer::decision(self)
+    }
+}
+
+impl Answered for VetAnswer {
+    type Decision = Decision;
+
+    fn stops_the_turn(&self) -> bool {
+        VetAnswer::stops_the_turn(*self)
+    }
+
+    fn decision(self) -> Decision {
+        VetAnswer::decision(self)
+    }
+}
+
+impl Answered for Noted<RunAnswer> {
+    type Decision = RunDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Noted::<RunAnswer>::stops_the_turn(self)
+    }
+
+    fn decision(self) -> RunDecision {
+        Noted::<RunAnswer>::decision(self)
+    }
+}
+
+impl Answered for Noted<WriteAnswer> {
+    type Decision = WriteDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Noted::<WriteAnswer>::stops_the_turn(self)
+    }
+
+    fn decision(self) -> WriteDecision {
+        Noted::<WriteAnswer>::decision(self)
+    }
+}
+
+impl Answered for Noted<CallAnswer> {
+    type Decision = CallDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Noted::<CallAnswer>::stops_the_turn(self)
+    }
+
+    fn decision(self) -> CallDecision {
+        Noted::<CallAnswer>::decision(self)
+    }
+}
+
+impl Answered for Asked {
+    type Decision = WriteDecision;
+
+    fn stops_the_turn(&self) -> bool {
+        Asked::stops_the_turn(self)
+    }
+
+    fn decision(self) -> WriteDecision {
+        Asked::decision(self)
+    }
+}
+
 /// What a key press did at a question, as far as the loop asking it is concerned.
 ///
 /// Made from a key function's response, which [`Drawn::take`] has already had its say over, so
@@ -419,16 +507,15 @@ mod tests {
     }
 
     fn a_run(private: bool) -> RunRequest {
-        let pipeline = bravebot_core::Pipeline::new(vec![
+        let mut pipeline = bravebot_core::Pipeline::new(vec![
             bravebot_core::Stage::new("git", vec!["log".into(), "--oneline".into()]),
             bravebot_core::Stage::new("sed", vec!["-n".into(), "1,10p".into()]),
         ]);
+        if private {
+            pipeline.stdin = Some(bravebot_core::label::Label::trusted_private());
+        }
         RunRequest::from_pipeline(
-            &if private {
-                pipeline.with_stdin(bravebot_core::label::Label::trusted_private())
-            } else {
-                pipeline
-            },
+            &pipeline,
             &["/usr/bin/git".into(), "/usr/bin/sed".into()],
             "/home/someone/project",
         )

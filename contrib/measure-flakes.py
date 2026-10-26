@@ -53,6 +53,11 @@ SAMPLE_LIMIT = 500
 # issue for is recognised as covered rather than filed a second time.
 TITLE = "Flaky test"
 
+# What every issue this opens carries, so `label:flaky-test` finds them whoever filed them. It is
+# the only label: nothing this files has been read by a person, so no kind, area or axis is claimed
+# for it. `gh issue create` refuses a label the repository lacks, and a person creates labels.
+LABEL = "flaky-test"
+
 # How many issues one run may open. A suite nobody has measured could have twenty flaky tests in it,
 # and twenty issues arriving at once is a thing people close in a batch without reading. The rest
 # are named in the report and the next run files them.
@@ -467,7 +472,7 @@ def file_issues(flaky, samples, threads, repo, assign, limit, gh):
         if filed >= limit:
             held.append(test)
             continue
-        create = ["issue", "create", "--repo", repo, "--title", title]
+        create = ["issue", "create", "--repo", repo, "--title", title, "--label", LABEL]
         # No login is no flag at all rather than an empty one, the way an empty --file-issues files
         # nothing: a run by hand assigns nobody, since the person running it is already looking.
         if assign:
@@ -841,6 +846,19 @@ def assignees(calls):
     ]
 
 
+def labels(calls):
+    """The labels each issue a recording was asked to open would carry."""
+    return [
+        [
+            arguments[at + 1]
+            for at, argument in enumerate(arguments)
+            if argument == "--label"
+        ]
+        for arguments, _ in calls
+        if arguments[:2] == ["issue", "create"]
+    ]
+
+
 def round_trip(outcomes, second, samples):
     """Whether --save then --load restores the threads and the machine and files without a report.
 
@@ -1047,6 +1065,14 @@ def selftest():
         (
             "every issue is assigned to the login the run was given",
             assignees(calls) == ["netzenbot", "netzenbot"],
+        )
+    )
+
+    # The tracker is searched by this label, and an issue without it is one the search never lists.
+    checks.append(
+        (
+            "every issue carries the flaky-test label and no other",
+            labels(calls) == [["flaky-test"], ["flaky-test"]],
         )
     )
 

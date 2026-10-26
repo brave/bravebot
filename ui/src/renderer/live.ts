@@ -17,6 +17,7 @@ import { conversationKey } from '../shared/experience'
 import { type Fork, forkOf } from '../shared/forks'
 import type { Entry } from './transcript'
 import type { Turns } from './turn-details'
+import type { AgentEntry, SessionSettled } from '../shared/protocol'
 import { conversationPreferences, setConversation } from './experience'
 
 /** A message waiting for the turn to end, and the grants it was written with. */
@@ -64,6 +65,13 @@ export interface Live {
   /** What a running confined check was given. Beside the phase, which a check does not change. */
   checking: Checking | null
   hook: Hook | null
+  /**
+   * Every agent this conversation has started, oldest first, with where each stands (VIEW-36),
+   * as the last `agents` event listed them. Never a line a delegate printed.
+   */
+  agents: AgentEntry[]
+  /** How many of those the bridge counted as started and as working, as that event sent them. */
+  agentCounts: { started: number; working: number }
   /** The word of the tool call the model is writing, while it is; the call itself is not yet drawn. */
   composing: string | null
   /**
@@ -200,7 +208,7 @@ export function cameFrom(
 export const NEW_CHAT = 'New Chat'
 
 /** The fields every new `Live` starts with, whichever answer it is built from. */
-type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'composing' | 'thinking' | 'tokens' | 'running'
+type Starting = 'turns' | 'quarantine' | 'phase' | 'checking' | 'hook' | 'agents' | 'agentCounts' | 'composing' | 'thinking' | 'tokens' | 'running'
 
 /**
  * A session as the window first holds it: what the bridge's answer says, and nothing yet said,
@@ -214,10 +222,26 @@ export function newLive(fields: Omit<Live, Starting>): Live {
     phase: null,
     checking: null,
     hook: null,
+    agents: [],
+    agentCounts: { started: 0, working: 0 },
     composing: null,
     thinking: '',
     tokens: 0,
     running: false,
+  }
+}
+
+/** What a bridge's answer settles about a session, in the names `Live` holds it under. */
+export function settledBy(answer: SessionSettled) {
+  return {
+    keepingTrust: answer.keeping ?? null,
+    shownKeepingTrust: answer.shownKeeping ?? null,
+    confinedLinesNotice: answer.confinedLines ?? null,
+    trustRemembered: answer.remembered ?? null,
+    autoVetting: answer.autoVetting,
+    permissionMode: answer.permissionMode,
+    sandboxMode: answer.sandboxMode,
+    rules: answer.settingsRules ?? null,
   }
 }
 

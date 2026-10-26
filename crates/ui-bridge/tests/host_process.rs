@@ -17,43 +17,28 @@
     reason = "a test that unwraps fails at the line that did"
 )]
 
+mod support;
+
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
+use support::{Client, Host, PATIENCE, Start};
 
-const PATIENCE: Duration = Duration::from_secs(60);
 /// Longer than a stopped turn needs and shorter than the minute after which a question nobody
 /// answers expires, so a turn still going at this point was not stopped.
 const STOPPED_WITHIN: Duration = Duration::from_secs(20);
-const RELAY: &str = "HOST_TEST_RELAY_SOCKET";
 
 /// The client the host starts. Does nothing unless it was started as one.
 #[test]
+#[ignore = "run by the host as its client"]
 fn relay_entry() {
-    let Ok(path) = std::env::var(RELAY) else {
-        return;
-    };
-    let socket = UnixStream::connect(path).expect("the test is listening");
-    let mut up = socket.try_clone().unwrap();
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut std::io::stdin(), &mut up);
-        let _ = up.shutdown(std::net::Shutdown::Write);
-    });
-    let mut down = socket;
-    let mut out = std::io::stdout();
-    let mut buffer = [0u8; 8192];
-    while let Ok(read) = down.read(&mut buffer) {
-        if read == 0 || out.write_all(&buffer[..read]).is_err() || out.flush().is_err() {
-            break;
-        }
-    }
-    std::process::exit(0);
+    support::relay();
 }
 
 struct Scratch {
@@ -215,12 +200,6 @@ fn a_gate() -> (
 
 // ---------------------------------------------------------------- the host and its client
 
-struct Host {
-    child: Child,
-    commands: Option<ChildStdin>,
-    relay: UnixListener,
-}
-
 impl Host {
     fn start(scratch: &Scratch, endpoint: &str) -> Self {
         Self::start_in(scratch, endpoint, &scratch.project())
@@ -238,172 +217,27 @@ impl Host {
         workspace: &Path,
         settings: Option<&Path>,
     ) -> Self {
-        let relay_path = scratch.directory.path().join("relay.sock");
-        let relay = UnixListener::bind(&relay_path).expect("a relay socket");
-        relay.set_nonblocking(true).unwrap();
-        let named: Vec<&std::ffi::OsStr> = settings
-            .map(|file| vec!["--settings".as_ref(), file.as_os_str()])
-            .unwrap_or_default();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_bravebot-host"))
-            .env_clear()
-            .env("HOME", scratch.home())
-            .env("BRAVEBOT_LOCALE", "en-US")
-            .env("SERVICES_KEY_AICHAT", "a-services-key")
-            .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-            .env("BRAVE_AI_CHAT_ENDPOINT", endpoint)
-            .env("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", endpoint)
-            .env("BRAVEBOT_DEFAULT_MODEL", "stub-model")
-            .env(RELAY, &relay_path)
-            .arg("--sessions-root")
-            .arg(scratch.root())
-            .arg("--workspace")
-            .arg(workspace)
-            .args(named)
-            .arg("--")
-            .arg(std::env::current_exe().unwrap())
-            .args(["--exact", "relay_entry", "--nocapture"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("the host runs");
-        let commands = child.stdin.take();
-        Self {
-            child,
-            commands,
-            relay,
-        }
-    }
-
-    /// The client the host started, once it has connected to the relay.
-    fn client(&self) -> Client {
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            match self.relay.accept() {
-                Ok((stream, _)) => return Client::over(stream),
-                Err(_) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(error) => panic!("the host never started its client: {error}"),
-            }
-        }
-    }
-
-    fn command(&mut self, line: &str) {
-        let commands = self.commands.as_mut().expect("the host's input is open");
-        writeln!(commands, "{line}").unwrap();
-        commands.flush().unwrap();
-    }
-
-    fn end_input(&mut self) {
-        self.commands = None;
+        Self::launch(Start {
+            home: &scratch.home(),
+            sessions_root: &scratch.root(),
+            workspace,
+            relay: &scratch.directory.path().join("relay.sock"),
+            settings,
+            current_dir: None,
+            environment: &model_service(endpoint),
+            stdout: Stdio::null(),
+            stderr: Stdio::null(),
+        })
     }
 }
 
-impl Drop for Host {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-struct Client {
-    stream: UnixStream,
-    said: mpsc::Receiver<Value>,
-    held: VecDeque<Value>,
-    next: u64,
-}
-
-impl Client {
-    fn over(stream: UnixStream) -> Self {
-        stream.set_nonblocking(false).unwrap();
-        let reading = stream.try_clone().unwrap();
-        let (sender, said) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(reading).lines().map_while(Result::ok) {
-                if let Ok(value) = serde_json::from_str::<Value>(&line)
-                    && sender.send(value).is_err()
-                {
-                    break;
-                }
-            }
-        });
-        Self {
-            stream,
-            said,
-            held: VecDeque::new(),
-            next: 0,
-        }
-    }
-
-    fn send(&mut self, method: &str, params: Value) -> u64 {
-        self.next += 1;
-        let line = json!({"id": self.next, "method": method, "params": params});
-        writeln!(self.stream, "{line}").unwrap();
-        self.next
-    }
-
-    fn answered(&mut self, method: &str, params: Value) -> Value {
-        let id = self.send(method, params);
-        self.until(|message| message["id"] == id)
-    }
-
-    fn call(&mut self, method: &str, params: Value) -> Value {
-        let answered = self.answered(method, params);
-        answered
-            .get("ok")
-            .cloned()
-            .unwrap_or_else(|| panic!("{method} failed: {answered}"))
-    }
-
-    fn until(&mut self, wanted: impl Fn(&Value) -> bool) -> Value {
-        self.within(PATIENCE, wanted)
-            .expect("the host never said what the test was waiting for")
-    }
-
-    /// The next message `wanted` accepts within `limit`, keeping the others for a later wait.
-    fn within(&mut self, limit: Duration, wanted: impl Fn(&Value) -> bool) -> Option<Value> {
-        if let Some(at) = self.held.iter().position(&wanted) {
-            return self.held.remove(at);
-        }
-        let deadline = Instant::now() + limit;
-        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
-            match self.said.recv_timeout(left) {
-                Ok(message) if wanted(&message) => return Some(message),
-                Ok(message) => self.held.push_back(message),
-                Err(_) => break,
-            }
-        }
-        None
-    }
-
-    fn event(&mut self, name: &str) -> Value {
-        self.until(|message| message["event"] == name)
-    }
-
-    /// A session opened in the project and trusted, ready for a turn.
-    fn session_in(&mut self, project: &Path) -> String {
-        let opened = self.call("session.new", json!({"directory": project}));
-        let session = opened["session"].as_str().expect("a handle").to_string();
-        // A yes an earlier session here gave is kept, and settles the next one without asking.
-        if opened["remembered"].is_null() {
-            self.call("trust.reply", json!({"session": session, "trusted": true}));
-        }
-        session
-    }
-
-    fn leave(self) {
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
-    }
-
-    fn the_session(&mut self, session: &str) -> Value {
-        let info = self.call("instance.info", json!({}));
-        info["sessions"]
-            .as_array()
-            .and_then(|all| all.iter().find(|one| one["session"] == session))
-            .cloned()
-            .unwrap_or_else(|| panic!("the host does not list {session}: {info}"))
-    }
+/// What a host is told of the model service at `endpoint`.
+fn model_service(endpoint: &str) -> [(&'static str, &OsStr); 3] {
+    [
+        ("BRAVE_AI_CHAT_ENDPOINT", OsStr::new(endpoint)),
+        ("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", OsStr::new(endpoint)),
+        ("BRAVEBOT_DEFAULT_MODEL", OsStr::new("stub-model")),
+    ]
 }
 
 /// Every `.json` record under `root`, however deep.
@@ -602,12 +436,12 @@ fn a_session_is_reported_closed_only_after_its_turn_has_ended() {
     assert_eq!(closed["session"], session.as_str());
     assert_eq!(closed["data"]["saved"], "unknown");
     assert!(
-        client.held.iter().any(|message| {
+        client.inbox.held.iter().any(|message| {
             matches!(message["event"].as_str(), Some("turn.done" | "turn.error"))
                 && message["session"] == session.as_str()
         }),
         "the session was reported closed before its turn said how it ended: {:?}",
-        client.held
+        client.inbox.held
     );
     let after = client.call("instance.info", json!({}));
     assert_eq!(after["sessions"][0]["state"], "closed", "{after}");
@@ -726,11 +560,12 @@ fn a_session_whose_client_never_started_a_view_has_its_questions_refused_unseen(
     assert!(!written.exists(), "a write nobody could answer landed");
     assert!(
         client
+            .inbox
             .held
             .iter()
             .all(|message| message["event"] != "confirm.request"),
         "a question was shown to a client that could not answer: {:?}",
-        client.held
+        client.inbox.held
     );
     assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
     client.leave();
@@ -1194,7 +1029,7 @@ fn the_answer_to_a_close_comes_before_the_session_is_said_to_be_closed() {
         let id = client.send("session.close", json!({"session": session}));
         let mut seen = Vec::new();
         loop {
-            let message = client.said.recv_timeout(PATIENCE).expect("a message");
+            let message = client.inbox.said.recv_timeout(PATIENCE).expect("a message");
             let done = message["id"] == id;
             let closed = message["event"] == "session.closed";
             seen.push(message);
@@ -1349,46 +1184,21 @@ fn a_sessions_root_the_host_cannot_write_to_is_refused() {
 fn a_relative_directory_is_refused_even_from_inside_a_workspace() {
     let scratch = Scratch::new();
     let endpoint = a_model_service(ends_the_turn, || {});
-    let relay = scratch.directory.path().join("relay.sock");
-    let listener = UnixListener::bind(&relay).unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let mut host = Command::new(env!("CARGO_BIN_EXE_bravebot-host"))
-        .current_dir(scratch.project())
-        .env_clear()
-        .env("HOME", scratch.home())
-        .env("BRAVEBOT_LOCALE", "en-US")
-        .env("SERVICES_KEY_AICHAT", "a-services-key")
-        .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
-        .env("BRAVE_AI_CHAT_ENDPOINT", &endpoint)
-        .env("BRAVE_AI_CHAT_PREMIUM_ENDPOINT", &endpoint)
-        .env("BRAVEBOT_DEFAULT_MODEL", "stub-model")
-        .env(RELAY, &relay)
-        .arg("--sessions-root")
-        .arg(scratch.root())
-        .arg("--workspace")
-        .arg(scratch.project())
-        .arg("--")
-        .arg(std::env::current_exe().unwrap())
-        .args(["--exact", "relay_entry", "--nocapture"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + PATIENCE;
-    let stream = loop {
-        match listener.accept() {
-            Ok((stream, _)) => break stream,
-            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => panic!("no client: {error}"),
-        }
-    };
-    let mut client = Client::over(stream);
+    let host = Host::launch(Start {
+        home: &scratch.home(),
+        sessions_root: &scratch.root(),
+        workspace: &scratch.project(),
+        relay: &scratch.directory.path().join("relay.sock"),
+        settings: None,
+        current_dir: Some(&scratch.project()),
+        environment: &model_service(&endpoint),
+        stdout: Stdio::null(),
+        stderr: Stdio::null(),
+    });
+    let mut client = host.client();
     let answered = client.answered("session.new", json!({"directory": "."}));
     assert_eq!(answered["error"]["code"], "not_allowed", "{answered}");
     client.leave();
-    let _ = host.kill();
-    let _ = host.wait();
 }
 
 /// A line on the host's input that is not text is reported and skipped, not taken for the end of

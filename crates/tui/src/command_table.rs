@@ -156,11 +156,22 @@ pub(crate) const WATCH_COMMAND: &str = "/watch";
 /// job while the turn goes on with everything else.
 pub(crate) const JOBS_COMMAND: &str = "/jobs";
 
+/// The line that opens the view over what commands printed, background jobs included.
+///
+/// The agents have a key of their own, and what a program printed is a different thing to look at,
+/// so it is opened from here rather than from that key (WATCH-7).
+pub(crate) const OUTPUTS_COMMAND: &str = "/outputs";
+
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
 /// The line that puts the info panel in its files state, or ends it.
-pub(crate) const FILES_COMMAND: &str = "/files";
+pub(crate) const DIFF_COMMAND: &str = "/diff";
+
+/// The line that prints the whole plan in the transcript, as its key does.
+///
+/// Carried out by the driver from the plan the session holds and starts no turn (CMD-28).
+pub(crate) const TODOS_COMMAND: &str = "/todos";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
@@ -370,7 +381,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 56] {
+pub fn commands() -> [Command; 58] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -577,15 +588,27 @@ pub fn commands() -> [Command; 56] {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: OUTPUTS_COMMAND,
+            argument: "",
+            description: t!(command_outputs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: PANEL_COMMAND,
             argument: "",
             description: t!(command_panel),
             mid_turn: MidTurn::Runs,
         },
         Command {
-            name: FILES_COMMAND,
+            name: DIFF_COMMAND,
             argument: "",
-            description: t!(command_files),
+            description: t!(command_diff),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: TODOS_COMMAND,
+            argument: "",
+            description: t!(command_todos),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -1184,11 +1207,10 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
             command = word,
             line = named(goes, ahead)
         )
-        .to_string()
     } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
-        t!(command_waits_to_ask, command = word).to_string()
+        t!(command_waits_to_ask, command = word)
     } else {
-        t!(command_waits_for_the_turn, command = word).to_string()
+        t!(command_waits_for_the_turn, command = word)
     })
 }
 

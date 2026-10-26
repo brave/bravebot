@@ -8,7 +8,7 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
 
-use crate::state::{Delegate, Laid, Output, Session, Watched};
+use crate::state::{Delegate, Laid, Output, Session, WatchScope, Watched};
 use crate::theme;
 
 use super::transcript::{assistant_lines, draw_transcript, link_references};
@@ -148,8 +148,8 @@ fn draw_aside(
 ///
 /// The same shape as a delegate's view, because a person arriving here has already learned it:
 /// a header saying what they are looking at, the lines, and a footer with the way out. What
-/// differs is the header, which has to say which kind of view this is: two keys for two lists
-/// would be worse than one list whose rows say what they are.
+/// differs is the header, which says which kind of view this is, because the agents list and the
+/// outputs list share one view and one set of keys.
 fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
     let areas = Layout::default()
         .direction(Direction::Vertical)
@@ -283,7 +283,7 @@ fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) {
 
     let head = if delegate.is_running() {
         Style::default().fg(theme::running())
-    } else if delegate.failed {
+    } else if delegate.failed() {
         Style::default().fg(theme::fail())
     } else {
         Style::default().fg(theme::ok())
@@ -322,15 +322,16 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
         return;
     };
 
-    // Which kind of view this is, said in the footer as well as in the header, because the list
-    // holds both kinds and the row somebody stepped onto may not be the kind they came from.
+    // Which kind of view this is, said in the footer as well as in the header, because the agents
+    // list holds asides and delegates and the row somebody stepped onto may not be the kind they
+    // came from.
     let (name, standing, colour) = match session.watched() {
         Some(Watched::Delegate(delegate)) => {
             let (standing, colour) = if delegate.is_stopping() {
                 (t!(watching_stopping), theme::running())
             } else if delegate.is_running() {
                 (t!(watching_working), theme::running())
-            } else if delegate.failed {
+            } else if delegate.failed() {
                 (t!(watching_failed), theme::fail())
             } else {
                 (t!(watching_answered), theme::ok())
@@ -340,8 +341,7 @@ fn draw_watching_footer(frame: &mut Frame, area: Rect, session: &Session) {
                     watching_footer,
                     kind = delegate.kind.clone(),
                     number = delegate.id.to_string()
-                )
-                .to_string(),
+                ),
                 standing.to_string(),
                 colour,
             )
@@ -448,12 +448,16 @@ fn draw_delegate_list(frame: &mut Frame, session: &Session) -> Laid {
     // The theme's own colours rather than the terminal's, the way every other panel here is
     // painted. `Clear` only empties the cells, so without this the panel is drawn on whatever the
     // terminal's default background is and a theme chosen for readability stops applying.
+    let title = match session.watch_scope() {
+        WatchScope::Agents => t!(watching_list_title),
+        WatchScope::Outputs => t!(watching_outputs_title),
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme::brand_primary()))
         .title(Span::styled(
-            format!(" {} ", t!(watching_list_title)),
+            format!(" {title} "),
             Style::default()
                 .fg(theme::brand_primary())
                 .add_modifier(Modifier::BOLD),
@@ -623,7 +627,7 @@ fn delegate_row(delegate: &Delegate, highlighted: bool, width: usize) -> Line<'s
     // does not have to spend a colour the highlight has already taken.
     let (mark, colour) = if delegate.is_running() {
         ("●", theme::running())
-    } else if delegate.failed {
+    } else if delegate.failed() {
         ("✗", theme::fail())
     } else {
         ("✓", theme::ok())

@@ -282,13 +282,11 @@ impl Grant {
             (Lifetime::Session(_), Some(workspace)) => t!(
                 reach_lifetime_session_in,
                 workspace = workspace.root.display().to_string()
-            )
-            .to_string(),
+            ),
             (Lifetime::Always, Some(workspace)) => t!(
                 reach_lifetime_always_in,
                 workspace = workspace.root.display().to_string()
-            )
-            .to_string(),
+            ),
         }
     }
 }
@@ -764,7 +762,6 @@ pub fn requested_paths_listed(held: &[crate::workspace::PathReach]) -> Vec<Strin
                 access = path_access(row),
                 path = row.path.display().to_string()
             )
-            .to_string()
         })
         .collect()
 }
@@ -799,9 +796,8 @@ pub fn requested_paths_command(
             path_removed,
             access = path_access(&ended),
             path = ended.path.display().to_string()
-        )
-        .to_string(),
-        None => t!(path_refused_number, number = number.to_string()).to_string(),
+        ),
+        None => t!(path_refused_number, number = number.to_string()),
     })
 }
 
@@ -824,7 +820,6 @@ fn keys_command(store: &Store, rest: &str) -> String {
                     key = chosen.display(),
                     date = chosen.allowed.as_str()
                 )
-                .to_string()
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -836,12 +831,12 @@ fn keys_command(store: &Store, rest: &str) -> String {
         return t!(reach_key_usage).to_string();
     };
     let Some(chosen) = number.checked_sub(1).and_then(|at| held.get(at)) else {
-        return t!(reach_key_refused_number, number = number.to_string()).to_string();
+        return t!(reach_key_refused_number, number = number.to_string());
     };
     if !store.forget_key(chosen) {
         return t!(reach_refused_incognito).to_string();
     }
-    t!(reach_key_removed, owner = chosen.owner()).to_string()
+    t!(reach_key_removed, owner = chosen.owner())
 }
 
 fn listing(held: &[Grant]) -> String {
@@ -872,7 +867,6 @@ fn rows(held: &[Grant]) -> Vec<String> {
                 date = grant.allowed.as_str(),
                 lifetime = grant.lasting()
             )
-            .to_string()
         })
         .collect()
 }
@@ -880,7 +874,7 @@ fn rows(held: &[Grant]) -> Vec<String> {
 fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
     let held = store.read(Some(session), root);
     let Some(grant) = number.checked_sub(1).and_then(|at| held.get(at)) else {
-        return t!(reach_refused_number, number = number.to_string()).to_string();
+        return t!(reach_refused_number, number = number.to_string());
     };
     if !store.revoke(grant) {
         return t!(reach_refused_incognito).to_string();
@@ -891,7 +885,6 @@ fn remove(store: &Store, session: &str, root: &Path, number: usize) -> String {
         access = grant.access(),
         entry = grant.reached.display()
     )
-    .to_string()
 }
 
 fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
@@ -926,7 +919,7 @@ fn allow(store: &Store, typed: &Typed<'_>, argument: &str) -> String {
             };
             match judged_directory(&named, profile, write) {
                 Some(path) => Reached::Directory(path),
-                None => return t!(reach_refused_entry, entry = entry).to_string(),
+                None => return t!(reach_refused_entry, entry = entry),
             }
         }
     };

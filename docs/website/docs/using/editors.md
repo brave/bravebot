@@ -47,7 +47,7 @@ written to, so later sessions started in that directory are not asked. Where a y
 option reads **Trust for this session** and the question says the answer cannot be kept here. A
 refusal is never kept. See [Remembering the answer](../security/trust.md#remembering-the-answer).
 
-A host that a sandboxed `run` line reaches and that [`sandbox.network`](../customize/configuration.md)
+A host that a sandboxed `run` line reaches and that [`sandbox.network`](../security/sandbox.md#sandboxnetwork)
 does not list is also asked about in the editor. An allow there is labelled as lasting the session and
 writes no rule.
 

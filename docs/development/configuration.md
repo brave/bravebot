@@ -32,6 +32,13 @@ somebody wrote it as root. Baked values are masked so `strings` on the binary do
 print them; that is obfuscation and not encryption, so a binary built with a live key should
 be treated as holding one.
 
+`BACKTRACE_SUBMIT_URL` is the one name the build bakes in that a build can do without. It is the
+submission URL of the Backtrace project that crash reports go to, token included, and a build made
+without it writes and sends no report ([CRASH-3](../specs/crash-reports.md#CRASH-3)). Unlike the
+others it is not read from the environment at run time at all. Leave it out of `.envrc` for day-to-day
+work: a build that has it reports its own panics too, marked as debug builds. Releases are built by
+the Jenkins job, so the variable has to be set there as well for released binaries to report.
+
 The cross-build container does not inherit the host environment, so `make all-platforms`
 forwards these variables as a BuildKit secret rather than a build argument, which would record
 the signing key in the image metadata.
