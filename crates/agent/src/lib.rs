@@ -27,6 +27,7 @@ pub mod conversation;
 pub mod delegate;
 pub mod diff;
 pub mod exec;
+pub mod file_preview;
 pub mod findings;
 pub mod git;
 pub mod glob;

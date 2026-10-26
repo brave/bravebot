@@ -16,7 +16,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::colour_codes;
 use crate::state::{Delegate, Laid, Session};
@@ -26,25 +26,29 @@ use crate::wrap;
 mod beneath;
 mod export;
 mod hint;
+mod hover;
+mod menu;
 mod prompt;
 mod scroller;
 mod transcript;
 mod watching;
 
-pub use self::export::{as_last_drawn, as_markdown, as_text};
+pub use self::export::{as_drawn_at, as_last_drawn, as_markdown, as_text};
 pub(crate) use self::hint::{cache_hit_rate, context_reading};
-pub(crate) use self::transcript::{EntryLines, ReplyLines, opening_screen, rows_of};
+pub(crate) use self::transcript::{
+    EntryLines, ReplyLines, Rows, links_of_the_latest_reply, opening_screen, place_top_of_view,
+    plan_item_row, reply_as_text, rows_of, top_of_view,
+};
 
-use self::beneath::lines_beneath_the_box;
+use self::beneath::{first_waiting_row, lines_beneath_the_box, offered_picks};
 use self::hint::draw_hint;
-pub(crate) use self::prompt::offset_at as caret_offset_at;
 use self::prompt::{draw_input, draw_status, input_height, status_height};
 use self::scroller::draw_scroller;
 use self::transcript::draw_transcript;
 use self::watching::draw_watching;
 
 #[cfg(test)]
-use self::beneath::{entry_lines, shortcut_lines, shortcuts, stashed_lines};
+use self::beneath::{PointerKeys, entry_lines, shortcut_lines, shortcuts, stashed_lines};
 #[cfg(test)]
 use self::hint::{COMPACTED_CONTEXT, SHORTCUTS_HINT, UNMEASURED_CONTEXT, loop_part};
 #[cfg(test)]
@@ -835,16 +839,28 @@ fn diff_lines(
 /// and none of them exist before a frame: how tall the transcript is, and where in it the rows
 /// worth jumping to are, are both answers about a paragraph wrapped at a particular width.
 pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
-    let columns = frame.area().width;
-    let laid = Laid {
+    let (columns, lines) = (frame.area().width, frame.area().height);
+    let mut laid = Laid {
         columns,
+        lines,
         ..draw_frame(frame, session)
     };
     // Over whatever the frame holds, as it is at rest: the panel is a question about the session
-    // behind it, and a turn goes on being drawn there.
+    // behind it, and a turn goes on being drawn there. Recorded, so a press that lands on it is
+    // the panel's and not the frame's (MOUSE-45).
     if let Some(picking) = session.picking() {
         picking.draw(frame);
+        laid.targets.extend(picking.popup(frame.area()).recorded());
     }
+    // The menu a right click opened is drawn over the picker as over the frame, and holds the input
+    // as a picker does (MOUSE-52).
+    if let Some(open) = session.menu() {
+        laid.targets.extend(menu::draw_menu(frame, open).recorded());
+    }
+    // Last, over everything, where the pointer is over a target that says what a click on it does
+    // (MOUSE-51).
+    hover::mark_the_hovered(frame, session, &laid);
+    hover::say_what_a_click_does(frame, session, &laid);
     laid
 }
 
@@ -950,9 +966,12 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
 
     let mut laid = draw_transcript(frame, areas[0], session);
     laid.panes = [
-        (crate::select::Pane::Transcript, areas[0]),
+        (
+            crate::select::Pane::Transcript,
+            text_beside_the_bar(&laid, areas[0]),
+        ),
         (crate::select::Pane::Status, areas[1]),
-        (crate::select::Pane::Input, areas[2]),
+        (crate::select::Pane::Input, inside_the_border(areas[2])),
         (crate::select::Pane::Offered, areas[4]),
         (crate::select::Pane::Hint, hint_row),
     ]
@@ -961,26 +980,84 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     .filter(|(_, rect)| !rect.is_empty())
     .collect();
     draw_status(frame, areas[1], session);
-    draw_input(frame, areas[2], session);
+    laid.targets.extend(draw_input(frame, areas[2], session));
     draw_previews(frame, areas[3], &thumbs);
     frame.render_widget(Paragraph::new(beneath), areas[4]);
-    laid.mode = draw_hint(frame, hint_row, session);
+    laid.targets
+        .extend(queued_prompts(session, width, offered_height, areas[4]));
+    let (hints, taken) = draw_hint(frame, hint_row, session);
+    laid.targets.extend(hints);
+    laid.hint_row = Some(crate::state::HintRow {
+        area: hint_row,
+        taken,
+    });
+    laid.targets
+        .extend(offered_picks(session, width, &offered, areas[4]));
     if let Some(panel) = panel {
-        crate::panel::draw(frame.buffer_mut(), panel, session);
+        laid.targets
+            .extend(crate::panel::draw(frame.buffer_mut(), panel, session));
     }
 
     // Last, over everything: the selection is of the screen rather than of any one widget, and
     // the user swept it over whatever happened to be there.
-    highlight_selection(frame, session);
+    highlight_selection(frame, session, &laid);
 
     laid
 }
 
-/// Paint the selection, where there is one, over what the frame already holds.
-fn highlight_selection(frame: &mut Frame, session: &Session) {
-    if let Some(selection) = &session.selection {
-        crate::select::highlight(frame.buffer_mut(), selection);
+/// The rows a click on a waiting prompt answers on. Each waiting prompt is two rows, and a click on
+/// either takes it back (MOUSE-28). Only the rows drawn are recorded.
+fn queued_prompts(
+    session: &Session,
+    width: u16,
+    offered_height: u16,
+    area: Rect,
+) -> Vec<crate::state::Target> {
+    let Some(first) = first_waiting_row(session, width) else {
+        return Vec::new();
+    };
+    let mut recorded = Vec::new();
+    for place in 0..session.queued.len() {
+        let top = first + 2 * place;
+        let Some(rows) = usize::from(offered_height)
+            .checked_sub(top)
+            .filter(|rows| *rows > 0)
+        else {
+            break;
+        };
+        recorded.push(crate::state::Target::on_screen(
+            Rect::new(
+                area.x,
+                area.y + u16::try_from(top).unwrap_or(u16::MAX),
+                area.width,
+                u16::try_from(rows.min(2)).unwrap_or(2),
+            ),
+            crate::state::Hit::Queued(place),
+        ));
     }
+    recorded
+}
+
+/// Paint the selection, where there is one, over what the frame already holds, passing over the
+/// cells drawn for a click.
+///
+/// A selection of the transcript is placed by the view this frame drew, which can have scrolled
+/// since the frame the session last recorded. Placed by the old one, the frame that moved the view
+/// would mark the rows its text was on before it moved (MOUSE-34). Where the frame is not drawing
+/// the rows the selection counts, or the text on them is not what it was put on, it marks nothing.
+fn highlight_selection(frame: &mut Frame, session: &Session, laid: &Laid) {
+    let Some(mut selection) = session.selection else {
+        return;
+    };
+    if selection.scrolls()
+        && !(laid
+            .window
+            .is_some_and(|window| selection.follow(window, laid.rows))
+            && laid.marks.is_none_or(|now| selection.keep_marks(now)))
+    {
+        return;
+    }
+    crate::select::highlight(frame.buffer_mut(), &selection, &laid.chrome);
 }
 
 /// Draw the thumbnails side by side, leftmost first, each only where it fits whole.
@@ -999,6 +1076,24 @@ fn draw_previews(frame: &mut Frame, area: Rect, thumbs: &[&crate::preview::Thumb
     }
 }
 
+/// The cells inside a box's border, which are the ones with text in them: a selection of the box
+/// takes no border (MOUSE-1).
+fn inside_the_border(area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(area)
+}
+
+/// The part of the transcript's pane a selection can reach. The scrollbar is chrome and not text, so
+/// the column it is in is left out (VIEW-39).
+fn text_beside_the_bar(laid: &Laid, pane: Rect) -> Rect {
+    match laid.bar {
+        Some(_) => Rect {
+            width: pane.width.saturating_sub(1),
+            ..pane
+        },
+        None => pane,
+    }
+}
+
 /// Draw the history search: the transcript, and the list of prompts where the box was.
 fn draw_history_search(frame: &mut Frame, session: &Session) -> Laid {
     let panel = crate::history_search::height(session, frame.area());
@@ -1010,8 +1105,21 @@ fn draw_history_search(frame: &mut Frame, session: &Session) -> Laid {
         ])
         .split(frame.area());
 
-    let laid = draw_transcript(frame, areas[0], session);
+    let mut laid = draw_transcript(frame, areas[0], session);
     crate::history_search::draw(frame, areas[1], session);
+    // The search holds the input where the box was, so a press is its own (MOUSE-15, MOUSE-47).
+    laid.targets.extend(
+        crate::state::Popup {
+            panel: crate::state::Panel::HistorySearch,
+            area: areas[1],
+            list: None,
+        }
+        .recorded(),
+    );
+    laid.targets
+        .extend(crate::history_search::picks(session, areas[1]));
+    // What a release copies is what is marked, here as in every other view.
+    highlight_selection(frame, session, &laid);
     laid
 }
 
@@ -1023,14 +1131,21 @@ fn draw_history_search(frame: &mut Frame, session: &Session) -> Laid {
 pub(crate) fn head_of(line: &str, room: usize) -> String {
     // A prompt may be a paragraph; it is one row here, so the rest is not shown at all.
     let first = line.lines().next().unwrap_or("");
-    let characters: Vec<char> = first.chars().collect();
-    if characters.len() <= room && first.len() == line.len() {
+    if wrap::display_width(first) <= room && first.len() == line.len() {
         return first.to_string();
     }
-    let kept: String = characters
-        .iter()
-        .take(room.saturating_sub(1))
-        .collect::<String>();
+    // Cut by the columns the row draws each cluster in, so what is kept and the ellipsis never come
+    // to more than the room, whatever the characters are.
+    let shown = printable(first);
+    let mut kept = String::new();
+    let mut used = 0;
+    for (cluster, columns) in wrap::cluster_strs(&shown) {
+        if used + columns > room.saturating_sub(1) {
+            break;
+        }
+        kept.push_str(cluster);
+        used += columns;
+    }
     format!("{kept}…")
 }
 
@@ -1040,15 +1155,24 @@ pub(crate) fn head_of(line: &str, room: usize) -> String {
 /// what a plain truncation does, and it leaves every attachment in a deep directory reading as the
 /// same long prefix with the filename gone, which is the one thing the row exists to show.
 fn tail_of(path: &str, room: usize) -> String {
-    let characters: Vec<char> = path.chars().collect();
-    if characters.len() <= room || room == 0 {
+    if wrap::display_width(path) <= room || room == 0 {
         return path.to_string();
     }
 
-    // One column for the ellipsis that says something was cut.
-    let kept = room.saturating_sub(1);
-    let tail: String = characters[characters.len() - kept..].iter().collect();
-    format!("…{tail}")
+    // One column for the ellipsis that says something was cut, and the rest cut by the columns the row
+    // draws each cluster in.
+    let shown = printable(path);
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for (cluster, columns) in wrap::cluster_strs(&shown).into_iter().rev() {
+        if used + columns > room.saturating_sub(1) {
+            break;
+        }
+        tail.push(cluster);
+        used += columns;
+    }
+    tail.reverse();
+    format!("…{}", tail.concat())
 }
 
 #[cfg(test)]
@@ -2332,9 +2456,13 @@ mod tests {
         #[test]
         fn the_shortcut_list_names_the_key_that_watches() {
             assert!(
-                shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default())
-                    .iter()
-                    .any(|(key, _)| key == "ctrl-l"),
+                shortcuts(
+                    crate::vim::Editing::Ordinary,
+                    &Keybindings::default(),
+                    PointerKeys::CapturedWithMenu,
+                )
+                .iter()
+                .any(|(key, _)| key == "ctrl-l"),
                 "the shortcut list does not name the key"
             );
         }
@@ -2892,6 +3020,171 @@ mod tests {
             );
         }
 
+        /// A click on a task of the plan goes to the row its turn drew the task on, which is worked
+        /// out from where the lines kept for the last frame say the entry that holds the plan begins
+        /// and the lines of that entry above the task. Rejects: laying every entry above the plan out
+        /// again for each click, which for a long transcript is the whole of a frame's work for one
+        /// press: the click asks about the lines of the one entry and not about a thousand more, and
+        /// the row it names is below all of them.
+        #[test]
+        fn a_click_on_a_task_measures_the_entry_that_holds_the_plan_and_not_the_entries_above() {
+            use bravebot_core::todo::{Item, List, Status};
+            let mut session = a_long_session();
+            let tasks = bravebot_core::todo::rows(&List::new(vec![
+                Item::new("Read the tokenizer", Status::Done),
+                Item::new("Fix it", Status::Done),
+                Item::new("Check it", Status::Done),
+            ]));
+            session
+                .transcript
+                .push(Entry::assistant("the plan", Vec::new()).with_todos(tasks));
+            let (_, laid) = frame_of(&session, 90, 24);
+            assert!(
+                laid.rows > 1000,
+                "the transcript is not long: {}",
+                laid.rows
+            );
+            session.note_layout(laid);
+            assert!(
+                session.plan_entry().is_some(),
+                "the plan is not in the transcript"
+            );
+
+            let (rows, work) = counted::during(|| {
+                (0..3)
+                    .map(|task| plan_item_row(&session, task))
+                    .collect::<Vec<_>>()
+            });
+
+            let rows: Vec<u16> = rows.into_iter().map(|row| row.expect("a row")).collect();
+            assert!(
+                rows.windows(2).all(|pair| pair[0] < pair[1]),
+                "the rows of the tasks do not follow each other: {rows:?}"
+            );
+            assert!(
+                rows[0] > 1000,
+                "the first task is on row {}, not below the transcript above it",
+                rows[0]
+            );
+            assert!(
+                work.asked <= 3 * 12,
+                "three clicks measured {} lines of the transcript",
+                work.asked
+            );
+        }
+
+        /// VIEW-39. Whether the bar is wanted is read by laying the lines out at the width it leaves, and a
+        /// transcript that does not overflow is then laid out again at the full width. One layout is
+        /// kept at a time, so each frame lays out a transcript that fits twice. That costs lines of
+        /// what fits, which is no more than the rows of the pane, and does not grow with the
+        /// conversation: one that is longer overflows and keeps the one layout, which is what the
+        /// keystroke test above measures.
+        #[test]
+        fn a_transcript_that_fits_the_pane_costs_lines_of_no_more_than_the_pane_each_frame() {
+            let mut session = Session::new("kernel-enforced");
+            for n in 0..6 {
+                session
+                    .transcript
+                    .push(Entry::assistant(format!("reply {n}"), Vec::new()));
+            }
+            let _ = frame_of(&session, 90, 24);
+            let ((_, laid), work) = counted::during(|| frame_of(&session, 90, 24));
+            assert!(laid.bar.is_none(), "the transcript does not fit the pane");
+            assert!(
+                laid.rows <= 24 && work.asked <= 2 * usize::from(laid.rows),
+                "{} lines were measured for {} rows",
+                work.asked,
+                laid.rows
+            );
+        }
+
+        /// A transcript of `replies` replies that each hold a fenced block, so that every one has the
+        /// marker that copies the reply and the word that copies the block: cells drawn for a click,
+        /// which a selection's marks leave out and so look for on every line above its ends.
+        fn a_long_session_of_blocks(replies: usize) -> Session {
+            let mut session = Session::new("kernel-enforced");
+            for n in 0..replies {
+                session.transcript.push(Entry::assistant(
+                    format!("Reply {n}:\n```sh\necho {n}\n```"),
+                    Vec::new(),
+                ));
+            }
+            session
+        }
+
+        /// How many rows the transcript comes to and how many places were compared to find the cells
+        /// drawn for a click, in the frame that first marks a selection held near the end of a
+        /// transcript of `replies` replies, with the scroller open or not.
+        fn rows_and_comparisons_to_mark_a_selection(
+            replies: usize,
+            scrolling: bool,
+        ) -> (u16, usize) {
+            let mut session = a_long_session_of_blocks(replies);
+            if scrolling {
+                session.open_scroller();
+            }
+            let (_, laid) = frame_of(&session, 90, 24);
+            session.note_layout(laid);
+            if scrolling {
+                // The scroller opens at the first row, and the selection is wanted at the last.
+                session.scroller_to_last_row();
+                let (_, laid) = frame_of(&session, 90, 24);
+                session.note_layout(laid);
+            }
+            session.begin_selection(12, 4);
+            session.sweep_to(10, 30);
+            assert!(session.selection.is_some_and(|held| held.scrolls()));
+            let ((_, laid), work) = counted::during(|| frame_of(&session, 90, 24));
+            assert!(laid.marks.is_some(), "the frame marked nothing");
+            (laid.rows, work.compared)
+        }
+
+        /// A selection of the transcript is told by the text above each of its ends, which leaves out
+        /// the cells drawn for a click, and finding those on each line was a scan of every one drawn.
+        /// Held in a transcript of twenty thousand rows that was every line against every cell, for the
+        /// frame that first drew the selection. The work of finding them is counted and not timed, and
+        /// has to grow with the transcript and not with its square: four times the replies is not more
+        /// than six times the comparisons, and no row costs more than a bisection of the cells for each
+        /// end.
+        #[test]
+        fn marking_a_selection_in_a_long_transcript_looks_for_each_click_cell_once() {
+            let (small_rows, small) = rows_and_comparisons_to_mark_a_selection(1250, false);
+            let (big_rows, big) = rows_and_comparisons_to_mark_a_selection(5000, false);
+            assert!(
+                big_rows >= 20_000,
+                "the transcript is not long: {big_rows} rows"
+            );
+            assert!(
+                big <= small.max(1) * 6,
+                "{big} comparisons for {big_rows} rows against {small} for {small_rows}"
+            );
+            assert!(
+                big <= usize::from(big_rows) * 64,
+                "{big} comparisons for {big_rows} rows"
+            );
+        }
+
+        /// The same bound in the scroller, where nothing is kept from one frame to the next and the
+        /// cells drawn for a click are found for every line above each end of the selection in every
+        /// frame.
+        #[test]
+        fn marking_a_selection_in_the_scroller_looks_for_each_click_cell_once() {
+            let (small_rows, small) = rows_and_comparisons_to_mark_a_selection(1250, true);
+            let (big_rows, big) = rows_and_comparisons_to_mark_a_selection(5000, true);
+            assert!(
+                big_rows >= 20_000,
+                "the transcript is not long: {big_rows} rows"
+            );
+            assert!(
+                big <= small.max(1) * 6,
+                "{big} comparisons for {big_rows} rows against {small} for {small_rows}"
+            );
+            assert!(
+                big <= usize::from(big_rows) * 64,
+                "{big} comparisons for {big_rows} rows"
+            );
+        }
+
         /// What the kept lines stand for is the entries, so an entry changed in place is drawn as
         /// it now reads and not as it did when the lines were kept.
         #[test]
@@ -2935,7 +3228,9 @@ mod tests {
 
         /// Drawing only the rows on the screen is the same picture as wrapping the whole
         /// transcript and scrolling it, from the bottom and from every row held above it, at a
-        /// width where lines wrap and one where they do not.
+        /// width where lines wrap and one where they do not. With the mouse captured the last
+        /// column is the scrollbar (VIEW-39), so the picture is the whole transcript wrapped to one
+        /// column fewer, with that column left out.
         #[test]
         fn drawing_the_visible_slice_matches_wrapping_the_whole_transcript() {
             let reference = |session: &Session, width: u16, height: u16| -> String {
@@ -2963,39 +3258,45 @@ mod tests {
                     .map(|cell| cell.symbol())
                     .collect()
             };
-            let mut session = a_long_session();
-            session.streaming("a reply still arriving that is long enough to wrap onto a second row at forty columns");
-            for width in [40u16, 90] {
-                let height = 12;
-                let area = |session: &Session| {
-                    let mut terminal =
-                        Terminal::new(TestBackend::new(width, height)).expect("terminal");
-                    let mut laid = Laid::default();
-                    terminal
-                        .draw(|frame| laid = draw_transcript(frame, frame.area(), session))
-                        .expect("draw succeeds");
-                    let drawn: String = terminal
-                        .backend()
-                        .buffer()
-                        .content()
-                        .iter()
-                        .map(|cell| cell.symbol())
-                        .collect();
-                    (drawn, laid)
-                };
-                let (bottom, laid) = area(&session);
-                assert_eq!(bottom, reference(&session, width, height), "at the bottom");
-                session.note_layout(laid);
-                for held in [1u16, 2, 3, 7, 40, 301, 999] {
-                    session.scroll = held;
-                    let (drawn, _) = area(&session);
+            for captured in [false, true] {
+                let mut session = a_long_session();
+                session.adopt_mouse(Some(captured));
+                session.streaming("a reply still arriving that is long enough to wrap onto a second row at forty columns");
+                for width in [40u16, 90] {
+                    let height = 12;
+                    let text_width = if captured { width - 1 } else { width };
+                    let area = |session: &Session| {
+                        let mut terminal =
+                            Terminal::new(TestBackend::new(width, height)).expect("terminal");
+                        let mut laid = Laid::default();
+                        terminal
+                            .draw(|frame| laid = draw_transcript(frame, frame.area(), session))
+                            .expect("draw succeeds");
+                        let buffer = terminal.backend().buffer();
+                        let drawn: String = (0..height)
+                            .flat_map(|row| (0..text_width).map(move |column| (row, column)))
+                            .map(|(row, column)| buffer[(column, row)].symbol())
+                            .collect();
+                        (drawn, laid)
+                    };
+                    let (bottom, laid) = area(&session);
                     assert_eq!(
-                        drawn,
-                        reference(&session, width, height),
-                        "held {held} rows up at {width} columns"
+                        bottom,
+                        reference(&session, text_width, height),
+                        "at the bottom, captured {captured}"
                     );
+                    session.note_layout(laid);
+                    for held in [1u16, 2, 3, 7, 40, 301, 999] {
+                        session.scroll = held;
+                        let (drawn, _) = area(&session);
+                        assert_eq!(
+                            drawn,
+                            reference(&session, text_width, height),
+                            "held {held} rows up at {width} columns, captured {captured}"
+                        );
+                    }
+                    session.scroll = 0;
                 }
-                session.scroll = 0;
             }
         }
 
@@ -3759,6 +4060,27 @@ mod tests {
             );
         }
 
+        /// The list names the key that opens the delegates' views from the scroller, as it is bound,
+        /// so a settings file moving the chord does not leave the list advertising the old one
+        /// (MOUSE-10). The regression it rejects is a row that names a chord by its default.
+        #[test]
+        fn the_help_names_the_watch_chord_as_it_is_bound() {
+            let mut session = reading();
+            session.toggle_scroller_help();
+            let (drawn, _) = screen(&session);
+            assert!(
+                drawn.contains(t!(scroller_key_delegates)) && drawn.contains("ctrl-l"),
+                "{drawn}"
+            );
+
+            let mut moved = std::collections::BTreeMap::new();
+            moved.insert("watch".to_string(), "alt-w".to_string());
+            session.adopt_keybindings(&moved);
+            let (drawn, _) = screen(&session);
+            assert!(drawn.contains("alt-w"), "{drawn}");
+            assert!(!drawn.contains("ctrl-l"), "{drawn}");
+        }
+
         /// The way out is the one row of a key list that must never be the row that did not fit.
         #[test]
         fn the_help_renders_on_a_tiny_terminal() {
@@ -3810,6 +4132,58 @@ mod tests {
                 !text.contains('\u{1b}'),
                 "an escape reached the file as an escape"
             );
+        }
+
+        /// A session at 80 by 24 whose one reply says `copy` in its prose, holds a block and says it
+        /// again after it, drawn once so that the width is the frame's.
+        fn a_reply_saying_copy_around_a_block() -> Session {
+            let mut session = Session::new("kernel-enforced");
+            session.transcript.push(Entry::assistant(
+                "Say copy once.\n```sh\nmake\n```\nand copy again",
+                Vec::new(),
+            ));
+            let (_, laid) = frame_of(&session, 80, 24);
+            session.note_layout(laid);
+            session
+        }
+
+        /// SCROLL-6: the word that copies a block is the interface's own, on the screen to be clicked,
+        /// and what goes to the editor is the transcript and not that word or the blanks that put it
+        /// at the right of the row. The words a reply says itself, `copy` among them, go as they are.
+        #[test]
+        fn what_goes_to_the_editor_leaves_out_the_word_that_copies_a_block() {
+            let session = a_reply_saying_copy_around_a_block();
+            let (drawn, _) = frame_of(&session, 80, 24);
+            assert_eq!(
+                drawn.matches("copy").count(),
+                3,
+                "the frame draws the word beside the two the reply says: {drawn}"
+            );
+
+            let text = as_text(&session);
+            assert_eq!(text.matches("copy").count(), 2, "{text}");
+            assert!(
+                text.lines().any(|line| line == "  sh"),
+                "the header went with the blanks that placed the word: {text:?}"
+            );
+            assert!(text.contains("Say copy once."), "{text}");
+        }
+
+        /// MOUSE-27: a search is for the transcript's text, so it finds the words a reply says and
+        /// neither the word that copies a block nor the blanks before it. The fixtures are searches
+        /// that the word, and a name and the blanks after it, would satisfy.
+        #[test]
+        fn a_search_finds_what_a_reply_says_and_not_the_word_that_copies_its_block() {
+            let found = |needle: &str| {
+                let mut session = a_reply_saying_copy_around_a_block();
+                session.open_scroller();
+                search(&mut session, needle);
+                as_last_drawn(&session).matches.len()
+            };
+            assert_eq!(found("copy"), 2);
+            assert_eq!(found("sh"), 1, "the name the fence gave is text");
+            assert_eq!(found("sh "), 0, "the blanks that place the word are not");
+            assert_eq!(found("   copy"), 0);
         }
     }
 
@@ -5094,6 +5468,50 @@ mod tests {
         assert_eq!(tail_of("/tmp/a.png", 40), "/tmp/a.png");
     }
 
+    /// A row is cut by the columns it draws, and a character two cells wide, an emoji presentation
+    /// sequence and a halfwidth voiced mark each take more than a count of characters says. Rejects:
+    /// a cut by characters, which came to more than the room, so a path in wide characters lost the
+    /// end of its name to the row's edge and a hover line ran past it. The end of a path and the start
+    /// of an address are what is kept, at every room.
+    #[test]
+    fn a_cut_is_made_by_columns_whatever_the_characters_are() {
+        use crate::wrap::display_width;
+        let names = [
+            "/\u{65e5}\u{672c}\u{8a9e}/\u{30d5}\u{30a1}\u{30a4}\u{30eb}\u{540d}/shot.png",
+            "/\u{2764}\u{fe0f}\u{2764}\u{fe0f}\u{2764}\u{fe0f}/\u{2764}\u{fe0f}\u{2764}\u{fe0f}.png",
+            "/\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}/\u{ff76}\u{ff9e}\u{ff76}\u{ff9e}.png",
+            "/e\u{301}e\u{301}e\u{301}e\u{301}/e\u{301}e\u{301}e\u{301}e\u{301}.png",
+        ];
+        for name in names {
+            let end: String = crate::wrap::cluster_strs(name)
+                .last()
+                .map(|(cluster, _)| cluster.to_string())
+                .expect("a cluster");
+            let start: String = crate::wrap::cluster_strs(name)
+                .first()
+                .map(|(cluster, _)| cluster.to_string())
+                .expect("a cluster");
+            for room in 2..=40 {
+                let tail = tail_of(name, room);
+                assert!(display_width(&tail) <= room, "{name:?} in {room}: {tail:?}");
+                let head = head_of(name, room);
+                assert!(display_width(&head) <= room, "{name:?} in {room}: {head:?}");
+                if display_width(name) > room {
+                    assert!(
+                        tail.starts_with('\u{2026}') && tail.ends_with(&end),
+                        "{tail:?}"
+                    );
+                    assert!(
+                        head.ends_with('\u{2026}') && head.starts_with(&start),
+                        "{head:?}"
+                    );
+                } else {
+                    assert_eq!((tail.as_str(), head.as_str()), (name, name));
+                }
+            }
+        }
+    }
+
     /// A user about to send a file should be able to see which file: `[Image #1]` alone does not
     /// tell a screenshot from a private key.
     #[test]
@@ -5668,6 +6086,44 @@ mod tests {
             rendered(&session).contains("106 chars to clipboard"),
             "the copy was not reported"
         );
+    }
+
+    /// MOUSE-39: a copy from the panel, the box, the status line, what is offered under the box or the
+    /// footer says where it came from after the count, and one from the transcript, or from a view
+    /// that is the transcript's, does not.
+    #[test]
+    fn a_copy_names_the_pane_it_came_from_unless_that_is_the_transcript() {
+        use crate::select::Pane;
+        for (pane, said) in [
+            (Pane::Panel, "106 chars to clipboard, from the panel"),
+            (Pane::Input, "106 chars to clipboard, from the box"),
+            (Pane::Status, "106 chars to clipboard, from the status line"),
+            (
+                Pane::Offered,
+                "106 chars to clipboard, from the list under the box",
+            ),
+            (Pane::Hint, "106 chars to clipboard, from the footer"),
+        ] {
+            let mut session = Session::new("kernel-enforced");
+            session.note_copied_from(106, pane);
+            assert!(rendered(&session).contains(said), "{pane:?}");
+        }
+        for pane in [Pane::Transcript, Pane::Screen] {
+            let mut session = Session::new("kernel-enforced");
+            session.note_copied_from(106, pane);
+            let drawn = rendered(&session);
+            assert!(drawn.contains("106 chars to clipboard"), "{pane:?}");
+            assert!(!drawn.contains("from the"), "{pane:?}: {drawn}");
+        }
+    }
+
+    /// MOUSE-39: the count reads as it does everywhere, "1 char" and not "1 chars", with the pane
+    /// named after it.
+    #[test]
+    fn a_copy_of_one_character_from_a_named_pane_reads_naturally() {
+        let mut session = Session::new("kernel-enforced");
+        session.note_copied_from(1, crate::select::Pane::Panel);
+        assert!(rendered(&session).contains("1 char to clipboard, from the panel"));
     }
 
     /// Nobody presses a chord nothing mentions, and Command-V is the one the fingers already know:
@@ -6400,7 +6856,11 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in shortcuts(session.editing(), session.bindings()) {
+        for (key, meaning) in shortcuts(
+            session.editing(),
+            session.bindings(),
+            PointerKeys::of(&session),
+        ) {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
@@ -6471,7 +6931,11 @@ mod tests {
         session.type_char('?');
         let output = rendered_at(&session, 120, 40);
 
-        for (key, meaning) in shortcuts(session.editing(), session.bindings()) {
+        for (key, meaning) in shortcuts(
+            session.editing(),
+            session.bindings(),
+            PointerKeys::of(&session),
+        ) {
             assert!(output.contains(&key), "{key} missing");
             assert!(output.contains(meaning), "{key} has no meaning on screen");
         }
@@ -6969,7 +7433,11 @@ mod tests {
     /// the mouse took its own selection away.
     #[test]
     fn the_shortcuts_name_the_terminals_own_selection() {
-        let listed = shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default());
+        let listed = shortcuts(
+            crate::vim::Editing::Ordinary,
+            &Keybindings::default(),
+            PointerKeys::Captured,
+        );
         assert!(
             listed
                 .iter()
@@ -6978,15 +7446,78 @@ mod tests {
         );
     }
 
+    /// MOUSE-4, MOUSE-52: the list names what the mouse does where the mouse is reported, and the
+    /// modifier for the terminal's own selection of the terminals that give it by Shift and of those
+    /// that give it by Option. With capture off the terminal's selection needs no modifier and the
+    /// session reads no drag, so no row names either, and a right click is named only where it opens
+    /// the menu. Rejects: rows for a drag and a bypass that do nothing under `tui.mouse` false, a
+    /// right click named where `tui.contextMenu` is false, and the macOS modifier left out.
+    #[test]
+    fn the_key_list_names_the_mouse_only_where_it_is_reported() {
+        let named = |pointer| -> Vec<String> {
+            shortcuts(
+                crate::vim::Editing::Ordinary,
+                &Keybindings::default(),
+                pointer,
+            )
+            .into_iter()
+            .map(|(key, _)| key)
+            .filter(|key| key.contains("drag") || key.contains("click"))
+            .collect()
+        };
+        assert_eq!(named(PointerKeys::Uncaptured), Vec::<String>::new());
+        assert_eq!(
+            named(PointerKeys::Captured),
+            ["drag", "shift-drag", "option-drag"]
+        );
+        assert_eq!(
+            named(PointerKeys::CapturedWithMenu),
+            ["drag", "shift-drag", "option-drag", "right-click"]
+        );
+
+        let on_the_screen = |mouse: Option<bool>, menu: Option<bool>| {
+            let mut session = Session::new("none");
+            session.adopt_mouse(mouse);
+            session.adopt_context_menu(menu);
+            session.type_char('?');
+            rendered_at(&session, 120, 40)
+        };
+        let by_default = on_the_screen(None, None);
+        for key in ["shift-drag", "option-drag", "right-click"] {
+            assert!(
+                by_default.contains(key),
+                "{key} is not listed: {by_default}"
+            );
+        }
+        let uncaptured = on_the_screen(Some(false), None);
+        assert!(
+            !uncaptured.contains("drag") && !uncaptured.contains("right-click"),
+            "{uncaptured}"
+        );
+        assert!(
+            uncaptured.contains("this list"),
+            "the list is not drawn: {uncaptured}"
+        );
+        let without_the_menu = on_the_screen(None, Some(false));
+        assert!(
+            without_the_menu.contains("shift-drag") && !without_the_menu.contains("right-click"),
+            "{without_the_menu}"
+        );
+    }
+
     /// INPUT-48: the list names the chord that rewrites the line, and the one a settings file moved
     /// it to, so the only place that says what the key does cannot go on naming a key that is dead.
     #[test]
     fn the_shortcuts_name_the_enhance_chord_in_force() {
         let named = |bindings: &Keybindings| {
-            shortcuts(crate::vim::Editing::Ordinary, bindings)
-                .into_iter()
-                .find(|(_, meaning)| meaning.contains("more specific"))
-                .map(|(key, _)| key)
+            shortcuts(
+                crate::vim::Editing::Ordinary,
+                bindings,
+                PointerKeys::Uncaptured,
+            )
+            .into_iter()
+            .find(|(_, meaning)| meaning.contains("more specific"))
+            .map(|(key, _)| key)
         };
         assert_eq!(named(&Keybindings::default()).as_deref(), Some("ctrl-p"));
 
@@ -7004,12 +7535,13 @@ mod tests {
     fn the_shortcuts_use_fewer_rows_where_the_width_allows() {
         let bindings = Keybindings::default();
         for editing in crate::vim::Editing::ALL {
-            let wide = shortcut_lines(editing, &bindings, 200).len();
-            let narrow = shortcut_lines(editing, &bindings, 40).len();
+            let wide = shortcut_lines(editing, &bindings, PointerKeys::CapturedWithMenu, 200).len();
+            let narrow =
+                shortcut_lines(editing, &bindings, PointerKeys::CapturedWithMenu, 40).len();
             assert!(wide < narrow, "{wide} rows wide, {narrow} narrow");
             assert_eq!(
                 narrow,
-                shortcuts(editing, &bindings).len(),
+                shortcuts(editing, &bindings, PointerKeys::CapturedWithMenu).len(),
                 "a narrow terminal cut a binding"
             );
         }
@@ -7029,7 +7561,9 @@ mod tests {
         for bindings in [Keybindings::default(), Keybindings::from_map(&moved)] {
             for editing in crate::vim::Editing::ALL {
                 for width in 0..=200u16 {
-                    for line in shortcut_lines(editing, &bindings, width) {
+                    for line in
+                        shortcut_lines(editing, &bindings, PointerKeys::CapturedWithMenu, width)
+                    {
                         let drawn = line.to_string();
                         assert!(
                             drawn.chars().count() <= width as usize,
@@ -7055,11 +7589,15 @@ mod tests {
     /// strings, so this is what keeps them from disagreeing about which key to press.
     #[test]
     fn the_hint_and_the_list_name_the_same_key() {
-        let key = shortcuts(crate::vim::Editing::Ordinary, &Keybindings::default())
-            .into_iter()
-            .find(|(_, meaning)| *meaning == "this list")
-            .map(|(key, _)| key)
-            .expect("the list lists itself");
+        let key = shortcuts(
+            crate::vim::Editing::Ordinary,
+            &Keybindings::default(),
+            PointerKeys::CapturedWithMenu,
+        )
+        .into_iter()
+        .find(|(_, meaning)| *meaning == "this list")
+        .map(|(key, _)| key)
+        .expect("the list lists itself");
         let key = key.as_str();
         assert!(
             SHORTCUTS_HINT.starts_with(key),

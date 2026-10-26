@@ -10,9 +10,12 @@ pub(super) fn choose_theme(
 ) {
     let current = crate::theme::name();
     let themes = crate::theme::listed(&current);
-    if let Some(chosen) = crate::theme_prompt::choose(terminal, themes, &current, |frame| {
+    let wheel = session.wheel_rows();
+    let chosen = crate::theme_prompt::choose(terminal, themes, &current, wheel, |frame| {
         render::draw(frame, session);
-    }) {
+    });
+    session.end_a_pickers_press();
+    if let Some(chosen) = chosen {
         theme_picked(session, &chosen.name);
     }
 }
@@ -37,9 +40,12 @@ pub(super) fn choose_effort(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) {
-    if let Some(row) = crate::effort_prompt::choose(terminal, session.effort(), |frame| {
+    let wheel = session.wheel_rows();
+    let chosen = crate::effort_prompt::choose(terminal, session.effort(), wheel, |frame| {
         render::draw(frame, session);
-    }) {
+    });
+    session.end_a_pickers_press();
+    if let Some(row) = chosen {
         effort_picked(session, row.0);
     }
 }
@@ -67,9 +73,12 @@ pub(super) fn choose_editing(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
 ) {
-    if let Some(row) = crate::config_prompt::choose(terminal, session.editing(), |frame| {
+    let wheel = session.wheel_rows();
+    let chosen = crate::config_prompt::choose(terminal, session.editing(), wheel, |frame| {
         render::draw(frame, session);
-    }) {
+    });
+    session.end_a_pickers_press();
+    if let Some(row) = chosen {
         editing_picked(session, row.0);
     }
 }
@@ -513,7 +522,8 @@ pub(super) fn record_to_resume(
             session.note(t!(session_resume_nothing_else));
             return None;
         }
-        let chosen = crate::resume::choose_other(terminal, root, current);
+        let chosen = crate::resume::choose_other(terminal, root, current, session.wheel_rows());
+        session.end_a_pickers_press();
         match chosen {
             crate::resume::Choice::Resume(record) => crate::resume::continuable(root, record),
             // Leaving the picker, by Escape or by Ctrl-C, stays where the person is.

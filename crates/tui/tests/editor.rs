@@ -224,3 +224,214 @@ fn the_scratch_file_does_not_outlive_the_edit() {
         );
     });
 }
+
+/// A directory holding a script named `name` that writes the arguments it is given, one to a line,
+/// into `record`, and then writes `then` after them. It stands in for the editor of that name.
+fn an_editor_named(name: &str, scratch: &str, then: &str) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = std::env::temp_dir().join(format!(
+        "bravebot-editor-{}-{scratch}-directory",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("a directory");
+    let record = directory.join("record");
+    let editor = directory.join(name);
+    std::fs::write(
+        &editor,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n{then}\n",
+            record.display()
+        ),
+    )
+    .expect("a script");
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    (editor, record)
+}
+
+/// What the script was given, one argument to a line.
+fn given(record: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(record)
+        .expect("the editor ran")
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// A file opened from a click is handed to the user's editor in that editor's words for a line: the
+/// whole path a person takes, spawning included, which the unit test of the table cannot reach.
+#[test]
+fn a_file_is_opened_at_its_line_in_the_words_of_the_editor_that_takes_one() {
+    let file = saves("one\ntwo\n", "placed");
+    let shown = file.display().to_string();
+    for (editor, expected) in [
+        ("vim", vec!["+12".to_string(), shown.clone()]),
+        ("nano", vec!["+12,5".to_string(), shown.clone()]),
+        ("emacs", vec!["+12:5".to_string(), shown.clone()]),
+        (
+            "code",
+            vec![
+                "--wait".to_string(),
+                "--goto".to_string(),
+                format!("{shown}:12:5"),
+            ],
+        ),
+        ("subl", vec!["--wait".to_string(), format!("{shown}:12:5")]),
+        ("some-other-editor", vec![shown.clone()]),
+    ] {
+        let (script, record) = an_editor_named(editor, &format!("placed-{editor}"), "");
+        with_editor(&script.display().to_string(), || {
+            bravebot_tui::editor::open_file(&file, Some(12), Some(5))
+        })
+        .expect("the editor ran");
+        assert_eq!(given(&record), expected, "{editor}");
+        std::fs::remove_dir_all(script.parent().expect("a directory")).ok();
+    }
+    std::fs::remove_file(&file).ok();
+}
+
+/// With no line, the editor is handed the file alone, and a column without a line is no place.
+#[test]
+fn a_file_with_no_line_is_opened_at_the_top() {
+    let file = saves("one\n", "unplaced");
+    let shown = file.display().to_string();
+    for (line, column) in [(None, None), (None, Some(5))] {
+        let (script, record) = an_editor_named("vim", "unplaced", "");
+        with_editor(&script.display().to_string(), || {
+            bravebot_tui::editor::open_file(&file, line, column)
+        })
+        .expect("the editor ran");
+        assert_eq!(given(&record), vec![shown.clone()], "{line:?} {column:?}");
+        std::fs::remove_dir_all(script.parent().expect("a directory")).ok();
+    }
+    std::fs::remove_file(&file).ok();
+}
+
+/// What the editor saved is what the file holds, and nothing is copied or read back: no scratch
+/// file is made, and the file is the one the editor was handed.
+#[test]
+fn what_the_editor_saves_is_the_file_and_nothing_is_read_back() {
+    let file = saves("one\n", "saved-in-place");
+    let (script, _) = an_editor_named(
+        "vim",
+        "saved-in-place",
+        &format!("printf 'two\\n' >> '{}'", file.display()),
+    );
+    with_editor(&script.display().to_string(), || {
+        let before = scratch_files();
+        bravebot_tui::editor::open_file(&file, Some(1), None).expect("the editor ran");
+        assert_eq!(scratch_files(), before, "a scratch file was made");
+    });
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("a file"),
+        "one\ntwo\n"
+    );
+    std::fs::remove_dir_all(script.parent().expect("a directory")).ok();
+    std::fs::remove_file(&file).ok();
+}
+
+/// An editor that exits with a status is not said to have left the file unchanged, which it may not
+/// have: the file is the person's and may have been saved before the editor was quit.
+#[test]
+fn an_editor_that_exits_badly_does_not_claim_the_file_is_unchanged() {
+    let file = saves("one\n", "exits-badly");
+    let failure = with_editor("false", || {
+        bravebot_tui::editor::open_file(&file, Some(1), None)
+    })
+    .expect_err("a non-zero exit is reported");
+    let said = failure.to_string();
+    assert!(said.contains("exited with status"), "said {said}");
+    assert!(!said.contains("unchanged"), "said {said}");
+    std::fs::remove_file(&file).ok();
+}
+
+/// A configured editor that is not there is said so and is not replaced with another.
+#[test]
+fn a_file_is_not_opened_in_an_editor_nobody_chose() {
+    let file = saves("one\n", "no-such-editor");
+    let failure = with_editor("no-such-editor-anywhere", || {
+        bravebot_tui::editor::open_file(&file, Some(1), None)
+    })
+    .expect_err("a missing editor does not open a file");
+    let said = failure.to_string();
+    assert!(said.contains("was not found"), "said {said}");
+    assert!(said.contains("nothing else was tried"), "said {said}");
+    std::fs::remove_file(&file).ok();
+}
+
+/// Whether `environment`, the output of `env`, holds a variable called `name`.
+fn holds(environment: &str, name: &str) -> bool {
+    environment
+        .lines()
+        .any(|line| line.starts_with(&format!("{name}=")))
+}
+
+/// The editor a ctrl-click starts is handed the person's environment without this agent's own
+/// credentials, since the file it opens is one the workspace holds and a checkout may have written
+/// ([CRED-14]). The editor the prompt is edited in is started with all of it, as the person's own
+/// program. Both runs are given the same variables, so a name missing from the first is withheld and
+/// not unset.
+#[test]
+fn an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is() {
+    let names = bravebot_config::scrub::builtin_credentials();
+    assert!(!names.is_empty(), "no credential is withheld to be found");
+    let file = saves("one\n", "environment");
+    let directory = std::env::temp_dir().join(format!(
+        "bravebot-editor-{}-environment-record",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("a directory");
+    let click = directory.join("click");
+    let prompt = directory.join("prompt");
+    let dump = |into: &std::path::Path| {
+        let (script, _) = an_editor_named(
+            "vim",
+            &format!(
+                "environment-{}",
+                into.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            &format!("env > '{}'", into.display()),
+        );
+        script
+    };
+    let for_click = dump(&click);
+    let for_prompt = dump(&prompt);
+
+    with_editor(&for_click.display().to_string(), || {
+        for name in &names {
+            // SAFETY: the lock is held and the variables are removed before it is let go.
+            unsafe { std::env::set_var(name, "a-secret-value") };
+        }
+        bravebot_tui::editor::open_file(&file, Some(1), None).expect("the editor ran");
+    });
+    with_editor(&for_prompt.display().to_string(), || {
+        bravebot_tui::editor::edit("a line").expect("the editor ran");
+        for name in &names {
+            // SAFETY: the lock is held.
+            unsafe { std::env::remove_var(name) };
+        }
+    });
+
+    let from_click = std::fs::read_to_string(&click).expect("the editor ran");
+    let from_prompt = std::fs::read_to_string(&prompt).expect("the editor ran");
+    for name in &names {
+        assert!(
+            !holds(&from_click, name),
+            "the editor a click opened was handed {name}"
+        );
+        assert!(
+            holds(&from_prompt, name),
+            "the editor the prompt is edited in was not handed {name}, so the click's test shows nothing"
+        );
+    }
+    assert!(
+        holds(&from_click, "PATH") || holds(&from_click, "HOME"),
+        "the editor a click opened was handed no environment at all"
+    );
+    for directory in [for_click, for_prompt] {
+        std::fs::remove_dir_all(directory.parent().expect("a directory")).ok();
+    }
+    std::fs::remove_dir_all(&directory).ok();
+    std::fs::remove_file(&file).ok();
+}

@@ -238,22 +238,27 @@ fn ask_saying<B: Backend>(
     scroll: &mut u16,
     seen: &mut Seen,
 ) -> Noted<WriteAnswer> {
+    let mut drawn = Drawn::default();
+    let mut ignored = false;
     loop {
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather than
         // proceed unseen. How far the body can scroll, and whether a yes is taken, are only
         // knowable once it has been laid out at the width it will be drawn at, so they come back
-        // out of the draw.
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_saying(frame, request, *scroll, seen, said))
-            .is_err()
+        // out of the draw. Not again for a report that changed nothing (MOUSE-44).
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw_saying(frame, request, *scroll, seen, said))
+                .is_err()
         {
             return Noted::plain(WriteAnswer::Reject);
         }
+        ignored = false;
 
         match next() {
+            Next::Ignored => ignored = true,
             Next::Skip => continue,
             Next::Lost => return Noted::plain(WriteAnswer::Reject),
+            Next::Wheel(by) => *scroll = drawn.moved(*scroll, by),
             Next::Press(key) if note::opens(key, alone()) => {
                 // A yes from the line is a yes only where this draw takes the question's own.
                 let may_yes = matches!(

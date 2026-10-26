@@ -2518,6 +2518,7 @@ scroller-key-count = un nombre d'abord va autant de fois plus loin
 scroller-key-search-run = lancer / supprimer, puis abandonner
 scroller-key-expand = déplier ou replier le résultat d'un appel
 scroller-key-editor = ouvrir la transcription dans $EDITOR
+scroller-key-delegates = ouvrir les vues des délégués
 scroller-key-this-list = cette liste
 scroller-key-close = fermer le défilement   (aussi ctrl-c)
 scroller-key-close-list = fermer cette liste
@@ -2594,7 +2595,8 @@ command-review = Faire examiner par le planificateur des modifications locales o
 command-help = Poser une question sur bravebot, avec une réponse tirée de sa documentation
 command-changelog = Afficher ce qui a changé dans cette version
 command-export = Exporter la transcription de la session vers un fichier markdown
-command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
+command-copy = Copier une réponse ; block copie un bloc de code, text les mots affichés
+command-open = Lister les liens de la dernière réponse, et en ouvrir un par son numéro
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
 command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
 command-hunks = Lister les morceaux qu'a écrits le dernier tour, ou en remettre un comme il était avant le tour
@@ -2616,6 +2618,8 @@ command-waits-for-the-turn = La commande { $command } attend la fin du tour : el
 command-waits-behind = La commande { $command } attend la fin du tour, derrière { $line }.
 # `/sandbox off`, qui demande avant de changer quoi que ce soit.
 command-waits-to-ask = La commande { $command } attend la fin du tour : passer à off demande d'abord, et le tour a l'écran.
+# Dit sous la boîte quand un clic sur une ligne du panneau d'information qui tient lieu de commande est fait pendant qu'une commande tapée par la personne s'exécute, ce qui ne lit aucune ligne tapée après elle.
+command-waits-for-the-command = La commande { $command } attend la fin de la commande en cours.
 
 ## Where a skill offered after a slash was found
 
@@ -2788,7 +2792,38 @@ session-copy-goes-no-further =
         [one] cette session a une seule réponse, /copy ne peut donc pas reculer plus loin
        *[other] cette session a { $replies } réponses, /copy ne peut donc pas reculer de plus de { $replies }
     }
+session-copy-block-needs-a-number = /copy block demande de combien de blocs reculer, comme /copy block 2
+session-copy-no-block = les réponses de cette session ne contiennent aucun bloc de code à copier
+session-copy-block-goes-no-further =
+    { $blocks ->
+        [one] les réponses de cette session ont un seul bloc de code, /copy block ne peut donc pas reculer plus loin
+       *[other] les réponses de cette session ont { $blocks } blocs de code, /copy block ne peut donc pas reculer de plus de { $blocks }
+    }
 session-copy-failed = impossible de copier la réponse dans le presse-papiers
+copied-to-clipboard = { $count ->
+    [one] { $count } caractère dans le presse-papiers
+   *[other] { $count } caractères dans le presse-papiers
+    }
+copied-from-panel = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis le panneau
+   *[other] { $count } caractères dans le presse-papiers, depuis le panneau
+    }
+copied-from-box = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis la zone de saisie
+   *[other] { $count } caractères dans le presse-papiers, depuis la zone de saisie
+    }
+copied-from-status = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis la ligne d'état
+   *[other] { $count } caractères dans le presse-papiers, depuis la ligne d'état
+    }
+copied-from-offered = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis la liste sous la zone de saisie
+   *[other] { $count } caractères dans le presse-papiers, depuis la liste sous la zone de saisie
+    }
+copied-from-footer = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis le pied de page
+   *[other] { $count } caractères dans le presse-papiers, depuis le pied de page
+    }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
 session-directory-added = { $directory } ajouté, et approuvé pour cette session
 session-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; /add-dir close { $directory } y met fin
@@ -3635,6 +3670,36 @@ caffeinate-unavailable = /caffeinate est indisponible : `{ $program }` n'a pas p
 # Laissé dans la transcription quand ce programme s'est arrêté de lui-même, ce qui désactive
 # /caffeinate.
 caffeinate-ended = /caffeinate est désactivé : `{ $program }` a cessé de garder l'ordinateur éveillé
+open-listed = { $count ->
+    [one] 1 lien dans la dernière réponse qui en a un :
+   *[other] { $count } liens dans la dernière réponse qui en a :
+    }
+open-item = { $number }. { $link }
+open-more = { $count ->
+    [one] et 1 de plus, qu'aucun numéro n'ouvre : saisissez-le après /open
+   *[other] et { $count } de plus, qu'aucun numéro n'ouvre : saisissez-en un après /open
+    }
+open-none = Aucune réponse n'a d'adresse web ni de chemin de fichier
+open-list-first = listez d'abord les liens avec /open, puis ouvrez-en un par son numéro
+open-no-such =
+    { $links ->
+        [0] il n'y a pas de lien { $number } ; la dernière liste n'en avait aucun
+        [one] il n'y a pas de lien { $number } ; la dernière liste avait 1 lien
+       *[other] il n'y a pas de lien { $number } ; la dernière liste avait { $links } liens
+    }
+open-not-while-working =
+    un fichier s'affiche quand rien ne tourne, car ses lignes vont à la fin de la transcription, où
+    le travail écrit ; saisissez la commande de nouveau à ce moment
+open-edit-an-address = une adresse s'ouvre dans le navigateur, pas dans un éditeur : utilisez /open <numéro>
+open-edit-not-while-working =
+    un éditeur prend le terminal, sur lequel le travail en cours dessine ; saisissez la commande de
+    nouveau quand rien ne tourne
+open-not-an-address =
+    ce n'est pas une adresse à ouvrir : seule une adresse web avec un hôte, en http ou https et en
+    ASCII simple, s'ouvre
+open-takes =
+    /open liste les liens de la dernière réponse, /open <numéro>, /open <adresse> ou /open <chemin>
+    en ouvre un, et /open edit <numéro> ou /open edit <chemin> ouvre un fichier dans votre éditeur
 panel-session = Session
 panel-model = Modèle
 panel-goal = Objectif
@@ -3642,8 +3707,6 @@ panel-goal-paused = suspendu
 panel-context = Contexte
 panel-language-servers = Serveurs de langage
 panel-mcp-servers = Serveurs MCP
-# Ce que dit un clic sur une ligne de serveur de langage du panneau. Les noms sont les programmes démarrés par la session.
-panel-language-servers-started = Serveurs de langage démarrés dans cette session : { $programs }.
 panel-plan = Plan
 panel-links = Liens
 # Les lignes de la section Liens du panneau d'informations, chacune suivie du lien.
@@ -4050,3 +4113,53 @@ deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non en
 # reconnecter : le refus porte sur le modèle.
 failure-account-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT. Choisissez un autre modèle
 desktop-chatgpt-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT, donc choisissez un autre modèle.
+
+# Ce que dit le pointeur sur une cible de ce que fait un clic dessus, sur la ligne des raccourcis, dans la
+# place qu'ils laissent. Chacun tient en une ligne, dans la voix de l'interface, et aucun ne reprend
+# un mot du texte sous la cible. L'adresse ou le chemin d'un lien le suit sur la même ligne s'il y a
+# de la place.
+hover-back = cliquer pour quitter cette vue
+hover-reply = cliquer pour copier cette réponse
+hover-block = cliquer pour copier ce bloc
+hover-queued = cliquer pour reprendre cette invite dans la zone de saisie
+hover-call-toggle = cliquer pour déplier ou replier cet appel
+hover-call-open = cliquer pour ouvrir le défilement sur cet appel
+hover-delegate = cliquer pour ouvrir la vue de ce délégué
+hover-address = ctrl-clic pour ouvrir cette adresse dans le navigateur
+hover-path = cliquer pour afficher ce fichier, ctrl-clic pour l'ouvrir dans l'éditeur
+hover-path-edit = ctrl-clic pour ouvrir ce fichier dans l'éditeur
+hover-panel-model = cliquer pour choisir le modèle
+hover-panel-effort = cliquer pour choisir l'effort
+hover-panel-context = cliquer pour voir à quel point le contexte est plein
+hover-panel-servers = cliquer pour lister les serveurs MCP
+hover-panel-languages = cliquer pour lister les serveurs de langage
+hover-panel-hide = cliquer pour masquer le panneau
+hover-panel-files = cliquer pour voir les fichiers que cette session a modifiés
+hover-panel-file = cliquer pour voir les modifications de ce fichier
+hover-panel-close-files = cliquer pour revenir au panneau
+hover-panel-edit-previous = cliquer pour aller à la modification précédente
+hover-panel-edit-next = cliquer pour aller à la modification suivante
+hover-panel-name = cliquer pour renommer cette session
+hover-panel-task = cliquer pour aller au tour qui a écrit cette tâche
+hover-panel-detail = cliquer pour ouvrir ou fermer le texte de cette tâche
+hover-panel-link = cliquer pour ouvrir cette adresse dans le navigateur
+hover-footer-mode = cliquer pour changer le mode de permission
+hover-footer-trail = cliquer pour afficher ou masquer la trace
+hover-footer-shortcuts = cliquer pour afficher ou masquer les touches
+hover-footer-info = cliquer pour afficher le panneau d'informations
+hover-footer-watch = cliquer pour ouvrir la vue de ce qu'a fait le tour
+hover-footer-outputs = cliquer pour ouvrir ce que les commandes ont affiché
+hover-footer-background = cliquer pour passer la commande en arrière-plan
+hover-footer-held = cliquer pour revenir à la fin
+hover-footer-cancel-shell = cliquer pour quitter le mode shell
+hover-footer-paste = cliquer pour coller l'image
+hover-item = cliquer pour choisir celui-ci, cliquer encore pour le prendre
+hover-scrollbar = cliquer pour amener la vue ici, glisser le curseur pour défiler
+
+# Le petit menu qu'un clic droit ouvre sur une réponse, le bloc d'un délégué ou une sélection tenue.
+# Un mot ou une courte expression par entrée, et chacune fait ce que fait la commande ou le clic
+# qu'elle représente.
+menu-copy = copier
+menu-copy-text = copier comme texte
+menu-branch = créer une branche de cette session
+menu-open-delegate = ouvrir ce délégué

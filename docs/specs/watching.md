@@ -274,6 +274,9 @@ be open over. So is a command line that waited in the queue, which begins as the
 view still open, and the press that closes the view does not stop it. A goal armed behind a check
 is not touched either, since the press that closes the view is not a press about it.
 
+A click on the way back drawn in the header of a delegate's view, or on the sentence that closes it,
+closes the view as Ctrl-L does ([MOUSE-24](mouse.md#MOUSE-24)). Every key above still works.
+
 There is no key for talking to a delegate and no box for it. A delegate is given one task, has
 nobody to ask, and takes no line typed mid-turn.
 

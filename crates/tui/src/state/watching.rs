@@ -339,6 +339,24 @@ impl Session {
         });
     }
 
+    /// A row put ahead of every delegate in the list, with the place of the row the view is on moved
+    /// with it, as whatever inserts a row ahead of it must do. For a test of what the view keeps
+    /// when the place of what it shows changes and what it shows does not.
+    #[cfg(test)]
+    pub(crate) fn put_an_aside_ahead_of_the_watched_row(&mut self) {
+        self.asides.insert(
+            0,
+            Aside {
+                question: "put ahead".to_string(),
+                answer: None,
+                kept: false,
+            },
+        );
+        if let Some(watching) = &mut self.watching {
+            watching.at += 1;
+        }
+    }
+
     /// Put back the asides a resumed session had, oldest first.
     ///
     /// The one thing the view holds that outlives the session that produced it. A delegate's

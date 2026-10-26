@@ -719,7 +719,15 @@ pub(super) fn run_turn_animated(
         // it, so typing during a turn lagged while typing between turns did not, for no reason a
         // person could see. A keystroke wakes this the instant it arrives; the worker's messages
         // are picked up on the way round and drawn at the frame rate, which is all they need.
-        pump_terminal(terminal, session, |session, key| {
+        pump_terminal(terminal, session, |session, heard| {
+            // What a click left for the loop to carry out, which is the one thing here that holds
+            // the configuration a picker needs (MOUSE-29).
+            let key = match heard {
+                Heard::Key(key) => key,
+                Heard::Click(action) => {
+                    return carry_out_while_working(session, action, &cancel, &mut beside);
+                }
+            };
             // Presses only, for the reason the outer loop ignores releases: a release taken
             // for a press would type every character twice, and cancel the turn on the way up
             // from the Escape that already cancelled it.

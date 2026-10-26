@@ -82,6 +82,59 @@ impl Picking {
         }
     }
 
+    /// Where [`Picking::draw`] draws the panel in a frame of `frame`.
+    pub fn popup(&self, frame: ratatui::layout::Rect) -> crate::state::Popup {
+        let listed = |placed: list_picker::Placed| crate::state::Popup {
+            panel: crate::state::Panel::Picker,
+            area: placed.area,
+            list: Some(placed.list),
+        };
+        match self {
+            Picking::Model(picker) => listed(model_prompt::placed(frame, picker)),
+            Picking::Theme(picker) => listed(theme_prompt::placed(frame, picker)),
+            Picking::Effort(picker) => listed(effort_prompt::placed(frame, picker)),
+            Picking::Editing(picker) => listed(config_prompt::placed(frame, picker)),
+        }
+    }
+
+    /// Give a mouse event to the picker, as it was drawn at `popup` (MOUSE-15, MOUSE-46, MOUSE-47).
+    pub fn pointer(
+        &mut self,
+        popup: &crate::state::Popup,
+        mouse: ratatui::crossterm::event::MouseEvent,
+        last: &mut Option<crate::select::Click>,
+        now: std::time::Instant,
+        wheel: u16,
+    ) -> Step {
+        let placed = list_picker::Placed {
+            area: popup.area,
+            list: popup.list.unwrap_or_default(),
+        };
+        match self {
+            Picking::Model(picker) => {
+                let outcome =
+                    match model_prompt::handle_mouse(picker, placed, mouse, last, now, wheel) {
+                        model_prompt::Outcome::Continue => Outcome::Continue,
+                        model_prompt::Outcome::Cancel => Outcome::Cancel,
+                        model_prompt::Outcome::Select => Outcome::Select,
+                    };
+                step(outcome, picker.chosen().cloned(), Picked::Model)
+            }
+            Picking::Theme(picker) => {
+                let outcome = theme_prompt::click(picker, placed, mouse, last, now, wheel);
+                step(outcome, picker.chosen().cloned(), Picked::Theme)
+            }
+            Picking::Effort(picker) => {
+                let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
+                step(outcome, picker.chosen().copied(), Picked::Effort)
+            }
+            Picking::Editing(picker) => {
+                let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
+                step(outcome, picker.chosen().copied(), Picked::Editing)
+            }
+        }
+    }
+
     /// Draw the panel over whatever is already in the frame.
     pub fn draw(&self, frame: &mut Frame) {
         match self {

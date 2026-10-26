@@ -374,6 +374,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `deepLinks` | `false` makes `bravebot --handle-uri` refuse every `bravebot://open` link ([below](#deeplinks)) |
 | `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
+| `tui.contextMenu` | `false` stops a right click opening the small menu over a reply, a delegate's block or a selection ([below](#tuicontextmenu)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `crashReports` | `false` stops crash reports being written and sent. Read from your own file only ([below](#crashreports)) |
@@ -932,7 +933,44 @@ and wheel scrolling do not (use the keys and the scroller instead). Only the boo
 this: `"false"` in quotes or any other value leaves capture on. Read when the session opens.
 
 While capture is on, most terminals still select natively if you hold a modifier while dragging:
-Shift on most, Option on macOS iTerm2 and Terminal.app.
+Shift on most, Option on macOS iTerm2 and Terminal.app. [The mouse](../using/transcript.md#the-mouse)
+says what the session does with it while it is captured.
+
+**Behind tmux or GNU screen,** the session asks the terminal it is attached to for the buttons, the
+wheel, motion with a button held and motion with none, and for coordinates in the form that can name
+a column or a row past 223 (SGR, mode 1006). Inside a multiplexer the terminal the session is
+attached to is the multiplexer, which has to forward the reports it gets from your terminal, and in
+the form that was asked for. The session cannot tell when it does not: the wheel and a drag then do
+nothing in it, or act on the multiplexer's own scrollback and selection. What the multiplexers' own
+documents show:
+
+- tmux has a `mouse` option, off by default, that makes it capture the mouse for its own key
+  bindings. As of tmux 3.5a its source forwards a mouse report to a program that asked for them with
+  the option off, and with it on through its default key bindings. It keeps one tracking mode for
+  each pane, the last the program asked for, and writes the SGR form to the program only when the
+  program asked for it and your terminal sent that form to tmux. Otherwise it writes the plain older
+  form, in which a position past what the form can hold is set to the last cell it can name, which
+  is a click at the wrong cell on a wide screen.
+- The GNU screen manual lists mouse tracking among the modes it understands as modes 9 and 1000 and
+  no other, so where it is used, assume the wheel and a click arrive, and that a drag, the target
+  under the pointer and a column past 223 may not.
+
+This is what the multiplexers' documents say, and the session has not been run inside either. If the
+wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier above to
+select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the session
+asking for the mouse at all.
+
+### `tui.contextMenu`
+
+```json
+{ "tui": { "contextMenu": false } }
+```
+
+`false` stops a right click opening the [small menu](../using/transcript.md#the-right-click-menu) over a reply, a delegate's
+block or a selection you hold. The mouse is still captured, so the wheel and the drag selection keep
+working, and a terminal that keeps the right click for a menu of its own, or that reports a ctrl-click
+as one, as macOS Terminal does, can then have it. Only the boolean `false` does this: `"false"` in
+quotes or any other value leaves the menu on. Read when the session opens.
 
 ### `tui.wheelRows`
 
@@ -940,9 +978,11 @@ Shift on most, Option on macOS iTerm2 and Terminal.app.
 { "tui": { "wheelRows": 5 } }
 ```
 
-How many rows one mouse wheel notch scrolls, in the transcript of the session view, in
-[the scroller](../using/transcript.md) and in the list and the edits of
-[the files view](../using/sessions.md#the-files-the-session-wrote) alike. Without this key it is 3,
+How many rows of the transcript one mouse wheel notch scrolls, in the session view and in
+[the scroller](../using/transcript.md) alike, and how many rows of the list and of the edits it
+scrolls in [the files view](../using/sessions.md#the-files-the-session-wrote). It is also how many
+rows or items a notch moves the cursor in a picker, in the search over earlier prompts, in the lists of
+sessions, in the list offered under the box and in the right-click menu. Without this key it is 3,
 which is what a terminal's own scrollback moves.
 
 Terminals disagree about how many events a notch sends, and a trackpad swipe sends a stream of them,

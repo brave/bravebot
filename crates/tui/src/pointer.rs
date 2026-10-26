@@ -87,13 +87,6 @@ fn pointer() -> MutexGuard<'static, Pointer> {
         .unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Whether this terminal draws a pointer shape it is asked for. Only then is it worth asking it to
-/// report the pointer's movement without a button held, which is how the border is found
-/// ([INPUT-33](../../../docs/specs/terminal-input.md#INPUT-33)).
-pub(crate) fn is_asked() -> bool {
-    pointer().name.is_some()
-}
-
 /// [`Pointer::show`] for this run.
 pub(crate) fn show<W: Write>(out: &mut W, wanted: Shape) -> io::Result<()> {
     pointer().show(out, wanted)

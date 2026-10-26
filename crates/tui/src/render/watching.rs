@@ -7,14 +7,16 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
-use crate::state::{Delegate, Laid, Output, Session, WatchScope, Watched};
+use crate::state::{Delegate, Hit, Laid, Output, Session, Target, WatchScope, Watched};
 use crate::theme;
 
 use super::transcript::{assistant_lines, draw_transcript, link_references};
 use super::{
     QUARANTINE_BAR, TURN_MARKER, dim, head_of, highlight_selection, marked_rows, one_line,
 };
+use crate::text_links::Marks;
 
 /// Draw the delegate view: the list of them, or the one somebody opened.
 ///
@@ -41,11 +43,21 @@ pub(super) fn draw_watching(frame: &mut Frame, session: &Session) -> Laid {
         ])
         .split(frame.area());
 
-    draw_delegate_head(frame, areas[0], session);
-    let laid = draw_transcript(frame, areas[1], session);
+    let back = draw_delegate_head(frame, areas[0], session);
+    let mut laid = draw_transcript(frame, areas[1], session);
     draw_watching_footer(frame, areas[2], session);
+    laid.hint_row = Some(crate::state::HintRow {
+        area: areas[2],
+        taken: false,
+    });
+    // The label is the interface's own and not text of the view, so a copy leaves it out.
+    if let Some(back) = back {
+        laid.targets
+            .push(Target::on_screen(back.clickable, Hit::Back));
+        laid.chrome.push(back.label);
+    }
 
-    highlight_selection(frame, session);
+    highlight_selection(frame, session, &laid);
 
     laid
 }
@@ -120,7 +132,7 @@ fn draw_aside(
         Some(answer) => lines.extend(assistant_lines(
             answer,
             areas[1].width,
-            session.repository().is_some(),
+            Marks::references(session.repository().is_some()),
         )),
         // A resumed aside whose answer the record could not hold. Said rather than drawn as an
         // empty screen, which reads as an answer that was never given.
@@ -140,7 +152,7 @@ fn draw_aside(
     link_references(frame, areas[1], session);
 
     draw_watching_footer(frame, areas[2], session);
-    highlight_selection(frame, session);
+    highlight_selection(frame, session, &Laid::default());
     Laid::default()
 }
 
@@ -260,7 +272,7 @@ fn draw_output(frame: &mut Frame, session: &Session, output: &Output) -> Laid {
     frame.render_widget(Paragraph::new(lines).scroll((offset, 0)), areas[1]);
 
     draw_watching_footer(frame, areas[2], session);
-    highlight_selection(frame, session);
+    highlight_selection(frame, session, &Laid::default());
     Laid::default()
 }
 
@@ -276,10 +288,11 @@ fn offset_from_end(total: u16, height: u16, scroll: u16) -> u16 {
 /// Above its lines rather than in them, so it stays put while somebody reads back through a
 /// delegate that has made hundreds of calls. The question a reader has at every row is which run
 /// they are looking at, and a header that scrolled away would answer it only at the top.
-fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) {
-    let Some(delegate) = session.watched_delegate() else {
-        return;
-    };
+///
+/// The way back out is drawn at the right of the first row, where there is room for it beside the
+/// words, and says where the cells it was drawn in are.
+fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) -> Option<Back> {
+    let delegate = session.watched_delegate()?;
 
     let head = if delegate.is_running() {
         Style::default().fg(theme::running())
@@ -311,6 +324,45 @@ fn draw_delegate_head(frame: &mut Frame, area: Rect, session: &Session) {
         ]),
         area,
     );
+
+    let words = TURN_MARKER.width()
+        + 1
+        + t!(
+            watching_footer,
+            kind = delegate.kind.clone(),
+            number = delegate.id.to_string()
+        )
+        .width();
+    let label = t!(watching_back);
+    let wide = u16::try_from(label.width()).unwrap_or(u16::MAX);
+    // Two blank cells either side of the words and one after the label, so that it is not read as
+    // part of them. Where the mouse is not reported nothing reaches it, and it is not drawn.
+    if !session.mouse_captured()
+        || area.height == 0
+        || (area.width as usize) < words + 2 + usize::from(wide) + 1
+    {
+        return None;
+    }
+    let drawn = Rect::new(area.right() - wide - 1, area.y, wide, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            label.to_string(),
+            Style::default().fg(theme::brand_primary()),
+        )),
+        drawn,
+    );
+    // A blank cell either side is part of what a click answers, which is a small target.
+    let clickable = Rect::new(drawn.x - 1, drawn.y, wide + 2, 1).intersection(area);
+    Some(Back {
+        label: drawn,
+        clickable,
+    })
+}
+
+/// Where the way back out of a delegate's view is drawn.
+struct Back {
+    label: Rect,
+    clickable: Rect,
 }
 
 /// The footer of one delegate's view: which one, how it is going, and the way out.
@@ -502,7 +554,7 @@ fn draw_delegate_list(frame: &mut Frame, session: &Session) -> Laid {
         layout[2],
     );
 
-    highlight_selection(frame, session);
+    highlight_selection(frame, session, &laid);
 
     laid
 }

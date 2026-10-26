@@ -3,26 +3,18 @@
 
 use crate::state::{Laid, Session, Speaker};
 
-use super::transcript::lay_out;
+use super::transcript::{lay_out, plain_rows};
 
 /// The transcript as plain text, laid out exactly as it is drawn.
 ///
 /// The rows as they are on the screen, margins included, so untrusted content is marked in the
 /// file the same way it is marked on the screen and control characters are already glyphs. What
 /// goes to an editor is what the person was looking at, not a second rendering of it that agrees
-/// about the words and about nothing else.
+/// about the words and about nothing else. The cells the interface draws for a click, the word that
+/// copies a block and the blanks before it, are not text of the transcript and are left out, as they
+/// are from a copy.
 pub fn as_text(session: &Session) -> String {
-    let (lines, _) = lay_out(session, session.laid.width, session.laid.height);
-    lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>()
-        })
-        .collect::<Vec<String>>()
-        .join("\n")
+    plain_rows(session, session.laid.width, session.laid.height).join("\n")
 }
 
 /// The transcript as a markdown document, for exporting to a file.
@@ -167,7 +159,13 @@ fn task_list(tasks: &[bravebot_core::todo::Row]) -> String {
 /// at. The size comes from the last frame because that is the frame the person is looking at when
 /// they press the key.
 pub fn as_last_drawn(session: &Session) -> Laid {
-    lay_out(session, session.laid.width, session.laid.height).1
+    as_drawn_at(session, session.laid.width, session.laid.height)
+}
+
+/// Lay the transcript out at a size the caller names, for a view about to be drawn at a size the
+/// last frame did not have.
+pub fn as_drawn_at(session: &Session, width: u16, height: u16) -> Laid {
+    lay_out(session, width, height).1
 }
 
 #[cfg(test)]

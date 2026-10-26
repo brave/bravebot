@@ -1445,7 +1445,9 @@ The browser is opened by the platform's own opener, started with the URL as one 
 between them: `open` on macOS, `xdg-open` on Linux and `rundll32` with `url.dll,FileProtocolHandler` on
 Windows, where `start` is a shell builtin. It is started as the sandboxing spec says a program is started
 that bravebot looks up by name, resolved first and with the variables that spec removes from what an agent
-passes on left out. The opener failing is not the sign-in failing, and the command carries on waiting.
+passes on left out. The opener failing is not the sign-in failing, and the command carries on waiting. The
+opener is `bravebot_tui::opener`, which the terminal interface uses for a link as well, so the program,
+its arguments and what it is given are one definition.
 
 **Why.** A sign-in that printed the URL only when the opener failed would show nothing on a machine where
 the opener exits successfully and opens nothing, which a machine reached over SSH may do. A shell between
@@ -1453,10 +1455,10 @@ the program and the URL would read the `&` the query holds. The URL holds the `s
 identifiers, and the person needs it, so it is the one line [CHATGPT-8](#CHATGPT-8) lets reach the terminal.
 
 `verified-by: bravebot_cli::chatgpt::the_address_and_the_port_are_shown_before_the_browser_is_asked_for`
-`verified-by: bravebot_cli::chatgpt::the_address_is_one_argument_of_the_platforms_own_opener`
-`verified-by: bravebot_cli::chatgpt::the_opener_is_not_handed_this_agents_own_credentials`
-`verified-by: bravebot_cli::chatgpt::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
-`verified-by: bravebot_cli::chatgpt::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
+`verified-by: bravebot_tui::opener::the_address_is_one_argument_of_the_platforms_own_opener`
+`verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_tui::opener::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started`
+`verified-by: bravebot_tui::opener::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_skus::chatgpt::the_announcement_names_the_port_the_listener_is_already_bound_to`
 `verified-by: bravebot_skus::chatgpt::a_browser_that_never_returns_ends_the_sign_in_at_the_bound`
 

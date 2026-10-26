@@ -552,18 +552,24 @@ pub(super) fn ask_mcp_call_reading<B: Backend>(
     let mut scroll = 0u16;
     let mut seen = Seen::default();
     let mut expanded = false;
+    let mut drawn = Drawn::default();
+    let mut ignored = false;
     loop {
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw_mcp_call(frame, request, expanded, scroll, &mut seen))
-            .is_err()
+        // Not again for a report that changed nothing (MOUSE-44).
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw_mcp_call(frame, request, expanded, scroll, &mut seen))
+                .is_err()
         {
             return Noted::plain(CallAnswer::Reject);
         }
+        ignored = false;
 
         match next() {
+            Next::Ignored => ignored = true,
             Next::Skip => continue,
             Next::Lost => return Noted::plain(CallAnswer::Reject),
+            Next::Wheel(by) => scroll = drawn.moved(scroll, by),
             Next::Press(key) if note::opens(key, alone()) => {
                 // A yes from the line is a yes only where this draw takes the question's own.
                 let may_yes = matches!(

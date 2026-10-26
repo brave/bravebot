@@ -252,21 +252,25 @@ fn ask_one_from<B: Backend>(
 ) -> Answer {
     let mut offered_to_leave = false;
     let mut scroll = 0u16;
+    let mut drawn = Drawn {
+        furthest: 0,
+        page: 1,
+        answerable: false,
+    };
+    let mut ignored = false;
 
     loop {
-        let mut drawn = Drawn {
-            furthest: 0,
-            page: 1,
-            answerable: false,
-        };
         // Drawn inside the loop rather than once before it, because the offer to leave is part of
         // what the question says: a panel drawn once would take the first interrupt and then look as
-        // though nothing had happened.
+        // though nothing had happened. Not again for a report of the mouse that changed nothing, which
+        // is every position of a pointer crossing the window while the offer is not standing
+        // (MOUSE-44).
         //
         // A terminal that cannot be drawn to cannot carry the question.
-        if terminal
-            .draw(|frame| drawn = draw_it(frame, offered_to_leave, scroll))
-            .is_err()
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw_it(frame, offered_to_leave, scroll))
+                .is_err()
         {
             return Answer::Decline;
         }
@@ -276,9 +280,11 @@ fn ask_one_from<B: Backend>(
         let Ok((taken, arrived_alone)) = read() else {
             return Answer::Decline;
         };
+        let was_offered = offered_to_leave;
         if withdraws_the_offer(&taken) {
             offered_to_leave = false;
         }
+        ignored = matches!(taken, event::Event::Mouse(_)) && !was_offered;
         let Some(key) = input::key_of(&taken) else {
             continue;
         };

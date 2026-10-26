@@ -146,32 +146,33 @@ impl Session {
     }
 
     /// Carry out one turn of the wheel with the pointer at (`row`, `column`) while the state is
-    /// drawn, and say whether the pointer was over the panel. Over the list it scrolls the list and
-    /// leaves the highlight where it is, and over the edits it scrolls them, by the rows one wheel
-    /// event moves anywhere (SCROLL-3). Where the pointer is not over the panel, the transcript
-    /// is the pane and nothing is done here.
+    /// drawn, and say whether the pointer was over a pane of it. Over the list it scrolls the list
+    /// and leaves the highlight where it is, and over the edits it scrolls them, by the rows one
+    /// wheel event moves anywhere (SCROLL-3). Where the pointer is not over the panel, the
+    /// transcript is the pane and nothing is done here. The panes are found in the record the frame
+    /// wrote, as the targets of a click are (MOUSE-19).
     pub fn files_wheel(&mut self, row: u16, column: u16, back: bool) -> bool {
-        if self.files.is_none() {
-            return false;
-        }
-        let Some((crate::select::Pane::Panel, area)) =
-            crate::select::pane_at(&self.laid.panes, row, column)
-        else {
+        let Some(pane) = self.wheel_pane_at(row, column) else {
             return false;
         };
-        let rule =
-            files_mode::Geometry::new(usize::from(area.height), self.written_totals().0).rule();
         let rows = isize::try_from(self.wheel_rows()).unwrap_or(isize::MAX);
         let by = if back { -rows } else { rows };
-        // The heading and the list are above the rule, and the file's name, the bar, the edits and
-        // the row of the keys, the last of the panel, are below it.
-        let at = usize::from(row - area.y);
-        if at <= rule && at + 1 < usize::from(area.height) {
-            self.files_scroll_list(by);
-        } else {
-            self.files_scroll(by);
+        match pane {
+            crate::state::Scrolled::List => self.files_scroll_list(by),
+            crate::state::Scrolled::Edits => self.files_scroll(by),
         }
         true
+    }
+
+    /// The pane of the files state under a cell, as the last frame drew it.
+    fn wheel_pane_at(&self, row: u16, column: u16) -> Option<crate::state::Scrolled> {
+        let found = self.laid.find_of_kind(self, row, column, |hit| {
+            matches!(hit, crate::state::Hit::Wheel(_))
+        })?;
+        match found.hit {
+            crate::state::Hit::Wheel(pane) => Some(pane),
+            _ => None,
+        }
     }
 
     /// Scroll the rows of the list by `by`, held between the first file and the last row that

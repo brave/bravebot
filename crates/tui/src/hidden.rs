@@ -22,14 +22,7 @@ pub fn read(question: &str) -> std::io::Result<Option<Secret>> {
     let mut stderr = std::io::stderr();
     let answer = {
         let _raw = ask(&mut stderr, question, Raw::enable)?;
-        let mut typed = Typed::new();
-        loop {
-            if let Event::Key(key) = event::read()?
-                && let Some(answer) = typed.answer_to(key)
-            {
-                break answer;
-            }
-        }
+        answer_from(event::read)?
     };
     writeln!(stderr)?;
     Ok(answer)
@@ -49,6 +42,23 @@ fn ask<G>(
     write!(out, "{question} ")?;
     out.flush()?;
     Ok(raw)
+}
+
+/// What the person answered, reading events from `next` until a key ends the answer.
+///
+/// Only a key is read. A pointer report, a paste, a resize or a change of focus is passed over, so
+/// nothing but the keyboard types a credential or ends the question.
+pub(crate) fn answer_from(
+    mut next: impl FnMut() -> std::io::Result<Event>,
+) -> std::io::Result<Option<Secret>> {
+    let mut typed = Typed::new();
+    loop {
+        if let Event::Key(key) = next()?
+            && let Some(answer) = typed.answer_to(key)
+        {
+            return Ok(answer);
+        }
+    }
 }
 
 /// Raw mode for as long as this is held, left however the read ends, a panic included.
