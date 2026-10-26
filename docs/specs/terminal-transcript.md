@@ -209,10 +209,27 @@ What the session says in its own voice, the trust answer, an unavailable confine
 report, is drawn in a single ink belonging to nothing else, and never in the ink that marks
 untrusted content.
 
+A note written by `Session::note_done` is drawn in the ink for finished and one written by
+`Session::note_refused` in the ink for failed ([VIEW-9](#VIEW-9)), so a directory that was added is
+not read as another error. The code that writes the note chooses which, from what happened and
+never from the words of the note. `/add-dir` writes a done note for a directory it opened and a
+refused note for a path it refuses or asks for. `/add-dir close` writes a done note for a directory
+it closed and a refused note for a name it cannot close or asks for. The opening of the directories
+a settings file names goes through the `/add-dir` handler, so it writes the same done note for a
+directory it opens and the same refused note for a name that does not open. Every other note has
+the shared-ink tone and is drawn in the shared ink, whether it is written by `Session::note` or
+built as an entry directly. Neither tone is a failed turn: an export, the failure the status area
+repeats and the reason a turn is recorded under are read from the entry's speaker, which the choice
+leaves as it was. Where every ink is the terminal's own, the wording ("added", "could not add") is
+what tells them apart. Under `brave`, neither ink is the one that marks untrusted content.
+
 **Why.** That ink is spoken for twice over: a call still running, and the margin down every block
 of content the planner may not read. Drawing a note in it said the trust answer was quarantined.
 An ink of its own rather than merely a different one, because a note sharing with any third meaning
-puts the question back where it started.
+puts the question back where it started. Under `brave` that ink is Brave orange, which reads as
+red, so a success drawn in it reads as an error beside the refusals around it. A note that says
+something was done or refused takes the ink that already means that, and the ink every other note
+shares is still used by nothing else.
 
 This is about which ink, and it is never what makes the marking hold. VIEW-3 stands on the margin
 because a colour can be imitated by the content beside it, and nothing here weakens that: no ink
@@ -221,6 +238,12 @@ outside a block.
 
 `verified-by: bravebot_tui::render::a_system_note_is_not_drawn_in_the_ink_that_marks_untrusted_content`
 `verified-by: bravebot_tui::theme::the_note_ink_is_shared_with_no_other_ink_of_the_brave_palette`
+`verified-by: bravebot_tui::render::a_note_of_something_done_or_refused_is_not_drawn_in_the_ink_every_note_shares`
+`verified-by: bravebot_tui::app::add_dir_draws_the_directory_it_added_apart_from_the_names_it_refused`
+`verified-by: bravebot_tui::app::add_dir_close_draws_what_it_closed_apart_from_what_it_refused`
+`verified-by: bravebot_tui::app::under_a_palette_without_colour_the_wording_tells_what_add_dir_did_from_what_it_refused`
+`verified-by: bravebot_tui::app::the_directories_a_settings_file_names_are_told_in_the_tones_of_add_dir`
+`verified-by: bravebot_tui::app::a_refused_command_is_not_taken_for_the_failure_of_the_turn_around_it`
 
 <a id="VIEW-9"></a>
 ### VIEW-9: under `brave`, an ink that carries meaning is mixed, not chosen by the terminal

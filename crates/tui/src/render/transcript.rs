@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::colour_codes;
 use crate::logo;
 use crate::markdown;
-use crate::state::{Entry, Laid, Session, Speaker};
+use crate::state::{Entry, Laid, Session, Speaker, Tone};
 use crate::table;
 use crate::theme::{self, Palette};
 use crate::wrap;
@@ -168,16 +168,23 @@ fn has_more_to_show(entry: &Entry) -> bool {
             .is_some_and(|activity| activity.changes.len() > MAX_DIFF_LINES)
 }
 
-/// A note, one line to each line of `text`.
+/// A note, one line to each line of `text`, in the ink its `tone` says.
 ///
 /// Shared by the notes in the transcript and by what commands typed during a turn answered, which
-/// are the same voice and have to look it.
-fn note_lines(text: &str) -> Vec<Line<'static>> {
+/// are the same voice and have to look it. The ink is the tone's and is not worked out from the
+/// words. Under `brave` none of the three is the ink that marks untrusted content, and under the
+/// plain palette every ink is the terminal's own (VIEW-8).
+fn note_lines(text: &str, tone: Tone) -> Vec<Line<'static>> {
+    let ink = match tone {
+        Tone::Note => theme::note(),
+        Tone::Done => theme::ok(),
+        Tone::Refused => theme::fail(),
+    };
     text.lines()
         .map(|text| {
             Line::from(Span::styled(
                 format!("{:LEAD$}{text}", ""),
-                Style::default().fg(theme::note()),
+                Style::default().fg(ink),
             ))
         })
         .collect()
@@ -218,7 +225,7 @@ fn speaker_lines(session: &Session, entry: &Entry, width: u16) -> Vec<Line<'stat
         // The session in its own voice, indented to the column the rest of the transcript's
         // text starts in. Not behind the detail marker: that says the line belongs to the
         // entry above it, and the notes starting up leaves are drawn before there is one.
-        Speaker::System => lines.extend(note_lines(&entry.text)),
+        Speaker::System => lines.extend(note_lines(&entry.text, entry.tone)),
         // In the same column as a note and in the colour of a failure, wrapped rather than
         // clipped: a reason is the one line in the transcript somebody reads to the end.
         Speaker::Failure | Speaker::Stopped => {

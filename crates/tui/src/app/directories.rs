@@ -72,20 +72,19 @@ pub(super) fn add_directory(
     directory: &str,
 ) {
     if directory.is_empty() {
-        session.note(t!(session_add_dir_needs_a_path));
+        session.note_refused(t!(session_add_dir_needs_a_path));
         return;
     }
 
-    // Expanded here rather than in the workspace, because `~` is a shell convention and a library
-    // resolving it would be guessing at a home the caller never named.
-    let expanded = expand_home(directory);
-
-    let outcome = workspace.add_directory(&expanded);
+    // The workspace refuses a name that is not absolute, and what `~` and a relative name mean is
+    // the session's to say, so the name is made absolute here.
+    let outcome = named_directory(workspace.root(), directory)
+        .and_then(|named| workspace.add_directory(&named));
     session.set_reference_sources(workspace.reference_sources());
     match outcome {
         Ok(added) => {
             trust.trust(&bravebot_agent::workspace::key_of(&added));
-            session.note(t!(
+            session.note_done(t!(
                 session_directory_added,
                 directory = added.display().to_string()
             ));
@@ -96,7 +95,7 @@ pub(super) fn add_directory(
                 ));
             }
         }
-        Err(error) => session.note(t!(
+        Err(error) => session.note_refused(t!(
             session_directory_not_added,
             directory = directory,
             problem = error
@@ -117,10 +116,11 @@ pub(super) fn close_directory(
     directory: &str,
 ) -> bool {
     if directory.is_empty() {
-        session.note(t!(session_close_dir_needs_a_path));
+        session.note_refused(t!(session_close_dir_needs_a_path));
         return false;
     }
-    let outcome = workspace.close_added_directory(&expand_home(directory));
+    let outcome = named_directory(workspace.root(), directory)
+        .and_then(|named| workspace.close_added_directory(&named));
     session.set_reference_sources(workspace.reference_sources());
     match outcome {
         Ok(closed) => {
@@ -128,14 +128,14 @@ pub(super) fn close_directory(
             // Where no trusted rule went, the directory answers as it did before the close, so
             // saying trust was withdrawn would tell the person something that did not happen.
             if trust.withdraw_trust(&bravebot_agent::workspace::key_of(&closed)) {
-                session.note(t!(session_directory_withdrawn, directory = directory));
+                session.note_done(t!(session_directory_withdrawn, directory = directory));
             } else {
-                session.note(t!(session_directory_closed, directory = directory));
+                session.note_done(t!(session_directory_closed, directory = directory));
             }
             true
         }
         Err(error) => {
-            session.note(t!(
+            session.note_refused(t!(
                 session_directory_not_closed,
                 directory = directory,
                 problem = error
@@ -184,9 +184,9 @@ pub(super) fn change_directory(
     // Against where the session is now, which is what changing directory means everywhere else: a
     // command that only took an absolute path would refuse `/cd crates/tui` and `/cd ..`, which are
     // the two ways anybody would think to say it.
-    let named = against_workspace(workspace.root(), &expand_home(directory));
-
-    let moved = match workspace.change_root(&named) {
+    let moved = match named_directory(workspace.root(), directory)
+        .and_then(|named| workspace.change_root(&named))
+    {
         Ok(moved) => moved,
         Err(problem) => {
             session.note(t!(
@@ -269,23 +269,67 @@ pub(super) enum Changed {
     Left,
 }
 
-/// The name a settings file gave a directory, as an absolute path.
+/// The name a person or a settings file gave a directory, as an absolute path.
 ///
-/// A relative name means a path under the workspace, which is what `../shared` in a settings file
-/// says: the file is about a project, and the directory it wants is next to that project rather
-/// than next to wherever the agent happened to be started from.
-pub(super) fn against_workspace(root: &std::path::Path, directory: &str) -> String {
-    match std::path::Path::new(directory).is_absolute() {
-        true => directory.to_string(),
-        false => root.join(directory).display().to_string(),
+/// A leading `~` is the home directory first, and then a relative name means a path under the
+/// working directory `root`. That order keeps `~/notes` the home directory and not a directory
+/// called `~` under the project, and it is the order `/cd` and a settings file's names are read in.
+/// `../shared` in a settings file says the directory it wants is next to the project rather than
+/// next to wherever the agent happened to be started from, and `/add-dir`, `/add-dir close` and
+/// `/cd` take a name against the working directory the session is in the same way.
+///
+/// The leading `.` and `..` of a relative name are cleaned against `root` here, and the remaining
+/// components are appended in order. The path of `root` is canonical, so it holds no link for a
+/// `..` to step over, and `../notes` becomes `<parent of root>/notes`, which is the spelling an
+/// opened directory is recorded under and so the one `/add-dir close` matches before it asks the
+/// file system where the name leads. A `..` after a name is left alone, since that name may be a
+/// link and the file system takes the `..` from the link's target (TRUST-10).
+///
+/// A relative name against a `root` that is not text is refused. The `String` this returns becomes
+/// a reach grant and a trust key, and a rendering of `root` that replaces the bytes it cannot show
+/// names another directory (PATH-002). A name that is already absolute needs no `root`.
+pub(super) fn named_directory(
+    root: &std::path::Path,
+    typed: &str,
+) -> Result<String, bravebot_agent::WorkspaceError> {
+    use std::path::Component;
+
+    let expanded = expand_home(typed);
+    if std::path::Path::new(&expanded).is_absolute() {
+        return Ok(expanded);
     }
+    let not_text = || bravebot_agent::WorkspaceError::Invalid {
+        path: typed.to_string(),
+        reason: t!(session_directory_root_not_text),
+    };
+    if root.to_str().is_none() {
+        return Err(not_text());
+    }
+
+    let mut resolved = root.to_path_buf();
+    let mut components = std::path::Path::new(&expanded).components().peekable();
+    while let Some(leading) = components.peek() {
+        match leading {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                resolved.pop();
+            }
+            _ => break,
+        }
+        components.next();
+    }
+    resolved.extend(components);
+    resolved
+        .into_os_string()
+        .into_string()
+        .map_err(|_| not_text())
 }
 
 /// Replace a leading `~` with the user's home directory.
 ///
 /// Only a leading one, and only when it is the whole first segment, so a directory genuinely called
-/// `~notes` is left alone. Without a home to expand to, the path is passed through and the
-/// workspace refuses it for not being absolute, which says the same thing.
+/// `~notes` is left alone. Without a home to expand to, the path is passed through as it was typed,
+/// and the caller reads it as a name under the working directory.
 ///
 /// The directory comes from [`bravebot_agent::home::profile`] rather than from `HOME` read here,
 /// so that a `~` somebody types and a `~` the planner writes in a command line name the same file
@@ -346,17 +390,16 @@ pub(super) fn named_to_open(
 ) -> Vec<String> {
     let mut paths: Vec<String> = Vec::new();
     for directory in named {
-        // Home first, then the workspace, so `~/notes` means the home directory rather than a
-        // directory called `~` under the project. `/cd` resolves a name in that order too.
-        let candidate = against_workspace(workspace.root(), &expand_home(directory));
-        match workspace.resolve_directory(&candidate) {
+        match named_directory(workspace.root(), directory)
+            .and_then(|candidate| workspace.resolve_directory(&candidate))
+        {
             Ok(path) => {
                 let shown = path.display().to_string();
                 if !paths.contains(&shown) {
                     paths.push(shown);
                 }
             }
-            Err(problem) => session.note(t!(
+            Err(problem) => session.note_refused(t!(
                 session_directory_not_added,
                 directory = directory,
                 problem = problem

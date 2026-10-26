@@ -2798,6 +2798,9 @@ session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer
 session-directory-not-added = impossible d'ajouter { $directory } : { $problem }
+# La raison donnée pour un nom relatif à un répertoire de travail dont le nom n'est pas du texte.
+# Aucun texte ne désigne ce répertoire, donc aucun chemin n'en est fait.
+session-directory-root-not-text = le nom du répertoire de travail n'est pas du texte, donc un nom relatif à celui-ci ne peut pas être résolu ; donnez le chemin complet
 session-scratch-unavailable = aucun répertoire temporaire pour cette session : { $problem }
 session-using-model = utilise { $model }
 session-using-model-from = utilise { $model } via { $service }
