@@ -369,6 +369,71 @@ mod tests {
         assert!(read("notes.txt").is_ok());
     }
 
+    /// A name that is not UTF-8 has no spelling a rule can be written about, and its lossy rendering
+    /// is the name of another file (PATH-003). Where a rule is in force, a file with such a second
+    /// name is refused, since a rule may be about it. The file named like the rendering, and files
+    /// whose names are all text, are refused only by a rule that names them.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_no_rule_can_be_written_about_refuses_only_the_file_that_has_it() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let project = Project::new("bytes");
+        project.write("plain.txt", "one\n");
+        project.write("link-\u{FFFD}", "the lookalike\n");
+        project.write("pair-a.txt", "two\n");
+        std::fs::hard_link(
+            project.root.join("plain.txt"),
+            project.root.join(OsStr::from_bytes(b"link-\xff")),
+        )
+        .expect("a second name that is not text");
+        std::fs::hard_link(
+            project.root.join("pair-a.txt"),
+            project.root.join("pair-b.txt"),
+        )
+        .expect("a second name that is text");
+        let read = |permissions: &Permissions, named: &str| {
+            preview(
+                &project.workspace,
+                &TrustStore::new(&project.root),
+                permissions,
+                &mut NullSink,
+                named,
+                1,
+            )
+        };
+
+        assert!(
+            read(&Permissions::new(), "plain.txt").is_ok(),
+            "with no rule in force a name no rule can spell refused a file"
+        );
+
+        let (permissions, rejected) = Permissions::parse(
+            &["Read(link-\u{FFFD})".to_string()],
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        );
+        assert!(rejected.is_empty());
+        assert_eq!(
+            read(&permissions, "link-\u{FFFD}"),
+            Err(Refused::Denied),
+            "the rule did not refuse the file it names"
+        );
+        assert_eq!(
+            read(&permissions, "plain.txt"),
+            Err(Refused::Denied),
+            "a file with a second name no rule can spell was passed"
+        );
+        for named in ["pair-a.txt", "pair-b.txt"] {
+            assert!(
+                read(&permissions, named).is_ok(),
+                "{named}: a name that cannot be spelled elsewhere in the directory refused a file whose names can"
+            );
+        }
+    }
+
     /// A file past the size a preview reads is refused by its size, and one that is not text has no
     /// rows, as an empty one has none: the same answer, since nothing here asks the file which it is.
     #[test]

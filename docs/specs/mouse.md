@@ -1425,6 +1425,7 @@ with a blank in it, can be shown too. `@src/main.rs` in a prompt sends the file 
 `verified-by: bravebot_agent::file_preview::a_name_that_is_not_a_file_in_reach_shows_nothing`
 `verified-by: bravebot_agent::file_preview::an_absolute_name_inside_the_working_directory_is_the_file_it_names`
 `verified-by: bravebot_agent::file_preview::a_file_a_deny_rule_covers_is_not_read`
+`verified-by: bravebot_agent::file_preview::a_name_no_rule_can_be_written_about_refuses_only_the_file_that_has_it`
 `verified-by: bravebot_agent::file_preview::a_pipe_put_where_the_file_was_is_refused_and_not_waited_on`
 `verified-by: bravebot_agent::file_preview::a_file_of_one_byte_over_the_most_is_refused_by_the_size_of_the_open_file`
 `verified-by: bravebot_agent::workspace::a_source_longer_than_the_most_is_refused_after_reading_one_byte_past_it`
