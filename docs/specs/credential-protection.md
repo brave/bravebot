@@ -624,6 +624,7 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_agent::usability::a_program_the_suite_starts_is_not_handed_this_agents_signing_key`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_this_agents_signing_key`
 `verified-by: bravebot_tui::editor::an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is`
+`verified-by: bravebot_tui::editor::the_editor_a_click_opens_is_started_without_this_agents_own_credentials`
 `verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`

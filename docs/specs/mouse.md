@@ -1504,6 +1504,7 @@ the path.
 `verified-by: bravebot_tui::editor::a_file_is_not_opened_in_an_editor_nobody_chose`
 `verified-by: bravebot_tui::app::a_click_on_a_path_is_held_to_the_working_directory_and_only_the_preview_to_the_deny_rules`
 `verified-by: bravebot_tui::editor::an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is`
+`verified-by: bravebot_tui::editor::the_editor_a_click_opens_is_started_without_this_agents_own_credentials`
 `verified-by: bravebot_agent::file_preview::a_name_that_is_not_a_file_in_reach_shows_nothing`
 `verified-by: bravebot_agent::file_preview::an_absolute_name_inside_the_working_directory_is_the_file_it_names`
 `verified-by: bravebot_tui::link_clicks::edit_and_a_number_ask_for_what_a_ctrl_click_on_that_path_asks_for_in_every_shape`

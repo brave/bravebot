@@ -95,22 +95,24 @@ pub fn show(text: &str) -> Result<(), Failure> {
 ///
 /// Nothing is copied and nothing is read back. The editor is handed the file itself, which is the
 /// user's own, and what it does to it is theirs to do. The program is the one a prompt is edited
-/// in, looked up and started the same way (SANDBOX-30).
+/// in, looked up and started the same way (SANDBOX-30): through [`run`], which [`start`] shares, so
+/// `an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started` and
+/// `an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written` show that no
+/// file a stage wrote is the program that runs here either.
 ///
 /// The file is one the workspace holds, which a checkout may have written, and an editor acts on
 /// what is in a file it opens (a modeline, a project's configuration). So it is started without this
 /// agent's own credentials, as the browser is
 /// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)); the editor a prompt is edited in is
-/// started with all of the environment, since nothing but the person's own line goes to it.
+/// started with all of the environment, since nothing but the person's own line goes to it. The
+/// command is built by [`file_command`], and
+/// `the_editor_a_click_opens_is_started_without_this_agents_own_credentials` reads it.
 pub fn open_file(path: &Path, line: Option<u32>, column: Option<u32>) -> Result<(), Failure> {
     let (program, arguments) = which_editor(configured())?;
     let (arguments, file) = at_a_place(&program, arguments, path, line, column);
-    let withheld = bravebot_config::scrub::own_credentials();
     run(
         &program,
-        &arguments,
-        &[file.as_os_str()],
-        bravebot_sandbox::programs::Inherits::Without(&withheld),
+        file_command(&program, &arguments, file.as_os_str()),
         |editor, code| match code {
             Some(code) => t!(editor_file_exited_badly, editor = editor, code = code),
             None => t!(editor_file_was_stopped, editor = editor),
@@ -516,9 +518,12 @@ fn waiting_flag(program: &Path) -> Option<String> {
 fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failure> {
     run(
         program,
-        arguments,
-        &[path.as_os_str()],
-        bravebot_sandbox::programs::Inherits::All,
+        command_for(
+            program,
+            arguments,
+            &[path.as_os_str()],
+            bravebot_sandbox::programs::Inherits::All,
+        ),
         |editor, code| match code {
             Some(code) => t!(editor_exited_badly, editor = editor, code = code),
             None => t!(editor_was_stopped, editor = editor),
@@ -526,13 +531,39 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
     )
 }
 
-/// [`start`] with the arguments after the editor's own given as they are, and what a run that did
-/// not end well says given by the caller, who knows what the run was for.
-fn run(
+/// The command that opens `file` for a click: the editor's own arguments, then the file, started
+/// without this agent's own credentials.
+fn file_command(program: &Path, arguments: &[String], file: &OsStr) -> std::process::Command {
+    let withheld = bravebot_config::scrub::own_credentials();
+    command_for(
+        program,
+        arguments,
+        &[file],
+        bravebot_sandbox::programs::Inherits::Without(&withheld),
+    )
+}
+
+/// The command that starts `program`, given the arguments after the editor's own as they are.
+fn command_for(
     program: &Path,
     arguments: &[String],
     trailing: &[&OsStr],
     inherits: bravebot_sandbox::programs::Inherits<'_>,
+) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        inherits,
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
+    command.args(arguments).args(trailing);
+    command
+}
+
+/// Run `command` and wait for it, saying what a run that did not end well says as the caller gives
+/// it, who knows what the run was for.
+fn run(
+    program: &Path,
+    mut command: std::process::Command,
     exited_badly: impl FnOnce(String, Option<i32>) -> String,
 ) -> Result<(), Failure> {
     let name = program
@@ -541,12 +572,7 @@ fn run(
         .to_string_lossy()
         .into_owned();
 
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(program),
-        inherits,
-        bravebot_sandbox::programs::SearchPath::Reduced,
-    );
-    match command.args(arguments).args(trailing).status() {
+    match command.status() {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(Failure::Editor(exited_badly(name, status.code()))),
         Err(error) => Err(Failure::Editor(t!(
@@ -845,6 +871,50 @@ mod tests {
         assert_eq!(
             relative, emacs,
             "a relative name that no longer resolves was started under its name"
+        );
+    }
+
+    /// CRED-14: the editor a click opens is started without the variables this agent's own
+    /// credentials arrive in, and with the editor's arguments then the file, while the editor a
+    /// prompt is edited in withholds none. A start that inherited everything would hand those
+    /// credentials to whatever a workspace file makes the editor run.
+    #[test]
+    fn the_editor_a_click_opens_is_started_without_this_agents_own_credentials() {
+        fn withheld_from(command: &std::process::Command) -> Vec<String> {
+            let mut names: Vec<String> = command
+                .get_envs()
+                .filter(|(_, value)| value.is_none())
+                .map(|(name, _)| name.to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+        let program = Path::new("/usr/bin/vim");
+        let arguments = vec!["+3".to_string()];
+
+        let click = file_command(program, &arguments, OsStr::new("/work/a.rs"));
+        let mut expected = bravebot_config::scrub::own_credentials();
+        expected.sort();
+        assert!(
+            !expected.is_empty(),
+            "no credential is withheld to be found"
+        );
+        assert_eq!(withheld_from(&click), expected);
+        assert_eq!(
+            click.get_args().collect::<Vec<_>>(),
+            ["+3", "/work/a.rs"],
+            "the file is not the last argument, after the editor's own"
+        );
+
+        let prompt = command_for(
+            program,
+            &arguments,
+            &[OsStr::new("/work/prompt.md")],
+            bravebot_sandbox::programs::Inherits::All,
+        );
+        assert!(
+            withheld_from(&prompt).is_empty(),
+            "the editor a prompt is edited in is not given all of the environment"
         );
     }
 
