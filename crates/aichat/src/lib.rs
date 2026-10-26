@@ -1237,9 +1237,20 @@ fn backoff(base: Duration, failures: u32) -> Duration {
     base * 2u32.pow(failures - 1)
 }
 
+/// Whether a failed attempt should be repeated, for a client that also reads a failure the service
+/// reports part way through a reply.
+///
+/// What [`worth_another_attempt`] asks, and a reported failure that a second attempt could get
+/// past.
+fn worth_another_attempt_or_report(allowed: u32, attempt: u32, error: &ChatError) -> bool {
+    worth_another_attempt(allowed, attempt, error)
+        || (attempt < allowed
+            && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
+}
+
 /// The wait a service asked for with a 429, or none. Another status keeps the doubling whatever
 /// header it carried: the header is read as a rate limit's only.
-fn asked_wait(error: &EgressError) -> Duration {
+pub fn asked_wait(error: &EgressError) -> Duration {
     match error {
         EgressError::Status {
             status: 429,
@@ -1250,18 +1261,17 @@ fn asked_wait(error: &EgressError) -> Duration {
     }
 }
 
-/// The pause before sending again after `failures` failures: what the service asked for where it
-/// said, and the doubling otherwise. Never less than the doubling, so a `Retry-After: 0` sends the
-/// next request after the pause it would have had anyway rather than at once.
+/// The pause before sending again after `failures` failures of the transport: what the service
+/// asked for where it said, and the doubling otherwise. Never less than the doubling, so a
+/// `Retry-After: 0` sends the next request after the pause it would have had anyway rather than at
+/// once.
+pub fn pause_after_failure(base: Duration, failures: u32, error: &EgressError) -> Duration {
+    asked_wait(error).max(backoff(base, failures))
+}
+
 fn pause_before_retry(base: Duration, failures: u32, error: &ChatError) -> Duration {
     match error {
-        ChatError::Egress(
-            e @ EgressError::Status {
-                status: 429,
-                retry_after: Some(_),
-                ..
-            },
-        ) => asked_wait(e).max(backoff(base, failures)),
+        ChatError::Egress(e) => pause_after_failure(base, failures, e),
         _ => backoff(base, failures),
     }
 }

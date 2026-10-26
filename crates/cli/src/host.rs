@@ -1549,7 +1549,7 @@ mod tests {
     /// What a client that sends `sent` and then stops sending is told by `serve`.
     #[cfg(unix)]
     fn served(shared: &Arc<Shared>, sent: &str) -> String {
-        use std::io::Read;
+        use std::io::{ErrorKind, Read};
         use std::net::Shutdown;
         use std::os::unix::net::UnixStream;
 
@@ -1560,7 +1560,13 @@ mod tests {
             .set_read_timeout(Some(LONG_ENOUGH))
             .expect("a timeout");
         client.write_all(sent.as_bytes()).expect("sent");
-        client.shutdown(Shutdown::Write).expect("done sending");
+        // `serve` returns as soon as it has read what it takes, so it can have closed its end by
+        // now, and macOS then answers `NotConnected` where Linux does not. A server that has gone
+        // has no end of input left to wait for.
+        match client.shutdown(Shutdown::Write) {
+            Err(error) if error.kind() == ErrorKind::NotConnected => {}
+            done => done.expect("done sending"),
+        }
         let mut told = String::new();
         client.read_to_string(&mut told).expect("closed");
         serving.join().expect("serve ended");

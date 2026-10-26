@@ -10,7 +10,11 @@ governs:
   - crates/aichat/src/lib.rs
   - crates/aichat/src/responses.rs
   - crates/aichat/src/models.rs
+  - crates/tui/src/app/actions.rs
   - crates/tui/src/app/models.rs
+  - crates/tui/src/app/session_commands.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/turns.rs
   - crates/ui-bridge/src/models.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/account_words.rs
@@ -122,7 +126,8 @@ A turn whose model is named `chatgpt/<name>` on the command line or by a setting
 entry has that id ([CHATGPT-9](#CHATGPT-9)), and that finds no usable sign-in, is refused before a request
 is sent. The refusal is a sentence from [CHATGPT-8](#CHATGPT-8), and it names the command.
 
-The way is named `chatgpt`. `openai` is the id of the gateway reached with `OPENAI_API_KEY`, and
+The way is named `chatgpt`. `openai` is the id of the gateway reached with an API key, stored by
+`bravebot auth login gateway openai` or read from a variable its block names, and
 `auth status openai` would name two credentials.
 
 **Why.** The flow opens a browser, holds a port and ends with a credential on disk. Each is a decision

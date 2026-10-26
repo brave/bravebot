@@ -9,6 +9,8 @@ governs:
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/session_commands.rs
   - crates/agent/src/home.rs
   - crates/tui/src/command_table.rs
   - crates/cli/src/supervisor.rs

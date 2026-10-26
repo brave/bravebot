@@ -25,7 +25,10 @@ pub mod protocol;
 
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
-use bravebot_aichat::{Completion, CutOff, OpenCall, Progress, read_in_background, reply_bound};
+use bravebot_aichat::{
+    Completion, CutOff, LONGEST_WAIT, OpenCall, Progress, asked_wait, pause_after_failure,
+    read_in_background, reply_bound,
+};
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
@@ -358,8 +361,11 @@ impl Driven for BedrockClient<'_> {
         worth_another_attempt(self.attempts_allowed(), attempt, error)
     }
 
-    fn pause(&self, failures: u32, _error: &BedrockError) -> Duration {
-        backoff(self.pace.backoff, failures)
+    fn pause(&self, failures: u32, error: &BedrockError) -> Duration {
+        match error {
+            BedrockError::Egress(e) => pause_after_failure(self.pace.backoff, failures, e),
+            _ => backoff(self.pace.backoff, failures),
+        }
     }
 
     fn log_retry(&self, attempt: u32, pause: Duration) {
@@ -1155,7 +1161,8 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
         return false;
     }
     match error {
-        BedrockError::Egress(e) => e.is_transient(),
+        // A wait past the ceiling is not sat through, as for every other backend.
+        BedrockError::Egress(e) => e.is_transient() && asked_wait(e) <= LONGEST_WAIT,
         // The service's own name for what went wrong. A fault or a busy service is worth asking
         // again; a request it refuses on its contents is refused the same way every time.
         BedrockError::Reported { kind } => TRANSIENT_REPORTS.contains(&kind.as_str()),
@@ -2110,6 +2117,14 @@ mod tests {
     fn refused_with(status: u16) -> Vec<u8> {
         format!("HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .into_bytes()
+    }
+
+    /// A refusal that carries a `Retry-After` header of this text.
+    fn refused_asking_for(status: u16, after: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status} Refused\r\nRetry-After: {after}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes()
     }
 
     /// Stream `request` to a server answering `responses` in turn, and return the body of each
@@ -4629,6 +4644,56 @@ mod tests {
             asked_through(&account_stating(Some(4), None), &Egress::new(), http, true);
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(attempts, 5);
+    }
+
+    /// A throttled request is sent again after the wait the service asked for, and not after the
+    /// doubling, which this client has shortened to a millisecond.
+    #[test]
+    fn a_throttled_request_is_waited_out_for_as_long_as_the_service_asked() {
+        let (http, received) = scripted_responses(vec![refused_asking_for(429, "2"), answered()]);
+        let started = std::time::Instant::now();
+        let (result, attempts) =
+            asked_through(&account_stating(None, None), &Egress::new(), http, true);
+        let waited = started.elapsed();
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(attempts, 2);
+        assert_eq!(received.try_iter().count(), 2);
+        assert!(
+            waited >= Duration::from_secs(2),
+            "it asked again after {waited:?}, before the two seconds the service asked for"
+        );
+    }
+
+    /// A wait past the ceiling is not sat through: the request is not sent again, and the failure
+    /// carries the figure for the line that tells the person when to ask again.
+    #[test]
+    fn a_throttle_asking_for_longer_than_the_ceiling_fails_at_once_with_the_figure() {
+        for streaming in [false, true] {
+            let (http, received) =
+                scripted_responses(vec![refused_asking_for(429, "600"), answered()]);
+            let started = std::time::Instant::now();
+            let (result, attempts) = asked_through(
+                &account_stating(None, None),
+                &Egress::new(),
+                http,
+                streaming,
+            );
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "streaming {streaming}: {:?}",
+                started.elapsed()
+            );
+            assert_eq!(attempts, 1, "streaming {streaming}");
+            assert_eq!(received.try_iter().count(), 1, "streaming {streaming}");
+            match result {
+                Err(BedrockError::Egress(EgressError::Status {
+                    status: 429,
+                    retry_after: Some(asked),
+                    ..
+                })) => assert_eq!(asked, Duration::from_secs(600)),
+                other => panic!("streaming {streaming}: expected the 429 with its wait: {other:?}"),
+            }
+        }
     }
 
     /// The count says how many times a request is sent again and not which failures are worth it:

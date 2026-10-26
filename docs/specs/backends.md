@@ -558,6 +558,16 @@ session is running is sent by the sessions started after it. The key is only sto
 named by the block, so a key stored for an id no block names configures nothing, and the managed
 layer's gateways ([BACKEND-38](#BACKEND-38)) take one as a person's own do.
 
+**A known name with no block.** `bravebot auth login gateway` stores a key for a known name
+([BACKEND-17](#BACKEND-17)) before any block names it, and then adds an entry that holds no field to
+the person's own settings file ([cli.md](cli.md)). The entry names the name and nothing else, so the
+key is sent to the host compiled in for it, as [BACKEND-17](#BACKEND-17) says that name is reached:
+as `authorization: Bearer` for `openrouter` and `openai`, and as `x-api-key` for `anthropic`. It
+names no variable, so the variable that name's own service reads, such as `OPENAI_API_KEY` for
+`openai`, is not read: a variable is read only where a block names it. The sign-in offers no known
+name where the machine-level layer names the gateways, since a block recorded in the person's file
+would not be read there.
+
 **An entry naming AWS is the exception**, and not a token kept somewhere else: Bedrock takes a
 signature over the request, so there is no credential for a block to name and none is read from one.
 Which set of AWS credentials to sign with comes from the profile the block names, resolved when a
@@ -582,6 +592,8 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_config::provider::a_stored_key_is_read_after_a_variable_and_before_the_file`
 `verified-by: bravebot_config::provider::a_stored_key_is_sent_to_a_block_naming_no_credential`
 `verified-by: bravebot_config::lib::a_stored_key_reaches_the_gateway_its_id_names`
+`verified-by: bravebot_config::lib::an_entry_that_names_nothing_under_a_known_id_is_sent_the_stored_key_and_no_variable`
+`verified-by: bravebot_config::lib::a_known_id_recorded_as_an_empty_entry_is_sent_its_key_in_the_header_its_protocol_uses`
 `verified-by: bravebot_cli::running::a_run_sends_the_key_stored_for_its_gateway`
 `verified-by: bravebot_config::provider::a_token_written_into_the_file_is_still_read`
 `verified-by: bravebot_config::provider::a_provider_with_nothing_holding_a_token_has_none`
@@ -608,6 +620,11 @@ The set of known names is compiled in: `openrouter`, reached at `https://openrou
 `openai`, reached at `https://api.openai.com/v1`, and `anthropic`, reached at
 `https://api.anthropic.com/v1` in the protocol [BACKEND-57](#BACKEND-57) states. Nothing is fetched to
 resolve one, and no service is asked what its own endpoint is.
+
+`bravebot auth login gateway` offers a key for exactly these names where no block names them, and
+for none of them where the machine-level layer names the gateways. It shows each with the endpoint
+its entry would reach: a known name asked for alone is read as an entry that holds no field is, so
+the host it shows is the one a session sends the key to.
 
 A known name supplies an endpoint and nothing else. An `openai` entry is otherwise reached as any
 other gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
@@ -639,6 +656,9 @@ gateway is a line of configuration rather than an unreachable service. A stated 
 what keeps a known name usable against a proxy or a private deployment.
 
 `verified-by: bravebot_config::provider::a_known_provider_name_supplies_its_own_endpoint`
+`verified-by: bravebot_config::provider::the_known_ids_are_the_ids_an_endpoint_is_compiled_in_for_and_no_other`
+`verified-by: bravebot_config::provider::a_known_id_asked_for_alone_is_read_as_an_entry_that_names_nothing`
+`verified-by: bravebot_config::provider::an_id_with_no_row_in_the_table_is_not_a_known_provider`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
 `verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
@@ -977,11 +997,6 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
 `verified-by: bravebot_aichat::client::a_model_that_refuses_the_thinking_budget_is_asked_again_without_it`
 `verified-by: bravebot_aichat::client::a_refusal_of_a_request_asking_for_no_level_is_reported_after_one_request`
-`verified-by: bravebot_aichat::call::the_level_is_dropped_only_for_a_refusal_of_a_request_that_carried_one`
-`verified-by: bravebot_aichat::call::a_request_starts_from_what_the_model_was_known_to_refuse`
-`verified-by: bravebot_aichat::call::a_probe_that_answered_remembers_the_refusal`
-`verified-by: bravebot_aichat::call::a_probe_that_failed_as_well_remembers_nothing_and_goes_back`
-`verified-by: bravebot_aichat::call::a_request_that_probed_nothing_settles_nothing`
 `verified-by: bravebot_aichat::call::the_order_fields_are_given_up_in_is_the_callers`
 `verified-by: bravebot_aichat::call::a_probe_that_failed_as_well_remembers_nothing_and_restores_what_was_known`
 `verified-by: bravebot_aichat::lib::a_model_whose_service_refused_a_level_is_reported_as_reading_none`
@@ -999,6 +1014,9 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
+`verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug`
+`verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
+`verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
@@ -1878,6 +1896,7 @@ category and the request count and no more, as for every failure.
 `verified-by: bravebot_aichat::call::beginning_an_attempt_keeps_what_the_earlier_ones_were_billed`
 `verified-by: bravebot_aichat::call::a_stop_that_lands_between_attempts_is_answered_before_the_next_is_sent`
 `verified-by: bravebot_aichat::call::attempts_are_capped_and_a_concession_is_not_one`
+`verified-by: bravebot_aichat::call::a_mended_failure_is_sent_again_at_once_and_counts_against_nothing`
 `verified-by: bravebot_aichat::call::beginning_a_call_clears_the_count_and_both_usages`
 `verified-by: bravebot_aichat::call::a_wait_ends_early_and_says_so_when_a_stop_lands_in_the_middle_of_it`
 `verified-by: bravebot_aichat::call::a_wait_nobody_stops_finishes_and_says_so`
@@ -2878,6 +2897,10 @@ parsed number only how long.
 `verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`
 `verified-by: bravebot_aichat::client::a_stop_does_not_wait_out_the_pause_a_service_asked_for`
+`verified-by: bravebot_bedrock::lib::a_throttled_request_is_waited_out_for_as_long_as_the_service_asked`
+`verified-by: bravebot_bedrock::lib::a_throttle_asking_for_longer_than_the_ceiling_fails_at_once_with_the_figure`
+`verified-by: bravebot_aichat::client::a_google_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling`
+`verified-by: bravebot_aichat::client::a_responses_429_is_waited_out_for_as_long_as_asked_unless_the_wait_is_past_the_ceiling`
 `verified-by: bravebot_agent::backend::a_rate_limit_keeps_the_wait_the_service_asked_for`
 `verified-by: bravebot_session::sessions::a_rate_limit_says_how_long_the_service_asked_for`
 

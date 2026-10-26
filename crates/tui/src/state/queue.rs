@@ -213,14 +213,10 @@ impl Session {
         // here, and handing it a command is how one used to be answered as a question about
         // itself, while handing it a command line is how `echo pwned` used to reach the planner as
         // something a person had said. Both wait in the queue below and nowhere else.
-        //
-        // Behind a copy being held back it is held too: the turn taking it ahead of the older one
-        // would send what was typed last first.
         if waiting.is_sent() {
-            // A line the buffer is not taking yet is held, and goes in when the next turn starts.
-            if let Err(held) = self.pending.offer(self.held.is_empty(), resolved) {
-                self.held.push_back(held);
-            }
+            // Behind a line held back from the turn in flight, the buffer holds it too: the turn
+            // taking it ahead of the older one would send what was typed last first.
+            self.pending.push_behind(resolved);
         }
         self.queued.push(Queued {
             prompt,
@@ -287,7 +283,7 @@ impl Session {
         let sent = |line: &&Queued| line.waiting.is_sent();
         let total = self.queued.iter().filter(sent).count();
         let before = self.queued[..at].iter().filter(sent).count();
-        before >= total.saturating_sub(self.held.len())
+        before >= total.saturating_sub(self.pending.held())
     }
 
     /// Record that the person asked for what is running to stop.
@@ -361,31 +357,19 @@ impl Session {
         let mut attached = Vec::new();
         let mut pasted = Vec::new();
         let mut recall = Vec::new();
-        // The copies of the prompts still waiting, in queue order, with those of the ones going now
-        // in front of them.
-        let mut copies: std::collections::VecDeque<String> = self.pending.drain().into();
-        copies.extend(self.held.drain(..));
         let hurried = self.queued[0].hurried;
         for next in self.queued.drain(..together) {
-            // The copy left for the running turn goes: this prompt is becoming part of a turn of its
-            // own, and a copy still in the buffer would reach the planner a second time, as an
-            // interjection into the very turn this line started.
-            copies.pop_front();
             prompts.push(next.prompt);
             attached.extend(next.attached);
             pasted.extend(next.pasted);
             recall.push(next.recall);
         }
-        // What waits behind a hurried batch goes after whatever stops it, a command or a turn of
-        // its own, so the turn begun now may not take it. Behind a prompt sent alone, the rest is
+        // The copies of the prompts going now leave the buffer: a copy still there would reach the
+        // planner a second time, as an interjection into the very turn this line started. What
+        // waits behind a hurried batch goes after whatever stops it, a command or a turn of its
+        // own, so the turn begun now may not take it. Behind a prompt sent alone, the rest is
         // for that turn to take, as it always was.
-        if hurried {
-            self.held = copies;
-        } else {
-            for copy in copies {
-                self.pending.push(copy);
-            }
-        }
+        self.pending.begin_turn(together, hurried);
         // A line sent together with others is no longer a lone word, so only one prompt can be.
         let lone = matches!(
             prompts.as_slice(),
@@ -480,7 +464,7 @@ impl Session {
         // has already gone.
         let mut reclaimed = Vec::new();
         while let Some(waiting) = self.queued.last().map(|line| line.waiting) {
-            if waiting.is_sent() && self.held.pop_back().is_none() && !self.pending.forget_last() {
+            if waiting.is_sent() && !self.pending.forget_last() {
                 break;
             }
             reclaimed.push(self.queued.pop().expect("the queue was not empty"));
