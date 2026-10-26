@@ -146,8 +146,8 @@ impl<'a> ResponsesClient<'a> {
     /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
     /// A request that asks for a level then carries `level` in its place, so a level chosen later in
-    /// the session, or asked for by a skill, changes nothing that is sent: the service keeps the
-    /// prompt cache of a session only while its level stays the same. A request that asks for none,
+    /// the session, or asked for by a skill, changes nothing that is sent: the service's prompt cache
+    /// was seen to miss once at each change of level inside a session. A request that asks for none,
     /// as a summary does, carries none. Without this call every request carries the level it asks
     /// for. A model that refuses the level is sent none whatever it was held to, as
     /// [BACKEND-22](../../../docs/specs/backends.md#BACKEND-22) has it for any model. Ignored by a

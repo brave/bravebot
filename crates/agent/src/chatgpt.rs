@@ -170,17 +170,16 @@ pub(crate) mod stand_in {
 ///
 /// Made when a session begins and held by whatever holds the session, so every request the session
 /// makes carries the same identifier, and a second session of the same process carries another. The
-/// service derives its prompt-cache affinity from the identifier, so one that changed between a
-/// session's requests would be a cache that never hit, and one two sessions shared would give them
-/// each other's cache. A delegate, a background session, a resumed session and a fork each begin
-/// their own: nothing here is stored in a session's record.
+/// service's prompt cache was seen to hit on 4 of 6 calls with all three session headers and on 3 of 5
+/// with `session-id` alone, and on none of 9 with none of them. A delegate, a background session, a
+/// resumed session and a fork each begin their own: nothing here is stored in a session's record.
 ///
 /// The effort level is the one in force when the session began, and it is the one the account is
-/// sent for the rest of it, whatever level is chosen afterwards: the service keeps the cache of a
-/// session only while its level stays the same. What the person chose is kept apart and applies to
-/// the sessions begun after it, and to every service but this one. A model that refuses a level
-/// outranks it: the client sends that model none from then on, for every session of the process
-/// ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
+/// sent for the rest of it, whatever level is chosen afterwards: the service's cache was seen to miss
+/// once at each change of level inside a session, and to hit again after. What the person chose is
+/// kept apart and applies to the sessions begun after it, and to every service but this one. A model
+/// that refuses a level outranks it: the client sends that model none from then on, for every
+/// session of the process ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
 ///
 /// Cloning gives another handle on the same session.
 #[derive(Debug, Clone)]

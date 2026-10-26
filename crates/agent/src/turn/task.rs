@@ -227,8 +227,8 @@ pub struct Task {
     /// a delegate are that. Every clone of a task is in the session the task is in, whether it was
     /// made before the session began or after, so the rounds of a goal run, which are made from
     /// clones of its first task, are one session. A caller that builds a task for each turn of a
-    /// session and does not say would give each turn an identifier of its own, which the service
-    /// takes for a cache that never hits.
+    /// session and does not say would give each turn an identifier of its own, so the turns of a
+    /// session would not carry the one identifier the service's cache hits were seen with.
     account: std::sync::Arc<std::sync::OnceLock<crate::chatgpt::AccountSession>>,
     /// The schema the person running this task supplied for its reply, sent with each of the
     /// planner's requests.
