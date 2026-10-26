@@ -152,7 +152,6 @@ impl BackendError {
                 // Callers handle cancellation separately; its fallback diagnosis stays internal.
                 ChatError::Encode(_) | ChatError::Cancelled => Category::Internal,
                 ChatError::Subscription(_) => Category::Unauthorized,
-                ChatError::BodyTooLarge { .. } => Category::Refused,
                 ChatError::Account(failure) => match failure {
                     AccountFailure::NotSignedIn
                     | AccountFailure::Ended
@@ -163,6 +162,10 @@ impl BackendError {
                     // credential. A refusal is a category no fallback model is used for, and the
                     // account answers for every model it serves.
                     AccountFailure::Named { .. } => Category::Refused,
+                    // The service answered and said the account does not offer this model, which
+                    // a new sign-in or another request does not change, so it is no failure of
+                    // the credential.
+                    AccountFailure::ModelNotOffered => Category::Refused,
                     AccountFailure::Renewal(class) => match class {
                         RenewalFailure::Refused => Category::Refused,
                         RenewalFailure::RateLimited => Category::RateLimited,
@@ -277,7 +280,8 @@ impl BackendError {
     /// Decided from the status alone, never from what the reply wrote. The same statuses cover a
     /// field the service dislikes as readily as a prompt too long, so this says only that the request
     /// as written was refused, and a caller acting on it has to be one for whom a wrong guess costs
-    /// little.
+    /// little. A 400 that the ChatGPT account's client has told as a model not offered arrives as
+    /// another error, so it is not this and no compaction is spent on it.
     pub fn refused_the_body(&self) -> bool {
         use bravebot_net::EgressError;
         match self {
@@ -291,9 +295,6 @@ impl BackendError {
             Self::Aichat(ChatError::Reported {
                 failure: Failure::ContextFull,
             }) => true,
-            // Not sent for its size: the same remedy as a body the service refused, and the
-            // service was not asked.
-            Self::Aichat(ChatError::BodyTooLarge { .. }) => true,
             Self::Attempted { cause, .. } => cause.refused_the_body(),
             _ => false,
         }
@@ -2312,6 +2313,7 @@ mod tests {
             (AccountFailure::Unusable, Category::Unauthorized, false),
             (refused(Refusal::UsageLimit), Category::Refused, false),
             (refused(Refusal::NotPermitted), Category::Refused, false),
+            (AccountFailure::ModelNotOffered, Category::Refused, false),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),
                 Category::Refused,
@@ -2361,6 +2363,7 @@ mod tests {
             AccountFailure::Unusable,
             refused(Refusal::UsageLimit),
             refused(Refusal::NotPermitted),
+            AccountFailure::ModelNotOffered,
             AccountFailure::Renewal(RenewalFailure::Refused),
             AccountFailure::Renewal(RenewalFailure::RateLimited),
             AccountFailure::Renewal(RenewalFailure::Unavailable),
@@ -2394,7 +2397,6 @@ mod tests {
             status(429),
             status(503),
             BackendError::from(ChatError::Subscription("none".to_string())),
-            BackendError::from(ChatError::BodyTooLarge { limit: 1 << 20 }),
             BackendError::from(ChatError::NoContent),
             BackendError::from(ChatError::Incomplete),
             BackendError::from(ChatError::Cancelled),
@@ -2412,23 +2414,18 @@ mod tests {
         }
     }
 
-    /// CHATGPT-10: a body not sent for its size is refused as the body is where a service refuses
-    /// it, so the turn shortens the conversation once, and it is no failure of the sign-in.
-    #[test]
-    fn a_body_not_sent_for_its_size_is_a_refusal_of_the_body_and_no_failure_of_the_sign_in() {
-        let error = BackendError::from(ChatError::BodyTooLarge { limit: 1 << 20 });
-        assert!(error.refused_the_body());
-        assert_eq!(error.diagnosis().category, Category::Refused);
-        assert!(!error.to_string().contains("auth login"), "{error}");
-        assert!(!BackendError::from(ChatError::Account(AccountFailure::Ended)).refused_the_body());
-    }
-
-    /// CHATGPT-8: a refusal that says something about the account is not a refusal of the body, so no
-    /// summary is spent on it, and the sentences of the two are told apart and quote nothing.
+    /// CHATGPT-8: a refusal that says something about the account, and a refusal of a model the
+    /// account does not offer, are not a refusal of the body, so no summary is spent on them and the
+    /// conversation is not shortened for them, though the service answered the model's with a 400.
+    /// The sentences of the three are told apart and quote nothing.
     #[test]
     fn a_refusal_of_the_account_is_not_a_refusal_of_the_body() {
         let mut sentences = Vec::new();
-        for failure in [refused(Refusal::UsageLimit), refused(Refusal::NotPermitted)] {
+        for failure in [
+            refused(Refusal::UsageLimit),
+            refused(Refusal::NotPermitted),
+            AccountFailure::ModelNotOffered,
+        ] {
             let error = BackendError::from(ChatError::Account(failure));
             assert!(!error.refused_the_body(), "{failure:?}");
             assert!(!error.is_unreachable(), "{failure:?}");
@@ -2436,8 +2433,16 @@ mod tests {
             sentences.push(error.to_string());
         }
         assert_ne!(sentences[0], sentences[1]);
+        assert_ne!(sentences[0], sentences[2]);
+        assert_ne!(sentences[1], sentences[2]);
         assert!(sentences[0].contains("usage limit"), "{}", sentences[0]);
         assert!(!sentences[1].contains("usage limit"), "{}", sentences[1]);
+        assert!(!sentences[2].contains("usage limit"), "{}", sentences[2]);
+        assert!(
+            sentences[2].contains("does not offer that model"),
+            "{}",
+            sentences[2]
+        );
     }
 
     /// CHATGPT-10: a request to the account that asks for a level is sent the one its session began
@@ -2511,6 +2516,26 @@ mod tests {
                 "{failure:?} after attempts"
             );
         }
+    }
+
+    /// CHATGPT-8 and BACKEND-53: a refusal of a model the account does not offer is a refusal among the
+    /// failure categories, which no fallback model is used for. Only a rate limit and an unavailable
+    /// service move a turn to the model named as the fallback, so the category is why it is not used
+    /// here, counted or not.
+    #[test]
+    fn a_model_the_account_does_not_offer_takes_no_fallback_model() {
+        let mut config = with_providers("{}");
+        config.fallback_model = Some("chatgpt/gpt-b".to_string());
+        let refused = BackendError::from(ChatError::Account(AccountFailure::ModelNotOffered));
+
+        assert_eq!(refused.diagnosis().category, Category::Refused);
+        assert_eq!(fallback_after(&config, "chatgpt/gpt-a", &refused), None);
+        let after_attempts = refused.counted(3, None, None);
+        assert_eq!(
+            fallback_after(&config, "chatgpt/gpt-a", &after_attempts),
+            None,
+            "after attempts"
+        );
     }
 
     /// A gateway authenticates with a bearer token and has nothing to sign in for. Deciding

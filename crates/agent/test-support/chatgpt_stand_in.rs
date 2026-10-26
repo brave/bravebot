@@ -118,9 +118,16 @@ pub enum Serving {
     /// [CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8), in a body that repeats what it
     /// has seen.
     RefusesWithCode(u16, &'static str),
+    /// The model is refused with a 400, in the body the serving host answered a model the account
+    /// does not offer with: a `detail` and an `error` object that names `model_not_found`, the
+    /// sentence of each repeating what the stand-in has seen.
+    RefusesTheModel,
     /// A turn is answered with one call of the tool `name` with the JSON `arguments`, as the model
     /// would ask for it, and ends there.
     Calls(&'static str, &'static str),
+    /// A listing is answered with a row for each of these names, each shown to a person and
+    /// reachable through the API. A turn is answered in the text `all done`.
+    Lists(&'static [&'static str]),
 }
 
 /// One request the stand-in took.
@@ -525,6 +532,20 @@ fn refusal_with_code(state: &State, status: u16, code: &str) -> (u16, &'static s
     (status, "application/json", body.to_string())
 }
 
+/// A refusal of a model the account does not offer, in the shape the serving host gave it.
+fn refusal_of_the_model(state: &State) -> (u16, &'static str, String) {
+    let words = echoed(state);
+    let body = serde_json::json!({
+        "detail": words,
+        "error": {
+            "type": "invalid_request_error",
+            "code": refusal_codes::MODEL_NOT_FOUND,
+            "message": words,
+        },
+    });
+    (400, "application/json", body.to_string())
+}
+
 impl Serving {
     /// The reply, as the status, the kind and the body.
     fn reply(self, state: &State) -> (u16, &'static str, String) {
@@ -537,8 +558,30 @@ impl Serving {
             Self::RefusesTheToken => refusal(state, 401),
             Self::Refuses(status) => refusal(state, status),
             Self::RefusesWithCode(status, code) => refusal_with_code(state, status, code),
+            Self::Lists(names) => (200, "application/json", listing_of(names)),
+            Self::RefusesTheModel => refusal_of_the_model(state),
         }
     }
+}
+
+/// The listing of the serving host with a row for each of `names`: the fields the program reads and
+/// no others, with the window of a model that reads images and a level.
+fn listing_of(names: &[&str]) -> String {
+    let rows: Vec<serde_json::Value> = names
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "slug": name,
+                "display_name": format!("Named {name}"),
+                "visibility": "list",
+                "supported_in_api": true,
+                "context_window": 272_000,
+                "input_modalities": ["text", "image"],
+                "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+            })
+        })
+        .collect();
+    serde_json::json!({ "models": rows }).to_string()
 }
 
 /// Answer one request.

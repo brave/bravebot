@@ -17,13 +17,13 @@ settings name no [`effort`](configuration.md#effort), and `/status` reports it b
 
 **On a ChatGPT account the level applies from the next session.** A session on a model of a
 [ChatGPT account](providers/chatgpt.md) is sent the level it began with in every request that asks for
-one, because the service keeps the prompt cache of a session only while its level stays the same. A level
-chosen later with `/effort`, or named by a skill, changes nothing for that session. The terminal says so
-in a sentence that names both levels, `/status` names the level sent and the level you chose where they
-differ, and `/clear` begins a session at the level you chose. A request that asks for no level, such as a
-summary or a goal check, sends none, and the desktop window offers no way to choose a level, so its
-sessions send none. A model of the account that refuses a level is sent none from then on, as any model
-is. A level chosen on any other service applies at once.
+one, because OpenAI's prompt cache was seen to be per level: changing the level inside a session cost one
+miss at each change, and requests hit again after. A level chosen later with `/effort`, or named by a skill,
+changes nothing for that session. The terminal says so in a sentence that names both levels, `/status` names
+the level sent and the level you chose where they differ, and `/clear` begins a session at the level you
+chose. A request that asks for no level, such as a summary or a goal check, sends none, and the desktop
+window offers no way to choose a level, so its sessions send none. A model of the account that refuses a
+level is sent none from then on, as any model is. A level chosen on any other service applies at once.
 
 **Nothing infers a level.** Until you choose one the request carries no such field at all and each
 service applies its own default. Taking the row for no level removes the record rather than writing an

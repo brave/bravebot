@@ -47,17 +47,10 @@ fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
             && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
 }
 
-/// The largest body sent to a ChatGPT account's serving host, measured on the zstd frame the body is
-/// sent as ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
-///
-/// The program the account's request is read from says the host rejects an uncompressed body over
-/// about this size. Whether it limits the frame, and where, has not been observed.
-const ACCOUNT_BODY_LIMIT: usize = 1 << 20;
-
 /// `body` as one zstd frame, the form the account's serving host takes a body in.
 ///
 /// Level `Fastest`, the one level `ruzstd` implements, with the frame's checksum. The frame goes to
-/// egress as it is, and the caller takes its length and nothing else from it.
+/// egress as it is.
 fn zstd_frame(body: &[u8]) -> Vec<u8> {
     ruzstd::encoding::compress_to_vec(body, ruzstd::encoding::CompressionLevel::Fastest)
 }
@@ -128,9 +121,8 @@ impl<'a> ResponsesClient<'a> {
     /// time ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
     /// Each request carries the token and the three session headers with `session` as the value of
-    /// each, sends its body as a zstd frame, refuses a redirect, and is not sent where that frame is
-    /// larger than the service takes. A token the host refuses is replaced once and the request sent
-    /// again.
+    /// each, sends its body as a zstd frame of whatever size, and refuses a redirect. A token the host
+    /// refuses is replaced once and the request sent again.
     pub fn for_account(
         egress: &'a Egress,
         provider: &'a Provider,
@@ -154,8 +146,8 @@ impl<'a> ResponsesClient<'a> {
     /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
     /// A request that asks for a level then carries `level` in its place, so a level chosen later in
-    /// the session, or asked for by a skill, changes nothing that is sent: the service keeps the
-    /// prompt cache of a session only while its level stays the same. A request that asks for none,
+    /// the session, or asked for by a skill, changes nothing that is sent: the service's prompt cache
+    /// was seen to miss once at each change of level inside a session. A request that asks for none,
     /// as a summary does, carries none. Without this call every request carries the level it asks
     /// for. A model that refuses the level is sent none whatever it was held to, as
     /// [BACKEND-22](../../../docs/specs/backends.md#BACKEND-22) has it for any model. Ignored by a
@@ -299,19 +291,13 @@ impl<'a> ResponsesClient<'a> {
     /// The body of one request as it is sent: as it was encoded for a gateway, and for the account
     /// as the zstd frame that host decodes ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
     ///
-    /// Every account body is a frame, whatever its size. The limit is on the frame, so a body that
-    /// is over it as it was built and under it encoded is sent, and one still over it is not.
-    fn on_the_wire(&self, encoded: Vec<u8>) -> Result<Vec<u8>, ChatError> {
+    /// Every account body is a frame, whatever its size. This program sets no size above which a
+    /// body is not sent: the service decides what it takes and refuses what it does not.
+    fn on_the_wire(&self, encoded: Vec<u8>) -> Vec<u8> {
         if self.account.is_none() {
-            return Ok(encoded);
+            return encoded;
         }
-        let frame = zstd_frame(&encoded);
-        if frame.len() > ACCOUNT_BODY_LIMIT {
-            return Err(ChatError::BodyTooLarge {
-                limit: ACCOUNT_BODY_LIMIT,
-            });
-        }
-        Ok(frame)
+        zstd_frame(&encoded)
     }
 
     /// The request for one attempt, addressed and authenticated.
@@ -515,9 +501,9 @@ impl<'a> ResponsesClient<'a> {
             return Err(ChatError::Cancelled);
         }
 
-        // Before a token is asked for, which can mean a renewal: a body that is not going to be sent
+        // Before a token is asked for, which can mean a renewal: a body that cannot be encoded
         // spends nothing.
-        let body = self.on_the_wire(self.encode(request)?)?;
+        let body = self.on_the_wire(self.encode(request)?);
         let token = match self.account.as_mut() {
             Some(account) => {
                 let token = account.access.access_token().map_err(ChatError::Account)?;

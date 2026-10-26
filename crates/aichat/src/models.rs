@@ -392,9 +392,8 @@ struct AccountListing {
 
 /// One row of the account's listing.
 ///
-/// Every field but the list is held as it arrived, because the shape is read from another
-/// program's source and has not been observed, and a field in a form this code did not expect must
-/// cost that row its place and no more: a listing that fails to decode offers nothing.
+/// Every field but the list is held as it arrived, so that a field in a form this code did not
+/// expect costs that row its place and no more: a listing that fails to decode offers nothing.
 #[derive(Debug, Default, Deserialize)]
 struct ListedByAccount {
     /// What a request names.
@@ -545,27 +544,18 @@ pub fn named_by_entry(
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 ///
 /// Names only, so a row takes the window and the label a model the listing did not describe has.
-/// They are the set opencode offers for this sign-in (`fallbackModels` in
-/// `packages/core/src/plugin/provider/chatgpt.ts`, at commit `ac68d6a929`). None is observed against
-/// the service, so one may name a model the account cannot reach, which the service refuses at the
-/// first request. A release changes this list; no reply, model or settings file does.
+/// They are the seven rows the service's listing offered a signed-in account, each of which answered
+/// a request. A release changes this list; no reply, model or settings file does. The `-fast` names
+/// opencode offers are not here, since the service refuses them as models. It accepts the
+/// `service_tier` `priority`, which this program does not send.
 const COMPILED_ACCOUNT_MODELS: &[&str] = &[
-    "gpt-5.5",
-    "gpt-5.5-fast",
     "gpt-5.6-luna",
-    "gpt-5.6-luna-fast",
     "gpt-5.6-sol",
-    "gpt-5.6-sol-fast",
     "gpt-5.6-terra",
-    "gpt-5.6-terra-fast",
     "gpt-6-astra",
-    "gpt-6-astra-fast",
     "gpt-6-luna",
-    "gpt-6-luna-fast",
     "gpt-6-sol",
-    "gpt-6-sol-fast",
     "gpt-6.1-sol",
-    "gpt-6.1-sol-fast",
 ];
 
 /// The picker rows of the compiled list, under the account's identifier for the reason
@@ -1619,5 +1609,29 @@ mod tests {
             );
             assert_eq!(row.advertised, Advertised::default());
         }
+    }
+
+    /// CHATGPT-9: the compiled list is the seven models the service listed for a signed-in account
+    /// and accepted. The list opencode offers has sixteen names, and the service refuses nine of
+    /// them as models (`gpt-5.5` and every `-fast` name), so a picker built on it offers rows that
+    /// fail at the first request. An exact list fails for a restored name and for a `-fast` name
+    /// added again.
+    #[test]
+    fn the_compiled_list_is_the_seven_models_the_service_offered() {
+        let rows = compiled_for_account(&bravebot_config::provider::Provider::chatgpt_account());
+
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "chatgpt/gpt-5.6-luna",
+                "chatgpt/gpt-5.6-sol",
+                "chatgpt/gpt-5.6-terra",
+                "chatgpt/gpt-6-astra",
+                "chatgpt/gpt-6-luna",
+                "chatgpt/gpt-6-sol",
+                "chatgpt/gpt-6.1-sol",
+            ]
+        );
     }
 }

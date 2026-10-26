@@ -24,7 +24,6 @@
 #![allow(clippy::disallowed_methods, reason = "the test names its program")]
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -33,96 +32,18 @@ mod chatgpt_run;
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
 
-use chatgpt_run::{SIGN_IN_HOST, Scratch, Shown, bravebot, environment, in_a_terminal, said};
+use chatgpt_run::{
+    SIGN_IN_HOST, Scratch, Shown, bravebot, environment, in_a_terminal, said, sign_in,
+};
 use chatgpt_stand_in::{
-    ACCESS_TWO, Asked, CLIENT, CODE, Fault, Handled, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh,
-    Serving, StandIn, USAGE_LIMIT, files_under, form, now, url_encoded,
+    ACCESS_TWO, Asked, CLIENT, Fault, Handled, MODEL, REFRESH_ONE, REFRESH_TWO, Refresh, Serving,
+    StandIn, USAGE_LIMIT, files_under, now, url_encoded,
 };
 
 /// Store a sign-in whose access token is five seconds from its expiry, so the first request of a run
 /// renews it with [`REFRESH_ONE`].
 fn store_a_sign_in_nearly_expired(home: &Scratch) {
     home.store_sign_in("PLACEHOLDER-ACCESS-NEARLY-EXPIRED", REFRESH_ONE, now() + 5);
-}
-
-/// `bravebot auth login chatgpt` in a terminal, with a browser that returns to the listener with
-/// [`CODE`] and [`CLIENT`]. Returns everything the terminal showed, the authorization URL and whether
-/// the command succeeded.
-fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
-    let mut command = in_a_terminal(&["--log-level", "debug", "auth", "login", "chatgpt"]);
-    environment(&mut command, home, stand_in);
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("script runs the built binary in a terminal");
-    let shown = Shown::read(child.stdout.take().expect("the terminal"));
-
-    let opened = format!("{}/authorize?", stand_in.base);
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let url = loop {
-        let text = shown.text();
-        if let Some(start) = text.find("http://")
-            && let Some(length) = text[start..].find(['\r', '\n'])
-        {
-            break text[start..start + length].to_string();
-        }
-        if Instant::now() > deadline || child.try_wait().expect("a status").is_some() {
-            let _ = child.kill();
-            panic!("no authorization URL was shown: {text}");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    if !url.starts_with(&opened) {
-        // The seam is off: the code would go to OpenAI. Nothing is sent.
-        let _ = child.kill();
-        panic!("the sign-in was not pointed at the stand-in: {url}");
-    }
-
-    let query = form(url.split_once('?').expect("a query").1);
-    let value = |name: &str| {
-        query
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.clone())
-            .unwrap_or_else(|| panic!("no {name} in {url}"))
-    };
-    stand_in.state().url = Some(url.clone());
-    let port: u16 = value("redirect_uri")
-        .trim_start_matches("http://127.0.0.1:")
-        .trim_end_matches("/auth/callback")
-        .parse()
-        .expect("the listener's port");
-    let mut browser = TcpStream::connect(("127.0.0.1", port)).expect("the listener");
-    browser
-        .write_all(
-            format!(
-                "GET /auth/callback?state={}&code={CODE}&client_id={CLIENT} HTTP/1.1\r\nhost: x\r\n\r\n",
-                url_encoded(&value("state"))
-            )
-            .as_bytes(),
-        )
-        .expect("the callback");
-    let mut page = String::new();
-    let _ = browser.read_to_string(&mut page);
-
-    let deadline = Instant::now() + Duration::from_secs(60);
-    let status = loop {
-        if let Some(status) = child.try_wait().expect("a status") {
-            break status;
-        }
-        if Instant::now() > deadline {
-            let _ = child.kill();
-            panic!("the sign-in did not end");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    let mut terminal = shown.finished();
-    if let Some(mut rest) = child.stderr.take() {
-        let _ = rest.read_to_string(&mut terminal);
-    }
-    (terminal, url, status.success())
 }
 
 /// `bravebot --plain` in a terminal, which a person types lines to: the session in lines, which takes
@@ -461,6 +382,36 @@ fn no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews
         stand_in.presented(),
         [REFRESH_ONE],
         "a refusal in a listed code asked for a new token"
+    );
+    // A model the account does not offer is refused with a 400 whose body repeats every value the
+    // stand-in has seen. It is a refusal of the model and not of the sign-in, so it asks for no new
+    // token either.
+    for (name, format) in [
+        ("the turn that is refused as a model not offered", &[][..]),
+        (
+            "the turn that is refused as a model not offered, as JSON",
+            &["--json"][..],
+        ),
+        (
+            "the turn that is refused as a model not offered, as a JSON stream",
+            &["--json-stream"][..],
+        ),
+    ] {
+        stand_in.state().serving.push_back(Serving::RefusesTheModel);
+        let refused = runs.turn(name, format);
+        assert!(!refused.status.success(), "{}", said(&refused));
+        if format.is_empty() {
+            assert!(
+                said(&refused).contains("does not offer that model"),
+                "{name}: {}",
+                said(&refused)
+            );
+        }
+    }
+    assert_eq!(
+        stand_in.presented(),
+        [REFRESH_ONE],
+        "a refusal of the model asked for a new token"
     );
     stand_in.state().refusing = true;
     let failed = runs.turn("the turn that fails", &[]);

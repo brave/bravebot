@@ -9,3 +9,7 @@ pub const USAGE_LIMIT: &str = "subscription_sharing_usage_limit_exceeded";
 pub const NOT_ELIGIBLE: &str = "subscription_sharing_user_not_eligible";
 /// Another of the six.
 pub const INVALID_USER: &str = "subscription_sharing_invalid_user";
+
+/// The code the serving host gives a model the account does not offer, which is not one of the
+/// seven: it refuses the model and says nothing of the account.
+pub const MODEL_NOT_FOUND: &str = "model_not_found";

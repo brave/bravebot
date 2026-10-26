@@ -74,12 +74,6 @@ pub enum ChatError {
     ///
     /// Fails the request rather than falling back: see [`AichatClient::route`].
     Subscription(String),
-    /// The body, as the form it is sent in, is larger than the service takes, so it was not sent
-    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
-    ///
-    /// Sent nowhere and no token spent on it. A caller that can shorten the conversation does, as
-    /// it does where a service refuses the body.
-    BodyTooLarge { limit: usize },
     /// The ChatGPT account's access token could not be had or was refused twice, or the serving host
     /// refused a request in a code that names the account
     /// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
@@ -146,11 +140,6 @@ impl fmt::Display for ChatError {
                 }
                 f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
             }
-            Self::BodyTooLarge { limit } => write!(
-                f,
-                "the request body is larger than the {limit} bytes the service takes, even compressed, \
-                 so it was not sent. Shorten the conversation"
-            ),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
@@ -167,13 +156,14 @@ impl std::error::Error for ChatError {}
 /// ([`Request::reading_a_refusal`]).
 ///
 /// A refusal whose `error.code` is one of [`responses::protocol::REFUSAL_CODES`] is the account being
-/// refused, and says so. Any other body, or none, leaves the status alone with the body dropped, as
-/// it is for a request that did not ask, so what a status decides is decided the same way for both.
-/// Every other failure is converted as it is.
+/// refused, and says so. One whose `error.code` is [`responses::protocol::MODEL_NOT_OFFERED`] is the
+/// model being refused, which the account does not offer. Any other body, or none, leaves the status
+/// alone with the body dropped, as it is for a request that did not ask, so what a status decides is
+/// decided the same way for both. Every other failure is converted as it is.
 ///
 /// The one place the body of a refusal is read, and all it reads is the code, whole, against the
-/// closed list ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). What leaves is a
-/// value from this crate's own set, and nothing the service wrote.
+/// closed list and the one more code ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+/// What leaves is a value from this crate's own set, and nothing the service wrote.
 pub(crate) fn failure_of_refusal<S: Sink>(
     policy: &mut Policy<'_, S>,
     mut error: EgressError,
@@ -194,14 +184,17 @@ pub(crate) fn failure_of_refusal<S: Sink>(
     };
     let label = body.label();
     let (bytes, _) = policy.decode_transport("refusal", label).decode(body);
-    match responses::protocol::refusal_in(&bytes) {
-        Some(refusal) => ChatError::Account(AccountFailure::Named {
+    if let Some(refusal) = responses::protocol::refusal_in(&bytes) {
+        return ChatError::Account(AccountFailure::Named {
             refusal,
             status: Some(status),
             retry_after,
-        }),
-        None => error.into(),
+        });
     }
+    if responses::protocol::model_not_offered_in(&bytes) {
+        return ChatError::Account(AccountFailure::ModelNotOffered);
+    }
+    error.into()
 }
 
 impl From<EgressError> for ChatError {
@@ -319,6 +312,12 @@ pub enum AccountFailure {
         /// and said only at a 429 ([`AccountFailure::wait`]).
         retry_after: Option<Duration>,
     },
+    /// The serving host refused the model of the request, because the account does not offer it.
+    ///
+    /// A refusal of the model and not of the sign-in: a new token or a second request does not
+    /// change it, and no sentence sends the person to sign in again for it. Another model can be
+    /// chosen. It carries nothing the service said, so it names no model.
+    ModelNotOffered,
     /// The sign-in file could not be read, or the claim on it could not be taken.
     Unusable,
     /// The token could not be renewed, and the reason is the class of the reply.
@@ -344,6 +343,7 @@ impl AccountFailure {
             Self::Ended => "ended",
             Self::Refused => "token-refused",
             Self::Named { refusal, .. } => refusal.name(),
+            Self::ModelNotOffered => "model-not-offered",
             Self::Unusable => "unusable",
             Self::Renewal(RenewalFailure::Refused) => "renewal-refused",
             Self::Renewal(RenewalFailure::RateLimited) => "renewal-rate-limited",
@@ -1452,6 +1452,7 @@ mod tests {
                 },
                 "not-permitted",
             ),
+            (AccountFailure::ModelNotOffered, "model-not-offered"),
             (
                 AccountFailure::Renewal(RenewalFailure::Refused),
                 "renewal-refused",
@@ -1505,6 +1506,7 @@ mod tests {
                 status: None,
                 retry_after: None,
             },
+            AccountFailure::ModelNotOffered,
             AccountFailure::Renewal(RenewalFailure::Refused),
             AccountFailure::Renewal(RenewalFailure::RateLimited),
             AccountFailure::Renewal(RenewalFailure::Unavailable),

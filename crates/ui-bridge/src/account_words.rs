@@ -57,6 +57,7 @@ pub(crate) fn of_failure(failure: AccountFailure) -> Said {
         AccountFailure::Ended => said(t!(desktop_chatgpt_ended, command = shown)),
         AccountFailure::Refused => said(t!(desktop_chatgpt_token_refused, command = shown)),
         AccountFailure::Unusable => said(t!(desktop_chatgpt_unusable, command = shown)),
+        AccountFailure::ModelNotOffered => Said::plain(t!(desktop_chatgpt_model_not_offered)),
         // The wait a refusal asked for at a 429 is said for either refusal, as the terminal says it.
         AccountFailure::Named {
             refusal: Refusal::UsageLimit,
@@ -174,6 +175,7 @@ mod tests {
                 Some(429),
                 Some(Duration::from_secs(61)),
             ),
+            AccountFailure::ModelNotOffered,
             AccountFailure::Renewal(RenewalFailure::Refused),
             AccountFailure::Renewal(RenewalFailure::RateLimited),
             AccountFailure::Renewal(RenewalFailure::Unavailable),
@@ -256,11 +258,34 @@ mod tests {
         for failure in every_failure() {
             if matches!(
                 failure,
-                AccountFailure::Named { .. } | AccountFailure::Renewal(_)
+                AccountFailure::Named { .. }
+                    | AccountFailure::ModelNotOffered
+                    | AccountFailure::Renewal(_)
             ) {
                 assert_eq!(command_of(failure), None, "{failure:?}");
             }
         }
+    }
+
+    /// CHATGPT-8: a model the account does not offer is said alike in the window and in the terminal:
+    /// that OpenAI does not offer it to the account and that another can be chosen. Neither names a
+    /// command, since the refusal is of the model and a new sign-in changes nothing, and neither
+    /// names the model. The window's is the one sentence of its own and the terminal's the two it has
+    /// for a remedy. The regressions it rejects are the window saying the sign-in failed, as it says
+    /// for a token the host refused, and the two front ends saying different things of one refusal.
+    #[test]
+    fn a_model_the_account_does_not_offer_is_said_alike_in_the_window_and_the_terminal() {
+        let window = of_failure(AccountFailure::ModelNotOffered);
+        let terminal = bravebot_agent::chatgpt::said_of_failure(AccountFailure::ModelNotOffered);
+
+        assert_one_sentence_naming(&window, "a model the account does not offer");
+        assert_eq!(window.command, None);
+        for said in [window.sentence.as_str(), terminal.as_str()] {
+            assert!(said.contains("does not offer that model"), "{said}");
+            assert!(said.contains("hoose another model"), "{said}");
+            assert!(!said.to_lowercase().contains("sign"), "{said}");
+        }
+        assert_ne!(window.sentence, terminal);
     }
 
     /// A wait a refusal asked for at a 429 is said for either refusal, in minutes rounded up and in

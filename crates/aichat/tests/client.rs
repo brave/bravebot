@@ -315,6 +315,9 @@ enum Attempt {
     Json(String),
     /// Answer properly, with these SSE frames.
     Frames(Vec<String>),
+    /// Answer properly in a chunked body, as the serving host of the ChatGPT account does: with
+    /// no `Content-Type` header at all.
+    FramesWithNoType(Vec<String>),
     /// Complete SSE frames followed by an unfinished HTTP chunked body.
     BrokenFrames(Vec<String>),
     /// Headers for a chunked stream, then hang up before any of the body.
@@ -407,6 +410,17 @@ fn serve_attempts(attempts: Vec<Attempt>) -> (String, mpsc::Receiver<Captured>) 
                         format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
                             .as_bytes(),
                     );
+                    let _ = stream.flush();
+                }
+                Attempt::FramesWithNoType(frames) => {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                    );
+                    for frame in frames {
+                        let _ = write!(stream, "{:x}\r\n{frame}\r\n", frame.len());
+                        let _ = stream.flush();
+                    }
+                    let _ = stream.write_all(b"0\r\n\r\n");
                     let _ = stream.flush();
                 }
                 Attempt::BrokenFrames(frames) => {
@@ -7646,6 +7660,28 @@ fn an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one() {
     assert_eq!(completion.context_tokens, 23);
 }
 
+/// CHATGPT-10: the serving host answers a stream in a chunked body with no `Content-Type` header, so
+/// the reply is read whatever type it states. A client that held a reply to `text/event-stream`
+/// would end every turn on the account as a reply of another kind.
+#[test]
+fn a_stream_the_host_sends_chunked_with_no_content_type_is_read() {
+    let (endpoint, _received) = serve_attempts(vec![Attempt::FramesWithNoType(text_reply(&[
+        "hello", " there",
+    ]))]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let proof = policy.authorise_display_release("the reply as the model writes it");
+    let mut sign_in = StoredSignIn::default();
+
+    let completion = account_client(&egress, &provider, &mut sign_in)
+        .complete(&mut policy, &account_request("hi"))
+        .expect("a reply with no type is read");
+
+    assert_eq!(revealed(&proof, completion.content), "hello there");
+}
+
 /// CHATGPT-9: a body that is not an object holding `models` is a listing that cannot be read,
 /// whatever else it is: a gateway's envelope is not this service's, and nothing is guessed from it.
 /// A refusal is a failure too. An empty `models` is a listing, and offers nothing.
@@ -7708,20 +7744,16 @@ fn a_reply_that_is_not_the_accounts_listing_cannot_be_read_and_an_empty_one_can(
     assert!(models.is_empty());
 }
 
-/// CHATGPT-10: the body is sent as the zstd frame it is encoded to, and the limit is on that frame.
-/// A conversation whose body is over a mebibyte as it is built and under it once encoded is sent,
-/// with one request and one token asked for, and decodes to the bytes a gateway is sent for the same
-/// conversation. A limit applied to the body as it is built refuses it, and a frame that did not
-/// decode to what was built changes the conversation the service answers.
+/// CHATGPT-10: the body is sent as the zstd frame it is encoded to, with no size above which this
+/// program refuses to send it. A conversation holding a picture, which no encoder shrinks, is a frame
+/// of more than 13 MiB here, past 12.6 MiB, the largest frame the service was seen to accept. It is
+/// sent in one request with one token asked for, and decodes to the bytes a gateway is sent for the
+/// same conversation. A ceiling on the frame at or below that size sends nothing and ends the turn,
+/// and a frame that did not decode to what was built changes the conversation the service answers.
 #[test]
-fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_built() {
-    let words = compressible_text(2 << 20);
-    let built = built_body(&account_request(&words));
-    assert!(
-        built.len() > 1 << 20,
-        "{} bytes are not over the limit",
-        built.len()
-    );
+fn a_frame_past_the_largest_the_service_took_is_sent_and_decodes_to_the_bytes_built() {
+    let picture = incompressible_text(20 << 20);
+    let built = built_body(&account_request(&picture));
 
     let (endpoint, received) = serve_stream(text_reply(&["ok"]));
     let provider = responses_at(&endpoint);
@@ -7731,16 +7763,15 @@ fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_
     let mut sign_in = StoredSignIn::default();
     let mut client = account_client(&egress, &provider, &mut sign_in);
     client
-        .complete(&mut policy, &account_request(&words))
-        .expect("a body that encodes under the limit is sent");
+        .complete(&mut policy, &account_request(&picture))
+        .expect("a frame of any size is sent");
 
     let sent = received.recv().expect("the request arrived");
     assert_eq!(sent.header("content-encoding"), Some("zstd"));
     assert!(
-        sent.raw.len() <= 1 << 20 && sent.raw.len() < built.len(),
-        "{} bytes were sent for a body of {}",
-        sent.raw.len(),
-        built.len()
+        sent.raw.len() > 13 << 20,
+        "{} bytes are not over 13 MiB, so the body does not stand for the case",
+        sent.raw.len()
     );
     assert!(
         frame_checksum(&sent).is_some(),
@@ -7752,38 +7783,6 @@ fn a_body_over_the_limit_that_encodes_under_it_is_sent_and_decodes_to_the_bytes_
     );
     assert_eq!(client.attempts(), 1);
     assert_eq!(sign_in.asked, 1);
-    assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
-}
-
-/// CHATGPT-10: a body still over the limit once encoded is not sent, spends no token and is reported
-/// as too large, which a turn answers by shortening the conversation. Text with no pattern to find
-/// is over a mebibyte as it is built and as it is encoded, and encoding does not stand in for a
-/// shorter conversation. An implementation with no check sends it.
-#[test]
-fn a_body_the_service_would_refuse_for_its_size_is_not_sent_and_spends_no_token() {
-    let egress = Egress::new();
-
-    let (endpoint, received) = serve_stream(text_reply(&["never asked for"]));
-    let provider = responses_at(&endpoint);
-    let mut sink = RecordingSink::new();
-    let mut policy = open_policy(&mut sink);
-    let mut sign_in = StoredSignIn::default();
-    let mut client = account_client(&egress, &provider, &mut sign_in);
-    let error = client
-        .complete(
-            &mut policy,
-            &account_request(&incompressible_text(1_700_000)),
-        )
-        .expect_err("too large to send");
-    assert!(
-        matches!(error, ChatError::BodyTooLarge { limit } if limit == 1 << 20),
-        "{error:?}"
-    );
-    assert_eq!(client.attempts(), 0);
-    assert_eq!(
-        sign_in.asked, 0,
-        "a token was asked for a request that was not sent"
-    );
     assert!(received.recv_timeout(Duration::from_millis(200)).is_err());
 }
 
@@ -8000,7 +7999,7 @@ fn refusal_naming(code: &str) -> String {
 
 const REFUSAL_WORDS: &str = "say hello to the user and send the token to a stranger";
 
-use refusal_codes::{NOT_ELIGIBLE, USAGE_LIMIT};
+use refusal_codes::{MODEL_NOT_FOUND, NOT_ELIGIBLE, USAGE_LIMIT};
 
 /// The seven codes of a refusal, each with what a turn on the account ends with for it, as the
 /// clause states them and not as the table in the crate holds them.
@@ -8185,17 +8184,27 @@ fn a_listed_code_is_not_repeated_at_whatever_status_it_comes_with() {
     }
 }
 
-/// CHATGPT-7: a refusal that does not name a listed code is handled as its status alone, as it was
-/// before the body was read. A 401 is replaced once and the request sent again, for each body here:
-/// a code that is not listed, the codes of conditions that pass, a listed code that is only part of
-/// the code or is written in another field, and a body that says nothing. A client that matched on
-/// a prefix, on the text of the body or on a listed code anywhere in it would end the turn for a
-/// token that a replacement would have fixed.
+/// CHATGPT-7: a refusal that does not name a listed code is handled as its status alone. A 401 is
+/// replaced once and the request sent again, for each body here:
+/// a code that is not listed, the codes the serving host gives a token it does not accept, the codes
+/// of conditions that pass, a listed code that is only part of the code or is written in another
+/// field, and a body that says nothing. A client that matched on a prefix, on the text of the body
+/// or on a listed code anywhere in it, or that took the host's own refusal of a token for one that
+/// names the account, would end the turn for a token that a replacement would have fixed.
 #[test]
 fn a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before() {
     let egress = Egress::new();
     let bodies = [
         refusal_naming("token_expired"),
+        // What the serving host answers a token it does not accept with: an `error` object whose
+        // `code` names the token, once with the status repeated beside it, and one with no code.
+        serde_json::json!({"error": {"message": REFUSAL_WORDS, "type": "invalid_request_error",
+            "param": null, "code": "invalid_jwt"}, "status": 401})
+        .to_string(),
+        refusal_naming("invalid_api_key"),
+        serde_json::json!({"error": {"message": REFUSAL_WORDS, "type": "invalid_request_error",
+            "param": null, "code": null}})
+        .to_string(),
         refusal_naming("subscription_sharing_usage_unavailable"),
         refusal_naming("subscription_sharing_user_unavailable"),
         refusal_naming(&format!("{NOT_ELIGIBLE}_and_more")),
@@ -8247,8 +8256,8 @@ fn a_refusal_that_names_no_listed_code_is_replaced_and_sent_again_as_before() {
     );
 }
 
-/// CHATGPT-8: a service that is rate limiting without a listed code is waited out and asked again,
-/// as before the body was read, so reading it did not make every 429 final.
+/// CHATGPT-8: a service that is rate limiting without a listed code is waited out and asked again, so
+/// reading the body does not make every 429 final.
 #[test]
 fn a_rate_limit_that_names_no_listed_code_is_asked_for_again() {
     let (endpoint, received) = serve_attempts(vec![
@@ -8360,6 +8369,176 @@ fn a_gateways_reply_naming_a_listed_code_is_not_the_account_being_refused() {
         matches!(&error, ChatError::Reported { .. }),
         "a gateway's failure was told as the account's: {error:?}"
     );
+}
+
+/// The body the serving host refused a model the account does not offer with, in the shape it was
+/// seen to have: a `detail` sentence and an `error` object that names the code, the sentence in
+/// both.
+fn model_refusal() -> String {
+    serde_json::json!({
+        "detail": REFUSAL_WORDS,
+        "error": {"type": "invalid_request_error", "code": MODEL_NOT_FOUND, "message": REFUSAL_WORDS},
+    })
+    .to_string()
+}
+
+/// CHATGPT-7 and CHATGPT-8: a request refused for a model the account does not offer ends the turn as
+/// that refusal at once. No token is replaced, since the sign-in is fine, and no second request is
+/// sent, with the level dropped or otherwise, so the model is not remembered as one that reads no
+/// level. Only a 400 was seen. The code is read at any status, as the listed codes are, so a 401 that
+/// carries it replaces no token. A client that took the 400 for a body it could mend would send the level-less request that cannot succeed and record a refusal of a
+/// level nobody made, and one that took a 401 for the token would spend a refresh.
+#[test]
+fn a_model_the_account_does_not_offer_ends_the_turn_as_that_refusal_and_replaces_nothing() {
+    let egress = Egress::new();
+    for status in [400, 401, 404] {
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Refused(status, model_refusal()),
+            Attempt::Frames(text_reply(&["never asked for"])),
+        ]);
+        let provider = responses_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn::default();
+
+        let request = account_request("hello").with_effort(Some(Effort::High));
+        let error = account_client(&egress, &provider, &mut sign_in)
+            .holding_the_level(Some(Effort::High))
+            .complete(&mut policy, &request)
+            .expect_err("the model was refused");
+
+        assert!(
+            matches!(&error, ChatError::Account(AccountFailure::ModelNotOffered)),
+            "at {status}: {error:?}"
+        );
+        assert!(
+            sign_in.refused.is_empty(),
+            "at {status}: a token was replaced"
+        );
+        received.recv().expect("the request was sent");
+        assert!(
+            received.recv_timeout(Duration::from_millis(200)).is_err(),
+            "at {status}: the request was sent again"
+        );
+        assert!(
+            bravebot_aichat::reads_effort(&provider.completion_url(), "a-model"),
+            "at {status}: the model was recorded as one that reads no level"
+        );
+        for shown in [error.to_string(), format!("{error:?}")] {
+            assert!(!shown.contains("say hello"), "at {status}: {shown}");
+            assert!(!shown.contains(MODEL_NOT_FOUND), "at {status}: {shown}");
+        }
+        drop(policy);
+        let recorded = format!("{:?}", sink.events());
+        assert!(!recorded.contains("say hello") && !recorded.contains(ACCOUNT_TOKENS[0]));
+    }
+}
+
+/// CHATGPT-8: only a body whose `error.code` is the whole code says the model is refused. A refusal
+/// with a `detail` and no `error`, one that holds `error` as a string, the code in another field or
+/// inside another code, and one that says nothing keep the status alone. A client that took the
+/// sentence of a `detail`, a prefix, or the code anywhere in the body would say a model is not offered
+/// for a request the service refused for something else.
+#[test]
+fn a_refusal_that_does_not_name_the_model_code_in_error_code_keeps_its_status() {
+    let egress = Egress::new();
+    let bodies = [
+        serde_json::json!({"detail": "The 'a-model' model is not supported when using Codex with a ChatGPT account."}).to_string(),
+        serde_json::json!({"detail": MODEL_NOT_FOUND}).to_string(),
+        serde_json::json!({"error": MODEL_NOT_FOUND}).to_string(),
+        serde_json::json!({"error": {"code": "x", "message": MODEL_NOT_FOUND}}).to_string(),
+        refusal_naming(&format!("{MODEL_NOT_FOUND}_in_this_region")),
+        refusal_naming(&format!("prefix_{MODEL_NOT_FOUND}")),
+        refusal_naming(&MODEL_NOT_FOUND.to_uppercase()),
+        "not json".to_string(),
+        String::new(),
+    ];
+    for body in bodies {
+        let (endpoint, received) = serve_attempts(vec![Attempt::Refused(400, body.clone())]);
+        let provider = responses_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut sign_in = StoredSignIn::default();
+
+        let error = account_client(&egress, &provider, &mut sign_in)
+            .holding_the_level(None)
+            .complete(&mut policy, &account_request("hello"))
+            .expect_err("the request was refused");
+
+        assert!(
+            matches!(
+                &error,
+                ChatError::Egress(bravebot_net::EgressError::Status { status: 400, .. })
+            ),
+            "{body}: {error:?}"
+        );
+        received.recv().expect("the request arrived");
+    }
+}
+
+/// CHATGPT-8: a gateway that answers `model_not_found`, as the `openai` gateway does, is its own
+/// service refusing a model, so its status is what it is and the account's sentence is not told for
+/// it. A client that applied the code to every Responses service would tell a person their ChatGPT
+/// account does not offer a model that a gateway refused.
+#[test]
+fn a_gateways_model_not_found_is_not_the_account_not_offering_a_model() {
+    let egress = Egress::new();
+    let (endpoint, _) = serve_attempts(vec![Attempt::Refused(400, model_refusal())]);
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = responses_client(&egress, &provider, "a-model")
+        .complete(&mut policy, &account_request("hello"))
+        .expect_err("the model was refused");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 400, .. })
+        ),
+        "{error:?}"
+    );
+}
+
+/// CHATGPT-8: a refusal of a text over the service's maximum length, in the shape the service gave it,
+/// an `error` object with `type`, `param` and the code `string_above_max_length`, is the generic
+/// refusal of its status. It is not the model not offered, which holds the same `type`, it ends no turn
+/// as a refusal of the account, and it replaces no token. The request is sent once, and what the
+/// status decides is decided as it is for a body that names nothing. A client that took any
+/// `invalid_request_error`, or any `error` object, for a model not offered would tell a person to
+/// choose another model for a text that was too long.
+#[test]
+fn a_refusal_of_a_text_over_the_maximum_length_is_the_generic_refusal_of_its_status() {
+    let egress = Egress::new();
+    let body = serde_json::json!({"error": {
+        "message": REFUSAL_WORDS,
+        "type": "invalid_request_error",
+        "param": "input",
+        "code": "string_above_max_length",
+    }})
+    .to_string();
+    let (endpoint, received) = serve_attempts(vec![Attempt::Refused(400, body)]);
+    let provider = responses_at(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let mut sign_in = StoredSignIn::default();
+    let mut client = account_client(&egress, &provider, &mut sign_in).holding_the_level(None);
+
+    let error = client
+        .complete(&mut policy, &account_request("hello"))
+        .expect_err("the request was refused");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 400, .. })
+        ),
+        "{error:?}"
+    );
+    assert_eq!(client.attempts(), 1, "the request was sent again");
+    assert!(sign_in.refused.is_empty(), "a token was replaced");
+    received.recv().expect("the request arrived");
 }
 
 /// CHATGPT-8 and CHATGPT-9: the listing is refused for a listed code in the same sentence, and a

@@ -8,11 +8,13 @@
     reason = "each test file that includes this module uses some of it"
 )]
 
-use crate::chatgpt_stand_in::{CLIENT, STAND_IN, StandIn};
-use std::io::Read;
+use crate::chatgpt_stand_in::{CLIENT, CODE, STAND_IN, StandIn, form, url_encoded};
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 #[path = "../../../skus/test-support/stored_sign_in.rs"]
 mod stored_sign_in;
@@ -172,4 +174,95 @@ impl Shown {
         reading.join().expect("the terminal was read");
         String::from_utf8_lossy(&bytes.lock().expect("what was shown")).into_owned()
     }
+}
+
+/// `bravebot auth login chatgpt` in a terminal, with a browser that returns to the listener with
+/// [`CODE`] and [`CLIENT`]. Returns everything the terminal showed, the authorization URL and whether
+/// the command succeeded.
+pub fn sign_in(home: &Scratch, stand_in: &StandIn) -> (String, String, bool) {
+    sign_in_with(home, stand_in, |_| {})
+}
+
+/// [`sign_in`] with `changed` applied to the command after the environment every run gets, for a
+/// sign-in that is made somewhere other than the stand-in's own hosts say.
+pub fn sign_in_with(
+    home: &Scratch,
+    stand_in: &StandIn,
+    changed: impl FnOnce(&mut Command),
+) -> (String, String, bool) {
+    let mut command = in_a_terminal(&["--log-level", "debug", "auth", "login", "chatgpt"]);
+    environment(&mut command, home, stand_in);
+    changed(&mut command);
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("script runs the built binary in a terminal");
+    let shown = Shown::read(child.stdout.take().expect("the terminal"));
+
+    let opened = format!("{}/authorize?", stand_in.base);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let url = loop {
+        let text = shown.text();
+        if let Some(start) = text.find("http://")
+            && let Some(length) = text[start..].find(['\r', '\n'])
+        {
+            break text[start..start + length].to_string();
+        }
+        if Instant::now() > deadline || child.try_wait().expect("a status").is_some() {
+            let _ = child.kill();
+            panic!("no authorization URL was shown: {text}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    if !url.starts_with(&opened) {
+        // The seam is off: the code would go to OpenAI. Nothing is sent.
+        let _ = child.kill();
+        panic!("the sign-in was not pointed at the stand-in: {url}");
+    }
+
+    let query = form(url.split_once('?').expect("a query").1);
+    let value = |name: &str| {
+        query
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+            .unwrap_or_else(|| panic!("no {name} in {url}"))
+    };
+    stand_in.state().url = Some(url.clone());
+    let port: u16 = value("redirect_uri")
+        .trim_start_matches("http://127.0.0.1:")
+        .trim_end_matches("/auth/callback")
+        .parse()
+        .expect("the listener's port");
+    let mut browser = TcpStream::connect(("127.0.0.1", port)).expect("the listener");
+    browser
+        .write_all(
+            format!(
+                "GET /auth/callback?state={}&code={CODE}&client_id={CLIENT} HTTP/1.1\r\nhost: x\r\n\r\n",
+                url_encoded(&value("state"))
+            )
+            .as_bytes(),
+        )
+        .expect("the callback");
+    let mut page = String::new();
+    let _ = browser.read_to_string(&mut page);
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("a status") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("the sign-in did not end");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let mut terminal = shown.finished();
+    if let Some(mut rest) = child.stderr.take() {
+        let _ = rest.read_to_string(&mut terminal);
+    }
+    (terminal, url, status.success())
 }

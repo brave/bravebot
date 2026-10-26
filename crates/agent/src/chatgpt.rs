@@ -170,17 +170,16 @@ pub(crate) mod stand_in {
 ///
 /// Made when a session begins and held by whatever holds the session, so every request the session
 /// makes carries the same identifier, and a second session of the same process carries another. The
-/// service derives its prompt-cache affinity from the identifier, so one that changed between a
-/// session's requests would be a cache that never hit, and one two sessions shared would give them
-/// each other's cache. A delegate, a background session, a resumed session and a fork each begin
-/// their own: nothing here is stored in a session's record.
+/// service's prompt cache was seen to hit on 4 of 6 calls with all three session headers and on 3 of 5
+/// with `session-id` alone, and on none of 9 with none of them. A delegate, a background session, a
+/// resumed session and a fork each begin their own: nothing here is stored in a session's record.
 ///
 /// The effort level is the one in force when the session began, and it is the one the account is
-/// sent for the rest of it, whatever level is chosen afterwards: the service keeps the cache of a
-/// session only while its level stays the same. What the person chose is kept apart and applies to
-/// the sessions begun after it, and to every service but this one. A model that refuses a level
-/// outranks it: the client sends that model none from then on, for every session of the process
-/// ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
+/// sent for the rest of it, whatever level is chosen afterwards: the service's cache was seen to miss
+/// once at each change of level inside a session, and to hit again after. What the person chose is
+/// kept apart and applies to the sessions begun after it, and to every service but this one. A model
+/// that refuses a level outranks it: the client sends that model none from then on, for every
+/// session of the process ([BACKEND-22](../../../docs/specs/backends.md#BACKEND-22)).
 ///
 /// Cloning gives another handle on the same session.
 #[derive(Debug, Clone)]
@@ -435,6 +434,8 @@ pub fn said_of_failure(failure: AccountFailure) -> String {
         AccountFailure::Ended => t!(failure_account_ended).into(),
         AccountFailure::Refused => t!(failure_account_token_refused).into(),
         AccountFailure::Unusable => t!(failure_account_unusable).into(),
+        // The model is the one refused, so the sentence names no sign-in and no model.
+        AccountFailure::ModelNotOffered => t!(failure_account_model_not_offered).into(),
         // The same words whatever the code, so both refusals are told when to ask again.
         AccountFailure::Named { refusal, .. } => match failure.wait() {
             Some(wait) => t!(
@@ -486,14 +487,17 @@ impl Remedy {
 }
 
 /// The remedy for a failure of the account. A usage limit, a refusal that says the account may not
-/// be used this way and every failed renewal are not mended by signing in again.
+/// be used this way, a model the account does not offer and every failed renewal are not mended by
+/// signing in again.
 pub fn remedy_of_failure(failure: AccountFailure) -> Option<Remedy> {
     match failure {
         AccountFailure::NotSignedIn | AccountFailure::Ended | AccountFailure::Refused => {
             Some(Remedy::SignIn)
         }
         AccountFailure::Unusable => Some(Remedy::Status),
-        AccountFailure::Named { .. } | AccountFailure::Renewal(_) => None,
+        AccountFailure::Named { .. }
+        | AccountFailure::ModelNotOffered
+        | AccountFailure::Renewal(_) => None,
     }
 }
 
@@ -661,7 +665,7 @@ mod tests {
 
     /// Every failure of the account, with the command it names where signing in again, or looking
     /// at the stored sign-in, is the remedy.
-    fn every_failure() -> [(AccountFailure, Option<&'static str>); 11] {
+    fn every_failure() -> [(AccountFailure, Option<&'static str>); 12] {
         let login = Some("bravebot auth login chatgpt");
         [
             (AccountFailure::NotSignedIn, login),
@@ -673,6 +677,7 @@ mod tests {
             ),
             (refused(Refusal::UsageLimit), None),
             (refused(Refusal::NotPermitted), None),
+            (AccountFailure::ModelNotOffered, None),
             (AccountFailure::Renewal(RenewalFailure::Refused), None),
             (AccountFailure::Renewal(RenewalFailure::RateLimited), None),
             (AccountFailure::Renewal(RenewalFailure::Unavailable), None),
@@ -728,6 +733,42 @@ mod tests {
                 "a refusal is worded one way in the listing and in a turn"
             );
         }
+    }
+
+    /// CHATGPT-8: a model the account does not offer is said as a refusal of the model: that OpenAI
+    /// does not offer it to the account and that another can be chosen. It says nothing of signing in,
+    /// since the sign-in is fine, no command, no model and no status, and it is one sentence in every
+    /// place a failure is worded: the terminal's line, the one-shot run's error and the line for a
+    /// summary. The regressions it rejects are the sentence of a token the host refused, which sends
+    /// the person to sign in again, the usage limit's or the refusal that says the account may not be
+    /// used, which say it is the account that is wrong, and a status put after it.
+    #[test]
+    fn a_model_the_account_does_not_offer_is_said_as_a_refusal_of_the_model_and_not_of_the_sign_in()
+    {
+        let said = said_of_failure(AccountFailure::ModelNotOffered);
+
+        assert!(said.contains("does not offer that model"), "{said}");
+        assert!(said.contains("Choose another model"), "{said}");
+        for left_out in [
+            "sign in",
+            "sign-in",
+            "auth login",
+            "usage limit",
+            "this way",
+        ] {
+            assert!(!said.contains(left_out), "{left_out}: {said}");
+        }
+        assert!(!said.contains('{') && !said.contains('}'), "{said}");
+        assert_eq!(
+            told_of_failure(AccountFailure::ModelNotOffered),
+            said,
+            "a status was put after it"
+        );
+        assert_eq!(
+            remedy_of_failure(AccountFailure::ModelNotOffered),
+            None,
+            "a command was named for a refusal of the model"
+        );
     }
 
     /// CHATGPT-9: a picker's warning names signing in again where the listing could not be read, and

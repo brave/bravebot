@@ -19,9 +19,8 @@ bravebot can tell you. bravebot stores a sign-in only when OpenAI's reply grants
 use the subscription's tokens and holds an ID token that verifies, and otherwise stops with a sentence
 saying which.
 
-Several values here, such as the names in the built-in model list, are read from another program's source
-and have not been checked against OpenAI's service. Others are stated in OpenAI's documentation, and have
-not been checked against the service either.
+Several values here are read from another program's source and have not been checked against OpenAI's
+service. Others are stated in OpenAI's documentation, and have not been checked against the service either.
 [What has been observed](#what-has-been-observed) and [What the documents state](#what-the-documents-state)
 say which.
 
@@ -35,9 +34,10 @@ say which.
 3. The browser returns to the listener, and bravebot exchanges what it was given for an access token, an
    ID token and a refresh token. It checks the ID token before storing anything. The tab says you can close
    it, and the terminal says the sign-in is stored, when the access token expires, and where.
-4. The account is then asked which models it offers. The command says to pick one in `/model` or to name
-   one, that the account reaches no model, or that the listing could not be read. The sign-in is
-   stored first, so a slow answer leaves you knowing it was kept.
+4. The account is then asked which models it offers. The command says to run `bravebot`, which asks which
+   one to use, where nothing serves the model in force, and otherwise to name one, that the account reaches no
+   model, or that the listing could not be read. The sign-in is stored first, so a slow answer leaves you
+   knowing it was kept.
 
 The ID token is checked against the key set OpenAI publishes, and the check covers its signature, its
 issuer, its audience, its expiry, the one-time value bravebot sent and that it names a subject. No other
@@ -69,15 +69,23 @@ even where a gateway lists a model of that name. That gateway's model is named w
 of it, as `litellm/chatgpt/<name>`, which is also how its row appears in `/model`.
 
 `/model` offers what OpenAI lists for the account, leaving out rows the listing marks hidden or not
-available through its API. Each row has the window the listing states and whether any effort level is
-listed for it, and a row that lists none takes no effort level. None is offered without a sign-in.
+available through its API. Each row has the window the listing states, whether it takes images, and
+whether any effort level is listed for it, and a row that lists none takes no effort level. None is
+offered without a sign-in.
 
 Where the listing cannot be read, `/model` says so, offers a list of model names built into bravebot, and
-says that a row may name a model the account cannot reach. That list is read from another program's
-source and none of its names has been checked against the service, so the service refuses at the first
+says that a row may name a model the account cannot reach. That list is the seven models OpenAI's listing
+offered one account, so another account or a later date may differ, and the service refuses at the first
 request a model the account cannot reach. A listing that is read and is empty offers nothing, and an
 account that reaches no model is still signed in. A listing OpenAI refuses in one of the codes that name
 the account, such as its usage limit, offers nothing and says why.
+
+A model the account does not offer is refused by OpenAI at the first request, whether you named it with
+`--model` or picked it from the built-in list. The turn ends with one sentence that says OpenAI does not
+offer that model to this ChatGPT account and to choose another model, without naming the model or quoting
+OpenAI, and the terminal, a one-shot run and the window say the same thing. Nothing else happens for it: the
+request is not sent again, the sign-in is not replaced or removed, and `/model` offers the models the account
+has.
 
 **To offer the models you name instead,** put a `provider` entry named `chatgpt` in your settings with no
 endpoint:
@@ -118,11 +126,12 @@ second and to no other.
 A request to the account is made in the Responses protocol, as an [`openai` entry that names
 `@ai-sdk/openai`](openai.md#the-responses-api) is, and nothing is asked to be kept at OpenAI. It carries the
 access token, three headers that hold an identifier bravebot generated, and `content-encoding: zstd`, and
-nothing a settings file or a reply adds. The body is compressed into one zstd frame whatever its size,
-because the service refuses an uncompressed body over about 1 MiB. A frame over 1 MiB is not sent, no
-token is spent on it, and the turn is told the body is too large and shortens the conversation.
-`OPENAI_API_KEY` and a gateway's key are not looked for, and the account's tokens are never sent to a
-gateway.
+nothing a settings file or a reply adds. The body is compressed into one zstd frame whatever its size.
+bravebot sets no limit on how large a request may be, so a conversation holding a picture of several
+megabytes is sent. OpenAI decides what it takes: it refused a text field of 16 MiB and over, with a message
+that states a maximum length of 10485760, and a turn answers a refusal like that, as it answers any request
+OpenAI refuses as written, by shortening the conversation once and sending it again. `OPENAI_API_KEY` and a
+gateway's key are not looked for, and the account's tokens are never sent to a gateway.
 
 ## Staying signed in
 
@@ -132,9 +141,11 @@ A token OpenAI turns away early is replaced once and the request sent again.
 
 If OpenAI refuses the refresh token as no longer valid, the stored copy is removed and the turn says the
 sign-in has ended: run `bravebot auth login chatgpt` again. bravebot reads that from the error code the
-OAuth standard names for it, which this server has not been seen to send, so a sign-in it ends in another
-way leaves the file in place and each turn is told the renewal failed until you sign in again. OpenAI's
-documentation lists five other codes for a refresh token that cannot be used, which bravebot does not read.
+OAuth standard names for it, which this server sent for a refresh token it did not know and for one revoked
+at its revocation endpoint. A sign-in OpenAI ends by age or by reuse was not tried, so one that comes in
+another code leaves the file in place and each turn is told the renewal failed until you sign in again.
+OpenAI's documentation lists five other codes for a refresh token that cannot be used, which bravebot does
+not read.
 If the renewed tokens could not be saved, the turn says so once, and they last until bravebot exits. A
 sign-in is used in an incognito session as in any other, and a renewal is still written to the file there.
 
@@ -145,9 +156,10 @@ the others say it may not be used this way. Where the refusal came as a 429 that
 sentence says how long, in minutes rounded up. The line a failed turn leaves in the terminal and the error
 a one-shot run prints add the status after the sentence, as `(HTTP 429)`. `/compact`, the line a turn says
 when it could not summarise the conversation, the window and an editor give the sentence alone
-([Troubleshooting](../../troubleshooting.md)). The codes are read from another program's source, are listed
-in OpenAI's documentation, and have not been seen from this service, so a refusal that says the same in
-another code is handled by its status alone. A refusal with one of them is not repeated, and no
+([Troubleshooting](../../troubleshooting.md)). The codes are read from another program's source and are
+listed in OpenAI's documentation. One of them was seen from this service and the other six were not, so a
+refusal that says the same in another code is handled by its status alone. A refusal with one of them is not
+repeated, and no
 [fallback model](../configuration.md#fallbackmodel) is tried, since the account answers for every model it
 serves.
 
@@ -171,8 +183,11 @@ bravebot auth logout chatgpt
 removes the stored copy, and is allowed in an incognito session. It ends nothing at OpenAI. OpenAI's
 documentation describes a revocation call a client can make at sign-out, which bravebot does not make.
 bravebot's record is that signing out of the ChatGPT account, or removing bravebot's access in the account's
-settings, ends the sign-in there. That has not been observed, and an access token already issued may run
-to its own expiry.
+settings, ends the sign-in there. Neither has been observed, and what either does to an access token
+already issued has not been observed. Revoking one account's refresh token at OpenAI's
+revocation endpoint, a call bravebot does not make, was followed within seconds by a refusal of an access
+token issued from it before ([What has been observed](#what-has-been-observed)). That was one revocation
+of one account's sign-in.
 
 ## What is kept
 
@@ -187,29 +202,47 @@ One account is signed in at a time. Signing in again replaces it.
 
 ## What has been observed
 
-A sign-in, a refresh, the listing of models and a streamed turn have been made against a real ChatGPT
-account with bravebot's own build. That covers the authorization and token addresses, the registration of
-a client, the scopes and fields the requests carry, the replacement of the refresh token on every use, the
-listing's fields, and the events of a text turn, a tool call and a reasoning turn.
+A sign-in, refreshes, the listing of models and streamed turns have been made against a real ChatGPT
+account with bravebot's own build, the latest on 2026-10-25. That covers the authorization and token
+addresses, the registration of a client, the scopes and fields the requests carry, an ID token that
+verifies, the replacement of the refresh token on every use, how OpenAI refuses a refresh and an access
+token, the listing's fields, and the events of a text turn, a tool call and a reasoning turn. Seen there:
 
-These are read from another program's source, opencode's, and have not been observed against the service.
+- The listing offered that account seven models, and every one of them answered a request. The list built
+  into bravebot is those seven. Of the sixteen names in the list that opencode offers for this sign-in, only
+  those seven were accepted. The other nine, among them `gpt-5.5` and the `-fast` names, and a made-up name
+  were refused with the code `model_not_found` and a sentence saying the model is not supported when using
+  Codex with a ChatGPT account. The two hidden rows of the listing were accepted as well.
+- A picture sent as an image was read correctly, and requests carrying incompressible pictures in frames of up
+  to 12.6 MiB were accepted. OpenAI refused a text field of 16 MiB and over, whose message states a maximum
+  length of 10485760.
+- OpenAI's prompt cache hit when a request carried the session identifier bravebot sends, and changing the
+  effort level inside one session cost one miss at each change.
+- OpenAI refused an effort level of `ultra` on a model whose listing row offers it and on one whose row does
+  not. bravebot does not send that level.
+- A call to OpenAI's revocation endpoint with a refresh token was answered 200 with an empty body. Within
+  seconds after it, an access token issued from that refresh token before the call, and not yet expired, was
+  refused with 401, an access token of another sign-in was still accepted, and a refresh with the revoked
+  refresh token was refused as `invalid_grant`. That was one revocation of one account's sign-in.
+
+Still read only from another program's source, opencode's, and not observed against the service.
 [What the documents state](#what-the-documents-state) says what OpenAI's own documents add to some of them:
 
-- the algorithm and the issuer of a real ID token. OpenAI's discovery document states both as bravebot
-  expects them, OpenAI's documentation gives the same issuer, and this page records no ID token's header or
-  claims. A real token that names another issuer would make every sign-in fail;
-- that the authorization server accepts a redirect to any loopback port, where only a port the operating
-  system chose has been tried. OpenAI's documentation says only the port may vary at later sign-ins;
-- the names in the built-in model list, and in particular the ones ending in `-fast`;
-- what the three identifiers do for the service's prompt cache;
-- that the service accepts the zstd frames bravebot writes and the size at which it refuses a body, and
-  whether that size is of the frame or of what it decodes to;
-- the seven error codes that name the account, and where a refusal writes them. OpenAI's documentation gives
-  the seven with their statuses and names no `error` event.
+- that the authorization server accepts a redirect to any loopback port, where only two ports the operating
+  system chose have been tried. OpenAI's authorization endpoint answered every request that was not from a
+  browser with 403, so this could not be tried another way. OpenAI's documentation says only the port may
+  vary at later sign-ins;
+- what the other two identifiers, `thread-id` and `x-client-request-id`, do for the service's prompt cache.
+  The cache hit on 3 of 5 calls with `session-id` alone and on 1 of 5 with each of the other two, and the
+  calls were too few to show that the other two do nothing;
+- six of the seven error codes that name the account, and where a refusal writes them. One was seen as the
+  code of a 400. OpenAI's documentation gives the seven with their statuses and names no `error` event, and
+  no request provoked an event of either kind.
 
-Whether an access token issued before a sign-out keeps working is in no source bravebot was written from.
-OpenAI's documentation lists the codes of a refused refresh without a status, and does not say what an
-expired or revoked access token returns.
+Not observed: whether signing out of the account, or removing bravebot's access in its settings, ends the
+sign-in and the access tokens issued from it, and what an account with no subscription reaches. OpenAI's
+documentation lists the codes of a refused refresh without a status, and does not say what an expired or
+revoked access token returns.
 
 ## What the documents state
 

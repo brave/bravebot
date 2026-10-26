@@ -167,11 +167,8 @@ fn picked<R: BufRead, W: Write>(
         Some(answer) if !answer.is_empty() => answer,
         _ => return Ok(None),
     };
-    let way = answer
-        .parse::<usize>()
-        .ok()
-        .and_then(|number| number.checked_sub(1))
-        .and_then(|index| Way::ALL.get(index).copied())
+    let way = crate::plain::numbered_row(&answer, &Way::ALL)
+        .copied()
         .or_else(|| Way::named(&answer));
     let Some(way) = way else {
         return Err(t!(auth_not_a_listed_way, answer = printable(&answer)));
@@ -694,11 +691,8 @@ fn which_gateway<'p, R: BufRead, W: Write>(
                 Some(answer) if !answer.is_empty() => answer,
                 _ => return Ok(None),
             };
-            let picked = answer
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| number.checked_sub(1))
-                .and_then(|index| gateways.get(index).copied())
+            let picked = crate::plain::numbered_row(&answer, gateways)
+                .copied()
                 .or_else(|| {
                     gateways
                         .iter()

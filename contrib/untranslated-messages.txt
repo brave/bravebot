@@ -7,6 +7,13 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:chatgpt-start-chosen
+fr:chatgpt-start-heading
+fr:chatgpt-start-not-remembered
+fr:chatgpt-start-question
+fr:chatgpt-start-row
+fr:chatgpt-use-by-asking
+fr:chatgpt-use-by-naming
 fr:command-outputs
 fr:outputs-hint
 fr:outputs-none

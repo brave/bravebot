@@ -57,8 +57,12 @@ session uses it without the variable exported. Where that file already names
 **ChatGPT** opens a browser at OpenAI, where you sign in, and keeps the sign-in it is given in
 `chatgpt-account.json` beside the other credential files. It prints the address as well, so a machine
 with no browser can finish the sign-in elsewhere through a forwarded port, and it waits five minutes.
-If a sign-in is already stored it asks before replacing it. The account's models are then offered in
-`/model` as `chatgpt/<model>`. `bravebot auth logout chatgpt` forgets the copy here and ends nothing at
+If a sign-in is already stored it asks before replacing it. The account's models are offered in
+`/model` as `chatgpt/<model>`. Where nothing serves the model in force, `bravebot` lists the account's
+models in the terminal and asks which one to use, remembers the answer for the next start, and opens on
+it. An answer that is not the number of a model, a start in a script or in an incognito session, and an
+account whose models could not be listed are refused as before, with the forms that name a model, and a
+listing that gave no model is said why. `bravebot auth logout chatgpt` forgets the copy here and ends nothing at
 OpenAI. See [ChatGPT](providers/chatgpt.md).
 
 ## Gateway

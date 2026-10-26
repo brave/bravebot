@@ -35,8 +35,9 @@ pub(super) struct Tokens {
 }
 
 /// The error code that says a refresh token is no longer valid: RFC 6749 section 5.2's
-/// `invalid_grant`. Not observed in a refused refresh from this server, which the spec lists as
-/// unrecorded, so a refresh refused with any other code is a failure of the request and ends nothing.
+/// `invalid_grant`. The token endpoint sends it as a string, `{"error":"invalid_grant"}`, in a 400
+/// for a refresh token it does not know. A refresh refused with any other code is a failure of the
+/// request and ends nothing.
 const ENDED: &str = "invalid_grant";
 
 /// The statuses a refused refresh is read for its error code at. RFC 6749 gives 400, and a server
@@ -464,10 +465,15 @@ mod tests {
     /// Only a 400 or 401 whose error code is `invalid_grant` ends the sign-in. The same code at
     /// another status, another code at those statuses, and a body that is not the shape are each a
     /// failure of the request, so a busy server or a proxy's page cannot delete a person's sign-in.
+    /// The token endpoint sends `error` as a string, with the other codes of RFC 6749 for the other
+    /// faults of a request. The serving host sends `error` as an object with a `code`, and a body of
+    /// that shape is not the token endpoint saying the sign-in is over. An implementation that read
+    /// `error.code`, or ended the sign-in for any 400, would delete a sign-in that a retry or a
+    /// corrected request would have kept.
     #[test]
     fn only_the_recorded_code_at_a_refusing_status_ends_the_sign_in() {
         use super::super::stand_in::{Reply, serve};
-        let cases: [(u16, &str, Refused); 8] = [
+        let cases: [(u16, &str, Refused); 11] = [
             (400, "{\"error\":\"invalid_grant\"}", Refused::Ended),
             (401, "{\"error\":\"invalid_grant\"}", Refused::Ended),
             (
@@ -491,6 +497,21 @@ mod tests {
                 429,
                 "{\"error\":\"invalid_grant\"}",
                 Refused::Failed(Class::RateLimited),
+            ),
+            (
+                400,
+                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":\"invalid_grant\"}}",
+                Refused::Failed(Class::Refused),
+            ),
+            (
+                405,
+                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":null}}",
+                Refused::Failed(Class::Refused),
+            ),
+            (
+                400,
+                "{\"detail\":\"invalid_grant\"}",
+                Refused::Failed(Class::Refused),
             ),
         ];
         for (status, body, expected) in cases {

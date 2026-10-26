@@ -72,7 +72,7 @@ pub use keys::{Action, handle_key, handle_key_while_working, handle_mouse};
 mod models;
 use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
-pub use models::{adopt_listing_for_model, reads_structured_output};
+pub use models::{account_models_to_start_on, adopt_listing_for_model, reads_structured_output};
 
 mod opening;
 use opening::*;
@@ -1662,7 +1662,7 @@ fn sign_in_if_needed(
     session: &mut Session,
     config: &Config,
 ) -> io::Result<()> {
-    let model = session.model().unwrap_or(&config.default_model).to_string();
+    let model = model_in_force(session.model(), config).to_string();
     if !bravebot_agent::backend::Backend::needs_sign_in(config, &model) {
         return Ok(());
     }
@@ -4348,8 +4348,13 @@ mod tests {
         for (gateway, id) in [("Down Gateway", "down"), ("Garbled Gateway", "garbled")] {
             let note = said.iter().find(|note| note.contains(gateway)).unwrap();
             assert!(
-                note.contains(&format!("--model {id}/<model>")),
-                "no way to name a model of {gateway}: {note}"
+                note.contains(&format!(r#"`bravebot -i "<prompt>" --model {id}/<model>`"#))
+                    && note.contains(&format!(r#"`bravebot "<task>" --model {id}/<model>`"#)),
+                "no command that names a model of {gateway}: {note}"
+            );
+            assert!(
+                !note.contains("bravebot --model"),
+                "a form that needs a task: {note}"
             );
         }
         for rows_of in ["readable/llama3", "named/m", "opus-arn"] {
@@ -4733,7 +4738,7 @@ mod tests {
     /// The listing the account's tests script: one model with a window a budget can be told apart
     /// from the default by.
     fn the_accounts_listing() -> Vec<bravebot_aichat::models::Model> {
-        vec![listed("chatgpt/gpt-5.5", Some(65_536))]
+        vec![listed("chatgpt/gpt-6-sol", Some(65_536))]
     }
 
     /// CHATGPT-9: a session or a turn on a model that is not the account's sends the stored token
@@ -4780,31 +4785,31 @@ mod tests {
 
         let mut config = a_config_with_a_named_roster();
         let mut session = Session::new("none");
-        session.choose_model("chatgpt/gpt-5.5".to_string(), &config);
+        session.choose_model("chatgpt/gpt-6-sol".to_string(), &config);
         adopt_budget_for_current_model(&mut session, &mut config);
         assert_eq!(asked(), 1, "the lookup at session start did not ask");
         assert_eq!(config.context_budget, 65_536);
 
         offer(the_accounts_listing());
         let mut config = a_config_with_a_named_roster();
-        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-6-sol");
         assert_eq!(asked(), 1, "a run's lookup did not ask");
         assert_eq!(config.context_budget, 65_536);
 
         offer(the_accounts_listing());
         let config = a_config_with_a_named_roster();
-        let turn = config_for_turn(&config, Some("chatgpt/gpt-5.5"));
+        let turn = config_for_turn(&config, Some("chatgpt/gpt-6-sol"));
         assert_eq!(asked(), 1, "a turn addressed to a definition did not ask");
         assert_eq!(turn.context_budget, 65_536);
 
         offer(the_accounts_listing());
-        assert!(reads_structured_output(&config, "chatgpt/gpt-5.5"));
+        assert!(reads_structured_output(&config, "chatgpt/gpt-6-sol"));
         assert_eq!(asked(), 1, "the structured-output check did not ask");
 
         // The listing could not be had, so the compiled name stands in and its window is the assumed one.
         fail_to_list();
         let mut config = a_config_with_a_named_roster();
-        adopt_listing_for_model(&mut config, "chatgpt/gpt-5.5");
+        adopt_listing_for_model(&mut config, "chatgpt/gpt-6-sol");
         assert_eq!(asked(), 1, "a run's lookup did not ask");
         assert_eq!(
             config.context_budget,
@@ -4830,11 +4835,325 @@ mod tests {
             panic!("no model picker is open");
         };
         let keys: Vec<&str> = picker.matching().iter().map(|m| m.key.as_str()).collect();
-        assert!(keys.contains(&"chatgpt/gpt-5.5"), "{keys:?}");
+        assert!(keys.contains(&"chatgpt/gpt-6-sol"), "{keys:?}");
         assert!(
             keys.contains(&"opus-arn"),
             "a row already there was taken away: {keys:?}"
         );
+    }
+
+    /// BACKEND-11: the list `/model` opens at rest marks the model in force, as the one opened in the
+    /// middle of a turn does, and picking a row puts that model in force. Reached through the part of
+    /// the command that decides what is offered and which row is current, since the part that reads
+    /// keys needs a terminal. Run with the model set by settings and nothing picked, with a pick, and
+    /// where a row is chosen. The regressions it rejects are the pick alone read as the model in force,
+    /// which marks Brave's `automatic` for a session on the settings model, and a default that
+    /// outranks a pick.
+    #[test]
+    fn the_list_the_model_command_opens_at_rest_marks_the_model_in_force_and_a_row_picked_is_put_in_force()
+     {
+        use models::scripted_account::offer;
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        offer(vec![
+            bravebot_aichat::models::Model::automatic(),
+            listed("chatgpt/gpt-5.5", Some(65_536)),
+        ]);
+        let marked = |session: &mut Session, config: &mut Config| -> Option<String> {
+            let mut current = None;
+            choose_model_with(session, config, |_, marked, _| {
+                current = marked.map(str::to_string);
+                None
+            });
+            current
+        };
+
+        let mut session = Session::new("none");
+        assert_eq!(
+            marked(&mut session, &mut config).as_deref(),
+            Some("chatgpt/gpt-5.5"),
+            "the settings model was not the one marked at rest"
+        );
+
+        session.name_model("opus-arn".to_string());
+        assert_eq!(
+            marked(&mut session, &mut config).as_deref(),
+            Some("opus-arn"),
+            "the default outranked the pick at rest"
+        );
+
+        let mut session = Session::new("none");
+        choose_model_with(&mut session, &mut config, |models, _, _| {
+            models.into_iter().find(|model| model.key == "opus-arn")
+        });
+        assert_eq!(
+            session.model(),
+            Some("opus-arn"),
+            "the row picked was not put in force"
+        );
+    }
+
+    /// The row the picker's cursor opens on and the rows it marks as current, for a session as it stands.
+    fn picker_opened(session: &mut Session, config: &Config) -> (Option<String>, Vec<String>) {
+        open_model_picker(session, config);
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let marked = picker
+            .matching()
+            .into_iter()
+            .filter(|model| picker.is_current(model))
+            .map(|model| model.key.clone())
+            .collect();
+        (picker.chosen().map(|model| model.key.clone()), marked)
+    }
+
+    /// CHATGPT-9, BACKEND-11: the picker marks the model in force, which is the pick where the
+    /// session has one and otherwise the configured default, and that is the model a `model` key of
+    /// the settings file names. The roster has Brave's `automatic` row beside the account's, as the
+    /// roster of anybody has, and a session whose settings name an account model has not picked
+    /// `automatic`. Each case holds the mark and where the cursor opens, which are two things: a
+    /// cursor on a row that is not marked is a picker that opens on one model and says another is in
+    /// use. The regressions it rejects are the pick alone read as the model in force, which marks
+    /// `automatic` for a session on the settings model, a default that outranks a pick, and
+    /// `automatic` left unmarked where nothing is configured and nothing is picked.
+    #[test]
+    fn the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked() {
+        use models::scripted_account::offer;
+        let mut config = a_config_with_a_named_roster();
+        offer(vec![
+            bravebot_aichat::models::Model::automatic(),
+            listed("chatgpt/gpt-5.5", Some(65_536)),
+        ]);
+        let in_force = |key: &str| (Some(key.to_string()), vec![key.to_string()]);
+
+        // As a `model` key of the settings file leaves it, with nothing picked.
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        let mut session = Session::new("none");
+        assert_eq!(
+            picker_opened(&mut session, &config),
+            in_force("chatgpt/gpt-5.5"),
+            "the settings model was not the one marked"
+        );
+
+        // A pick outranks the configured default.
+        let mut session = Session::new("none");
+        session.name_model("opus-arn".to_string());
+        assert_eq!(
+            picker_opened(&mut session, &config),
+            in_force("opus-arn"),
+            "the default outranked the pick"
+        );
+
+        // Nothing configured and nothing picked is `automatic` in use.
+        config.default_model = bravebot_config::DEFAULT_MODEL.to_string();
+        let mut session = Session::new("none");
+        assert_eq!(
+            picker_opened(&mut session, &config),
+            in_force(bravebot_config::DEFAULT_MODEL),
+            "`automatic` was not marked where it is the default"
+        );
+    }
+
+    /// BACKEND-22, BACKEND-11: the refusal of a level a turn or a run learned is asked of the model in
+    /// force, which is the configured default where nothing is picked and the pick where there is one,
+    /// and the answer is the one given for that model. Asked through the one function the end of a
+    /// turn and the end of a manifest run both call. The regressions it rejects are the pick alone
+    /// read as the model in force, which asks about no model for a session on the settings model, and a
+    /// default that outranks a pick.
+    #[test]
+    fn the_refusal_of_a_level_is_asked_of_the_model_in_force_and_its_answer_is_returned() {
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        let asked_of = |session: &Session, answer: bool| {
+            let mut model = None;
+            let refused = refused_level_in_force(session, &config, |_, asked| {
+                model = Some(asked.to_string());
+                answer
+            });
+            (model, refused)
+        };
+
+        let mut session = Session::new("none");
+        assert_eq!(
+            asked_of(&session, false),
+            (Some("chatgpt/gpt-5.5".to_string()), false),
+            "the settings model was not the one asked about"
+        );
+        assert!(asked_of(&session, true).1, "the answer was not returned");
+
+        session.name_model("opus-arn".to_string());
+        assert_eq!(
+            asked_of(&session, false).0.as_deref(),
+            Some("opus-arn"),
+            "the default outranked the pick"
+        );
+    }
+
+    /// CHATGPT-10: a session whose model is the account's by the settings file, with nothing picked,
+    /// is told that the account keeps the level the session began with when another is chosen, as one
+    /// that picked the model is. The regression it rejects is the account read from the pick alone,
+    /// which would take the settings model for a model of another service and say nothing.
+    #[test]
+    fn a_level_chosen_in_a_session_on_the_settings_model_of_the_account_is_said_to_be_kept() {
+        use models::scripted_account::offer;
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        offer(the_accounts_listing());
+        let mut session = Session::new("none");
+        adopt_settings(&mut session, &bravebot_config::Settings::default(), None);
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert!(session.model().is_none(), "something was picked");
+
+        set_effort(&mut session, "high");
+
+        let kept = t!(
+            session_effort_kept_for_account,
+            began = t!(effort_unset),
+            chosen = "high"
+        );
+        assert!(
+            notes_of(&session).contains(&kept.as_str()),
+            "{:?}",
+            notes_of(&session)
+        );
+    }
+
+    /// CHATGPT-9: the notes the picker says of a ChatGPT account whose models could not be listed name
+    /// the two commands that work as typed, `bravebot -i "<prompt>" --model chatgpt/<model>` and
+    /// `bravebot "<task>" --model chatgpt/<model>`, and never `bravebot --model chatgpt/<model>`, which
+    /// is refused for want of a task. The note for a refused listing names no command, since
+    /// naming one would not mend it.
+    #[test]
+    fn the_notes_the_picker_says_of_the_accounts_listing_name_only_commands_that_work_as_typed() {
+        use bravebot_agent::chatgpt::AccountModels;
+        let models = || vec![listed("chatgpt/gpt-5.5", None)];
+
+        for (listing, what) in [
+            (AccountModels::Unreadable, "an unreadable sign-in file"),
+            (
+                AccountModels::Compiled(models()),
+                "a listing that could not be had",
+            ),
+        ] {
+            let note = account_problem_said(&listing).expect("a note");
+            let named: Vec<&str> = note.split('`').skip(1).step_by(2).collect();
+            assert_eq!(
+                named,
+                [
+                    r#"bravebot -i "<prompt>" --model chatgpt/<model>"#,
+                    r#"bravebot "<task>" --model chatgpt/<model>"#
+                ],
+                "{what}: {note}"
+            );
+            assert!(!note.contains("bravebot --model"), "{what}: {note}");
+        }
+        let refused = account_problem_said(&AccountModels::Refused(
+            bravebot_aichat::responses::protocol::Refusal::UsageLimit,
+        ))
+        .expect("a note");
+        assert!(!refused.contains("--model"), "{refused}");
+    }
+
+    /// BACKEND-39: a start that nothing serves offers the rows the account listed, in the order the
+    /// picker lists them, and none where the service listed none, with the listing that gave none so the
+    /// start can say why. The compiled names that stand in for a listing in the picker are not offered,
+    /// nor is anything where the listing was refused, the sign-in file could not be read, the sign-in
+    /// ended while the listing was asked for or the listing was read and is empty. The regressions it
+    /// rejects are the service's order in place of the picker's, which would number a row differently
+    /// from the `/model` the person meets next, a question over names the account may refuse, and a
+    /// listing that gave none reported as another.
+    #[test]
+    fn a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else() {
+        use bravebot_agent::chatgpt::AccountModels;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use models::scripted_account::{
+            fail_to_list, fail_to_read_the_file, nobody_signed_in, offer, refuse,
+        };
+        let config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            account_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(vec![
+            listed("chatgpt/gpt-b", None),
+            listed("chatgpt/gpt-c", None),
+            listed("chatgpt/gpt-a", None),
+        ]);
+        assert_eq!(
+            keys(&config),
+            ["chatgpt/gpt-a", "chatgpt/gpt-b", "chatgpt/gpt-c"]
+        );
+
+        offer(Vec::new());
+        assert_eq!(
+            account_models_to_start_on(&config),
+            Err(AccountModels::Offered(Vec::new())),
+            "a listing with no row offered one, or was not said to be empty"
+        );
+        fail_to_list();
+        assert!(
+            matches!(
+                account_models_to_start_on(&config),
+                Err(AccountModels::Compiled(_))
+            ),
+            "the compiled names were offered for a listing that could not be had"
+        );
+        fail_to_read_the_file();
+        assert_eq!(
+            account_models_to_start_on(&config),
+            Err(AccountModels::Unreadable),
+            "an unreadable sign-in offered rows"
+        );
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            refuse(refusal);
+            assert_eq!(
+                account_models_to_start_on(&config),
+                Err(AccountModels::Refused(refusal)),
+                "{refusal:?} offered rows"
+            );
+        }
+        nobody_signed_in();
+        assert_eq!(
+            account_models_to_start_on(&config),
+            Err(AccountModels::Absent),
+            "a sign-in that ended while the listing was asked for offered rows"
+        );
+    }
+
+    /// BACKEND-48: a start does not offer a model this machine may not request, as the picker does
+    /// not, so a person is not refused after choosing it.
+    #[test]
+    fn a_start_is_not_offered_a_model_the_machine_level_layer_refuses() {
+        use models::scripted_account::offer;
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-start-models-refused");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["chatgpt/gpt-b"]}}"#)
+            .expect("a managed file");
+        let mut config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            account_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(vec![
+            listed("chatgpt/gpt-a", None),
+            listed("chatgpt/gpt-b", None),
+        ]);
+        assert_eq!(keys(&config), ["chatgpt/gpt-a", "chatgpt/gpt-b"]);
+
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(keys(&config), ["chatgpt/gpt-a"]);
     }
 
     /// CHATGPT-9: a person who signed in to ChatGPT and whose listing could not be had is told why, in
@@ -14902,25 +15221,58 @@ mod tests {
     }
 
     /// With no pick, the configured default is what a request names, so it is the row the roster is
-    /// asked about. Looking up nothing took the level as read whatever the row said.
+    /// asked about. Looking up nothing took the level as read whatever the row said. A pick is the row
+    /// asked about once there is one, whatever the default's row says.
     #[test]
     fn a_default_model_the_roster_says_reads_no_level_is_withheld_one_when_nothing_is_picked() {
+        use models::scripted_account::offer;
         let row = |key: &str, reads_effort: bool| bravebot_aichat::models::Model {
-            key: key.to_string(),
-            display_name: key.to_string(),
-            premium: false,
-            provider: None,
-            conversation_tokens: None,
             reads_effort,
-            advertised: bravebot_aichat::models::Advertised::default(),
+            ..listed(key, None)
         };
-        let roster = vec![row("gateway/plain", false), row("gateway/reasons", true)];
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/plain".to_string();
+        offer(vec![
+            row("chatgpt/plain", false),
+            row("chatgpt/reasons", true),
+        ]);
 
-        assert!(!reads_effort_in_force(&roster, None, "gateway/plain"));
-        assert!(reads_effort_in_force(&roster, None, "gateway/reasons"));
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
         assert!(
-            reads_effort_in_force(&roster, Some("gateway/reasons"), "gateway/plain"),
+            !session.model_reads_effort(),
+            "the default's row, which reads no level, was not the one looked up"
+        );
+
+        let mut session = Session::new("none");
+        session.name_model("chatgpt/reasons".to_string());
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert!(
+            session.model_reads_effort(),
             "the default was looked up where a model was picked"
+        );
+    }
+
+    /// The inputs the roster lists for the model in force are taken for the session, which is the
+    /// default where nothing is picked: a picture put to a model the listing says takes text only is
+    /// held to that. Taken for the pick alone, a session on the settings model carried none, and a
+    /// picture went to a model the roster had said does not read one.
+    #[test]
+    fn the_inputs_the_roster_lists_are_those_of_the_model_in_force_which_is_the_default_unpicked() {
+        use models::scripted_account::offer;
+        let mut text_only = listed("chatgpt/text-only", None);
+        text_only.advertised.input_modalities = vec!["text".to_string()];
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/text-only".to_string();
+        offer(vec![text_only, listed("chatgpt/other", None)]);
+
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
+
+        assert_eq!(
+            config.listed_inputs("chatgpt/text-only"),
+            ["text".to_string()],
+            "the default's inputs were not taken"
         );
     }
 
@@ -31932,6 +32284,10 @@ mod tests {
                     retry_after: None,
                 },
                 "does not allow this ChatGPT account to be used this way",
+            ),
+            (
+                AccountFailure::ModelNotOffered,
+                "OpenAI does not offer that model to this ChatGPT account. Choose another model",
             ),
             // A usage limit that arrived as a 429 with a wait says the wait and the status, after
             // the sentence and before nothing: no count of the two tries follows.

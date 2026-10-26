@@ -465,7 +465,7 @@ doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
 doctor-outlives-chatgpt-account =
-    un jeton d'accès qu'OpenAI a déjà émis à partir du jeton d'actualisation, qui peut courir jusqu'à sa propre expiration : on n'a pas observé si la révocation de la connexion l'atteint
+    un jeton d'accès qu'OpenAI a déjà émis à partir du jeton d'actualisation : il a été refusé en quelques secondes après la révocation du jeton d'actualisation au point de révocation d'OpenAI (un compte, une révocation, un appel que ce programme ne fait pas), et on n'a pas observé si la déconnexion du compte ou le retrait de l'accès de ce programme dans ses paramètres y met fin
 doctor-binding = liaison
 doctor-binding-sender-constrained =
     liée à l'émetteur de la requête : l'émetteur vérifie qui la présente, donc une copie prise sur cette machine ne sert à rien ailleurs
@@ -1044,14 +1044,14 @@ chatgpt-replace = La remplacer ?
 chatgpt-open-this = Ouvrez cette adresse dans un navigateur pour vous connecter à ChatGPT :
 chatgpt-waiting = En attente du navigateur sur 127.0.0.1, port { $port }. Un navigateur sur une autre machine ne l'atteint que par un port redirigé.
 chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
-chatgpt-use-by-name = Choisissez l'un des modèles du compte avec /model pour utiliser cette connexion, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-use-by-name = Nommez l'un des modèles du compte, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`. Une fois une session ouverte, /model les liste. Lancé seul, dans un terminal hors d'une session incognito, bravebot demande lequel utiliser quand le compte liste ses modèles.
 # Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
 # modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
 # enregistrée dans chaque cas. Des deux messages pour une liste qui n'a pas pu être obtenue, le second
 # concerne un compte dont le sélecteur propose la liste intégrée à la place.
 chatgpt-reaches-no-model = Ce compte ChatGPT n'atteint aucun modèle avec bravebot, donc /model n'en propose aucun. La connexion reste enregistrée.
-chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés, donc /model n'en propose aucun. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
-chatgpt-listing-compiled = Les modèles du compte n'ont pas pu être listés, donc /model propose une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser. Réessayez /model plus tard, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés. Nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+chatgpt-listing-compiled = Les modèles du compte n'ont pas pu être listés, et, une fois une session ouverte, /model propose une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser. Nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
 chatgpt-listing-refused = Les modèles du compte n'ont pas pu être listés : { $refusal }
 chatgpt-forgotten =
     connexion ChatGPT enregistrée oubliée. Elle reste valide chez OpenAI tant qu'on n'y met pas fin : déconnectez-vous de ChatGPT, ou retirez l'accès de bravebot dans les réglages du compte
@@ -2810,13 +2810,13 @@ session-models-unavailable = impossible de lister les modèles : { $problem }
 # les modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être obtenue,
 # où le sélecteur montre la liste intégrée. Le troisième concerne une liste refusée par un code qui
 # désigne le compte, où se reconnecter ne change rien.
-session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
-session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans bravebot --model chatgpt/<modèle>
+session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
 session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
 # Dit à l'ouverture du sélecteur quand une passerelle dont les réglages ne nomment aucun modèle n'a pas pu
 # être interrogée sur sa liste, donc aucun de ses modèles n'est proposé. Une passerelle dont la clé manque
 # n'est pas interrogée et n'est pas signalée ici.
-session-gateway-models-unreadable = impossible de lire la liste des modèles de { $gateway }, donc aucun de ses modèles n'est proposé ; réessayez, ou nommez-en un, comme dans bravebot --model { $id }/<modèle>
+session-gateway-models-unreadable = impossible de lire la liste des modèles de { $gateway }, donc aucun de ses modèles n'est proposé ; réessayez, ou nommez-en un, comme dans `bravebot -i "<invite>" --model { $id }/<modèle>` ou `bravebot "<tâche>" --model { $id }/<modèle>`
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire
@@ -4011,3 +4011,13 @@ deep-link-started-in-home = Le lien désignait { $dir }, qui n'est pas un réper
 # Sous la zone de saisie tant que les mots qu'un lien extérieur y a mis s'y trouvent encore.
 deep-link-banner = Invite d'un lien externe, pas encore envoyée  ·  lisez-la, puis Entrée l'envoie
 deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non envoyée  ·  faites défiler et relisez tout d'abord
+
+## Un modèle que le compte ChatGPT ne propose pas
+
+# Dit lorsque l'hôte de service refuse le modèle d'un tour parce que le compte ne le propose pas
+# (CHATGPT-8). La première phrase est celle du terminal et de l'exécution en une passe, en minuscules
+# avec une seconde phrase pour le remède, et la seconde est celle de la fenêtre, une phrase avec une
+# majuscule. Aucune ne nomme le modèle ni ne cite le service, et aucune n'envoie la personne se
+# reconnecter : le refus porte sur le modèle.
+failure-account-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT. Choisissez un autre modèle
+desktop-chatgpt-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT, donc choisissez un autre modèle.

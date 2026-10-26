@@ -557,6 +557,46 @@ mod tests {
         assert!(warnings.is_empty());
     }
 
+    /// The window has no command line, so no warning it sends names the flag that names a model, and
+    /// the command a warning does name is one that works as typed: the sign-in. The terminal's notes
+    /// name `bravebot -i "<prompt>" --model <model>` and `bravebot "<task>" --model <model>`, which a
+    /// window draws as nothing. Each listing that gave no row sends a warning, so the check below is
+    /// made of something, and a listing that gave rows or belongs to nobody sends none. The regression
+    /// it rejects is a warning that carries either form, or a bare `--model`, to a window that cannot
+    /// use it.
+    #[test]
+    fn no_warning_the_window_sends_names_a_command_line_that_names_a_model() {
+        use bravebot_agent::chatgpt::AccountModels;
+        use bravebot_aichat::responses::protocol::Refusal;
+        for (listing, warned) in [
+            (AccountModels::Absent, false),
+            (
+                AccountModels::Offered(vec![account_row("chatgpt/gpt-5.5")]),
+                false,
+            ),
+            (AccountModels::Unreadable, true),
+            (
+                AccountModels::Compiled(vec![account_row("chatgpt/gpt-5.5")]),
+                true,
+            ),
+            (AccountModels::Refused(Refusal::NotPermitted), true),
+            (AccountModels::Refused(Refusal::UsageLimit), true),
+        ] {
+            let (mut rows, mut warnings) = (Vec::new(), Vec::new());
+            with_account(&mut rows, &mut warnings, listing);
+            assert_eq!(!warnings.is_empty(), warned, "{warnings:?}");
+            for said in &warnings {
+                assert!(!said.sentence.contains("--model"), "{}", said.sentence);
+                assert!(
+                    said.command
+                        .is_none_or(|command| command == "bravebot auth login chatgpt"),
+                    "{:?}",
+                    said.command
+                );
+            }
+        }
+    }
+
     /// CHATGPT-9 in the window: a turn on a model that is not the account's sends the stored token
     /// nowhere, whether the model is named for the turn or is the configured default, and a turn on
     /// one of the account's own models asks for its row and takes the window the listing states.

@@ -322,11 +322,12 @@ fn a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in() {
 }
 
 /// Somebody whose ChatGPT sign-in is stored and whose model in force is still Brave's own is
-/// one key from working, as one who wrote a gateway block is. The first run says to pick one of the
-/// account's models in the words the sign-in command ends with, and does not show the routes they
-/// have just followed, and with Claude Code set up on the machine it does not name an import either,
-/// since a service is configured. A stored sign-in that cannot be read is said first and is no
-/// service, so the routes stay. Nothing stored shows them, which the first-run tests above pin.
+/// one key from working, as one who wrote a gateway block is. The first run says to name one of the
+/// account's models in the commands that open a session or run a task on it, and does not show the
+/// routes they have just followed, and with Claude Code set up on the machine it does not name an
+/// import either, since a service is configured. A stored sign-in that cannot be read is said first
+/// and is no service, so the routes stay. Nothing stored shows them, which the first-run tests above
+/// pin.
 #[test]
 fn a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run() {
     let stored = Scratch::new("cli-running-no-service-chatgpt-stored")
@@ -338,9 +339,13 @@ fn a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(
         stderr.contains("A ChatGPT sign-in is stored")
-            && stderr.contains("Pick one of the account's models in /model")
-            && stderr.contains("bravebot --model chatgpt/<model>"),
+            && stderr.contains(r#"`bravebot -i "<prompt>" --model chatgpt/<model>`"#)
+            && stderr.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
         "the refusal did not say how to use the sign-in: {stderr}"
+    );
+    assert!(
+        !stderr.contains("`bravebot --model chatgpt/<model>`"),
+        "the refusal named a form that needs a task: {stderr}"
     );
     for offered in [
         "amazon-bedrock",
@@ -410,7 +415,7 @@ fn a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_nam
     assert!(stderr.contains("`model` key"), "{stderr}");
     for replaced in [
         "A ChatGPT sign-in is stored",
-        "Pick one of the account's models",
+        "Name one of the account's models",
         "amazon-bedrock",
         "bravebot auth login leo",
     ] {
@@ -457,7 +462,8 @@ fn doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured() {
     assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
     assert!(
         stdout.contains("A ChatGPT sign-in is stored")
-            && stdout.contains("bravebot --model chatgpt/<model>"),
+            && stdout.contains(r#"`bravebot -i "<prompt>" --model chatgpt/<model>`"#)
+            && stdout.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
         "the report did not say how to use the sign-in: {stdout}"
     );
     for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
@@ -9036,9 +9042,10 @@ fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request(
 
 /// CHATGPT-11 and CRED-25: `doctor` names a stored ChatGPT sign-in as a held credential at its
 /// tier, with what would end it and the instant the access token expires, and prints nothing the
-/// file holds beyond that instant. Nothing stored is nothing said, a sign-in whose instant has
-/// passed is still signed in, and a file that cannot be used is named with its remedy and ends the
-/// run in failure, since the sign-in it held has stopped being used.
+/// file holds beyond that instant. It says what was seen of a revocation at the endpoint and that
+/// signing out and removing access were not observed. Nothing stored is nothing said, a sign-in
+/// whose instant has passed is still signed in, and a file that cannot be used is named with its
+/// remedy and ends the run in failure, since the sign-in it held has stopped being used.
 #[test]
 fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     // A model keyed by a variable, so a report that finds nothing else wrong ends in success and the
@@ -9092,9 +9099,24 @@ fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     );
     assert!(account.contains("held: a permanent secret"), "{account}");
     assert!(account.contains("a bearer secret"), "{account}");
+    // What may outlive a revocation is one line that says what was seen, a revocation at the
+    // endpoint, and what was not, signing out and removing access. A report with no such line reads
+    // as nothing surviving, and one that says a token may run to its own expiry ignores the
+    // revocation that ended one.
+    let outlives = account
+        .lines()
+        .find(|line| line.trim_start().starts_with("outlives "))
+        .unwrap_or_else(|| panic!("what may outlive a revocation is not reported: {account}"));
+    for words in [
+        "was refused within seconds after the refresh token was revoked at OpenAI's revocation endpoint",
+        "one account, one revocation, a call this program does not make",
+        "whether signing out of the account or removing this program's access in its settings ends it has not been observed",
+    ] {
+        assert!(outlives.contains(words), "{words}: {outlives}");
+    }
     assert!(
-        account.contains("whether revoking the sign-in reaches it has not been observed"),
-        "{account}"
+        !outlives.contains("may run to its own expiry"),
+        "the sign-in is still said to run to its own expiry: {outlives}"
     );
 
     let lapsed = scratch("cli-running-doctor-chatgpt-lapsed")
@@ -9372,6 +9394,89 @@ fn a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait
             service.asked.try_iter().count(),
             1,
             "{status} {code}: the refusal was sent again"
+        );
+    }
+}
+
+/// CHATGPT-8: a turn on a model the account does not offer is reported by the one-shot run as one
+/// sentence, in text and in `--json`: that OpenAI does not offer that model to the account and that
+/// another can be chosen. The service answers with a 400 whose body names `model_not_found`. The
+/// report says no status, no command to sign in again and no model, and none of the words the
+/// service wrote. The request is sent once and the stored sign-in is as it was, so nothing was
+/// renewed or removed for it.
+///
+/// The regressions it rejects are the report that says only that the service returned HTTP 400, a
+/// sentence that sends the person to sign in again, the service's own words or the model's name in
+/// the report, a second request for the refusal, and a stored sign-in changed by it.
+#[test]
+fn a_model_the_account_does_not_offer_is_reported_by_the_one_shot_run_as_one_sentence() {
+    let sentence = "OpenAI does not offer that model to this ChatGPT account. Choose another model";
+    let refusal = serde_json::json!({
+        "detail": "WORDS-OF-THE-SERVICE about gpt-placeholder",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "model_not_found",
+            "message": "WORDS-OF-THE-SERVICE about gpt-placeholder",
+        },
+    })
+    .to_string();
+    for json in [false, true] {
+        let reply = format!(
+            "HTTP/1.1 400 \r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{refusal}",
+            refusal.len()
+        );
+        let service = a_gateway("[]", move |_| reply.clone());
+        let base = format!("http://127.0.0.1:{}", service.port);
+        let scratch = Scratch::new(&format!("cli-running-chatgpt-model-not-offered-{json}"))
+            .with_state("chatgpt-account.json", &a_chatgpt_sign_in(4_102_444_800));
+        let stored = scratch.path.join(".bravebot/chatgpt-account.json");
+        let before = std::fs::read(&stored).expect("the stored sign-in");
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push((bravebot_skus::chatgpt::STAND_IN, base.as_str()));
+        let mut arguments = vec![
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-placeholder",
+            "--trust-workspace",
+        ];
+        if json {
+            arguments.push("--json");
+        }
+
+        let output = bravebot(&scratch.path, &environment, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(1), "{json}: {stdout}{stderr}");
+        assert!(
+            stderr
+                .lines()
+                .any(|found| found == format!("BB1001: {sentence}")),
+            "{json}: {stderr}"
+        );
+        if json {
+            assert!(stdout.contains(sentence), "{stdout}");
+        }
+        for said in [&stderr, &stdout] {
+            for left_out in [
+                "HTTP 400",
+                "auth login",
+                "WORDS-OF-THE-SERVICE",
+                "gpt-placeholder",
+                "returned HTTP",
+            ] {
+                assert!(!said.contains(left_out), "{json}: {said}");
+            }
+        }
+        assert_eq!(
+            service.asked.try_iter().count(),
+            1,
+            "{json}: the refusal was sent again"
+        );
+        assert_eq!(
+            std::fs::read(&stored).expect("the sign-in is still stored"),
+            before,
+            "{json}: the refusal changed the stored sign-in"
         );
     }
 }

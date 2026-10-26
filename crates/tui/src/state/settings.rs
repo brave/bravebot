@@ -170,7 +170,7 @@ impl Session {
     pub fn choose_model(&mut self, model: impl Into<String>, config: &bravebot_config::Config) {
         let model = model.into();
         if self.persist {
-            bravebot_session::store::save_model(config.name_to_record(&model));
+            bravebot_session::store::record_model(config, &model);
         }
         self.model = Some(model);
     }

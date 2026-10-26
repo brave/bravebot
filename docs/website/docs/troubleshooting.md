@@ -37,7 +37,11 @@ issued it. Import from the Brave channel matching the environment the binary is 
 
 **`no model service is configured yet`**. Nothing is set up to send the request, so the run stops
 instead of starting work that has no service to do it. It lists the ways to configure one, each
-naming what to type or write. `doctor` says the same and fails. See
+naming what to type or write. `doctor` says the same and fails. With a ChatGPT sign-in stored and no
+other service configured, it says so instead of listing the ways, and names the commands that use the
+account: `bravebot -i "<prompt>" --model chatgpt/<model>` and `bravebot "<task>" --model
+chatgpt/<model>`. Started in a terminal outside an incognito session with no `--model`, `bravebot` first
+asks which of the account's models to use, where the account lists them. See
 [Configuration](customize/configuration.md).
 
 ## When a turn fails

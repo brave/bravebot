@@ -1166,15 +1166,18 @@ prompt is in the conversation and is still a place a fork can be cut at.
 
 `account` names which failure of a ChatGPT account it was, and is `null` for a failure that did
 not come from the account. It is one of `not-signed-in`, `ended`, `token-refused`, `unusable`,
-`usage-limit`, `not-permitted`, `renewal-refused`, `renewal-rate-limited`, `renewal-unavailable`,
-`renewal-incomplete` and `renewal-transport`, and the `category` beside it is still the class the
-failure belongs to. `accountMessage` is the bridge's sentence for that failure, and `null` where `account`
-is: one sentence in sentence case that says what happened and what to do. `accountCommand` is the words of it
-that are a command to run, as they stand in the sentence, and `null` where it names none. A client draws
-the sentence as text with the command in a code element, and does not word the failure from the name or
-read the sentence for the command. Neither holds text from a reply. For `usage-limit` and `not-permitted`,
-`status` is the status of the reply that refused, and `null` where the refusal came in an event of the
-stream; a wait the usage limit asked for at a 429 is in `accountMessage`.
+`usage-limit`, `not-permitted`, `model-not-offered`, `renewal-refused`, `renewal-rate-limited`,
+`renewal-unavailable`, `renewal-incomplete` and `renewal-transport`, and the `category` beside it is still
+the class the failure belongs to. `accountMessage` is the bridge's sentence for that failure, and `null`
+where `account` is: one sentence in sentence case that says what happened and what to do. `accountCommand`
+is the words of it that are a command to run, as they stand in the sentence, and `null` where it names none.
+A client draws the sentence as text with the command in a code element, and does not word the failure from
+the name or read the sentence for the command. Neither holds text from a reply. For `usage-limit` and
+`not-permitted`, `status` is the status of the reply that refused, and `null` where the refusal came in an
+event of the stream; a wait the usage limit asked for at a 429 is in `accountMessage`. `model-not-offered`
+is the service refusing the model of the turn because the account does not offer it: `accountMessage` says
+so and that another model can be chosen, `accountCommand` and `status` are `null`, and the sign-in is
+untouched.
 
 `cutOff` is set where a reply stopped at the output ceiling is what failed, and `null`
 otherwise. That is `category: "too-long"`, or `"internal"` where the stop was in a plan's
