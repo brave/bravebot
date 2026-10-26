@@ -3,6 +3,15 @@
 
 use super::*;
 
+/// The model a request names now: the pick where the session has one, and otherwise the configured
+/// default, which a `model` key of the settings file sets.
+///
+/// What the picker marks as current and what the budget and the effort note are read for, so that a
+/// session opened on a configured model is not taken for one on Brave's `automatic`.
+pub(super) fn model_in_force<'a>(session: &'a Session, config: &'a Config) -> &'a str {
+    session.model().unwrap_or(&config.default_model)
+}
+
 /// Ask the endpoint what it offers.
 ///
 /// Shared by the picker and by the budget lookup a session does when it starts, because both want
@@ -470,7 +479,7 @@ pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut
     }) {
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
-    let in_force = session.model().unwrap_or(&config.default_model).to_string();
+    let in_force = model_in_force(session, config).to_string();
     config.adopt_inputs(&in_force, advertised_inputs(&models, session.model()));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
@@ -715,7 +724,8 @@ pub(super) fn choose_model(
             for problem in problems {
                 session.note(problem);
             }
-            let chosen = crate::model_prompt::choose(terminal, models, session.model(), |frame| {
+            let current = Some(model_in_force(session, config));
+            let chosen = crate::model_prompt::choose(terminal, models, current, |frame| {
                 render::draw(frame, session);
             });
             if let Some(chosen) = chosen {
@@ -773,7 +783,7 @@ pub(super) fn open_model_picker(session: &mut Session, config: &Config) {
                 session.note(problem);
             }
             session.open_picking(crate::picking::Picking::Model(
-                crate::model_prompt::Picker::new(models, session.model()),
+                crate::model_prompt::Picker::new(models, Some(model_in_force(session, config))),
             ));
         }
         Err(detail) => session.note(t!(session_models_unavailable, problem = detail)),

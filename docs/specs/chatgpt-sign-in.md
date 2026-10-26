@@ -1300,6 +1300,7 @@ sent would mislead a person about what the session costs.
 `verified-by: bravebot_tui::app::a_level_the_account_refused_stops_being_sent_and_is_said`
 `verified-by: bravebot_tui::status::on_the_account_the_effort_names_the_level_sent_and_the_one_chosen_where_they_differ`
 `verified-by: bravebot_tui::app::the_status_of_a_chatgpt_session_names_the_level_it_sends`
+`verified-by: bravebot_tui::app::a_level_chosen_in_a_session_on_the_settings_model_of_the_account_is_said_to_be_kept`
 `verified-by: bravebot_tui::panel::the_effort_row_of_a_chatgpt_session_is_the_level_it_was_begun_at`
 `verified-by: bravebot_agent::chatgpt_effort_in_french::the_sentences_about_a_level_a_chatgpt_session_keeps_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_agent::chatgpt::the_account_is_one_provider_at_the_serving_host`

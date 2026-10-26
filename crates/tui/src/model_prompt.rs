@@ -153,7 +153,7 @@ impl Picker {
     /// Whether this row is the model already in use.
     ///
     /// Nothing chosen is `automatic` in use, since that is what a request with no choice sends.
-    fn is_current(&self, model: &Model) -> bool {
+    pub(crate) fn is_current(&self, model: &Model) -> bool {
         match &self.current {
             Some(name) => model.key == *name,
             None => model.is_automatic(),

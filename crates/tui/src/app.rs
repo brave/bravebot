@@ -4831,6 +4831,97 @@ mod tests {
         );
     }
 
+    /// The row the picker's cursor opens on and the rows it marks as current, for a session as it stands.
+    fn picker_opened(session: &mut Session, config: &Config) -> (Option<String>, Vec<String>) {
+        open_model_picker(session, config);
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let marked = picker
+            .matching()
+            .into_iter()
+            .filter(|model| picker.is_current(model))
+            .map(|model| model.key.clone())
+            .collect();
+        (picker.chosen().map(|model| model.key.clone()), marked)
+    }
+
+    /// CHATGPT-9, BACKEND-11: the picker marks the model in force, which is the pick where the
+    /// session has one and otherwise the configured default, and that is the model a `model` key of
+    /// the settings file names. The roster has Brave's `automatic` row beside the account's, as the
+    /// roster of anybody has, and a session whose settings name an account model has not picked
+    /// `automatic`. Each case holds the mark and where the cursor opens, which are two things: a
+    /// cursor on a row that is not marked is a picker that opens on one model and says another is in
+    /// use. The regressions it rejects are the pick alone read as the model in force, which marks
+    /// `automatic` for a session on the settings model, a default that outranks a pick, and
+    /// `automatic` left unmarked where nothing is configured and nothing is picked.
+    #[test]
+    fn the_picker_marks_the_model_in_force_which_is_the_default_where_nothing_is_picked() {
+        use models::scripted_account::offer;
+        let mut config = a_config_with_a_named_roster();
+        offer(vec![
+            bravebot_aichat::models::Model::automatic(),
+            listed("chatgpt/gpt-5.5", Some(65_536)),
+        ]);
+        let in_force = |key: &str| (Some(key.to_string()), vec![key.to_string()]);
+
+        // As a `model` key of the settings file leaves it, with nothing picked.
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        let mut session = Session::new("none");
+        assert_eq!(
+            picker_opened(&mut session, &config),
+            in_force("chatgpt/gpt-5.5"),
+            "the settings model was not the one marked"
+        );
+
+        // A pick outranks the configured default.
+        let mut session = Session::new("none");
+        session.name_model("opus-arn".to_string());
+        assert_eq!(
+            picker_opened(&mut session, &config),
+            in_force("opus-arn"),
+            "the default outranked the pick"
+        );
+
+        // Nothing configured and nothing picked is `automatic` in use.
+        config.default_model = bravebot_config::DEFAULT_MODEL.to_string();
+        let mut session = Session::new("none");
+        assert_eq!(
+            picker_opened(&mut session, &config),
+            in_force(bravebot_config::DEFAULT_MODEL),
+            "`automatic` was not marked where it is the default"
+        );
+    }
+
+    /// CHATGPT-10: a session whose model is the account's by the settings file, with nothing picked,
+    /// is told that the account keeps the level the session began with when another is chosen, as one
+    /// that picked the model is. The regression it rejects is the account read from the pick alone,
+    /// which would take the settings model for a model of another service and say nothing.
+    #[test]
+    fn a_level_chosen_in_a_session_on_the_settings_model_of_the_account_is_said_to_be_kept() {
+        use models::scripted_account::offer;
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/gpt-5.5".to_string();
+        offer(the_accounts_listing());
+        let mut session = Session::new("none");
+        adopt_settings(&mut session, &bravebot_config::Settings::default(), None);
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert!(session.model().is_none(), "something was picked");
+
+        set_effort(&mut session, "high");
+
+        let kept = t!(
+            session_effort_kept_for_account,
+            began = t!(effort_unset),
+            chosen = "high"
+        );
+        assert!(
+            notes_of(&session).contains(&kept.as_str()),
+            "{:?}",
+            notes_of(&session)
+        );
+    }
+
     /// BACKEND-39: a start that nothing serves offers the rows the account listed, in the order the
     /// picker lists them, and none where the service listed none, with the listing that gave none so the
     /// start can say why. The compiled names that stand in for a listing in the picker are not offered,
