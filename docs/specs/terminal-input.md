@@ -2230,7 +2230,7 @@ editing arm. In vi's normal mode, `/` translates to the chord configured for his
 down (INPUT-13), and the rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
-search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
+search (INPUT-19), the last row of the info panel's plan ([PANEL-10](info-panel.md#PANEL-10)), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one

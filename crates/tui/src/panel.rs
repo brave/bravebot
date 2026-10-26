@@ -393,12 +393,18 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     // The blank row and the heading come out of the room before the rows do.
     let room = (height - 1).saturating_sub(body.len() + 2);
     if !plan.is_empty() && room > 0 {
-        let cut = cut_for(plan, room);
-        section(
-            &mut body,
-            t!(panel_plan).to_string(),
-            plan_rows(plan, &cut, !session.a_turn_is_running(), text),
-        );
+        let (cut, names_the_key) = choose_rows(plan, room);
+        let mut rows = plan_rows(plan, &cut, !session.a_turn_is_running(), text);
+        if names_the_key {
+            rows.push(row(
+                crate::status::cut(
+                    &t!(panel_todos, chord = session.bindings().todos_name()),
+                    text,
+                ),
+                dim(),
+            ));
+        }
+        section(&mut body, t!(panel_plan).to_string(), rows);
     }
 
     body.truncate(height - 1);
@@ -604,6 +610,35 @@ fn head(session: &Session, text: usize) -> Body {
     (body, links, continued, targets)
 }
 
+/// The fewest rows the plan has for the row that names the key that prints it whole to be drawn.
+/// With fewer, the rows of the plan and the row that counts what it left out take them.
+const LEAST_ROOM_TO_NAME_THE_KEY: usize = 3;
+
+/// The rows of `plan` drawn where `room` rows are the plan's, and whether the last of those rows
+/// names the key that prints the plan whole.
+///
+/// Without the key row the plan has the room, less the row that counts what was left out where it
+/// does not fit. The key row takes one more, and is drawn only where it takes the place of nothing a
+/// person would look for. It is left out where the room has fewer than
+/// [`LEAST_ROOM_TO_NAME_THE_KEY`] rows, where the plan fills the room exactly, and where it would
+/// take the place of a row still to do: the room less the key row holds the whole plan, or holds
+/// every row still to do and the row that counts the rest.
+///
+/// Decided from the statuses alone, by the same choice that draws the rows.
+fn choose_rows(plan: &[bravebot_core::todo::Row], room: usize) -> (Cut, bool) {
+    if room >= LEAST_ROOM_TO_NAME_THE_KEY && plan.len() != room {
+        let beside_the_key = if plan.len() < room {
+            cut_to(plan, plan.len())
+        } else {
+            cut_to(plan, room - 2)
+        };
+        if beside_the_key.to_do == 0 {
+            return (beside_the_key, true);
+        }
+    }
+    (cut_for(plan, room), false)
+}
+
 /// The mark of a row that no turn is working on and that was neither finished nor dropped.
 ///
 /// Hollow where the mark of a row being worked on is filled, so the two differ under `NO_COLOR`
@@ -663,8 +698,8 @@ fn cut_to(plan: &[bravebot_core::todo::Row], capacity: usize) -> Cut {
     cut
 }
 
-/// The rows of `plan` drawn in `room` rows: all of them where they fit, and otherwise as many as the
-/// room holds beside the row that counts the rest.
+/// The rows of `plan` drawn in `room` rows with no row for the key: all of them where they fit, and
+/// otherwise as many as the room holds beside the row that counts the rest.
 fn cut_for(plan: &[bravebot_core::todo::Row], room: usize) -> Cut {
     if plan.len() <= room {
         cut_to(plan, plan.len())
@@ -2439,11 +2474,19 @@ mod tests {
             .iter()
             .position(|row| *row == t!(panel_plan))
             .expect("a plan heading");
-        let part: Vec<Line<'static>> = all[heading + 1..]
+        let mut part: Vec<Line<'static>> = all[heading + 1..]
             .iter()
             .take_while(|line| !line.to_string().trim().is_empty())
             .cloned()
             .collect();
+        // The row that names the key is not one of the plan's.
+        let key = t!(panel_todos, chord = session.bindings().todos_name()).to_string();
+        if part
+            .last()
+            .is_some_and(|line| line.to_string().trim() == key)
+        {
+            part.pop();
+        }
         assert_eq!(
             part.len(),
             rows,
@@ -2593,35 +2636,114 @@ mod tests {
             .find(|row| row.starts_with('+'))
     }
 
-    /// A panel of fourteen rows leaves the plan nine: the context section takes two, the blank and
-    /// the heading two more, and the key that hides the panel one. Eight of the nine are tasks when
-    /// the plan does not fit, since the ninth says what was left out.
-    const HEIGHT_FOR_EIGHT_TASKS: u16 = 14;
+    /// A panel of fifteen rows leaves the plan ten: the context section takes two, the blank and
+    /// the heading two more, and the key that hides the panel one. Eight of the ten are tasks when
+    /// the plan does not fit, since one row names the key that prints the plan whole and one says
+    /// what was left out.
+    const HEIGHT_FOR_EIGHT_TASKS: u16 = 15;
+
+    /// The height of a panel whose plan has `room` rows: the context section takes two, the blank
+    /// and the heading two more, and the key that hides the panel one.
+    fn height_for_room(room: u16) -> u16 {
+        room + 5
+    }
 
     /// A plan whose unfinished rows are at its end must show them. In a plan of eight rows done and
-    /// two pending, a panel with room for fewer than ten rows has to draw both pending rows and say
-    /// how many finished ones it left out.
+    /// two pending, a panel with room for fewer than ten rows draws both pending rows and the row
+    /// that counts the finished ones it left out, at every room from three rows up. One or two
+    /// rows of room cannot hold both pending rows and the count, so the count names the pending
+    /// rows it left out. The key that prints the plan whole is named from four rows up, where it
+    /// takes the place of neither pending row.
     ///
     /// Rejects: a window that starts at the first row, or at the task in progress with the first
-    /// row as the fallback, which draws only finished rows.
+    /// row as the fallback, which draws only finished rows; and a key row that takes the place of
+    /// a pending row at three rows of room.
     #[test]
     fn a_long_plan_shows_the_rows_still_to_do_before_the_finished_ones() {
         let rows = plan_of(&[(Status::Done, 8), (Status::Pending, 2)]);
+        let key = t!(panel_todos, chord = "alt-a").to_string();
+        // The room, the tasks drawn, the row that counts what was left out, and whether the last
+        // row names the key.
+        let from = |first: usize| (first..=10).collect::<Vec<_>>();
+        let table: [(u16, Vec<usize>, Option<&str>, bool); 11] = [
+            (1, vec![], Some("+2 to do, +8 done"), false),
+            (2, vec![9], Some("+1 to do, +8 done"), false),
+            (3, from(9), Some("+8 done"), false),
+            (4, from(9), Some("+8 done"), true),
+            (5, from(8), Some("+7 done"), true),
+            (6, from(7), Some("+6 done"), true),
+            (7, from(6), Some("+5 done"), true),
+            (8, from(5), Some("+4 done"), true),
+            (9, from(4), Some("+3 done"), true),
+            (10, from(1), None, false),
+            (11, from(1), None, true),
+        ];
+        for (room, shown, left_out, names_the_key) in table {
+            let drawn = panel_for(&rows, height_for_room(room));
+            let at = format!("{room} rows of room: {drawn:#?}");
+            assert_eq!(tasks_in(&drawn), shown, "{at}");
+            assert_eq!(left_out_in(&drawn), left_out, "{at}");
+            assert_eq!(drawn.contains(&key), names_the_key, "{at}");
+        }
 
-        // Five rows of room: the two pending rows, two finished rows, and the row that counts.
-        let drawn = panel_for(&rows, 10);
-        assert_eq!(tasks_in(&drawn), [7, 8, 9, 10], "{drawn:#?}");
-        assert_eq!(left_out_in(&drawn), Some("+6 done"), "{drawn:#?}");
-
-        // Three rows of room, which is fewer than the two pending rows and the count are.
-        let drawn = panel_for(&rows, 8);
-        assert_eq!(tasks_in(&drawn), [9, 10], "{drawn:#?}");
-        assert_eq!(left_out_in(&drawn), Some("+8 done"), "{drawn:#?}");
-
-        // Room for the whole plan draws it, and counts nothing.
+        // A panel with the room to spare draws the whole plan and counts nothing.
         let drawn = panel_for(&rows, 30);
         assert_eq!(tasks_in(&drawn), (1..=10).collect::<Vec<_>>(), "{drawn:#?}");
         assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+    }
+
+    /// The key row never takes the place of a row still to do: at every room from three rows up,
+    /// in plans with every number of rows still to do, pending or in progress and in either order,
+    /// the rows still to do drawn are as many as the room holds beside the row that counts the
+    /// rest, whether or not the key is named.
+    ///
+    /// Rejects: a key row drawn wherever the room has three rows, which hides a row still to do that
+    /// the room holds without it, and a choice of whether to draw it that counts only the pending
+    /// rows, which draws it over a task in progress.
+    #[test]
+    fn the_key_row_never_takes_the_place_of_a_row_still_to_do() {
+        use Status::{Active, Done, Pending};
+        // Rows still to do after the finished ones: only pending rows, only rows in progress, and a
+        // mix with the row in progress between pending rows.
+        type Shape = fn(usize) -> Vec<(Status, usize)>;
+        let shapes: [Shape; 3] = [
+            |n| vec![(Pending, n)],
+            |n| vec![(Active, n.min(2)), (Pending, n - n.min(2))],
+            |n| vec![(Pending, n / 2), (Active, 1), (Pending, n - n / 2 - 1)],
+        ];
+        for shape in shapes {
+            for to_do in 1..=12usize {
+                for finished in [0usize, 3, 20] {
+                    let mut runs = vec![(Done, finished)];
+                    runs.extend(shape(to_do));
+                    runs.retain(|(_, count)| *count > 0);
+                    let rows = plan_of(&runs);
+                    let outstanding: Vec<usize> = rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, status))| *status != Done)
+                        .map(|(at, _)| at + 1)
+                        .collect();
+                    assert_eq!(outstanding.len(), to_do, "{runs:?}");
+                    for room in 3..=14u16 {
+                        let drawn = panel_for(&rows, height_for_room(room));
+                        let room = usize::from(room);
+                        let shown = tasks_in(&drawn)
+                            .into_iter()
+                            .filter(|task| outstanding.contains(task))
+                            .count();
+                        // Without the key row the plan has the room less the row that counts what
+                        // it left out, where it does not fit whole.
+                        let held = if rows.len() > room { room - 1 } else { room };
+                        assert_eq!(
+                            shown,
+                            outstanding.len().min(held),
+                            "{runs:?}, {room} rows of room: {drawn:#?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// The rows shown stay in the order of the plan, not the order they were chosen in. The plan
@@ -2648,10 +2770,12 @@ mod tests {
     }
 
     /// Where there are more rows still to do than room, the task in progress is kept and the
-    /// pending rows after it are the ones left out, and the row says they are still to do.
+    /// pending rows after it are the ones left out, and the row says they are still to do. The
+    /// room has no row for the key that prints the plan whole, which would take a row still to do.
     ///
     /// Rejects: taking the first rows that are not finished, which drops a task in progress that
-    /// comes after enough pending rows, and counting what it left out as `done`.
+    /// comes after enough pending rows, counting what it left out as `done`, and a key row that
+    /// takes the place of a row still to do.
     #[test]
     fn the_task_in_progress_is_kept_when_there_are_more_rows_still_to_do_than_room() {
         let rows = plan_of(&[
@@ -2662,19 +2786,24 @@ mod tests {
         ]);
 
         let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 5);
-        // Three rows: the task in progress and the first two pending rows.
-        assert_eq!(tasks_in(&drawn), [4, 5, 9], "{drawn:#?}");
+        // Four rows and the row that counts: the task in progress and the first three pending
+        // rows.
+        assert_eq!(tasks_in(&drawn), [4, 5, 6, 9], "{drawn:#?}");
         assert_eq!(
             left_out_in(&drawn),
             Some(
                 format!(
                     "{}, {}",
-                    t!(panel_hidden_to_do, count = 8),
+                    t!(panel_hidden_to_do, count = 7),
                     t!(panel_hidden_done, count = 3)
                 )
                 .as_str()
             ),
             "{drawn:#?}"
+        );
+        assert!(
+            !drawn.iter().any(|row| row.contains("whole plan")),
+            "the key row took a row still to do: {drawn:#?}"
         );
     }
 
@@ -2732,14 +2861,14 @@ mod tests {
             (Status::Pending, 6),
         ]);
         let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 4);
-        assert_eq!(tasks_in(&drawn), [6, 7, 8, 9], "{drawn:#?}");
+        assert_eq!(tasks_in(&drawn), [6, 7, 8, 9, 10], "{drawn:#?}");
         assert_eq!(
             left_out_in(&drawn),
-            Some(said(3, 3, 2).as_str()),
+            Some(said(2, 3, 2).as_str()),
             "{drawn:#?}"
         );
         assert!(
-            said(3, 3, 2).find("to do") < said(3, 3, 2).find("done"),
+            said(2, 3, 2).find("to do") < said(2, 3, 2).find("done"),
             "the rows still to do are not counted first"
         );
 
@@ -2757,7 +2886,7 @@ mod tests {
         let narrow = texts(&narrow);
         let counted = left_out_in(&narrow).expect("a row that counts");
         assert!(
-            counted.starts_with(&t!(panel_hidden_to_do, count = 3).to_string())
+            counted.starts_with(&t!(panel_hidden_to_do, count = 2).to_string())
                 && crate::wrap::display_width(counted) <= usize::from(NARROWEST_PANEL) - 2,
             "{counted:?}"
         );
@@ -2776,14 +2905,14 @@ mod tests {
         rows[6].1 = Status::Active;
         rows[7].1 = Status::Pending;
 
-        // Five rows of room hold four tasks beside the row that counts: the two rows to do and
-        // two finished ones. The row before them is nearest. Rows 5 and 9 are two places away and
-        // one is left, so the tie shows: the earlier.
-        let drawn = panel_for(&rows, 10);
+        // Six rows of room hold four tasks beside the row that counts and the row that names the
+        // key: the two rows to do and two finished ones. The row before them is nearest. Rows 5 and
+        // 9 are two places away and one is left, so the tie shows: the earlier.
+        let drawn = panel_for(&rows, height_for_room(6));
         assert_eq!(tasks_in(&drawn), [5, 6, 7, 8], "{drawn:#?}");
 
         // One row more takes the later of the two as well.
-        let drawn = panel_for(&rows, 11);
+        let drawn = panel_for(&rows, height_for_room(7));
         assert_eq!(tasks_in(&drawn), [5, 6, 7, 8, 9], "{drawn:#?}");
 
         let finished = plan_of(&[(Status::Done, 20)]);
@@ -2830,11 +2959,31 @@ mod tests {
         assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
         // A plan that fills the room to the last row is drawn whole, with no row to count.
         let nine = plan_of(&[(Status::Done, 7), (Status::Active, 1), (Status::Pending, 1)]);
-        let drawn = panel_for(&nine, HEIGHT_FOR_EIGHT_TASKS);
+        let drawn = panel_for(&nine, HEIGHT_FOR_EIGHT_TASKS - 1);
         assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
         assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
 
-        // Fifty rows, nine of them to do after the task in progress, on a panel that holds eight.
+        // Fifty rows with five still to do, on a panel that holds eight tasks beside the key row:
+        // the five and the three finished rows before them, and the key row after the count.
+        let few_to_do = plan_of(&[
+            (Status::Done, 45),
+            (Status::Active, 1),
+            (Status::Pending, 4),
+        ]);
+        let drawn = panel_for(&few_to_do, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            tasks_in(&drawn),
+            (43..=50).collect::<Vec<_>>(),
+            "{drawn:#?}"
+        );
+        assert_eq!(left_out_in(&drawn), Some("+42 done"), "{drawn:#?}");
+        assert_eq!(
+            drawn[drawn.len() - 2],
+            t!(panel_todos, chord = session.bindings().todos_name()),
+            "{drawn:#?}"
+        );
+
+        // Fifty rows with ten still to do, which leave the panel no row for the key.
         let fifty = plan_of(&[
             (Status::Done, 40),
             (Status::Active, 1),
@@ -2843,7 +2992,7 @@ mod tests {
         let drawn = panel_for(&fifty, HEIGHT_FOR_EIGHT_TASKS);
         assert_eq!(
             tasks_in(&drawn),
-            [41, 42, 43, 44, 45, 46, 47, 48],
+            (41..=49).collect::<Vec<_>>(),
             "{drawn:#?}"
         );
         assert_eq!(
@@ -2851,7 +3000,7 @@ mod tests {
             Some(
                 format!(
                     "{}, {}",
-                    t!(panel_hidden_to_do, count = 2),
+                    t!(panel_hidden_to_do, count = 1),
                     t!(panel_hidden_done, count = 40)
                 )
                 .as_str()
@@ -3422,6 +3571,154 @@ mod tests {
         assert!(first.is_some(), "the first plan is gone: {drawn}");
         assert!(second.is_some(), "the second plan was not printed: {drawn}");
         assert!(first < second, "{drawn}");
+    }
+
+    /// The plan's last row names the key that prints it whole, the chord in force, as the panel's
+    /// last row names the key that hides it. It is drawn where the plan has three rows of room or
+    /// more, does not fill them exactly and has every row still to do drawn beside it, and below
+    /// the row that says what was left out where rows were.
+    ///
+    /// Rejects: no row at all, the default named after the key was moved, a row that takes the
+    /// place of a task a plan that fits had, a row that crowds out the row that counts what was
+    /// left out or the plan's own rows where there are only one or two to give, and one that is
+    /// left out at three rows, where a task, the count and the key all fit.
+    #[test]
+    fn the_last_row_of_the_plan_names_the_key_that_prints_it_whole() {
+        let key = |session: &Session| {
+            t!(panel_todos, chord = session.bindings().todos_name()).to_string()
+        };
+        let heading = t!(panel_plan).to_string();
+        let under_the_heading = |drawn: &[String]| -> Vec<String> {
+            let at = drawn
+                .iter()
+                .position(|row| *row == heading)
+                .expect("a heading");
+            drawn[at + 1..]
+                .iter()
+                .take_while(|row| !row.is_empty() && !row.contains("hide panel"))
+                .cloned()
+                .collect()
+        };
+
+        // A plan with room to spare ends in the key.
+        let session = working_on(plan(&[("one", Status::Active), ("two", Status::Pending)]));
+        let drawn = texts(&lines(&session, WIDTH, 20));
+        let part = under_the_heading(&drawn);
+        assert_eq!(part.len(), 3, "{drawn:#?}");
+        assert_eq!(part.last(), Some(&key(&session)), "{drawn:#?}");
+        assert_eq!(key(&session), "alt-a whole plan");
+
+        // A plan cut to the room ends in the key, below the row that says what was left out.
+        let rows = plan_of(&[(Status::Done, 20), (Status::Active, 1)]);
+        let session = working_on(plan(
+            &rows
+                .iter()
+                .map(|(text, status)| (text.as_str(), *status))
+                .collect::<Vec<_>>(),
+        ));
+        let drawn = texts(&lines(&session, WIDTH, HEIGHT_FOR_EIGHT_TASKS));
+        let part = under_the_heading(&drawn);
+        assert_eq!(part.len(), 10, "{drawn:#?}");
+        assert_eq!(part.last(), Some(&key(&session)), "{drawn:#?}");
+        assert!(part[8].starts_with('+'), "{drawn:#?}");
+
+        // Three rows of room are the least that name the key: the one task still to do, the row
+        // that counts the eight finished tasks it leaves out, and the key.
+        let rows = plan_of(&[(Status::Done, 8), (Status::Pending, 1)]);
+        let session = working_on(plan(
+            &rows
+                .iter()
+                .map(|(text, status)| (text.as_str(), *status))
+                .collect::<Vec<_>>(),
+        ));
+        let drawn = texts(&lines(&session, WIDTH, height_for_room(3)));
+        let part = under_the_heading(&drawn);
+        assert_eq!(tasks_in(&drawn), [9], "{drawn:#?}");
+        assert_eq!(part.len(), 3, "{drawn:#?}");
+        assert_eq!(part[1], "+8 done", "{drawn:#?}");
+        assert_eq!(part[2], key(&session), "{drawn:#?}");
+
+        // A plan that fills the room exactly keeps every task and names no key, and one with no
+        // room for three rows names no key and keeps what it counts.
+        let nine = plan_of(&[(Status::Done, 8), (Status::Active, 1)]);
+        let drawn = panel_for(&nine, HEIGHT_FOR_EIGHT_TASKS - 1);
+        assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
+        assert!(
+            !drawn.contains(&key(&working_on(Vec::new()))),
+            "the key took a task's row: {drawn:#?}"
+        );
+        for height in [6, 7] {
+            let drawn = panel_for(&nine, height);
+            assert!(
+                !drawn.contains(&key(&working_on(Vec::new()))),
+                "a plan with one or two rows to give named the key: {drawn:#?}"
+            );
+            assert!(left_out_in(&drawn).is_some(), "{drawn:#?}");
+        }
+
+        // A plan with every task finished, which the key row could take a task from without
+        // taking a row still to do, names no key either where there is room for a task and the
+        // count and no more.
+        let finished = plan_of(&[(Status::Done, 12)]);
+        for (height, tasks) in [(6, 0), (7, 1)] {
+            let drawn = panel_for(&finished, height);
+            assert_eq!(tasks_in(&drawn).len(), tasks, "{drawn:#?}");
+            assert!(
+                !drawn.contains(&key(&working_on(Vec::new()))),
+                "a plan with {tasks} rows of room named the key: {drawn:#?}"
+            );
+        }
+
+        // The chord in force is the one named.
+        let mut session = working_on(plan(&[("one", Status::Active)]));
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("todos".to_string(), "alt-y".to_string());
+        session.adopt_keybindings(&moved);
+        let drawn = texts(&lines(&session, WIDTH, 20));
+        assert!(
+            drawn.contains(&"alt-y whole plan".to_string()),
+            "{drawn:#?}"
+        );
+        assert!(
+            !drawn.iter().any(|row| row.contains("alt-a")),
+            "the default is named after the key was moved: {drawn:#?}"
+        );
+    }
+
+    /// The row that names the key is cut to the width of the panel with an ellipsis, as the row
+    /// that counts is, so a chord longer than the panel is wide does not run past its edge.
+    ///
+    /// Rejects: a key row drawn at its whole length, which a panel 24 columns wide clips in the
+    /// middle of a word.
+    #[test]
+    fn the_row_naming_the_key_is_cut_to_the_width_of_a_narrow_panel() {
+        let mut session = working_on(plan(&[("one", Status::Active), ("two", Status::Pending)]));
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("todos".to_string(), "ctrl-alt-pgdn".to_string());
+        session.adopt_keybindings(&moved);
+        let whole = t!(panel_todos, chord = "ctrl-alt-pgdn").to_string();
+        assert_eq!(session.bindings().todos_name(), "ctrl-alt-pgdn");
+
+        let narrowest = lines(&session, NARROWEST_PANEL, 20);
+        let drawn = narrowest
+            .iter()
+            .find(|line| line.to_string().contains("ctrl-alt-pgdn"))
+            .expect("a row naming the key");
+        let room = usize::from(NARROWEST_PANEL) - usize::from(INSET);
+        assert!(
+            drawn.width() <= room + 1 && drawn.to_string().trim().ends_with('…'),
+            "the row is not cut to the panel: {:?}",
+            drawn.to_string()
+        );
+        assert!(
+            whole.starts_with(drawn.to_string().trim().trim_end_matches('…')),
+            "the cut row is not the start of the whole one: {:?}",
+            drawn.to_string()
+        );
+
+        // A panel wide enough for the whole row draws it whole.
+        let wide = texts(&lines(&session, WIDTH, 20));
+        assert!(wide.contains(&whole), "{wide:#?}");
     }
 
     /// The key prints the same whole plan the command does, with every task, its status and none

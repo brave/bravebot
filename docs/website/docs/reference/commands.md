@@ -794,7 +794,8 @@ a running turn holds, so typed while a turn runs it is carried out at once. A pr
 named `todos` is shadowed by the command.
 
 Alt-A does the same and is one of the [chords you can move](../customize/configuration.md#keybindings), the `todos`
-action. It works at the box, and while a turn runs.
+action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
+the chord in force, where the plan has room for it.
 
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 

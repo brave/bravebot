@@ -3635,6 +3635,8 @@ panel-hidden-cancelled = { $count ->
     [one] +{ $count } annulée
    *[other] +{ $count } annulées
     }
+# Le plan du panneau d'informations nomme la touche qui l'affiche en entier, comme sa dernière ligne nomme celle qui masque le panneau.
+panel-todos = { $chord } plan complet
 # Ce que la liste `?` dit de la touche qui affiche le plan en entier, après la touche.
 shortcut-todos = afficher le plan en entier
 # Ce que /todos met dans la transcription au-dessus du plan qu'il affiche, et ce qu'il dit quand il n'y en a pas.

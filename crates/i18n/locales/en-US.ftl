@@ -2899,6 +2899,8 @@ panel-hidden-cancelled = { $count ->
     [one] +{ $count } cancelled
    *[other] +{ $count } cancelled
     }
+# The info panel's plan names the key that prints it whole, as its last row names the key that hides the panel.
+panel-todos = { $chord } whole plan
 # What the `?` list says the key that prints the whole plan does, after the key.
 shortcut-todos = print the whole plan
 # What /todos puts in the transcript above the plan it prints, and what it says where there is none.

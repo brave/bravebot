@@ -16,7 +16,7 @@
  - Changed the keys that move between the edits of `/diff` from `[` and `]` to Left and Right, and `h` and `l`. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Changed where `/diff` names its keys: the last row of the panel names them, and the hint line names them only where the panel is not drawn. ([#3259](https://github.com/brave/bravebot/issues/3259))
  - Changed `/files` to `/diff`. `/files` is no longer a command, so a line that is only `/files` is sent as a prompt, and the Files section of the info panel no longer ends in a row that names it. ([#3259](https://github.com/brave/bravebot/issues/3259))
- - Changed the info panel's plan, when it has more rows than room, to show the task in progress and the pending tasks first, with the finished tasks nearest them, instead of the first rows of the plan. It counts what it leaves out as `+3 to do, +40 done, +2 cancelled` instead of `+3 more`. ([#3319](https://github.com/brave/bravebot/issues/3319))
+ - Changed the info panel's plan, when it has more rows than room, to show the task in progress and the pending tasks first, with the finished tasks nearest them, instead of the first rows of the plan. It counts what it leaves out as `+3 to do, +40 done, +2 cancelled` instead of `+3 more`, and names the key that prints the whole plan on its last row where there is room. ([#3319](https://github.com/brave/bravebot/issues/3319))
 
 ## [0.18.0](https://github.com/brave/bravebot/releases/tag/v0.18.0)
 
