@@ -282,7 +282,6 @@ fn only_a_single_click_of_the_left_button_on_a_hint_acts() {
     for case in cases() {
         let width = (case.build)().1.chars().count() as u16;
 
-        // Beside the hint.
         for beside in [-1i16, width as i16] {
             let (mut session, (row, column)) = located(case.build);
             let action = click(&mut session, row, (column as i16 + beside) as u16);
@@ -321,7 +320,6 @@ fn only_a_single_click_of_the_left_button_on_a_hint_acts() {
             case.name
         );
 
-        // The other buttons.
         for button in [MouseButton::Right, MouseButton::Middle] {
             let (mut session, (row, column)) = located(case.build);
             handle_mouse(

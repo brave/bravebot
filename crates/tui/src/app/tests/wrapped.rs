@@ -13,7 +13,6 @@ fn replying(text: &str, width: u16) -> (Session, ratatui::buffer::Buffer) {
     (session, buffer)
 }
 
-/// What a click with ctrl held on the cell `(row, column)` opens.
 fn opened_by(session: &mut Session, (row, column): (u16, u16)) -> Action {
     let mut down = drag(MouseEventKind::Down(MouseButton::Left), row, column);
     down.modifiers = KeyModifiers::CONTROL;

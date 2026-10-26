@@ -4,7 +4,6 @@ use super::popups::targets;
 use super::*;
 use crate::state::Hit;
 
-/// The pointer moved to `cell` with no button held.
 fn moved(row: u16, column: u16) -> MouseEvent {
     drag(MouseEventKind::Moved, row, column)
 }

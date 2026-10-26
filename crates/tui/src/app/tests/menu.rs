@@ -624,7 +624,6 @@ fn a_press_outside_the_menu_closes_it_and_nothing_else_does() {
 #[test]
 fn the_menu_does_not_open_where_it_must_not_and_is_dropped_on_a_resize() {
     use ratatui::crossterm::event::Event as TermEvent;
-    // The setting.
     let off = bravebot_config::Settings::parse(r#"{"tui": {"contextMenu": false}}"#);
     let on = bravebot_config::Settings::parse(r#"{"tui": {"contextMenu": true}}"#);
     let (mut session, cell) = over_a_reply();
@@ -677,7 +676,6 @@ fn the_menu_does_not_open_where_it_must_not_and_is_dropped_on_a_resize() {
     assert_eq!(right_press(&mut session, cell), Action::None);
     assert!(!session.menu_open());
 
-    // A resize drops it.
     let (mut session, cell) = over_a_reply();
     right_press(&mut session, cell);
     assert!(session.menu_open());

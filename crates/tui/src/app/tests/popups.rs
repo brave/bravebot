@@ -47,7 +47,6 @@ impl Target {
     }
 }
 
-/// A mouse event at `cell` with `modifiers` held.
 fn mouse_at(kind: MouseEventKind, cell: (u16, u16), modifiers: KeyModifiers) -> MouseEvent {
     let mut event = drag(kind, cell.0, cell.1);
     event.modifiers = modifiers;

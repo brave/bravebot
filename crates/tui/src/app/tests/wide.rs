@@ -51,7 +51,6 @@ fn on_a_wide_screen_of(turns: usize, last_reply: &str) -> (Session, Terminal<Tes
     (session, terminal)
 }
 
-/// The cell where `needle` starts on the screen.
 fn find(buffer: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
     for row in 0..buffer.area.height {
         let text: String = (0..buffer.area.width)
