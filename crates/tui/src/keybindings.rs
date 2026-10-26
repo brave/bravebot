@@ -195,6 +195,8 @@ pub struct Keybindings {
     pub outputs: KeyChord,
     pub paste: KeyChord,
     pub panel: KeyChord,
+    /// Prints the whole plan, as `/todos` does (CMD-28).
+    pub todos: KeyChord,
     pub scope: KeyChord,
     pub undo: KeyChord,
     /// Absent where the session cannot be suspended, which is Windows (INPUT-47).
@@ -218,6 +220,8 @@ impl Default for Keybindings {
             outputs: KeyChord::alt('l'),
             paste: KeyChord::ctrl('v'),
             panel: KeyChord::ctrl('x'),
+            // Alt for the reason `outputs` is: every Ctrl letter is taken.
+            todos: KeyChord::alt('a'),
             scope: KeyChord::ctrl('n'),
             undo: Keybindings::UNDO,
             #[cfg(unix)]
@@ -227,10 +231,10 @@ impl Default for Keybindings {
     }
 }
 
-/// How many actions a settings file can move. Fourteen where the session can be suspended, and
-/// thirteen where it cannot, since an action that does nothing has no chord to be moved off of
+/// How many actions a settings file can move. Fifteen where the session can be suspended, and
+/// fourteen where it cannot, since an action that does nothing has no chord to be moved off of
 /// (INPUT-47).
-const MOVABLE: usize = if cfg!(unix) { 14 } else { 13 };
+const MOVABLE: usize = if cfg!(unix) { 15 } else { 14 };
 
 /// The spellings a terminal reports for the byte Ctrl-_ sends, which is 0x1f.
 ///
@@ -275,6 +279,7 @@ impl Keybindings {
             ("stash", &mut self.stash),
             #[cfg(unix)]
             ("suspend", &mut self.suspend),
+            ("todos", &mut self.todos),
             ("trail", &mut self.trail),
             ("undo", &mut self.undo),
             ("watch", &mut self.watch),
@@ -371,6 +376,11 @@ impl Keybindings {
         self.scope.matches(key)
     }
 
+    /// Whether this press asks for the whole plan to be printed (CMD-28).
+    pub fn is_todos(&self, key: &KeyEvent) -> bool {
+        self.todos.matches(key)
+    }
+
     /// Whether this press asks for the session to be suspended to the shell (INPUT-47).
     #[cfg(unix)]
     pub fn is_suspend(&self, key: &KeyEvent) -> bool {
@@ -398,6 +408,7 @@ impl Keybindings {
             self.stash,
             #[cfg(unix)]
             self.suspend,
+            self.todos,
             self.trail,
             self.watch,
         ]
@@ -468,6 +479,10 @@ impl Keybindings {
         self.scope.display()
     }
 
+    pub fn todos_name(&self) -> String {
+        self.todos.display()
+    }
+
     pub fn undo_name(&self) -> String {
         self.undo.display()
     }
@@ -494,6 +509,7 @@ impl Keybindings {
             || self.is_paste(key)
             || self.is_panel(key)
             || self.is_scope(key)
+            || self.is_todos(key)
             || self.is_undo(key)
             || self.is_enhance(key);
         #[cfg(unix)]
@@ -700,6 +716,45 @@ mod tests {
         assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
         let mut map = BTreeMap::new();
         map.insert("outputs".to_string(), "ctrl-l".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+    }
+
+    /// Printing the whole plan is an action of its own on Alt-A, because every Ctrl letter is
+    /// taken. It moves like the others and gives up the chord it left.
+    ///
+    /// Rejects: a default other than Alt-A, and a moved action whose old chord still answers for
+    /// it.
+    #[test]
+    fn the_todos_chord_is_alt_a_and_can_be_moved() {
+        let defaults = Keybindings::default();
+        assert_eq!(defaults.todos, KeyChord::alt('a'));
+        assert_eq!(defaults.todos_name(), "alt-a");
+        let pressed = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
+        assert!(defaults.is_todos(&pressed) && defaults.claims(&pressed));
+
+        let mut map = BTreeMap::new();
+        map.insert("todos".to_string(), "alt-y".to_string());
+        let bindings = Keybindings::from_map(&map);
+        assert_eq!(bindings.todos_name(), "alt-y");
+        let moved = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::ALT);
+        assert!(bindings.is_todos(&moved) && bindings.claims(&moved));
+        assert!(!bindings.is_todos(&pressed) && !bindings.claims(&pressed));
+    }
+
+    /// Another action asking for Alt-A loses to the action that prints the whole plan, as it loses
+    /// asking for any other action's chord, and the plan's action asking for another action's chord
+    /// loses to that one: both fall back to the defaults.
+    ///
+    /// Rejects: another action that takes Alt-A from the plan's action, which an existing
+    /// `keybindings` entry on `alt-a` would do without being told, and the plan's action that takes
+    /// a chord from the action that has it.
+    #[test]
+    fn another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another() {
+        let mut map = BTreeMap::new();
+        map.insert("editor".to_string(), "alt-a".to_string());
+        assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
+        let mut map = BTreeMap::new();
+        map.insert("todos".to_string(), "alt-l".to_string());
         assert_eq!(Keybindings::default(), Keybindings::from_map(&map));
     }
 

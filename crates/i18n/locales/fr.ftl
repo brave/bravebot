@@ -2557,6 +2557,7 @@ command-watch = Lister les fichiers que cette session surveille, et en arrêter 
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
 command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
+command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
 command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
@@ -3623,9 +3624,31 @@ panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
-panel-more = +{ $count } de plus
-panel-earlier = +{ $count } avant
-panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
+# Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
+# de lignes de chaque sorte il a laissées de côté.
+panel-hidden-to-do = +{ $count } à faire
+panel-hidden-done = { $count ->
+    [one] +{ $count } terminée
+   *[other] +{ $count } terminées
+    }
+panel-hidden-cancelled = { $count ->
+    [one] +{ $count } annulée
+   *[other] +{ $count } annulées
+    }
+# Le plan du panneau d'informations nomme la touche qui l'affiche en entier, comme sa dernière ligne nomme celle qui masque le panneau.
+panel-todos = { $chord } plan complet
+# Ce que la liste `?` dit de la touche qui affiche le plan en entier, après la touche.
+shortcut-todos = afficher le plan en entier
+# Ce que /todos met dans la transcription au-dessus du plan qu'il affiche, et ce qu'il dit quand il n'y en a pas.
+todos-heading = plan : { $done } sur { $total } terminées
+# La même, quand certaines de ses tâches ont été annulées, ce qu'elle compte à part de celles qui sont terminées.
+todos-heading-cancelled = plan : { $done } sur { $total } terminées, annulées : { $cancelled }
+todos-none = cette session n'a pas encore de plan
+# L'état que porte chaque tâche d'un plan affiché, à côté de sa marque.
+todos-status-pending = à faire
+todos-status-active = en cours
+todos-status-done = terminée
+todos-status-cancelled = annulée
 
 # L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/diff`).
 # Son titre, au-dessus de la liste : combien de fichiers les appels d'écriture de la session ont modifiés.

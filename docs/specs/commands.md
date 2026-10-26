@@ -47,7 +47,8 @@ belong to, so what it copies is CMD-11, and neither has `/caffeinate`, so what i
 when it is refused are CMD-13. `/review` is the same kind of turn, and what it is given and what
 it may not do are CMD-18. `/help` is the same kind of turn, given a question and
 the name of the skill that carries the documentation, which is CMD-24, and `/changelog` shows text
-this program carries and starts no turn, which is CMD-25. `/request` shows the request a turn built, which is
+this program carries and starts no turn, which is CMD-25. `/todos` prints the plan the session holds
+and starts no turn, which is CMD-28. `/request` shows the request a turn built, which is
 [TRACE-9](trace.md#TRACE-9)'s, and `/context` divides what it measured, which is CMD-19.
 
 **Skills are offered here, and are never commands.** A slash word is offered the skills a turn
@@ -341,7 +342,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -1406,6 +1407,39 @@ sources already trusted for skills, and not a way to name a file.
 `verified-by: bravebot_tui::app::enter_on_mode_typed_in_full_runs_mode_and_not_model`
 `verified-by: bravebot_tui::command_table::every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`
 `verified-by: bravebot_tui::render::a_slash_offers_every_command_and_what_it_does`
+
+<a id="CMD-28"></a>
+### CMD-28: `/todos` prints the whole plan, and starts no turn
+
+`/todos` puts the session's plan in the transcript, every task with its status, as
+[VIEW-37](terminal-transcript.md#VIEW-37) draws it. The plan is the one the info panel draws
+([PANEL-10](info-panel.md#PANEL-10)): the last list the planner reported, and while a turn runs the
+list that turn has reported so far. A task that is neither completed nor cancelled is drawn with
+the mark and ink the panel gives it when the command is typed: filled while a turn is running, and
+hollow and dim while none is, when the whole row matches the panel's. A session with no plan says
+so in a note and prints no heading. Nothing is read, fetched or sent, no turn starts, and the printed plan is not kept with
+the session as the plan of any turn.
+
+The command takes no argument, so `/todos` followed by words is a prompt (CMD-2). It touches nothing
+a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt file or
+skill named `todos` is shadowed by the command (CMD-17).
+
+The `todos` key ([INPUT-32](terminal-input.md#INPUT-32)) does what the command does: the same plan, said
+in the same way, at the box, and while a turn runs.
+
+**Why.** The panel draws the rows it has room for, each cut to its width, and the plan the planner
+is working to is what a person most often wants to read whole. The session already holds it, so no
+model is needed to read it out.
+
+`verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::app::the_todos_command_says_so_when_there_is_no_plan`
+`verified-by: bravebot_tui::app::a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt`
+`verified-by: bravebot_tui::app::the_todos_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
+`verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
+`verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
+`verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`
 
 ## Known costs
 

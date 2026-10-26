@@ -659,6 +659,34 @@ mod tests {
         }
     }
 
+    /// INPUT-32: the picker narrows its list with every character that carries no Ctrl, so a chord
+    /// no action asked for here is read as the letter it carries. The key that prints the whole
+    /// plan, Alt-A, narrows the list to the rows with an `a` in them and prints nothing.
+    ///
+    /// Rejects: a picker that turns an Alt chord away, which leaves a person typing a name with Alt
+    /// held with a list that did not narrow.
+    #[test]
+    fn an_alt_chord_narrows_the_list_as_the_letter_it_carries() {
+        let mut picker = Picker::new(from_two_services(), None);
+        let keys = |picker: &Picker| -> Vec<String> {
+            picker
+                .matching()
+                .iter()
+                .map(|model| model.key.clone())
+                .collect()
+        };
+        assert!(keys(&picker).iter().any(|key| key.contains("kimi")));
+
+        let outcome = handle_key(&mut picker, KeyCode::Char('a'), KeyModifiers::ALT);
+
+        assert_eq!(outcome, Outcome::Continue);
+        let narrowed = keys(&picker);
+        assert!(
+            !narrowed.is_empty() && !narrowed.iter().any(|key| key.contains("kimi")),
+            "Alt-A did not narrow the list to the rows holding an a: {narrowed:?}"
+        );
+    }
+
     /// The row a user is looking for is the one already in use, so the cursor starts there rather
     /// than at the top of a list they then have to search.
     #[test]

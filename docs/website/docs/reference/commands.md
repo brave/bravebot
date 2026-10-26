@@ -49,6 +49,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
+| `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -772,6 +773,30 @@ least 100 columns wide, and says so on a narrower one. With no file written it s
 nothing. It shows what the session's own write calls changed. A change another program made is not
 in it. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
 
+## `/todos`
+
+Prints the session's plan in the transcript: every task, in the plan's order, with its status in
+words beside its mark (`pending`, `in progress`, `completed` or `cancelled`) and its text wrapped
+to the width and never cut. A heading above it says how many tasks are done, and how many are
+cancelled where any are. The info panel draws only the rows it has room for, each cut to its width,
+and this is the whole plan. A session with no plan says so.
+
+The plan is the one the panel draws, and while a turn runs it is the list that turn has reported so
+far. A task that is neither completed nor cancelled is drawn with the mark and ink the panel gives it
+when you type the command: filled while a turn is running, and hollow and dim while none is, when the
+whole row matches the panel's. What is printed is the
+plan as it stood then, so a later report from the planner, or the end of the turn, does not change
+it. It is no part of the conversation: no turn starts, nothing is sent, and it is not saved with the
+session or put in an export. The text of a task is the planner's, so a control character in it is
+drawn as a visible character, and every row of it has a margin of the interface's own that the text
+cannot draw. The word takes no argument: `/todos` followed by words is a prompt. It touches nothing
+a running turn holds, so typed while a turn runs it is carried out at once. A prompt file or skill
+named `todos` is shadowed by the command.
+
+Alt-A does the same and is one of the [chords you can move](../customize/configuration.md#keybindings), the `todos`
+action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
+the chord in force, where the plan has room for it.
+
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 
 Bare or as `list`, it names each [MCP server](../customize/mcp-servers.md) the session runs and how its
@@ -1428,7 +1453,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/panel`, `/diff`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

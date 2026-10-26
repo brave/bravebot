@@ -788,6 +788,7 @@ prevent, and a mode read off `/status` after the write is a mode read too late.
 `verified-by: bravebot_tui::render::a_note_at_the_right_takes_its_room_from_the_parts_rather_than_over_them`
 `verified-by: bravebot_tui::shell_mode::the_shortcuts_offer_shell_mode`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_suspend_chord`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_todos_chord`
 
 <a id="INPUT-14"></a>
 ### INPUT-14: Ctrl-G edits the line in the user's own editor, and only what was saved comes back
@@ -2148,13 +2149,13 @@ one carries to the other.
 `verified-by: bravebot_tui::history::narrowing_picks_the_nearest_earlier_prompt_not_the_oldest`
 
 <a id="INPUT-32"></a>
-### INPUT-32: a settings file can move fourteen chords, and nothing else
+### INPUT-32: a settings file can move fifteen chords, and nothing else
 
 A `keybindings` block in `settings.json` names an action and the chord it is to answer, spelled
 `ctrl-x`, `alt-o` or `ctrl+x`. It layers per action the way `env` does: a project file moving one
 action's key says nothing about the others. There is no second file and no other spelling of the
-block, so one place answers what a key does. Fourteen actions can be moved on a platform that can
-suspend the session, thirteen on one that cannot (INPUT-47), and nothing else can be moved:
+block, so one place answers what a key does. Fifteen actions can be moved on a platform that can
+suspend the session, fourteen on one that cannot (INPUT-47), and nothing else can be moved:
 
 - `background` (default: `ctrl-b`): move the command the turn is waiting on to the background
   ([RUN-25](tools/run.md#RUN-25)).
@@ -2169,6 +2170,12 @@ suspend the session, thirteen on one that cannot (INPUT-47), and nothing else ca
 - `trail` (default: `ctrl-t`): toggle turn execution trail visibility.
 - `paste` (default: `ctrl-v`): paste from clipboard.
 - `panel` (default: `ctrl-x`): show or hide the info panel ([PANEL-5](info-panel.md#PANEL-5)).
+- `todos` (default: `alt-a`): print the whole plan, as `/todos` does ([CMD-28](commands.md#CMD-28)). It
+  works at the box, and while a turn runs. In the files state ([FILES-4](files-mode.md#FILES-4)), the
+  watch view, the transcript scroller outside a search and the pickers that take no letters it does
+  nothing. Where the prompt search, a search typed in the transcript scroller or the model picker
+  takes letters, it is read as the letter it carries, as is any chord a mode did not ask the
+  bindings about. Alt and not Ctrl because every Ctrl letter is taken.
 - `scope` (default: `ctrl-n`): switch the prompt history Up walks between every stored prompt and
   this session's prompts (INPUT-40).
 - `undo` (default: `ctrl-_`): put back the last edit to the line (INPUT-44).
@@ -2223,7 +2230,7 @@ editing arm. In vi's normal mode, `/` translates to the chord configured for his
 down (INPUT-13), and the rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back
 (INPUT-17), the border while an older prompt is being walked back to (INPUT-31), the keys under the
-search (INPUT-19), the hint saying there is something to watch, the note left where a picture on the
+search (INPUT-19), the last row of the info panel's plan ([PANEL-10](info-panel.md#PANEL-10)), the hint saying there is something to watch, the note left where a picture on the
 clipboard needs a key of its own, and the scroller's way out
 ([SCROLL-7](scroller.md#SCROLL-7)). A translated line names the chord by taking it as an argument, so
 no catalog has to be revisited when a default moves. Where a clause of this spec or another names one
@@ -2253,12 +2260,19 @@ is worse than either, because the words around it are the reason somebody believ
 `verified-by: bravebot_tui::keybindings::a_chord_contested_with_suspend_is_given_up_by_the_request`
 `verified-by: bravebot_tui::keybindings::the_enhance_chord_is_ctrl_p_and_can_be_moved`
 `verified-by: bravebot_tui::keybindings::the_outputs_chord_is_alt_l_and_can_be_moved_but_not_onto_another_actions_chord`
+`verified-by: bravebot_tui::keybindings::the_todos_chord_is_alt_a_and_can_be_moved`
+`verified-by: bravebot_tui::keybindings::another_action_cannot_take_the_todos_chord_and_the_todos_action_cannot_take_another`
+`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::app::the_todos_key_prints_nothing_in_the_files_state`
+`verified-by: bravebot_tui::app::a_mode_that_types_letters_reads_the_todos_key_as_the_letter`
+`verified-by: bravebot_tui::model_prompt::an_alt_chord_narrows_the_list_as_the_letter_it_carries`
 `verified-by: bravebot_config::settings::a_keybindings_block_is_read_from_settings`
 `verified-by: bravebot_config::settings::a_keybindings_entry_that_is_not_a_chord_is_dropped`
 `verified-by: bravebot_config::settings::a_project_layer_overrides_keybindings_per_name`
 `verified-by: bravebot_config::settings::a_local_layer_overrides_project_and_global_keybindings`
 `verified-by: bravebot_tui::render::the_shortcut_list_reflects_custom_keybindings`
 `verified-by: bravebot_tui::render::the_shortcut_list_names_the_scope_chord`
+`verified-by: bravebot_tui::render::the_shortcut_list_names_the_todos_chord`
 `verified-by: bravebot_tui::render::the_stashed_line_names_the_custom_stash_chord`
 `verified-by: bravebot_tui::render::the_help_names_the_chord_the_scroller_was_opened_with`
 `verified-by: bravebot_tui::render::the_help_names_every_key_that_closes_the_scroller`

@@ -288,6 +288,18 @@ pub struct Entry {
     /// Held on the entry rather than in one place so the scrollback shows what each turn did.
     /// A live list belongs to the turn in flight and goes here when that turn ends.
     pub todos: Vec<bravebot_core::todo::Row>,
+    /// The whole plan as it stood when the person asked for it to be printed (VIEW-37), for the
+    /// [`Speaker::System`] entry `/todos` leaves.
+    ///
+    /// Held apart from `todos`, which is the plan a turn worked to and is written down with the
+    /// session: a printed plan is an entry of the screen and no turn's plan, so it takes no place
+    /// in what the record keeps by turn.
+    pub whole_plan: Vec<bravebot_core::todo::Row>,
+    /// Whether no turn was running when the plan was printed, so that a row still to do is drawn
+    /// as the panel draws it then: hollow and dim, not as work being done (PANEL-10).
+    ///
+    /// Taken at the press and kept, so the printed plan does not change when a turn ends.
+    pub whole_plan_left_open: bool,
     /// The call this entry describes, for a [`Speaker::Tool`] entry.
     ///
     /// Carries the note and the hunks separately from `text` so the interface can style them
@@ -338,6 +350,8 @@ impl Entry {
             text,
             trail: Vec::new(),
             todos: Vec::new(),
+            whole_plan: Vec::new(),
+            whole_plan_left_open: false,
             landing: None,
             shown: None,
             returned: None,
@@ -439,6 +453,21 @@ impl Entry {
         Self {
             why: why.into(),
             ..Self::blank(Speaker::Tool, line.into())
+        }
+    }
+
+    /// The plan as `/todos` prints it, under `heading`, which is the interface's own words.
+    ///
+    /// `left_open` is whether no turn is running as it is printed.
+    pub fn printed_plan(
+        heading: impl Into<String>,
+        plan: Vec<bravebot_core::todo::Row>,
+        left_open: bool,
+    ) -> Self {
+        Self {
+            whole_plan: plan,
+            whole_plan_left_open: left_open,
+            ..Self::blank(Speaker::System, heading.into())
         }
     }
 

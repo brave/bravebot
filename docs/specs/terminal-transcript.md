@@ -1151,6 +1151,53 @@ The accelerator that focuses the composer is not changed by this entry.
 
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/agents.test.mjs pins it: it folds the agents event through the window's own event reducer and asserts that the list it carries replaces the window's, that a number sent twice is two rows, that no turn.done, turn.error, manifest.done or manifest.error changes an agent, that the sidebar counts are the two the bridge sent, and that a new conversation starts with none; it renders the real Agents view and sidebar foot through react-dom and asserts the rows, the empty sentence, the Done control, the label alone for none started, the count, and the count of those working; make check-ui runs it)`
 
+<a id="VIEW-37"></a>
+### VIEW-37: a plan printed on request is drawn whole, behind a margin its text cannot draw
+
+`/todos` ([CMD-28](commands.md#CMD-28)) and the key that does the same
+([INPUT-32](terminal-input.md#INPUT-32)) put the session's plan in the transcript under a heading
+that says how many of its tasks are done, and how many are cancelled where any are. Every task is
+there, in the plan's order, whatever room the info panel has for rows
+([PANEL-10](info-panel.md#PANEL-10)). A task takes the rows its text needs. The first begins with
+the task's mark and its status in words (`pending`, `in progress`, `completed` or `cancelled`), both
+read from the status the task carries, and the text follows, wrapped to the width. Every row after
+the first has the same margin, blank where the mark and the status stood. A task no longer
+outstanding is struck through, in the colours the plan has under a turn. A task that is neither
+completed nor cancelled is drawn as work being done where a turn is running as it is printed, with
+the mark and ink the panel gives it ([PANEL-10](info-panel.md#PANEL-10)), and left open, with the
+hollow mark and the dim text the panel gives it then, where none is. Its status in words is the one
+the planner wrote either way.
+
+No row is wider than the transcript, so none is wrapped again outside its margin. The margin is
+shortened to leave the text two columns. A status word that does not fit is cut with an ellipsis, a
+margin with room for one column of it holds the mark and blanks, and a margin of one column is the
+mark. From three columns up no text is cut or replaced. At two columns a character wider than the
+column left is drawn as a replacement character, and a single column holds the mark alone, so a task
+is drawn as its mark.
+
+A task's text is the planner's, so it is drawn as the lines of a call's result are. Control
+characters are replaced with visible glyphs ([VIEW-3](#VIEW-3)), a line break among them, so an
+escape sequence in a task is drawn as visible characters and a task is always rows of its own. The margin is drawn by
+the interface on every row, so a task that writes a mark, a status or a margin into its text draws
+it after the margin of the mark and status it carries, and never in place of them.
+
+The entry holds the plan as it stood when it was printed, and whether a turn was running then. A
+later report from the planner, or the end of the turn, does not change it. It is not part of the conversation, the session record or an export.
+
+**Why.** The panel cuts each task to its width and the plan to its room, so a person who wants a
+task's whole text or the whole plan has nowhere else to read it. The text is what the planner wrote
+and may have been dictated by something it read, so a mark or a status inside it would otherwise be
+taken for the interface's own, as a forged margin would be.
+
+`verified-by: bravebot_tui::panel::the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut`
+`verified-by: bravebot_tui::panel::a_printed_plan_holds_at_every_width_from_one_column_up`
+`verified-by: bravebot_tui::panel::a_printed_plan_is_drawn_on_the_screen_as_it_is_laid_out`
+`verified-by: bravebot_tui::panel::a_printed_task_cannot_draw_a_margin_a_mark_or_a_status_of_its_own`
+`verified-by: bravebot_tui::panel::a_printed_plan_stays_as_it_was_when_the_plan_changes`
+`verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
+`verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
+
 ## Known costs
 
 - **The desktop window is sent the thinking whether or not it is shown.** Holding it is what lets

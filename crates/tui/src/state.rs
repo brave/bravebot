@@ -3094,6 +3094,37 @@ impl Session {
         self.note(format!("{heading}\n{notes}"));
     }
 
+    /// Put the whole plan in the transcript, as `/todos` does, or say there is none (VIEW-37).
+    ///
+    /// The rows as they stand, whether the turn that wrote them is still running or not, and
+    /// whether a turn is running now, which decides how a row still to do is drawn (PANEL-10). Both
+    /// are kept as of the press. Nothing here reads a task's text: the heading counts statuses, and
+    /// the rows go to the entry to be drawn.
+    pub fn report_plan(&mut self) {
+        let rows = self.plan().to_vec();
+        if rows.is_empty() {
+            self.note(t!(todos_none));
+            return;
+        }
+        let counted = |status| rows.iter().filter(|row| row.status == status).count();
+        let done = counted(bravebot_core::todo::Status::Done);
+        let cancelled = counted(bravebot_core::todo::Status::Cancelled);
+        // As the planner's own result says it, which counts the cancelled rows apart.
+        let heading = if cancelled == 0 {
+            t!(todos_heading, done = done, total = rows.len())
+        } else {
+            t!(
+                todos_heading_cancelled,
+                done = done,
+                total = rows.len(),
+                cancelled = cancelled
+            )
+        };
+        let left_open = !self.a_turn_is_running();
+        self.transcript
+            .push(Entry::printed_plan(heading, rows, left_open));
+    }
+
     /// Whether the turn starting now sends a prompt the driver wrote, without taking the answer.
     pub fn driver_prompt_is_pending(&self) -> bool {
         self.driver_prompt_pending

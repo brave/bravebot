@@ -1393,6 +1393,13 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
         // list is said rather than silent (WATCH-7). In the shared ladder for the watch chord's
         // reason: it sends nothing.
         _ if session.bindings().is_outputs(&key) => super::open_outputs(session),
+        // The whole plan, printed as `/todos` prints it and said into the transcript as that is
+        // (CMD-28). In the shared ladder for the same reason: it sends nothing, and a plan is most
+        // worth reading in full while the turn works through it.
+        _ if session.bindings().is_todos(&key) => {
+            session.answer_while_working(|session| session.report_plan());
+            Action::Redraw
+        }
         // Before the Tab arm below, since a terminal that has been asked to disambiguate reports
         // this as Tab with a modifier rather than as its own code, and it would otherwise be taken
         // for a completion. Both spellings, because which one arrives is the terminal's choice.

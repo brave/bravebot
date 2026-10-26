@@ -1223,6 +1223,7 @@ one shell name and exits with status 2 for anything else.
 | Ctrl-O | Open the scroller over the transcript |
 | Ctrl-L | Watch what a delegate is doing, and read what an aside answered |
 | Alt-L | Read what a command printed, as `/outputs` does |
+| Alt-A | Print the whole plan, as `/todos` does |
 | Up / Down | Walk back through sent prompts |
 | Ctrl-R | Search every prompt you have sent |
 | Wheel, PageUp / PageDown | Scroll the transcript |

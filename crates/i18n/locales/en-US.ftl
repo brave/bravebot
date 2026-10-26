@@ -2887,12 +2887,32 @@ panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
-# Where the info panel has no room for the whole plan.
-panel-more = +{ $count } more
-# Where the info panel's plan starts past its first rows, counting those it left out above.
-panel-earlier = +{ $count } earlier
-# The same, with rows left out below as well.
-panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+# Where the info panel has no room for the whole plan, a row after the rows it draws says how many
+# rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
+# The forms of the other two are the same in English and differ in other languages.
+panel-hidden-to-do = +{ $count } to do
+panel-hidden-done = { $count ->
+    [one] +{ $count } done
+   *[other] +{ $count } done
+    }
+panel-hidden-cancelled = { $count ->
+    [one] +{ $count } cancelled
+   *[other] +{ $count } cancelled
+    }
+# The info panel's plan names the key that prints it whole, as its last row names the key that hides the panel.
+panel-todos = { $chord } whole plan
+# What the `?` list says the key that prints the whole plan does, after the key.
+shortcut-todos = print the whole plan
+# What /todos puts in the transcript above the plan it prints, and what it says where there is none.
+todos-heading = plan: { $done } of { $total } done
+# The same where some of its tasks were cancelled, which are counted apart from the done ones.
+todos-heading-cancelled = plan: { $done } of { $total } done, { $cancelled } cancelled
+todos-none = there is no plan in this session yet
+# The status each task of a printed plan carries beside its mark.
+todos-status-pending = pending
+todos-status-active = in progress
+todos-status-done = completed
+todos-status-cancelled = cancelled
 
 # The files state of the info panel, which lists what the session wrote (`/diff`).
 # Its heading, above the list: how many files the session's write calls changed.
@@ -3028,6 +3048,7 @@ command-jobs = List this turn's background jobs, and stop one by its name
 command-outputs = Open what the commands this session ran printed, background jobs included
 command-panel = Show or hide the info panel beside the transcript
 command-diff = List the files the session wrote and show every edit to the one highlighted
+command-todos = Print the whole plan, every task with its status
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one

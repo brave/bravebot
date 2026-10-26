@@ -45,7 +45,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Fourteen of these chords can be [moved to keys of your own](#moving-a-key), thirteen on Windows. Every chord named on this
+Fifteen of these chords can be [moved to keys of your own](#moving-a-key), fourteen on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -137,7 +137,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Fourteen actions can be moved, and nothing else can** (thirteen on Windows, which has no `suspend`):
+**Fifteen actions can be moved, and nothing else can** (fourteen on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
@@ -151,6 +151,7 @@ action the way `env` does, so a project file moving one action says nothing abou
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
+| `todos` | `alt-a` | print the whole plan in the transcript, as [`/todos`](../reference/commands.md#todos) does |
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
 | `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
@@ -373,7 +374,7 @@ the turn ends becomes a turn of its own.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/thinking`, `/copy`, `/export`, `/loop`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/todos`, `/thinking`, `/copy`, `/export`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
