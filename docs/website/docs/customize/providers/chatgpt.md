@@ -183,9 +183,11 @@ bravebot auth logout chatgpt
 removes the stored copy, and is allowed in an incognito session. It ends nothing at OpenAI. OpenAI's
 documentation describes a revocation call a client can make at sign-out, which bravebot does not make.
 bravebot's record is that signing out of the ChatGPT account, or removing bravebot's access in the account's
-settings, ends the sign-in there. Neither has been observed. Revoking one account's refresh token with the
-revocation call was seen to end an access token issued from it before: the token was refused within seconds
-after the call ([What has been observed](#what-has-been-observed)). That was one test on one account.
+settings, ends the sign-in there. Neither has been observed, and what either does to an access token
+already issued has not been observed. Revoking one account's refresh token at OpenAI's
+revocation endpoint, a call bravebot does not make, was followed within seconds by a refusal of an access
+token issued from it before ([What has been observed](#what-has-been-observed)). That was one revocation
+of one account's sign-in.
 
 ## What is kept
 

@@ -517,6 +517,8 @@ doctor-noticed-aws-session =
 doctor-outlives = outlives
 doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
+doctor-outlives-chatgpt-account =
+    an access token OpenAI already issued from the refresh token: it was refused within seconds after the refresh token was revoked at OpenAI's revocation endpoint (one account, one revocation, a call this program does not make), and whether signing out of the account or removing this program's access in its settings ends it has not been observed
 # Whether a derived credential is bound to the party that presents it. Shown only for the
 # credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
 # two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.

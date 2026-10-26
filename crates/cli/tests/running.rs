@@ -9042,10 +9042,10 @@ fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request(
 
 /// CHATGPT-11 and CRED-25: `doctor` names a stored ChatGPT sign-in as a held credential at its
 /// tier, with what would end it and the instant the access token expires, and prints nothing the
-/// file holds beyond that instant. It names nothing that outlives a revocation, since revoking the
-/// refresh token was seen to end an access token minted before it. Nothing stored is nothing said,
-/// a sign-in whose instant has passed is still signed in, and a file that cannot be used is named
-/// with its remedy and ends the run in failure, since the sign-in it held has stopped being used.
+/// file holds beyond that instant. It says what was seen of a revocation at the endpoint and that
+/// signing out and removing access were not observed. Nothing stored is nothing said, a sign-in
+/// whose instant has passed is still signed in, and a file that cannot be used is named with its
+/// remedy and ends the run in failure, since the sign-in it held has stopped being used.
 #[test]
 fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     // A model keyed by a variable, so a report that finds nothing else wrong ends in success and the
@@ -9099,20 +9099,25 @@ fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     );
     assert!(account.contains("held: a permanent secret"), "{account}");
     assert!(account.contains("a bearer secret"), "{account}");
-    // Revoking the refresh token was seen to end an access token minted before it, so the sign-in
-    // has no line saying one outlives a revocation, and none of the words that said it was unknown.
-    assert!(
-        !stdout
-            .lines()
-            .any(|line| line.trim_start().starts_with("outlives ")),
-        "the sign-in is reported as leaving something working after a revocation: {stdout}"
-    );
-    for old in ["may run to its own expiry", "has not been observed"] {
-        assert!(
-            !account.contains(old),
-            "the sign-in is still reported as unobserved: {account}"
-        );
+    // What may outlive a revocation is one line that says what was seen, a revocation at the
+    // endpoint, and what was not, signing out and removing access. A report with no such line reads
+    // as nothing surviving, and one that says a token may run to its own expiry ignores the
+    // revocation that ended one.
+    let outlives = account
+        .lines()
+        .find(|line| line.trim_start().starts_with("outlives "))
+        .unwrap_or_else(|| panic!("what may outlive a revocation is not reported: {account}"));
+    for words in [
+        "was refused within seconds after the refresh token was revoked at OpenAI's revocation endpoint",
+        "one account, one revocation, a call this program does not make",
+        "whether signing out of the account or removing this program's access in its settings ends it has not been observed",
+    ] {
+        assert!(outlives.contains(words), "{words}: {outlives}");
     }
+    assert!(
+        !outlives.contains("may run to its own expiry"),
+        "the sign-in is still said to run to its own expiry: {outlives}"
+    );
 
     let lapsed = scratch("cli-running-doctor-chatgpt-lapsed")
         .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1));
