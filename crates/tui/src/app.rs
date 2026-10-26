@@ -14858,6 +14858,29 @@ mod tests {
         );
     }
 
+    /// The inputs the roster lists for the model in force are taken for the session, which is the
+    /// default where nothing is picked: a picture put to a model the listing says takes text only is
+    /// held to that. Taken for the pick alone, a session on the settings model carried none, and a
+    /// picture went to a model the roster had said does not read one.
+    #[test]
+    fn the_inputs_the_roster_lists_are_those_of_the_model_in_force_which_is_the_default_unpicked() {
+        use models::scripted_account::offer;
+        let mut text_only = listed("chatgpt/text-only", None);
+        text_only.advertised.input_modalities = vec!["text".to_string()];
+        let mut config = a_config_with_a_named_roster();
+        config.default_model = "chatgpt/text-only".to_string();
+        offer(vec![text_only, listed("chatgpt/other", None)]);
+
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
+
+        assert_eq!(
+            config.listed_inputs("chatgpt/text-only"),
+            ["text".to_string()],
+            "the default's inputs were not taken"
+        );
+    }
+
     /// A longer word that only starts with the command is a prompt, not the command.
     #[test]
     fn a_prompt_containing_the_theme_command_is_still_a_prompt() {

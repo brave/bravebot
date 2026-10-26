@@ -491,7 +491,7 @@ pub(super) fn adopt_budget_for_current_model(session: &mut Session, config: &mut
         session.note(t!(session_context_budget, budget = config.context_budget));
     }
     let in_force = model_in_force(session.model(), config).to_string();
-    config.adopt_inputs(&in_force, advertised_inputs(&models, session.model()));
+    config.adopt_inputs(&in_force, advertised_inputs(&models, Some(&in_force)));
     // Outside the note, because a budget that did not move can still have stopped being one the
     // endpoint advertised: nothing changed for compaction, and what the hint line may claim did.
     session.update_budget(config.context_budget, config.budget_is_guessed());
