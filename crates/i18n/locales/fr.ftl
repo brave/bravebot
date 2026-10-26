@@ -3623,9 +3623,17 @@ panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
-panel-more = +{ $count } de plus
-panel-earlier = +{ $count } avant
-panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
+# Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
+# de lignes de chaque sorte il a laissées de côté.
+panel-hidden-to-do = +{ $count } à faire
+panel-hidden-done = { $count ->
+    [one] +{ $count } terminée
+   *[other] +{ $count } terminées
+    }
+panel-hidden-cancelled = { $count ->
+    [one] +{ $count } annulée
+   *[other] +{ $count } annulées
+    }
 
 # L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/diff`).
 # Son titre, au-dessus de la liste : combien de fichiers les appels d'écriture de la session ont modifiés.

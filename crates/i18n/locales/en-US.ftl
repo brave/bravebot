@@ -2887,12 +2887,18 @@ panel-spent = { $tokens } this session
 # The last turn's cache figures in the info panel, one to a row and never added together.
 panel-cache-read = cache read { $tokens }
 panel-cache-written = cache written { $tokens }
-# Where the info panel has no room for the whole plan.
-panel-more = +{ $count } more
-# Where the info panel's plan starts past its first rows, counting those it left out above.
-panel-earlier = +{ $count } earlier
-# The same, with rows left out below as well.
-panel-earlier-and-more = +{ $earlier } earlier, +{ $later } more
+# Where the info panel has no room for the whole plan, a row after the rows it draws says how many
+# rows of each kind it left out. A kind with none is not named, and the rows still to do come first.
+# The forms of the other two are the same in English and differ in other languages.
+panel-hidden-to-do = +{ $count } to do
+panel-hidden-done = { $count ->
+    [one] +{ $count } done
+   *[other] +{ $count } done
+    }
+panel-hidden-cancelled = { $count ->
+    [one] +{ $count } cancelled
+   *[other] +{ $count } cancelled
+    }
 
 # The files state of the info panel, which lists what the session wrote (`/diff`).
 # Its heading, above the list: how many files the session's write calls changed.

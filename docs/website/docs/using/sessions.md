@@ -330,10 +330,11 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   written. Clicking its heading or the count opens the files view below,
 - the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
   filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
-  that wrote the list has ended or in a resumed session. Where it runs past the bottom it keeps the
-  task in progress in view and counts the rows left out above and below it, as `+12 earlier` or
-  `+3 more`. A task list with no rows leaves the plan as the last list that had rows. `/clear`, a
-  rewind and a new turn clear it.
+  that wrote the list has ended or in a resumed session. Where it runs past the bottom it shows the
+  task in progress and the pending tasks first, in the order of the plan, then the finished tasks
+  nearest the first one still to do, and its last row counts what it left out in words of their own,
+  as `+3 to do, +40 done, +2 cancelled`. A kind with none left out is not named. A task list with no
+  rows leaves the plan as the last list that had rows. `/clear`, a rewind and a new turn clear it.
 
 Its last row names the key that hides it. While it is drawn, the context and cache figures leave the
 hint line under the box, unless the terminal is too short for the panel to show them; the mode, a

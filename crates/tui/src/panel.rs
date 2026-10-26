@@ -393,10 +393,11 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
     // The blank row and the heading come out of the room before the rows do.
     let room = (height - 1).saturating_sub(body.len() + 2);
     if !plan.is_empty() && room > 0 {
+        let cut = cut_for(plan, room);
         section(
             &mut body,
             t!(panel_plan).to_string(),
-            plan_rows(plan, !session.a_turn_is_running(), text, room),
+            plan_rows(plan, &cut, !session.a_turn_is_running(), text),
         );
     }
 
@@ -609,38 +610,102 @@ fn head(session: &Session, text: usize) -> Body {
 /// too, where the ink of a row is the terminal's own.
 const LEFT_OPEN_MARKER: &str = "□";
 
-/// The plan in at most `room` rows, the task being worked on among them.
+/// Which rows of a plan that does not fit are drawn, and how many of each kind are not.
+#[derive(Default)]
+struct Cut {
+    /// The positions in the plan of the rows drawn, in the plan's order.
+    shown: Vec<usize>,
+    /// Rows still to do or in progress that were left out.
+    to_do: usize,
+    done: usize,
+    cancelled: usize,
+}
+
+/// The `capacity` rows of `plan` to draw, chosen from each row's status and from nothing else.
+///
+/// The rows still outstanding come first, the one in progress before the pending ones, each in the
+/// plan's order. Where capacity is left over it goes to the finished rows, those nearest the first
+/// outstanding row first and the earlier of two as near, or nearest the end of a plan with none, so
+/// that what was last done is shown beside what comes next. The rows chosen are drawn in the plan's
+/// order.
+///
+/// The text of a task is the planner's and decides nothing here. A status the driver does not
+/// recognise reads as outstanding ([TODO-2](../../../docs/specs/tools/todo-write.md#TODO-2)), so
+/// its row is drawn first and counted among those still to do.
+fn cut_to(plan: &[bravebot_core::todo::Row], capacity: usize) -> Cut {
+    use bravebot_core::todo::Status;
+    let mut outstanding: Vec<usize> = (0..plan.len()).filter(|&at| !plan[at].struck()).collect();
+    let anchor = outstanding.first().copied().unwrap_or(plan.len());
+    // Stable, so each group keeps the plan's order.
+    outstanding.sort_by_key(|&at| plan[at].status != Status::Active);
+    outstanding.truncate(capacity);
+    let spare = capacity - outstanding.len();
+    let mut finished: Vec<usize> = (0..plan.len()).filter(|&at| plan[at].struck()).collect();
+    finished.sort_by_key(|&at| (at.abs_diff(anchor), at));
+    let mut shown = outstanding;
+    shown.extend(finished.into_iter().take(spare));
+    shown.sort_unstable();
+
+    let mut cut = Cut {
+        shown,
+        ..Cut::default()
+    };
+    for (at, row) in plan.iter().enumerate() {
+        if cut.shown.binary_search(&at).is_ok() {
+            continue;
+        }
+        match row.status {
+            Status::Pending | Status::Active => cut.to_do += 1,
+            Status::Done => cut.done += 1,
+            Status::Cancelled => cut.cancelled += 1,
+        }
+    }
+    cut
+}
+
+/// The rows of `plan` drawn in `room` rows: all of them where they fit, and otherwise as many as the
+/// room holds beside the row that counts the rest.
+fn cut_for(plan: &[bravebot_core::todo::Row], room: usize) -> Cut {
+    if plan.len() <= room {
+        cut_to(plan, plan.len())
+    } else {
+        cut_to(plan, room - 1)
+    }
+}
+
+/// The row that says what a plan left out, or `None` where it left nothing out.
+///
+/// Each kind is counted in words of its own, the rows still to do first, so a count of finished
+/// work is not read as work to come. A row cut to the width of a narrow panel loses the finished
+/// counts before it loses the unfinished one.
+fn left_out_row(cut: &Cut, width: usize) -> Option<Line<'static>> {
+    let mut counts = Vec::new();
+    if cut.to_do > 0 {
+        counts.push(t!(panel_hidden_to_do, count = cut.to_do));
+    }
+    if cut.done > 0 {
+        counts.push(t!(panel_hidden_done, count = cut.done));
+    }
+    if cut.cancelled > 0 {
+        counts.push(t!(panel_hidden_cancelled, count = cut.cancelled));
+    }
+    (!counts.is_empty()).then(|| row(crate::status::cut(&counts.join(", "), width), dim()))
+}
+
+/// The rows of `plan` that `cut` chose, and the row that says what it left out.
 ///
 /// `left_open` is whether no turn is running: a row still outstanding is then drawn hollow and
 /// dim, so that after a turn ends it does not read as work being done.
-///
-/// Where the rows do not all fit, the visible part starts at the task in progress if it would
-/// otherwise fall below the cut, since what is being done now is what somebody glancing at the
-/// panel is looking for. The last row counts the rows left out above the visible part apart from
-/// those below it, so a count is never read as work still to come when it is work already past.
 fn plan_rows(
     plan: &[bravebot_core::todo::Row],
+    cut: &Cut,
     left_open: bool,
     width: usize,
-    room: usize,
 ) -> Vec<Line<'static>> {
-    let (start, shown) = if plan.len() <= room {
-        (0, plan.len())
-    } else {
-        let shown = room - 1;
-        let active = plan
-            .iter()
-            .position(|row| row.status == bravebot_core::todo::Status::Active)
-            .unwrap_or(0);
-        let start = if active < shown {
-            0
-        } else {
-            active.min(plan.len() - shown)
-        };
-        (start, shown)
-    };
-    let mut lines: Vec<Line<'static>> = plan[start..start + shown]
+    let mut lines: Vec<Line<'static>> = cut
+        .shown
         .iter()
+        .map(|&at| &plan[at])
         .map(|task| {
             let (glyph, marker, text) = if task.status == bravebot_core::todo::Status::Cancelled {
                 (
@@ -673,16 +738,7 @@ fn plan_rows(
             ])
         })
         .collect();
-    let later = plan.len() - start - shown;
-    let count = match (start, later) {
-        (0, 0) => None,
-        (0, later) => Some(t!(panel_more, count = later)),
-        (earlier, 0) => Some(t!(panel_earlier, count = earlier)),
-        (earlier, later) => Some(t!(panel_earlier_and_more, earlier = earlier, later = later)),
-    };
-    if let Some(count) = count {
-        lines.push(row(count, dim()));
-    }
+    lines.extend(left_out_row(cut, width));
     lines
 }
 
@@ -2491,58 +2547,388 @@ mod tests {
         );
     }
 
-    /// The task being worked on is what somebody glancing at the panel looks for, so a plan cut
-    /// to the room keeps it in view. The rows left out above it are counted apart from those below
-    /// it, so a count of finished work is not read as work still to come.
+    /// A plan of `Status` runs, each row's text its place in the plan: `plan_of(&[(Done, 2),
+    /// (Pending, 1)])` is `task 1` and `task 2` done and `task 3` pending.
+    fn plan_of(runs: &[(Status, usize)]) -> Vec<(String, Status)> {
+        runs.iter()
+            .flat_map(|(status, count)| std::iter::repeat_n(*status, *count))
+            .enumerate()
+            .map(|(at, status)| (format!("task {}", at + 1), status))
+            .collect()
+    }
+
+    /// The panel drawn `height` rows tall for a session whose plan is `rows`, which a turn is
+    /// working on.
+    fn panel_for(rows: &[(String, Status)], height: u16) -> Vec<String> {
+        let borrowed: Vec<(&str, Status)> = rows
+            .iter()
+            .map(|(text, status)| (text.as_str(), *status))
+            .collect();
+        let drawn = texts(&lines(&working_on(plan(&borrowed)), WIDTH, height));
+        assert_eq!(
+            drawn.len(),
+            usize::from(height),
+            "the panel is not the height it was given: {drawn:#?}"
+        );
+        drawn
+    }
+
+    /// The numbers of the tasks a drawn panel holds, in the order it draws them.
+    fn tasks_in(drawn: &[String]) -> Vec<usize> {
+        drawn
+            .iter()
+            .filter_map(|row| {
+                row.find("task ")
+                    .map(|at| row[at + 5..].parse().expect("a number"))
+            })
+            .collect()
+    }
+
+    /// The row that says what the plan left out, which is the only row of the panel that begins
+    /// with a plus.
+    fn left_out_in(drawn: &[String]) -> Option<&str> {
+        drawn
+            .iter()
+            .map(String::as_str)
+            .find(|row| row.starts_with('+'))
+    }
+
+    /// A panel of fourteen rows leaves the plan nine: the context section takes two, the blank and
+    /// the heading two more, and the key that hides the panel one. Eight of the nine are tasks when
+    /// the plan does not fit, since the ninth says what was left out.
+    const HEIGHT_FOR_EIGHT_TASKS: u16 = 14;
+
+    /// A plan whose unfinished rows are at its end must show them. In a plan of eight rows done and
+    /// two pending, a panel with room for fewer than ten rows has to draw both pending rows and say
+    /// how many finished ones it left out.
+    ///
+    /// Rejects: a window that starts at the first row, or at the task in progress with the first
+    /// row as the fallback, which draws only finished rows.
     #[test]
-    fn a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it() {
-        let drawn_with = |tasks: usize| {
-            let rows: Vec<(String, Status)> = (1..=tasks)
-                .map(|n| {
-                    let status = match n {
-                        1..=15 => Status::Done,
-                        16 => Status::Active,
-                        _ => Status::Pending,
-                    };
-                    (format!("task {n}"), status)
-                })
-                .collect();
-            let borrowed: Vec<(&str, Status)> = rows
-                .iter()
-                .map(|(text, status)| (text.as_str(), *status))
-                .collect();
-            texts(&lines(&working_on(plan(&borrowed)), WIDTH, 14))
-        };
-        let shown = |drawn: &[String]| -> Vec<String> {
-            drawn
-                .iter()
-                .filter_map(|row| row.find("task ").map(|at| row[at..].to_string()))
-                .collect()
+    fn a_long_plan_shows_the_rows_still_to_do_before_the_finished_ones() {
+        let rows = plan_of(&[(Status::Done, 8), (Status::Pending, 2)]);
+
+        // Five rows of room: the two pending rows, two finished rows, and the row that counts.
+        let drawn = panel_for(&rows, 10);
+        assert_eq!(tasks_in(&drawn), [7, 8, 9, 10], "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), Some("+6 done"), "{drawn:#?}");
+
+        // Three rows of room, which is fewer than the two pending rows and the count are.
+        let drawn = panel_for(&rows, 8);
+        assert_eq!(tasks_in(&drawn), [9, 10], "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), Some("+8 done"), "{drawn:#?}");
+
+        // Room for the whole plan draws it, and counts nothing.
+        let drawn = panel_for(&rows, 30);
+        assert_eq!(tasks_in(&drawn), (1..=10).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+    }
+
+    /// The rows shown stay in the order of the plan, not the order they were chosen in. The plan
+    /// has a pending row ahead of the task in progress, and the choice takes the task in progress
+    /// first.
+    ///
+    /// Rejects: drawing the rows in the order they are chosen, which puts the task in progress
+    /// above the pending row that comes first in the plan.
+    #[test]
+    fn the_rows_shown_keep_the_order_of_the_plan() {
+        let mut rows = plan_of(&[(Status::Done, 12)]);
+        for (at, status) in [
+            (0, Status::Pending),
+            (2, Status::Active),
+            (3, Status::Pending),
+            (7, Status::Pending),
+        ] {
+            rows[at].1 = status;
+        }
+
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 4);
+        assert_eq!(tasks_in(&drawn), [1, 3, 4, 8], "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), Some("+8 done"), "{drawn:#?}");
+    }
+
+    /// Where there are more rows still to do than room, the task in progress is kept and the
+    /// pending rows after it are the ones left out, and the row says they are still to do.
+    ///
+    /// Rejects: taking the first rows that are not finished, which drops a task in progress that
+    /// comes after enough pending rows, and counting what it left out as `done`.
+    #[test]
+    fn the_task_in_progress_is_kept_when_there_are_more_rows_still_to_do_than_room() {
+        let rows = plan_of(&[
+            (Status::Done, 3),
+            (Status::Pending, 5),
+            (Status::Active, 1),
+            (Status::Pending, 5),
+        ]);
+
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 5);
+        // Three rows: the task in progress and the first two pending rows.
+        assert_eq!(tasks_in(&drawn), [4, 5, 9], "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(
+                format!(
+                    "{}, {}",
+                    t!(panel_hidden_to_do, count = 8),
+                    t!(panel_hidden_done, count = 3)
+                )
+                .as_str()
+            ),
+            "{drawn:#?}"
+        );
+    }
+
+    /// Each kind of row the panel leaves out is counted in words of its own, the rows still to do
+    /// first, so that a figure for finished work is not read as work to come and a dropped row is
+    /// not counted as finished.
+    ///
+    /// Rejects: one count of every row left out, which says nothing of what they were, and a count
+    /// that adds the cancelled rows to the done ones.
+    #[test]
+    fn the_row_that_counts_what_was_left_out_names_each_kind_in_words_of_its_own() {
+        let said = |to_do: usize, done: usize, cancelled: usize| {
+            let mut parts = Vec::new();
+            if to_do > 0 {
+                parts.push(t!(panel_hidden_to_do, count = to_do));
+            }
+            if done > 0 {
+                parts.push(t!(panel_hidden_done, count = done));
+            }
+            if cancelled > 0 {
+                parts.push(t!(panel_hidden_cancelled, count = cancelled));
+            }
+            parts.join(", ")
         };
 
-        // Fourteen rows: the context section takes two, the blank and the heading two more, the
-        // key that hides the panel one, and the count one, which leaves eight tasks.
-        let both = drawn_with(30);
-        assert_eq!(both.len(), 14, "the panel is not the height it was given");
+        // Only finished rows are left out.
+        let rows = plan_of(&[(Status::Done, 9), (Status::Active, 1), (Status::Pending, 2)]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
         assert_eq!(
-            shown(&both),
-            (16..=23).map(|n| format!("task {n}")).collect::<Vec<_>>(),
-            "the rows shown do not start at the task in progress: {both:#?}"
-        );
-        assert!(
-            both.contains(&t!(panel_earlier_and_more, earlier = 15, later = 7).to_string()),
-            "the rows above and below are not counted apart: {both:#?}"
+            left_out_in(&drawn),
+            Some(said(0, 4, 0).as_str()),
+            "{drawn:#?}"
         );
 
-        let above = drawn_with(20);
+        // Cancelled rows are told apart from done ones.
+        let rows = plan_of(&[
+            (Status::Cancelled, 4),
+            (Status::Done, 1),
+            (Status::Active, 1),
+            (Status::Pending, 7),
+        ]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (6..=13).collect::<Vec<_>>(), "{drawn:#?}");
         assert_eq!(
-            shown(&above),
-            (13..=20).map(|n| format!("task {n}")).collect::<Vec<_>>(),
-            "the last rows of the plan are not the ones shown: {above:#?}"
+            left_out_in(&drawn),
+            Some(said(0, 1, 4).as_str()),
+            "{drawn:#?}"
+        );
+
+        // All three kinds, with the rows still to do first.
+        let rows = plan_of(&[
+            (Status::Done, 3),
+            (Status::Cancelled, 2),
+            (Status::Active, 1),
+            (Status::Pending, 6),
+        ]);
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS - 4);
+        assert_eq!(tasks_in(&drawn), [6, 7, 8, 9], "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(said(3, 3, 2).as_str()),
+            "{drawn:#?}"
         );
         assert!(
-            above.contains(&t!(panel_earlier, count = 12).to_string()),
-            "rows left out above are counted as more to come: {above:#?}"
+            said(3, 3, 2).find("to do") < said(3, 3, 2).find("done"),
+            "the rows still to do are not counted first"
+        );
+
+        // A panel too narrow for all three cuts the finished counts and keeps the first.
+        let narrow = lines(
+            &working_on(plan(
+                &rows
+                    .iter()
+                    .map(|(text, status)| (text.as_str(), *status))
+                    .collect::<Vec<_>>(),
+            )),
+            NARROWEST_PANEL,
+            HEIGHT_FOR_EIGHT_TASKS - 4,
+        );
+        let narrow = texts(&narrow);
+        let counted = left_out_in(&narrow).expect("a row that counts");
+        assert!(
+            counted.starts_with(&t!(panel_hidden_to_do, count = 3).to_string())
+                && crate::wrap::display_width(counted) <= usize::from(NARROWEST_PANEL) - 2,
+            "{counted:?}"
+        );
+    }
+
+    /// Rows left over after the rows still to do go to the finished rows nearest the first of
+    /// them, drawn in the plan's order, so what was last done is beside what comes next. Of two
+    /// rows as near, the earlier is taken first. A plan with nothing left to do shows its last
+    /// rows.
+    ///
+    /// Rejects: filling from the top of the plan, or from the end, a tie that goes to the later
+    /// row, and a plan with nothing left to do drawn from its first row.
+    #[test]
+    fn room_left_over_goes_to_the_finished_rows_nearest_the_first_one_still_to_do() {
+        let mut rows = plan_of(&[(Status::Done, 12)]);
+        rows[6].1 = Status::Active;
+        rows[7].1 = Status::Pending;
+
+        // Five rows of room hold four tasks beside the row that counts: the two rows to do and
+        // two finished ones. The row before them is nearest. Rows 5 and 9 are two places away and
+        // one is left, so the tie shows: the earlier.
+        let drawn = panel_for(&rows, 10);
+        assert_eq!(tasks_in(&drawn), [5, 6, 7, 8], "{drawn:#?}");
+
+        // One row more takes the later of the two as well.
+        let drawn = panel_for(&rows, 11);
+        assert_eq!(tasks_in(&drawn), [5, 6, 7, 8, 9], "{drawn:#?}");
+
+        let finished = plan_of(&[(Status::Done, 20)]);
+        let drawn = panel_for(&finished, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            tasks_in(&drawn),
+            (13..=20).collect::<Vec<_>>(),
+            "{drawn:#?}"
+        );
+        assert_eq!(left_out_in(&drawn), Some("+12 done"), "{drawn:#?}");
+    }
+
+    /// The panel draws a plan of any size: none at all, one row, twelve rows, fifty rows, and the
+    /// fewest rows that leave the plan any room.
+    ///
+    /// Rejects: a heading over no rows, a count row on a plan that fits, a plan longer than the
+    /// room that overruns the panel or pushes off the key that hides it, and a panel with no room
+    /// for the plan that draws the heading anyway.
+    #[test]
+    fn the_panel_draws_a_plan_of_none_one_twelve_and_fifty_rows_and_at_the_least_height() {
+        let heading = t!(panel_plan).to_string();
+        let hide =
+            |session: &Session| t!(panel_hide, chord = session.bindings().panel_name()).to_string();
+        let session = Session::new("none");
+
+        // No plan: no heading.
+        let drawn = texts(&lines(&session, WIDTH, 30));
+        assert!(!drawn.contains(&heading), "{drawn:#?}");
+
+        // One row: the heading, the row and nothing counted.
+        let drawn = panel_for(&plan_of(&[(Status::Active, 1)]), 14);
+        assert!(drawn.contains(&heading), "{drawn:#?}");
+        assert_eq!(tasks_in(&drawn), [1], "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+
+        // Twelve rows that do not fit.
+        let twelve = plan_of(&[(Status::Done, 6), (Status::Active, 1), (Status::Pending, 5)]);
+        let drawn = panel_for(&twelve, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (5..=12).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), Some("+4 done"), "{drawn:#?}");
+        // And twelve that do.
+        let drawn = panel_for(&twelve, 30);
+        assert_eq!(tasks_in(&drawn), (1..=12).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+        // A plan that fills the room to the last row is drawn whole, with no row to count.
+        let nine = plan_of(&[(Status::Done, 7), (Status::Active, 1), (Status::Pending, 1)]);
+        let drawn = panel_for(&nine, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), (1..=9).collect::<Vec<_>>(), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+
+        // Fifty rows, nine of them to do after the task in progress, on a panel that holds eight.
+        let fifty = plan_of(&[
+            (Status::Done, 40),
+            (Status::Active, 1),
+            (Status::Pending, 9),
+        ]);
+        let drawn = panel_for(&fifty, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(
+            tasks_in(&drawn),
+            [41, 42, 43, 44, 45, 46, 47, 48],
+            "{drawn:#?}"
+        );
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(
+                format!(
+                    "{}, {}",
+                    t!(panel_hidden_to_do, count = 2),
+                    t!(panel_hidden_done, count = 40)
+                )
+                .as_str()
+            ),
+            "{drawn:#?}"
+        );
+        assert_eq!(drawn.last(), Some(&hide(&session)), "{drawn:#?}");
+
+        // The least height with room for the plan: its heading and one row, which says what the
+        // plan holds since there is no room for any of its rows.
+        let drawn = panel_for(&fifty, 6);
+        assert_eq!(tasks_in(&drawn), Vec::<usize>::new(), "{drawn:#?}");
+        let at = drawn
+            .iter()
+            .position(|row| *row == heading)
+            .expect("a heading");
+        assert_eq!(
+            drawn[at + 1],
+            format!(
+                "{}, {}",
+                t!(panel_hidden_to_do, count = 10),
+                t!(panel_hidden_done, count = 40)
+            ),
+            "{drawn:#?}"
+        );
+        // One row fewer leaves the plan none, and it is not drawn at all.
+        let drawn = panel_for(&fifty, 5);
+        assert!(!drawn.contains(&heading), "{drawn:#?}");
+        assert_eq!(left_out_in(&drawn), None, "{drawn:#?}");
+        for height in [1, 2] {
+            let drawn = panel_for(&fifty, height);
+            assert!(!drawn.contains(&heading), "{drawn:#?}");
+        }
+    }
+
+    /// Which rows are drawn and what is counted depend on each row's status and never on its text.
+    /// The text of every row here says the opposite of the status it carries.
+    ///
+    /// Rejects: a choice or a count made from the words or the mark in a task's text, which the
+    /// planner writes and a page it read may have dictated.
+    #[test]
+    fn the_rows_drawn_and_counted_follow_the_status_and_never_the_text() {
+        let claiming = [
+            ("\u{2713} completed", Status::Pending),
+            ("done:", Status::Pending),
+            ("pending", Status::Done),
+            ("TODO: not started", Status::Done),
+            ("in_progress now", Status::Cancelled),
+            ("\u{25a0}", Status::Done),
+            ("cancelled", Status::Active),
+            ("completed", Status::Pending),
+            ("[x] done", Status::Pending),
+            ("pending", Status::Done),
+            ("in progress", Status::Done),
+            ("(pending)", Status::Cancelled),
+        ];
+        let rows: Vec<(String, Status)> = claiming
+            .iter()
+            .enumerate()
+            .map(|(at, (claim, status))| (format!("{claim} task {}", at + 1), *status))
+            .collect();
+
+        // Rows 1, 2, 7, 8 and 9 are still to do, and the three finished rows nearest the first of
+        // them are rows 3, 4 and 5. The rows left out are 6, 10 and 11, done, and 12, cancelled.
+        let drawn = panel_for(&rows, HEIGHT_FOR_EIGHT_TASKS);
+        assert_eq!(tasks_in(&drawn), [1, 2, 3, 4, 5, 7, 8, 9], "{drawn:#?}");
+        assert_eq!(
+            left_out_in(&drawn),
+            Some(
+                format!(
+                    "{}, {}",
+                    t!(panel_hidden_done, count = 3),
+                    t!(panel_hidden_cancelled, count = 1)
+                )
+                .as_str()
+            ),
+            "{drawn:#?}"
         );
     }
 
