@@ -928,7 +928,7 @@ auth-ways-heading = Façons de se connecter à un service de modèle :
 auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
-auth-way-gateway = Une clé pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
+auth-way-gateway = Une clé pour { $services } ou pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
 auth-way-chatgpt = Un compte ChatGPT Plus ou Pro, auquel se connecter dans un navigateur
 auth-gateway-held = une clé enregistrée pour { $ids }
 auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
@@ -975,18 +975,24 @@ auth-gateway-extra-word =
 auth-gateway-not-while-incognito =
     une session incognito n'écrit rien sur le disque, et enregistrer une clé est une écriture : lancez bravebot auth login gateway sans --incognito
 auth-gateway-none-configured =
-    aucune passerelle n'est configurée : ajoutez un bloc provider à settings.json, ou lancez bravebot auth login import, puis enregistrez sa clé ici
-auth-gateway-not-configured = ce n'est pas l'id d'un bloc provider ; les passerelles configurées sont { $ids }
+    { $path } nomme les passerelles de tous les utilisateurs de cette machine et n'en nomme aucune : il n'y a donc aucune passerelle pour laquelle enregistrer une clé
+auth-gateway-not-configured = ce n'est pas l'id d'une passerelle pour laquelle une clé peut être enregistrée ; ce sont { $ids }
+auth-gateway-not-configured-managed =
+    ce n'est pas l'id de l'une des passerelles que { $path } nomme pour tous les utilisateurs de cette machine, qui sont les seules pour lesquelles une clé peut être enregistrée ; ce sont { $ids }
 auth-gateway-needs-a-terminal =
     une clé de passerelle se tape dans un terminal sans rien afficher, donc bravebot auth login gateway a besoin d'un terminal
 auth-gateway-no-home = il n'y a pas de répertoire personnel où enregistrer la clé
 auth-gateway-keys-unreadable =
     { $path } n'est pas un fichier de clés écrit par bravebot, il a donc été laissé tel quel et rien n'a changé
-auth-gateways-heading = Passerelles configurées :
+auth-gateways-heading = Services pour lesquels une clé peut être enregistrée :
+auth-gateways-heading-managed =
+    Les passerelles que { $path } nomme pour tous les utilisateurs de cette machine, qui sont les seules pour lesquelles une clé peut être enregistrée :
 auth-gateway-key-stored = une clé enregistrée
 auth-which-gateway = Laquelle ? Tapez son numéro ou son identifiant, ou rien pour arrêter :
 auth-not-a-listed-gateway = { $answer } n'est pas l'une des passerelles listées
 auth-gateway-key-held = Une clé est déjà enregistrée pour { $id }.
+auth-gateway-key-held-unrecorded =
+    Une clé est déjà enregistrée pour { $id }, et aucun bloc provider ne le nomme : aucune session ne l'envoie. Répondre non la garde et enregistre le bloc dans les réglages.
 auth-gateway-replace = La remplacer ?
 auth-gateway-key-question = Clé pour { $id }, envoyée à { $host } (non affichée pendant la saisie) :
 auth-gateway-nothing-stored = rien n'a été enregistré
@@ -994,6 +1000,16 @@ auth-gateway-not-read = la clé n'a pas pu être lue depuis le terminal : { $err
 auth-gateway-not-stored = la clé n'a pas été enregistrée : { $path } : { $error }
 auth-gateway-stored =
     la clé pour { $id } est enregistrée dans { $path }, et les sessions démarrées à partir de maintenant l'envoient à { $host }
+auth-gateway-recorded =
+    { $file } nomme désormais { $id } sous provider : les sessions démarrées à partir de maintenant envoient la clé enregistrée pour lui à { $host }
+auth-gateway-stored-and-recorded =
+    la clé pour { $id } est enregistrée dans { $path }, et { $file } nomme désormais { $id } sous provider : les sessions démarrées à partir de maintenant l'envoient à { $host }
+auth-gateway-cannot-record =
+    une clé pour { $id } n'est envoyée que lorsqu'un bloc provider nomme { $id }, et aucun ne peut être enregistré : aucune clé n'a donc été demandée : { $problem }
+auth-gateway-not-recorded =
+    la clé pour { $id } est enregistrée, et aucune session ne l'envoie tant qu'un bloc provider ne nomme pas { $id } : ajoutez { $entry } à { $file } ({ $problem })
+auth-gateway-entry-not-a-service =
+    { $file } contient un provider qui n'est pas un bloc d'entrées, ou une entrée pour { $id } qui ne configure aucun service
 auth-gateway-variable-wins =
     { $variable } est définie, et tant qu'elle l'est, une session envoie sa valeur au lieu de la clé enregistrée
 auth-logout-gateway-none = aucune clé de passerelle n'est enregistrée
@@ -1014,6 +1030,10 @@ auth-status-not-all-usable = une connexion demandée n'est pas utilisable
 auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway ou chatgpt
 auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
 auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
+auth-status-gateway-none = aucune clé de passerelle n'est enregistrée ; lancez bravebot auth login gateway
+auth-status-gateway-none-stored = aucune clé n'est enregistrée pour { $id } ; lancez bravebot auth login gateway { $id }
+auth-status-gateway-unrecorded =
+    une clé est enregistrée pour { $id } et aucun bloc provider ne le nomme : aucune session ne l'envoie ; lancez bravebot auth login gateway { $id } pour enregistrer le bloc
 # L'instant est celui où le jeton d'accès expire, écrit sous la forme 2026-10-22T21:05:27Z. Le jeton
 # est remplacé à sa prochaine utilisation, donc un instant passé reste une connexion active.
 auth-status-chatgpt-expires = le jeton d'accès expire le { $expires }

@@ -19,12 +19,14 @@ An entry keyed `anthropic` reaches Anthropic's own API with an API key:
 }
 ```
 
-Export the key as `ANTHROPIC_API_KEY=<your key>`, or store it with
-`bravebot auth login gateway anthropic`. The block has to say where the key lives: a block naming no
-`env`, no `options.apiKey` and no stored key sends none, and Anthropic refuses the request.
-`ANTHROPIC_API_KEY` is a name other tools read as well, and naming it in `env` is what makes
-bravebot send the key your shell holds. Like any variable a `provider` block names, it is
-[withheld from the programs bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
+Export the key as `ANTHROPIC_API_KEY=<your key>`, or store it with `bravebot auth login gateway
+anthropic`, which needs no block written first: it adds `"provider": {"anthropic": {}}` to your
+settings, and that entry sends the stored key to `api.anthropic.com`. A block you write yourself has
+to say where the key lives: one naming no `env`, no `options.apiKey` and no stored key sends none,
+and Anthropic refuses the request. `ANTHROPIC_API_KEY` is a name other tools read as well, and
+naming it in `env` is what makes bravebot send the key your shell holds, so the entry the sign-in
+adds does not name it. Like any variable a `provider` block names, it is [withheld from the programs
+bravebot runs](../../reference/run-tool.md#what-a-program-is-handed).
 
 This is a different route from [AWS Bedrock](bedrock.md), which reaches Claude through an AWS
 account and signs its requests. Nothing here needs an AWS account.

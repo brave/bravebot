@@ -136,6 +136,14 @@ pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
         .map(|(_, url, _)| *url)
 }
 
+/// Every id [`known_endpoint`] has an endpoint for, in the order the table lists them.
+///
+/// Read from the table itself, so what a caller offers by name and what a session reaches by that
+/// name are one list.
+pub fn known_ids() -> impl Iterator<Item = &'static str> {
+    KNOWN_ENDPOINTS.iter().map(|(id, _, _)| *id)
+}
+
 /// The variable the other tool reads `id`'s token from, where the id is one compiled in.
 pub(crate) fn known_variable(id: &str) -> Option<&'static str> {
     if id == GOOGLE_VERTEX_ID {
@@ -464,6 +472,18 @@ impl Provider {
             Some(account) => account,
             None => unreachable!("an entry that states its endpoint is reachable"),
         }
+    }
+
+    /// The service a known id reaches where no block names it, or `None` for an id that is not one
+    /// of [`known_ids`].
+    ///
+    /// The reading of a block that holds no field, so its endpoint is the one a session reaches
+    /// for `{"<id>": {}}` and cannot differ from it. `Self::one` alone would also accept an id such
+    /// as `google-vertex` that has no entry in the table and builds from an empty entry, so the table
+    /// is asked first.
+    pub fn known(id: &str) -> Option<Self> {
+        known_endpoint(id)?;
+        Self::one(id, &serde_json::Map::new())
     }
 
     /// Every provider in a settings root, in the order the file listed them.
@@ -2139,6 +2159,81 @@ mod tests {
             }}}"#);
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(token(&provider.credential(|_| None)), Some("a-token"));
+    }
+
+    /// What a caller offers by name has to be what a session reaches by that name, so an id is known
+    /// exactly where an endpoint is compiled in for it. The ids that have a reading of their own and
+    /// no endpoint are the ones a list built from another table, such as the variables, would add:
+    /// Vertex AI builds its endpoint from a project, and neither Bedrock nor the ChatGPT account is a
+    /// gateway reached by a name alone.
+    #[test]
+    fn the_known_ids_are_the_ids_an_endpoint_is_compiled_in_for_and_no_other() {
+        let ids: Vec<&str> = known_ids().collect();
+        let candidates = [
+            "openrouter",
+            "openai",
+            "anthropic",
+            GOOGLE_VERTEX_ID,
+            AWS_PROVIDER_ID,
+            CHATGPT_ID,
+            "work",
+            "",
+        ];
+        let with_an_endpoint: Vec<&str> = candidates
+            .into_iter()
+            .filter(|id| known_endpoint(id).is_some())
+            .collect();
+        let listed: Vec<&str> = candidates
+            .into_iter()
+            .filter(|id| ids.contains(id))
+            .collect();
+        assert_eq!(listed, with_an_endpoint);
+        assert!(!ids.is_empty(), "no id is known");
+        for id in &ids {
+            assert!(known_endpoint(id).is_some(), "{id} has no endpoint");
+        }
+        assert!(
+            known_variable(GOOGLE_VERTEX_ID).is_some(),
+            "the variables name an id the endpoints do not"
+        );
+    }
+
+    /// A known id asked for by name alone is read as `{"<id>": {}}` is, so the host a picker shows
+    /// for it is the host a session sends the key to, whichever protocol the id is spoken in.
+    #[test]
+    fn a_known_id_asked_for_alone_is_read_as_an_entry_that_names_nothing() {
+        for id in known_ids() {
+            let alone = Provider::known(id).unwrap_or_else(|| panic!("{id} is not known"));
+            let entry = one(&format!(r#"{{"provider": {{"{id}": {{}}}}}}"#));
+
+            assert_eq!(alone.id, id);
+            assert_eq!(Some(alone.base_url.as_str()), known_endpoint(id), "{id}");
+            assert_eq!(alone.base_url, entry.base_url, "{id}");
+            assert_eq!(alone.host(), entry.host(), "{id}");
+            assert_eq!(alone.protocol(), entry.protocol(), "{id}");
+            assert!(
+                alone.env.is_empty() && alone.api_key.is_none() && alone.stored_key.is_none(),
+                "{id} names somewhere for a credential to live"
+            );
+            assert!(alone.models.is_empty(), "{id} lists models");
+        }
+        assert_eq!(
+            Provider::known("openai").map(|provider| provider.host().to_string()),
+            Some("api.openai.com".to_string())
+        );
+    }
+
+    /// An id with no row is not a known provider, though the reading of an empty entry would build
+    /// one for some of them: Vertex AI's has an express endpoint, which is not a name's endpoint.
+    #[test]
+    fn an_id_with_no_row_in_the_table_is_not_a_known_provider() {
+        for id in [GOOGLE_VERTEX_ID, AWS_PROVIDER_ID, CHATGPT_ID, "work", ""] {
+            assert!(Provider::known(id).is_none(), "{id:?} was taken as known");
+        }
+        assert!(
+            one(r#"{"provider": {"google-vertex": {}}}"#).base_url == VERTEX_EXPRESS_ENDPOINT,
+            "the empty Vertex entry builds the express endpoint, so `known` has to check the table first"
+        );
     }
 
     /// A known name pointed somewhere else reaches where it was pointed. Otherwise the table would

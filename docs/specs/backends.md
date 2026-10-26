@@ -558,6 +558,16 @@ session is running is sent by the sessions started after it. The key is only sto
 named by the block, so a key stored for an id no block names configures nothing, and the managed
 layer's gateways ([BACKEND-38](#BACKEND-38)) take one as a person's own do.
 
+**A known name with no block.** `bravebot auth login gateway` stores a key for a known name
+([BACKEND-17](#BACKEND-17)) before any block names it, and then adds an entry that holds no field to
+the person's own settings file ([cli.md](cli.md)). The entry names the name and nothing else, so the
+key is sent to the host compiled in for it, as [BACKEND-17](#BACKEND-17) says that name is reached:
+as `authorization: Bearer` for `openrouter` and `openai`, and as `x-api-key` for `anthropic`. It
+names no variable, so the variable that name's own service reads, such as `OPENAI_API_KEY` for
+`openai`, is not read: a variable is read only where a block names it. The sign-in offers no known
+name where the machine-level layer names the gateways, since a block recorded in the person's file
+would not be read there.
+
 **An entry naming AWS is the exception**, and not a token kept somewhere else: Bedrock takes a
 signature over the request, so there is no credential for a block to name and none is read from one.
 Which set of AWS credentials to sign with comes from the profile the block names, resolved when a
@@ -582,6 +592,8 @@ offering its models is not offering rows that fail when picked.
 `verified-by: bravebot_config::provider::a_stored_key_is_read_after_a_variable_and_before_the_file`
 `verified-by: bravebot_config::provider::a_stored_key_is_sent_to_a_block_naming_no_credential`
 `verified-by: bravebot_config::lib::a_stored_key_reaches_the_gateway_its_id_names`
+`verified-by: bravebot_config::lib::an_entry_that_names_nothing_under_a_known_id_is_sent_the_stored_key_and_no_variable`
+`verified-by: bravebot_config::lib::a_known_id_recorded_as_an_empty_entry_is_sent_its_key_in_the_header_its_protocol_uses`
 `verified-by: bravebot_cli::running::a_run_sends_the_key_stored_for_its_gateway`
 `verified-by: bravebot_config::provider::a_token_written_into_the_file_is_still_read`
 `verified-by: bravebot_config::provider::a_provider_with_nothing_holding_a_token_has_none`
@@ -608,6 +620,11 @@ The set of known names is compiled in: `openrouter`, reached at `https://openrou
 `openai`, reached at `https://api.openai.com/v1`, and `anthropic`, reached at
 `https://api.anthropic.com/v1` in the protocol [BACKEND-57](#BACKEND-57) states. Nothing is fetched to
 resolve one, and no service is asked what its own endpoint is.
+
+`bravebot auth login gateway` offers a key for exactly these names where no block names them, and
+for none of them where the machine-level layer names the gateways. It shows each with the endpoint
+its entry would reach: a known name asked for alone is read as an entry that holds no field is, so
+the host it shows is the one a session sends the key to.
 
 A known name supplies an endpoint and nothing else. An `openai` entry is otherwise reached as any
 other gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
@@ -639,6 +656,9 @@ gateway is a line of configuration rather than an unreachable service. A stated 
 what keeps a known name usable against a proxy or a private deployment.
 
 `verified-by: bravebot_config::provider::a_known_provider_name_supplies_its_own_endpoint`
+`verified-by: bravebot_config::provider::the_known_ids_are_the_ids_an_endpoint_is_compiled_in_for_and_no_other`
+`verified-by: bravebot_config::provider::a_known_id_asked_for_alone_is_read_as_an_entry_that_names_nothing`
+`verified-by: bravebot_config::provider::an_id_with_no_row_in_the_table_is_not_a_known_provider`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
 `verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
