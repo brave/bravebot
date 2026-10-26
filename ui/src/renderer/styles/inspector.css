@@ -96,6 +96,10 @@
 .todos li.cancelled { color: var(--ink-tertiary); }
 .todos li.cancelled .todo-text { text-decoration: line-through; }
 .todos li.active { color: var(--ink-primary); font: var(--type-meta-strong); }
+/* A row the turn left neither done nor cancelled, once the turn has ended: dimmed like a settled
+   row, but its hollow mark (the marker's own default ink) keeps it apart from `done` and
+   `cancelled`, since nobody struck it. */
+.todos li.left-open { color: var(--ink-tertiary); }
 
 .file-row, .confined-row {
   display: flex;
