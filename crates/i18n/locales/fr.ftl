@@ -3635,6 +3635,8 @@ panel-hidden-cancelled = { $count ->
     [one] +{ $count } annulée
    *[other] +{ $count } annulées
     }
+# Ce que la liste `?` dit de la touche qui affiche le plan en entier, après la touche.
+shortcut-todos = afficher le plan en entier
 # Ce que /todos met dans la transcription au-dessus du plan qu'il affiche, et ce qu'il dit quand il n'y en a pas.
 todos-heading = plan : { $done } sur { $total } terminées
 # La même, quand certaines de ses tâches ont été annulées, ce qu'elle compte à part de celles qui sont terminées.

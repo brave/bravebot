@@ -2899,6 +2899,8 @@ panel-hidden-cancelled = { $count ->
     [one] +{ $count } cancelled
    *[other] +{ $count } cancelled
     }
+# What the `?` list says the key that prints the whole plan does, after the key.
+shortcut-todos = print the whole plan
 # What /todos puts in the transcript above the plan it prints, and what it says where there is none.
 todos-heading = plan: { $done } of { $total } done
 # The same where some of its tasks were cancelled, which are counted apart from the done ones.

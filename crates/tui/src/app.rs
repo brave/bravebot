@@ -13311,6 +13311,198 @@ mod tests {
         );
     }
 
+    /// CMD-28, INPUT-32: the `todos` key prints the plan as `/todos` does, at rest and while a turn
+    /// runs, says so where there is no plan, and a moved key leaves the old chord with no meaning.
+    ///
+    /// Rejects: a key that does something other than the command does, one that waits for the turn
+    /// to end, one that types into the box or sends the line, and a moved key that the old chord
+    /// still answers.
+    #[test]
+    fn the_todos_key_prints_the_plan_as_the_command_does() {
+        let alt = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+
+        let mut keyed = Session::new("none");
+        keyed.set_todos(a_plan_of_four_tasks());
+        assert_eq!(handle_key(&mut keyed, alt('a')), Action::Redraw);
+        let mut typed = Session::new("none");
+        typed.set_todos(a_plan_of_four_tasks());
+        enter_line(&mut typed, "/todos");
+        let (by_key, by_command) = (keyed.transcript.last(), typed.transcript.last());
+        let (by_key, by_command) = (by_key.expect("the plan"), by_command.expect("the plan"));
+        assert_eq!(by_key.whole_plan, a_plan_of_four_tasks());
+        assert_eq!(by_key.whole_plan, by_command.whole_plan);
+        assert_eq!(by_key.text, by_command.text);
+        assert_eq!(keyed.turns, 0);
+        assert_eq!(keyed.input(), "", "the key typed into the box");
+
+        // While a turn runs it is carried out as it is pressed, and is said as a command is.
+        let mut running = a_turn_running_on("first");
+        running.set_todos(a_plan_of_four_tasks());
+        assert_eq!(
+            handle_key_while_working(&mut running, alt('a')),
+            Action::Redraw
+        );
+        let said = running.said_while_working();
+        assert_eq!(said.len(), 1);
+        assert_eq!(said[0].whole_plan, a_plan_of_four_tasks());
+        assert_eq!(running.input(), "", "the key typed into the box");
+
+        // With no plan it says so, as the command does.
+        let mut empty = Session::new("none");
+        assert_eq!(handle_key(&mut empty, alt('a')), Action::Redraw);
+        assert_eq!(
+            empty.transcript.last().expect("a note").text,
+            t!(todos_none)
+        );
+
+        // A moved key prints, and the chord it left does not.
+        let mut moved = Session::new("none");
+        moved.set_todos(a_plan_of_four_tasks());
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert("todos".to_string(), "alt-y".to_string());
+        moved.adopt_keybindings(&custom);
+        handle_key(&mut moved, alt('a'));
+        assert!(
+            moved
+                .transcript
+                .iter()
+                .all(|entry| entry.whole_plan.is_empty()),
+            "the chord the action was moved off still printed the plan"
+        );
+        assert_eq!(handle_key(&mut moved, alt('y')), Action::Redraw);
+        assert_eq!(
+            moved.transcript.last().expect("the plan").whole_plan,
+            a_plan_of_four_tasks()
+        );
+    }
+
+    /// INPUT-32: in the files state the `todos` key does nothing, at rest and while a turn runs, so
+    /// the plan is not printed behind the list of edits and no letter reaches the box.
+    ///
+    /// Rejects: a key that prints the plan while the files state holds the keys, and one that
+    /// reads Alt-A as the letter `a` and types it into the box behind the state.
+    #[test]
+    fn the_todos_key_prints_nothing_in_the_files_state() {
+        let alt_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
+        for running in [false, true] {
+            let mut session = if running {
+                a_turn_running_on("first")
+            } else {
+                Session::new("none")
+            };
+            session.set_todos(a_plan_of_four_tasks());
+            let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", "a.rs")
+                    .of_tool("edit_file")
+                    .with_changes(diff.condensed(3))
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: "a.rs".into(),
+                        added: diff.added(),
+                        removed: diff.removed(),
+                        numbers: diff.condensed_numbers(3),
+                    }))
+                    .done("done"),
+            ));
+            session.laid.columns = 120;
+            session.toggle_files();
+            assert!(session.files_open(), "the files state did not open");
+            let entries = session.transcript.len();
+            let input = session.input().to_string();
+
+            let action = if running {
+                handle_key_while_working(&mut session, alt_a)
+            } else {
+                handle_key(&mut session, alt_a)
+            };
+
+            assert_eq!(action, Action::None, "running: {running}");
+            assert!(session.files_open(), "the key ended the state");
+            assert_eq!(
+                session.transcript.len(),
+                entries,
+                "the key left an entry while the files state held the keys (running: {running})"
+            );
+            assert!(
+                session
+                    .transcript
+                    .iter()
+                    .all(|entry| entry.whole_plan.is_empty()),
+                "the plan was printed behind the files state (running: {running})"
+            );
+            assert_eq!(session.input(), input, "a letter reached the box");
+        }
+    }
+
+    /// INPUT-32: where a mode types letters, the `todos` key is read as the letter it carries and
+    /// prints nothing: in the prompt search and in a search typed in the transcript scroller, at
+    /// rest and while a turn runs.
+    ///
+    /// Rejects: a key that prints the plan where the mode types, and a mode that turns the chord
+    /// away instead of reading the letter, so that a person typing an `a` with Alt held loses it.
+    #[test]
+    fn a_mode_that_types_letters_reads_the_todos_key_as_the_letter() {
+        let alt_a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT);
+        let press = |session: &mut Session, running: bool, key: KeyEvent| {
+            if running {
+                handle_key_while_working(session, key)
+            } else {
+                handle_key(session, key)
+            }
+        };
+        for running in [false, true] {
+            let new_session = || {
+                let mut session = if running {
+                    a_turn_running_on("first")
+                } else {
+                    Session::new("none")
+                };
+                session.set_todos(a_plan_of_four_tasks());
+                session
+            };
+            let printed = |session: &Session| {
+                session
+                    .transcript
+                    .iter()
+                    .any(|entry| !entry.whole_plan.is_empty())
+            };
+
+            // The prompt search.
+            let mut session = new_session();
+            session.history =
+                crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                    "a prompt sent before",
+                    None,
+                )]);
+            assert!(session.open_history_search(), "no search opened");
+            press(&mut session, running, alt_a);
+            assert_eq!(
+                session.history_search().map(|search| search.needle()),
+                Some("a"),
+                "the letter was not typed into the search (running: {running})"
+            );
+            assert!(!printed(&session), "the plan was printed from the search");
+
+            // A search typed in the transcript scroller, which runs when Enter ends it.
+            let mut session = new_session();
+            session.open_scroller();
+            session.begin_search();
+            press(&mut session, running, alt_a);
+            assert!(session.typing_a_search(), "the key ended the typed search");
+            press(
+                &mut session,
+                running,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            );
+            assert_eq!(
+                session.needle(),
+                "a",
+                "the letter was not typed into the scroller's search (running: {running})"
+            );
+            assert!(!printed(&session), "the plan was printed from the scroller");
+        }
+    }
+
     /// `/request` opens the last request built, and nothing else: no turn starts and no prompt is
     /// recorded.
     #[test]

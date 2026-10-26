@@ -225,7 +225,7 @@ fn fitting(text: &str, room: usize) -> String {
     fitted
 }
 
-/// The whole plan, as `/todos` prints it (VIEW-37): a mark and the status in words for
+/// The whole plan, as `/todos` and its key print it (VIEW-37): a mark and the status in words for
 /// each task, then the task wrapped to `width`.
 ///
 /// A row that is neither completed nor cancelled is drawn as work being done, as the plan under a
@@ -6708,6 +6708,26 @@ mod tests {
             !output.contains("ctrl-s"),
             "default stash chord should not be displayed: {output}"
         );
+    }
+
+    /// The `?` list has a row for the key that prints the whole plan, on its default and on a moved
+    /// chord, so the key is written down in the one place that lists the keys (INPUT-13).
+    #[test]
+    fn the_shortcut_list_names_the_todos_chord() {
+        let mut session = Session::new("none");
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-a"), "{listed}");
+        assert!(listed.contains("print the whole plan"), "{listed}");
+
+        let mut session = Session::new("none");
+        let mut moved = std::collections::BTreeMap::new();
+        moved.insert("todos".to_string(), "alt-y".to_string());
+        session.adopt_keybindings(&moved);
+        session.type_char('?');
+        let listed = rendered_at(&session, 120, 40);
+        assert!(listed.contains("alt-y"), "{listed}");
+        assert!(!listed.contains("alt-a"), "{listed}");
     }
 
     /// The `?` list has a row for the scope switch, on its default and on a moved chord, so the key

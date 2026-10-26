@@ -3424,6 +3424,106 @@ mod tests {
         assert!(first < second, "{drawn}");
     }
 
+    /// The key prints the same whole plan the command does, with every task, its status and none
+    /// of its text cut, at a width the panel could not draw it in.
+    ///
+    /// Rejects: a key that prints some other form of the plan, such as the rows the panel has room
+    /// for, and one that cuts a task to the width.
+    #[test]
+    fn the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it() {
+        let rows: Vec<(String, Status)> = (1..=12)
+            .map(|n| {
+                (
+                    format!(
+                        "task {n} is written to be longer than the panel is wide: {}",
+                        "word ".repeat(n)
+                    ),
+                    [
+                        Status::Done,
+                        Status::Active,
+                        Status::Pending,
+                        Status::Cancelled,
+                    ][n % 4],
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, Status)> = rows
+            .iter()
+            .map(|(text, status)| (text.as_str(), *status))
+            .collect();
+        let finished = |plan| {
+            let mut session = working_on(plan);
+            session.complete("done", Vec::new(), 0);
+            session
+        };
+        let alt_a = ratatui::crossterm::event::KeyEvent::new(
+            ratatui::crossterm::event::KeyCode::Char('a'),
+            ratatui::crossterm::event::KeyModifiers::ALT,
+        );
+
+        let mut keyed = finished(plan(&borrowed));
+        crate::app::handle_key(&mut keyed, alt_a);
+        let mut typed = finished(plan(&borrowed));
+        for c in "/todos".chars() {
+            crate::app::handle_key(
+                &mut typed,
+                ratatui::crossterm::event::KeyEvent::new(
+                    ratatui::crossterm::event::KeyCode::Char(c),
+                    ratatui::crossterm::event::KeyModifiers::NONE,
+                ),
+            );
+        }
+        crate::app::handle_key(
+            &mut typed,
+            ratatui::crossterm::event::KeyEvent::new(
+                ratatui::crossterm::event::KeyCode::Enter,
+                ratatui::crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+
+        for width in [40, 100] {
+            screen(&mut keyed, width, 60);
+            screen(&mut typed, width, 60);
+            let (by_key, by_command) = (
+                crate::render::as_text(&keyed),
+                crate::render::as_text(&typed),
+            );
+            // The typed command is a line of its own above its plan, which the key has no line
+            // for, so each is compared from its heading down.
+            let from_heading = |text: &str| -> String {
+                assert_eq!(text.matches("plan:").count(), 1, "{text}");
+                text[text.find("plan:").expect("a heading")..].to_string()
+            };
+            assert_eq!(
+                from_heading(&by_key),
+                from_heading(&by_command),
+                "the key and the command printed different plans at {width} columns"
+            );
+            let all: Vec<String> = by_key.lines().map(str::to_string).collect();
+            let at = all
+                .iter()
+                .rposition(|row| row.trim().starts_with("plan:"))
+                .expect("a heading");
+            assert!(all.iter().all(|row| !row.contains('…')), "{by_key}");
+            let printed = tasks_printed(&all[at + 1..]);
+            assert_eq!(printed.len(), 12, "{by_key}");
+            for ((said, text), (original, status)) in printed.iter().zip(&rows) {
+                let word = match status {
+                    Status::Done => t!(todos_status_done),
+                    Status::Active => t!(todos_status_active),
+                    Status::Pending => t!(todos_status_pending),
+                    Status::Cancelled => t!(todos_status_cancelled),
+                };
+                assert_eq!(said, word, "{original}");
+                assert_eq!(
+                    *text,
+                    original.split_whitespace().collect::<String>(),
+                    "{original} lost text at {width} columns"
+                );
+            }
+        }
+    }
+
     fn mouse(
         kind: ratatui::crossterm::event::MouseEventKind,
         row: u16,

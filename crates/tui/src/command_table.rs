@@ -168,7 +168,7 @@ pub(crate) const PANEL_COMMAND: &str = "/panel";
 /// The line that puts the info panel in its files state, or ends it.
 pub(crate) const DIFF_COMMAND: &str = "/diff";
 
-/// The line that prints the whole plan in the transcript.
+/// The line that prints the whole plan in the transcript, as its key does.
 ///
 /// Carried out by the driver from the plan the session holds and starts no turn (CMD-28).
 pub(crate) const TODOS_COMMAND: &str = "/todos";

@@ -49,7 +49,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
-| `/todos` | | Print the whole plan, every task with its status |
+| `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -792,6 +792,9 @@ drawn as a visible character, and every row of it has a margin of the interface'
 cannot draw. The word takes no argument: `/todos` followed by words is a prompt. It touches nothing
 a running turn holds, so typed while a turn runs it is carried out at once. A prompt file or skill
 named `todos` is shadowed by the command.
+
+Alt-A does the same and is one of the [chords you can move](../customize/configuration.md#keybindings), the `todos`
+action. It works at the box, and while a turn runs.
 
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 

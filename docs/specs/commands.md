@@ -1424,6 +1424,9 @@ The command takes no argument, so `/todos` followed by words is a prompt (CMD-2)
 a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt file or
 skill named `todos` is shadowed by the command (CMD-17).
 
+The `todos` key ([INPUT-32](terminal-input.md#INPUT-32)) does what the command does: the same plan, said
+in the same way, at the box, and while a turn runs.
+
 **Why.** The panel draws the rows it has room for, each cut to its width, and the plan the planner
 is working to is what a person most often wants to read whole. The session already holds it, so no
 model is needed to read it out.
@@ -1432,6 +1435,8 @@ model is needed to read it out.
 `verified-by: bravebot_tui::app::the_todos_command_says_so_when_there_is_no_plan`
 `verified-by: bravebot_tui::app::a_prompt_containing_the_todos_command_or_a_longer_word_is_still_a_prompt`
 `verified-by: bravebot_tui::app::the_todos_command_is_carried_out_while_a_turn_runs`
+`verified-by: bravebot_tui::app::the_todos_key_prints_the_plan_as_the_command_does`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
 `verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
 `verified-by: bravebot_tui::app::only_the_commands_that_touch_nothing_the_turn_holds_skip_the_queue`
 `verified-by: bravebot_tui::app::every_command_in_the_table_dispatches`

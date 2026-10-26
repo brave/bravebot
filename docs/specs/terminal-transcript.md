@@ -1154,7 +1154,8 @@ The accelerator that focuses the composer is not changed by this entry.
 <a id="VIEW-37"></a>
 ### VIEW-37: a plan printed on request is drawn whole, behind a margin its text cannot draw
 
-`/todos` ([CMD-28](commands.md#CMD-28)) puts the session's plan in the transcript under a heading
+`/todos` ([CMD-28](commands.md#CMD-28)) and the key that does the same
+([INPUT-32](terminal-input.md#INPUT-32)) put the session's plan in the transcript under a heading
 that says how many of its tasks are done, and how many are cancelled where any are. Every task is
 there, in the plan's order, whatever room the info panel has for rows
 ([PANEL-10](info-panel.md#PANEL-10)). A task takes the rows its text needs. The first begins with
@@ -1195,6 +1196,7 @@ taken for the interface's own, as a forged margin would be.
 `verified-by: bravebot_tui::panel::a_printed_plan_stays_as_it_was_when_the_plan_changes`
 `verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
 `verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
 
 ## Known costs
 
