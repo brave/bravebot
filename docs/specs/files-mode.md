@@ -81,9 +81,12 @@ kernel.
 
 `/diff` draws the panel in its files state and opens the panel if it was closed. A click on the
 heading of the Files section of the ordinary panel, or on the row under it, does the same
-([MOUSE-20](mouse.md#MOUSE-20)). While the state is open, `/diff`, `q` and Escape end it, and so
-does a click on the `x` at the right end of its heading row ([MOUSE-18](mouse.md#MOUSE-18)). Ending
-it returns the panel to what it was before: closed if it was closed, in its ordinary state if it was
+([MOUSE-20](mouse.md#MOUSE-20)). While the state is open, `q`, Escape and Ctrl-C end it, and so
+does a click on the `x` at the right end of its heading row ([MOUSE-18](mouse.md#MOUSE-18)). A
+person cannot type `/diff` to end it, since no character reaches the box while it is open
+([FILES-9](#FILES-9)). A `/diff` that reaches the dispatcher with the state open anyway, queued
+earlier ([CMD-8](commands.md#CMD-8)) and run when the session is idle, ends it as `q` does, so a
+second queued `/diff` undoes the first. Ending it returns the panel to what it was before: closed if it was closed, in its ordinary state if it was
 open. Entering and leaving write nothing to `~/.bravebot/panel` ([PANEL-5](info-panel.md#PANEL-5)).
 The `panel` chord hides the panel from either state and ends the state with it. The state is not
 kept across a start or a resume.
@@ -95,6 +98,7 @@ the state (FILES-4) it answers with a note saying how wide the terminal has to b
 
 `verified-by: bravebot_tui::app::diff_opens_the_panel_in_its_files_state_and_q_puts_it_back`
 `verified-by: bravebot_tui::app::leaving_the_state_closes_a_panel_it_opened`
+`verified-by: bravebot_tui::app::a_typed_diff_cannot_end_the_state_and_a_queued_one_does`
 `verified-by: bravebot_tui::app::entering_and_leaving_the_state_writes_no_panel_choice`
 `verified-by: bravebot_tui::app::the_panel_chord_ends_the_state_with_the_panel`
 `verified-by: bravebot_tui::files_mode::a_click_on_the_files_heading_or_the_row_under_it_opens_the_state`

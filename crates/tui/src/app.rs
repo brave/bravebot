@@ -34318,6 +34318,26 @@ mod tests {
         assert!(!session.files_open() && !session.panel_open());
     }
 
+    /// FILES-3, FILES-9: typing `/diff` with the state open reaches nothing, so the state stays, and
+    /// the box keeps its line. The same line queued earlier and dispatched ends it.
+    #[test]
+    fn a_typed_diff_cannot_end_the_state_and_a_queued_one_does() {
+        let mut session = session_that_wrote();
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
+        assert!(session.files_open());
+        for character in DIFF_COMMAND.chars() {
+            handle_key(&mut session, key(KeyCode::Char(character)));
+        }
+        let action = handle_key(&mut session, key(KeyCode::Enter));
+        assert_ne!(action, Action::Submit(DIFF_COMMAND.to_string()));
+        assert!(session.files_open(), "typing /diff ended the state");
+        dispatch_command(&mut session, commanded(DIFF_COMMAND));
+        assert!(
+            !session.files_open(),
+            "a queued /diff did not end the state"
+        );
+    }
+
     /// FILES-3: the panel chord hides the panel from the state and ends the state with it.
     #[test]
     fn the_panel_chord_ends_the_state_with_the_panel() {
