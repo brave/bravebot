@@ -1056,13 +1056,13 @@ CLI_ARCHES = amd64:x86_64 arm64:aarch64
 .PHONY: cli-packages-linux
 cli-packages-linux:
 	@docker run --rm -e OWNER="$$(id -u):$$(id -g)" \
-		-v "$(PWD):/work:ro" -v "$(PWD)/dist:/work/dist:rw" -w /work $(DEB_IMAGE) sh -c '\
+		-v "$(CURDIR):/work:ro" -v "$(CURDIR)/dist:/work/dist:rw" -w /work $(DEB_IMAGE) sh -c '\
 		apt-get update >/dev/null && \
 		apt-get install -y --no-install-recommends make >/dev/null && \
 		make cli-packages-linux-deb && \
 		chown "$$OWNER" dist/bravebot-linux-*.deb'
 	@docker run --rm -e OWNER="$$(id -u):$$(id -g)" \
-		-v "$(PWD):/work:ro" -v "$(PWD)/dist:/work/dist:rw" -w /work $(RPM_IMAGE) sh -c '\
+		-v "$(CURDIR):/work:ro" -v "$(CURDIR)/dist:/work/dist:rw" -w /work $(RPM_IMAGE) sh -c '\
 		dnf -y --setopt=install_weak_deps=False install make rpm-build >/dev/null && \
 		make cli-packages-linux-rpm && \
 		chown "$$OWNER" dist/bravebot-linux-*.rpm'
