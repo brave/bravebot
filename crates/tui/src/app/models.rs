@@ -746,7 +746,7 @@ fn listed_in_the_background(
         let listed = list_models_for_picker(&config, chosen.as_deref())
             .map(|PickerRoster { models, problems }| (models, problems));
         // The picker was left before the answer came, so nobody is waiting for it.
-        let _ = send.send(listed);
+        send.send(listed).ok();
     };
     #[cfg(test)]
     ask();
