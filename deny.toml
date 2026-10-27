@@ -10,7 +10,9 @@
 # What a new crate buys, and what writing it by hand would cost, is a judgement a person
 # makes: DEP-001 in docs/best-practices/dependencies.md. This file is the half of that rule
 # a tool can decide. `make check-deps` first runs contrib/check-deny-reasons.py, which fails an
-# `ignore`, `skip`, `skip-tree` or `deny` entry that has no `reason`.
+# `ignore`, `skip`, `skip-tree` or `deny` entry that has no `reason`, and a licence exception that
+# has no comment. It then runs cargo-deny over the root graph and over the fuzz package's, which
+# is a workspace of its own.
 
 [graph]
 # The feature set clippy is run under here, and the widest one anything ships with. A
@@ -43,6 +45,16 @@ allow = [
     "MPL-2.0",              # this workspace, and challenge-bypass-ristretto
     "Unicode-3.0",          # unicode-ident, which is (MIT OR Apache-2.0) AND Unicode-3.0
     "Zlib",                 # foldhash
+]
+# A crate that needs a licence none of the above covers is named here with the licence it is
+# allowed, and a comment above it saying why. cargo-deny takes no `reason` on an exception, so
+# contrib/check-deny-reasons.py reads the comment as it reads a `reason` elsewhere.
+exceptions = [
+    # libfuzzer-sys vendors LLVM's libFuzzer, which is under the University of Illinois/NCSA licence.
+    # That licence is permissive, and no other crate here has it. libfuzzer-sys is a dependency of
+    # the fuzz package alone, a test harness that is never linked into a binary that ships, and
+    # `make check-deps` reads that package's graph with this policy.
+    { crate = "libfuzzer-sys", allow = ["NCSA"] },
 ]
 
 [bans]

@@ -13,6 +13,7 @@
 #   transcript   la transcription
 #   scroller     le défilement      the mode Ctrl-O opens over the transcript
 #   token        le jeton
+#   hunk         le morceau         a run of changed lines in a file, as `git add -p` calls it
 #
 # What is deliberately left in English: the names of commands (`/model`, `/add-dir`), of
 # environment variables (`$EDITOR`), of release channels, and the letters a question is
@@ -69,7 +70,11 @@ permissions-check-granted = accordée à la question pour cet espace de travail,
 permissions-check-not-in-force = sans effet : { $rule } dans { $path } autoriserait cet appel une fois accordée à la question
 cli-usage-sessions = Lister les sessions qui continuent après la fermeture du terminal, groupées par état dans un terminal
 cli-usage-sessions-stop = En arrêter une
+cli-usage-sessions-list = Lister les sessions enregistrées pour ce répertoire
+cli-usage-sessions-delete = Supprimer une session enregistrée, son journal d'audit et son index de recherche
+cli-usage-sessions-purge = Supprimer toutes les sessions enregistrées pour ce répertoire
 cli-usage-sessions-import = Copier les sessions qu'un autre agent a gardées pour ce répertoire
+cli-usage-stats = Totaliser les tours et les jetons dépensés par les sessions enregistrées ; accepte --days <n>, --models et --project [<répertoire>]
 cli-usage-bg = Démarrer une session qui continue après la fermeture du terminal
 cli-usage-attach = Rejoindre le terminal d'une session en arrière-plan
 cli-usage-reply = Envoyer une invite à une session en arrière-plan inactive
@@ -388,13 +393,16 @@ onboarding-import-many =
     { $sources } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
+onboarding-chatgpt-signed-in = Une connexion ChatGPT est enregistrée, mais le modèle en vigueur est l'un de ceux de Brave.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
 onboarding-bedrock =
     AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
 onboarding-openrouter =
     OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
+onboarding-chatgpt =
+    Un compte ChatGPT Plus ou Pro, si vous en avez un : lancez `bravebot auth login chatgpt` dans un terminal et connectez-vous dans le navigateur qu'il ouvre. Ses modèles sont ensuite proposés dans /model sous la forme chatgpt/<modèle>.
 onboarding-leo =
-    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des deux options ci-dessus.
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des trois options ci-dessus.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -439,6 +447,8 @@ doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-subscription-batch =
     le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot auth logout leo` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
+doctor-ends-chatgpt-account =
+    une connexion ChatGPT : émise par OpenAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne, de sorte que l'expiration du jeton d'accès met fin à cette copie et non à l'accès de ce programme ; on y met fin chez OpenAI en se déconnectant du compte ou en retirant l'accès de ce programme dans ses réglages, car `bravebot auth logout chatgpt` met fin à la garde de cette machine et laisse les jetons actifs là-bas
 doctor-tier = niveau
 doctor-tier-delegated =
     délégué : rien n'est détenu ici, et quelque chose que ce programme ne peut usurper décide de chaque usage et peut le refuser
@@ -454,6 +464,8 @@ doctor-noticed-aws-session =
 doctor-outlives = survit
 doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
+doctor-outlives-chatgpt-account =
+    un jeton d'accès qu'OpenAI a déjà émis à partir du jeton d'actualisation : il a été refusé en quelques secondes après la révocation du jeton d'actualisation au point de révocation d'OpenAI (un compte, une révocation, un appel que ce programme ne fait pas), et on n'a pas observé si la déconnexion du compte ou le retrait de l'accès de ce programme dans ses paramètres y met fin
 doctor-binding = liaison
 doctor-binding-sender-constrained =
     liée à l'émetteur de la requête : l'émetteur vérifie qui la présente, donc une copie prise sur cette machine ne sert à rien ailleurs
@@ -490,6 +502,20 @@ doctor-dropped-gateway-token-not-minted-for-one-step =
     porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages, la variable ou ce que `bravebot auth login gateway` a enregistré, et il est gardé pendant toute l'exécution
 doctor-dropped-subscription-batch-nothing-decides-each-use =
     porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même un identifiant du lot et rien n'est sollicité pour autoriser la requête
+doctor-dropped-chatgpt-account-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce processus présente lui-même le jeton d'accès et rien n'est sollicité pour autoriser la requête
+doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la connexion peut faire n'est fixée avant son émission, car rien ici ne demande à OpenAI de la restreindre à cette exécution
+doctor-dropped-chatgpt-account-renewable-without-authority =
+    porte { $gate }, { $answer } : l'agent la renouvelle sans autre autorisation, car le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne
+# La connexion ChatGPT, montrée seulement là où il y en a une d'enregistrée. Une connexion illisible
+# est montrée sur la même ligne, avec la phrase qui nomme son remède. L'instant est celui où le jeton
+# d'accès expire, écrit sous la forme 2026-10-22T21:05:27Z, et c'est la seule partie du fichier
+# montrée : le fichier contient aussi les jetons et les identifiants, qui n'ont leur place dans aucun
+# rapport que l'on colle. Un instant passé reste une connexion active, puisque le jeton est remplacé
+# à sa prochaine utilisation.
+doctor-chatgpt = chatgpt
+doctor-chatgpt-signed-in = connecté, le jeton d'accès expire le { $expires }
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo
@@ -588,6 +614,17 @@ doctor-settings-references-ignored =
 doctor-settings-attribution-ignored =
     attribution dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+# retentionDays n'est lu que dans le fichier de la personne elle-même, car une copie de travail qui
+# choisirait quand ses enregistrements sont supprimés les supprimerait par le seul fait d'être
+# ouverte. Une ligne qui ne fait rien mérite qu'on le dise.
+doctor-settings-retention-ignored =
+    retentionDays dans { $path } n'est pas appliqué : il n'est lu que dans ~/.bravebot/settings.json
+# Le balayage qui supprime les anciens enregistrements de session, les index du serveur de langage et
+# les constats attend tant que la durée demandée ne peut pas être déterminée, et ne supprime rien,
+# afin que la personne qui a fixé une durée ne se voie pas appliquer à la place celle qui est intégrée.
+doctor-retention = conservation
+doctor-retention-paused =
+    rien n'est supprimé pour cause d'âge tant que { $path } n'est pas lisible et que retentionDays n'y est pas un nombre entier de jours supérieur à zéro
 doctor-settings-narrowing-ignored =
     { $key } dans { $path } n'est pas un booléen, il est donc lu comme absent et ne refuse rien
 doctor-run-network = réseau de run
@@ -667,6 +704,14 @@ doctor-state-directory-unprotected = non restreint
 doctor-state-directory-permissions =
     l'historique des invites, les enregistrements de session et les choix retenus portent les
     permissions de votre répertoire de profil
+# Une valeur qui n'est pas un chemin absolu ne désigne aucun répertoire, donc le répertoire d'état est
+# celui que donne le répertoire de profil, et le rapport ci-dessus dit que `HOME` l'a nommé. Sans cette
+# ligne, quelqu'un qui a défini la variable et n'en voit aucun effet n'a rien qui lui dise qu'elle a
+# été lue puis écartée. Seul le nom de la variable est dit, comme pour les variables de proxy, car une
+# valeur peut contenir des identifiants.
+doctor-state-directory-passed-over = écartée
+doctor-state-directory-passed-over-detail =
+    { $variable } n'est pas un chemin absolu, donc elle ne désigne aucun répertoire
 doctor-state-directory-absent = aucun répertoire d'état : { $variables } ne nomme rien
 doctor-state-directory-not-kept = non conservés
 doctor-state-directory-forgotten =
@@ -773,6 +818,8 @@ ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens }
 ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
 ceiling-stop-silent = le modèle a atteint sa limite de sortie de { $tokens } jetons avant d'avoir rien écrit ; il lui est redemandé
 fallback-model-in-use = { $from } a échoué ({ $category }) ; ce tour passe à { $to }
+# Pareil quand l'échec est celui du compte ChatGPT, qui est dit dans sa propre phrase.
+fallback-model-in-use-account = { $from } a échoué ({ $problem }) ; ce tour passe à { $to }
 # Ce que compte une limite, sous la forme du nom que les phrases suivantes complètent.
 limit-unit-tokens = jetons
 limit-unit-credits = crédits
@@ -881,7 +928,8 @@ auth-ways-heading = Façons de se connecter à un service de modèle :
 auth-way-leo = Brave Leo Premium, depuis une installation de Brave abonnée
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
-auth-way-gateway = Une clé pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
+auth-way-gateway = Une clé pour { $services } ou pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
+auth-way-chatgpt = Un compte ChatGPT Plus ou Pro, auquel se connecter dans un navigateur
 auth-gateway-held = une clé enregistrée pour { $ids }
 auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
 auth-way-held = { $description } ({ $status })
@@ -922,21 +970,29 @@ auth-logout-import =
     un import ne garde aucun identifiant : il a écrit des entrées dans le fichier de réglages, et les y retirer l'annule
 auth-gateway-key-argument =
     une clé n'est jamais un argument de la ligne de commande, que d'autres programmes peuvent lire et que le shell garde : lancez bravebot auth login gateway { $id } et tapez la clé quand elle est demandée
+auth-gateway-extra-word =
+    { $command } prend un identifiant et rien après : un mot à cet endroit n'est pas répété, car ce peut être une clé
 auth-gateway-not-while-incognito =
     une session incognito n'écrit rien sur le disque, et enregistrer une clé est une écriture : lancez bravebot auth login gateway sans --incognito
 auth-gateway-none-configured =
-    aucune passerelle n'est configurée : ajoutez un bloc provider à settings.json, ou lancez bravebot auth login import, puis enregistrez sa clé ici
-auth-gateway-not-configured = ce n'est pas l'id d'un bloc provider ; les passerelles configurées sont { $ids }
+    { $path } nomme les passerelles de tous les utilisateurs de cette machine et n'en nomme aucune : il n'y a donc aucune passerelle pour laquelle enregistrer une clé
+auth-gateway-not-configured = ce n'est pas l'id d'une passerelle pour laquelle une clé peut être enregistrée ; ce sont { $ids }
+auth-gateway-not-configured-managed =
+    ce n'est pas l'id de l'une des passerelles que { $path } nomme pour tous les utilisateurs de cette machine, qui sont les seules pour lesquelles une clé peut être enregistrée ; ce sont { $ids }
 auth-gateway-needs-a-terminal =
     une clé de passerelle se tape dans un terminal sans rien afficher, donc bravebot auth login gateway a besoin d'un terminal
 auth-gateway-no-home = il n'y a pas de répertoire personnel où enregistrer la clé
 auth-gateway-keys-unreadable =
     { $path } n'est pas un fichier de clés écrit par bravebot, il a donc été laissé tel quel et rien n'a changé
-auth-gateways-heading = Passerelles configurées :
+auth-gateways-heading = Services pour lesquels une clé peut être enregistrée :
+auth-gateways-heading-managed =
+    Les passerelles que { $path } nomme pour tous les utilisateurs de cette machine, qui sont les seules pour lesquelles une clé peut être enregistrée :
 auth-gateway-key-stored = une clé enregistrée
 auth-which-gateway = Laquelle ? Tapez son numéro ou son identifiant, ou rien pour arrêter :
 auth-not-a-listed-gateway = { $answer } n'est pas l'une des passerelles listées
 auth-gateway-key-held = Une clé est déjà enregistrée pour { $id }.
+auth-gateway-key-held-unrecorded =
+    Une clé est déjà enregistrée pour { $id }, et aucun bloc provider ne le nomme : aucune session ne l'envoie. Répondre non la garde et enregistre le bloc dans les réglages.
 auth-gateway-replace = La remplacer ?
 auth-gateway-key-question = Clé pour { $id }, envoyée à { $host } (non affichée pendant la saisie) :
 auth-gateway-nothing-stored = rien n'a été enregistré
@@ -944,6 +1000,16 @@ auth-gateway-not-read = la clé n'a pas pu être lue depuis le terminal : { $err
 auth-gateway-not-stored = la clé n'a pas été enregistrée : { $path } : { $error }
 auth-gateway-stored =
     la clé pour { $id } est enregistrée dans { $path }, et les sessions démarrées à partir de maintenant l'envoient à { $host }
+auth-gateway-recorded =
+    { $file } nomme désormais { $id } sous provider : les sessions démarrées à partir de maintenant envoient la clé enregistrée pour lui à { $host }
+auth-gateway-stored-and-recorded =
+    la clé pour { $id } est enregistrée dans { $path }, et { $file } nomme désormais { $id } sous provider : les sessions démarrées à partir de maintenant l'envoient à { $host }
+auth-gateway-cannot-record =
+    une clé pour { $id } n'est envoyée que lorsqu'un bloc provider nomme { $id }, et aucun ne peut être enregistré : aucune clé n'a donc été demandée : { $problem }
+auth-gateway-not-recorded =
+    la clé pour { $id } est enregistrée, et aucune session ne l'envoie tant qu'un bloc provider ne nomme pas { $id } : ajoutez { $entry } à { $file } ({ $problem })
+auth-gateway-entry-not-a-service =
+    { $file } contient un provider qui n'est pas un bloc d'entrées, ou une entrée pour { $id } qui ne configure aucun service
 auth-gateway-variable-wins =
     { $variable } est définie, et tant qu'elle l'est, une session envoie sa valeur au lieu de la clé enregistrée
 auth-logout-gateway-none = aucune clé de passerelle n'est enregistrée
@@ -961,14 +1027,102 @@ auth-status-not-signed-in = non connecté : { $detail }
 auth-status-unusable = inutilisable : { $detail }
 auth-status-none-usable = aucune connexion n'est utilisable
 auth-status-not-all-usable = une connexion demandée n'est pas utilisable
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock ou gateway
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway ou chatgpt
 auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
 auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
+auth-status-gateway-none = aucune clé de passerelle n'est enregistrée ; lancez bravebot auth login gateway
+auth-status-gateway-none-stored = aucune clé n'est enregistrée pour { $id } ; lancez bravebot auth login gateway { $id }
+auth-status-gateway-unrecorded =
+    une clé est enregistrée pour { $id } et aucun bloc provider ne le nomme : aucune session ne l'envoie ; lancez bravebot auth login gateway { $id } pour enregistrer le bloc
+# L'instant est celui où le jeton d'accès expire, écrit sous la forme 2026-10-22T21:05:27Z. Le jeton
+# est remplacé à sa prochaine utilisation, donc un instant passé reste une connexion active.
+auth-status-chatgpt-expires = le jeton d'accès expire le { $expires }
+auth-status-chatgpt-none = aucune connexion ChatGPT n'est enregistrée ; lancez bravebot auth login chatgpt
+auth-status-chatgpt-nowhere = cette machine n'a nulle part où garder une connexion, donc aucune n'est enregistrée
 auth-status-bedrock-good = la session AWS fournit des identifiants pour signer une requête
 
 
 ## Déclarer un serveur MCP, et l'approuver
 
+# Les quatre suivantes sont des phrases fixes, car une ligne de `auth status` ne porte aucun texte
+# choisi par l'AWS CLI : ses messages d'erreur nomment des comptes et des rôles, et sa liste de
+# profils peut contenir un identifiant de compte.
+auth-status-bedrock-lapsed = la session AWS a expiré : lancez `bravebot auth login bedrock`
+auth-status-bedrock-no-profile = l'AWS CLI n'a aucun profil de ce nom : nommez-en un qu'elle connaît dans les réglages
+auth-status-bedrock-no-cli = l'AWS CLI n'est pas installée, et les identifiants Bedrock viennent d'elle
+auth-status-bedrock-undecodable = l'AWS CLI a répondu par quelque chose qui n'est pas un identifiant
+chatgpt-not-while-incognito = se connecter enregistre un jeton sur le disque, ce qu'une session incognito ne fera pas
+chatgpt-needs-a-terminal =
+    se connecter à ChatGPT affiche une adresse à ouvrir et attend le navigateur, donc bravebot auth login chatgpt a besoin d'un terminal sur la sortie d'erreur standard
+chatgpt-held-needs-a-terminal =
+    une connexion ChatGPT est déjà enregistrée et la remplacer demande une réponse, donc bravebot auth login chatgpt a besoin d'un terminal sur l'entrée standard
+chatgpt-name-is-a-gateway =
+    un bloc provider nommé chatgpt est une passerelle, et un même nom ne peut pas choisir deux services : renommez le bloc, puis relancez bravebot auth login chatgpt
+chatgpt-held = Une connexion ChatGPT est déjà enregistrée.
+# À côté de la façon, dans la liste des façons, quand le fichier où est gardée une connexion ne peut
+# pas être lu.
+chatgpt-held-unusable = une connexion enregistrée ne peut pas être lue
+chatgpt-replace = La remplacer ?
+chatgpt-open-this = Ouvrez cette adresse dans un navigateur pour vous connecter à ChatGPT :
+chatgpt-waiting = En attente du navigateur sur 127.0.0.1, port { $port }. Un navigateur sur une autre machine ne l'atteint que par un port redirigé.
+chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
+chatgpt-use-by-name = Nommez l'un des modèles du compte, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`. Une fois une session ouverte, /model les liste. Lancé seul, dans un terminal hors d'une session incognito, bravebot demande lequel utiliser quand le compte liste ses modèles.
+# Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
+# modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
+# enregistrée dans chaque cas. Des deux messages pour une liste qui n'a pas pu être obtenue, le second
+# concerne un compte dont le sélecteur propose la liste intégrée à la place.
+chatgpt-reaches-no-model = Ce compte ChatGPT n'atteint aucun modèle avec bravebot, donc /model n'en propose aucun. La connexion reste enregistrée.
+chatgpt-listing-unreadable = Les modèles du compte n'ont pas pu être listés. Nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+chatgpt-listing-compiled = Les modèles du compte n'ont pas pu être listés, et, une fois une session ouverte, /model propose une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser. Nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+chatgpt-listing-refused = Les modèles du compte n'ont pas pu être listés : { $refusal }
+chatgpt-forgotten =
+    connexion ChatGPT enregistrée oubliée. Elle reste valide chez OpenAI tant qu'on n'y met pas fin : déconnectez-vous de ChatGPT, ou retirez l'accès de bravebot dans les réglages du compte
+chatgpt-nothing-to-forget = aucune connexion ChatGPT n'est enregistrée
+# Pourquoi la connexion s'est arrêtée. Chacune est choisie d'après l'étape qui a échoué et, pour une
+# requête échouée, d'après la classe de son statut. Aucune ne répète ce que le navigateur, OpenAI ou
+# un fichier de réglages a dit.
+chatgpt-failed-listener =
+    impossible d'attendre le navigateur sur l'adresse de boucle locale, donc aucun navigateur n'a été ouvert et rien n'a été modifié
+chatgpt-failed-timed-out =
+    le navigateur n'est pas revenu à bravebot à temps, donc la connexion s'est arrêtée et rien n'a été enregistré ; un navigateur sur une autre machine n'atteint le port de boucle locale de celle-ci que si le port nommé ci-dessus lui est redirigé
+chatgpt-failed-no-code =
+    le navigateur n'a renvoyé aucun code d'autorisation, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-no-client =
+    le navigateur n'a renvoyé aucun client utilisable pour bravebot, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-client-changed =
+    le navigateur a renvoyé un autre client que celui qui est enregistré, donc la connexion s'est arrêtée et rien n'a été modifié ; lancez bravebot auth logout chatgpt, puis reconnectez-vous
+chatgpt-failed-no-use-scope =
+    la connexion n'a pas permis à bravebot d'utiliser les jetons de l'abonnement, donc rien n'a été enregistré ; lancez bravebot auth login chatgpt et autorisez-le, ou utilisez une clé d'API avec la passerelle openai
+chatgpt-failed-id-token =
+    le jeton d'identité renvoyé par le serveur d'autorisation n'a pas pu être vérifié, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-clock =
+    l'horloge de cet ordinateur est réglée avant 1970, donc la connexion ne peut pas savoir quand le jeton d'identité expire et rien n'a été enregistré ; réglez l'horloge, puis lancez bravebot auth login chatgpt pour réessayer
+chatgpt-failed-key-set = les clés qui vérifient la connexion n'ont pas pu être obtenues : { $reason } ; rien n'a été enregistré
+chatgpt-failed-exchange = la connexion n'a pas pu aboutir : { $reason } ; rien n'a été enregistré
+chatgpt-class-refused = le serveur d'autorisation a refusé la requête
+chatgpt-class-rate-limited = le serveur d'autorisation limite les requêtes ; réessayez plus tard
+chatgpt-class-unavailable = le serveur d'autorisation est indisponible ; réessayez plus tard
+chatgpt-class-incomplete = la réponse du serveur d'autorisation était incomplète
+chatgpt-class-transport = le serveur d'autorisation n'a pas pu être joint
+# Le détail est un chemin et ce que le système d'exploitation en a dit.
+chatgpt-account-nowhere = il n'y a nulle part où garder une connexion ChatGPT : { $detail }
+chatgpt-account-unusable =
+    la connexion ChatGPT enregistrée n'a pas pu être lue : { $detail } ; lancez bravebot auth login chatgpt pour vous reconnecter, ou bravebot auth logout chatgpt pour l'oublier
+chatgpt-account-malformed =
+    la connexion ChatGPT enregistrée est inutilisable : { $defect } ; lancez bravebot auth login chatgpt pour vous reconnecter, ou bravebot auth logout chatgpt pour l'oublier
+chatgpt-account-unwritable = la connexion ChatGPT n'a pas pu être enregistrée : { $detail } ; rien n'a été modifié
+# Dit une fois, dans le tour qui a renouvelé la connexion, quand le fichier n'a pas pu recevoir le
+# renouvellement. Aucun chemin n'y figure et rien de ce que le fichier ou le système a dit n'y est repris.
+chatgpt-renewal-unwritten = la connexion ChatGPT a été renouvelée sans pouvoir être enregistrée, elle ne dure donc que jusqu'à la fin de bravebot ; vérifiez que le dossier où elle est conservée a de la place et accepte l'écriture, et si le prochain démarrage indique que la connexion a pris fin, lancez bravebot auth login chatgpt
+chatgpt-defect-empty = le fichier ne contient rien, ce que laisse une écriture interrompue
+chatgpt-defect-not-json = le fichier n'est pas du JSON valide
+chatgpt-defect-other-version = il a été écrit par une autre version, et cette version lit la version 1
+chatgpt-defect-missing-field = un champ manque ou est vide
+chatgpt-defect-no-expiry = il n'a pas d'expiration
+# Les deux pages que le navigateur affiche : après son retour vers bravebot, et pour toute autre
+# requête sur le port. Elles sont affichées dans le navigateur, pas dans le terminal.
+chatgpt-page-done = Vous pouvez fermer cet onglet et revenir à bravebot, qui dit si la connexion a réussi.
+chatgpt-page-not-found = Introuvable.
 mcp-forms-heading = bravebot mcp prend l'une de ces formes :
 mcp-needs-a-command = bravebot mcp a besoin d'une commande
 mcp-unknown-command = bravebot mcp n'a pas de commande { $command }
@@ -1353,6 +1507,7 @@ path-not-trusted =
 path-yes = Oui, pour cette session
 path-no = Non
 path-listed = { $number }. chaque commande { $access } aussi { $path }, pour cette session
+reached-listed = { $path }, atteint d'abord par { $tool } ({ $field })
 path-none = aucun chemin n'a été demandé dans cette session
 path-removed = retiré : aucune commande ne { $access } plus { $path }
 path-refused-number = aucun chemin demandé n'est numéroté { $number }
@@ -1466,6 +1621,8 @@ model-picker-keys =
     ↑↓ choisir  ·  Entrée valider  ·  tapez pour rechercher  ·  Échap garder l'actuel
 model-picker-search-placeholder = Rechercher
 model-picker-nothing-matches = aucune correspondance
+model-picker-loading = chargement des modèles…
+model-picker-listing-lost = la liste des modèles n'a pas été reçue
 picker-current = actuel
 
 config-picker-title = mode d'édition
@@ -1750,6 +1907,13 @@ run-remember-only-asking =
     cela arrête seulement la question : ce qu'elle affiche reste en quarantaine
 run-remember-every-session =
     toute session ouverte dans ce répertoire la lit, pas seulement celle-ci
+# Dit seulement pour une ligne que la table du programme énumère, sous les lignes propres à
+# l'enregistrement. Le nom sous la première ligne est la portée en mots, et les deux lignes suivantes
+# disent ce qu'elle couvre et ce qui reste fixe.
+run-remember-scope-explained = s : ne plus rien demander pour cela, dans ce répertoire, à partir de maintenant :
+run-remember-scope-read-covers = elle couvre l'affichage d'une pull request ou d'une issue et la lecture du diff et des vérifications d'une pull request, avec n'importe quel numéro
+run-remember-scope-read-fixed = tout le reste est toujours demandé : un autre dépôt, une autre option, et tout ce qui écrit
+run-remember-scope-one-entry = elle est enregistrée comme une seule entrée dans le même fichier, et supprimer cette ligne reprend tout
 run-pattern-varies =
     ces arguments diffèrent de ceux qui vous ont déjà été soumis : aucune touche ici n'arrête la question
 run-pattern-where =
@@ -1761,6 +1925,7 @@ run-pattern-only-asking =
 run-yes = l'exécuter
 run-always = toujours pour cette session
 run-remember = s'en souvenir
+run-remember-scope-read-pull-requests-and-issues = lire les pull requests et les issues de { $repository }
 run-no = ne pas l'exécuter
 run-unseen =
     { $count ->
@@ -1960,9 +2125,17 @@ count-commands = { $count ->
     [one] { $count } commande
    *[other] { $count } commandes
     }
+count-remembered = { $count ->
+    [one] { $count } entrée
+   *[other] { $count } entrées
+    }
 count-requested-paths = { $count ->
     [one] { $count } chemin
    *[other] { $count } chemins
+    }
+count-reached-directories = { $count ->
+    [one] { $count } répertoire
+   *[other] { $count } répertoires
     }
 count-reach-grants = { $count ->
     [one] { $count } autorisation
@@ -2007,6 +2180,7 @@ status-effort = Effort
 status-effort-chosen = choisi avec /effort
 status-effort-default = ce que le service fait de lui-même
 status-effort-not-read = choisi avec /effort, mais ce modèle n'en lit aucun
+status-effort-kept-for-account = le niveau avec lequel cette session ChatGPT a commencé ; { $chosen }, choisi avec /effort, s'applique à partir de la session suivante
 status-theme = Thème
 status-theme-chosen = choisi avec /theme
 status-served = Répondu par
@@ -2125,6 +2299,7 @@ status-nothing-vouched-this-session =
 status-trusted-commands = Commandes fiables
 status-trusted-commands-note = exécutées sans rien demander, et leur sortie est fiable
 status-command-in = dans { $directory }
+scope-read-pull-requests-and-issues = Lire les pull requests et les issues de { $repository }
 status-remembered = Lignes mémorisées
 status-remembered-note =
     exécutées sans rien demander dans ce répertoire, et leur sortie reste en quarantaine
@@ -2132,6 +2307,8 @@ status-remembered-this-session = mémorisée dans cette session
 status-remembered-earlier = mémorisée dans une session antérieure
 status-remembered-where = supprimez une ligne de { $path } pour qu'elle soit redemandée
 status-reach = Accès retenus
+status-reached-directories = Répertoires atteints
+status-reached-directories-note = le mode bypass laisse les outils de fichiers les atteindre sans les ouvrir ; ils ne sont pas fiables, et quitter bypass y met fin
 status-requested-paths = Chemins demandés
 status-requested-paths-note =
     les programmes que lance cette session peuvent les atteindre ; les répertoires ne sont pas
@@ -2240,6 +2417,7 @@ session-resume-nothing-else = aucune autre session à reprendre dans ce réperto
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
 session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
+session-resume-held-by-another-process = cette session est ouverte dans un autre terminal ou une autre fenêtre, elle ne peut donc pas être reprise ici
 session-mention-added = { $chars } caractères de la session { $id } ajoutés au message
 session-mention-added-cut = les { $chars } derniers caractères de la session { $id } ajoutés au message, les tours plus anciens sont laissés de côté
 session-mention-no-such = aucune session { $id } dans ce répertoire, rien n'a donc été ajouté pour elle
@@ -2321,6 +2499,12 @@ transcript-earlier-lines = { $count ->
     [one] … { $count } ligne plus haut
    *[other] … { $count } lignes plus haut
     }
+# Dit sous une sortie qu'un programme a colorée : combien de codes de couleur ont été retirés du
+# texte sans être affichés, pour que l'on puisse encore voir qu'ils y étaient.
+colour-codes-not-drawn = { $count ->
+    [one] { $count } code de couleur non affiché
+   *[other] { $count } codes de couleur non affichés
+    }
 transcript-unchanged = { $count ->
     [one] … { $count } ligne inchangée
    *[other] … { $count } lignes inchangées
@@ -2341,6 +2525,7 @@ scroller-key-count = un nombre d'abord va autant de fois plus loin
 scroller-key-search-run = lancer / supprimer, puis abandonner
 scroller-key-expand = déplier ou replier le résultat d'un appel
 scroller-key-editor = ouvrir la transcription dans $EDITOR
+scroller-key-delegates = ouvrir les vues des délégués
 scroller-key-this-list = cette liste
 scroller-key-close = fermer le défilement   (aussi ctrl-c)
 scroller-key-close-list = fermer cette liste
@@ -2403,7 +2588,8 @@ command-goal = Continuer à travailler jusqu'à ce qu'une condition que vous fix
 command-watch = Lister les fichiers que cette session surveille, et en arrêter un par son numéro
 command-jobs = Lister les tâches en arrière-plan de ce tour, et en arrêter une par son nom
 command-panel = Afficher ou masquer le panneau d'informations à côté de la transcription
-command-files = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
+command-diff = Lister les fichiers écrits par la session et afficher chaque modification de celui qui est sélectionné
+command-todos = Afficher le plan en entier, chaque tâche avec son état
 command-caffeinate = Garder l'ordinateur éveillé tant qu'un tour ou une boucle est en attente
 command-thinking = Afficher ou masquer la réflexion du modèle à mesure qu'elle arrive
 command-checkouts = Lister les copies gardées, en rapporter les fichiers, ou en supprimer une
@@ -2416,9 +2602,11 @@ command-review = Faire examiner par le planificateur des modifications locales o
 command-help = Poser une question sur bravebot, avec une réponse tirée de sa documentation
 command-changelog = Afficher ce qui a changé dans cette version
 command-export = Exporter la transcription de la session vers un fichier markdown
-command-copy = Copier la dernière réponse dans le presse-papiers, ou une plus ancienne en reculant d'autant de réponses
+command-copy = Copier une réponse ; block copie un bloc de code, text les mots affichés
+command-open = Lister les liens de la dernière réponse, et en ouvrir un par son numéro
 command-undo = Rembobiner d'un tour et restaurer les fichiers qu'il a écrits
 command-rewind = Lister les tours qu'un rembobinage peut atteindre, ou reculer d'autant
+command-hunks = Lister les morceaux qu'a écrits le dernier tour, ou en remettre un comme il était avant le tour
 command-exit = Partir
 
 
@@ -2437,6 +2625,8 @@ command-waits-for-the-turn = La commande { $command } attend la fin du tour : el
 command-waits-behind = La commande { $command } attend la fin du tour, derrière { $line }.
 # `/sandbox off`, qui demande avant de changer quoi que ce soit.
 command-waits-to-ask = La commande { $command } attend la fin du tour : passer à off demande d'abord, et le tour a l'écran.
+# Dit sous la boîte quand un clic sur une ligne du panneau d'information qui tient lieu de commande est fait pendant qu'une commande tapée par la personne s'exécute, ce qui ne lit aucune ligne tapée après elle.
+command-waits-for-the-command = La commande { $command } attend la fin de la commande en cours.
 
 ## Where a skill offered after a slash was found
 
@@ -2451,6 +2641,7 @@ skill-named-by-the-person = { $skill } est chargée parce que vous l'avez nommé
 turn-named-skill-not-shown = { $skill } a été nommée mais n'a pas pu être montrée au planificateur
 skill-asks-a-model = { $skill } demande { $model } pour le reste de ce tour
 skill-asks-an-effort = { $skill } demande l'effort { $effort } pour le reste de ce tour
+skill-effort-kept-for-account = { $skill } demande l'effort { $effort } pour le reste de ce tour, mais une session ChatGPT garde le niveau avec lequel elle a commencé, donc ce tour ne change pas
 skill-model-needs-sign-in = { $skill } demande { $model }, qui exige d'abord une connexion, donc ses tours gardent le modèle de cette session
 skill-model-refused = { $skill } demande { $model }, que cette machine ne demande pas, donc ses tours gardent le modèle de cette session : { $reason }
 skill-model-kept-for-definition = { $skill } demande { $model }, mais ce tour reste sur le modèle que { $definition } a désigné
@@ -2538,6 +2729,67 @@ session-rewind-cause-desktop = tours du bureau
 session-rewind-cause-checkout = copies de travail des délégués
 session-rewind-cause-backup = sauvegardes indisponibles
 session-rewind-cause-unknown = couverture inconnue
+# Affiché après la ligne d'un morceau qui n'a pas de terminateur, ce que seule la dernière ligne d'un
+# fichier peut avoir.
+diff-no-final-newline = [pas de fin de ligne à la fin du fichier]
+# Ce que dit /hunks. Un morceau est une suite de lignes modifiées dans un fichier qu'a écrit le
+# dernier tour.
+session-hunks-heading = le tour { $turn } a écrit ces morceaux. /hunks <numéro> en remet un, et laisse le reste du fichier
+session-hunks-wrote-nothing = le tour { $turn } n'a écrit aucun fichier, donc il n'y a aucun morceau à remettre
+# Un morceau : la ligne où il commence dans le fichier tel qu'il est maintenant, et combien de lignes
+# il a ajoutées et supprimées.
+session-hunk-row = à partir de la ligne { $line } : { $added }, { $removed }
+# Un morceau qui ne fait que supprimer des lignes n'en a aucune qui lui soit propre dans le fichier
+# tel qu'il est maintenant, donc la ligne qui le précède le situe.
+session-hunk-row-after = après la ligne { $line } : { $removed }
+session-hunk-row-at-start = au début du fichier : { $removed }
+session-hunk-added =
+    { $count ->
+        [0] aucune ligne ajoutée
+        [one] 1 ligne ajoutée
+       *[other] { $count } lignes ajoutées
+    }
+session-hunk-removed =
+    { $count ->
+        [0] aucune ligne supprimée
+        [one] 1 ligne supprimée
+       *[other] { $count } lignes supprimées
+    }
+# Un fichier qu'a écrit le dernier tour et qui n'a aucun morceau à lister, et pourquoi.
+session-hunks-left-row = { $path } : { $why }
+session-hunks-left-created = le tour l'a créé, donc on ne peut pas en extraire un morceau. /undo le supprime, avec le reste du tour
+session-hunks-left-not-kept = ce qu'il contenait avant le tour n'a pas été conservé, donc il ne reviendra pas en arrière
+session-hunks-left-untrusted =
+    son contenu n'est pas approuvé, donc il n'est pas comparé. Seul /undo le remet, avec le reste du tour
+session-hunks-left-not-text = ce n'est pas du texte
+session-hunks-left-too-different = il a tellement changé que ses morceaux ne peuvent pas être alignés
+session-hunks-left-outside = il ne se résout plus à l'intérieur du projet, donc il n'est pas lu
+session-hunks-left-unreadable = il a disparu, n'est pas un fichier, ou est plus grand que ce qu'un rembobinage conserve
+session-hunks-left-as-it-was = il contient ce qu'il contenait avant le tour
+session-hunk-put-back = morceau { $number } de { $path } remis comme il était avant le tour { $turn }
+session-hunk-not-put-back = le morceau { $number } de { $path } n'a pas été remis : { $why }
+session-hunk-changed =
+    { $path } ne contient plus le morceau { $number } tel qu'il a été listé, donc rien n'a été écrit.
+    /hunks liste ce qu'il contient maintenant
+session-hunk-failed =
+    l'écriture de { $path } a échoué, donc il peut contenir une partie de la modification et n'est pas approuvé : { $problem }
+session-hunks-unavailable = /hunks n'a pas pu commencer : { $problem }
+session-hunks-needs-a-number = /hunks demande le numéro d'un morceau qu'il a listé, comme /hunks 2
+session-hunks-more =
+    { $count ->
+        [one] 1 morceau de plus n'est pas listé. /undo le remet, avec le reste du tour
+       *[other] { $count } morceaux de plus ne sont pas listés. /undo les remet, avec le reste du tour
+    }
+session-hunks-uncovered = la liste peut manquer des modifications. Couverture incomplète : { $causes }.
+session-hunks-list-first = listez d'abord les morceaux avec /hunks, puis remettez-en un par son numéro
+session-hunks-turn-moved =
+    la session a eu un autre tour depuis cette liste. /hunks liste les morceaux du dernier
+session-hunk-no-such =
+    { $hunks ->
+        [0] il n'y a pas de morceau { $number } ; la dernière liste n'en avait aucun
+        [one] il n'y a pas de morceau { $number } ; la dernière liste avait 1 morceau
+       *[other] il n'y a pas de morceau { $number } ; la dernière liste avait { $hunks } morceaux
+    }
 session-exported = transcription exportée vers { $path }
 session-export-failed = impossible d'exporter la transcription : { $problem }
 session-copy-needs-a-number = /copy demande de combien de réponses reculer, comme /copy 2
@@ -2547,7 +2799,38 @@ session-copy-goes-no-further =
         [one] cette session a une seule réponse, /copy ne peut donc pas reculer plus loin
        *[other] cette session a { $replies } réponses, /copy ne peut donc pas reculer de plus de { $replies }
     }
+session-copy-block-needs-a-number = /copy block demande de combien de blocs reculer, comme /copy block 2
+session-copy-no-block = les réponses de cette session ne contiennent aucun bloc de code à copier
+session-copy-block-goes-no-further =
+    { $blocks ->
+        [one] les réponses de cette session ont un seul bloc de code, /copy block ne peut donc pas reculer plus loin
+       *[other] les réponses de cette session ont { $blocks } blocs de code, /copy block ne peut donc pas reculer de plus de { $blocks }
+    }
 session-copy-failed = impossible de copier la réponse dans le presse-papiers
+copied-to-clipboard = { $count ->
+    [one] { $count } caractère dans le presse-papiers
+   *[other] { $count } caractères dans le presse-papiers
+    }
+copied-from-panel = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis le panneau
+   *[other] { $count } caractères dans le presse-papiers, depuis le panneau
+    }
+copied-from-box = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis la zone de saisie
+   *[other] { $count } caractères dans le presse-papiers, depuis la zone de saisie
+    }
+copied-from-status = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis la ligne d'état
+   *[other] { $count } caractères dans le presse-papiers, depuis la ligne d'état
+    }
+copied-from-offered = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis la liste sous la zone de saisie
+   *[other] { $count } caractères dans le presse-papiers, depuis la liste sous la zone de saisie
+    }
+copied-from-footer = { $count ->
+    [one] { $count } caractère dans le presse-papiers, depuis le pied de page
+   *[other] { $count } caractères dans le presse-papiers, depuis le pied de page
+    }
 session-add-dir-needs-a-path = /add-dir demande un répertoire, comme /add-dir ~/notes
 session-directory-added = { $directory } ajouté, et approuvé pour cette session
 session-directory-ends-checkouts = { $directory } contient le répertoire de travail, donc aucun délégué n'obtient de copie de travail tant qu'il est ouvert ; /add-dir close { $directory } y met fin
@@ -2581,6 +2864,9 @@ session-permissions-skipped =
     --dangerously-skip-permissions : rien ne sera demandé avant une écriture, une commande, ou la
     lecture d'un fichier que personne n'a approuvé. shift-tab pour changer
 session-directory-not-added = impossible d'ajouter { $directory } : { $problem }
+# La raison donnée pour un nom relatif à un répertoire de travail dont le nom n'est pas du texte.
+# Aucun texte ne désigne ce répertoire, donc aucun chemin n'en est fait.
+session-directory-root-not-text = le nom du répertoire de travail n'est pas du texte, donc un nom relatif à celui-ci ne peut pas être résolu ; donnez le chemin complet
 session-scratch-unavailable = aucun répertoire temporaire pour cette session : { $problem }
 session-using-model = utilise { $model }
 session-using-model-from = utilise { $model } via { $service }
@@ -2588,6 +2874,18 @@ session-signing-in =
     connexion à AWS ; suivez les instructions ci-dessous, cela reprend une fois terminé
 session-context-budget = compactage au-delà de { $budget } jetons, selon ce que ce modèle annonce
 session-models-unavailable = impossible de lister les modèles : { $problem }
+# Dit à l'ouverture du sélecteur quand une connexion ChatGPT est enregistrée et que sa liste n'a pas pu
+# être obtenue. Le premier concerne un fichier de connexion illisible quand une entrée des réglages nomme
+# les modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être obtenue,
+# où le sélecteur montre la liste intégrée. Le troisième concerne une liste refusée par un code qui
+# désigne le compte, où se reconnecter ne change rien.
+session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
+session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
+# Dit à l'ouverture du sélecteur quand une passerelle dont les réglages ne nomment aucun modèle n'a pas pu
+# être interrogée sur sa liste, donc aucun de ses modèles n'est proposé. Une passerelle dont la clé manque
+# n'est pas interrogée et n'est pas signalée ici.
+session-gateway-models-unreadable = impossible de lire la liste des modèles de { $gateway }, donc aucun de ses modèles n'est proposé ; réessayez, ou nommez-en un, comme dans `bravebot -i "<invite>" --model { $id }/<modèle>` ou `bravebot "<tâche>" --model { $id }/<modèle>`
 session-theme-set = thème { $theme }
 session-no-such-theme = aucun thème nommé { $theme } ; essayez /theme pour la liste
 session-editing-vi = édition à la manière de vi ; échap pour les commandes, i pour écrire
@@ -2602,6 +2900,7 @@ session-language-not-saved = cette session ne peut pas conserver de choix, la la
 session-no-such-language = aucun catalogue pour { $language } ; les catalogues sont { $available }
 session-no-such-effort = aucun niveau d'effort nommé { $effort } ; essayez /effort pour la liste
 session-effort-not-read = ce modèle ne lit aucun niveau d'effort ; les requêtes n'en portent pas
+session-effort-kept-for-account = une session ChatGPT garde le niveau d'effort avec lequel elle a commencé, { $began }, donc { $chosen } s'applique à partir de la session suivante, que /clear commence
 session-advisor-set = le planificateur peut consulter { $model } dès le prochain tour, ce qui dépense les jetons de ce modèle
 session-advisor-in-force = le planificateur peut consulter { $model }
 session-advisor-none = aucun conseiller ; essayez /advisor suivi d'un nom de modèle
@@ -2652,6 +2951,11 @@ update-not-installed-by-us =
     cette copie n'a été installée ni par le paquet npm ni par le script d'installation ; il n'y a
     donc pas de commande de mise à jour pour elle. Une version compilée depuis les sources se met
     à jour en récupérant les sources et en recompilant.
+crash-reports-notice =
+    si bravebot plante, un rapport est envoyé à Brave au lancement suivant. Il contient la version,
+    votre système d'exploitation et la ligne du code source de bravebot qui a échoué, jamais vos
+    invites, vos fichiers ni vos clés. Pour l'éviter, mettez crashReports à false dans votre
+    fichier de réglages, ou définissez BRAVEBOT_CRASH_REPORTS=0.
 session-started-server = serveur de langage { $language } actif pour cette session ({ $program })
 session-offered-tools =
     { $count ->
@@ -2704,6 +3008,77 @@ failure-workspace = l'espace de travail n'a pas pu être utilisé
 failure-internal = un problème est survenu ici
 failure-with-status = { $what } (HTTP { $status })
 failure-with-attempts = { $what }, après { $attempts } tentatives
+failure-account-not-signed-in = pas connecté à un compte ChatGPT. Lancez `bravebot auth login chatgpt` pour vous connecter
+failure-account-ended = la connexion ChatGPT a pris fin. Lancez `bravebot auth login chatgpt` pour vous reconnecter
+failure-account-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT. Lancez `bravebot auth login chatgpt` pour vous reconnecter
+failure-account-unusable = la connexion ChatGPT enregistrée n'a pas pu être lue. Lancez `bravebot auth status chatgpt` pour voir pourquoi
+failure-account-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation
+failure-account-not-permitted = OpenAI n'autorise pas l'utilisation de ce compte ChatGPT de cette manière
+failure-account-wait =
+    { $minutes ->
+        [one] { $what }, et le service a demandé une attente d'environ 1 minute
+       *[other] { $what }, et le service a demandé une attente d'environ { $minutes } minutes
+    }
+failure-account-renewal-refused = la connexion ChatGPT n'a pas pu être renouvelée : la requête a été refusée
+failure-account-renewal-rate-limited = la connexion ChatGPT n'a pas pu être renouvelée : le service limite le nombre de requêtes
+failure-account-renewal-unavailable = la connexion ChatGPT n'a pas pu être renouvelée : la requête a rencontré un service indisponible
+failure-account-renewal-incomplete = la connexion ChatGPT n'a pas pu être renouvelée : la réponse à la requête avait une forme illisible
+failure-account-renewal-transport = la connexion ChatGPT n'a pas pu être renouvelée : la requête n'a pas abouti
+
+
+## Ce que la fenêtre du bureau dit du compte ChatGPT
+
+# Une phrase chacune, avec une majuscule initiale, qui dit ce qui s'est passé et quoi faire, pour la carte
+# d'erreur de la fenêtre, sa carte d'exécution et le sélecteur de modèle. Elles sont choisies d'après
+# l'étape qui a échoué et ne reprennent rien de ce que OpenAI, le fichier de connexion ou un fichier de
+# réglages a dit. La fenêtre affiche { $command } comme du code : il est transmis et envoyé à côté de la
+# phrase, et n'est pas écrit dans les mots entre apostrophes inversées. Les phrases du terminal pour les
+# mêmes échecs sont en minuscules et reçoivent le statut d'un refus après elles, ce qu'une carte ne peut
+# pas faire.
+#
+# La fenêtre et un éditeur lisent le catalogue de référence quelle que soit la langue de la machine
+# (`bravebot-rpc` choisit en-US, `bravebot-host` et `bravebot-acp` n'en choisissent aucune), donc aucun
+# programme ne lit le français de ces messages. Ils sont gardés pour que les deux catalogues contiennent les
+# mêmes messages et que contrib/untranslated-messages.txt ne liste aucun manque.
+desktop-chatgpt-not-signed-in = Vous n'êtes pas connecté à ChatGPT, donc lancez { $command } dans un terminal pour vous connecter.
+desktop-chatgpt-ended = La connexion ChatGPT a pris fin, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-token-refused = OpenAI a refusé le jeton d'accès de la connexion ChatGPT, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-unusable = La connexion ChatGPT enregistrée n'a pas pu être lue, donc lancez { $command } dans un terminal pour en voir la raison.
+desktop-chatgpt-renewal-refused = OpenAI a refusé de renouveler la connexion ChatGPT, donc réessayez plus tard.
+desktop-chatgpt-renewal-rate-limited = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI limite les requêtes, donc réessayez plus tard.
+desktop-chatgpt-renewal-unavailable = La connexion ChatGPT n'a pas pu être renouvelée parce que le service de connexion d'OpenAI est indisponible, donc réessayez plus tard.
+desktop-chatgpt-renewal-incomplete = La connexion ChatGPT n'a pas pu être renouvelée parce que la réponse d'OpenAI était incomplète, donc réessayez.
+desktop-chatgpt-renewal-transport = La connexion ChatGPT n'a pas pu être renouvelée parce qu'OpenAI n'a pas pu être joint, donc vérifiez la connexion et réessayez.
+desktop-chatgpt-usage-limit = OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez plus tard.
+# Dit quand le refus est arrivé en 429 avec une attente demandée, pour l'un ou l'autre refus, comme le dit le
+# terminal. La requête n'est pas renvoyée, donc toute l'attente reste à venir.
+desktop-chatgpt-usage-limit-wait =
+    { $minutes ->
+        [one] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ 1 minute.
+       *[other] OpenAI indique que ce compte ChatGPT a atteint sa limite d'utilisation, donc réessayez dans environ { $minutes } minutes.
+    }
+desktop-chatgpt-not-permitted = OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+desktop-chatgpt-not-permitted-wait =
+    { $minutes ->
+        [one] OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon et a demandé une attente d'environ 1 minute, donc utilisez un autre compte ou un modèle d'un autre service.
+       *[other] OpenAI n'autorise pas ce compte ChatGPT à être utilisé de cette façon et a demandé une attente d'environ { $minutes } minutes, donc utilisez un autre compte ou un modèle d'un autre service.
+    }
+# Ce que la fenêtre raconte quand un tour continue ou change de modèle après un échec du compte en chemin :
+# un résumé qu'il n'a pas pu faire, et le modèle qu'il quitte pour le fallbackModel de la personne. Le premier
+# est suivi de la phrase du compte ci-dessus, donc chaque ligne est une seule phrase.
+desktop-compaction-failed = La conversation n'a pas pu être résumée, donc le tour continue avec les messages qu'il a.
+desktop-chatgpt-fell-back-rate-limited = Ce tour passe de { $from } à { $to } parce que la connexion ChatGPT n'a pas pu être renouvelée pendant qu'OpenAI limite les requêtes.
+desktop-chatgpt-fell-back-unavailable = Ce tour passe de { $from } à { $to } parce que la connexion ChatGPT n'a pas pu être renouvelée pendant que le service de connexion d'OpenAI est indisponible.
+desktop-chatgpt-fell-back = Ce tour passe de { $from } à { $to } parce que le compte ChatGPT n'a pas pu être utilisé.
+# Les avertissements du sélecteur de modèle, un pour chaque façon dont les modèles du compte n'ont pas pu
+# être listés. Le premier concerne un fichier de connexion illisible quand une entrée des réglages nomme les
+# modèles, ce qui n'offre aucune ligne. Le deuxième concerne une liste qui n'a pas pu être lue, où le
+# sélecteur montre la liste intégrée. Les deux derniers concernent une liste refusée par un code qui désigne
+# le compte, où se reconnecter ne change rien.
+desktop-chatgpt-models-unreadable = Impossible de charger les modèles de ChatGPT, donc réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-models-compiled = Impossible de charger les modèles de ChatGPT, donc la liste affichée est intégrée et peut nommer un modèle que le compte ne peut pas utiliser ; réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+desktop-chatgpt-models-usage-limit = Impossible de charger les modèles de ChatGPT parce que le compte a atteint sa limite d'utilisation, donc réessayez plus tard.
+desktop-chatgpt-models-not-permitted = Impossible de charger les modèles de ChatGPT parce qu'OpenAI n'autorise pas ce compte à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
 
 
 ## Répéter une consigne
@@ -2964,6 +3339,13 @@ leave-not-pressed =
 suspend-not-pressed =
     cela est arrivé avec d'autres touches, donc ce n'était pas une frappe : appuyez à nouveau pour suspendre
 suspend-failed = impossible de suspendre la session : { $reason }
+# Dit sous la zone de saisie pendant le tour que lance le mot seul exit ou quit, ce que d'autres
+# agents de terminal laissent activé et qui est ici une invite pour le modèle. Un tour est en cours,
+# donc la première façon de partir qu'il nomme est celle qui l'arrête. Affiché à droite de la ligne
+# d'indications, où les parties de la ligne sont ajustées à la place qu'il laisse : assez court pour
+# que le nom de n'importe quel mode de permission tienne encore à côté sur une ligne de quatre-vingts
+# colonnes.
+leave-word-sent = Envoyé comme invite ; ctrl-c l'arrête, /exit pour partir
 prompt-file-unreadable =
     /{ $name } est un fichier d'invite illisible comme texte, donc la ligne n'a pas été envoyée : { $path }
 prompt-file-too-large =
@@ -3007,6 +3389,8 @@ compact-done =
     { $summarised } messages antérieurs résumés, les { $kept } derniers gardés tels quels
 compact-nothing-to-do = il n'y a encore rien à résumer
 compact-failed = la conversation n'a pas pu être résumée : { $problem }
+# Dit par un tour qui a demandé un résumé sans l'obtenir, et qui poursuit avec l'historique qu'il a.
+compact-failed-and-continuing = la conversation n'a pas pu être résumée : { $problem } ; poursuite avec le contexte existant
 turn-ended-unexpectedly = le tour s'est terminé de façon inattendue
 btw-needs-a-question = /btw prend la question à poser, que la conversation ne lira pas
 btw-stopped = la question a été arrêtée
@@ -3113,6 +3497,7 @@ verb-spawn-agent = Déléguer
 verb-schedule-next = Programmer
 verb-watch-file = Surveiller
 verb-advisor = Conseiller
+verb-propose-plan = Planifier
 verb-message-session = Message
 verb-mcp-call = MCP
 verb-unknown = Outil
@@ -3225,7 +3610,8 @@ watching-calls = { $count ->
     }
 # Dit sur la ligne du bas une fois que la vue a quelque chose a ouvrir, la seule ligne qui survit
 # au tour qui l'a dessinee. Le compte y est car une touche sans rien derriere ne vaut pas la
-# peine. Delegues et commandes sont comptes ensemble, une seule touche ouvrant la liste des deux.
+# peine. Le compte est celui des questions posees a cote et des delegues, que la touche ouvre. Ce
+# que les commandes ont affiche s'ouvre par /outputs et a son propre compte.
 watching-hint = { $chord } { $count } a ouvrir
 # Dit sur la ligne du bas tant qu'une commande attendue par le tour peut passer en arrière-plan,
 # et retiré dès qu'elle se termine ou y passe. Court, car il partage la ligne avec tout le reste.
@@ -3291,6 +3677,36 @@ caffeinate-unavailable = /caffeinate est indisponible : `{ $program }` n'a pas p
 # Laissé dans la transcription quand ce programme s'est arrêté de lui-même, ce qui désactive
 # /caffeinate.
 caffeinate-ended = /caffeinate est désactivé : `{ $program }` a cessé de garder l'ordinateur éveillé
+open-listed = { $count ->
+    [one] 1 lien dans la dernière réponse qui en a un :
+   *[other] { $count } liens dans la dernière réponse qui en a :
+    }
+open-item = { $number }. { $link }
+open-more = { $count ->
+    [one] et 1 de plus, qu'aucun numéro n'ouvre : saisissez-le après /open
+   *[other] et { $count } de plus, qu'aucun numéro n'ouvre : saisissez-en un après /open
+    }
+open-none = Aucune réponse n'a d'adresse web ni de chemin de fichier
+open-list-first = listez d'abord les liens avec /open, puis ouvrez-en un par son numéro
+open-no-such =
+    { $links ->
+        [0] il n'y a pas de lien { $number } ; la dernière liste n'en avait aucun
+        [one] il n'y a pas de lien { $number } ; la dernière liste avait 1 lien
+       *[other] il n'y a pas de lien { $number } ; la dernière liste avait { $links } liens
+    }
+open-not-while-working =
+    un fichier s'affiche quand rien ne tourne, car ses lignes vont à la fin de la transcription, où
+    le travail écrit ; saisissez la commande de nouveau à ce moment
+open-edit-an-address = une adresse s'ouvre dans le navigateur, pas dans un éditeur : utilisez /open <numéro>
+open-edit-not-while-working =
+    un éditeur prend le terminal, sur lequel le travail en cours dessine ; saisissez la commande de
+    nouveau quand rien ne tourne
+open-not-an-address =
+    ce n'est pas une adresse à ouvrir : seule une adresse web avec un hôte, en http ou https et en
+    ASCII simple, s'ouvre
+open-takes =
+    /open liste les liens de la dernière réponse, /open <numéro>, /open <adresse> ou /open <chemin>
+    en ouvre un, et /open edit <numéro> ou /open edit <chemin> ouvre un fichier dans votre éditeur
 panel-session = Session
 panel-model = Modèle
 panel-goal = Objectif
@@ -3307,16 +3723,40 @@ panel-effort = effort { $level }
 panel-spent = { $tokens } cette session
 panel-cache-read = cache lu { $tokens }
 panel-cache-written = cache écrit { $tokens }
-panel-more = +{ $count } de plus
-panel-earlier = +{ $count } avant
-panel-earlier-and-more = +{ $earlier } avant, +{ $later } de plus
+# Là où le panneau d'informations n'a pas la place du plan entier, une ligne après celles qu'il dessine dit combien
+# de lignes de chaque sorte il a laissées de côté.
+panel-hidden-to-do = +{ $count } à faire
+panel-hidden-done = { $count ->
+    [one] +{ $count } terminée
+   *[other] +{ $count } terminées
+    }
+panel-hidden-cancelled = { $count ->
+    [one] +{ $count } annulée
+   *[other] +{ $count } annulées
+    }
+# Le plan du panneau d'informations nomme la touche qui l'affiche en entier, comme sa dernière ligne nomme celle qui masque le panneau.
+panel-todos = { $chord } plan complet
+# Ce que la liste `?` dit de la touche qui affiche le plan en entier, après la touche.
+shortcut-todos = afficher le plan en entier
+# Ce que /todos met dans la transcription au-dessus du plan qu'il affiche, et ce qu'il dit quand il n'y en a pas.
+todos-heading = plan : { $done } sur { $total } terminées
+# La même, quand certaines de ses tâches ont été annulées, ce qu'elle compte à part de celles qui sont terminées.
+todos-heading-cancelled = plan : { $done } sur { $total } terminées, annulées : { $cancelled }
+todos-none = cette session n'a pas encore de plan
+# L'état que porte chaque tâche d'un plan affiché, à côté de sa marque.
+todos-status-pending = à faire
+todos-status-active = en cours
+todos-status-done = terminée
+todos-status-cancelled = annulée
 
-# L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/files`).
+# L'état « fichiers » du panneau d'informations, qui liste ce que la session a écrit (`/diff`).
 # Son titre, au-dessus de la liste : combien de fichiers les appels d'écriture de la session ont modifiés.
 files-heading = { $count ->
     [one] { $count } fichier modifié
    *[other] { $count } fichiers modifiés
     }
+# Le contrôle à l'extrémité droite de ce titre, qui met fin à l'état.
+files-close = x
 # À côté de ce titre après une reprise, puisque l'enregistrement de la session ne garde aucune modification.
 files-earlier-not-kept = les modifications antérieures ne sont pas conservées
 # La première et la dernière ligne d'une liste plus longue que sa place, avec les fichiers omis.
@@ -3324,19 +3764,35 @@ files-more-above = ↑ { $count } de plus au-dessus
 files-more-below = ↓ { $count } de plus en dessous
 # La dernière ligne de cette liste quand des fichiers sont arrivés depuis la dernière touche.
 files-more-below-new = ↓ { $count } de plus en dessous, dont { $new } nouveaux
+# La ligne au-dessus des modifications quand certaines de leurs lignes ont défilé hors de vue en haut,
+# et la ligne en dessous pour celles qui sont hors de vue en bas.
+files-rows-above = { $count ->
+    [one] ↑ { $count } ligne au-dessus
+   *[other] ↑ { $count } lignes au-dessus
+    }
+files-rows-below = { $count ->
+    [one] ↓ { $count } ligne en dessous
+   *[other] ↓ { $count } lignes en dessous
+    }
 # Au-dessus de chaque modification du fichier sélectionné : sa place parmi elles et le tour où elle a été faite.
 files-edit-header = modification { $index } sur { $total }, tour { $turn }
+# La barre au-dessus des modifications : le contrôle de la modification qui précède celle du haut, la
+# place de celle-ci parmi les autres, et le contrôle de la modification qui la suit.
+files-previous-edit = ← précédente
+files-edit-position = modification { $index } sur { $total }
+files-next-edit = suivante →
 # Après le nom du fichier sélectionné.
 files-edit-count = { $count ->
     [one] { $count } modification
    *[other] { $count } modifications
     }
-# Laissé dans la transcription par /files avant que la session n'ait écrit un fichier.
+# Laissé dans la transcription par /diff avant que la session n'ait écrit un fichier.
 files-nothing-written = aucun fichier n'a encore été écrit dans cette session
-# Laissé dans la transcription par /files sur un terminal trop étroit pour cet état.
+# Laissé dans la transcription par /diff sur un terminal trop étroit pour cet état.
 files-too-narrow = La vue des fichiers demande un terminal d'au moins { $columns } colonnes de large.
-# Dit sur la dernière ligne tant que l'état est ouvert, avec ses touches.
-files-hint = ↑↓ fichier  ·  PgUp PgDn défiler  ·  [ ] modification  ·  q retour
+# La dernière ligne du panneau tant que l'état est ouvert, avec ses touches, et celle de la
+# ligne d'aide là où le panneau n'est pas dessiné.
+files-keys = ↑↓ fichier  ←→ modification  PgUp PgDn défiler  q retour
 # La section Fichiers du panneau d'informations : son titre, et combien de fichiers la session a écrits.
 panel-files = Fichiers
 panel-files-total = { $count ->
@@ -3344,6 +3800,46 @@ panel-files-total = { $count ->
    *[other] { $count } fichiers
     }
 
+# Dit d'un fichier d'instructions permanentes assez long pour mériter une mention, et qui part avec
+# chaque requête de la session. La source est son chemin relatif à l'espace de travail, ou
+# ~/.bravebot/AGENTS.md, et reste telle quelle ; les tailles sont des nombres d'octets. Le fichier a
+# tout de même été chargé.
+source-is-large = { $source } fait { $bytes } octets, et chaque requête que cette session envoie le porte
+# Dit une fois pour le tour, de tous les fichiers d'instructions ensemble plutôt que d'un seul.
+sources-large-together = les instructions permanentes font { $bytes } octets en tout, au-delà de { $limit }, et chaque requête que cette session envoie les porte
+# Un fichier de règle, gardé dans .bravebot/rules ou ~/.bravebot/rules, qui a été ajouté aux
+# instructions parce qu'un fichier utilisé par la session correspond à l'un de ses chemins. La règle
+# est son emplacement et reste telle quelle ; le fichier est le nom que le planificateur ou la
+# personne a saisi, affiché de façon qu'aucun caractère ne soit caché.
+rule-loaded = { $rule } a été ajouté aux instructions : { $file } correspond à ses chemins
+# Les fichiers de règle du projet qui n'ont pas été lus, parce que le répertoire n'est pas approuvé.
+# Un nombre et aucun nom : un nom dans un répertoire que personne n'a approuvé n'est pas montré.
+rules-directory-not-trusted =
+    { $count ->
+        [one] 1 fichier de règle de .bravebot/rules n'a pas été chargé : ce répertoire n'est pas approuvé
+       *[other] { $count } fichiers de règle de .bravebot/rules n'ont pas été chargés : ce répertoire n'est pas approuvé
+    }
+# Des fichiers d'un répertoire de règles (.bravebot/rules ou ~/.bravebot/rules) qui ne sont pas des
+# règles, parce que leurs noms ne sont pas du texte et ne peuvent donc être ni comparés ni montrés.
+# Le répertoire reste tel quel.
+rule-names-not-text =
+    { $count ->
+        [one] 1 fichier de { $directory } n'a pas été lu comme une règle : son nom n'est pas du texte
+       *[other] { $count } fichiers de { $directory } n'ont pas été lus comme des règles : leurs noms ne sont pas du texte
+    }
+# Un fichier de règle qui ouvre un bloc de frontmatter sans jamais le fermer, ou une liste paths avec
+# un [ et sans ] fermant, ou une valeur paths qui n'est pas une liste de motifs glob. Écarté plutôt
+# que lu comme du texte à chaque tour, puisque le fichier devait se limiter à certains chemins et
+# qu'ils ne peuvent pas être lus.
+rule-frontmatter-unreadable = { $rule } n'a pas été chargé : son frontmatter ou ses chemins n'ont pas pu être lus, donc il peut manquer un --- ou un ], ou paths n'est pas une liste
+# Les fichiers de règle du ~/.bravebot/rules de la personne qui n'ont pas été chargés, parce que le
+# chemin vers le fichier passe par le répertoire de travail ou par un répertoire ouvert à côté, où un
+# tour peut écrire.
+home-rules-reached-through-the-workspace =
+    { $count ->
+        [one] 1 fichier de règle de ~/.bravebot/rules n'a pas été chargé : le chemin qui y mène passe par un répertoire où cette session peut écrire
+       *[other] { $count } fichiers de règle de ~/.bravebot/rules n'ont pas été chargés : le chemin qui y mène passe par un répertoire où cette session peut écrire
+    }
 # Vérifications indicatives affichées uniquement dans un dépôt de sources de Bravebot.
 doctor-development = environnement de développement { $path }
 doctor-agents-ok = OK (lien vers agents/AGENTS.md)
@@ -3381,6 +3877,58 @@ sessions-import-ambiguous = Plusieurs sessions Claude Code ici commencent par { 
 sessions-import-failed = Impossible d'écrire « { $title } » : { $problem }
 sessions-search-usage = sessions search accepte le texte à trouver, et peut y ajouter since:<n>h, since:<n>d ou since:<n>w, et workspace:<répertoire> s'il ne s'agit pas de celui-ci
 sessions-search-none = Aucune session ne correspond.
+sessions-list-usage = sessions list accepte --json, et --limit avec un nombre
+sessions-list-none = Aucune session n'est enregistrée pour ce répertoire.
+sessions-list-row = { $id }  { $when }  { $title }  { $branch }  { $front }  { $state }
+sessions-list-continuable = peut être reprise
+sessions-list-not-continuable = ne peut pas être reprise
+sessions-list-unknown = inconnu
+sessions-list-more = { $held } de plus. Passez --limit pour les voir.
+sessions-delete-usage = sessions delete accepte l'identifiant d'une session, et sessions purge accepte --dry-run et -y
+sessions-delete-invalid = { $id } n'a pas la forme d'un identifiant de session.
+sessions-delete-missing = Aucune session { $id } n'est enregistrée pour ce répertoire.
+sessions-delete-held = La session { $id } s'exécute en arrière-plan. Arrêtez-la d'abord avec : bravebot sessions stop { $id }
+sessions-delete-failed = Impossible de supprimer la session { $id }.
+sessions-delete-done = Session { $id } supprimée.
+sessions-purge-none = Aucune session n'est enregistrée pour ce répertoire.
+sessions-purge-row = supprimerait { $id }  { $when }  { $title }
+sessions-purge-held = { $id } laissée, car elle s'exécute en arrière-plan
+sessions-purge-question = Supprimer les sessions enregistrées pour { $directory }, { $count } au total, avec leurs journaux d'audit et leurs index de recherche ?
+sessions-purge-needs-yes = sessions purge demande avant de supprimer, et il n'y a pas de terminal où demander. Passez -y pour supprimer sans demander, ou --dry-run pour voir ce qu'il supprimerait.
+sessions-purge-declined = Rien n'a été supprimé.
+sessions-purge-done = Supprimées : { $count }.
+# Ce que dit `bravebot stats`. Les chiffres sont des nombres que le programme a notés, donc les seuls
+# mots ici sont les titres et la phrase qui dit ce que les chiffres couvrent.
+stats-usage = stats accepte --days avec un nombre de jours, --models, et --project avec un répertoire s'il ne s'agit pas de celui-ci
+stats-scope-everything = Toutes les sessions enregistrées, dans tous les projets
+stats-scope-days = { $days ->
+    [one] Sessions dont la dernière écriture date du dernier jour, dans tous les projets
+   *[other] Sessions dont la dernière écriture date des { $days } derniers jours, dans tous les projets
+    }
+stats-scope-project = Toutes les sessions enregistrées dans { $project }
+stats-scope-days-project = { $days ->
+    [one] Sessions dont la dernière écriture date du dernier jour, dans { $project }
+   *[other] Sessions dont la dernière écriture date des { $days } derniers jours, dans { $project }
+    }
+stats-column-model = Modèle
+stats-column-sessions = Sessions
+stats-column-turns = Tours
+stats-column-tokens = Jetons
+stats-column-read = Lus
+stats-column-written = Écrits
+# Les jetons qu'un enregistrement contient et que sa répartition entre lus et écrits ne couvre pas :
+# chaque jeton d'une session écrite avant que cette répartition soit conservée.
+stats-column-unsplit = Non répartis
+stats-row-total = Total
+# Une session dont l'enregistrement ne nomme aucun modèle : une session écrite avant que le modèle
+# soit conservé, une dont les tours n'ont jamais atteint un serveur, et une copiée depuis un autre
+# programme.
+stats-model-unknown = inconnu
+stats-incognito = Une session incognito ne laisse aucun enregistrement, donc aucune n'est comptée.
+stats-unreadable = { $count ->
+    [one] 1 entrée du répertoire des sessions n'a pas pu être lue comme un enregistrement et n'est pas comptée.
+   *[other] { $count } entrées du répertoire des sessions n'ont pas pu être lues comme des enregistrements et ne sont pas comptées.
+    }
 sessions-state-working = au travail
 sessions-state-idle = inactive
 sessions-state-stopped = arrêtée
@@ -3432,6 +3980,8 @@ bg-restart-needs-a-terminal = { $name } est arrêtée, et seul un terminal peut 
 bg-interrupted-needs-a-terminal = { $name } a été interrompue, et seul un terminal peut la redémarrer.
 bg-interrupted-not-repeated = { $name } a été interrompue au milieu d'un tour. La redémarrer ne répète pas ce tour.
 resume-held-by-background = { $name } est tenue par une session en arrière-plan en cours d'exécution. Rejoignez-la avec : bravebot attach { $id }
+resume-held-by-another-process = { $id } est ouverte dans un autre terminal ou une autre fenêtre, elle ne peut donc pas être reprise ici. Copiez-la avec : bravebot --fork { $id }
+resume-changed-while-opening = { $id } a été écrite par un autre processus pendant son ouverture. Reprenez-la.
 
 # `bravebot doctor --sandbox-check` : git, gh, make, cargo et les autres programmes courants, lancés
 # comme une session les lance. Une ligne est un flux de travail ; une ligne en échec dit où, quoi
@@ -3532,6 +4082,13 @@ doctor-push-chosen = Choisie
 doctor-push-chosen-by = git.identities nomme cette clé pour le propriétaire
 doctor-push-chosen-at-prompt = vous avez choisi cette clé pour le propriétaire à une demande d'exécution ; /reach keys dans le client en terminal la liste et l'oublie
 
+## L'invite qui propose un plan terminé en mode plan
+agent-plan-approval-header = Plan
+agent-plan-approval-accept-edits = Oui, accepter les modifications
+agent-plan-approval-accept-edits-detail = Quitter le mode plan et exécuter le plan. Les écritures passent sans demander ; les commandes sont toujours demandées.
+agent-plan-approval-ask = Oui, demander avant chaque modification
+agent-plan-approval-ask-detail = Quitter le mode plan et exécuter le plan, en demandant avant chaque écriture et chaque commande.
+agent-plan-approval-keep-planning = Non, continuer à planifier
 # Ce qu'est le gestionnaire d'un lien bravebot:// dans la table d'usage.
 cli-usage-handle-uri = Ouvrir une session depuis un lien bravebot://open, son invite placée dans la zone de saisie sans être envoyée
 # Dit quand --handle-uri reçoit autre chose que le lien seul, ou une option qui changerait le
@@ -3553,3 +4110,63 @@ deep-link-started-in-home = Le lien désignait { $dir }, qui n'est pas un réper
 # Sous la zone de saisie tant que les mots qu'un lien extérieur y a mis s'y trouvent encore.
 deep-link-banner = Invite d'un lien externe, pas encore envoyée  ·  lisez-la, puis Entrée l'envoie
 deep-link-banner-long = Invite d'un lien externe, { $count } caractères, non envoyée  ·  faites défiler et relisez tout d'abord
+
+## Un modèle que le compte ChatGPT ne propose pas
+
+# Dit lorsque l'hôte de service refuse le modèle d'un tour parce que le compte ne le propose pas
+# (CHATGPT-8). La première phrase est celle du terminal et de l'exécution en une passe, en minuscules
+# avec une seconde phrase pour le remède, et la seconde est celle de la fenêtre, une phrase avec une
+# majuscule. Aucune ne nomme le modèle ni ne cite le service, et aucune n'envoie la personne se
+# reconnecter : le refus porte sur le modèle.
+failure-account-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT. Choisissez un autre modèle
+desktop-chatgpt-model-not-offered = OpenAI ne propose pas ce modèle à ce compte ChatGPT, donc choisissez un autre modèle.
+
+# Ce que dit le pointeur sur une cible de ce que fait un clic dessus, sur la ligne des raccourcis, dans la
+# place qu'ils laissent. Chacun tient en une ligne, dans la voix de l'interface, et aucun ne reprend
+# un mot du texte sous la cible. L'adresse ou le chemin d'un lien le suit sur la même ligne s'il y a
+# de la place.
+hover-back = cliquer pour quitter cette vue
+hover-reply = cliquer pour copier cette réponse
+hover-block = cliquer pour copier ce bloc
+hover-queued = cliquer pour reprendre cette invite dans la zone de saisie
+hover-call-toggle = cliquer pour déplier ou replier cet appel
+hover-call-open = cliquer pour ouvrir le défilement sur cet appel
+hover-delegate = cliquer pour ouvrir la vue de ce délégué
+hover-address = ctrl-clic pour ouvrir cette adresse dans le navigateur
+hover-path = cliquer pour afficher ce fichier, ctrl-clic pour l'ouvrir dans l'éditeur
+hover-path-edit = ctrl-clic pour ouvrir ce fichier dans l'éditeur
+hover-panel-model = cliquer pour choisir le modèle
+hover-panel-effort = cliquer pour choisir l'effort
+hover-panel-context = cliquer pour voir à quel point le contexte est plein
+hover-panel-servers = cliquer pour lister les serveurs MCP
+hover-panel-languages = cliquer pour lister les serveurs de langage
+hover-panel-hide = cliquer pour masquer le panneau
+hover-panel-files = cliquer pour voir les fichiers que cette session a modifiés
+hover-panel-file = cliquer pour voir les modifications de ce fichier
+hover-panel-close-files = cliquer pour revenir au panneau
+hover-panel-edit-previous = cliquer pour aller à la modification précédente
+hover-panel-edit-next = cliquer pour aller à la modification suivante
+hover-panel-name = cliquer pour renommer cette session
+hover-panel-task = cliquer pour aller au tour qui a écrit cette tâche
+hover-panel-detail = cliquer pour ouvrir ou fermer le texte de cette tâche
+hover-panel-link = cliquer pour ouvrir cette adresse dans le navigateur
+hover-footer-mode = cliquer pour changer le mode de permission
+hover-footer-trail = cliquer pour afficher ou masquer la trace
+hover-footer-shortcuts = cliquer pour afficher ou masquer les touches
+hover-footer-info = cliquer pour afficher le panneau d'informations
+hover-footer-watch = cliquer pour ouvrir la vue de ce qu'a fait le tour
+hover-footer-outputs = cliquer pour ouvrir ce que les commandes ont affiché
+hover-footer-background = cliquer pour passer la commande en arrière-plan
+hover-footer-held = cliquer pour revenir à la fin
+hover-footer-cancel-shell = cliquer pour quitter le mode shell
+hover-footer-paste = cliquer pour coller l'image
+hover-item = cliquer pour choisir celui-ci, cliquer encore pour le prendre
+hover-scrollbar = cliquer pour amener la vue ici, glisser le curseur pour défiler
+
+# Le petit menu qu'un clic droit ouvre sur une réponse, le bloc d'un délégué ou une sélection tenue.
+# Un mot ou une courte expression par entrée, et chacune fait ce que fait la commande ou le clic
+# qu'elle représente.
+menu-copy = copier
+menu-copy-text = copier comme texte
+menu-branch = créer une branche de cette session
+menu-open-delegate = ouvrir ce délégué

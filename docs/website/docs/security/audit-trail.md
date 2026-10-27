@@ -17,7 +17,7 @@ would not answer "why did it not do the thing I asked", which is most of what an
 | a one-shot run | `--trace`, which puts it on stderr, after the error too when the run ends in one |
 | after the fact | `~/.bravebot/sessions/<directory>/<id>.audit.jsonl` |
 
-An [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind) shows its gate
+An [incognito session](../using/incognito.md) shows its gate
 decisions on screen as always and writes no file. The trail holds no content, but it does hold gate
 names and paths, which is a record of a session having happened and what it touched.
 
@@ -114,8 +114,9 @@ Each turn and each manifest run begins with a `permission_mode` line naming the 
 `ask`, `accept-edits`, `plan` or `bypass`. A manifest run writes it before planning. A command or write that was put to you gets an `approval`
 line after it that says either `no mode answered, left to the confirmer` or
 `answered by <mode> mode, nobody was asked`, so an entry ending in "asking" is never the only thing
-the trail says about who answered. A fetch or a server start that a mode answers carries no such
-line. A `run` that asks to start with no sandbox is put to you in every mode, so its line says no mode
+the trail says about who answered. A fetch that a mode answers carries no such line. A language
+server's start that a mode answers has one `approval` line of its own, `start a language server:
+answered by <mode> mode, nobody was asked`, written before the server starts. A `run` that asks to start with no sandbox is put to you in every mode, so its line says no mode
 answered.
 
 A turn whose prompt opens with a [`/style`](../reference/commands.md#style-name--off) output style adds an
@@ -172,7 +173,7 @@ BLOCK   approval: weather:get_forecast: the call was not approved, so the server
 
 ## The hosts a run's programs asked for are recorded
 
-When the sandbox holds a run to [a list of hosts](../customize/configuration.md#sandboxnetwork), the
+When the sandbox holds a run to [a list of hosts](sandbox.md#sandboxnetwork), the
 trail records, once the foreground `run` has stopped, what the list decided for each host its programs
 asked for under `hosts`: the host, `allowed` or `refused`, the entry that decided it or `not listed`,
 `port not carried` or `not public`, and the stages that were served. Repeats are counted. A program

@@ -204,6 +204,15 @@ fn queued_lines(session: &Session, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
+/// The row, among those beneath the box, where the first waiting prompt is drawn, where one waits.
+///
+/// Each waiting prompt takes two rows, its words and its mark, one after the other from here
+/// (MOUSE-28). They come after what is attached to the line and what is put away.
+pub(super) fn first_waiting_row(session: &Session, width: u16) -> Option<usize> {
+    (!session.queued.is_empty())
+        .then(|| attached_lines(session, width).len() + stashed_lines(session, width).len())
+}
+
 /// Everything drawn between the box and the hint line, one per row.
 ///
 /// Returned rather than rendered, because the height the layout reserves has to be the height this
@@ -238,11 +247,59 @@ pub(super) fn lines_beneath_the_box(
             slash_lines(session, commands, skills, width)
         }
         crate::state::Offered::Files(entries) => entry_lines(session, entries),
-        crate::state::Offered::Shortcuts => {
-            shortcut_lines(session.editing(), session.bindings(), width)
-        }
+        crate::state::Offered::Shortcuts => shortcut_lines(
+            session.editing(),
+            session.bindings(),
+            PointerKeys::of(session),
+            width,
+        ),
     });
     lines
+}
+
+/// Which of the lines [`lines_beneath_the_box`] gives are the rows of what is offered to be taken,
+/// one to an item, as a range of those lines. `None` where what is offered is not a list to choose
+/// from: nothing, or the shortcuts, which are drawn in columns and have nothing to take.
+fn offered_lines(
+    session: &Session,
+    width: u16,
+    offered: &crate::state::Offered,
+) -> Option<std::ops::Range<usize>> {
+    let items = match offered {
+        crate::state::Offered::Slash { commands, skills } => commands.len() + skills.len(),
+        crate::state::Offered::Files(entries) => entries.len(),
+        crate::state::Offered::Nothing | crate::state::Offered::Shortcuts => return None,
+    };
+    let before = attached_lines(session, width).len()
+        + stashed_lines(session, width).len()
+        + queued_lines(session, width).len();
+    Some(before..before + items)
+}
+
+/// The rows of a list of what could be typed that a press can take (MOUSE-15), each as the cells of
+/// the row and the item it stands for, in `pane`, which is where [`lines_beneath_the_box`] was drawn.
+/// Only the rows the pane had room for are drawn, so only those are there to press.
+pub(super) fn offered_picks(
+    session: &Session,
+    width: u16,
+    offered: &crate::state::Offered,
+    pane: ratatui::layout::Rect,
+) -> Vec<crate::state::Target> {
+    let Some(lines) = offered_lines(session, width, offered) else {
+        return Vec::new();
+    };
+    lines
+        .zip(0..)
+        .filter_map(|(line, index)| {
+            let line = u16::try_from(line)
+                .ok()
+                .filter(|line| *line < pane.height)?;
+            Some(crate::state::Target::on_screen(
+                ratatui::layout::Rect::new(pane.x, pane.y + line, pane.width, 1),
+                crate::state::Hit::Item(index),
+            ))
+        })
+        .collect()
 }
 
 /// One row per command and then one per skill, each with what it is for.
@@ -313,14 +370,14 @@ fn slash_lines(
             Origin::Skill(Source::Home) => t!(skill_from_user).to_string(),
             Origin::Skill(Source::BuiltIn) => t!(skill_from_built_in).to_string(),
             Origin::Server { alias, .. } => {
-                t!(skill_from_mcp_server, alias = alias.as_str()).to_string()
+                t!(skill_from_mcp_server, alias = alias.as_str())
             }
         };
         // After where it was found, so the row says both: a skill the planner is kept from is one only
         // this line can load (SKILL-20).
         let from = match skill.person_only {
             true => format!("{found} {}", t!(skill_person_only)),
-            false => found.to_string(),
+            false => found,
         };
         // Cut rather than wrapped, since nothing below the box wraps, and cut short of the width so
         // where the skill came from is still on the row.
@@ -400,11 +457,12 @@ fn skill_word(skill: &crate::skills::Skill) -> String {
 /// Every other row means the same thing either way.
 ///
 /// The chords a settings file can move are asked of the bindings rather than written here, so the
-/// list names the key that answers rather than the key that used to. The thirteen the file can move
+/// list names the key that answers rather than the key that used to. The fifteen the file can move
 /// are the only rows that vary: nothing can take `?` or Enter, and a marker is not a chord at all.
 pub(super) fn shortcuts(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
+    pointer: PointerKeys,
 ) -> Vec<(String, &'static str)> {
     let escape = match editing {
         crate::vim::Editing::Ordinary => "clear the line",
@@ -427,6 +485,7 @@ pub(super) fn shortcuts(
         ("ctrl-d".to_string(), "exit"),
         (bindings.editor_name(), "write prompt in $EDITOR"),
         (bindings.watch_name(), "watch a delegate work"),
+        (bindings.outputs_name(), "read what a command printed"),
         (bindings.scroller_name(), "open the scroller"),
         (bindings.history_name(), "search earlier prompts"),
         (bindings.stash_name(), "stash, bring it back, or search"),
@@ -434,6 +493,7 @@ pub(super) fn shortcuts(
         (bindings.paste_name(), "paste, pictures too"),
         (bindings.background_name(), "background a running command"),
         (bindings.panel_name(), "show or hide the info panel"),
+        (bindings.todos_name(), t!(shortcut_todos)),
         (
             bindings.scope_name(),
             "earlier prompts: this session or all",
@@ -444,11 +504,41 @@ pub(super) fn shortcuts(
     // Where the session can be suspended, which is every platform but Windows (INPUT-47).
     #[cfg(unix)]
     listed.push((bindings.suspend_name(), "suspend to the shell"));
-    listed.extend([
-        ("drag".to_string(), "select, copy on release"),
-        ("shift-drag".to_string(), "the terminal's own selection"),
-    ]);
+    // What the mouse does, only where it is reported: with capture off the terminal's own selection
+    // needs no modifier, and a row for a drag the session does not read would advertise one that does
+    // nothing (MOUSE-4).
+    if pointer != PointerKeys::Uncaptured {
+        listed.extend([
+            ("drag".to_string(), "select, copy on release"),
+            ("shift-drag".to_string(), "the terminal's own selection"),
+            ("option-drag".to_string(), "same in macOS iTerm2, Terminal"),
+        ]);
+    }
+    if pointer == PointerKeys::CapturedWithMenu {
+        listed.push(("right-click".to_string(), "menu on a reply or selection"));
+    }
     listed
+}
+
+/// What the mouse does in the session the key list is drawn for, which decides the rows that name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PointerKeys {
+    /// `tui.mouse` is `false`: nothing is reported, and the terminal selects and scrolls.
+    Uncaptured,
+    /// The mouse is reported and a right click opens nothing (`tui.contextMenu` is `false`).
+    Captured,
+    /// The mouse is reported and a right click opens the small menu.
+    CapturedWithMenu,
+}
+
+impl PointerKeys {
+    pub(super) fn of(session: &Session) -> Self {
+        match (session.mouse_captured(), session.context_menu_on()) {
+            (false, _) => Self::Uncaptured,
+            (true, false) => Self::Captured,
+            (true, true) => Self::CapturedWithMenu,
+        }
+    }
 }
 
 /// The shortcuts in as many columns as the width will hold.
@@ -461,6 +551,7 @@ pub(super) fn shortcuts(
 pub(super) fn shortcut_lines(
     editing: crate::vim::Editing,
     bindings: &Keybindings,
+    pointer: PointerKeys,
     width: u16,
 ) -> Vec<Line<'static>> {
     /// Blank columns between one column of the list and the next.
@@ -475,7 +566,7 @@ pub(super) fn shortcut_lines(
         return Vec::new();
     }
 
-    let listed = shortcuts(editing, bindings);
+    let listed = shortcuts(editing, bindings, pointer);
     let key_column = listed
         .iter()
         .map(|(key, _)| key.chars().count())

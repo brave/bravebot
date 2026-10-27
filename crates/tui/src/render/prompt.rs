@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use crate::state::{Session, Status};
+use crate::state::{Hit, Session, Status, Target};
 use crate::theme;
 use crate::wrap;
 
@@ -76,6 +76,57 @@ pub(super) fn input_height(session: &Session, width: u16, height: u16) -> u16 {
         .min(wrap::MAX_ROWS);
 
     (rows + 2).min(ceiling) as u16
+}
+
+/// The cells of each row of the box's text a click puts the caret in, as [`draw_input`] drew them
+/// over `area` (MOUSE-16).
+///
+/// A row is the cells inside the border, from the prompt character or the indent that opens it to
+/// the last, and says where the text of the row begins and which bytes of the line it holds. A cell
+/// on the lead lands at the start of its row and one past the end of the text at its end. The border
+/// is no text, so it is in none of them.
+fn text_targets(
+    session: &Session,
+    area: Rect,
+    first: usize,
+    rows: &[String],
+    starts: &[usize],
+) -> Vec<Target> {
+    rows.iter()
+        .enumerate()
+        .map(|(offset, row)| {
+            let index = first + offset;
+            // A row the wrap broke at a space ends in it, and the row after it begins where this one
+            // ends, so the end of what is drawn on it is before the blank: a press past the text is
+            // on this row, which is the one the person pressed, and not at the start of the next.
+            let continues = starts.get(index + 1) == Some(&(starts[index] + row.len()));
+            let held = if continues {
+                row.trim_end_matches(' ')
+            } else {
+                row
+            };
+            let lead = lead_for(index, session.shell, session.shell_private()).len();
+            let text_at = area
+                .x
+                .saturating_add(1)
+                .saturating_add(u16::try_from(lead).unwrap_or(u16::MAX));
+            Target::on_screen(
+                Rect::new(
+                    area.x.saturating_add(1),
+                    area.y
+                        .saturating_add(1)
+                        .saturating_add(u16::try_from(offset).unwrap_or(u16::MAX)),
+                    area.width.saturating_sub(2),
+                    1,
+                ),
+                Hit::Text {
+                    text_at,
+                    start: starts[index],
+                    end: starts[index] + held.len(),
+                },
+            )
+        })
+        .collect()
 }
 
 /// A row with `at..through` of it drawn as a block, which is where the caret is.
@@ -332,7 +383,8 @@ pub(super) fn draw_status(frame: &mut Frame, area: Rect, session: &Session) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
+/// Draw the box, and give back the cells of its text that a click puts the caret in.
+pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) -> Vec<Target> {
     let wrapped = wrap::wrap(
         session.input(),
         input_text_width(area.width),
@@ -340,6 +392,7 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     );
     let visible = (area.height as usize).saturating_sub(2).max(1);
     let (first, rows) = wrapped.window(visible);
+    let targets = text_targets(session, area, first, rows, &wrapped.starts);
     let marker = session.marker_at_caret();
     let selection = session.vi_selection();
     let words = named_words(session);
@@ -527,4 +580,5 @@ pub(super) fn draw_input(frame: &mut Frame, area: Rect, session: &Session) {
     }
 
     frame.render_widget(Paragraph::new(lines).block(block), area);
+    targets
 }

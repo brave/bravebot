@@ -329,7 +329,11 @@ unchanged, and no summary is asked for.
 
 The inputs are the status and the driver's own measurement of the conversation, which is what
 COMPACT-5 decides on. The reply's body is never read, because it is bytes a remote service wrote and
-the driver does not branch on those.
+the driver does not branch on those. A 400 from the ChatGPT account whose body names a model the account
+does not offer is not answered with a compaction: the client that sent the request compares one field of
+the body with that one code and hands the driver the refusal of the model
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)), not a status, so the driver reads no body and no summary is
+asked for.
 
 **Why a status is enough here, and is not enough elsewhere.** 400 and 422 are what a prompt too long
 and a field the service dislikes both come back as (backends.md, Known costs), so nothing about the
@@ -347,6 +351,7 @@ again, as in COMPACT-8.
 `verified-by: bravebot_agent::turn::a_refusal_with_nothing_to_cut_is_reported_without_a_summary`
 `verified-by: bravebot_agent::turn::a_refusal_after_a_failed_summary_is_reported_without_asking_for_another`
 `verified-by: bravebot_agent::backend::only_a_400_or_a_422_is_a_refusal_of_the_body`
+`verified-by: bravebot_agent::backend::a_refusal_of_the_account_is_not_a_refusal_of_the_body`
 
 <a id="COMPACT-15"></a>
 ### COMPACT-15: the `summaryModel` setting names the model a summary runs on

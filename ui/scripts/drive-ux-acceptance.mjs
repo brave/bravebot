@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { eventsFor, idA, installBridge, makeProfile } from './acceptance-fixture.mjs'
+import { BOT_OPEN_BUTTON, COMPOSER_NAME } from './drive-support.mjs'
 const output = process.env.UX_OUTPUT || join(tmpdir(), 'bravebot-ux-final')
 mkdirSync(output, { recursive: true })
 const { profile, directory } = makeProfile({ copy: true })
@@ -22,7 +23,7 @@ try {
   // Playwright clicks bypass native window dragging; assert the native hit-test exclusion too.
   for (const name of ['Chats', 'Bots']) assert.equal(await page.getByRole('button', {name, exact:true}).evaluate(e => getComputedStyle(e.closest('leo-segmentedcontrol') ?? e.getRootNode().host?.closest('leo-segmentedcontrol') ?? e).getPropertyValue('-webkit-app-region')), 'no-drag', `${name} must receive native mouse clicks inside the draggable titlebar`)
   await page.locator('.session').filter({hasText:'Review the sample project'}).click()
-  const composer=page.getByRole('textbox',{name:'Message the agent'})
+  const composer=page.getByRole('textbox',{name:COMPOSER_NAME})
   await composer.fill('Draft retained across conversations.');await snap('02-conversation')
   await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await composer.fill('Independent draft.')
   await page.locator('.session').filter({hasText:'Review the sample project'}).click();assert.equal(await composer.inputValue(),'Draft retained across conversations.')
@@ -93,7 +94,7 @@ try {
   await app.evaluate(({BrowserWindow},session)=>BrowserWindow.getAllWindows()[0].webContents.send('bravebot:bots:consolidated',{session,slug:'review-bot',delivered:true}),'s-'+idA)
   await page.waitForFunction(()=>document.querySelector('.queued-messages')===null);assert.equal((await app.evaluate(()=>globalThis.ux.sent)).length,beforeMaintenance+1);await done()
   // A bot's own page: its conversations in the middle, its details and memory on the right.
-  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
+  await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-conversations"]').waitFor();await snap('19-bot-overview')
   await page.locator('[data-test="bot-details"]').getByRole('button',{name:'Edit memory',exact:true}).waitFor();await snap('20-bot-editor')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('textbox',{name:'Edit memory'}).fill('# Saved preference\n\n- Use a blue accent.');await page.getByRole('button',{name:'Save memory'}).click();await page.locator('.bot-memory').getByText('Saved preference',{exact:false}).waitFor();await snap('21-memory-read')
   await page.getByRole('button',{name:'Edit memory',exact:true}).click();await page.getByRole('button',{name:'Reset…',exact:true}).click();await snap('23-memory-reset');await page.getByRole('button',{name:'Reset saved memory'}).click()
@@ -104,7 +105,7 @@ try {
   await page.reload();await page.getByRole('button',{name:'Chats',exact:true}).click();await page.locator('.session').filter({hasText:'Plan the next iteration'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor();assert.equal(await composer.inputValue(),'Independent draft.');await snap('35-backend-not-ready');await page.getByRole('button',{name:'Diagnostics',exact:true}).click();await snap('38-diagnostics');await page.keyboard.press('Escape')
   await page.getByRole('button',{name:'Setup help'}).click();await snap('36-setup-help');await page.keyboard.press('Escape')
   await app.evaluate(()=>globalThis.ux.configured=true);await page.getByRole('button',{name:'Check again'}).click();await page.getByText('Backend not set up',{exact:true}).waitFor({state:'hidden'})
-  const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator('.bot-open-button').click();await page.locator('[data-test="bot-conversations"]').waitFor()}
+  const openBot=async()=>{await page.getByRole('button',{name:'Bots',exact:true}).click();await page.locator('.bot').filter({hasText:'Review Bot'}).locator(BOT_OPEN_BUTTON).click();await page.locator('[data-test="bot-conversations"]').waitFor()}
   await openBot();await page.locator('.bot-conversations .bot-history-row').filter({hasText:'Review the sample project'}).click();await page.locator('.transcript-head .where').waitFor()
   // A new bot conversation starts from the bot's page by sending to it; the message waits for the trust question.
   await openBot();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await page.getByRole('button',{name:"Don't trust",exact:true}).click();await snap('39-new-bot-conversation')

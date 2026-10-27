@@ -93,7 +93,7 @@ back to the turn's model, so an intended cost control cannot be silently bypasse
 answered by a different model than the one named says so, so a misspelt name is not silent.
 
 **`effort` chooses how hard that model is asked to think.** It takes the same five words as
-[`/effort`](configuration.md#choosing-how-hard-to-think): `low`, `medium`, `high`, `xhigh`
+[`/effort`](effort.md): `low`, `medium`, `high`, `xhigh`
 and `max`. A checker that greps logs can ask for `low` while a worker doing a refactor asks for
 `high`, whatever the session is set to. Where `effort` is omitted the delegate asks for the level
 the turn that spawned it runs at, so a level you chose with `/effort` reaches your delegates. The key
@@ -246,7 +246,9 @@ A `checker` or `worker` definition with `isolation: checkout` has each of its de
 checkout bravebot makes for it under `~/.bravebot/checkouts`, holding the last commit of the
 repository the session is in. Its writes land there and not in your working tree, and changes you
 have not committed are not in it. `worktree`, the value Claude Code reads, asks for the same thing.
-The planner cannot start the delegate without one.
+The planner cannot start the delegate without one. Where the session is in bypass, a delegate in a checkout
+is given the reach the session has outside the workspace, except the working directory and every other
+checkout, which no path of its reaches and its programs are given no write in.
 
 ```markdown
 ---

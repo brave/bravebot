@@ -349,7 +349,9 @@ fn auto_vetting_is_reported_when_a_session_opens_and_held_for_the_rest_of_it() {
     );
     assert_eq!(forked["autoVetting"], true, "{forked}");
 
-    // Opening the record again is a session of its own, and settles the question afresh.
+    // Opening the record again is a session of its own, and settles the question afresh. The
+    // session it was written by is closed first, since one process holds a record at a time.
+    front.call("session.close", json!({"session": session}));
     let reopened = front.call(
         "session.open",
         json!({"directory": scratch.project().display().to_string(), "id": id}),

@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { launchWorld, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, ASSISTANT_BUBBLE, COMPOSER_SEND } from './drive-support.mjs'
 
 // Both outside the project: workspace-write and read-only read the first and refuse a write to the
 // second, strict refuses both. Both are under the real home, because a session may use the temporary directory,
@@ -47,7 +47,7 @@ try {
 
   const composer = page.locator(COMPOSER_INPUT)
   const stop = page.locator('.composer .stop')
-  const replies = page.locator('.bubble.assistant')
+  const replies = page.locator(ASSISTANT_BUBBLE)
   const sandbox = page.locator('[data-test="sandbox-trigger"]')
   // The Leo host has no box of its own, so the mode is read off its attribute, not its visibility.
   const inMode = (wanted) => page.waitForFunction((wanted) =>
@@ -56,7 +56,7 @@ try {
   const run = async (prompt) => {
     const before = await replies.count()
     await composer.fill(prompt)
-    await page.locator('.composer .send').click()
+    await page.locator(COMPOSER_SEND).click()
     const card = page.locator('.confirm.run:not([data-folded="true"])')
     await card.waitFor()
     await card.locator('.confirm-actions .approve:not(.always)').click()

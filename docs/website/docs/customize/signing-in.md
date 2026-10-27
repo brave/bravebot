@@ -18,7 +18,8 @@ Ways to sign in to a model service:
   1. leo      Brave Leo Premium, from a Brave install that subscribes
   2. bedrock  An AWS account, for Amazon Bedrock
   3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-  4. gateway  A key for a gateway a provider block in settings names, typed here and kept by bravebot
+  4. gateway  A key for openrouter, openai, anthropic or a gateway a provider block in settings names, typed here and kept by bravebot
+  5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
 Which one? Type its number or its name, or nothing to stop:
 ```
 
@@ -28,13 +29,15 @@ Each way is the command it was before, run for you:
 |---|---|---|
 | `leo` | `bravebot import-leo-creds [channel]` | [Leo Premium](premium.md) |
 | `bedrock` | the AWS sign-in a session makes on its first turn | [AWS Bedrock](providers/bedrock.md) |
-| `import` | `bravebot import-providers` | [Importing](configuration.md#importing-from-claude-code-opencode-or-a-local-model-server) |
+| `import` | `bravebot import-providers` | [Importing](importing.md) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
+| `chatgpt` | nothing before it: a sign-in in a browser | [ChatGPT](providers/chatgpt.md) |
 
 A script names the way, so nothing is asked: `bravebot auth login leo nightly`,
-`bravebot auth login bedrock`, `bravebot auth login import`. With no way named and no terminal to
-ask on, the command is refused and prints these forms. `gateway` is the exception, since the key is
-typed at the terminal and never given on the command line.
+`bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`. With no way
+named and no terminal to ask on, the command is refused and prints these forms. `gateway` is the
+exception, since the key is typed at the terminal and never given on the command line. `chatgpt` shows
+an address to open and waits for the browser, so it needs a terminal on standard error.
 
 **Leo** asks which channel, and nothing typed means stable. If a subscription is already imported it
 asks before signing in again, because each import registers this machine with Brave as one more
@@ -51,34 +54,76 @@ session uses it without the variable exported. Where that file already names
 `AWS_PROFILE` are not written, so keep them exported or put them in the same block. To sign out, run
 `aws sso logout`.
 
+**ChatGPT** opens a browser at OpenAI, where you sign in, and keeps the sign-in it is given in
+`chatgpt-account.json` beside the other credential files. It prints the address as well, so a machine
+with no browser can finish the sign-in elsewhere through a forwarded port, and it waits five minutes.
+If a sign-in is already stored it asks before replacing it. The account's models are offered in
+`/model` as `chatgpt/<model>`. Where nothing serves the model in force, `bravebot` lists the account's
+models in the terminal and asks which one to use, remembers the answer for the next start, and opens on
+it. An answer that is not the number of a model, a start in a script or in an incognito session, and an
+account whose models could not be listed are refused as before, with the forms that name a model, and a
+listing that gave no model is said why. `bravebot auth logout chatgpt` forgets the copy here and ends nothing at
+OpenAI. See [ChatGPT](providers/chatgpt.md).
+
 ## Gateway
 
-An [OpenAI-compatible gateway](providers/openai-compatible.md) such as OpenRouter is a provider
-block in settings, and the block says where requests go. `gateway` stores the key it is sent:
+`gateway` stores an API key for `openrouter`, `openai` or `anthropic`, which bravebot knows the
+endpoints of, or for a gateway a provider block names, such as an
+[OpenAI-compatible gateway](providers/openai-compatible.md). A key for one of the three needs no
+block written first:
 
 ```
 $ bravebot auth login gateway
-Gateways configured:
-  1. openrouter  openrouter.ai
-  2. work        gateway.work.example (a key stored)
-Which one? Type its number or its id, or nothing to stop: 1
+Services a key can be stored for:
+  1. work        gateway.work.example (a key stored)
+  2. openrouter  openrouter.ai
+  3. openai      api.openai.com
+  4. anthropic   api.anthropic.com
+Which one? Type its number or its id, or nothing to stop: 3
 
-Key for openrouter, sent to openrouter.ai (not shown as you type):
-the key for openrouter is stored in /home/you/.bravebot/gateway-keys.json, and sessions started from now on send it to openrouter.ai
+Key for openai, sent to api.openai.com (not shown as you type):
+the key for openai is stored in /home/you/.bravebot/gateway-keys.json, and /home/you/.bravebot/settings.json names openai under provider now, so sessions started from now on send it to api.openai.com
 ```
 
-With one gateway configured, or one named as in `bravebot auth login gateway openrouter`, it asks
-for the key straight away. Nothing appears as the key is typed or pasted. Ctrl-U starts it again,
-and Escape, Ctrl-C, Ctrl-D or Enter on nothing stops without storing anything. A gateway that
-already has a key stored asks before replacing it.
+The list is the gateways your settings name, then each of the three that no block names, each with
+the host its key is sent to. A block with the id of one of the three is listed once, with its own
+host. Where the machine-level file names the gateways, only those are offered, since an entry
+written in your settings would not be read there, and the list and the refusal of any other id name
+that file.
+
+With one service offered, or one named as in `bravebot auth login gateway openai`, it asks for the
+key straight away. Nothing appears as the key is typed or pasted. Ctrl-U starts it again, and
+Escape, Ctrl-C, Ctrl-D or Enter on nothing stops without storing anything. A service that already
+has a key stored asks before replacing it.
 
 The key is kept in `~/.bravebot/gateway-keys.json`, readable only by your account, under the
-block's id. It holds no host, so a key goes only where the block with that id sends requests. A
-variable the block's `env` names wins over a stored key while it is set, and the sign-in says so
-when one is set. A session reads the file when it starts, so one already open keeps the key it had.
+service's id. It holds no host, so a key goes only where the provider block with that id sends
+requests. For one of the three that no block names, the sign-in adds `"provider": {"openai": {}}`
+to `~/.bravebot/settings.json` once the key is stored, so sessions send the key to the host built
+into bravebot. The file is rewritten whole, so its keys come out in order of name and its spacing is
+replaced. A file with a comment in it is refused before the key is asked for, and is never
+rewritten. The entry names no variable, so `OPENAI_API_KEY` in your shell is not read for it: name
+it in the block's `env` to have it used. Nothing is written where a block or the file already names
+the id. A settings file that cannot take the entry, because it is not a settings document, is past
+the size bravebot reads, or names the id as something that is not a provider block, is said before
+the key is asked for, and nothing is stored. A variable the block's `env` names wins over a stored
+key while it is set, and the sign-in says so when one is set. A session reads the files when it
+starts, so one already open keeps what it had.
 
-`bravebot auth logout gateway openrouter` forgets the key. With only one stored the id can be left
-off. Forgetting it here does not revoke it: it works at the gateway until you revoke it there.
+A key stored with no block naming its id is sent by no session. Running the sign-in for that id
+again records the block, whether you replace the key or keep it.
+
+Storing the key does not choose a model. Until one of the service's is named, `bravebot` refuses to
+start with `no model service is configured yet` and a line naming the
+[`model` key](configuration.md#model), because the model in force is still the one the build came
+with. The next step is to name one, as `openai/<model id>` in the `model` key or after `--model`.
+[OpenAI](providers/openai.md) shows the block and the `model` key, and the pages for
+[Anthropic](providers/anthropic.md) and [OpenRouter](providers/openrouter.md) show theirs.
+
+`bravebot auth logout gateway openai` forgets the key. With only one stored the id can be left off.
+Forgetting it here does not revoke it: it works at the service until you revoke it there, and the
+line names the host. Logging out leaves the provider entry in your settings, and `auth status` and
+`doctor` then say that none is needed, until the entry is removed or a key is stored again.
 
 ## Checking a sign-in
 
@@ -87,13 +132,15 @@ bravebot auth status leo
 ```
 
 prints whether Leo is signed in and usable, and exits 0 only if it is, so a script can test it.
-`bedrock` and `gateway [id]` ask about the other two. With no way named it asks about all of them and
-exits 0 if any is usable. See [the reference](../reference/cli.md#auth).
+`bedrock`, `gateway [id]` and `chatgpt` ask about the others. `gateway openai` says whether a
+session would send a key for `openai`, and a key stored for it with no block naming it is reported
+as not signed in. With no way named it asks about all of them and exits 0 if any is usable. See [the
+reference](../reference/cli.md#auth).
 
 ## In an incognito session
 
-In an [incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind), `leo`,
-`import` and `gateway` are refused, since each keeps something in bravebot's own directory.
+In an [incognito session](../using/incognito.md), `leo`,
+`import`, `gateway` and `chatgpt` are refused, since each keeps something in bravebot's own directory.
 `bedrock` is allowed: the AWS CLI keeps that session, and a session in this mode signs in to it as
 well. It writes nothing to settings, so `BRAVEBOT_USE_BEDROCK=1` still has to be exported. Signing
-out of Leo and forgetting a gateway key are allowed.
+out of Leo, forgetting a gateway key and signing out of ChatGPT are allowed.

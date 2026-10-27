@@ -3,6 +3,11 @@
 # from the app directory. pnpm's default layout puts neither at the top level.
 nodeLinker: hoisted
 
+# react-native reaches body-parser through @react-native/community-cli-plugin, and 2.3.0 carries
+# GHSA-27r3-jxmh-p828. 2.4.0 fixes it. Remove this once react-native depends on 2.4.0 or later.
+overrides:
+  body-parser: "^2.4.0"
+
 # Known high advisory in build-time tooling (Metro and the React Native CLI) that is not part of the app
 # bundle; braces has no patched release. Any other high or critical advisory fails `pnpm audit --audit-level=high` in CI.
 auditConfig:

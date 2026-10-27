@@ -51,6 +51,11 @@ pub struct Search {
     /// Counted from the newest rather than as an index, because the newest is where the list is
     /// read from and typing changes how many matches there are below it.
     up: usize,
+    /// The first prompt drawn, counted from the oldest, held where a press left it: a press moves the
+    /// cursor to a prompt that is already drawn and the list stays where it is, so a second press on
+    /// the same cell is on the same prompt. A key, a turn of the wheel, a letter typed or another
+    /// scope lets go of it, and the list moves as it always did.
+    held_from: Option<usize>,
     /// Which prompts the list offers.
     scope: Scope,
 }
@@ -64,6 +69,7 @@ impl Search {
         Self {
             needle: needle.into(),
             up: 0,
+            held_from: None,
             scope: Scope::All,
         }
     }
@@ -84,23 +90,39 @@ impl Search {
     pub fn typed(&mut self, c: char) {
         self.needle.push(c);
         self.up = 0;
+        self.held_from = None;
     }
 
     /// Remove the last character. Reports whether there was one, so the caller can decide what
     /// backspacing past the start means.
     pub fn backspace(&mut self) -> bool {
         self.up = 0;
+        self.held_from = None;
         self.needle.pop().is_some()
     }
 
     /// Move to an older match, stopping at the oldest.
     pub fn older(&mut self, matches: usize) {
         self.up = (self.up + 1).min(matches.saturating_sub(1));
+        self.held_from = None;
     }
 
     /// Move to a newer match, stopping at the newest.
     pub fn newer(&mut self) {
         self.up = self.up.saturating_sub(1);
+        self.held_from = None;
+    }
+
+    /// Put the cursor on the match at `index` of `matches`, counted from the oldest, as
+    /// [`Search::at`] counts.
+    pub fn select(&mut self, index: usize, matches: usize) {
+        self.up = matches.saturating_sub(1 + index.min(matches.saturating_sub(1)));
+    }
+
+    /// Hold the list with `first` as the first prompt drawn, counted from the oldest, until the
+    /// cursor next moves by a key or the wheel.
+    pub fn hold_from(&mut self, first: usize) {
+        self.held_from = Some(first);
     }
 
     /// Move to the next scope of everywhere, this project and this session that holds a prompt,
@@ -109,6 +131,7 @@ impl Search {
         if let Some(scope) = history.following(self.scope) {
             self.scope = scope;
             self.up = 0;
+            self.held_from = None;
         }
     }
 
@@ -119,6 +142,7 @@ impl Search {
     pub fn narrow(&mut self) {
         self.scope = Scope::Project;
         self.up = 0;
+        self.held_from = None;
     }
 
     /// The prompts this search answers with, oldest first.
@@ -180,15 +204,7 @@ pub fn draw(frame: &mut Frame, area: Rect, session: &Session) {
         area,
     );
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // title and scope
-            Constraint::Min(1),    // the matches, and the one under the cursor in full
-            Constraint::Length(3), // what is being typed
-            Constraint::Length(1), // keys
-        ])
-        .split(area);
+    let layout = layout(area);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -226,6 +242,84 @@ pub fn draw(frame: &mut Frame, area: Rect, session: &Session) {
     );
 }
 
+/// The rows of the panel drawn in `area`: the title, the matches, the box the search is typed into
+/// and the keys.
+fn layout(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // title and scope
+            Constraint::Min(1),    // the matches, and the one under the cursor in full
+            Constraint::Length(3), // what is being typed
+            Constraint::Length(1), // keys
+        ])
+        .split(area)
+}
+
+/// The list of matches, and the prompt under the cursor in full beside it where there is room, in
+/// the rows [`layout`] gives the matches.
+fn lists(area: Rect) -> (Rect, Option<Rect>) {
+    match area.width >= ROOM_FOR_A_PREVIEW {
+        true => {
+            let split = Layout::default()
+                .direction(Direction::Horizontal)
+                // A column of space between the two, so a prompt cut at the edge of the list does
+                // not read as running into the border beside it.
+                .constraints([
+                    Constraint::Percentage(55),
+                    Constraint::Length(2),
+                    Constraint::Min(20),
+                ])
+                .split(area);
+            (split[0], Some(split[2]))
+        }
+        false => (area, None),
+    }
+}
+
+/// Which matches are drawn in a list `rows` tall, as the indexes `first..last`. The newest is at the
+/// bottom, so the window is taken from the end and slides up as the cursor walks back through older
+/// prompts. Where a press has held the list it stays, while the cursor is among the prompts drawn.
+fn window(at: usize, matches: usize, rows: usize, held_from: Option<usize>) -> (usize, usize) {
+    let visible = rows.max(1);
+    if let Some(first) = held_from
+        && (first..first + visible).contains(&at)
+        && first + visible <= matches
+    {
+        return (first, first + visible);
+    }
+    let last = (at + 1).max(matches.min(visible)).min(matches);
+    (last.saturating_sub(visible), last)
+}
+
+/// The rows of the matches in a panel drawn in `area`, each as the cells of the row and the match it
+/// shows, counted from the oldest, as the panel draws them (MOUSE-15).
+pub fn picks(session: &Session, area: Rect) -> Vec<crate::state::Target> {
+    let Some(search) = session.history_search() else {
+        return Vec::new();
+    };
+    let matches = session.history_matches().len();
+    if matches == 0 {
+        return Vec::new();
+    }
+    let (list, _) = lists(layout(area)[1]);
+    let (first, last) = window(
+        search.at(matches).unwrap_or(0),
+        matches,
+        usize::from(list.height),
+        search.held_from,
+    );
+    (first..last)
+        .zip(list.y..list.bottom())
+        .map(|(index, row)| {
+            crate::state::Target::on_screen(
+                Rect::new(list.x, row, list.width, 1),
+                crate::state::Hit::Match(index),
+            )
+        })
+        .collect()
+}
+
 /// The list, and beside it the prompt under the cursor in full.
 fn draw_matches(frame: &mut Frame, area: Rect, session: &Session, search: &Search) {
     let matching = session.history_matches();
@@ -243,31 +337,15 @@ fn draw_matches(frame: &mut Frame, area: Rect, session: &Session, search: &Searc
     // The full prompt beside the list rather than under it: a row is one line of what may be a
     // paragraph, and the difference between two prompts that begin alike is further in than a row
     // has room for.
-    let (list, preview) = match area.width >= ROOM_FOR_A_PREVIEW {
-        true => {
-            let split = Layout::default()
-                .direction(Direction::Horizontal)
-                // A column of space between the two, so a prompt cut at the edge of the list does
-                // not read as running into the border beside it.
-                .constraints([
-                    Constraint::Percentage(55),
-                    Constraint::Length(2),
-                    Constraint::Min(20),
-                ])
-                .split(area);
-            (split[0], Some(split[2]))
-        }
-        false => (area, None),
-    };
+    let (list, preview) = lists(area);
 
     let at = search.at(matching.len()).unwrap_or(0);
-    let visible = (list.height as usize).max(1);
-    // The newest is at the bottom, so the window is taken from the end and slides up as the cursor
-    // walks back through older prompts.
-    let last = (at + 1)
-        .max(matching.len().min(visible))
-        .min(matching.len());
-    let first = last.saturating_sub(visible);
+    let (first, last) = window(
+        at,
+        matching.len(),
+        usize::from(list.height),
+        search.held_from,
+    );
 
     let mut lines = Vec::new();
     for (index, entry) in matching.iter().enumerate().take(last).skip(first) {

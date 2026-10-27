@@ -30,6 +30,7 @@ tests are [ui/docs/development.md](../../ui/docs/development.md).
 | [commits.md](commits.md) | what one commit contains, what its message says, what closes an issue, and how to open the pull request |
 | [reviewing-for-the-rule.md](reviewing-for-the-rule.md) | reading a diff against the guarantee the repository exists for |
 | [spec-enforced-development.md](spec-enforced-development.md) | developing against the mini-specs, and what ships with a clause |
+| [fuzzing.md](fuzzing.md) | the fuzz targets for code that reads outside input, running one, adding one, and what to do with a crash |
 | [maintainer-jobs.md](maintainer-jobs.md) | the skills a maintainer runs on a schedule, what each files, and the ledger each leaves to commit |
 | [branch-protection.md](branch-protection.md) | the review settings branch protection holds `main` to, which no file in a checkout can read |
 | [security-scan.md](security-scan.md) | the scan that comments on pull requests, run before pushing |

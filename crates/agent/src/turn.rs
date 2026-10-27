@@ -12,19 +12,18 @@
 //! quarantine the references in it name, and the integrity that exchange has met. A new policy
 //! each turn, resuming a conversation that outlives it.
 
-use bravebot_aichat::protocol::{Cached, ChatRequest, Effort, ImageUrl, Message, Part, ToolCall};
+use bravebot_aichat::protocol::{Effort, ImageUrl, Message, Part, ToolCall};
 use bravebot_config::Config;
 use bravebot_core::cancel::Cancel;
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::event::Sink;
-use bravebot_core::policy::{AfterCeilingStop, Policy, ReleasePlan, Routing, Vouched};
+use bravebot_core::policy::{Policy, ReleasePlan, Routing, Vouched};
 use bravebot_core::programs::TrustedPrograms;
 use bravebot_core::reference::Presentation;
 use bravebot_core::trust::TrustStore;
 use bravebot_core::value::Labelled;
 use bravebot_i18n::t;
 use bravebot_net::Egress;
-use std::fmt;
 use std::time::Instant;
 
 use crate::confirm::Confirmer;
@@ -32,19 +31,25 @@ use crate::conversation::{Composed, Conversation, TOOL_RESULT_PREFIX};
 use crate::report::{DelegateId, Phase, Reporter};
 use crate::request_view::Provenance;
 use crate::styles;
-use crate::timing::{Elapsed, Timing};
+use crate::timing::Elapsed;
 use crate::tools;
-use crate::workspace::{Workspace, WorkspaceError};
+use crate::workspace::Workspace;
 
 mod delegate_end;
+mod hooked;
 mod prompts;
+mod result;
 mod round_steps;
 mod sentences;
 mod setup;
 mod task;
 
+pub use hooked::Hooked;
+pub(crate) use hooked::trouble_sentences;
+use hooked::{fire_checkout_made, fire_hooks, say_prompt_notices};
 pub(crate) use prompts::PLANNING;
 use prompts::{FOR_A_PERSON, OPENING};
+pub use result::*;
 pub use task::*;
 
 /// How many rounds of tool calls one turn may make before it has to answer, where nobody is
@@ -141,172 +146,6 @@ impl ReadOutputIs {
 const STOP_BEING_ASKED: &str = "To stop being asked, a person vouching for every stage of the \
      exact command makes what it prints visible from then on.";
 
-/// What the person is told when a reply reached the output ceiling and the planner is asked again
-/// (TURN-7). A turn with no tools left is asked for a shorter answer rather than for the work.
-fn ceiling_stop_narration(cut_off: &bravebot_aichat::CutOff, may_call_tools: bool) -> String {
-    use bravebot_aichat::OpenCall;
-    let tokens = cut_off.ceiling;
-    if !may_call_tools {
-        return t!(ceiling_stop_answer_now, tokens = tokens);
-    }
-    match (&cut_off.call, cut_off.thought) {
-        (
-            Some(OpenCall {
-                tool: Some(tool), ..
-            }),
-            _,
-        ) => {
-            t!(ceiling_stop_in_call, tokens = tokens, tool = tool.as_str())
-        }
-        (Some(OpenCall { tool: None, .. }), _) => t!(ceiling_stop_in_a_call, tokens = tokens),
-        (None, true) => t!(ceiling_stop_thinking, tokens = tokens),
-        (None, false) => t!(ceiling_stop_silent, tokens = tokens),
-    }
-}
-
-/// What the person is told when a reply the output ceiling stopped is the turn's answer. A call it
-/// was writing is named, since the text reads as though the work it announces was done.
-fn answer_stopped_narration(cut_off: &bravebot_aichat::CutOff) -> String {
-    use bravebot_aichat::OpenCall;
-    let tokens = cut_off.ceiling;
-    match &cut_off.call {
-        Some(OpenCall {
-            tool: Some(tool), ..
-        }) => t!(
-            ceiling_stop_ends_in_call,
-            tokens = tokens,
-            tool = tool.as_str()
-        ),
-        Some(OpenCall { tool: None, .. }) => t!(ceiling_stop_ends_in_a_call, tokens = tokens),
-        None => "the model reached its output limit, so this answer stops where it did. \
-                 What it wrote is kept; raise BRAVEBOT_OUTPUT_BUDGET or ask for less in one turn"
-            .to_string(),
-    }
-}
-
-/// Put a reply the output ceiling stopped in the trail, with what the turn did about it (TURN-7).
-fn record_ceiling_stop<S: Sink>(
-    policy: &mut Policy<'_, S>,
-    round: usize,
-    cut_off: &bravebot_aichat::CutOff,
-    then: AfterCeilingStop,
-) {
-    policy.record_ceiling_stop(
-        round,
-        cut_off.ceiling,
-        cut_off
-            .call
-            .as_ref()
-            .map(|call| (call.tool.as_deref(), call.arguments)),
-        cut_off.thought,
-        then,
-    );
-}
-
-/// What the planner is told after a reply of its own reached the output ceiling (TURN-7).
-///
-/// Made from the stop's structure and the request's own spelling of a tool it offered, so nothing
-/// the reply wrote reaches the line. The remedy follows from what the reply was writing: a file
-/// too big for one reply is written in parts, with the write tools `request` offered, and a reply
-/// that spent the ceiling thinking is asked to act sooner.
-fn after_a_ceiling_stop(
-    cut_off: &bravebot_aichat::CutOff,
-    request: &ChatRequest,
-    may_call_tools: bool,
-) -> String {
-    use bravebot_aichat::OpenCall;
-    let ceiling = cut_off.ceiling;
-    let stopped = match (&cut_off.call, cut_off.thought) {
-        (
-            Some(OpenCall {
-                tool: Some(tool), ..
-            }),
-            _,
-        ) => {
-            format!("while writing a call to {tool}, so the call was not made")
-        }
-        (Some(OpenCall { tool: None, .. }), _) => {
-            "while writing a tool call, so the call was not made".to_string()
-        }
-        (None, true) => "while thinking, before it said or did anything".to_string(),
-        (None, false) => "before it said or did anything".to_string(),
-    };
-    let next = match &cut_off.call {
-        _ if !may_call_tools => "Answer now, in fewer words.",
-        Some(OpenCall {
-            tool: Some(tool), ..
-        }) if tools::writes_a_file(tool) => match (
-            request.offered("write_file").is_some(),
-            request.offered("edit_file").is_some(),
-        ) {
-            (true, true) => {
-                "Nothing was written. Make the same change in smaller calls, each well under the \
-                 limit: split it across several files, or write the first part and add the rest \
-                 with edit_file."
-            }
-            (true, false) => {
-                "Nothing was written. Make the same change in smaller calls, each well under the \
-                 limit: split it across several files."
-            }
-            _ => {
-                "Nothing was written. Make the same change in smaller calls, each well under the limit."
-            }
-        },
-        Some(_) => "Make it again with less in it, in smaller calls each well under the limit.",
-        None if cut_off.thought => "Think less before you act: make the next call now.",
-        None => "Make the next call now, or give a shorter answer.",
-    };
-    format!(
-        "{TOOL_BUDGET_SPENT} Your last reply reached the output limit of {ceiling} tokens \
-         {stopped}. {next}"
-    )
-}
-
-/// Which of the limits a person gave a run ended it, and what the run had done by then (TURN-14).
-///
-/// Numbers the driver counted and nothing a reply or a tool result said, so a caller may put them
-/// in a sentence or a result object without reading content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LimitReached {
-    /// The planner asked for a round of tool calls past the most the run may make. The round it
-    /// asked for was not run.
-    Rounds {
-        /// The limit, which is also how many rounds were made.
-        most: usize,
-    },
-    /// The run had spent as many tokens as it may when it was about to send another request, which
-    /// was not sent.
-    Tokens {
-        /// The limit.
-        most: u64,
-        /// Tokens the run had spent, which is at least `most`.
-        spent: u64,
-        /// Rounds of tool calls made before the run stopped.
-        rounds: usize,
-    },
-}
-
-impl LimitReached {
-    /// Rounds of tool calls the run made before it stopped.
-    pub fn rounds(&self) -> usize {
-        match *self {
-            Self::Rounds { most } => most,
-            Self::Tokens { rounds, .. } => rounds,
-        }
-    }
-}
-
-impl fmt::Display for LimitReached {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            Self::Rounds { most } => write!(f, "{}", t!(run_limit_rounds, most = most)),
-            Self::Tokens { most, spent, .. } => {
-                write!(f, "{}", t!(run_limit_tokens, spent = spent, most = most))
-            }
-        }
-    }
-}
-
 /// The limit on tokens a person gave the run, where the run has spent it (TURN-14).
 fn token_limit_reached(task: &Task, state: &State<'_>) -> Option<LimitReached> {
     let most = task.limits.tokens?;
@@ -330,116 +169,6 @@ fn stopped_at<S: Sink>(
     };
     policy.record_run_limit(round, counts, made, limit);
     TurnError::LimitReached(reached)
-}
-
-#[derive(Debug)]
-pub enum TurnError {
-    /// The user asked for the turn to stop.
-    Cancelled { attempts: Option<u32> },
-    /// The run reached a limit its person gave it, and stopped before going past it (TURN-14).
-    LimitReached(LimitReached),
-    /// Routing could not be precommitted.
-    Precommit(String),
-    /// A file operation failed or was refused.
-    Workspace(WorkspaceError),
-    /// The model call failed or was refused.
-    Chat(crate::backend::BackendError),
-    /// A manifest run stopped before it had a frozen plan, or a step failed.
-    ///
-    /// Carries what the run produced so a caller can still look at it. A plan that would not
-    /// parse has no rendered form, so the model's own words are the only thing left.
-    ///
-    /// The failure itself travels rather than a sentence about it, so what stopped the run is
-    /// still something a caller can decide from. Flattened to a sentence, a step that lost the
-    /// backend and a plan that would not parse arrive indistinguishable.
-    Manifest {
-        attempt: Box<crate::manifest::Attempt>,
-        cause: Box<TurnError>,
-    },
-}
-
-impl fmt::Display for TurnError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cancelled { .. } => write!(f, "cancelled"),
-            Self::LimitReached(reached) => write!(f, "{reached}"),
-            Self::Precommit(detail) => write!(f, "{detail}"),
-            Self::Workspace(e) => write!(f, "{e}"),
-            Self::Chat(e) => write!(f, "{e}"),
-            Self::Manifest { cause, .. } => write!(f, "{cause}"),
-        }
-    }
-}
-
-impl std::error::Error for TurnError {}
-
-impl TurnError {
-    /// Classify a failure or cancellation without copying raw error text.
-    pub fn ending(&self) -> crate::outcome::Ending {
-        use crate::outcome::{Category, Diagnosis, Ending};
-        match self {
-            Self::Cancelled { attempts } => Ending::Stopped {
-                attempts: *attempts,
-            },
-            // The person's own limit, so a stop and not a failure of anything. No request was
-            // handed to egress after it was reached.
-            Self::LimitReached(_) => Ending::Stopped { attempts: Some(0) },
-            Self::Chat(error) => Ending::Failed(error.diagnosis()),
-            Self::Workspace(_) => Ending::Failed(Diagnosis::of(Category::Workspace)),
-            // A precommit that would not hold and a plan that would not run are both this program
-            // failing to get a turn off the ground, whatever the wording of either.
-            Self::Precommit(_) | Self::Manifest { .. } => {
-                Ending::Failed(Diagnosis::of(Category::Internal))
-            }
-        }
-    }
-
-    /// The limit that ended the run, where one did.
-    pub fn limit_reached(&self) -> Option<&LimitReached> {
-        match self {
-            Self::LimitReached(reached) => Some(reached),
-            Self::Manifest { cause, .. } => cause.limit_reached(),
-            _ => None,
-        }
-    }
-
-    /// What the reply the output ceiling stopped was doing, where that is what ended the turn.
-    ///
-    /// Beside [`Self::ending`] rather than in it, since a diagnosis is `Copy` and this carries a
-    /// tool's name.
-    pub fn cut_off(&self) -> Option<&bravebot_aichat::CutOff> {
-        match self {
-            Self::Chat(error) => error.cut_off(),
-            Self::Manifest { cause, .. } => cause.cut_off(),
-            _ => None,
-        }
-    }
-}
-
-impl From<WorkspaceError> for TurnError {
-    fn from(value: WorkspaceError) -> Self {
-        Self::Workspace(value)
-    }
-}
-
-impl From<crate::backend::BackendError> for TurnError {
-    fn from(value: crate::backend::BackendError) -> Self {
-        // A reply stopped part way through is the person's own stop arriving back, not a
-        // failure of the call. Reported as one, it would be written into the transcript as
-        // something that went wrong with the model.
-        if value.is_cancelled() {
-            return Self::Cancelled {
-                attempts: value.diagnosis().attempts,
-            };
-        }
-        Self::Chat(value)
-    }
-}
-
-impl From<bravebot_aichat::ChatError> for TurnError {
-    fn from(value: bravebot_aichat::ChatError) -> Self {
-        Self::from(crate::backend::BackendError::from(value))
-    }
 }
 
 /// How much of a quarantined result to put in front of the person watching.
@@ -533,234 +262,6 @@ fn released_lines<S: Sink>(
 
     let proof = policy.authorise_display_release("a tool result, for the person watching");
     shaped.declassify(&proof)
-}
-
-/// When the next tick of a self-paced loop is due, as the turn that has just ended asked for it.
-///
-/// A duration and a flag, and deliberately nothing else. What the next tick *says* is the line
-/// the person typed, held by whoever started the loop, so there is no field here for a turn to
-/// write its own next prompt into.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Wakeup {
-    /// How long to wait, already held to the bounds below.
-    pub after: std::time::Duration,
-    /// Whether the turn found nothing to do, as it reported.
-    pub quiet: bool,
-    /// Whether the turn said the loop is finished, so no further tick is wanted.
-    ///
-    /// One routing boolean that can only end the loop the person started: it cannot start,
-    /// lengthen or change what runs.
-    pub stop: bool,
-}
-
-impl Wakeup {
-    /// The shortest wait a turn may ask for.
-    ///
-    /// The wait is measured from the end of a tick and a tick is a whole turn, so how fast a watch
-    /// actually looks is set by how long the turn takes rather than by this. It is not zero because
-    /// a loop with no gap at all is a way to spend a rate limit rather than a way to watch
-    /// something.
-    pub const FLOOR: std::time::Duration = std::time::Duration::from_secs(1);
-
-    /// The longest.
-    ///
-    /// A person started the loop and is entitled to see it do something. A turn that wants longer
-    /// can say so in its answer, where somebody reads it, rather than by going quiet for a day.
-    pub const CEILING: std::time::Duration = std::time::Duration::from_secs(3_600);
-
-    /// What a turn asked for, held to the bounds.
-    ///
-    /// Held here rather than where the loop is kept, so the seconds the planner is told back are
-    /// the seconds it gets. A tool that echoed the number it was given would be reporting a wait
-    /// that is not going to happen.
-    pub fn asked(seconds: u64, quiet: bool) -> Self {
-        Self {
-            after: std::time::Duration::from_secs(seconds).clamp(Self::FLOOR, Self::CEILING),
-            quiet,
-            stop: false,
-        }
-    }
-
-    /// A turn saying the loop is finished.
-    ///
-    /// The wait is the floor and is never used: the loop that reads this ends instead of arming a
-    /// tick.
-    pub fn finished(quiet: bool) -> Self {
-        Self {
-            stop: true,
-            ..Self::asked(0, quiet)
-        }
-    }
-}
-
-/// The result of a turn.
-#[derive(Debug)]
-pub struct Outcome {
-    /// The assistant's reply. Untrusted, since it is model output.
-    pub reply: Labelled<String>,
-    /// The same reply, as the kernel labelled it from the context that produced it.
-    ///
-    /// [`Outcome::reply`] carries the transport's label, which is pessimistic because a JSON
-    /// string arrives with no provenance. This one carries the kernel's, which tracked what
-    /// entered the context and is the only thing that can say. A nested run's caller presents
-    /// this one: presenting the other would quarantine every report a delegate ever made,
-    /// whatever its context had actually met.
-    pub answer: Labelled<String>,
-    /// The model the server reported using.
-    pub model: String,
-    /// How many tool-calling rounds the turn took.
-    pub steps: usize,
-    /// Whether no gate refused anything during the turn.
-    pub clean: bool,
-    /// The refusals no later call to the same tool got past, each as `gate: reason`, in order.
-    /// Empty where `clean` is false means the turn cannot say which refusals those were.
-    pub standing_refusals: Vec<String>,
-    /// How many refusals a later call to the same tool got past.
-    pub worked_around: usize,
-    /// The trust map after the turn, including any rule the turn recorded itself.
-    pub trust: TrustStore,
-    /// The programs vouched for after the turn, including any the user vouched for during it.
-    ///
-    /// Travels back rather than being recorded by whoever drew the prompt, so there is one copy
-    /// of the answer and nothing to disagree with it.
-    pub programs: TrustedPrograms,
-    /// The run prompts put to the person after the turn, including any this one drew.
-    ///
-    /// Travels back for the reason [`Outcome::programs`] does, and grants nothing at all: a caller
-    /// that drops it loses a sentence of advice at a later prompt and nothing else.
-    pub asked_about: bravebot_core::programs::AskedAbout,
-    /// The files agreed to be shown to the planner after the turn, including any it asked about.
-    ///
-    /// Travels back for the reason [`Outcome::asked_about`] does, and grants as little: a caller
-    /// that drops it asks about the same file once more next turn and nothing else.
-    pub exposed: bravebot_core::credentials::Exposed,
-    /// Tokens the turn cost in total, summed over every round.
-    ///
-    /// A turn is several requests when the model calls tools, and each re-sends the whole
-    /// history, so one round's count understates what the turn actually cost.
-    pub tokens: u64,
-    /// Of those, the ones the model wrote.
-    ///
-    /// Kept apart from the total because it answers a different question: the total is dominated by
-    /// the history each round re-sends, while this tracks how much the model actually produced.
-    pub output_tokens: u64,
-    /// What the last round's request came to, as the server counted it.
-    ///
-    /// Occupancy rather than cost, and the difference matters. [`Outcome::tokens`] adds every
-    /// round together and so says what the turn spent; this says how full the context was when it
-    /// ended, which is the only figure worth comparing against
-    /// [`bravebot_config::Config::context_budget`].
-    pub context_tokens: u64,
-    /// Of [`Outcome::tokens`], how much the backend served out of its prompt cache.
-    ///
-    /// Summed over the rounds like the total, and for the same reason: a turn's first round writes
-    /// the prefix that the rest of them read back, so the round that paid for it and the rounds
-    /// that profited are only the same figure once added together.
-    ///
-    /// Both figures zero from a backend that reports nothing about a cache, which is the same thing
-    /// this says about a turn whose cache missed.
-    pub cached: Cached,
-    /// Whether this turn's requests went out on the premium tier.
-    ///
-    /// A fact about what happened rather than about the configuration. Every build that knows a
-    /// premium host used to report itself as premium, so a session whose credentials could not be
-    /// read said "premium" while being answered by a weaker model.
-    pub premium: bool,
-    /// When the planner asked to be asked again, whether or not this turn was a tick of a loop.
-    ///
-    /// A tick is setting the pace of a loop already running. Any other turn is asking to start
-    /// one, which is how a turn told to report a change gets the later look that would catch it.
-    ///
-    /// `None` from a turn that was offered the chance and said nothing. The caller decides what
-    /// that silence means; nothing here waits for it.
-    pub wakeup: Option<Wakeup>,
-    /// The paths this turn asked to have standing watches armed on, in the order it asked.
-    ///
-    /// Travels back for the reason a wakeup does: a watch outlives the turn, so the session is
-    /// what holds one. Each has been through the gate a read of that path goes through, and the
-    /// session applies the bound on how many may be live.
-    pub watches: Vec<crate::watch::Armed>,
-    /// Where the turn's wall clock went.
-    ///
-    /// Beside the token figures because it answers the other half of the same question. Tokens say
-    /// what a turn cost the endpoint; this says what it cost the person in front of it, and the two
-    /// have no relation: the cheapest turn in a session can be the one that took ten minutes
-    /// because it stopped and waited to be allowed to run a command.
-    pub timing: Timing,
-    /// The reply, released for display while the policy was still open.
-    pub(crate) display: String,
-    /// What to tell the person watching about standing instructions and skills.
-    ///
-    /// The driver's own words about what loaded and what did not, never anything read out of a
-    /// file, so they may go straight to a screen.
-    pub notices: Vec<String>,
-    /// What a manifest run produced, when this outcome came from one.
-    ///
-    /// Absent for a turn. On failure the same value is on [`TurnError::Manifest`].
-    pub attempt: Option<crate::manifest::Attempt>,
-    /// The definition this turn ran under, where the person's line addressed one.
-    ///
-    /// The kernel's match rather than anything the reply says about itself, so an interface
-    /// drawing the reply under a name is drawing the driver's word for it (ADDRESS-12).
-    pub addressed: Option<bravebot_core::delegate::Addressed>,
-    /// Whether the turn compared the model that answered with one it asked for itself: an
-    /// addressed definition's (ADDRESS-11) or a loaded skill's (SKILL-15).
-    pub(crate) compared_the_model_itself: bool,
-}
-
-impl Outcome {
-    /// The reply as text, for showing to the user.
-    ///
-    /// Authorised inside [`resume`], while the policy is still alive, so the release is
-    /// recorded in the audit trail rather than happening implicitly after the fact.
-    pub fn reply_for_display(&self) -> &str {
-        &self.display
-    }
-
-    /// Whether the turn's last round was asked of the session's own model, so that a front end
-    /// may compare [`Outcome::model`] with it.
-    ///
-    /// False where an addressed definition's model was asked for, a loaded skill named the
-    /// model, or the turn moved to the fallback model (BACKEND-53). The first two have already been
-    /// compared with the one that answered (ADDRESS-11, SKILL-15), and a comparison with the
-    /// session's would report a substitution that did not happen. The fallback is the model the
-    /// person named for the turn to move to, and the session's is the one that failed. True for a definition whose model the command line's outranked, since the
-    /// command line's is what was asked for.
-    pub fn ran_on_the_sessions_model(&self) -> bool {
-        !self.compared_the_model_itself
-    }
-}
-
-/// Session decisions after an ordinary turn ending. Advice and exposure answers are live-only.
-#[derive(Debug, Clone)]
-pub struct Decisions {
-    pub trust: TrustStore,
-    pub programs: TrustedPrograms,
-    pub asked_about: bravebot_core::programs::AskedAbout,
-    pub exposed: bravebot_core::credentials::Exposed,
-}
-
-impl Decisions {
-    fn initial(task: &Task, trust: TrustStore, programs: TrustedPrograms) -> Self {
-        Self {
-            trust: task
-                .file_authority
-                .as_ref()
-                .map(|files| files.snapshot())
-                .unwrap_or(trust),
-            programs,
-            asked_about: task.asked_about.clone(),
-            exposed: task.exposed.clone(),
-        }
-    }
-}
-
-/// A continuing caller adopts `decisions` before handling `outcome` or saving the session.
-/// Both fields are returned after child cleanup, including on early context-loading errors.
-#[must_use = "adopt the decisions before handling the outcome"]
-pub struct CompletedTurn {
-    pub outcome: Result<Outcome, TurnError>,
-    pub decisions: Decisions,
 }
 
 /// Run one turn, continuing a conversation.
@@ -929,6 +430,7 @@ pub(crate) fn delegated(
 pub fn compact<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     conversation: &mut Conversation,
     model: Option<&str>,
     reporter: &mut R,
@@ -953,7 +455,7 @@ pub fn compact<S: Sink, R: Reporter>(
     reporter.phase(Phase::Compacting);
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -974,17 +476,6 @@ pub fn compact<S: Sink, R: Reporter>(
         );
     }
     done
-}
-
-/// Where [`compact`] finds the hooks a person declared and the directory it runs them in.
-#[derive(Clone, Copy)]
-pub struct Hooked<'a> {
-    /// The user's own directory, which holds `hooks.json` (HOOK-1). `None` where the platform names
-    /// none, which leaves no hooks.
-    pub home: Option<&'a std::path::Path>,
-    /// The workspace the session is working in: a hook runs in its root (HOOK-4) and the session's
-    /// rewind coverage records that a program ran beside it.
-    pub workspace: &'a Workspace,
 }
 
 /// What `/checkouts apply` did.
@@ -1051,7 +542,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             skills: &skills,
             slots: &mut slots,
             reads: &mut reads,
-            chat: crate::processor::Chat::new(config, egress),
+            chat: crate::processor::Chat::new(config, egress, task.account_session()),
             cancel: &cancel,
             scheduling: tools::Scheduling::NoLaterLook,
             arming: crate::watch::Arming::Unavailable,
@@ -1115,6 +606,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
 pub fn aside<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     question: crate::aside::Question,
     model: Option<&str>,
     reporter: &mut R,
@@ -1132,7 +624,7 @@ pub fn aside<S: Sink, R: Reporter>(
         .resuming(question.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -1166,6 +658,7 @@ pub fn aside<S: Sink, R: Reporter>(
 pub fn goal<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     check: crate::goal::Check,
     model: Option<&str>,
     reporter: &mut R,
@@ -1185,7 +678,7 @@ pub fn goal<S: Sink, R: Reporter>(
         .resuming(check.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -1214,6 +707,7 @@ pub fn goal<S: Sink, R: Reporter>(
 pub fn commit_message<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     workspace: &Workspace,
     source: &crate::commit_message::Source,
     format: Option<&str>,
@@ -1235,7 +729,7 @@ pub fn commit_message<S: Sink, R: Reporter>(
         .with_backslash_separates(crate::workspace::BACKSLASH_SEPARATES);
 
     let mut subscription = discover_subscription(config, egress, model, reporter);
-    let mut chat = crate::processor::Chat::new(config, egress)
+    let mut chat = crate::processor::Chat::new(config, egress, session)
         .spending(subscription.as_mut())
         .on(model)
         .stoppable_by(cancel);
@@ -1304,32 +798,30 @@ fn adopt(
         let resolved = config.model_named(written);
         if let Some(definition) = pinned_by {
             if turn_model.as_deref() != Some(resolved.as_str()) {
-                said.push(
-                    t!(
-                        skill_model_kept_for_definition,
-                        skill = skill,
-                        model = written,
-                        definition = definition
-                    )
-                    .to_string(),
-                );
+                said.push(t!(
+                    skill_model_kept_for_definition,
+                    skill = skill,
+                    model = written,
+                    definition = definition
+                ));
             }
         } else if let Some((file, why)) = config.model_refused(written) {
             // Before the sign-in question, which would send somebody to fix the wrong thing
             // (BACKEND-48).
-            said.push(
-                t!(
-                    skill_model_refused,
-                    skill = skill,
-                    model = written,
-                    reason = crate::backend::refusal_reason(file, why)
-                )
-                .to_string(),
-            );
+            said.push(t!(
+                skill_model_refused,
+                skill = skill,
+                model = written,
+                reason = crate::backend::refusal_reason(file, why)
+            ));
         } else if crate::backend::Backend::needs_sign_in(config, &resolved) {
-            said.push(t!(skill_model_needs_sign_in, skill = skill, model = written).to_string());
+            said.push(t!(
+                skill_model_needs_sign_in,
+                skill = skill,
+                model = written
+            ));
         } else if turn_model.as_deref().unwrap_or(&config.default_model) != resolved {
-            said.push(t!(skill_asks_a_model, skill = skill, model = written).to_string());
+            said.push(t!(skill_asks_a_model, skill = skill, model = written));
             *turn_model = Some(resolved);
         }
     }
@@ -1337,8 +829,25 @@ fn adopt(
     if let Some(level) = runs_as.effort
         && *effort != Some(level)
     {
-        said.push(t!(skill_asks_an_effort, skill = skill, effort = level.as_str()).to_string());
-        *effort = Some(level);
+        // Of the model the rounds will be asked of, which the lines above may just have moved. The
+        // ChatGPT account is sent the level its session began with for all of it, or none where a
+        // model has refused a level, so a skill's level changes nothing there, and saying it would be
+        // asking for what is not going to happen (CHATGPT-10).
+        let asked_of = turn_model.as_deref().unwrap_or(&config.default_model);
+        if config.chatgpt_model(asked_of).is_some() {
+            said.push(t!(
+                skill_effort_kept_for_account,
+                skill = skill,
+                effort = level.as_str()
+            ));
+        } else {
+            said.push(t!(
+                skill_asks_an_effort,
+                skill = skill,
+                effort = level.as_str()
+            ));
+            *effort = Some(level);
+        }
     }
 
     said
@@ -1537,9 +1046,10 @@ fn admit_named_skill<S: Sink>(
         // A skill reaches the catalogue only through the trusted-content gate, so the gate showing it
         // is the one answer there is. Another would be a skill the person named that quietly did
         // nothing, so the turn stops rather than goes on without it.
-        Presentation::Quarantined(_) => Err(TurnError::Precommit(
-            t!(turn_named_skill_not_shown, skill = skill.name.as_str()).to_string(),
-        )),
+        Presentation::Quarantined(_) => Err(TurnError::Precommit(t!(
+            turn_named_skill_not_shown,
+            skill = skill.name.as_str()
+        ))),
     }
 }
 
@@ -1569,7 +1079,7 @@ fn admit_mode_skill<S: Sink>(
     Ok(match presented {
         Presentation::Visible(text) => {
             policy.admit_skill_mode(&skill.name, text.chars().count());
-            Some((skill.name.clone(), text.to_string()))
+            Some((skill.name.clone(), text))
         }
         Presentation::Quarantined(_) => None,
     })
@@ -1921,95 +1431,19 @@ fn collect_delegates<S: Sink, R: Reporter>(
         .position(|working| wait || working.handle.is_finished())
     {
         let working = delegates.remove(at);
-        let id = working.id;
-        reporter.delegate_waiting(id);
-        // After the report above, not before it: what a delegate's requests are clipped to is the
-        // wait itself, and a reporter that draws a screen or blocks on the lock another delegate
-        // holds is the parent's own overhead. Starting the window first would charge whatever a
-        // request happened to overlap of it as inference the parent never spent waiting.
-        let joined_at = Instant::now();
-        #[cfg(test)]
-        if let Some(started) = working.join_started {
-            // A closed receiver means the test observer has already exited.
-            let _ = started.send(());
-        }
-        let (delegated, ran, partial, requests) = match working.handle.join() {
-            Ok((ended, partial, requests)) => {
-                // Before anything else, and on both of the ways a run can end. A person who
-                // vouched for the build inside this delegate is not asked again by a delegate
-                // spawned after it, and one whose run failed had the same person answer the same
-                // question (DELEGATE-11): taking the record back only from a delegate that
-                // reported would leave the next run asking.
-                policy.adopt_from_delegate(&working.seeded, &ended.vouched);
-                // Also on both of the ways a run can end, and for a reason of the same shape:
-                // the person whose formatter would not start is owed the sentence whether or not
-                // the delegate that fired it went on to report.
-                notices.extend(ended.notices);
-                // On both of the ways a run can end too, since a stopped delegate leaves the files
-                // it changed and has run what it ran. Only from one that shares this turn's
-                // workspace, or from one in a checkout given its changes: a delegate in a checkout
-                // of its own built the commit the checkout holds, which has none of this turn's
-                // changes in it (TURN-4).
-                match working.checkout.as_deref() {
-                    None => worked.adopt(round, ended.worked),
-                    // A checkout given the working directory's changes was built and tested with
-                    // them, so a program run there counts as run against this turn's change, and
-                    // what it wrote there is not this turn's (CHECKOUT-23).
-                    Some(checkout)
-                        if checkout
-                            .carried()
-                            .is_some_and(|carried| carried.changed_anything()) =>
-                    {
-                        worked.adopt_run(ended.worked)
-                    }
-                    Some(_) => {}
-                }
-                let ran = Some((ended.took, ended.rounds));
-                (ended.delegated, ran, partial, requests)
-            }
-            // A thread that panicked is a delegate that stopped, which is all anybody can be
-            // told about it: what it was doing died with it, and the turn is still running.
-            // Nothing came back, not even a record, so there is no adoption either: "nothing
-            // moved" and "nothing is known" are different things, and the trail should not
-            // record the second as the first.
-            Err(_) => (
-                Err(TurnError::Precommit(
-                    "the delegate stopped without finishing".to_string(),
-                )),
-                None,
-                Default::default(),
-                Vec::new(),
-            ),
-        };
-
-        spent.inference += waits.collected(crate::timing::Interval::since(joined_at), requests);
-
-        let finish = delegate_end::finish_of(&delegated, ran);
-        // What its own backend reported it spent, which on a failed run is the part that completed.
-        let tokens = match &delegated {
-            Ok(delegated) => delegated.usage.total(),
-            Err(_) => partial.tokens,
-        };
-        policy.record_delegate_end_within(
+        let delegate_end::Joined {
             id,
-            working.rounds,
-            working.budget.map(|budget| (budget, tokens)),
+            limit,
+            stop,
+            delegated,
+            ran,
+            partial,
             finish,
+            tokens,
+            retired,
+        } = delegate_end::join_delegate(
+            working, policy, reporter, waits, spent, notices, worked, round,
         );
-
-        // After the decisions it made are taken back, so a rule that distrusts a path survives the
-        // withdrawal of the rest (CHECKOUT-12).
-        let retired = working
-            .checkout
-            .as_ref()
-            .map(|checkout| (checkout.retire(&policy.file_authority()), checkout.clone()));
-        if let Some((crate::workspace::Retired::Removed, checkout)) = &retired {
-            crate::workspace::record_checkout(
-                policy.sink(),
-                crate::workspace::Happened::Removed,
-                checkout.path(),
-            );
-        }
 
         let (mut note, mut body, failed, reported, from) = match delegated {
             Ok(delegated) => {
@@ -2021,14 +1455,14 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     &kind,
                     id,
                     rounds,
-                    working.rounds,
-                    working.stop.was_honoured(),
+                    limit.rounds,
+                    stop.was_honoured(),
                 );
-                let (note, bound) = match working.stop.was_honoured() {
+                let (note, bound) = match stop.was_honoured() {
                     true => (note, bound),
                     false => {
                         let (said, told) =
-                            delegate_end::budget_sentences(working.budget, tokens, true);
+                            delegate_end::budget_sentences(limit.budget, tokens, true);
                         let note = match said.is_empty() {
                             true => note,
                             false => format!("{note}; {said}"),
@@ -2092,9 +1526,8 @@ fn collect_delegates<S: Sink, R: Reporter>(
             }
             Err(_) => {
                 account.add_spent(&partial);
-                let (note, body) =
-                    delegate_end::unfinished_account(&finish, ran, working.rounds, id);
-                let (said, told) = delegate_end::budget_sentences(working.budget, tokens, false);
+                let (note, body) = delegate_end::unfinished_account(&finish, ran, limit.rounds, id);
+                let (said, told) = delegate_end::budget_sentences(limit.budget, tokens, false);
                 let note = match said.is_empty() {
                     true => note,
                     false => format!("{note}, {said}"),
@@ -2385,144 +1818,6 @@ fn reads_that_run_together(
         together += 1;
     }
     if together < 2 { 0 } else { together }
-}
-
-/// Run the hooks a person attached to `moment`, and answer with what went wrong where something
-/// did.
-///
-/// A hook that ended well is said nothing about: it did what it was asked, and a line per round
-/// saying so would bury the turn. A hook that could not run is worth a sentence, because the
-/// person is otherwise waiting for a formatter that has not run since they mistyped its path.
-///
-/// Said to a live display as it happens and handed back as well, because a caller with nowhere to
-/// draw reads the turn's notices off the outcome, and a one-shot run whose hook never fired is
-/// exactly the case that needs telling.
-///
-/// Nothing here reads what a hook produced or changes what the turn does next. See
-/// [`crate::hooks`], which is where that argument lives.
-fn fire_hooks<R: Reporter + ?Sized>(
-    hooks: &bravebot_config::hooks::Hooks,
-    moment: bravebot_config::hooks::Moment,
-    tool: Option<&str>,
-    workspace: &Workspace,
-    reporter: &mut R,
-) -> Vec<String> {
-    firing_in(hooks, moment, tool, workspace, reporter, |watch| {
-        crate::hooks::fire_watched(
-            hooks,
-            moment,
-            tool,
-            workspace.root(),
-            crate::hooks::default_limit(moment),
-            watch,
-        )
-    })
-}
-
-/// Run the hooks for the moment a checkout was written for a delegate, in that checkout, and
-/// answer with what went wrong where something did (HOOK-2).
-///
-/// Nothing is fired for a workspace that is not a checkout. The hook is handed two directories
-/// (HOOK-5): the checkout's, which the driver made, and the working directory it was made from,
-/// which the person's session works in. Neither is read from anything a model or a file wrote.
-fn fire_checkout_made<R: Reporter + ?Sized>(
-    hooks: &bravebot_config::hooks::Hooks,
-    workspace: &Workspace,
-    reporter: &mut R,
-) -> Vec<String> {
-    let Some(checkout) = workspace.checkout() else {
-        return Vec::new();
-    };
-    let moment = bravebot_config::hooks::Moment::CheckoutMade;
-    firing_in(hooks, moment, None, workspace, reporter, |watch| {
-        crate::hooks::fire_checkout_made(
-            hooks,
-            crate::hooks::Made {
-                checkout: checkout.path(),
-                working_directory: checkout.working_directory(),
-            },
-            crate::hooks::default_limit(moment),
-            watch,
-        )
-    })
-}
-
-/// What [`fire_hooks`] and [`fire_checkout_made`] share: the record that a program ran in the
-/// workspace, the display told as each hook starts and ends, and a sentence for each that went
-/// wrong. `fire` runs the hooks, telling the watcher it is given.
-fn firing_in<R: Reporter + ?Sized>(
-    hooks: &bravebot_config::hooks::Hooks,
-    moment: bravebot_config::hooks::Moment,
-    tool: Option<&str>,
-    workspace: &Workspace,
-    reporter: &mut R,
-    fire: impl FnOnce(&mut dyn FnMut(crate::hooks::Watch<'_>)) -> Vec<crate::hooks::Fired>,
-) -> Vec<String> {
-    // Hook programs can write files outside the backup journal, regardless of their outcome.
-    if hooks.firing(moment, tool).next().is_some() {
-        workspace.mark_rewind_gap(crate::rewind::CoverageGap::Hook);
-        if let Some(checkout) = workspace.checkout() {
-            checkout.mark_worked_in();
-        }
-    }
-    let fired_all = fire(&mut |edge| match edge {
-        crate::hooks::Watch::Starting { moment, program } => {
-            reporter.hook_started(moment, program.to_string())
-        }
-        crate::hooks::Watch::Over => reporter.hook_finished(),
-    });
-    let said = trouble_sentences(fired_all);
-    for one in &said {
-        reporter.notice(one.clone());
-    }
-    said
-}
-
-/// The confirmer fires `prompt-shown` with no reporter to hand and leaves each hook's trouble in
-/// `waiting`, so it is drained here, where the turn has one.
-fn say_prompt_notices<R: Reporter + ?Sized>(
-    waiting: &std::sync::Mutex<Vec<String>>,
-    reporter: &mut R,
-) -> Vec<String> {
-    let said = waiting
-        .lock()
-        .map(|mut held| std::mem::take(&mut *held))
-        .unwrap_or_default();
-    for one in &said {
-        reporter.notice(one.clone());
-    }
-    said
-}
-
-/// What went wrong, in a sentence each, for the hooks that did not run and end well.
-pub(crate) fn trouble_sentences(fired_all: Vec<crate::hooks::Fired>) -> Vec<String> {
-    let mut said = Vec::new();
-    for fired in fired_all {
-        let Some(trouble) = fired.trouble else {
-            continue;
-        };
-        said.push(match trouble {
-            crate::hooks::Trouble::NotStarted(detail) => t!(
-                hook_not_started,
-                moment = fired.moment,
-                program = fired.program,
-                detail = detail
-            ),
-            crate::hooks::Trouble::Ended(status) => t!(
-                hook_failed,
-                moment = fired.moment,
-                program = fired.program,
-                status = status
-            ),
-            crate::hooks::Trouble::Stopped(limit) => t!(
-                hook_stopped,
-                moment = fired.moment,
-                program = fired.program,
-                seconds = limit.as_secs()
-            ),
-        });
-    }
-    said
 }
 
 /// What a delegate's caller takes back from [`run_inner`], each written however the turn ended.
@@ -2960,7 +2255,7 @@ fn one_turn<S: Sink + ?Sized + Send, C: Confirmer + ?Sized + Send, R: Reporter +
         let name = picked.name.to_string();
         style = styles::resolve_project(&mut policy, sources, &name);
         if style.is_none() {
-            style_notice = Some(t!(agent_style_not_used, style = name).to_string());
+            style_notice = Some(t!(agent_style_not_used, style = name));
         }
     }
     if let (None, None, Some(style)) = (
@@ -3051,7 +2346,7 @@ where
         egress,
         workspace,
         task,
-        cancel,
+        cancel: _,
         hooks: _,
         prompt_notices: _,
         advisor,
@@ -3141,9 +2436,10 @@ where
             skill_mode = admit_mode_skill(policy, conversation, &skill)?;
         }
         if skill_mode.is_none() {
-            notices.push(crate::skills::Notice::from_message(
-                t!(agent_skill_mode_not_used, skill = name).to_string(),
-            ));
+            notices.push(crate::skills::Notice::from_message(t!(
+                agent_skill_mode_not_used,
+                skill = name
+            )));
         }
     }
     let catalogue = match named {
@@ -3287,7 +2583,6 @@ where
     // it, so the answer can be compared with it at the end of the turn (SKILL-15).
     let mut switched_by: Option<(String, String)> = None;
 
-    let told_mode = started_in;
     let memory = |keeps: bool, name: &str| match keeps && workspace.checkout().is_none() {
         true => crate::memory::told(policy, workspace, name),
         false => String::new(),
@@ -3614,57 +2909,16 @@ where
     };
     let mut subscription = wallet.map(crate::shared::Spending::new);
 
-    // The lists of the servers this session reached, settled at the start of a turn somebody asked
-    // for, a tick of their loop included, which is where there is a person to put a list to
-    // (SERVERS-8). A delegate settles none, since it puts no question to a person (DELEGATE-12),
-    // and is offered what its parent's turn already settled. Every run is offered the tools of the
-    // servers it holds a grant for and no other, and is put the lists of those alone, so a run
-    // of a definition that holds no servers is offered none and asked about none either
-    // (ADDRESS-7).
-    let holding = match (&task.delegate, &addressed) {
-        (Some(spec), _) => spec.capabilities().clone(),
-        (None, Some(addressed)) => addressed.capabilities().clone(),
-        (None, None) => held(task),
-    };
-    let holds_a_server = holding
-        .iter()
-        .any(|capability| matches!(capability, Capability::McpCall(_)));
-    let mut mcp = match (&task.delegate, &task.mcp) {
-        (_, Some(_)) if !holds_a_server => None,
-        // `--tools` names this program's own tools, so a server's are not among them, and no
-        // list is put to the person for a server whose tools would not be offered.
-        (_, Some(_)) if bravebot_core::tool_set::names_only() => None,
-        (Some(_), Some(session)) => Some((
-            session.offer().holding(&holding),
-            bravebot_aichat::protocol::Usage::default(),
-        )),
-        (None, Some(session)) => {
-            let settled = session.settle(
-                policy,
-                &mut crate::processor::Chat::new(config, egress)
-                    .spending(subscription.as_mut())
-                    .on(task.model.as_deref())
-                    .stoppable_by(cancel),
-                confirmer,
-                reporter,
-                task.permission_mode.get(),
-                &holding,
-            );
-            notices.extend(
-                settled
-                    .notices
-                    .into_iter()
-                    .map(crate::skills::Notice::from_message),
-            );
-            Some((session.offer().holding(&holding), settled.usage))
-        }
-        (_, None) => None,
-    };
-    // Past the size the settings name, the tools are offered by name under one `load_tool`
-    // and a definition joins `offered` when the planner loads it (SERVERS-16).
-    if let (Some((offer, _)), Some(threshold)) = (&mut mcp, config.defer_mcp_tools_above) {
-        *offer = offer.clone().deferring_above(threshold);
-    }
+    // The lists of the servers this session reached, settled for this turn (SERVERS-8).
+    let mcp = setup::settle_servers(
+        inputs,
+        addressed.as_ref(),
+        policy,
+        confirmer,
+        reporter,
+        &mut subscription,
+        &mut notices,
+    );
     if let Some((offer, _)) = &mcp {
         offered.extend(offer.functions());
         if offer.is_deferred() {
@@ -3672,19 +2926,6 @@ where
         }
     }
 
-    let steps = 0;
-    // Which reminders the driver has already put to the planner this turn.
-    let reminded = round_steps::Reminded::default();
-    // The round a file on disk first became different from how this turn found it, where one
-    // did, and whether a program has been run since the turn began.
-    //
-    // Both from what dispatch did, here and in the delegates that share this workspace, rather
-    // than from what the planner asked for, which is the opposite of the write counted in `reminded` and
-    // for the opposite reason. These say what the workspace holds: a write the person declined
-    // and a write plan mode refused leave nothing to build, and a run the person declined builds
-    // nothing, so a turn counting either would tell the planner and then the person about a diff
-    // that was never made or a check that never happened.
-    let worked = Worked::default();
     // Whether a write tool is offered at all, which a run offered none cannot be nudged into.
     // Read once: a tool loaded while the turn runs is a server's, never one of these. The mode
     // can change while it runs, and is read where the nudge is decided.
@@ -3693,49 +2934,6 @@ where
     // The same question in the form the refusals read it in: a tool that will not answer may say
     // to use `run` only where this turn has one to use.
     let running = tools::Running::on(&offered);
-    // Whether the planner may ask for another round of tools. Cleared once, when the budget
-    // runs out, so the last request goes out with none offered and the turn ends with an answer
-    // rather than with the driver's apology.
-    let may_call_tools = true;
-    // What this turn's requests did, summed from zero: not what the session has done, which the
-    // session adds up itself. `output_tokens` is tracked apart from the total because it is what
-    // the live count reports, and adding a round's output to a running total that also holds
-    // prompt tokens would make the figure jump by the size of the re-sent history every round.
-    // `context_tokens` is seeded from the conversation rather than starting at zero. A session
-    // is many turns, and a figure that began again with each one would only notice a
-    // conversation growing inside a single long turn: fifty short turns would fill the context
-    // with nothing watching.
-    let mut account = crate::outcome::Spent {
-        context_tokens: conversation.last_request_tokens(),
-        ..Default::default()
-    };
-    // What the indicator last said the turn had written, which the next round counts on from.
-    let shown_before = 0u64;
-    // What checking the servers' lists spent is this turn's, since this turn is what asked.
-    if let Some((_, usage)) = &mcp {
-        account.add_usage(*usage);
-    }
-    // Cleared only by a failure. A summary that could not be made once will not be made on the
-    // next round either, and a turn should not spend a request per round finding that out.
-    let may_compact = true;
-    // What the turn has already done about a request that did not succeed.
-    let retries = round_steps::Retries::default();
-    // The calls the planner has made this turn, as far as the last one goes (TURN-9).
-    let repeats = crate::repeated_call::Repeats::default();
-    // A delegate and a turn on a definition's model do not move to the fallback model
-    // (BACKEND-53): that model is a boundary its file drew.
-    let may_fall_back = task.delegate.is_none() && pinned_by.is_none();
-    // When the planner asked for the next tick, where this turn is one and it asked at all.
-    let wakeup = None;
-    // Every watch the turn armed, in the order it asked for them, for whoever holds the session
-    // to arm. A list rather than one, because the bound is the session's and a turn may ask
-    // about several files.
-    let watches: Vec<crate::watch::Armed> = Vec::new();
-    let armed = 0usize;
-    // How many questions the planner has put to its advisor this turn, which the bound on them
-    // is read against.
-    let advice_asked = 0usize;
-    let messages_sent = crate::messages::Ledger::default();
     // The pipelines this turn leaves running. Held here so they end here: dropping this kills
     // whatever is still going, which is what keeps a background job from outliving the turn that
     // started it and becoming an effect nobody is watching.
@@ -3749,24 +2947,15 @@ where
         Some(held) => held,
         None => &mut owned,
     };
-    // Said to the planner on the first round only, and not at all where nothing is kept.
-    let told_of_kept_jobs = !jobs.is_kept();
-    // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
-    //
-    // Per turn rather than per session, which is short of what the clause asks for: it says a line
-    // runs where the last one ran and that the first runs at the workspace root, and says nothing
-    // about a turn boundary, so a second message silently starts again at the root. Carrying it
-    // further means putting it in the session record and restoring it on `--resume`, the way the
-    // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
-    // the change that gives a session somewhere to keep one.
-    let run_directory = workspace.root().to_path_buf();
     let plan = Plan {
         system,
         system_text,
         may_write,
         may_run,
         running,
-        may_fall_back,
+        // A delegate and a turn on a definition's model do not move to the fallback model
+        // (BACKEND-53): that model is a boundary its file drew.
+        may_fall_back: task.delegate.is_none() && pinned_by.is_none(),
         pinned_by,
         scheduling,
         arming,
@@ -3776,26 +2965,79 @@ where
         offers_read_output,
     };
     let mut state = State {
-        steps,
-        reminded,
-        worked,
-        may_call_tools,
-        account,
-        shown_before,
-        may_compact,
-        retries,
-        repeats,
-        wakeup,
-        watches,
-        armed,
-        advice_asked,
-        messages_sent,
+        steps: 0,
+        // Which reminders the driver has already put to the planner this turn.
+        reminded: round_steps::Reminded::default(),
+        // The round a file on disk first became different from how this turn found it, where one
+        // did, and whether a program has been run since the turn began.
+        //
+        // Both from what dispatch did, here and in the delegates that share this workspace, rather
+        // than from what the planner asked for, which is the opposite of the write counted in `reminded` and
+        // for the opposite reason. These say what the workspace holds: a write the person declined
+        // and a write plan mode refused leave nothing to build, and a run the person declined builds
+        // nothing, so a turn counting either would tell the planner and then the person about a diff
+        // that was never made or a check that never happened.
+        worked: Worked::default(),
+        // Whether the planner may ask for another round of tools. Cleared once, when the budget
+        // runs out, so the last request goes out with none offered and the turn ends with an answer
+        // rather than with the driver's apology.
+        may_call_tools: true,
+        // What this turn's requests did, summed from zero: not what the session has done, which the
+        // session adds up itself. `output_tokens` is tracked apart from the total because it is what
+        // the live count reports, and adding a round's output to a running total that also holds
+        // prompt tokens would make the figure jump by the size of the re-sent history every round.
+        // `context_tokens` is seeded from the conversation rather than starting at zero. A session
+        // is many turns, and a figure that began again with each one would only notice a
+        // conversation growing inside a single long turn: fifty short turns would fill the context
+        // with nothing watching.
+        //
+        // What checking the servers' lists spent is this turn's, since this turn is what asked.
+        account: {
+            let mut account = crate::outcome::Spent {
+                context_tokens: conversation.last_request_tokens(),
+                ..Default::default()
+            };
+            if let Some((_, usage)) = &mcp {
+                account.add_usage(*usage);
+            }
+            account
+        },
+        // What the indicator last said the turn had written, which the next round counts on from.
+        shown_before: 0,
+        // Cleared only by a failure. A summary that could not be made once will not be made on the
+        // next round either, and a turn should not spend a request per round finding that out.
+        may_compact: true,
+        // What the turn has already done about a request that did not succeed.
+        retries: round_steps::Retries::default(),
+        // The calls the planner has made this turn, as far as the last one goes (TURN-9).
+        repeats: crate::repeated_call::Repeats::default(),
+        // When the planner asked for the next tick, where this turn is one and it asked at all.
+        wakeup: None,
+        // Every watch the turn armed, in the order it asked for them, for whoever holds the session
+        // to arm. A list rather than one, because the bound is the session's and a turn may ask
+        // about several files.
+        watches: Vec::new(),
+        armed: 0,
+        // How many questions the planner has put to its advisor this turn, which the bound on them
+        // is read against.
+        advice_asked: 0,
+        messages_sent: crate::messages::Ledger::default(),
+        // Said to the planner on the first round only, and not at all where nothing is kept. Read
+        // before `jobs` is moved into the literal.
+        told_of_kept_jobs: !jobs.is_kept(),
         jobs,
-        told_of_kept_jobs,
-        run_directory,
+        // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
+        //
+        // Per turn rather than per session, which is short of what the clause asks for: it says a line
+        // runs where the last one ran and that the first runs at the workspace root, and says nothing
+        // about a turn boundary, so a second message silently starts again at the root. Carrying it
+        // further means putting it in the session record and restoring it on `--resume`, the way the
+        // vouched list is (RUN-9), and the entry points that would carry it are the caller's. Left for
+        // the change that gives a session somewhere to keep one.
+        run_directory: workspace.root().to_path_buf(),
         confined_failures: tools::ConfinedFailures::default(),
         spent: Elapsed::default(),
-        told_mode,
+        told_mode: started_in,
         turn_model,
         effort,
         switched_by,
@@ -3841,75 +3083,26 @@ where
     });
     let conversation = &mut *channels.conversation;
     let reporter = &mut channels.reporter;
-    // Whatever way the rounds ended, a stop and a failed request included: each leaves the jobs
-    // to die with the turn, and the person is told which ones before they do.
-    //
-    // Except where the session keeps them: those are left running for the next turn to find, and
-    // are ended by the session ending (RUN-15).
-    if !state.jobs.is_kept() {
-        state.jobs.stop_all(policy, reporter);
-    }
-    *rounds_taken = state.steps;
-    *worked_out = state.worked;
-    state.spent.wall = began.elapsed();
-    reporter.spent(crate::outcome::Spent {
-        timing: state.spent.finish(),
-        ..state.account
-    });
-
-    // Said to the person, not to the planner, which gets its own question while the turn is still
-    // going and can still act on it. They are the one about to act on a diff, and nothing the turn
-    // leaves behind distinguishes a change that was compiled from one that was never tried. Not a
-    // reproach: plenty of turns have nothing to build, and this says what happened rather than
-    // what should have.
-    //
-    // Above the unwrap, so a stop and a failed request say it too: either leaves the same changed
-    // files on disk as an answer does, and being stopped with none of it compiled is the state a
-    // person is least able to spot for themselves. Both are the round loop's own record, settled
-    // by whatever it and the delegates it took back did before it ended, and every delegate is
-    // taken back before the rounds return.
-    //
-    // Only where a run was possible, the state the planner's question is asked in. A definition
-    // or a delegate whose tools leave out `run` could not have built what it wrote, so the line
-    // would report something it had no way to do.
-    if may_run && state.worked.changed_at.is_some() && !state.worked.ran_a_program {
-        reporter.narration(
-            "files changed this turn and no command was run, so none of it has been \
-         built or tested"
-                .to_string(),
-        );
-    }
+    round_steps::close_the_rounds(
+        policy,
+        reporter,
+        &mut state,
+        began,
+        may_run,
+        rounds_taken,
+        worked_out,
+    );
 
     let completion = completion?;
 
-    // Compared the way a delegate's model is, because the endpoint substitutes rather than refuses
-    // a name it will not serve. The sentence names the definition and the model it named, and
-    // never the one that answered (ADDRESS-11).
-    if let (Some(addressed), Some((written, resolved))) = (&plan.addressed, &definition_model)
-        && round_steps::model_was_substituted(config, resolved, &completion.model)
-    {
-        let said = t!(
-            delegate_model_substituted,
-            definition = addressed.name(),
-            model = written
-        );
-        reporter.notice(said.clone());
-        state
-            .notices
-            .push(crate::skills::Notice::from_message(said));
-    }
-    // The same comparison for a model a loaded skill moved the turn onto, naming the skill and
-    // the model as its file wrote it (SKILL-15). A delegate's turn is covered here too.
-    if let Some((skill, written)) = &state.switched_by {
-        let resolved = state.turn_model.as_deref().unwrap_or(&config.default_model);
-        if round_steps::model_was_substituted(config, resolved, &completion.model) {
-            let said = t!(skill_model_substituted, skill = skill, model = written);
-            reporter.notice(said.clone());
-            state
-                .notices
-                .push(crate::skills::Notice::from_message(said));
-        }
-    }
+    round_steps::note_substituted_models(
+        config,
+        reporter,
+        &mut state,
+        plan.addressed.as_ref(),
+        definition_model.as_ref(),
+        &completion.model,
+    );
 
     // Released while the policy is open, so the audit trail records that the reply was
     // shown rather than leaving the release invisible.
@@ -4020,8 +3213,8 @@ where
         task,
         cancel,
         hooks,
-        prompt_notices,
-        advisor,
+        prompt_notices: _,
+        advisor: _,
         lent_wallet: _,
     } = inputs;
     let (confirming, reporting, recording) =
@@ -4030,178 +3223,29 @@ where
     let reporter = &mut channels.reporter;
     let confirmer = &mut channels.confirmer;
     let Spawned { delegates, waits } = spawned;
-    let (may_write, may_run, running, may_fall_back) = (
-        plan.may_write,
-        plan.may_run,
-        plan.running,
-        plan.may_fall_back,
-    );
-    let (scheduling, arming, wallet) = (plan.scheduling, plan.arming, plan.wallet);
-    let pinned_by = &plan.pinned_by;
+    let (may_write, may_run, may_fall_back) = (plan.may_write, plan.may_run, plan.may_fall_back);
     // What the turn began with, copied once a round brings a rule in, which is appended to it
     // (INSTR-16).
     let mut grown: Option<(crate::request_view::Prompt, String)> = None;
-    let (catalogue, addressed) = (&plan.catalogue, &plan.addressed);
+    let addressed = &plan.addressed;
     let read_output_is = || setup::read_output_is(task, plan.offers_read_output);
     let completion = loop {
-        // Checked before each request rather than mid-flight: a request already on the wire has
-        // to finish, but nothing new needs to start.
-        if cancel.is_cancelled() {
-            return Err(TurnError::Cancelled { attempts: Some(0) });
-        }
-
-        // The mode the person last chose applies to this turn as it runs (MODE-8). The
-        // prompt was written in the one the turn started in, so a change that matters to
-        // the planner is said to it before the next request.
-        let chosen = task.permission_mode.get();
-        if let Some(notice) = state.told_mode.change_notice(chosen) {
-            conversation.push_composed_from(
-                Message::user(&notice),
-                Composed::Notice,
-                Provenance::Driver,
-            );
-        }
-        state.told_mode = chosen;
-
-        // A file the last round read or wrote may match the paths of a rule held back. The rule is
-        // appended to the system prompt before this request goes out, after every byte the last
-        // one carried, and the person is told which file brought it (INSTR-16).
-        let loaded = state.held_rules.take_for(workspace);
-        if !loaded.is_empty() {
-            let (system, system_text) =
-                grown.get_or_insert_with(|| (plan.system.clone(), plan.system_text.clone()));
-            for loaded in &loaded {
-                for (provenance, text) in crate::preamble::rule_pieces(loaded) {
-                    system.push(provenance, text);
-                }
-            }
-            *system_text = system.text();
-            for notice in rule_notices(workspace, task.delegate.is_none(), &loaded) {
-                reporter.notice(notice.message.clone());
-                state.notices.push(notice);
-            }
-            note_rules_added(workspace, &loaded);
-        }
+        round_steps::before_a_request(
+            inputs,
+            plan,
+            state,
+            policy,
+            conversation,
+            reporter,
+            confirmer,
+            delegates,
+            waits,
+            &mut grown,
+        )?;
         let (system, system_text) = match &grown {
             Some((system, text)) => (system, text.as_str()),
             None => (&plan.system, plan.system_text.as_str()),
         };
-
-        // Whatever finished while the last round was running, before the planner is asked what to
-        // do next. Waiting for none of them: one that is still working is left working, which is
-        // the whole of what starting them separately buys.
-        collect_delegates(
-            delegates,
-            policy,
-            conversation,
-            reporter,
-            &mut state.account,
-            false,
-            waits,
-            &mut state.spent,
-            state.hook_notices,
-            &mut state.worked,
-            state.steps,
-        )?;
-
-        // After the collection above, which adds what a finished delegate spent, so a delegate
-        // whose child took it past its budget goes to the planner's next request without tools.
-        round_steps::stop_at_token_budget(
-            &mut state.may_call_tools,
-            task,
-            state.account.tokens,
-            reporter,
-            conversation,
-        );
-
-        reporter.spent(crate::outcome::Spent {
-            timing: state.spent.finish(),
-
-            ..state.account
-        });
-
-        // And whatever exited while it was running, for the same reason and in the same place:
-        // the finish of a background job is news the turn is told rather than something the
-        // planner has to remember to ask about (CMDLINE-14).
-        collect_jobs(
-            state.jobs,
-            task.output_cap.unwrap_or(tools::OUTPUT_CAP),
-            read_output_is(),
-            policy,
-            conversation,
-            reporter,
-        )?;
-
-        show_what_running_jobs_have_printed(state.jobs, policy, reporter);
-
-        // Once, after the finishes above, so what is left is what is still going: a job
-        // the session kept from an earlier turn is something the planner has no other way
-        // to know is there (RUN-15).
-        if !std::mem::replace(&mut state.told_of_kept_jobs, true) {
-            tell_of_kept_jobs(state.jobs, conversation);
-        }
-
-        // And whatever another session sent, in the same place and for the same reason: it
-        // reaches the planner at the start of a request, so a session with no turn running
-        // keeps it until a person starts one (MSG-6).
-        take_session_messages(task, policy, conversation, reporter)?;
-
-        // Before anything new is sent, compaction included, since a summary is a request that
-        // spends tokens (TURN-8). A delegate's own task carries no limit: what it spends
-        // reaches this total when it is collected, and the person is asked once, here.
-        {
-            let mut asking = crate::confirm::Timed::new(confirmer);
-            let held = crate::spend_limit::hold(
-                &task.spend_limit,
-                task.spent_before + state.account.tokens,
-                state.steps,
-                policy,
-                &mut asking,
-                reporter,
-            );
-            state.spent.stalled += asking.waited();
-            if held == crate::spend_limit::Held::Stop {
-                return Err(TurnError::Cancelled { attempts: Some(0) });
-            }
-        }
-
-        // The person's own limit on the run, which ends it where the session limit above asks
-        // (TURN-14). Nobody is asked: a run that has one has nobody to ask, and raising a limit
-        // the person set is theirs to do by running it again.
-        if let Some(reached) = token_limit_reached(task, state) {
-            return Err(stopped_at(policy, state.steps, reached));
-        }
-
-        round_steps::compact_if_due(
-            config,
-            egress,
-            cancel,
-            policy,
-            conversation,
-            reporter,
-            state.subscription.as_mut(),
-            state.turn_model.as_deref(),
-            state.steps,
-            &mut state.account,
-            &mut state.spent,
-            &mut state.may_compact,
-            &mut state.retries,
-            // A delegate summarises a conversation of its own, which is not the session's (HOOK-2).
-            match task.delegate {
-                None => Some(round_steps::AfterCompacting {
-                    hooks,
-                    workspace,
-                    said: &mut *state.hook_notices,
-                }),
-                Some(_) => None,
-            },
-        )?;
-
-        // Again, because the summary a compaction asks for spends tokens of its own, and the
-        // request that follows it is the one this limit is meant to hold back (TURN-14).
-        if let Some(reached) = token_limit_reached(task, state) {
-            return Err(stopped_at(policy, state.steps, reached));
-        }
 
         // Said before the request goes out, so the longest silence in a turn is explained
         // while it happens rather than accounted for afterwards.
@@ -4246,8 +3290,9 @@ where
 
         let asked_at = Instant::now();
         let completion = {
-            let mut client =
-                crate::backend::Backend::select(config, egress, model).with_cancel(cancel.clone());
+            let mut client = crate::backend::Backend::select(config, egress, model)
+                .with_cancel(cancel.clone())
+                .in_session(task.account_session());
             if let Some(subscription) = state.subscription.as_mut() {
                 client = client.with_subscription(subscription);
             }
@@ -4283,6 +3328,9 @@ where
                 }
             })
         };
+        // Whatever came of the request: a ChatGPT sign-in renewed for it that the file could not take
+        // is news either way, and nothing is said unless one was (CHATGPT-7).
+        crate::chatgpt::say_an_unsaved_renewal(reporter);
         state.shown_before = written_before + round_shown;
         // Retries included, because a round that had to reconnect really did keep the turn waiting
         // that long. The count is what the turn spent, not what the endpoint would have taken had
@@ -4316,157 +3364,21 @@ where
             round_steps::Recovery::Retry => continue,
             round_steps::Recovery::Proceed(completion) => completion,
         };
-        state.retries.asked_after_an_empty_reply = false;
-        // The backend carries no call out of a reply the ceiling stopped (BACKEND-42),
-        // and one that did would be a call nobody finished writing.
-        if completion.cut_off.is_some() {
-            completion.calls.clear();
-        }
-        state.account.add_usage(completion.usage);
-        state.account.context_tokens = completion.context_tokens;
-        conversation.measured(state.account.context_tokens);
-        reporter.spent(crate::outcome::Spent {
-            timing: state.spent.finish(),
-            ..state.account
-        });
-
-        // A reply the ceiling stopped part way through a call, after text. The text is
-        // the planner's and goes into the conversation as any answer does; the call was
-        // never made, and the planner is told so and asked for the work in parts.
-        if let Some(cut_off) = completion
-            .cut_off
-            .as_ref()
-            .filter(|cut_off| cut_off.call.is_some())
-            && state.may_call_tools
-            && !state.retries.asked_after_a_ceiling_stop
-        {
-            state.retries.asked_after_a_ceiling_stop = true;
-            record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::AskedAgain);
-            record_answer(policy, conversation, &completion.content)?;
-            narrate_between_calls(policy, reporter, &completion.content);
-            reporter.narration(ceiling_stop_narration(cut_off, state.may_call_tools));
-            conversation.push_composed_from(
-                Message::user(after_a_ceiling_stop(
-                    cut_off,
-                    &request,
-                    state.may_call_tools,
-                )),
-                Composed::Notice,
-                Provenance::Driver,
-            );
-            continue;
-        }
-        if completion.cut_off.is_none() {
-            state.retries.asked_after_a_ceiling_stop = false;
-        }
-        // A reply the ceiling stopped is kept for what it says, so the person has to be
-        // told that it stops short: the text arrives looking like an answer, and an answer
-        // that ends mid-sentence is worth nothing if it is read as a whole one. It carries
-        // no calls, so this round is the last.
-        if let Some(cut_off) = &completion.cut_off {
-            record_ceiling_stop(policy, state.steps, cut_off, AfterCeilingStop::KeptTheText);
-            reporter.narration(answer_stopped_narration(cut_off));
-        }
-
-        // The budget is spent, so this round is the answer whatever it holds. A planner that
-        // asked for a tool anyway does not get one: a request that offered none is not one a
-        // call can be answering, and running them would put the turn back in the loop the
-        // budget exists to end.
-        if !state.may_call_tools {
-            if !completion.calls.is_empty() {
-                reporter.narration(
-                    "the tool budget was spent, so the last calls were not run".to_string(),
-                );
-            }
-            // Waited for even here, where the planner will not read what they say. They are
-            // writing to a person's workspace, and a turn that reported itself finished while
-            // that was still going would be reporting something untrue.
-            collect_delegates(
-                delegates,
-                policy,
-                conversation,
-                reporter,
-                &mut state.account,
-                true,
-                waits,
-                &mut state.spent,
-                state.hook_notices,
-                &mut state.worked,
-                state.steps,
-            )?;
-            break completion;
-        }
-
-        if completion.calls.is_empty() {
-            // The planner has answered while something it started is still working. The turn
-            // asked for that work, so what the delegate says is part of what the turn was for:
-            // the answer so far goes into the conversation, the reports follow it, and the
-            // planner answers once more knowing what came back.
-            if !delegates.is_empty() {
-                // Between-calls text rather than the reply: the round is not the
-                // turn's last, and left as the reply in progress it would be cleared
-                // when the next round starts and never reach the transcript.
-                narrate_between_calls(policy, reporter, &completion.content);
-                record_answer(policy, conversation, &completion.content)?;
-                collect_delegates(
-                    delegates,
-                    policy,
-                    conversation,
-                    reporter,
-                    &mut state.account,
-                    true,
-                    waits,
-                    &mut state.spent,
-                    state.hook_notices,
-                    &mut state.worked,
-                    state.steps,
-                )?;
-                // A round the planner spent waiting is still a round, and the wait is when a
-                // person watching a turn go somewhere they did not ask for is most likely to
-                // say so. This is the boundary their line was aimed at. Reaching the next
-                // request without asking would put the delegate's report to the planner and
-                // none of what the person made of it, and the turn can end on that request.
-                //
-                // Guarded on the stop for the reason the boundary below is: Escape during the
-                // wait ends this turn, and a line typed after it belongs to the next one.
-                if !cancel.is_cancelled() {
-                    take_interjections(task, confirmer, policy, conversation, reporter);
-                }
-                continue;
-            }
-            // The planner has answered with tasks still open in the list the panel keeps. The
-            // answer goes into the conversation as it does above, and the planner is asked once
-            // for the list to be brought up to date, so the answer and the panel agree when the
-            // turn ends. A turn the person stopped as the answer arrived is not asked anything
-            // further, since the next request would end it as stopped and lose the answer. Nor is
-            // a reply the ceiling stopped, which is the turn's answer as it stands.
-            if completion.cut_off.is_none()
-                && !cancel.is_cancelled()
-                && let Some(open) =
-                    round_steps::open_tasks_to_ask_about(policy, conversation, &state.offered)
-            {
-                narrate_between_calls(policy, reporter, &completion.content);
-                record_answer(policy, conversation, &completion.content)?;
-                round_steps::ask_about_open_tasks(conversation, &mut state.reminded, open);
-                // The line a person typed as the answer arrived is meant for the turn they are
-                // watching, and the request this goes on to make is its next round.
-                take_interjections(task, confirmer, policy, conversation, reporter);
-                continue;
-            }
-            break completion;
-        }
-
-        // The planner asked for a round past the most the person allowed. Stopped before that
-        // round runs, so nothing it would have done has happened (TURN-14). A run that answered
-        // after its last allowed round never gets here, since it asked for no further round.
-        if let Some(most) = task.limits.rounds
-            && state.steps >= most
-        {
-            return Err(stopped_at(
-                policy,
-                state.steps,
-                LimitReached::Rounds { most },
-            ));
+        match round_steps::after_a_reply(
+            inputs,
+            state,
+            policy,
+            conversation,
+            reporter,
+            confirmer,
+            delegates,
+            waits,
+            &request,
+            &mut completion,
+        )? {
+            round_steps::AfterReply::Continue => continue,
+            round_steps::AfterReply::Answer => break completion,
+            round_steps::AfterReply::RunTheCalls => {}
         }
 
         state.steps += 1;
@@ -4580,6 +3492,10 @@ where
                     for (place, read) in tools::read_ahead(
                         policy,
                         workspace,
+                        &tools::ReachFacts {
+                            permission_mode: task.permission_mode.clone(),
+                            profile: task.profile.as_deref(),
+                        },
                         &together,
                         tools::READS_AT_ONCE,
                         cancel,
@@ -4641,58 +3557,14 @@ where
                 Some(refused) => refused,
                 None => tools::dispatch_with(
                     policy,
-                    &mut tools::Tools {
-                        workspace,
-                        output_cap: task.output_cap.unwrap_or(tools::OUTPUT_CAP),
-                        download_cap: task.download_cap.unwrap_or(tools::DOWNLOAD_CAP),
-                        deadlines: task.deadlines,
-                        skills: catalogue,
-                        slots: quarantine,
+                    &mut round_steps::tools_for_a_call(
+                        inputs,
+                        plan,
+                        &mut *state,
+                        quarantine,
                         reads,
-                        chat: crate::processor::Chat::new(config, egress)
-                            .spending(state.subscription.as_mut())
-                            .on(state.turn_model.as_deref())
-                            .stoppable_by(cancel),
-                        cancel,
-                        scheduling,
-                        arming,
-                        running,
-                        armed: &mut state.armed,
-                        home: task.home.as_deref(),
-                        profile: task.profile.as_deref(),
-                        cache: task.cache.as_deref(),
-                        remembering: task.remembering.as_deref(),
-                        budget_left: task
-                            .delegate
-                            .as_ref()
-                            .and_then(bravebot_core::delegate::DelegateSpec::budget)
-                            .map(|budget| budget.saturating_sub(state.account.tokens)),
-                        advising: advisor.map(|model| crate::advisor::Advising {
-                            model,
-                            context: &request.messages,
-                            asked: &mut state.advice_asked,
-                        }),
-                        messaging: task
-                            .courier
-                            .as_deref()
-                            .filter(|_| task.delegate.is_none())
-                            .map(|courier| crate::messages::Messaging {
-                                courier,
-                                ledger: &mut state.messages_sent,
-                            }),
-                        delegated: task.delegate.is_some(),
-                        confined_to: addressed.as_ref().map(|addressed| addressed.tools()),
-                        servers: state.servers.as_deref_mut(),
-                        mcp: state.mcp.as_ref().map(|(offer, _)| offer),
-                        jobs: &mut *state.jobs,
-                        permission_mode: task.permission_mode.clone(),
-                        auto_vetting: task.auto_vetting,
-                        run_directory: &mut state.run_directory,
-                        confined_failures: &mut state.confined_failures,
-                        confine_runs: task.confine_runs,
-                        sandbox: task.sandbox,
-                        asks_about_unconfined: task.asks_about_unconfined,
-                    },
+                        &request.messages,
+                    ),
                     &mut asking,
                     reporter,
                     call,
@@ -4702,117 +3574,22 @@ where
             policy.call_ended(&call.function.name);
             let took = ran_at.elapsed();
             let cancellation = output.cancelled;
-
-            // What the call did, taken from the call rather than from the name the planner
-            // gave it. Read at the end of the turn to say whether a change went out
-            // unbuilt, and the round is the one the first change landed on, since before
-            // that there was nothing to run.
-            state
-                .worked
-                .count(state.steps, output.changed_a_file, output.ran_a_program);
-            if (output.changed_a_file || output.started_a_program)
-                && let Some(checkout) = workspace.checkout()
-            {
-                checkout.mark_worked_in();
-            }
-            attached.extend(output.attached.take());
-
-            // The call is over, whatever came of it. Fired here rather than on a successful
-            // one because "the call finished" is what a person can point at: a write that was
-            // refused is still a moment their formatter was told about, and a hook deciding
-            // what to make of that is a hook reading nothing this turn produced.
-            //
-            // The name is the one dispatch just matched on, which selects the entries that
-            // fire and reaches no process: what a hook is told is the moment and nothing else.
-            state.hook_notices.extend(fire_hooks(
-                hooks,
-                bravebot_config::hooks::Moment::ToolFinished,
-                Some(&call.function.name),
-                workspace,
-                reporter,
-            ));
-            // What a hook on a question drawn during this call had to say, which is the person's to
-            // hear about as soon as there is somewhere to say it.
-            state
-                .hook_notices
-                .extend(say_prompt_notices(prompt_notices, reporter));
-
-            round_steps::start_delegates(
+            round_steps::after_a_call(
                 scope,
-                std::mem::take(&mut output.delegate),
+                inputs,
+                plan,
+                state,
+                reporter,
                 delegates,
-                state.servers.as_deref(),
                 confirming,
                 reporting,
                 recording,
-                config,
-                egress,
-                workspace,
-                task,
-                cancel,
-                wallet,
-                &state.turn_model,
-                state.effort,
+                &mut attached,
+                call,
+                took,
+                asking.waited(),
+                &mut output,
             );
-            let stalled = asking.waited();
-            state.spent.stalled += stalled;
-            // What the model waited for inside the call, which is not what the call spent working:
-            // a processor is a request, and its seconds belong with the other requests'.
-            let waited = match output.inference_interval {
-                Some(interval) => {
-                    reporter.inference_interval(interval);
-                    interval.duration()
-                }
-                None => std::time::Duration::ZERO,
-            };
-            state.spent.inference += waited;
-            // Both taken off, so the four figures partition the turn rather than double-count the
-            // parts of it that nest. Saturating because they are separate clocks: a measure of the
-            // inside cannot be allowed to make the outside negative.
-            state.spent.tools += took.saturating_sub(stalled).saturating_sub(waited);
-            // A processor is a model call of its own, so what it spent belongs in the turn's
-            // total. Left out, a turn that did most of its work in processors would report
-            // having cost almost nothing.
-            state.account.add_usage(output.usage);
-            reporter.spent(crate::outcome::Spent {
-                timing: state.spent.finish(),
-                ..state.account
-            });
-            // Kept as the turn goes rather than read off the last round, and overwritten by each
-            // call: a turn that says when to wake twice meant the second one, which is the answer
-            // it ended on.
-            if let Some(asked) = output.wakeup {
-                state.wakeup = Some(asked);
-            }
-            // Kept rather than overwritten, unlike a wakeup: two calls naming two paths are
-            // two watches, and a session that armed only the last of them would have told
-            // the planner about one that does not exist.
-            if let Some(armed) = output.watch.clone() {
-                state.watches.push(armed);
-            }
-            // A tool the planner loaded is offered from the next request on (SERVERS-16).
-            if let Some(wire) = output.tool_loaded.take()
-                && let Some((offer, _)) = &mut state.mcp
-            {
-                state.offered.extend(offer.load(&wire));
-            }
-            // What a loaded skill's file asks the rounds after it to run as (SKILL-15).
-            // Shown before the next round and kept in the turn's notices (SKILL-11),
-            // because the switch decides what that round costs.
-            if let Some((skill, runs_as)) = output.loaded.take() {
-                adopt_and_say(
-                    reporter,
-                    &mut state.notices,
-                    Running {
-                        model: &mut state.turn_model,
-                        effort: &mut state.effort,
-                        switched_by: &mut state.switched_by,
-                    },
-                    config,
-                    (&skill, &runs_as),
-                    pinned_by.as_deref(),
-                );
-            }
             // As with a context file: what the turn has seen belongs to the conversation the
             // moment it sees it, not once the turn happens to end well.
             conversation.observed(policy.context_label());
@@ -5434,6 +4211,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::round_steps::{after_a_ceiling_stop, ceiling_stop_narration};
     use super::*;
     use std::path::PathBuf;
     use std::sync::mpsc;
@@ -6667,6 +5445,661 @@ mod tests {
         }
     }
 
+    /// CHATGPT-10: the identifier each request to the ChatGPT account carries as its session.
+    ///
+    /// What is read is the identifier the backend would have sent, taken from the backend each call
+    /// selected: that the three headers carry it is the client's, and its tests read them off the wire.
+    mod account_session {
+        use super::ceiling::said;
+        use super::fallback::{configured, take};
+        use super::*;
+        use crate::backend::scripted;
+        use crate::chatgpt::AccountSession;
+        use bravebot_aichat::protocol::Message;
+        use bravebot_core::cancel::Cancel;
+
+        const ACCOUNT_MODEL: &str = "chatgpt/a-model";
+
+        fn on_the_account(task: Task) -> Task {
+            task.with_model(Some(ACCOUNT_MODEL.into()))
+        }
+
+        fn carried_by(session: &AccountSession) -> Option<String> {
+            Some(session.identifier().to_string())
+        }
+
+        /// A turn of two rounds, the first calling a tool, and the identifier each request carried.
+        fn two_rounds(name: &str, task: Task) -> Vec<Option<String>> {
+            let taken = take(
+                name,
+                &configured(None),
+                on_the_account(task),
+                vec![
+                    said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None),
+                    said("done", &[], None),
+                ],
+            );
+            taken.outcome.expect("the turn answered");
+            scripted::sessions()
+        }
+
+        /// The request the session's rounds make are where a cache is hit or not: one round that went
+        /// out under an identifier of its own would be the part of the conversation the service never
+        /// finds again. The regression it rejects is a round whose backend is not given the turn's
+        /// session.
+        #[test]
+        fn every_round_of_a_turn_on_the_account_carries_the_identifier_of_its_session() {
+            let session = AccountSession::begin();
+
+            let carried = two_rounds(
+                "account-session-rounds",
+                Task::new("look it up").in_account_session(session.clone()),
+            );
+
+            assert_eq!(carried, [carried_by(&session), carried_by(&session)]);
+        }
+
+        /// Two turns of a session are the requests the service is meant to tie together, and two
+        /// sessions of a process are the ones it must not. The regressions it rejects are one
+        /// identifier for the whole process and one identifier for each turn.
+        #[test]
+        fn turns_of_one_session_carry_one_identifier_and_another_session_carries_its_own() {
+            let first = AccountSession::begin();
+            let second = AccountSession::begin();
+
+            let one = two_rounds(
+                "account-session-one",
+                Task::new("a").in_account_session(first.clone()),
+            );
+            let again = two_rounds(
+                "account-session-again",
+                Task::new("b").in_account_session(first.clone()),
+            );
+            let other = two_rounds(
+                "account-session-other",
+                Task::new("c").in_account_session(second.clone()),
+            );
+
+            assert_eq!(one, again);
+            assert_eq!(one, [carried_by(&first), carried_by(&first)]);
+            assert_eq!(other, [carried_by(&second), carried_by(&second)]);
+            assert_ne!(first.identifier(), second.identifier());
+        }
+
+        /// A caller that says nothing runs a session of one turn: the rounds of it share an
+        /// identifier, and another such turn has its own. The regression it rejects is an identifier
+        /// that does not depend on the task, which is what one for the process was.
+        #[test]
+        fn a_turn_given_no_session_is_a_session_of_its_own() {
+            let one = two_rounds("account-session-none-one", Task::new("a"));
+            let another = two_rounds("account-session-none-another", Task::new("b"));
+
+            assert!(one[0].is_some(), "{one:?}");
+            assert_eq!(one[0], one[1]);
+            assert_eq!(another[0], another[1]);
+            assert_ne!(one[0], another[0]);
+        }
+
+        /// A goal run sends one task's clones as its turns, so a clone is in the session its task is
+        /// in, whether the task was told the session, began it with a request, or has not begun it
+        /// yet when the clone is made. The regressions it rejects are a clone that does not carry
+        /// the session it was told, and one that begins a session of its own where the task had
+        /// none yet, which would give each round of a goal run its own identifier.
+        #[test]
+        fn a_clone_of_a_task_is_in_the_session_the_task_is_in() {
+            let session = AccountSession::begin();
+            let told = Task::new("work towards it").in_account_session(session.clone());
+            assert_eq!(
+                told.clone().account_session().identifier(),
+                session.identifier(),
+                "a clone of a task that was told its session is in another"
+            );
+
+            let unsaid = Task::new("work towards it");
+            let before_any_ask = unsaid.clone();
+            let begun = unsaid.account_session().identifier().to_string();
+            assert_eq!(
+                before_any_ask.account_session().identifier(),
+                begun,
+                "a clone made before the task began its session began another"
+            );
+            assert_eq!(
+                unsaid.clone().account_session().identifier(),
+                begun,
+                "a clone made after the task began its session is in another"
+            );
+            assert_eq!(
+                unsaid.account_session().identifier(),
+                begun,
+                "the session changed between two asks"
+            );
+        }
+
+        /// A session begins at a level, and a task that is told none begins one at the level it asks
+        /// for, which is what a one-shot run and a delegate are. One that was told keeps its own,
+        /// whatever the task asks afterwards. The regressions it rejects are a session begun with no
+        /// level whatever the task asks, and a task that ignores the session it was given.
+        #[test]
+        fn a_session_begins_at_the_level_it_was_given_and_a_task_given_none_begins_at_its_own() {
+            assert_eq!(
+                Task::new("a")
+                    .with_effort(Some(Effort::High))
+                    .account_session()
+                    .effort(),
+                Some(Effort::High)
+            );
+            assert_eq!(Task::new("b").account_session().effort(), None);
+            let given = Task::new("c")
+                .with_effort(Some(Effort::High))
+                .in_account_session(AccountSession::begin_with(Some(Effort::Low)));
+            assert_eq!(given.account_session().effort(), Some(Effort::Low));
+        }
+
+        /// A skill's file may ask for a level for the rest of a turn. The account is sent the level
+        /// its session began with, so there the turn goes on as it was and the sentence says so, and
+        /// saying that the turn is at the level the skill asked for would be wrong. The regressions
+        /// it rejects are a level that moves on the account, the ordinary sentence said there, a skill
+        /// that moves the turn onto the account and the level in the same breath, and the same
+        /// refusal for a model that is not the account's.
+        #[test]
+        fn a_skill_asking_for_a_level_changes_nothing_where_the_account_answers() {
+            let config = configured(None);
+            let asks = crate::skills::RunsAs {
+                model: None,
+                effort: Some(Effort::High),
+            };
+
+            let mut model = Some(ACCOUNT_MODEL.to_string());
+            let mut effort = Some(Effort::Low);
+            let said = adopt(&mut model, &mut effort, &config, "tidy", &asks, None);
+            assert_eq!(effort, Some(Effort::Low));
+            assert_eq!(
+                said,
+                [t!(
+                    skill_effort_kept_for_account,
+                    skill = "tidy",
+                    effort = "high"
+                )
+                .to_string()]
+            );
+
+            let mut model = None;
+            let mut effort = Some(Effort::Low);
+            let said = adopt(&mut model, &mut effort, &config, "tidy", &asks, None);
+            assert_eq!(effort, Some(Effort::High));
+            assert_eq!(
+                said,
+                [t!(skill_asks_an_effort, skill = "tidy", effort = "high").to_string()]
+            );
+
+            let both = crate::skills::RunsAs {
+                model: Some(ACCOUNT_MODEL.to_string()),
+                effort: Some(Effort::High),
+            };
+            let mut model = None;
+            let mut effort = Some(Effort::Low);
+            adopt(&mut model, &mut effort, &config, "tidy", &both, None);
+            assert_eq!(model.as_deref(), Some(ACCOUNT_MODEL));
+            assert_eq!(effort, Some(Effort::Low));
+        }
+
+        /// One turn of `task`, on the account, with the stand-in host installed on this thread.
+        fn take_a_turn_at_the_host(name: &str, task: Task) {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let completed = resume(
+                &configured(None),
+                &Egress::new(),
+                &workspace,
+                &on_the_account(task),
+                &mut Conversation::new(),
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            );
+            completed.outcome.expect("the host answered the turn");
+        }
+
+        /// The request a turn on the account sends carries the identifier of the turn's session in
+        /// each of the three headers, and the same value in all three. This runs the whole path from
+        /// the task to the wire. The regressions it rejects are a request sent with an identifier of
+        /// its own, whether because the session was not given to the backend or because it was
+        /// replaced by another between the backend and the client, and one header carrying another
+        /// value than the other two.
+        #[test]
+        fn a_turn_on_the_account_sends_the_identifier_of_its_session_in_each_of_the_three_headers()
+        {
+            use crate::testutil::{Answer, serving_host};
+            let host = serving_host(vec![Answer::Words("ok"); 3]);
+            let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+            let session = AccountSession::begin();
+            let other = AccountSession::begin();
+
+            take_a_turn_at_the_host(
+                "account-session-wire-one",
+                Task::new("a").in_account_session(session.clone()),
+            );
+            take_a_turn_at_the_host(
+                "account-session-wire-two",
+                Task::new("b").in_account_session(session.clone()),
+            );
+            take_a_turn_at_the_host(
+                "account-session-wire-three",
+                Task::new("c").in_account_session(other.clone()),
+            );
+
+            let expected =
+                [&session, &session, &other].map(|session| Some(session.identifier().to_string()));
+            for name in ["session-id", "thread-id", "x-client-request-id"] {
+                assert_eq!(host.header(name), expected, "{name}");
+            }
+        }
+
+        /// A model of the account that refuses a body carrying a level, and takes the same body
+        /// without it, is a model that reads none. The client sends the request again without the
+        /// level and the process remembers, so no later request to that model carries one, and the
+        /// backend reports it as the terminal and a session in lines ask it to, which is how the
+        /// person is told. The regressions it rejects are a refusal that is not read as the level's
+        /// and a memory that does not reach the question the interfaces ask.
+        #[test]
+        fn a_model_of_the_account_that_refuses_the_level_is_reported_as_reading_none() {
+            use crate::testutil::{Answer, serving_host};
+            let host = serving_host(vec![Answer::Status(400), Answer::Words("ok")]);
+            let _at = crate::chatgpt::stand_in::at(&host.endpoint);
+            let config = configured(None);
+            assert!(
+                !crate::backend::refused_a_level(&config, ACCOUNT_MODEL),
+                "refused before it was asked"
+            );
+
+            take_a_turn_at_the_host(
+                "account-session-refused-level",
+                Task::new("a")
+                    .with_effort(Some(Effort::High))
+                    .in_account_session(AccountSession::begin_with(Some(Effort::Low))),
+            );
+
+            assert_eq!(host.header("session-id").len(), 2, "sent again once");
+            assert!(
+                crate::backend::refused_a_level(&config, ACCOUNT_MODEL),
+                "the refusal was not remembered against the account's model"
+            );
+        }
+
+        fn an_exchange() -> Conversation {
+            let mut conversation = Conversation::new();
+            for (prompt, answer) in [
+                ("port the parser to the new lexer", "started on it"),
+                ("what about the error type", "widened it"),
+                ("now the tests", "updated them"),
+                ("carry on", "carrying on"),
+            ] {
+                conversation.push(Message::user(prompt));
+                conversation.push(Message::assistant(answer));
+            }
+            conversation.measured(50_000);
+            conversation
+        }
+
+        /// A summary, a question asked beside the work and the judgement of a goal are each a request
+        /// the session makes outside a turn, and each has to say which session. The regression it
+        /// rejects is one of the three made under an identifier of its own.
+        #[test]
+        fn a_summary_a_question_and_a_judgement_carry_the_identifier_of_the_session_that_asked() {
+            let session = AccountSession::begin();
+            let config = configured(None);
+            let egress = Egress::new();
+            let mut conversation = an_exchange();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut reporter = crate::report::RecordingReporter::default();
+            scripted::script(vec![
+                said("they were porting the parser", &[], None),
+                said("because the grammar nests", &[], None),
+                said("MET\nthe listing shows a.txt", &[], None),
+            ]);
+
+            compact(
+                &config,
+                &egress,
+                &session,
+                &mut conversation,
+                Some(ACCOUNT_MODEL),
+                &mut reporter,
+                &mut sink,
+                TrustStore::new("/work"),
+                None,
+                &Cancel::new(),
+                None,
+            )
+            .expect("the summary was made")
+            .expect("a long conversation has something to summarise");
+            aside(
+                &config,
+                &egress,
+                &session,
+                crate::aside::Question::recap(&conversation),
+                Some(ACCOUNT_MODEL),
+                &mut reporter,
+                &mut sink,
+                TrustStore::new("/work"),
+                |_| {},
+                &Cancel::new(),
+            )
+            .expect("the question was answered");
+            goal(
+                &config,
+                &egress,
+                &session,
+                crate::goal::Check::of(&conversation, "a.txt exists"),
+                Some(ACCOUNT_MODEL),
+                &mut reporter,
+                &mut sink,
+                TrustStore::new("/work"),
+                &Cancel::new(),
+            )
+            .expect("the condition was judged");
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            assert_eq!(carried, vec![carried_by(&session); 3]);
+        }
+
+        /// A manifest run asks the account twice to plan and once for each step that reads, and all
+        /// of them are the session's requests. The regressions it rejects are a planning call, and
+        /// the chat the steps are run with, each made under an identifier of its own.
+        #[test]
+        fn the_planning_calls_and_the_steps_of_a_manifest_run_carry_the_identifier_of_its_session()
+        {
+            let session = AccountSession::begin();
+            let scratch = crate::testutil::scratch_dir("account-session-manifest");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            std::fs::write(scratch.join("README.md"), "bravebot is a coding agent").unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let task = on_the_account(Task::new("summarise the readme"))
+                .in_account_session(session.clone());
+            let plan = r#"{"steps": [
+                {"capability": "FILE_READ", "args": {"path": "README.md", "out_slot": "readme"}},
+                {"capability": "TRANSFORM", "args": {"reads": ["readme"],
+                    "instruction": "summarise", "out_slot": "summary"}},
+                {"capability": "ANSWER", "args": {"from_slot": "summary"}}]}"#;
+            scripted::script(vec![
+                said(
+                    "1. Read what the task names. 2. Say what it holds.",
+                    &[],
+                    None,
+                ),
+                said(plan, &[], None),
+                said(
+                    &format!(
+                        "{}\nA coding agent.",
+                        bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+                    ),
+                    &[],
+                    None,
+                ),
+            ]);
+
+            let outcome = crate::manifest::run(
+                &configured(None),
+                &Egress::new(),
+                &workspace,
+                &task,
+                &mut crate::Confining::new(
+                    &mut crate::confirm::Unattended,
+                    crate::PermissionMode::Bypass,
+                    false,
+                ),
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                TrustStore::new("/work"),
+                &Cancel::new(),
+            );
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            assert_eq!(
+                outcome.expect("the run finished").reply_for_display(),
+                "A coding agent."
+            );
+            assert_eq!(carried, vec![carried_by(&session); 3]);
+        }
+
+        /// A commit message is drafted from a diff by a processor, off any turn, for the person who
+        /// asked in a session. The regression it rejects is a draft requested under an identifier of
+        /// its own, which no cache of that session would ever serve.
+        #[test]
+        fn a_commit_message_is_drafted_in_the_session_that_asked_for_it() {
+            let session = AccountSession::begin();
+            let scratch = crate::testutil::scratch_dir("account-session-commit-message");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            crate::testutil::repository::commit_files(
+                &scratch,
+                &[("src/lib.rs", "pub fn old() {}\n")],
+                "first",
+            );
+            crate::testutil::repository::commit_files(
+                &scratch,
+                &[("src/lib.rs", "pub fn renamed() {}\n")],
+                "second",
+            );
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = crate::workspace::trust_store(workspace.root());
+            trust.trust(".");
+            scripted::script(vec![said(
+                &format!(
+                    "It renames a function.\n{}\nRename old to renamed",
+                    bravebot_core::processor::ProcessorSpec::NOTE_MARKER
+                ),
+                &[],
+                None,
+            )]);
+
+            let drafted = commit_message(
+                &configured(None),
+                &Egress::new(),
+                &session,
+                &workspace,
+                &crate::commit_message::Source::Range("HEAD~1..HEAD".into()),
+                None,
+                Some(ACCOUNT_MODEL),
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                &Cancel::new(),
+            );
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            assert_eq!(drafted.expect("a draft").message, "Rename old to renamed");
+            assert_eq!(carried, vec![carried_by(&session)]);
+        }
+
+        /// The planner's question to its advisor is a request the turn makes beside its rounds, and
+        /// it is made through the chat the turn handed its tools, which is what a processor and a
+        /// vetting use as well. The regression it rejects is that chat being made for a session of
+        /// its own, which would leave the advisor, the processors and the vettings of a turn each
+        /// asking the account in an identifier its rounds never carry.
+        #[test]
+        fn the_advisor_a_turn_consults_is_asked_in_the_session_of_the_turn() {
+            let session = AccountSession::begin();
+            let task = Task::new("choose the first file to read")
+                .in_account_session(session.clone())
+                .with_advisor(Some("chatgpt/an-advisor".into()));
+
+            let taken = take(
+                "account-session-advisor",
+                &configured(None),
+                on_the_account(task),
+                vec![
+                    said(
+                        "",
+                        &[(
+                            "advisor",
+                            r#"{"question":"which file should I read first?","why":"unsure"}"#,
+                        )],
+                        None,
+                    ),
+                    said("read the manifest first", &[], None),
+                    said("done", &[], None),
+                ],
+            );
+
+            taken.outcome.expect("the turn answered");
+            assert_eq!(taken.sent.len(), 3, "the advisor was not asked");
+            assert_eq!(scripted::sessions(), vec![carried_by(&session); 3]);
+        }
+
+        /// A conversation that has outgrown its budget is summarised inside the turn, before the
+        /// round that would have overflowed. The summary is the session's request like any other:
+        /// the regression it rejects is a summary made under an identifier of its own, which would
+        /// leave the turn's next round to find the summary's cache empty.
+        #[test]
+        fn a_summary_made_inside_a_turn_carries_the_identifier_of_its_session() {
+            let session = AccountSession::begin();
+            let mut config = configured(None);
+            config.context_budget = 1_000;
+            let scratch = crate::testutil::scratch_dir("account-session-compaction");
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            scripted::script(vec![
+                said("they were porting the parser", &[], None),
+                said("carrying on", &[], None),
+            ]);
+
+            let completed = resume(
+                &config,
+                &Egress::new(),
+                &workspace,
+                &on_the_account(Task::new("go on").in_account_session(session.clone())),
+                &mut an_exchange(),
+                &mut crate::confirm::ApproveWrites,
+                &mut crate::report::RecordingReporter::default(),
+                &mut bravebot_core::event::RecordingSink::new(),
+                trust,
+                TrustedPrograms::new(),
+                None,
+                &Cancel::new(),
+            );
+            let asked = scripted::asked();
+            let carried = scripted::sessions();
+            scripted::clear();
+
+            completed.outcome.expect("the turn answered");
+            assert_eq!(asked.len(), 2, "the conversation was not summarised");
+            assert_eq!(carried, vec![carried_by(&session); 2]);
+        }
+
+        /// Two delegates, each of two rounds, spawned by a turn that asked for `effort`, on the
+        /// account: the identifier and the level each request would have been held to.
+        fn two_delegates(
+            name: &str,
+            effort: Option<Effort>,
+        ) -> (Vec<Option<String>>, Vec<Option<Option<Effort>>>) {
+            let scratch = crate::testutil::scratch_dir(name);
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch).unwrap();
+            let workspace = Workspace::new(&scratch).unwrap();
+            let config = configured(None);
+            let egress = Egress::new();
+            let mut replies = Vec::new();
+            for _ in 0..2 {
+                replies.push(said("", &[("read_file", r#"{"path":"absent.txt"}"#)], None));
+                replies.push(said("done", &[], None));
+            }
+            scripted::script(replies);
+
+            for _ in 0..2 {
+                let ended = crate::delegate::run(
+                    &seeded_reader(),
+                    &config,
+                    &egress,
+                    &workspace,
+                    None,
+                    None,
+                    Some(ACCOUNT_MODEL),
+                    effort,
+                    crate::PermissionMode::Ask,
+                    false,
+                    &bravebot_config::Attribution::default(),
+                    None,
+                    None,
+                    crate::exec::Deadlines::BUILT_IN,
+                    false,
+                    bravebot_sandbox::SandboxMode::default(),
+                    None,
+                    &Cancel::new(),
+                    &mut crate::confirm::ApproveWrites,
+                    &mut crate::report::IgnoreReports,
+                    &mut bravebot_core::event::RecordingSink::new(),
+                    None,
+                    None,
+                );
+                ended.delegated.expect("the delegate answered");
+            }
+            let carried = (scripted::sessions(), scripted::levels());
+            scripted::clear();
+            carried
+        }
+
+        /// Everything a delegate asks of the account is one session's, and a second delegate is
+        /// another. The regressions it rejects are a delegate that carries its parent's identifier
+        /// (here, a process-wide one) and one that begins a session for each round.
+        #[test]
+        fn a_delegate_is_a_session_of_its_own_and_carries_one_identifier_throughout() {
+            let (carried, _) = two_delegates("account-session-delegates", None);
+
+            let [first, second, third, fourth] = carried.as_slice() else {
+                panic!("two requests for each of two delegates: {carried:?}");
+            };
+            assert!(first.is_some(), "{carried:?}");
+            assert_eq!(first, second);
+            assert_eq!(third, fourth);
+            assert_ne!(first, third);
+        }
+
+        /// A delegate begins at the level it was given, which is the spawning turn's where its
+        /// definition names none, and keeps it. The regressions it rejects are a delegate begun with no
+        /// level, which would send its account nothing whatever its turn asked, and one that takes the
+        /// level of a later request.
+        #[test]
+        fn a_delegate_begins_at_the_level_it_was_given() {
+            let (_, asked) = two_delegates("account-session-delegate-level", Some(Effort::Low));
+            assert_eq!(asked, vec![Some(Some(Effort::Low)); 4]);
+
+            let (_, unasked) = two_delegates("account-session-delegate-none", None);
+            assert_eq!(unasked, vec![Some(None); 4]);
+        }
+
+        /// What the kernel settles about a delegate before it exists, for a reader.
+        fn seeded_reader() -> crate::delegate::Seeded {
+            let mut trail = bravebot_core::event::RecordingSink::new();
+            let mut routing = Routing::new();
+            routing.insert_trusted("task", "ask a delegate");
+            let mut trust = TrustStore::new("/work");
+            trust.trust(".");
+            let held = CapabilitySet::from_iter([Capability::WebFetch, Capability::FileRead]);
+            let policy = Policy::begin(routing, ReleasePlan::new(), held.clone(), &mut trail)
+                .expect("a policy")
+                .with_trust(trust);
+            let seeded = crate::delegate::seed(&policy, a_delegate_spec("reader", held), None);
+            policy.finish();
+            seeded
+        }
+    }
+
     /// BACKEND-53: a turn whose model keeps failing moves to the fallback model the person named.
     mod fallback {
         use super::ceiling::said;
@@ -6684,6 +6117,7 @@ mod tests {
                     url: "https://example.invalid/".into(),
                     status,
                     retry_after: None,
+                    body: None,
                 }))
                 .counted(3, None, None),
             )
@@ -7743,7 +7177,7 @@ mod tests {
     /// tools left is asked for a shorter answer.
     #[test]
     fn the_line_after_a_ceiling_stop_says_what_to_do_about_it() {
-        use bravebot_aichat::protocol::Tool;
+        use bravebot_aichat::protocol::{ChatRequest, Tool};
         use bravebot_aichat::{CutOff, OpenCall};
         let stop = |tool: Option<Option<&str>>, thought: bool| CutOff {
             ceiling: 32_000,

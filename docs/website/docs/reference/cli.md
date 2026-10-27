@@ -27,7 +27,7 @@ Usage:
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout <way>             Forget an imported Leo Premium subscription or a stored gateway key
+  bravebot auth logout <way>             Forget an imported Leo Premium subscription, a stored gateway key or a ChatGPT sign-in
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
   bravebot import-leo-creds [channel]    Import a Leo Premium subscription
   bravebot import-providers              Import a model service Claude Code or opencode configured
@@ -61,7 +61,8 @@ Usage:
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
 | `bravebot auth logout leo` | forget an imported Leo Premium subscription |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
-| `bravebot auth status [leo\|bedrock\|gateway [id]]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
+| `bravebot auth logout chatgpt` | forget the ChatGPT sign-in `auth login chatgpt` stored |
+| `bravebot auth status [leo\|bedrock\|gateway [id]\|chatgpt]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-leo-creds [channel]` | import a Leo Premium subscription |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot --bg "<prompt>"` | start a session that runs in the background and keeps going after the terminal closes ([Sessions](../using/sessions.md#sessions-in-the-background)) |
@@ -105,9 +106,9 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--goal <condition>` | keep working until a judge says the condition holds, or end on status 7 ([below](#--goal-condition)) |
 | `--max-rounds <n>` | stop the run when the agent asks for a round of tool calls past this many, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
 | `--max-tokens <n>` | stop the run before a request once it has spent this many tokens, and end on status 8 ([below](#--max-rounds-n-and---max-tokens-n)) |
-| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../customize/configuration.md#runnetwork)) |
+| `--run-network <open\|closed>` | `closed` takes the network from a program the agent runs unless it needs to fetch or reach a remote ([`run.network`](../security/sandbox.md#runnetwork)) |
 | `--sandbox <mode>` | how far the programs the agent runs may reach: `strict`, `read-only` (which also stops the agent's file tools writing), `workspace-write` or `off`. Without it the mode is `workspace-write` ([`sandbox.mode`](../security/security.md)). Where a machine-level file pins `sandbox.mode`, a mode that reads more of the machine, writes more or both is refused, and the refusal says which and names the pinned mode to run with |
-| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../customize/configuration.md#sandboxfilesystem)) |
+| `--sandbox-allow-read <path>`, `--sandbox-deny-read <path>`, `--sandbox-allow-write <path>`, `--sandbox-deny-write <path>` | add a path or glob to one of the four lists that move what a program the agent runs reads and writes; repeatable ([`sandbox.filesystem`](../security/sandbox.md#sandboxfilesystem)) |
 | `--log-level <error\|info\|debug>` | how much of a failure's shape goes to the [diagnostic log](#--log-level-errorinfodebug) |
 | `--agent <name>` | address every turn to one of your definitions, as `/agent` does for one ([below](#--agent-name)) |
 | `--issue <url>`, `--pr <url>` | give the session it opens its issue and pull request links, as `/issue` and `/pr` do ([below](#--issue-url-and---pr-url)) |
@@ -126,7 +127,7 @@ Anything that is not a recognised flag or subcommand is treated as the task prom
 | `--incognito` | write nothing to `~/.bravebot`: no history, no session record, no preference |
 | `--accept-edits` | for a one-shot run, write files without asking; commands, fetches and a write that would create a credential are still refused ([below](#--accept-edits)) |
 | `--dangerously-skip-permissions` | bypass every permission check; recommended only for a sandbox with no internet access |
-| `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
+| `--dangerously-bypass-approvals-and-sandbox` | as `--dangerously-skip-permissions` with `--sandbox off`: nothing is asked, a language server's start included, and no program is confined; refused where that flag is, and beside a `--sandbox` other than `off` |
 | `-h`, `--help` | show the help |
 | `-V`, `--version` | show the version |
 
@@ -143,7 +144,7 @@ combines with a session, `--plain` and a one-shot run, but not with `--resume`, 
 way of starting except `--mode manifest`.
 
 `--incognito` writes nothing under `~/.bravebot`. See
-[an incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+[an incognito session](../using/incognito.md).
 
 `--safe` is for finding out whether your own configuration is why a session misbehaves. The run
 reads none of your hooks, skills, delegate definitions, `mcp.request` entries or `AGENTS.md` files,
@@ -175,8 +176,8 @@ unknown name even with `--dangerously-skip-permissions`. `--tools` offers no MCP
 `--mode manifest`, `--bg` and the commands that start no session refuse them.
 
 `--dangerously-skip-permissions` is the only way to reach the mode that answers every permission
-question, including the ones that decide trust. See
-[modes](../security/permissions.md#answering-in-advance-modes) for what it costs.
+question, including the ones that decide trust, and it gives the file tools the reach of your account
+outside the workspace. See [modes](../security/permission-modes.md) for what it costs.
 
 ### `--accept-edits`
 
@@ -210,10 +211,9 @@ still whoever is reading the output. With either end piped or redirected there i
 the run stops before its first step unless `--dangerously-skip-permissions` was given. A plan that
 failed to build is printed on stderr even without `--trace`, and never shares stdout with the reply.
 
-This is a different axis from the [permission mode](../security/permissions.md#answering-in-advance-modes):
+This is a different axis from the [permission mode](../security/permission-modes.md):
 `--mode` decides when control flow is settled, the other decides who answers a prompt, and the two
-compose. See [Non-interactive use](../using/headless.md) and
-[Sessions](../using/sessions.md) for the rest.
+compose. See [Plan first, then execute](../using/manifest-mode.md) for the rest.
 
 ## `--model <name>`
 
@@ -224,7 +224,7 @@ bravebot --model opus "review the diff on this branch"
 Names the model for one run, and outranks every other way one is named. Where no flag names one, a
 run asks for the model a session opening in the same directory would: a
 [`model`](../customize/configuration.md#model) key in the checkout's settings or the file
-`--settings` names, then the choice [`/model`](../customize/configuration.md#choosing-a-model)
+`--settings` names, then the choice [`/model`](../customize/model.md)
 recorded, then the key in `~/.bravebot/settings.json`, then an exported
 `BRAVEBOT_DEFAULT_MODEL`, then the model the build was made with. So a script uses the model
 you picked without your having to write it down twice, a checkout that names its model gets it, and
@@ -791,7 +791,7 @@ directory](#doctor), readable by you alone, and the ten most recent are kept. At
 `error`, a run that fails nowhere leaves no file. `info` adds the steps taken, such as a retry or a
 server starting, and `debug` adds the detail between them. `doctor` prints the directory.
 
-An [`--incognito`](../using/sessions.md) session writes no log.
+An [`--incognito`](../using/incognito.md) session writes no log.
 
 ## `bug-report`
 
@@ -808,7 +808,7 @@ that file as well. `doctor` names paths, model services and the names, never the
 environment variables, so read the file before posting it. No transcript, trace, settings file,
 environment value or file of the directory holds a place in it.
 
-Nothing reads the file back. An [`--incognito`](../using/sessions.md) session, or a machine with no
+Nothing reads the file back. An [`--incognito`](../using/incognito.md) session, or a machine with no
 home directory, writes no report, and the command exits with status 1. Any argument is refused with
 status 2.
 
@@ -883,6 +883,9 @@ Answers "what will this actually use", and changes nothing. It reports:
 - any project or local settings file whose `provider` block or `model` key was ignored, since those two
   are read from your own file and the one `--settings` names;
 - whether a gateway key is stored by `bravebot auth login gateway`, without printing it;
+- where a ChatGPT sign-in is stored by `bravebot auth login chatgpt`, when its access token expires and
+  what would end it, without printing either token, nothing where none is stored, and that the file cannot
+  be read, with the remedy, where it cannot, which fails the report;
 - any settings file that tries to declare an [MCP server](../customize/mcp-servers.md), which fails
   the report, since only `~/.bravebot/mcp.json` declares one;
 - which names a machine-level file pinned, and where that file is;
@@ -954,10 +957,11 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [leo [channel] | bedrock | import | gateway [id]]
+bravebot auth login [leo [channel] | bedrock | import | gateway [id] | chatgpt]
 bravebot auth logout leo
 bravebot auth logout gateway [id]
-bravebot auth status [leo | bedrock | gateway [id]]
+bravebot auth logout chatgpt
+bravebot auth status [leo | bedrock | gateway [id] | chatgpt]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -968,14 +972,18 @@ which to run. It needs a terminal for that. A script names the way instead:
 | `leo [channel]` | what `import-leo-creds [channel]` runs |
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
-| `gateway [id]` | asks for the key of a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json` |
+| `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic` or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of the three that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json` |
+| `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
-argument. With one gateway configured it asks for no id.
+argument. With one service offered it asks for no id. Where the machine-level file names the
+gateways, only those are offered, and the list and the refusal of any other id name that file.
 
 `auth logout leo` runs `import-leo-creds --forget`. `auth logout gateway [id]` forgets a stored key,
-and the id can be left off when only one is stored. In an incognito session the `leo`, `import` and
-`gateway` ways are refused, and `bedrock`, `auth status` and both forms of `auth logout` are allowed. See
+and the id can be left off when only one is stored. It names the host the key still works at, and
+leaves the settings as they are. `auth logout chatgpt` forgets the stored ChatGPT
+sign-in and ends nothing at OpenAI. In an incognito session the `leo`, `import`, `gateway` and `chatgpt`
+ways are refused, and `bedrock`, `auth status` and every form of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
 `auth status` prints one line per sign-in and changes nothing:
@@ -985,18 +993,24 @@ $ bravebot auth status
 leo: signed in: production subscription imported, 12 of 30 credentials unspent
 bedrock: not signed in: the AWS session has lapsed: run `bravebot auth login bedrock`
 gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
+chatgpt: signed in: the access token expires 2026-10-22T21:05:27Z
 ```
 
 A line says signed in, not signed in (signing in fixes it), or unusable (it does not: a stored
 subscription for another Brave channel, an unreadable file, a missing `aws`), with the reason and
-what to run. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
+what to run. For ChatGPT it says when the access token expires, and a token past that time is still
+signed in, since the next request replaces it. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
 is one of four fixed sentences: the AWS session has lapsed, the AWS CLI has no profile by the name
 you set, the AWS CLI is not installed, or the AWS CLI answered with something that is not a
 credential. What the AWS CLI itself printed is never copied, because it can name accounts and roles.
 With no way named it
 exits 0 if any sign-in is usable. With a way named it exits 0 only if every sign-in under it is
 usable. Otherwise it prints a `BB1001` line and exits 1, or exits 3 when the configuration could not
-be read. `auth status import` is refused, since an import keeps no sign-in.
+be read. `auth status import` is refused, since an import keeps no sign-in. `auth status gateway`
+asks about each gateway a provider block names and about a service whose key is stored with no block
+naming it, and `auth status gateway openai` asks about that id whether or not a block names it. A
+key stored for `openai`, `openrouter` or `anthropic` with no block naming it is reported as not
+signed in, since no session sends it, and `auth login gateway <id>` records the block.
 
 ## `import-leo-creds`
 
@@ -1016,7 +1030,7 @@ bravebot import-providers
 Reads what Claude Code and opencode configured in your home directory, and asks a running Ollama, LM
 Studio and llama-server on this machine what each serves, shows what it would add to
 `~/.bravebot/settings.json`, and asks once for each. It takes no arguments, needs a terminal to ask on, and refuses in an incognito session. See
-[Importing from Claude Code, opencode or a local model server](../customize/configuration.md#importing-from-claude-code-opencode-or-a-local-model-server).
+[Importing from Claude Code, opencode or a local model server](../customize/importing.md).
 
 ## `mcp`
 
@@ -1076,7 +1090,7 @@ When no rule matches, it says so and the ordinary approval gates decide. An `all
 checkout's settings is not in force until you grant it at the question a session asks, so it is
 never reported as the rule that decides: a line says it would allow the call and is not in force.
 It starts nothing and changes nothing. It checks the rules only, not the
-[permission modes](../security/permissions.md), and a command line that names no call exits 2.
+[permission modes](../security/permission-modes.md), and a command line that names no call exits 2.
 
 ## `stats`
 
@@ -1213,7 +1227,9 @@ one shell name and exits with status 2 for anything else.
 | Shift-Tab | Choose how much the session asks before it acts |
 | Ctrl-T | Toggle the audit trail |
 | Ctrl-O | Open the scroller over the transcript |
-| Ctrl-L | Watch what a delegate is doing, and read what a command printed |
+| Ctrl-L | Watch what a delegate is doing, and read what an aside answered |
+| Alt-L | Read what a command printed, as `/outputs` does |
+| Alt-A | Print the whole plan, as `/todos` does |
 | Up / Down | Walk back through sent prompts |
 | Ctrl-R | Search every prompt you have sent |
 | Wheel, PageUp / PageDown | Scroll the transcript |

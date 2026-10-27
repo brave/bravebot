@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
+import { ASSISTANT_BUBBLE, COMPOSER_NAME } from './drive-support.mjs'
 
 const output = process.env.VISUAL_OUTPUT || join(tmpdir(), 'bravebot-visual')
 mkdirSync(output, { recursive: true })
@@ -117,7 +118,7 @@ try {
   }
   const escape = async () => { await page.keyboard.press('Escape'); await page.waitForTimeout(200) }
   const tool = (verb, target, why, note, extra = {}) => ({ verb, target, why, note, failed: false, untrusted: false, changes: [], waitedSeconds: null, ...extra })
-  const open = async (title) => { await page.locator('.session').filter({ hasText: title }).first().click(); await page.getByRole('textbox', { name: 'Message the agent' }).waitFor() }
+  const open = async (title) => { await page.locator('.session').filter({ hasText: title }).first().click(); await page.getByRole('textbox', { name: COMPOSER_NAME }).waitFor() }
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.reload()
@@ -127,7 +128,7 @@ try {
 
   await scene('02-conversation', async () => {
     await open('Refactor the session store')
-    await page.locator('.bubble.assistant').first().waitFor()
+    await page.locator(ASSISTANT_BUBBLE).first().waitFor()
     await variants('02-conversation')
   })
 
@@ -224,8 +225,8 @@ try {
 
   await scene('10-done-and-error', async () => {
     await emit('turn.done', { id: idA, turn: 2, reply: 'Split the lock and added **three** migration tests.', model: 'sample/fast', steps: 6, clean: true, tokens: 18342, outputTokens: 1204, contextTokens: 64000, notices: ['Hook turn-finished: formatted 2 files'], trust: { rules: [] }, archived: 0, prompt: 1 })
-    await page.getByRole('textbox', { name: 'Message the agent' }).fill('Now run the full suite')
-    await page.getByRole('textbox', { name: 'Message the agent' }).press('Enter')
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).fill('Now run the full suite')
+    await page.getByRole('textbox', { name: COMPOSER_NAME }).press('Enter')
     await emit('turn.error', { kind: 'provider', message: 'The provider is busy (429).', category: 'rate_limited', attempts: 3, status: 429, turn: 3, id: idA, contextTokens: 64000 })
     await page.locator('[data-test="error-card"]').last().scrollIntoViewIfNeeded()
     await variants('10-done-and-error')
@@ -325,7 +326,7 @@ try {
     await page.setViewportSize({ width: 900, height: 560 })
     await open('Refactor the session store')
     await emit('turn.started', { turn: 3 })
-    const composer = page.getByRole('textbox', { name: 'Message the agent' })
+    const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
     await page.getByRole('button', { name: 'Attach files' }).click()
     await page.locator('.attachment-chips').waitFor()
     for (const text of ['First queued follow-up', 'Second, a longer follow-up that runs on far enough to need truncating in the tray', 'Third', 'Fourth']) {
@@ -339,7 +340,7 @@ try {
   // In the conversation the scene above left running, with its queue still showing under the tray.
   await scene('23b-sent-into-the-turn', async () => {
     await page.setViewportSize({ width: 900, height: 560 })
-    const composer = page.getByRole('textbox', { name: 'Message the agent' })
+    const composer = page.getByRole('textbox', { name: COMPOSER_NAME })
     for (const text of ['no, the other one', 'And a second line, long enough that the tray has to truncate it before it reaches the end of the row']) {
       await composer.fill(text)
       await composer.press('Enter')

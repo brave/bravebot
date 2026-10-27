@@ -63,7 +63,7 @@ pub use programs::TrustedPrograms;
 pub use pure::Filter;
 pub use reference::{Presentation, Reference};
 pub use remembered::{Remembered, RememberedLine};
-pub use slot::{Measured, SlotError, SlotId, SlotReader, SlotStore, SlotWriter};
+pub use slot::{Measured, SlotError, SlotId, SlotStore, SlotWriter};
 pub use todo::{Item as TodoItem, List as TodoList, Status as TodoStatus};
 pub use trust::TrustStore;
 pub use value::Labelled;

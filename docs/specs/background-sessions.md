@@ -4,10 +4,13 @@ title: Background sessions
 status: proposed
 governs:
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/session/src/sessions.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/session_commands.rs
   - crates/agent/src/home.rs
   - crates/tui/src/command_table.rs
   - crates/cli/src/supervisor.rs
@@ -297,8 +300,10 @@ warned about for.
 
 `bravebot attach <id>` connects the terminal to the running process of that session. It draws the
 transcript, the held prompt if there is one, and the input box as a foreground session does, and
-every prompt it puts is answered by the person there. A session that is `stopped` or `interrupted`
-is started again in the mode every session opens in and attached to.
+every prompt it puts is answered by the person there. A line the terminal sends as soon as it has
+drawn a prompt or a question is taken, because the session is waiting for the line before what asks
+for it is written. A session that is `stopped` or `interrupted` is started again in the mode every
+session opens in and attached to.
 
 One terminal is attached at a time. A second `attach` is refused and names the session. Closing the
 terminal, losing its connection or typing `/detach` ends the attachment and nothing
@@ -312,13 +317,16 @@ foreground terminal would be handed, and nothing the session holds beyond that.
 
 A record a running background session holds is not resumed or continued by another process.
 `--resume` and `--continue` name the session and say to attach. `--fork` copies the record as it
-was last written, and the copy is a new session.
+was last written, and the copy is a new session. A record a terminal holds is refused the same way,
+and a stopped session whose record a terminal holds is not started again by `attach` or `reply`
+([SESSION-38](sessions.md#SESSION-38)).
 
 **Why.** If detaching ended the turn, closing a laptop would cancel work the person started with
 `--bg` in order to keep. If a second process could resume the record, two processes would write one
 conversation.
 
-`verified-by: none`
+`verified-by: bravebot_cli::host::a_line_sent_as_the_prompt_is_drawn_is_taken`
+`verified-by: bravebot_cli::plain::a_line_is_waited_for_before_what_asks_for_it_is_written`
 
 <a id="BG-10"></a>
 ### BG-10: a reply is the next prompt and answers nothing that was asked

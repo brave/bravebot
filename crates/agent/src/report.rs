@@ -18,15 +18,94 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     use crate::compact::SideModelRefusal;
     match refusal {
         SideModelRefusal::NeedsSignIn(model) => {
-            bravebot_i18n::t!(summary_model_needs_sign_in, model = model).to_string()
+            bravebot_i18n::t!(summary_model_needs_sign_in, model = model)
         }
         SideModelRefusal::Refused(model) => {
-            bravebot_i18n::t!(summary_model_refused, model = model).to_string()
+            bravebot_i18n::t!(summary_model_refused, model = model)
         }
         SideModelRefusal::NotServed(model) => {
-            bravebot_i18n::t!(summary_model_not_served, model = model).to_string()
+            bravebot_i18n::t!(summary_model_not_served, model = model)
         }
     }
+}
+
+/// Why a request a turn made on its way failed, as a closed value a front end words in its own
+/// way ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// Handed to [`Reporter::summary_failed`] and [`Reporter::fell_back`] rather than a sentence, so the
+/// terminal says the account's failure in the terminal's catalog sentence and the window says it in
+/// its own, with the command it names drawn as code. Nothing a service wrote is in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// The ChatGPT account failed in one of its own ways.
+    Account(bravebot_aichat::AccountFailure),
+    /// Any other failure, by its category.
+    Category(crate::outcome::Category),
+}
+
+impl Why {
+    /// The reason a diagnosis carries.
+    pub(crate) fn of(diagnosis: crate::outcome::Diagnosis) -> Self {
+        match diagnosis.account {
+            Some(account) => Self::Account(account),
+            None => Self::Category(diagnosis.category),
+        }
+    }
+
+    /// The reason a summary could not be made.
+    pub(crate) fn of_summary(error: &crate::compact::CompactError) -> Self {
+        match error {
+            crate::compact::CompactError::Chat(backend) => Self::of(backend.diagnosis()),
+            other => Self::Category(other.category()),
+        }
+    }
+
+    /// The terminal's words for it: the account's catalog sentence, with no status or count after
+    /// it, and the name of the category for every other failure. The wait a refusal asked for is
+    /// part of the sentence.
+    pub fn told(self) -> String {
+        match self {
+            Self::Account(failure) => crate::chatgpt::said_of_failure(failure),
+            Self::Category(category) => category.name().to_string(),
+        }
+    }
+}
+
+/// The line the terminal narrates for a summary that could not be made, which a front end that has
+/// no words of its own for the reason says as well.
+pub fn summary_failed_in_the_terminals_words(why: Why) -> String {
+    t!(compact_failed_and_continuing, problem = why.told())
+}
+
+/// The line the terminal narrates for a move to the fallback model, which a front end that has no
+/// words of its own for the reason says as well.
+pub fn fell_back_in_the_terminals_words(from: &str, to: &str, why: Why) -> String {
+    match why {
+        Why::Account(failure) => t!(
+            fallback_model_in_use_account,
+            from = from,
+            to = to,
+            problem = crate::chatgpt::said_of_failure(failure)
+        ),
+        Why::Category(category) => t!(
+            fallback_model_in_use,
+            from = from,
+            to = to,
+            category = category.name()
+        ),
+    }
+}
+
+/// What a person is told of a summary that could not be made: the sentence for the failure of the
+/// ChatGPT account where it was the account that failed
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)), and the name of the failure's
+/// category for every other failure.
+///
+/// Here for the reason [`summary_model_refusal`] is: the sentence is looked up in a catalog, and
+/// every string in `compact.rs` is read by the planner. A summary that failed on the account says
+/// which command to type where signing in again is the remedy, which the category's name does not.
+pub fn why_a_summary_failed(error: &crate::compact::CompactError) -> String {
+    Why::of_summary(error).told()
 }
 
 /// What a person is told when `processorModel` or `--processor-model` names a model a processor
@@ -38,13 +117,13 @@ pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> St
     use crate::compact::SideModelRefusal;
     match refusal {
         SideModelRefusal::NeedsSignIn(model) => {
-            bravebot_i18n::t!(processor_model_needs_sign_in, model = model).to_string()
+            bravebot_i18n::t!(processor_model_needs_sign_in, model = model)
         }
         SideModelRefusal::Refused(model) => {
-            bravebot_i18n::t!(processor_model_refused, model = model).to_string()
+            bravebot_i18n::t!(processor_model_refused, model = model)
         }
         SideModelRefusal::NotServed(model) => {
-            bravebot_i18n::t!(processor_model_not_served, model = model).to_string()
+            bravebot_i18n::t!(processor_model_not_served, model = model)
         }
     }
 }
@@ -798,6 +877,23 @@ pub trait Reporter {
     /// leave undrawn.
     fn narration(&mut self, _text: String) {}
 
+    /// A summary of the conversation could not be made, so the turn goes on with the history it has.
+    ///
+    /// The reason is the closed value and not a sentence, so a front end words it in its own way. The
+    /// default says it as a narration in the terminal's words.
+    fn summary_failed(&mut self, why: Why) {
+        self.narration(summary_failed_in_the_terminals_words(why));
+    }
+
+    /// The turn's model kept failing and the person's `fallbackModel` takes over for the rest of the
+    /// turn (BACKEND-53).
+    ///
+    /// The reason is the closed value, for the reason [`Reporter::summary_failed`] takes one. The
+    /// default says it as a narration in the terminal's words.
+    fn fell_back(&mut self, from: &str, to: &str, why: Why) {
+        self.narration(fell_back_in_the_terminals_words(from, to, why));
+    }
+
     /// The reply as the model writes it, in the words added since the last call.
     ///
     /// Released for a screen and nowhere else, exactly as the finished text is. Sent whether or
@@ -1475,6 +1571,102 @@ mod tests {
 
         let search = Activity::running("Search", "./todo ");
         assert_eq!(search.shown_file(), "./todo ");
+    }
+
+    /// CHATGPT-8: a summary that failed on the ChatGPT account is told in that failure's sentence,
+    /// which holds the wait a refusal asked for and has no status after it, and every other failure
+    /// keeps the name of its category, since nothing in a reply may be put in the line. The
+    /// regressions it rejects are the category's name for a failure of the account, a sentence for a
+    /// failure that is not the account's, such as a gateway's refused key, and the status of a
+    /// refusal put after the sentence, which `/compact` and the narrated line leave out.
+    #[test]
+    fn a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise()
+     {
+        use crate::backend::BackendError;
+        use crate::compact::{CompactError, SideModelRefusal};
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        let chat = |error: ChatError| CompactError::Chat(BackendError::from(error));
+        for failure in [AccountFailure::Ended, AccountFailure::NotSignedIn] {
+            assert_eq!(
+                why_a_summary_failed(&chat(ChatError::Account(failure))),
+                crate::chatgpt::said_of_failure(failure),
+                "{failure:?}"
+            );
+        }
+        // A refusal that came as a 429 with a wait has the wait in its sentence and no status after it.
+        for refusal in [
+            bravebot_aichat::responses::protocol::Refusal::UsageLimit,
+            bravebot_aichat::responses::protocol::Refusal::NotPermitted,
+        ] {
+            let failure = AccountFailure::Named {
+                refusal,
+                status: Some(429),
+                retry_after: Some(std::time::Duration::from_secs(600)),
+            };
+            let told = why_a_summary_failed(&chat(ChatError::Account(failure)));
+            assert_eq!(
+                told,
+                crate::chatgpt::said_of_failure(failure),
+                "{refusal:?}"
+            );
+            assert!(told.contains("a wait of about 10 minutes"), "{told}");
+            assert!(!told.contains("HTTP") && !told.contains("429"), "{told}");
+        }
+        let status = |status: u16| {
+            chat(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://api.example.invalid/v1/responses".to_string(),
+                status,
+                retry_after: None,
+                body: None,
+            }))
+        };
+        assert_eq!(why_a_summary_failed(&status(401)), "unauthorized");
+        assert_eq!(why_a_summary_failed(&status(503)), "unavailable");
+        assert_eq!(
+            why_a_summary_failed(&CompactError::SummaryModel(SideModelRefusal::NeedsSignIn(
+                "a-model".to_string()
+            ))),
+            "unconfigured"
+        );
+    }
+
+    /// CHATGPT-8: the line a turn narrates for a summary the account could not make is the account's
+    /// sentence, and for a refusal that came as a 429 with a wait it holds the wait and has no status
+    /// after it. The failure is handed to the reporter as the closed value the turn makes from the
+    /// error, as `round_steps` hands it. The regression it rejects is the status of the refusal put
+    /// after the sentence, as the terminal's line for a failed turn puts it.
+    #[test]
+    fn the_line_for_a_summary_the_account_refused_has_the_wait_and_no_status() {
+        use crate::backend::BackendError;
+        use crate::compact::CompactError;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let failure = AccountFailure::Named {
+                refusal,
+                status: Some(429),
+                retry_after: Some(std::time::Duration::from_secs(600)),
+            };
+            let error = CompactError::Chat(BackendError::from(ChatError::Account(failure)));
+            let mut reporter = RecordingReporter::default();
+            reporter.summary_failed(Why::of_summary(&error));
+
+            let [line] = reporter.narration.as_slice() else {
+                panic!("{refusal:?}: {:?}", reporter.narration);
+            };
+            assert_eq!(
+                *line,
+                t!(
+                    compact_failed_and_continuing,
+                    problem = crate::chatgpt::said_of_failure(failure)
+                ),
+                "{refusal:?}"
+            );
+            assert!(line.contains("a wait of about 10 minutes"), "{line}");
+            assert!(!line.contains("HTTP") && !line.contains("429"), "{line}");
+        }
     }
 
     /// Some work has nothing to name, and an empty pair of brackets reads as a bug rather than

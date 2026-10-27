@@ -54,6 +54,10 @@ interface Props {
   onRetireBot: (slug: string, retired: boolean) => void
   onRemoveBot: (slug: string) => void
   onSettings: () => void
+  /** How many agents this conversation has started, and how many of those are still working. */
+  agentsStarted: number
+  agentsWorking: number
+  onAgents: () => void
   build: string | null
 }
 
@@ -75,6 +79,9 @@ export const Sidebar = memo(function Sidebar({
   onRemoveBot,
   build,
   onSettings,
+  agentsStarted,
+  agentsWorking,
+  onAgents,
 }: Props): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('sessions')
   const [grouped, setGrouped] = useState(false)
@@ -165,6 +172,11 @@ export const Sidebar = memo(function Sidebar({
       {/* The build the sessions are stamped with is in About; it rides here only as data, for
           the drivers that check a packaged app is the one they built. */}
       <footer className="sidebar-foot">
+        <NavigationItem outsideList icon="robot" className="agents-open" onClick={onAgents} data-test="agents-open">
+          Agents
+          {agentsStarted > 0 && <span className="agents-count count">{agentsStarted}</span>}
+          {agentsWorking > 0 && <span className="agents-working">· {agentsWorking} working</span>}
+        </NavigationItem>
         <NavigationItem outsideList icon="settings" className="agent-settings-open" onClick={onSettings} data-test="agent-settings">
           Settings
         </NavigationItem>

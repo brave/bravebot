@@ -123,13 +123,15 @@ passes on this tree today and would have passed on the tree that shipped the fro
 
 ## check-deny-reasons.py
 
-Fails an exception in `deny.toml` that has no `reason`.
+Fails an exception in `deny.toml` that has no `reason`, and a licence exception that has no comment.
 
 cargo-deny makes `reason` optional on an advisory to ignore, a duplicate to skip and a crate to ban,
 and accepts a bare string in place of the table. An ignored advisory is one the binary ships with
 anyway, so an entry with no reason gives a reviewer nothing to agree to. It reads `[advisories]
-ignore` and `[bans]` `skip`, `skip-tree` and `deny`. Whether a reason is good is still a review
-question (DEP-001).
+ignore` and `[bans]` `skip`, `skip-tree` and `deny`. cargo-deny rejects a `reason` on a licence
+exception, so for `[licenses]` `exceptions` it reads a comment on the entry's line or the line above
+it, or above its `[[licenses.exceptions]]` header where the entry is a table of its own. Whether a
+reason is good is still a review question (DEP-001).
 
 ```sh
 make check-deps           # runs it before building cargo-deny
@@ -229,12 +231,13 @@ contrib/measure-flakes.py --runs 30 --test-threads 4   # what make check-linux c
 Nothing fails over a rate. A job that goes red for a known two percent flake is a job people learn
 to ignore, which is the problem this exists for, so a rate is reported and never gated on.
 
-`--file-issues OWNER/REPO` opens one issue per flaky test, titled `Flaky test: <name>`, saying the
-rate, the parallelism it was measured at and what the failure said. A test that already has an issue
-under that title gets nothing, whoever opened it, so a weekly run adds only what is new instead of
-filing the same test every Monday. `--assign LOGIN` puts that login on every issue the run opens:
-nothing here is triaged, so an issue naming nobody waits until a person notices it and assigns it by
-hand. The workflow passes `netzenbot`; a run by hand assigns nobody unless it says otherwise.
+`--file-issues OWNER/REPO` opens one issue per flaky test, titled `Flaky test: <name>` and labelled
+`flaky-test`, saying the rate, the parallelism it was measured at and what the failure said. A test
+that already has an issue under that title gets nothing, whoever opened it, so a weekly run adds
+only what is new instead of filing the same test every Monday. `--assign LOGIN` puts that login on
+every issue the run opens: nothing here is triaged, so an issue naming nobody waits until a person
+notices it and assigns it by hand. The workflow passes `netzenbot`; a run by hand assigns nobody
+unless it says otherwise.
 `--dry-run` prints what it would send and sends nothing; `--issue-limit` bounds how many one run may
 open, since the first measurement of a suite nobody has measured could otherwise arrive as twenty
 issues at once. The exit code is still not a verdict on

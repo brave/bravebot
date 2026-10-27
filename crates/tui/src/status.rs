@@ -117,6 +117,12 @@ pub struct Facts<'a> {
     pub effort: Option<bravebot_aichat::protocol::Effort>,
     /// Whether the model in force reads that level, as its roster row stated.
     pub model_reads_effort: bool,
+    /// The level the session began with, where the model in force is one of the ChatGPT account's:
+    /// the account is sent that level for the whole session whatever is chosen afterwards, unless
+    /// the model refuses a level, so it is what a request carries
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)). `None` for every other
+    /// model, and `Some(None)` for a session that began with none.
+    pub account_effort: Option<Option<bravebot_aichat::protocol::Effort>>,
     /// What the server reported using on the last turn, or `None` before one has run.
     ///
     /// Observed rather than configured, which is the whole point: the endpoint answers a model name
@@ -219,6 +225,8 @@ pub struct Facts<'a> {
     /// The paths the person let programs reach for this session, one row each as `/reach paths`
     /// lists it (SANDBOX-28). Empty says nothing.
     pub requested_paths: &'a [String],
+    /// The directories bypass mode took the file tools into, one line each (PATHREQ-7).
+    pub reached_directories: &'a [String],
     /// The yes about this directory a session kept, where one is kept and would settle the next
     /// session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
@@ -280,9 +288,8 @@ pub fn with_the_sandbox_mode(confinement: &str, mode: bravebot_sandbox::SandboxM
             confinement_with_mode,
             level = confinement,
             mode = mode.name()
-        )
-        .to_string(),
-        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement).to_string(),
+        ),
+        SandboxMode::Off => t!(confinement_with_mode_off, level = confinement),
     }
 }
 
@@ -421,15 +428,14 @@ fn hosts_line(
         status_hosts_counts,
         allowed = allowed.len(),
         denied = hosts.denied.len()
-    )
-    .to_string();
+    );
     let asks = hosts.on_unlisted == Some(bravebot_config::sandbox_network::OnUnlisted::Ask);
     Some(
         Line::new(t!(status_hosts), counts).with_note(match (sources.is_empty(), asks) {
             (true, false) => t!(status_hosts_refused).to_string(),
             (true, true) => t!(status_hosts_asked).to_string(),
-            (false, false) => t!(status_hosts_files, files = sources.join(", ")).to_string(),
-            (false, true) => t!(status_hosts_files_ask, files = sources.join(", ")).to_string(),
+            (false, false) => t!(status_hosts_files, files = sources.join(", ")),
+            (false, true) => t!(status_hosts_files_ask, files = sources.join(", ")),
         }),
     )
 }
@@ -448,11 +454,10 @@ pub fn run_network_source(decided: &bravebot_config::Decided) -> String {
         Decided::Settings(Some(path)) => t!(
             status_network_by_settings,
             path = path.display().to_string()
-        )
-        .to_string(),
+        ),
         Decided::Settings(None) => t!(status_network_by_a_setting).to_string(),
         Decided::Managed(Some(path)) => {
-            t!(status_network_pinned, path = path.display().to_string()).to_string()
+            t!(status_network_pinned, path = path.display().to_string())
         }
         Decided::Managed(None) => t!(status_network_pinned_by_policy).to_string(),
     }
@@ -488,7 +493,7 @@ pub fn report(facts: &Facts<'_>) -> Report {
         lines.push(
             Line::new("", t!(status_directory_kept, when = kept.when)).with_note(match kept.root {
                 Some(root) => {
-                    t!(status_directory_kept_root_note, root = root.display()).to_string()
+                    t!(status_directory_kept_root_note, root = root.display())
                 }
                 None => t!(status_directory_kept_note).to_string(),
             }),
@@ -693,7 +698,19 @@ fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
 
     // Beside the model, because the two together are what a turn costs: the same question asked of
     // the same model bills differently at either end of this range.
+    let word = |level: Option<bravebot_aichat::protocol::Effort>| match level {
+        Some(level) => level.as_str().to_string(),
+        None => t!(effort_unset).to_string(),
+    };
     lines.push(match (facts.effort, facts.model_reads_effort) {
+        // A model of the account is sent the level its session began with, which is the level a
+        // request carries and so the one named, with the level chosen since beside it. Where the
+        // two are the same the line is the ordinary one.
+        (chosen, true) if facts.account_effort.is_some_and(|began| began != chosen) => {
+            let began = facts.account_effort.flatten();
+            Line::new(t!(status_effort), word(began))
+                .with_note(t!(status_effort_kept_for_account, chosen = word(chosen)))
+        }
         // A level the model will not read is still the level somebody chose, so it is named rather
         // than hidden. What changes is the note: reporting it as in force would be this panel
         // telling them a request carries something it does not.
@@ -1113,6 +1130,20 @@ fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
         ));
     }
 
+    if !facts.reached_directories.is_empty() {
+        lines.extend(rows(
+            Line::new(
+                t!(status_reached_directories),
+                t!(
+                    count_reached_directories,
+                    count = facts.reached_directories.len()
+                ),
+            )
+            .with_note(t!(status_reached_directories_note)),
+            facts.reached_directories,
+        ));
+    }
+
     if !facts.requested_paths.is_empty() {
         lines.extend(rows(
             Line::new(
@@ -1438,6 +1469,7 @@ mod tests {
             agent_by_setting: false,
             effort: None,
             model_reads_effort: true,
+            account_effort: None,
             // Nothing observed, which is what a session looks like before its first turn. Tests
             // about the tier and the served model set these themselves.
             served_model: None,
@@ -1485,6 +1517,7 @@ mod tests {
             // No reach remembered for any command, on the same footing.
             reach: &[],
             requested_paths: &[],
+            reached_directories: &[],
             // No answer about the directory kept past a session, on the same footing.
             kept_trust: None,
         }
@@ -2505,6 +2538,33 @@ mod tests {
         }
     }
 
+    /// PATHREQ-7: a directory bypass mode took the file tools into is listed with the call that first
+    /// reached it and a note that it is not opened or trusted. A session that reached none draws no
+    /// heading, so a session outside bypass is not shown a section about a mode it is not in.
+    #[test]
+    fn the_report_lists_the_directories_bypass_took_the_file_tools_into() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let quiet = rendered(&report(&facts(&config, &trust)));
+        assert!(!quiet.contains(t!(status_reached_directories)), "{quiet}");
+
+        let rows = vec!["/srv/out, first reached by write_file (path)".to_string()];
+        let mut facts = facts(&config, &trust);
+        facts.reached_directories = &rows;
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_reached_directories)), "{shown}");
+        assert!(
+            shown.contains(&t!(count_reached_directories, count = 1)),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(t!(status_reached_directories_note)),
+            "{shown}"
+        );
+        assert!(shown.contains(rows[0].as_str()), "{shown}");
+    }
+
     /// RUN-19: where the list is shortened it says how many of each it left out. A bare count would
     /// leave a person unable to tell how much of what they are carrying came from another session,
     /// which is the whole question the two lifetimes raise.
@@ -3281,6 +3341,59 @@ mod tests {
         let shown = rendered(&report(&chosen));
         assert!(shown.contains("xhigh"), "{shown}");
         assert!(shown.contains("chosen with /effort"), "{shown}");
+    }
+
+    /// CHATGPT-10: on a model of the account the line names the level a request carries, which is the
+    /// one the session began with, and says which level was chosen since, where the two differ. The
+    /// regressions it rejects are the chosen level shown as the one in force, a note for a session
+    /// whose levels agree, and the same line for a model that is not the account's.
+    #[test]
+    fn on_the_account_the_effort_names_the_level_sent_and_the_one_chosen_where_they_differ() {
+        use bravebot_aichat::protocol::Effort;
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+
+        let mut differs = facts(&config, &trust);
+        differs.effort = Some(Effort::High);
+        differs.account_effort = Some(Some(Effort::Low));
+        let shown = rendered(&report(&differs));
+        assert!(
+            shown.contains("low") && shown.contains("the level this ChatGPT session began with"),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("high was chosen with /effort and applies from the next session"),
+            "{shown}"
+        );
+
+        let mut began_with_none = facts(&config, &trust);
+        began_with_none.effort = Some(Effort::High);
+        began_with_none.account_effort = Some(None);
+        let shown = rendered(&report(&began_with_none));
+        assert!(shown.contains("default"), "{shown}");
+        assert!(shown.contains("high was chosen with /effort"), "{shown}");
+
+        let mut agrees = facts(&config, &trust);
+        agrees.effort = Some(Effort::Low);
+        agrees.account_effort = Some(Some(Effort::Low));
+        let shown = rendered(&report(&agrees));
+        assert!(shown.contains("chosen with /effort"), "{shown}");
+        assert!(!shown.contains("began with"), "{shown}");
+
+        let mut elsewhere = facts(&config, &trust);
+        elsewhere.effort = Some(Effort::High);
+        let shown = rendered(&report(&elsewhere));
+        assert!(
+            shown.contains("high") && !shown.contains("began with"),
+            "{shown}"
+        );
+
+        let mut unread = facts(&config, &trust);
+        unread.effort = Some(Effort::High);
+        unread.account_effort = Some(Some(Effort::Low));
+        unread.model_reads_effort = false;
+        let shown = rendered(&report(&unread));
+        assert!(shown.contains("this model reads none"), "{shown}");
     }
 
     /// A level the model will not read is still named, since it is what somebody chose, but the

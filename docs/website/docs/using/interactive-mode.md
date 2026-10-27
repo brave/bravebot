@@ -45,7 +45,7 @@ works**, in every terminal and in shell mode too.
 With [vi editing](#editing-the-way-vi-does) chosen, Escape enters NORMAL mode instead of discarding
 the line, and the letters do what they do in vi.
 
-Thirteen of these chords can be [moved to keys of your own](#moving-a-key), twelve on Windows. Every chord named on this
+Fifteen of these chords can be [moved to keys of your own](#moving-a-key), fourteen on Windows. Every chord named on this
 page, and every one the interface names on your screen, is the default.
 
 ## Undoing an edit
@@ -137,19 +137,21 @@ action the way `env` does, so a project file moving one action says nothing abou
 }
 ```
 
-**Thirteen actions can be moved, and nothing else can** (twelve on Windows, which has no `suspend`):
+**Fifteen actions can be moved, and nothing else can** (fourteen on Windows, which has no `suspend`):
 
 | Action | Default | What it does |
 |---|---|---|
 | `background` | `ctrl-b` | move the command a turn is waiting on to the background |
 | `editor` | `ctrl-g` | open your editor on the prompt |
-| `watch` | `ctrl-l` | open what a delegate did, a command printed, or an aside answered |
+| `watch` | `ctrl-l` | open what a delegate did or an aside answered |
+| `outputs` | `alt-l` | open what the commands the session ran printed |
 | `scroller` | `ctrl-o` | open the transcript scroller |
 | `history` | `ctrl-r` | search the prompts you have sent |
 | `stash` | `ctrl-s` | put the line away, or bring it back |
 | `trail` | `ctrl-t` | show or hide the audit trail |
 | `paste` | `ctrl-v` | paste from the clipboard |
 | `panel` | `ctrl-x` | show or hide the [info panel](sessions.md#telling-sessions-apart) |
+| `todos` | `alt-a` | print the whole plan in the transcript, as [`/todos`](../reference/commands.md#todos) does |
 | `scope` | `ctrl-n` | cycle Up between every stored prompt, this project's and this session's |
 | `suspend` | `ctrl-z` | [suspend the session to the shell](#suspending-to-the-shell) |
 | `undo` | `ctrl-_` | put back the last edit to the line ([below](#undoing-an-edit)) |
@@ -230,7 +232,8 @@ The row beneath the box carries what the session is doing (the mode in force whe
 asking, how full the context is and the share of the prompt read from the cache, the trail, a
 [`/loop`](../reference/commands.md#loop-interval-prompt) that is running and when its next tick is
 due, how many [background jobs](#moving-a-command-to-the-background) the turn has running, the key
-that opens the delegates and the commands once the session has anything to open, and the key that
+that opens the delegates once the session has any, the key and `/outputs` entry that open the commands once
+the session has run one, and the key that
 moves the command the turn is waiting on to the background while there is one), then
 `? for shortcuts`, and then the key that opens the [info panel](sessions.md#telling-sessions-apart)
 while the panel is closed and the terminal is wide enough for it. While the panel is drawn, the
@@ -270,7 +273,8 @@ session opens and cannot change while it runs. It is stated once at startup, and
 bypassing every check. It types nothing, is read before Tab so it never completes a half-typed line,
 and works while a turn runs. A turn in flight follows the mode you pressed last, from its next
 question or tool call; a question already on your screen is left as it is. Both spellings of the chord are answered, since which one arrives is the
-terminal's choice rather than yours.
+terminal's choice rather than yours. A click on the mode drawn on the row beneath the box moves to the
+next one too, but never into bypassing every check: only the key reaches that.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
 everything takes no room at all: what is drawn is a mode somebody chose. When the terminal is too
@@ -279,7 +283,7 @@ no figure in it, the way to the bindings, the trail key, the figures, the move k
 background jobs, and a running loop after all of them), and the mode is the last to go. A note about what a press just did is drawn at the right of the same row and takes its
 room ahead of all of them, since a part fitted against the whole width is one the note writes over.
 
-See [modes](../security/permissions.md#answering-in-advance-modes) for what each one answers and what
+See [modes](../security/permission-modes.md) for what each one answers and what
 choosing one costs.
 
 ## Stopping and leaving
@@ -371,7 +375,7 @@ the turn ends becomes a turn of its own.
 **A [slash command](../reference/commands.md) is never sent.** Most wait to be carried out: one
 comes off the box and is drawn under it like anything else waiting, but it is not offered to the turn
 in flight, so nothing about it reaches the planner. It runs when the queue is reached after the turn
-has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/thinking`, `/copy`, `/export`, `/loop`
+has ended, and a prompt behind it goes once it has. During a turn, `/cost`, `/status`, `/watch`, `/jobs`, `/panel`, `/todos`, `/thinking`, `/copy`, `/export`, `/loop`
 and `/goal` are carried out as you press Enter instead, except a `/loop` that starts a loop and a `/goal`
 that sets one, which wait. `/theme`, `/config` and `/language` are too, whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model` and `/effort` are too unless a line waiting ahead of them could change what they act on, a
@@ -445,6 +449,10 @@ the box exactly as it was.
 
 They stay in the prompt history. From your side they were sent, and taking them back does not unsay
 them.
+
+A click on a waiting prompt does the same for it and the ones typed after it
+([the mouse](transcript.md#what-a-click-does)). The prompts before it keep waiting. Clearing the box is
+what cancels what came back.
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top
@@ -557,7 +565,7 @@ does not move it, since those wait for the turn to end anyway.
 **A job stays on the screen after its block scrolls away.** For as long as the turn has a job
 running, whether you moved it or the model started it in the background, the hint line says how many,
 as in `1 in the background`, in shell mode too. Each job is one row under
-[Ctrl-L](#watching-a-delegate-reading-a-command-and-asking-something-aside), made when the job
+[`/outputs`](#watching-a-delegate-reading-a-command-and-asking-something-aside), made when the job
 starts and before it has printed anything. The row says `background`, leads with the job's name, and
 says whether the job is still running and for how long, or how it ended. A delegate's `job:1` and the
 turn's `job:1` are separate rows.
@@ -614,18 +622,27 @@ Ctrl-O opens the scroller over the transcript, and Ctrl-T toggles the audit trai
 
 ## Watching a delegate, reading a command, and asking something aside
 
-**Ctrl-L opens the whole of what a delegate did, the whole of what a command printed, and the answer
-to anything you asked with [`/btw`](../reference/commands.md#btw-question).** Where there is more
+**Ctrl-L opens the whole of what a delegate did and the answer to anything you asked with
+[`/btw`](../reference/commands.md#btw-question).** Where there is more
 than one row, a list is the way in: a panel over the transcript, a row each. Where there is one, its
-own lines open directly. Where there is nothing the key does nothing. The row beneath the box names
-the key and how many rows there are, counting them all together, for as long as the session has any.
+own lines open directly. Where there is nothing the key does nothing, and a session that ran
+commands and no delegate has nothing for it. The row beneath the box names the key and how many rows
+it opens, for as long as the session has any.
+
+**Alt-L, or `/outputs`, opens what the commands the session ran printed**, background jobs included, in the
+same mode with the same keys. Where no command has run it says so and opens nothing. Inside the mode
+Alt-L closes it over the commands, and moves to the commands from the delegates. Ctrl-L stays the key
+for delegates and asides, and does nothing where only commands have run. Once a command
+has run, the row beneath the box names Alt-L, `/outputs` and how many rows they open, beside the key's own
+count. `outputs` is one of the [chords you can move](#moving-a-key).
 
 | Key | What it does |
 |---|---|
-| Ctrl-L | open the list, and close the mode from either level |
+| Ctrl-L | open the list of delegates and asides, and close the mode from either level |
+| Alt-L | open the commands' output; over the commands, close the mode; over the delegates, switch to the commands |
 | Enter | open the row under the cursor |
 | Up / Down | move through the list |
-| n / p | in a delegate, step to the next or previous one without going back to the list |
+| n / p | in a delegate, step to the next or previous one without going back to the list; in a command, the next or previous command |
 | x | in a delegate that is working, stop that delegate and no other: it answers with what it has and the turn goes on |
 | q, Escape | back to the list from a delegate, then out |
 | Ctrl-C | close the mode, leaving the turn in flight running |
@@ -641,7 +658,7 @@ sentence alone. A report the planner was not allowed to read is drawn in the
 What a command printed gets the same treatment: the transcript has room for the first lines and a
 count.
 
-**Every command the turn ran is a row**, after the delegates and in the order they ran, so a row's
+**Every command the turn ran is a row of the `/outputs` list**, in the order they ran, so a row's
 place does not move under you while you are stepping through it. Opening one draws what the command
 printed, as far back as is kept, and says so rather than dropping quietly where more was printed than
 was kept. Where the planner was kept from the output, every row of it carries the margin every
@@ -663,7 +680,7 @@ keeps the working mark because that is what it was doing: a server told to serve
 goes and never exits, so a cross beside it would say something about the program that is not true.
 The verdict comes from the exit codes and the clock, never from a line the program printed.
 
-**A question asked with `/btw` is a row too**, before the delegates and the commands and in the order
+**A question asked with `/btw` is a row too**, before the delegates and in the order
 they were asked. Opening one draws the question above the answer, and the row says whether the record
 kept the answer. It comes first because it is the only row that survives a resume: put last, every
 delegate a later turn spawned would be inserted above it and move its place.
@@ -719,7 +736,7 @@ session asks for four things, each because something here cannot work without it
 
 | What it asks for | What it buys |
 |---|---|
-| mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held (not asked for where [`tui.mouse`](../customize/configuration.md#tuimouse) is `false`) | the wheel scrolls the transcript |
+| mouse reporting of the buttons, the wheel, and the pointer's motion with a button held and with none, with coordinates in the form that can name a column or a row past 223 (not asked for where [`tui.mouse`](../customize/configuration.md#tuimouse) is `false`) | the wheel scrolls the transcript, a drag selects text, the target under the pointer is shown, and a click at the far side of a wide screen lands where it was made |
 | bracketed paste | a pasted prompt does not send itself on the newline most clipboards carry |
 | focus reporting | the clipboard is worth a look the moment a picture appears on it, rather than polled forever |
 | disambiguated keys, where the terminal says it understands the request | Shift-Enter and Ctrl-Enter arrive at all |

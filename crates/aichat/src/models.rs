@@ -369,7 +369,9 @@ fn read_listing<S: Sink, T: serde::de::DeserializeOwned>(
     url: &str,
     egress: &Egress,
 ) -> Result<T, ChatError> {
-    let response = egress.fetch(policy, request, Label::untrusted_public())?;
+    let response = egress
+        .fetch(policy, request, Label::untrusted_public())
+        .map_err(|error| crate::failure_of_refusal(policy, error))?;
     let label = response.body.label();
     let (bytes, _) = policy
         .decode_transport("gateway models", label)
@@ -390,9 +392,8 @@ struct AccountListing {
 
 /// One row of the account's listing.
 ///
-/// Every field but the list is held as it arrived, because the shape is read from another
-/// program's source and has not been observed, and a field in a form this code did not expect must
-/// cost that row its place and no more: a listing that fails to decode offers nothing.
+/// Every field but the list is held as it arrived, so that a field in a form this code did not
+/// expect costs that row its place and no more: a listing that fails to decode offers nothing.
 #[derive(Debug, Default, Deserialize)]
 struct ListedByAccount {
     /// What a request names.
@@ -439,7 +440,8 @@ pub fn list_from_account<S: Sink>(
     let request = Request::get(&url)
         .header("accept", "application/json")
         .socket_header(name, value)
-        .refusing_redirects();
+        .refusing_redirects()
+        .reading_a_refusal();
 
     let listed: AccountListing = read_listing(policy, request, &url, egress)?;
     Ok(offered_by_account(provider, listed.models))
@@ -478,39 +480,126 @@ fn offered_by_account(
                     })
                     .unwrap_or_default()
             };
-            Some(Model {
-                key: format!("{}/{slug}", provider.id),
-                display_name: row
-                    .display_name
+            Some(account_row(
+                provider,
+                slug,
+                row.display_name
                     .as_str()
                     .filter(|name| !name.trim().is_empty())
                     .unwrap_or(slug)
                     .to_string(),
-                // The account's own subscription, which is not Brave's.
-                premium: false,
-                provider: Some(provider.display_name().to_string()),
-                conversation_tokens: Some(
-                    row.context_window
-                        .as_u64()
-                        .filter(|window| *window > 0)
-                        .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
-                ),
+                row.context_window
+                    .as_u64()
+                    .filter(|window| *window > 0)
+                    .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
                 // A listing that names the levels is the service saying what it takes, and one
                 // that names none for a model says it takes none. A row with no such field, or one
                 // in a form other than a list, did not say, which is not a row claiming none: the
                 // answer is then the one the service gives a request that carries a level.
-                reads_effort: match row.supported_reasoning_levels.as_array() {
+                match row.supported_reasoning_levels.as_array() {
                     Some(levels) => !levels.is_empty(),
                     None => true,
-                } && crate::reads_effort(&provider.completion_url(), slug),
-                advertised: Advertised {
+                },
+                Advertised {
                     input_modalities: strings(&row.input_modalities),
                     output_modalities: Vec::new(),
                     parameters: None,
                 },
-            })
+            ))
         })
         .collect()
+}
+
+/// The picker rows a `chatgpt` entry's models become, one for each
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// The person wrote the list, so nothing is asked of the serving host and no row is dropped for
+/// what a listing would say: the service refuses at the first request a model the account cannot
+/// reach, as a gateway does for one a configured block names. Keyed by the account's id for the
+/// reason [`offered_by_account`] gives. A window the entry did not state is the assumed one, as it
+/// is for a gateway's model, and whether the model reads an effort level is what a request has
+/// already learned from the service, since an entry describes no model.
+pub fn named_by_entry(
+    provider: &bravebot_config::provider::Provider,
+    named: &[bravebot_config::provider::AccountModel],
+) -> Vec<Model> {
+    named
+        .iter()
+        .map(|model| {
+            account_row(
+                provider,
+                &model.id,
+                model.id.clone(),
+                model
+                    .context_window
+                    .unwrap_or(bravebot_config::provider::CONTEXT_WINDOW),
+                true,
+                Advertised::default(),
+            )
+        })
+        .collect()
+}
+
+/// The model names offered where the account's listing cannot be read
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// Names only, so a row takes the window and the label a model the listing did not describe has.
+/// They are the seven rows the service's listing offered a signed-in account, each of which answered
+/// a request. A release changes this list; no reply, model or settings file does. The `-fast` names
+/// opencode offers are not here, since the service refuses them as models. It accepts the
+/// `service_tier` `priority`, which this program does not send.
+const COMPILED_ACCOUNT_MODELS: &[&str] = &[
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
+];
+
+/// The picker rows of the compiled list, under the account's identifier for the reason
+/// [`offered_by_account`] gives.
+pub fn compiled_for_account(provider: &bravebot_config::provider::Provider) -> Vec<Model> {
+    COMPILED_ACCOUNT_MODELS
+        .iter()
+        .map(|slug| {
+            account_row(
+                provider,
+                slug,
+                (*slug).to_string(),
+                bravebot_config::provider::CONTEXT_WINDOW,
+                true,
+                Advertised::default(),
+            )
+        })
+        .collect()
+}
+
+/// One row of the account's roster, whichever way the model came to be named.
+///
+/// The key carries the account's identifier, since that is what selects the account over the
+/// `openai` gateway offering a model of the same name, and the row is the account's own
+/// subscription, which is not Brave's. `listed_to_read_effort` is what the source of the row said
+/// about the level, and the answer a request has already learned from the service is applied to it.
+fn account_row(
+    provider: &bravebot_config::provider::Provider,
+    slug: &str,
+    display_name: String,
+    window: u64,
+    listed_to_read_effort: bool,
+    advertised: Advertised,
+) -> Model {
+    Model {
+        key: format!("{}/{slug}", provider.id),
+        display_name,
+        premium: false,
+        provider: Some(provider.display_name().to_string()),
+        conversation_tokens: Some(window),
+        reads_effort: listed_to_read_effort
+            && crate::reads_effort(&provider.completion_url(), slug),
+        advertised,
+    }
 }
 
 /// The envelope a gateway's roster arrives in.
@@ -1437,6 +1526,112 @@ mod tests {
         assert_eq!(
             models[0].advertised.input_modalities,
             ["text".to_string(), "image".to_string()]
+        );
+    }
+
+    /// CHATGPT-9: a model an entry names is a row under the account's identifier, since a bare name
+    /// would select the `openai` gateway's model of that name. It carries the window the entry
+    /// stated and the assumed one where it stated none, which is the budget a turn compacts against,
+    /// and it is the account's own subscription and not Leo's. No listing describes it, so it is
+    /// not one that says it reads no effort level (BACKEND-22): a level goes out to be judged at the
+    /// far end.
+    #[test]
+    fn the_models_an_entry_names_are_rows_under_the_accounts_identifier_with_the_window_it_states()
+    {
+        let named = |id: &str, window: Option<u64>| bravebot_config::provider::AccountModel {
+            id: id.to_string(),
+            context_window: window,
+        };
+        let rows = named_by_entry(
+            &bravebot_config::provider::Provider::chatgpt_account(),
+            &[named("gpt-big", Some(400_000)), named("gpt-plain", None)],
+        );
+
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(keys, ["chatgpt/gpt-big", "chatgpt/gpt-plain"]);
+        assert_eq!(rows[0].display_name, "gpt-big");
+        assert_eq!(rows[0].conversation_tokens, Some(400_000));
+        assert_eq!(
+            rows[1].conversation_tokens,
+            Some(bravebot_config::provider::CONTEXT_WINDOW),
+            "a window the entry does not state is the assumed one"
+        );
+        for row in &rows {
+            assert_eq!(row.provider.as_deref(), Some("ChatGPT"));
+            assert!(!row.premium, "the account's subscription is not Leo's");
+            assert_eq!(row.advertised, Advertised::default());
+            assert!(
+                row.reads_effort,
+                "{} was taken to read no effort level, which no listing said of it",
+                row.key
+            );
+        }
+    }
+
+    /// CHATGPT-9: the compiled list is rows under the account's identifier, one to a name, each
+    /// with the assumed window and no advertised capability, and it is the account's own
+    /// subscription and not Leo's. A row keyed by the bare name would select the `openai` gateway's
+    /// model of that name, and a repeated key is a row nobody could tell from the first.
+    #[test]
+    fn the_compiled_list_is_rows_under_the_accounts_identifier_one_to_a_name() {
+        let rows = compiled_for_account(&bravebot_config::provider::Provider::chatgpt_account());
+
+        assert!(
+            !rows.is_empty(),
+            "a picker with no model offers nothing to pick"
+        );
+        let mut seen = std::collections::HashSet::new();
+        for row in &rows {
+            let name = row
+                .key
+                .strip_prefix("chatgpt/")
+                .unwrap_or_else(|| panic!("{} is not under the account's identifier", row.key));
+            assert!(
+                !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-.".contains(c)),
+                "{name} is not a name a request can carry as the model"
+            );
+            assert!(seen.insert(row.key.clone()), "{} appears twice", row.key);
+            assert_eq!(row.display_name, name);
+            assert_eq!(
+                row.conversation_tokens,
+                Some(bravebot_config::provider::CONTEXT_WINDOW),
+                "a name carries the assumed window"
+            );
+            assert_eq!(row.provider.as_deref(), Some("ChatGPT"));
+            assert!(!row.premium, "the account's subscription is not Leo's");
+            assert!(
+                row.reads_effort,
+                "{} was said to take no effort level, which no source says",
+                row.key
+            );
+            assert_eq!(row.advertised, Advertised::default());
+        }
+    }
+
+    /// CHATGPT-9: the compiled list is the seven models the service listed for a signed-in account
+    /// and accepted. The list opencode offers has sixteen names, and the service refuses nine of
+    /// them as models (`gpt-5.5` and every `-fast` name), so a picker built on it offers rows that
+    /// fail at the first request. An exact list fails for a restored name and for a `-fast` name
+    /// added again.
+    #[test]
+    fn the_compiled_list_is_the_seven_models_the_service_offered() {
+        let rows = compiled_for_account(&bravebot_config::provider::Provider::chatgpt_account());
+
+        let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "chatgpt/gpt-5.6-luna",
+                "chatgpt/gpt-5.6-sol",
+                "chatgpt/gpt-5.6-terra",
+                "chatgpt/gpt-6-astra",
+                "chatgpt/gpt-6-luna",
+                "chatgpt/gpt-6-sol",
+                "chatgpt/gpt-6.1-sol",
+            ]
         );
     }
 }

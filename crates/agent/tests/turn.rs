@@ -4161,9 +4161,18 @@ struct RecordingConfirmer {
     /// A mode the person "chooses" while the first question is on screen, for the tests about a
     /// mode that changes in the middle of a turn.
     switching: Option<(bravebot_agent::LiveMode, bravebot_agent::PermissionMode)>,
+    /// Whether a `run` line is approved, for the tests where a program rewrites a file between two
+    /// writes. Refused unless a test asked.
+    runs_approved: bool,
 }
 
 impl RecordingConfirmer {
+    /// Also approves every `run` line it is asked about.
+    fn and_approving_runs(mut self) -> Self {
+        self.runs_approved = true;
+        self
+    }
+
     /// Approves, and changes the live mode to `to` while it is being asked, as a key pressed over a
     /// prompt would.
     fn approving_while_the_mode_changes(
@@ -4182,6 +4191,7 @@ impl RecordingConfirmer {
             decision: bravebot_agent::WriteDecision::approve(),
             later: None,
             switching: None,
+            runs_approved: false,
         }
     }
 
@@ -4191,6 +4201,7 @@ impl RecordingConfirmer {
             decision: bravebot_agent::WriteDecision::reject(),
             later: None,
             switching: None,
+            runs_approved: false,
         }
     }
 
@@ -4202,6 +4213,7 @@ impl RecordingConfirmer {
             decision: bravebot_agent::WriteDecision::approve(),
             later: Some(bravebot_agent::WriteDecision::reject()),
             switching: None,
+            runs_approved: false,
         }
     }
 }
@@ -4239,7 +4251,10 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         if let Some((live, to)) = &self.switching {
             live.set(*to);
         }
-        bravebot_agent::RunDecision::reject()
+        match self.runs_approved {
+            true => bravebot_agent::RunDecision::approve(),
+            false => bravebot_agent::RunDecision::reject(),
+        }
     }
 
     fn confirm_read_output(
@@ -14415,6 +14430,356 @@ fn a_file_a_processor_left_alone_stays_exactly_as_it_was() {
     );
 }
 
+/// What a turn left behind for the tests of a write that puts a slot back where it came from.
+struct WroteBack {
+    confirmer: RecordingConfirmer,
+    sink: RecordingSink,
+    bodies: Vec<String>,
+}
+
+/// Runs one turn over a workspace nobody vouched for any path of, so a write to a path nobody has
+/// written yet is put to the confirmer, with the replies the planner gives in order.
+fn run_over_files_nobody_vouched_for(
+    scratch: &Scratch,
+    task: &str,
+    replies: Vec<String>,
+) -> WroteBack {
+    run_over_files_nobody_vouched_for_asking(
+        scratch,
+        task,
+        replies,
+        RecordingConfirmer::approving(),
+    )
+}
+
+/// [`run_over_files_nobody_vouched_for`] with the person's answers given by `confirmer`.
+fn run_over_files_nobody_vouched_for_asking(
+    scratch: &Scratch,
+    task: &str,
+    replies: Vec<String>,
+    mut confirmer: RecordingConfirmer,
+) -> WroteBack {
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(replies);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new(task),
+        &mut confirmer,
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+    )
+    .expect("turn runs");
+    WroteBack {
+        confirmer,
+        sink,
+        bodies: received.try_iter().collect(),
+    }
+}
+
+/// WRITE-4. The kernel's record of which file a slot was read from is compared with the
+/// destination as a name, and only an identical name is a write that changes nothing. A different
+/// path and the same file spelled with a leading `./` are each put to the person, who is the only
+/// party that sees which file is being rewritten. The same file spelled absolutely is refused by
+/// the workspace before any question, so it is neither asked about nor skipped.
+///
+/// Fails if the comparison is made on the file rather than the spelling (a normalised or resolved
+/// path), or if any destination is let through because the slot came from a file in the same
+/// directory.
+#[test]
+fn a_slot_written_to_another_path_or_another_spelling_of_its_file_is_asked_about() {
+    let scratch = Scratch::new("write-back-spellings");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/x.txt"), "vendor bytes\n").unwrap();
+    let absolute = scratch.path.canonicalize().unwrap().join("vendor/x.txt");
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "copy vendor/x.txt around",
+        vec![
+            tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"other.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"./vendor/x.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                &serde_json::json!({
+                    "path": absolute.to_str().expect("a utf-8 scratch path"),
+                    "contents_ref": "ref:1",
+                })
+                .to_string(),
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert_eq!(
+        done.confirmer
+            .seen
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        ["other.txt", "./vendor/x.txt"],
+        "a write of a slot to a name other than its file's own was not put to the person"
+    );
+    assert!(
+        done.bodies
+            .last()
+            .is_some_and(|body| body.contains("refusing to touch it as typed")),
+        "the absolute spelling of a file inside the workspace was not refused"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("other.txt")).unwrap(),
+        "vendor bytes\n",
+        "the write the person agreed to did not land"
+    );
+    assert!(
+        !done
+            .bodies
+            .iter()
+            .any(|body| body.contains("holds what ref:1 holds")),
+        "a write was reported as already done"
+    );
+}
+
+/// WRITE-4. A slot whose bytes were taken from X, and then X rewritten, is not a copy of X any
+/// more: writing the slot to X is put to the person and puts the bytes it holds back in the file.
+/// The slot is filled when something first needs its bytes, here the write to `copy.txt`, so the
+/// rewrite comes after the bytes were taken.
+///
+/// Fails if the write is dropped on the strength of where the slot was read from alone, which
+/// leaves the confirmer with one question fewer and the file holding the rewrite.
+#[test]
+fn a_slot_written_back_to_its_file_after_the_file_was_rewritten_is_asked_about_and_restores_it() {
+    let scratch = Scratch::new("write-back-after-rewrite");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    let original = "vendor bytes\n";
+    std::fs::write(scratch.path.join("vendor/x.txt"), original).unwrap();
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "rewrite vendor/x.txt, then put back what it held",
+        vec![
+            tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents":"rewritten\n"}"#,
+            ),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert_eq!(
+        done.confirmer.seen.len(),
+        3,
+        "the restoring write was not put to the person: {:?}",
+        done.confirmer
+            .seen
+            .iter()
+            .map(|r| &r.path)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("vendor/x.txt")).unwrap(),
+        original,
+        "the file does not hold the bytes the slot was read as"
+    );
+    assert!(
+        !done
+            .bodies
+            .iter()
+            .any(|body| body.contains("holds what ref:1 holds")),
+        "the planner was told a rewritten file held what the slot held"
+    );
+}
+
+/// WRITE-4. The same as the test above, with the file rewritten by a `run` line instead of by
+/// `write_file`: by a redirection the line names, and by a program that opens the file itself
+/// (`cp`, `sed -i`), which no part of the line names as a destination. Either way the slot is no
+/// longer a copy of the file, so writing it back is put to the person and restores the bytes.
+///
+/// Fails if the write is dropped on the strength of where the slot was read from alone after a
+/// program rewrote the file.
+#[test]
+fn a_slot_written_back_to_its_file_after_a_run_line_rewrote_the_file_is_asked_about_and_restores_it()
+ {
+    for (name, command) in [
+        ("redirection", "echo changed > vendor/x.txt"),
+        ("cp", "cp other.txt vendor/x.txt"),
+        ("sed", "sed -i.bak s/vendor/changed/ vendor/x.txt"),
+    ] {
+        let scratch = Scratch::new(&format!("write-back-after-run-{name}"));
+        std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+        let original = "vendor bytes\n";
+        std::fs::write(scratch.path.join("vendor/x.txt"), original).unwrap();
+        std::fs::write(scratch.path.join("other.txt"), "other bytes\n").unwrap();
+
+        let done = run_over_files_nobody_vouched_for_asking(
+            &scratch,
+            "rewrite vendor/x.txt with a program, then put back what it held",
+            vec![
+                tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+                tool_request_2(
+                    "write_file",
+                    r#"{"path":"copy.txt","contents_ref":"ref:1"}"#,
+                ),
+                tool_request_2(
+                    "run",
+                    &serde_json::json!({ "command": command }).to_string(),
+                ),
+                tool_request_2(
+                    "write_file",
+                    r#"{"path":"vendor/x.txt","contents_ref":"ref:1"}"#,
+                ),
+                reply_with("done"),
+            ],
+            RecordingConfirmer::approving().and_approving_runs(),
+        );
+
+        // Whether the person was asked is not asserted. A program that rewrites a file leaves it
+        // untrusted, and the trust map asks nothing about untrusted bytes written to an already
+        // untrusted path, so the table decides that and not the shortcut. What the shortcut must
+        // not do is drop the write, which the checks below pin: the file holds the bytes read,
+        // the planner is told the file was replaced, and the trail has no line saying the path
+        // already held what the slot holds.
+        assert!(
+            !done
+                .bodies
+                .iter()
+                .any(|body| body.contains("holds what ref:1 holds")),
+            "{name}: the planner was told a file a program rewrote held what the slot held"
+        );
+        assert!(
+            !done.sink.events().iter().any(|event| matches!(
+                event,
+                Event::GatePassed { gate: "write", detail } if detail.contains("already holds")
+            )),
+            "{name}: the trail says the path already held what the slot holds"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.path.join("vendor/x.txt")).unwrap(),
+            original,
+            "{name}: the file does not hold the bytes the slot was read as"
+        );
+        assert!(
+            done.bodies
+                .iter()
+                .any(|body| body.contains("replaced vendor/x.txt, which was already there")),
+            "{name}: the restoring write was not carried out"
+        );
+    }
+}
+
+/// WRITE-4. A processor's answer about X has no file it was read from, so writing it to X is a
+/// change like any other and is put to the person.
+///
+/// Fails if a slot counts as unchanged because the file it was an answer about is the destination.
+#[test]
+fn a_processors_answer_written_to_the_file_it_was_about_is_asked_about() {
+    let scratch = Scratch::new("write-back-processor-answer");
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/x.txt"), "vendor bytes\n").unwrap();
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "tidy vendor/x.txt",
+        vec![
+            tool_request("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request(
+                "spawn_processor",
+                r#"{"reads":["ref:1"],"instruction":"return the whole file, tidied"}"#,
+            ),
+            processor_reply("PROCESSED CONTENTS"),
+            tool_request(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents_ref":"ref:3"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert_eq!(
+        done.confirmer.seen.len(),
+        1,
+        "a processor's answer was written over its file without a question"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("vendor/x.txt")).unwrap(),
+        "PROCESSED CONTENTS\n",
+        "the answer the person agreed to did not land"
+    );
+}
+
+/// WRITE-4. The exception: a slot the kernel filled from X, with X not written since, written to
+/// X is not put to anybody, leaves X byte for byte as it was, tells the planner what stands and
+/// leaves a `write` line in the trail saying so.
+///
+/// Fails if the shortcut is removed (the confirmer is asked about a diff with nothing in it), or
+/// if the skipped write still lands (the bytes change).
+#[test]
+fn a_slot_written_back_to_the_file_it_was_read_from_asks_nobody_and_changes_nothing() {
+    let scratch = Scratch::new("write-back-unchanged");
+    let original = "vendor bytes\r\nwith no final newline";
+    std::fs::create_dir_all(scratch.path.join("vendor")).unwrap();
+    std::fs::write(scratch.path.join("vendor/x.txt"), original).unwrap();
+
+    let done = run_over_files_nobody_vouched_for(
+        &scratch,
+        "put vendor/x.txt back as it is",
+        vec![
+            tool_request_2("read_file", r#"{"path":"vendor/x.txt"}"#),
+            tool_request_2(
+                "write_file",
+                r#"{"path":"vendor/x.txt","contents_ref":"ref:1"}"#,
+            ),
+            reply_with("done"),
+        ],
+    );
+
+    assert!(
+        done.confirmer.seen.is_empty(),
+        "a write that changes nothing was put to the user: {:?}",
+        done.confirmer.seen
+    );
+    assert_eq!(
+        std::fs::read(scratch.path.join("vendor/x.txt")).unwrap(),
+        original.as_bytes(),
+        "a write that changes nothing changed the file"
+    );
+    assert!(
+        done.bodies
+            .iter()
+            .any(|body| body.contains("holds what ref:1 holds")),
+        "the planner was not told the file already holds what the slot holds"
+    );
+    assert!(
+        done.sink.events().iter().any(|event| matches!(
+            event,
+            Event::GatePassed { gate: "write", detail }
+                if detail.contains("vendor/x.txt already holds what ref:1 holds")
+        )),
+        "the trail has no write line saying the path already holds what the slot holds: {:?}",
+        done.sink.events()
+    );
+}
+
 /// A line saying "Read(index.html)" does not say whether the model can now read that file, and
 /// that difference is the whole design. Each result says where it went.
 #[test]
@@ -20372,6 +20737,7 @@ fn a_skill_loaded_in_a_turn_is_sent_again_when_that_conversation_is_compacted() 
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -20449,6 +20815,7 @@ fn a_skill_from_an_untrusted_project_is_not_sent_again_when_the_conversation_is_
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35331,6 +35698,7 @@ fn the_summariser_asks_for_no_cache_of_the_exchange_it_gives_up() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35523,6 +35891,7 @@ fn compacting_on_request_an_untrusted_conversation_is_refused_and_leaves_no_line
     let outcome = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35784,6 +36153,7 @@ fn compacting_on_request_reaches_the_model_and_shortens_the_conversation() {
     let done = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35828,6 +36198,7 @@ fn a_stop_pressed_during_a_summary_reaches_the_request_and_leaves_the_conversati
     let error = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35889,6 +36260,7 @@ fn a_stop_pressed_while_a_summary_is_out_walks_away_from_the_request() {
     let outcome = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35933,6 +36305,7 @@ fn the_trail_says_what_a_compaction_gave_up_and_what_it_cost() {
     let done = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -35993,6 +36366,7 @@ fn a_focus_typed_after_compact_reaches_the_summariser_after_the_exchange() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36033,6 +36407,7 @@ fn the_trail_records_that_a_focus_was_given_and_never_its_words() {
         turn::compact(
             &config,
             &egress,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
             &mut conversation,
             None,
             &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36121,6 +36496,7 @@ fn a_compaction_runs_on_the_summary_model_the_settings_name() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36155,6 +36531,7 @@ fn a_compaction_with_no_summary_model_runs_on_the_sessions_own() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36209,6 +36586,7 @@ fn a_summary_model_needing_a_sign_in_refuses_the_compaction_and_leaves_the_conve
     let refused = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36261,6 +36639,7 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
     let refused = turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36299,6 +36678,7 @@ fn a_summary_model_the_machine_excludes_refuses_the_compaction_and_leaves_the_co
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36328,6 +36708,7 @@ fn a_check_runs_on_the_summary_model_the_settings_name() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36359,6 +36740,7 @@ fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36403,6 +36785,7 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
     let refused = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36449,6 +36832,7 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
     let refused = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36480,6 +36864,7 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36507,6 +36892,7 @@ fn a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_b
     let error = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36547,6 +36933,7 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
     let assessed = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36603,6 +36990,7 @@ fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined(
     let assessed = turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36630,6 +37018,7 @@ fn asking_beside_the_work_reaches_the_model_and_leaves_the_conversation_alone() 
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &conversation,
             "why is the parser recursive?",
@@ -36686,6 +37075,7 @@ fn a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered(
     let error = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &conversation,
             "why is the parser recursive?",
@@ -36730,6 +37120,7 @@ fn a_recap_is_cut_to_its_limit_and_leaves_the_conversation_alone() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::recap(&conversation),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36786,6 +37177,7 @@ fn an_enhancement_asks_for_the_draft_over_the_exchange_and_leaves_the_conversati
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::enhance(&conversation, "fix the recursion"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36840,6 +37232,7 @@ fn an_enhancement_over_an_untrusted_exchange_is_not_offered_for_the_box() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::enhance(&conversation, "fix the parser"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -36869,6 +37262,7 @@ fn a_picture_pasted_into_a_question_reaches_the_model_with_it() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "what is in [Image #1]?",
@@ -36925,6 +37319,7 @@ fn a_picture_dropped_onto_a_question_reaches_the_model_with_it() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "what is in [Image #1]?",
@@ -36967,6 +37362,7 @@ fn a_picture_pasted_into_a_question_is_named_in_the_audit_trail() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "what is in [Image #1]?",
@@ -37011,6 +37407,7 @@ fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
     turn::goal(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::goal::Check::of(&an_exchange_to_ask_beside(), "a.txt exists"),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -37036,6 +37433,7 @@ fn a_question_asked_beside_the_work_asks_for_no_cache_of_the_exchange() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "why recursive?",
@@ -37066,6 +37464,7 @@ fn an_answer_over_a_trusted_exchange_may_be_written_down() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(
             &an_exchange_to_ask_beside(),
             "why recursive?",
@@ -37103,6 +37502,7 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
     let answered = turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::about(&conversation, "why recursive?", Vec::new()),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -37180,6 +37580,7 @@ fn compacting_on_request_grants_itself_nothing_but_reaching_the_model() {
     turn::compact(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut a_long_conversation(),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -37573,8 +37974,10 @@ fn a_mode_chosen_while_a_delegate_runs_applies_to_the_rest_of_its_work() {
     );
 }
 
-/// A delegate's programs are held to what the spawning turn's are. The regression it rejects is a
-/// delegate started with confinement off, which makes spawning one the way around the profile: the
+/// A delegate's programs are held to what the spawning turn's are. A turn that asks is the one
+/// held here: a delegate of a bypass turn is given what a request would be granted
+/// (`a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not`).
+/// The regression it rejects is a delegate started with confinement off, which makes spawning one the way around the profile: the
 /// same `touch` that is refused in the turn would write outside the session from inside it. The
 /// unconfined turn is the control that the file is writable at all.
 #[test]
@@ -37631,7 +38034,7 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
             &egress,
             &workspace,
             &Task::new("HAVE-A-DELEGATE-WRITE-IT")
-                .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+                .with_permission_mode(bravebot_agent::PermissionMode::Ask)
                 .with_confined_runs(confining),
             &mut bravebot_agent::confirm::ApproveRuns,
             &mut sink,
@@ -37645,6 +38048,105 @@ fn a_delegate_of_a_confining_turn_cannot_write_outside_the_session() {
             if written { "did not write" } else { "wrote" }
         );
         let _ = std::fs::remove_dir_all(&top);
+    }
+}
+
+/// MODE-9, SANDBOX-28, PATHREQ-7: a worker of a bypass turn reaches a sibling directory with each
+/// file tool and writes it from a program, with no request, since it is lent the mode and is
+/// offered no `request_path`. The same worker of an asking turn does neither, and a reader of a
+/// bypass turn reads it and writes nothing. The regressions they reject are a delegate left with
+/// the reach a person's `/add-dir` gives (the old exception), a reach given to any delegate whatever
+/// its parent's mode, and a reader given the worker's writes.
+#[test]
+fn a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not() {
+    if cannot_confine_here() {
+        return;
+    }
+    for (permission, kind, reads, writes) in [
+        (bravebot_agent::PermissionMode::Bypass, "worker", true, true),
+        (bravebot_agent::PermissionMode::Ask, "worker", false, false),
+        (
+            bravebot_agent::PermissionMode::Bypass,
+            "reader",
+            true,
+            false,
+        ),
+    ] {
+        let label = format!("{permission:?}-{kind}");
+        let places = PathPlaces::new(&format!("delegate-{label}"));
+        std::fs::write(places.beside.join("notes.txt"), "NOTES-CONTENT").unwrap();
+        let by_tool = places.beside.join("by-tool.txt");
+        let by_program = places.beside.join("by-program.txt");
+        let scratch = Scratch::new(&format!("delegate-reach-{label}"));
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let (endpoint, received) = serve_by_marker(vec![
+            (
+                "HAVE-A-DELEGATE-REACH",
+                vec![
+                    tool_request(
+                        "spawn_agent",
+                        &format!(r#"{{"kind":"{kind}","task":"REACH-THE-SIBLING"}}"#),
+                    ),
+                    reply_with("waiting"),
+                    reply_with("done"),
+                ],
+            ),
+            (
+                "REACH-THE-SIBLING",
+                vec![
+                    tool_request(
+                        "read_file",
+                        &serde_json::json!({ "path": places.beside.join("notes.txt") }).to_string(),
+                    ),
+                    tool_request(
+                        "write_file",
+                        &serde_json::json!({ "path": by_tool, "contents": "BY-TOOL" }).to_string(),
+                    ),
+                    tool_request(
+                        "run",
+                        &serde_json::json!({ "command": format!("touch {}", by_program.display()) })
+                            .to_string(),
+                    ),
+                    reply_with("tried"),
+                ],
+            ),
+        ]);
+        let config = config_for(&endpoint);
+        let egress = bravebot_net::Egress::new();
+        let mut sink = RecordingSink::new();
+        let task = Task::new("HAVE-A-DELEGATE-REACH")
+            .with_profile(Some(places.home.clone()))
+            .with_permission_mode(permission)
+            .with_confined_runs(true)
+            .with_sandbox_mode(bravebot_sandbox::SandboxMode::WorkspaceWrite);
+        let mut approving = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+        let mut confirmer = bravebot_agent::Confining::new(&mut approving, permission, false);
+        turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &task,
+            &mut bravebot_agent::Conversation::new(),
+            &mut confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .outcome
+        .expect("the turn runs");
+        let bodies: Vec<String> = received.try_iter().collect();
+        assert_eq!(
+            bodies.iter().any(|body| body.contains("NOTES-CONTENT")),
+            reads,
+            "{label}: the read: {:?}",
+            bodies.last()
+        );
+        assert_eq!(by_tool.exists(), writes, "{label}: write_file");
+        assert_eq!(by_program.exists(), writes, "{label}: a program's write");
+        assert!(workspace.added_directories().is_empty(), "{label}: opened");
     }
 }
 
@@ -42403,6 +42905,112 @@ fn a_delegate_cannot_write_outside_the_files_its_definition_names() {
     assert!(
         told > 0,
         "the delegate was not told why its write was refused"
+    );
+}
+
+/// DELEGATE-28, MODE-9: a delegate of a bypass turn that names `writes:` is refused a file its
+/// patterns do not cover in a sibling directory the mode reaches, as it is inside the workspace, by
+/// a tool and by a redirection, and told the limit is the reason. A write inside the pattern is not
+/// affected. The regression it rejects is the mode's reach being given to the delegate in place of
+/// its restriction, so the limit holds only for the files the workspace holds.
+#[test]
+fn a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("delegate-writes-bypass");
+    let scratch = Scratch::new("delegate-writes-bypass");
+    let home = Scratch::new("delegate-writes-bypass-home");
+    std::fs::create_dir_all(home.path.join("agents")).expect("create the definitions directory");
+    std::fs::write(
+        home.path.join("agents").join("scribe.md"),
+        "---\nname: scribe\ndescription: Writes the docs.\nkind: worker\nwrites: docs/**\n---\n\nWRITE-DOCS\n",
+    )
+    .expect("write the definition");
+    std::fs::create_dir_all(scratch.path.join("docs")).expect("create docs");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let by_tool = places.beside.join("by-tool.txt");
+    let by_redirection = places.beside.join("by-redirection.txt");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HAVE-THE-SCRIBE-DO-IT",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"scribe","task":"EDIT-THE-FILES"}"#,
+                ),
+                reply_with("waiting"),
+                reply_with("the scribe finished"),
+            ],
+        ),
+        (
+            "EDIT-THE-FILES",
+            vec![
+                tool_request(
+                    "write_file",
+                    &serde_json::json!({ "path": by_tool, "contents": "clobbered" }).to_string(),
+                ),
+                tool_request(
+                    "run",
+                    &serde_json::json!({
+                        "command": format!("echo clobbered > {}", by_redirection.display()),
+                    })
+                    .to_string(),
+                ),
+                tool_request(
+                    "write_file",
+                    r#"{"path":"docs/a.md","contents":"documented"}"#,
+                ),
+                reply_with("done"),
+            ],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut approving = RecordingConfirmer::approving();
+    let mut confirmer = bravebot_agent::Confining::new(
+        &mut approving,
+        bravebot_agent::PermissionMode::Bypass,
+        false,
+    );
+
+    turns::run_with_trust(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("HAVE-THE-SCRIBE-DO-IT")
+            .with_home(Some(home.path.clone()))
+            .with_profile(Some(places.home.clone()))
+            .with_permission_mode(bravebot_agent::PermissionMode::Bypass)
+            .with_confined_runs(true),
+        &mut confirmer,
+        &mut sink,
+        trusting_the_workspace(),
+    )
+    .expect("turn runs");
+
+    assert!(
+        !by_tool.exists(),
+        "a tool write outside the patterns landed"
+    );
+    assert!(
+        !by_redirection.exists(),
+        "a redirection outside the patterns landed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("docs/a.md")).unwrap(),
+        "documented"
+    );
+    let told = every_request(&received)
+        .iter()
+        .filter(|body| !body.contains("HAVE-THE-SCRIBE-DO-IT"))
+        .filter(|body| body.contains("limits the files you may write"))
+        .count();
+    assert!(
+        told > 0,
+        "the delegate was not told why its writes were refused"
     );
 }
 
@@ -54492,6 +55100,7 @@ fn a_hook_fires_when_a_person_compacts_the_conversation() {
     turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54545,6 +55154,7 @@ fn a_compaction_runs_no_hook_that_was_written_for_another_moment() {
     turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54661,6 +55271,7 @@ fn a_summary_a_person_asked_for_and_the_gate_refused_fires_no_hook() {
     let outcome = turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54706,6 +55317,7 @@ fn a_conversation_with_nothing_to_cut_fires_no_hook() {
     let outcome = turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut asked_for,
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
@@ -54840,6 +55452,7 @@ fn a_failing_hook_does_not_undo_a_compaction_a_person_asked_for() {
     let done = turn::compact(
         &config,
         &bravebot_net::Egress::new(),
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         &mut conversation,
         None,
         &mut reporter,
@@ -65564,8 +66177,11 @@ fn a_failed_advisor_call_tells_the_planner_only_the_category() {
     .expect("a failed consultation does not fail the turn");
     let last = every_request(&received).pop().expect("a last request");
     assert!(last.contains("error: advisor request"), "got: {last}");
+    // The request names the scratch directory, which holds this process's id, and an id can hold
+    // the status the service replied with.
+    let without_the_process_id = last.replace(&std::process::id().to_string(), "");
     assert!(
-        !last.contains("401"),
+        !without_the_process_id.contains("401"),
         "the planner was told more than the category: {last}"
     );
 }
@@ -68395,194 +69011,473 @@ fn outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools() {
     }
 }
 
-/// PATHREQ-7: a file tool's refusal names `request_path` where the session grants one unasked and
-/// opens the directory with it, and only there, so the planner makes the call when it would succeed
-/// and asks for `/add-dir` when it would not.
-#[test]
-fn a_file_tool_refusal_names_request_path_only_where_a_grant_is_unasked() {
-    if cannot_confine_here() {
-        return;
+/// The calls of one turn that each name `beside`, the directory next to the session, with a tool
+/// that names a path, and the file each leaves or finds there.
+fn calls_naming(
+    beside: &std::path::Path,
+    with_programs: bool,
+) -> Vec<(&'static str, serde_json::Value)> {
+    let notes = beside.join("notes.txt").display().to_string();
+    let named = beside.display().to_string();
+    let mut calls = vec![
+        ("read_file", serde_json::json!({ "path": notes })),
+        (
+            "edit_file",
+            serde_json::json!({ "path": notes, "old_text": "NOTES-CONTENT", "new_text": "NOTES-EDITED" }),
+        ),
+        ("list_files", serde_json::json!({ "directory": named })),
+        (
+            "search",
+            serde_json::json!({ "pattern": "NOTES-EDITED", "directory": named }),
+        ),
+        ("repo_map", serde_json::json!({ "directory": named })),
+        (
+            "write_file",
+            serde_json::json!({
+                "path": beside.join("created.txt").display().to_string(),
+                "contents": "CREATED-CONTENT",
+            }),
+        ),
+    ];
+    calls.push((
+        "read_git",
+        serde_json::json!({
+            "query": "log",
+            "repository": beside.join("repo").display().to_string(),
+        }),
+    ));
+    if with_programs {
+        calls.push(running(&format!("ls {named}")));
+        calls.push((
+            "run",
+            serde_json::json!({
+                "command": format!("echo REDIRECTED > {}", beside.join("redirected.txt").display()),
+            }),
+        ));
+        calls.push((
+            "run",
+            serde_json::json!({ "command": "pwd", "directory": named }),
+        ));
     }
-    for permission in [
-        bravebot_agent::PermissionMode::Ask,
-        bravebot_agent::PermissionMode::Bypass,
-    ] {
-        let places = PathPlaces::new("refusal-names-grant");
-        let target = places.beside.join("notes.txt");
-        std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
-        let mut asked =
-            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
-        let calls = [(
-            "read_file",
-            serde_json::json!({ "path": target.display().to_string() }),
-        )];
-        let turn = if permission == bravebot_agent::PermissionMode::Bypass {
-            path_turn(
-                "refusal-names-grant",
-                &places,
-                &calls,
-                bravebot_sandbox::SandboxMode::WorkspaceWrite,
-                permission,
-                trusting_the_workspace(),
-                None,
-                &mut bypassing(&mut asked),
-            )
-        } else {
-            path_turn(
-                "refusal-names-grant",
-                &places,
-                &calls,
-                bravebot_sandbox::SandboxMode::WorkspaceWrite,
-                permission,
-                trusting_the_workspace(),
-                None,
-                &mut asked,
-            )
-        };
-        let read = message_from(&turn.results[0], "Result of read_file");
-        assert!(
-            read.contains("resolves outside the workspace") && read.contains("/add-dir"),
-            "{permission:?}: the refusal is not the one asked about: {read}"
-        );
-        assert_eq!(
-            read.contains("request_path"),
-            permission == bravebot_agent::PermissionMode::Bypass,
-            "{permission:?}: {read}"
-        );
-    }
+    calls
 }
 
-/// PATHREQ-5, PATHREQ-7: a file tool's refusal names `request_path` only where the session accepts
-/// the call. Under the sandbox mode `off` and in a workspace nobody trusted, the mode that answers
-/// every question has nobody to ask and the tool refuses the request first, so a refusal that sent
-/// the planner there would name a road that is closed and leave the person to be asked for
-/// `/add-dir` after all. The same turn then makes the call the refusal would have named and checks
-/// that the tool refuses it.
+/// MODE-4, PATHREQ-7: under bypass every tool that names a path reaches a sibling directory with no
+/// request and no question, whatever the sandbox mode, and nothing is opened, trusted or granted. The
+/// trail records the first reach naming the mode, the tool and the field. The regressions it rejects
+/// are a refusal under one sandbox mode (a reach that waited on `request_path`, which `off` and
+/// `strict` do not accept), a directory opened for the next call (`/add-dir` lists it), and a reach
+/// recorded as trust.
 #[test]
-fn a_file_tool_refusal_names_request_path_only_where_the_session_accepts_one() {
+fn under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request() {
     if cannot_confine_here() {
         return;
     }
-    for (label, mode, trust) in [
+    for (label, mode) in [
         (
-            "off",
-            bravebot_sandbox::SandboxMode::Off,
-            trusting_the_workspace(),
-        ),
-        (
-            "untrusted",
+            "workspace-write",
             bravebot_sandbox::SandboxMode::WorkspaceWrite,
-            bravebot_core::trust::TrustStore::new("/work"),
         ),
+        ("strict", bravebot_sandbox::SandboxMode::Strict),
+        ("off", bravebot_sandbox::SandboxMode::Off),
     ] {
-        let name = format!("refusal-closed-road-{label}");
+        let name = format!("bypass-reach-{label}");
         let places = PathPlaces::new(&name);
         let target = places.beside.join("notes.txt");
         std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+        repository::commit_files(
+            &places.beside.join("repo"),
+            &[("README", "hello\n")],
+            "A-COMMIT-BESIDE",
+        );
+        // A `strict` stage is not started on a kernel below Landlock ABI 9 (SANDBOX-3).
+        let with_programs =
+            mode != bravebot_sandbox::SandboxMode::Strict || !strict_cannot_run_here();
+        let calls = calls_naming(&places.beside, with_programs);
         let mut asked =
             AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
         let paths = asked.paths.clone();
         let turn = path_turn(
             &name,
             &places,
-            &[
-                (
-                    "read_file",
-                    serde_json::json!({ "path": target.display().to_string() }),
-                ),
-                (
-                    "list_files",
-                    serde_json::json!({ "directory": places.beside.display().to_string() }),
-                ),
-                asking_for(&places.beside, false),
-            ],
+            &calls,
             mode,
             bravebot_agent::PermissionMode::Bypass,
-            trust,
+            trusting_the_workspace(),
             None,
             &mut bypassing(&mut asked),
         );
-        let read = message_from(&turn.results[0], "Result of read_file");
         assert!(
-            read.contains("resolves outside the workspace") && read.contains("/add-dir"),
-            "{label}: the refusal is not the one asked about: {read}"
+            paths.lock().unwrap().is_empty(),
+            "{label}: a path was asked"
         );
-        assert!(!read.contains("request_path"), "{label}: {read}");
-        let listed = message_from(&turn.results[1], "Result of list_files");
+        for (at, (tool, _)) in calls.iter().enumerate() {
+            let said = newest_tool_result(turn.results[at].clone());
+            assert!(
+                !said.contains("resolves outside the workspace")
+                    && !said.contains("refusing to touch"),
+                "{label}, {tool} (call {at}): {said}"
+            );
+        }
         assert!(
-            listed.contains("resolves outside the workspace") && listed.contains("/add-dir"),
-            "{label}: the refusal is not the one asked about: {listed}"
-        );
-        assert!(!listed.contains("request_path"), "{label}: {listed}");
-        assert!(
-            path_result(&turn.results[2]).contains("does not accept a request for a path"),
+            message_from(&turn.results[0], "Result of read_file").contains("NOTES-CONTENT"),
             "{label}: {}",
-            turn.results[2]
+            turn.results[0]
         );
-        assert!(paths.lock().unwrap().is_empty(), "{label}: asked");
-        assert!(turn.workspace.path_reach().is_empty(), "{label}: held");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "NOTES-EDITED",
+            "{label}: edit_file"
+        );
+        // The repository is reached, and then judged as one in the workspace nobody vouched for is:
+        // history is read only from a `.git` the map trusts in full, which nothing outside the
+        // workspace has said of this one.
+        assert!(
+            newest_tool_result(turn.results[6].clone())
+                .contains("is not a directory this session trusts in full"),
+            "{label}: read_git: {}",
+            newest_tool_result(turn.results[6].clone())
+        );
+        assert_eq!(
+            std::fs::read_to_string(places.beside.join("created.txt")).unwrap(),
+            "CREATED-CONTENT",
+            "{label}: write_file"
+        );
+        if with_programs {
+            assert!(
+                places.beside.join("redirected.txt").exists(),
+                "{label}: a redirection into the directory did not run: {}",
+                newest_tool_result(turn.results[8].clone())
+            );
+        }
         assert!(
             turn.workspace.added_directories().is_empty(),
-            "{label}: opened"
+            "{label}: the directory was opened"
         );
+        assert!(turn.workspace.path_reach().is_empty(), "{label}: a grant");
+        assert!(
+            !turn.trust.is_trusted(&places.beside.display().to_string()),
+            "{label}: the directory was trusted"
+        );
+        let reach = turn
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::GatePassed {
+                    gate: "path_reach",
+                    detail,
+                } if detail.contains("file tools reach") => Some(detail.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reach.len(),
+            1,
+            "{label}: one record for the directory: {reach:?}"
+        );
+        assert!(
+            reach[0].contains("bypass mode") && reach[0].contains("of read_file"),
+            "{label}: {}",
+            reach[0]
+        );
+        assert_eq!(turn.workspace.reached_directories().len(), 1, "{label}");
     }
 }
 
-/// PATHREQ-7: a refused directory is told of `request_path` under the same condition a refused
-/// file is. The refusal for a directory offers to open the directory itself, which is a different
-/// remedy from the one for a file, and the hint follows both.
+/// MODE-4, PATHREQ-7: outside bypass the same calls are refused as before, with the sentence naming
+/// `/add-dir` and no mention of `request_path`, which a refusal no longer sends the planner to. The
+/// regression it rejects is a reach given by something other than the mode: a refusal missing in
+/// asking, accepting edits or planning, or a sentence about a call that would not succeed.
 #[test]
-fn a_refused_directory_names_request_path_only_where_a_grant_is_unasked() {
+fn outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path() {
     if cannot_confine_here() {
         return;
     }
     for permission in [
         bravebot_agent::PermissionMode::Ask,
-        bravebot_agent::PermissionMode::Bypass,
+        bravebot_agent::PermissionMode::AcceptEdits,
+        bravebot_agent::PermissionMode::Plan,
     ] {
-        let places = PathPlaces::new("directory-refusal-names-grant");
+        let name = format!("no-bypass-{permission:?}");
+        let places = PathPlaces::new(&name);
+        let target = places.beside.join("notes.txt");
+        std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+        let calls = [
+            (
+                "read_file",
+                serde_json::json!({ "path": target.display().to_string() }),
+            ),
+            (
+                "list_files",
+                serde_json::json!({ "directory": places.beside.display().to_string() }),
+            ),
+            (
+                "search",
+                serde_json::json!({
+                    "pattern": "NOTES",
+                    "directory": places.beside.display().to_string(),
+                }),
+            ),
+        ];
         let mut asked =
             AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
-        let calls = [(
-            "list_files",
-            serde_json::json!({ "directory": places.beside.display().to_string() }),
-        )];
-        let turn = if permission == bravebot_agent::PermissionMode::Bypass {
-            path_turn(
-                "directory-refusal-names-grant",
-                &places,
-                &calls,
-                bravebot_sandbox::SandboxMode::WorkspaceWrite,
-                permission,
-                trusting_the_workspace(),
-                None,
-                &mut bypassing(&mut asked),
-            )
-        } else {
-            path_turn(
-                "directory-refusal-names-grant",
-                &places,
-                &calls,
-                bravebot_sandbox::SandboxMode::WorkspaceWrite,
-                permission,
-                trusting_the_workspace(),
-                None,
-                &mut asked,
-            )
-        };
-        let listed = message_from(&turn.results[0], "Result of list_files");
-        assert!(
-            listed.contains("resolves outside the workspace")
-                && listed.contains("open the directory this path names")
-                && listed.contains("/add-dir"),
-            "{permission:?}: the refusal is not the one asked about: {listed}"
+        let turn = path_turn(
+            &name,
+            &places,
+            &calls,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            permission,
+            trusting_the_workspace(),
+            None,
+            &mut asked,
         );
-        assert_eq!(
-            listed.contains("request_path"),
-            permission == bravebot_agent::PermissionMode::Bypass,
-            "{permission:?}: {listed}"
+        for (at, (tool, _)) in calls.iter().enumerate() {
+            let said = message_from(&turn.results[at], &format!("Result of {tool}"));
+            assert!(
+                said.contains("resolves outside the workspace") && said.contains("/add-dir"),
+                "{permission:?}, {tool}: {said}"
+            );
+            assert!(
+                !said.contains("request_path"),
+                "{permission:?}, {tool}: {said}"
+            );
+        }
+        assert!(
+            turn.workspace.reached_directories().is_empty(),
+            "{permission:?}"
         );
     }
+}
+
+/// MODE-8, PATHREQ-7: the reach is the live mode's. A turn that leaves bypass between two calls is
+/// refused the second, which a reach stored when the turn began would let through.
+#[test]
+fn leaving_bypass_with_the_key_ends_the_reach_to_a_sibling_directory() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-left");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+    let call = (
+        "read_file",
+        serde_json::json!({ "path": target.display().to_string() }),
+    );
+    // The first call runs in bypass and the second after the key moves the mode on: a confirmer
+    // that changes it as it answers the first call's question would be a different test, so the
+    // second turn begins in asking, which is the mode a key press leaves it in.
+    let mut asked = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let in_bypass = path_turn(
+        "bypass-left-first",
+        &places,
+        std::slice::from_ref(&call),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    assert!(
+        message_from(&in_bypass.results[0], "Result of read_file").contains("NOTES-CONTENT"),
+        "{}",
+        in_bypass.results[0]
+    );
+    let after = path_turn(
+        "bypass-left-second",
+        &places,
+        &[call],
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Ask,
+        trusting_the_workspace(),
+        None,
+        &mut asked,
+    );
+    assert!(
+        message_from(&after.results[0], "Result of read_file")
+            .contains("resolves outside the workspace"),
+        "{}",
+        after.results[0]
+    );
+}
+
+/// PATHREQ-3, PATHREQ-5, PERM-16: under bypass a path in each refusal category is refused with the
+/// sentence it always had and reaches nothing: the home directory, `~/.ssh`, a link that leads
+/// there, a write in a workspace the person has not trusted, and a read with
+/// `permissions.readsStayInWorkspace` set. The control in each turn is a path beside the session,
+/// which is reached, so a refusal that came from the turn failing is not taken for the rule.
+#[cfg(unix)]
+#[test]
+fn under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-reach-refused");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+    std::fs::write(places.home.join(".ssh/id"), "KEY").expect("a key");
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).expect("a link into ~/.ssh");
+    let control = (
+        "read_file",
+        serde_json::json!({ "path": target.display().to_string() }),
+    );
+    let refused = [
+        ("home", places.home.display().to_string()),
+        ("ssh", places.home.join(".ssh/id").display().to_string()),
+        ("a link into ssh", link.join("id").display().to_string()),
+    ];
+    for write in [false, true] {
+        let mut calls: Vec<(&str, serde_json::Value)> = vec![control.clone()];
+        for (_, path) in &refused {
+            calls.push(if write {
+                (
+                    "write_file",
+                    serde_json::json!({ "path": path, "contents": "X" }),
+                )
+            } else {
+                ("read_file", serde_json::json!({ "path": path }))
+            });
+        }
+        // A redirection is a write: into a persistence location it is refused, where a read of the
+        // same directory is not.
+        let autostart = places.home.join(".config/autostart");
+        std::fs::create_dir_all(&autostart).expect("a persistence location");
+        if write {
+            calls.push(running(&format!(
+                "echo X > {}",
+                autostart.join("new.desktop").display()
+            )));
+        }
+        let mut asked =
+            AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+        let turn = path_turn(
+            &format!("bypass-reach-refused-{write}"),
+            &places,
+            &calls,
+            bravebot_sandbox::SandboxMode::WorkspaceWrite,
+            bravebot_agent::PermissionMode::Bypass,
+            trusting_the_workspace(),
+            None,
+            &mut bypassing(&mut asked),
+        );
+        assert!(
+            message_from(&turn.results[0], "Result of read_file").contains("NOTES-CONTENT"),
+            "write {write}: the control was refused: {}",
+            turn.results[0]
+        );
+        for (at, (what, _)) in refused.iter().enumerate() {
+            let said = newest_tool_result(turn.results[at + 1].clone());
+            assert!(
+                said.contains("outside the workspace"),
+                "{what}, write {write}: {said}"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(places.home.join(".ssh/id")).unwrap(),
+            "KEY",
+            "write {write}: a refused write landed"
+        );
+        if write {
+            let said = newest_tool_result(turn.results[calls.len() - 1].clone());
+            assert!(
+                said.contains("outside the workspace"),
+                "a redirection: {said}"
+            );
+            assert!(
+                !autostart.join("new.desktop").exists(),
+                "a redirection wrote a persistence location"
+            );
+        }
+    }
+
+    // A workspace the person has not trusted reaches nothing, the control included.
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let distrusted = path_turn(
+        "bypass-reach-distrusted",
+        &places,
+        std::slice::from_ref(&control),
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        bravebot_core::trust::TrustStore::new("/work"),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    assert!(
+        message_from(&distrusted.results[0], "Result of read_file")
+            .contains("resolves outside the workspace"),
+        "{}",
+        distrusted.results[0]
+    );
+
+    // So does a settings layer that keeps the file tools inside the project.
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let kept = path_turn_in(
+        "bypass-reach-kept-inside",
+        &places,
+        &[control],
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+        true,
+        |_| {},
+    );
+    assert!(
+        message_from(&kept.results[0], "Result of read_file")
+            .contains("resolves outside the workspace"),
+        "{}",
+        kept.results[0]
+    );
+}
+
+/// SANDBOX-22, PATHREQ-5: a `read-only` session reaches nothing to write, since the mode holds in
+/// every permission mode, and its reads are reached.
+#[test]
+fn under_bypass_with_read_only_a_sibling_directory_is_read_and_not_written() {
+    if cannot_confine_here() {
+        return;
+    }
+    let places = PathPlaces::new("bypass-read-only");
+    let target = places.beside.join("notes.txt");
+    std::fs::write(&target, "NOTES-CONTENT").expect("a file beside the session");
+    let mut asked =
+        AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()).approving_paths();
+    let turn = path_turn(
+        "bypass-read-only",
+        &places,
+        &[
+            (
+                "read_file",
+                serde_json::json!({ "path": target.display().to_string() }),
+            ),
+            (
+                "write_file",
+                serde_json::json!({
+                    "path": places.beside.join("new.txt").display().to_string(),
+                    "contents": "NEW",
+                }),
+            ),
+        ],
+        bravebot_sandbox::SandboxMode::ReadOnly,
+        bravebot_agent::PermissionMode::Bypass,
+        trusting_the_workspace(),
+        None,
+        &mut bypassing(&mut asked),
+    );
+    assert!(
+        message_from(&turn.results[0], "Result of read_file").contains("NOTES-CONTENT"),
+        "{}",
+        turn.results[0]
+    );
+    assert!(
+        message_from(&turn.results[1], "Result of write_file").contains("read-only"),
+        "{}",
+        turn.results[1]
+    );
+    assert!(!places.beside.join("new.txt").exists());
 }
 
 /// PATHREQ-3: a path that is refused unasked is refused in bypass too. The mode answers a question
@@ -70937,6 +71832,7 @@ fn an_asides_cut_is_made_inside_the_kernel() {
     turn::aside(
         &config,
         &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
         bravebot_agent::aside::Question::recap(&conversation),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),

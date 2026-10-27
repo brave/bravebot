@@ -7,7 +7,9 @@ governs:
   - crates/i18n/src/*.rs
   - crates/i18n/locales/*.ftl
   - crates/agent/tests/audience.rs
-documented-by: docs/website/docs/customize/configuration.md
+documented-by:
+  - docs/website/docs/customize/configuration.md
+  - docs/website/docs/customize/language.md
 ---
 
 ## Scope
@@ -89,13 +91,15 @@ name, and the POSIX `C` locale asks for no catalog at all.
 A message that counts states its own forms, and which one is used is decided by the rules of the
 language the catalog those forms came from is written in, which for a message a translation leaves
 out is the reference. A language whose rules are not written down cannot ship a message that
-counts.
+counts. The reference may say its forms alike where its own language does not tell them apart, so
+that a translation can tell them apart.
 
 **Why.** Borrowing English's rule is how a translation comes out reading correctly for one and
 wrongly for everything else, which is a defect only a speaker of that language can see and which
 no review in English will catch.
 
 `verified-by: bravebot_i18n::lib::a_plural_select_picks_the_variant_the_language_calls_for`
+`verified-by: bravebot_i18n::generate::a_select_whose_forms_say_the_same_is_generated_as_that_text`
 `verified-by: bravebot_i18n::lib::a_language_with_a_plural_rule_is_the_only_kind_a_select_may_ship_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_omits_is_pluralised_by_the_language_it_is_written_in`
 `verified-by: bravebot_i18n::generate::a_message_a_translation_has_is_pluralised_by_that_translation_s_rules`
@@ -130,6 +134,8 @@ sees is worth nothing if two people running it see different things.
 `verified-by: bravebot_i18n::lib::a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked`
 `verified-by: bravebot_i18n::sizes_in_french::the_size_notes_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: bravebot_ui_bridge::history::a_failed_turn_on_the_account_is_sent_in_english_on_a_machine_set_to_french`
+`verified-by: bravebot_ui_bridge::history::the_narrations_for_a_summary_the_account_could_not_make_are_in_english_on_a_machine_set_to_french`
 
 <a id="LOCALE-8"></a>
 ### LOCALE-8: what the person said outranks the shell, and only their own file says it

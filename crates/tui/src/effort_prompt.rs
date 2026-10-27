@@ -89,6 +89,11 @@ impl Picker {
     }
 }
 
+/// Where [`draw`] draws the panel in a frame of `frame`.
+pub fn placed(frame: ratatui::layout::Rect, picker: &Picker) -> list_picker::Placed {
+    list_picker::placed(frame, picker, &panel())
+}
+
 /// Draw the panel over whatever is already in the frame.
 pub fn draw(frame: &mut Frame, picker: &Picker) {
     list_picker::draw(frame, picker, &panel());
@@ -102,9 +107,10 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
 pub fn choose<B: Backend>(
     terminal: &mut Terminal<B>,
     current: Option<Effort>,
+    wheel: u16,
     behind: impl FnMut(&mut Frame),
 ) -> Option<Row> {
-    list_picker::choose(terminal, Picker::new(current), &panel(), behind)
+    list_picker::choose(terminal, Picker::new(current), &panel(), wheel, behind)
 }
 
 fn panel() -> Panel {

@@ -26,7 +26,7 @@ A session started with `--dangerously-skip-permissions` is the one exception: th
 at all, and the map is the one a yes would have written. That mode already approves vouching for
 every unvouched file the planner reads, so the tree becomes trusted a file at a time either way. A
 resume still takes the map from its own record even there. See
-[modes](permissions.md#answering-in-advance-modes).
+[modes](permission-modes.md).
 
 ## Nothing is trusted until it is granted
 
@@ -240,9 +240,10 @@ path outside the project and every directory you opened, the refusal tells the m
 open the directory the file is in with `/add-dir` or `--add-dir`. If the path names a directory, that
 directory is the one to open. A name nothing is at yet is offered through the directory it is in, as
 a file is. Only a read is also told the file can be dropped on the window, and a read of a directory
-is not, since a directory cannot be dropped. The refusal names [`request_path`](../reference/tools.md#request_path)
-only where the session would accept that request, so under the sandbox mode `off` and in a workspace
-you have not trusted it names `/add-dir` alone. An absolute path that lands inside the project is
+is not, since a directory cannot be dropped. The refusal names `/add-dir` alone: with
+permissions bypassed the file tools reach such a path with no request and the refusal is not given,
+outside the paths a granted request refuses ([`request_path`](../reference/tools.md#request_path)).
+An absolute path that lands inside the project is
 refused with "is inside the workspace, and a path there is named relative to the workspace root",
 and no directory is offered, since opening one would change nothing. A refused write is not pointed
 at an unconfined `run` line in that case.
@@ -335,7 +336,7 @@ fork, and the session `/clear` begins each open a new one, and the directory bel
 they followed is removed rather than handed on. A resume can come days later, and bytes surviving that
 gap would be a cache nothing evicts.
 
-An [undo](../using/sessions.md) does not reach in here. A file a turn wrote in this directory is
+An [undo](../using/rewind.md) does not reach in here. A file a turn wrote in this directory is
 neither restored nor removed, and it is not named among the paths the rewind could not put back. What a
 turn keeps so that it can be undone is a bounded amount shared by every file that turn wrote, and an
 intermediate file is exactly the size of thing that bound is set to stay clear of: keeping one would
@@ -373,7 +374,7 @@ supply or change it.
 Where a yes cannot be kept, the question says so and the yes trusts that session only. That is the
 case at your home directory, a directory holding it or a filesystem root, where the filesystem cannot
 say when the directory was made, and in an
-[incognito session](../using/sessions.md#a-session-that-leaves-nothing-behind).
+[incognito session](../using/incognito.md).
 
 A later session started in that directory is not asked, and says so as it opens. In the terminal:
 

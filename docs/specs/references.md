@@ -8,10 +8,12 @@ governs:
   - crates/config/src/settings.rs
   - crates/agent/src/workspace.rs
   - crates/agent/src/workspace/reach.rs
+  - crates/agent/src/workspace/resolve.rs
   - crates/agent/src/preamble.rs
   - crates/agent/src/skills.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/cli/src/doctor.rs

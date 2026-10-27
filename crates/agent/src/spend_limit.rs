@@ -97,8 +97,7 @@ fn asking(spent: u64, limit: Limit, rejected: Option<&str>) -> Asking {
         spent = spent,
         limit = limit.figure,
         unit = unit
-    )
-    .to_string();
+    );
     if let Some(text) = rejected {
         prompt.push(' ');
         prompt.push_str(&t!(

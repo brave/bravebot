@@ -67,6 +67,11 @@ impl Request {
         &self.verifier
     }
 
+    /// The `nonce` the URL carries, which the ID token has to name.
+    pub(super) fn nonce(&self) -> &Secret {
+        &self.nonce
+    }
+
     pub(super) fn client(&self) -> Option<&str> {
         self.client.as_deref()
     }

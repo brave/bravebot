@@ -29,7 +29,7 @@ const live = (over = {}) => ({
   entries: [{ kind: 'user', id: 'u0', text: 'opening prompt' }],
   turns: {}, queued: [], interjected: [], running: true, queuePaused: false,
   summary: { id: null, title: 't', project: '/p', branch: null, directory: '/p' },
-  archived: 0, awaitingOrdinal: null, staging: { made: 0, staged: [] },
+  archived: 0, awaitingOrdinal: null, staging: { made: 0, staged: [] }, agents: [],
   ...over,
 })
 /** Fold `message` into `before` the way the window does. */

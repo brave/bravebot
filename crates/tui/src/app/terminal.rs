@@ -6,13 +6,13 @@ use super::*;
 /// Asks for motion reported only while a button is held.
 ///
 /// Sent after [`EnableMouseCapture`], which asks for all three tracking modes at once, including
-/// the one that reports a pointer merely crossing the window. Turning that one off is the whole
-/// intent, but terminals disagree about what the three modes are: some keep a flag per mode and
-/// use the highest one set, others keep a single state that the last request wins. Sending the
-/// two that are wanted again, after the one that is not, lands both kinds in the same place.
-/// Without that, a terminal of the second kind reads it as "no tracking at all" and the wheel
-/// goes back to scrolling the window behind the session.
-pub(super) const TRACK_MOTION_ONLY_WHILE_DRAGGING: &str = "\x1b[?1003l\x1b[?1000h\x1b[?1002h";
+/// the one that reports a pointer merely crossing the window. Turning that one off is what a list
+/// that has no use for it does, such as the list of sessions, and terminals disagree about what the
+/// three modes are: some keep a flag per mode and use the highest one set, others keep a single
+/// state that the last request wins. Sending the two that are wanted again, after the one that is
+/// not, lands both kinds in the same place. Without that, a terminal of the second kind reads it as
+/// "no tracking at all" and the wheel goes back to scrolling the window behind the session.
+pub(crate) const TRACK_MOTION_ONLY_WHILE_DRAGGING: &str = "\x1b[?1003l\x1b[?1000h\x1b[?1002h";
 
 /// Put the terminal into the state the interface draws in.
 ///
@@ -40,22 +40,22 @@ pub(super) fn take_over_terminal<W: Write>(out: &mut W, mouse: bool) -> io::Resu
     // alternate screen, so the query is not painted into the session.
     crate::theme::sense(out);
     crate::theme::restore_saved();
-    ask_for_modes(out, enhanced_keys(), mouse, crate::pointer::is_asked())
+    ask_for_modes(out, enhanced_keys(), mouse)
 }
 
 /// Ask the terminal for every mode the interface draws and reads in.
 ///
 /// Separate from raw mode, and told rather than asked whether the terminal understands
 /// disambiguated keys, because both of those are properties of a real tty: what is left here is
-/// bytes, so a test can read back what was asked for and what was given up. `hover` is whether the
-/// terminal draws the pointer shape it is asked for ([`crate::pointer::is_asked`]).
-pub(super) fn ask_for_modes<W: Write>(
-    out: &mut W,
-    enhanced: bool,
-    mouse: bool,
-    hover: bool,
-) -> io::Result<()> {
+/// bytes, so a test can read back what was asked for and what was given up.
+pub(super) fn ask_for_modes<W: Write>(out: &mut W, enhanced: bool, mouse: bool) -> io::Result<()> {
     execute!(out, EnterAlternateScreen)?;
+    // Mouse capture asks for the buttons, the wheel, motion while a button is held and motion with
+    // none held, which is what shows the target under the pointer (INPUT-33). The last is a stream
+    // of positions, which the reader hands out as the last of a burst (INPUT-49), and a terminal that
+    // sends none simply never shows a target under the pointer. Asked for last of the three tracking
+    // modes, which is the one a terminal that keeps a single tracking state ends in, and it reports
+    // the other two as well.
     if mouse {
         execute!(out, EnableMouseCapture)?;
     }
@@ -75,27 +75,44 @@ pub(super) fn ask_for_modes<W: Write>(
         )?;
     }
 
-    // Mouse capture asks for motion reported whether or not a button is down, which is a stream
-    // of events for a pointer merely crossing the window and a redraw for each one. Only the
-    // drag matters here, so all-motion reporting goes back off: what stays on reports the
-    // buttons, the wheel, and motion while a button is held, which is the gesture being read.
-    // Except where the terminal draws a pointer shape on request: finding the border to draw it
-    // over takes the pointer's position without a button, so all motion stays on there. Capture
-    // asks for it last of the three tracking modes, which is the one a terminal that keeps a single
-    // tracking state ends in.
-    if mouse && !hover {
-        write!(out, "{TRACK_MOTION_ONLY_WHILE_DRAGGING}")?;
-    }
     out.flush()
 }
 
 /// Put the terminal back the way it was found.
+///
+/// Every way out of the interface goes through this: the end of a session, a failure, the editor a
+/// prompt is written in, the viewer a transcript is read in and the stop that hands the shell the
+/// terminal (INPUT-33).
 pub(super) fn hand_back_terminal<W: Write>(out: &mut W) -> io::Result<()> {
-    disable_raw_mode()?;
+    hand_back(out, enhanced_keys(), disable_raw_mode)
+}
+
+/// [`hand_back_terminal`], told whether disambiguated keys were pushed and how to leave raw mode, so
+/// that a test can read the order they happen in.
+///
+/// The modes go back before raw mode is left. Mouse reports are on until they are written off, and a
+/// report that arrives in between, as one does when the pointer moves, would be read by the shell as
+/// text it echoes where raw mode no longer holds it, or be handed to whatever takes the terminal. Raw
+/// mode is left whether or not the modes could be written, and the first failure is the one given back.
+pub(super) fn hand_back<W: Write>(
+    out: &mut W,
+    enhanced: bool,
+    leave_raw_mode: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    let given_back = give_back_screen(out, enhanced);
+    leave_raw_mode()?;
+    given_back
+}
+
+/// What [`hand_back_terminal`] writes, which is all of it but leaving raw mode.
+///
+/// Told whether disambiguated keys were pushed, and separate from raw mode, which is a property of
+/// a real tty, so that a test can read what a way out of the interface leaves written.
+pub(super) fn give_back_screen<W: Write>(out: &mut W, enhanced: bool) -> io::Result<()> {
     // Before the screen is left: a terminal that keeps a pointer shape for each screen applies the
     // reset to the one it is on, and the shape was asked for on this one.
     crate::pointer::give_back(out)?;
-    give_back_modes(out, enhanced_keys())?;
+    give_back_modes(out, enhanced)?;
     crate::title::give_back(out)
 }
 
@@ -177,6 +194,34 @@ pub(super) fn show_transcript(
     // Said rather than swallowed, for the reason the prompt's editor says it: an editor that
     // would not start looks exactly like a key that does nothing.
     if let Err(failure) = shown {
+        session.note(failure.to_string());
+    }
+    Ok(())
+}
+
+/// Hand the terminal to the user's editor on a file, at the line a click on its path named, and take
+/// nothing back from it.
+///
+/// The terminal is given up and taken back the way it is for a prompt, since an editor needs the
+/// screen. The file is the person's own and is neither copied nor read afterwards. A failure is said
+/// rather than swallowed, for the reason the prompt's editor says it: an editor that would not start
+/// looks exactly like a click that did nothing.
+pub(super) fn open_file_in_editor(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    file: &std::path::Path,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> io::Result<()> {
+    hand_back_terminal(terminal.backend_mut())?;
+    terminal.show_cursor()?;
+
+    let opened = crate::editor::open_file(file, line, column);
+
+    take_over_terminal(terminal.backend_mut(), session.mouse_captured())?;
+    terminal.clear()?;
+
+    if let Err(failure) = opened {
         session.note(failure.to_string());
     }
     Ok(())

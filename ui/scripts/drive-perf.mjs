@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { agentInfo, threeModelList } from './acceptance-fixture.mjs'
+import { ASSISTANT_BUBBLE, COMPOSER_NAME } from './drive-support.mjs'
 
 const tolerance = Number(process.env.PERF_TOLERANCE) || 1
 const SESSIONS = 1000
@@ -146,9 +147,9 @@ try {
   record(`window: longest task, ${SESSIONS} sessions`, longest, `<= ${BUDGET.openLongTask} ms`, longest <= BUDGET.openLongTask)
 
   await page.locator('.session').filter({ hasText: 'A long conversation' }).first().click()
-  const entry = page.getByRole('textbox', { name: 'Message the agent' })
+  const entry = page.getByRole('textbox', { name: COMPOSER_NAME })
   await entry.waitFor()
-  await page.locator('.bubble.assistant').first().waitFor()
+  await page.locator(ASSISTANT_BUBBLE).first().waitFor()
 
   // Three decision cards, left pending: a confirm with a diff, a run, and a question.
   const emit = (event, data) => app.evaluate((_, v) => globalThis.perf.emit(v.event, v.data), { event, data })

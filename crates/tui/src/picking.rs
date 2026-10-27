@@ -1,14 +1,17 @@
 //! The pickers that `/model`, `/config`, `/theme` and `/effort` open, held as state of the session.
 //!
-//! At rest each of them is a loop of its own: it draws, reads a key and returns what was picked.
-//! A turn cannot wait inside such a loop, because the same thread draws the turn and puts the
-//! worker's questions on the screen. So while a turn runs the picker is a mode of the session
-//! instead: the key handler gives it every key, the frame draws it over everything else, and the
-//! loop that runs the turn goes on as before. A question the worker asks takes the screen for as
-//! long as it is open, and the picker is there again when it is answered.
+//! `/model` is always a mode of the session. The others are loops of their own at rest: each draws,
+//! reads a key and returns what was picked. A turn cannot wait inside such a loop, because the same
+//! thread draws the turn and puts the worker's questions on the screen. So while a turn runs they
+//! are modes of the session too: the key handler gives them every key, the frame draws them over
+//! everything else, and the loop that runs the turn goes on as before. A question the worker asks
+//! takes the screen for as long as it is open, and the picker is there again when it is answered.
 //!
-//! The rows, the cursor and the keys are the ones the picker has at rest, read from the same
-//! modules. What this adds is only where the state lives.
+//! The model picker opens before its rows are known and takes them when the endpoints have
+//! answered, so typing `/model` draws at once.
+//!
+//! The rows, the cursor and the keys are the ones each picker module defines. What this adds is
+//! only where the state lives.
 //!
 //! Nothing labelled is involved. The rows are fixed strings or names a person picks from, and the
 //! pick is the person's own keystroke.
@@ -74,6 +77,59 @@ impl Picking {
             }
             Picking::Editing(picker) => {
                 let outcome = list_picker::handle_key(picker, code, modifiers);
+                step(outcome, picker.chosen().copied(), Picked::Editing)
+            }
+        }
+    }
+
+    /// Where [`Picking::draw`] draws the panel in a frame of `frame`.
+    pub fn popup(&self, frame: ratatui::layout::Rect) -> crate::state::Popup {
+        let listed = |placed: list_picker::Placed| crate::state::Popup {
+            panel: crate::state::Panel::Picker,
+            area: placed.area,
+            list: Some(placed.list),
+        };
+        match self {
+            Picking::Model(picker) => listed(model_prompt::placed(frame, picker)),
+            Picking::Theme(picker) => listed(theme_prompt::placed(frame, picker)),
+            Picking::Effort(picker) => listed(effort_prompt::placed(frame, picker)),
+            Picking::Editing(picker) => listed(config_prompt::placed(frame, picker)),
+        }
+    }
+
+    /// Give a mouse event to the picker, as it was drawn at `popup` (MOUSE-15, MOUSE-46, MOUSE-47).
+    pub fn pointer(
+        &mut self,
+        popup: &crate::state::Popup,
+        mouse: ratatui::crossterm::event::MouseEvent,
+        last: &mut Option<crate::select::Click>,
+        now: std::time::Instant,
+        wheel: u16,
+    ) -> Step {
+        let placed = list_picker::Placed {
+            area: popup.area,
+            list: popup.list.unwrap_or_default(),
+        };
+        match self {
+            Picking::Model(picker) => {
+                let outcome =
+                    match model_prompt::handle_mouse(picker, placed, mouse, last, now, wheel) {
+                        model_prompt::Outcome::Continue => Outcome::Continue,
+                        model_prompt::Outcome::Cancel => Outcome::Cancel,
+                        model_prompt::Outcome::Select => Outcome::Select,
+                    };
+                step(outcome, picker.chosen().cloned(), Picked::Model)
+            }
+            Picking::Theme(picker) => {
+                let outcome = theme_prompt::click(picker, placed, mouse, last, now, wheel);
+                step(outcome, picker.chosen().cloned(), Picked::Theme)
+            }
+            Picking::Effort(picker) => {
+                let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
+                step(outcome, picker.chosen().copied(), Picked::Effort)
+            }
+            Picking::Editing(picker) => {
+                let outcome = list_picker::handle_mouse(picker, placed, mouse, last, now, wheel);
                 step(outcome, picker.chosen().copied(), Picked::Editing)
             }
         }

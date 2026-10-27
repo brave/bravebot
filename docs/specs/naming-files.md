@@ -5,8 +5,10 @@ status: normative
 governs:
   - crates/mentions/src/lib.rs
   - crates/tui/src/state.rs
+  - crates/tui/src/state/attachments.rs
   - crates/tui/src/state/completion.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/workspace.rs
   - crates/ui-bridge/src/mentions.rs
@@ -186,7 +188,10 @@ go are the ones the sent line names. Each is surveyed by the read the turn will 
 would fail it (outside the workspace, missing, a directory, or not text) refuses the send before a
 turn starts, where the terminal would end the turn. The project is the folder the conversation runs
 in, which for a bot's conversation is the bot's home folder or the project chosen for it. A prompt
-the app composes itself names no file.
+the app composes itself names no file. A list or a name asked for while a turn runs does not wait
+for the turn: bridge requests are read on one thread, and the turn may be waiting on an answer
+queued behind the request, so a turn holding the session's state leaves out the directories the
+session added, as a poisoned lock does.
 
 **Why.** One person names files in both front ends, and a name the window treated differently from
 the terminal would send a file nobody chose or drop one somebody did.
@@ -197,6 +202,8 @@ the terminal would send a file nobody chose or drop one somebody did.
 `verified-by: bravebot_ui_bridge::mentions::a_fragment_is_offered_the_file_below_it_and_enter_completes_it`
 `verified-by: bravebot_ui_bridge::mentions::a_prompt_names_only_text_files_inside_the_project`
 `verified-by: bravebot_ui_bridge::mentions::a_send_naming_a_file_that_cannot_go_is_refused_before_the_turn`
+`verified-by: bravebot_ui_bridge::mentions_running_tests::offering_rows_does_not_wait_for_a_turn_holding_the_session`
+`verified-by: bravebot_ui_bridge::mentions_running_tests::naming_a_file_does_not_wait_for_a_turn_holding_the_session`
 `verified-by: by-construction (the window's half is not a crate this workspace compiles, so ui/scripts/drive-at-mentions.mjs drives the real app and bridge against a stub model and asserts the list, a fragment finding a file in a directory below with Tab writing its whole path, its keys, Tab into a directory, Enter completing a half-typed name, a directory holding a space completed to the escaped text and Enter completing a name already holding an escaped space (ui/scripts/mentions.test.mjs pins the splice), the file's contents in the model request, the Read row, the refusal of @../outside.txt at send, and that a bot's conversation with no project lists and reads the bot's home folder and refuses a project file)`
 
 <a id="NAME-10"></a>

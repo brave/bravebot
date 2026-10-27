@@ -53,6 +53,12 @@ fn main() {
         }
     };
 
+    // As soon as this process knows it is serving, so a panic in anything that follows is covered.
+    // A build with nowhere to send reports, or a person who switched them off, gets nothing from
+    // this call (CRASH-3, CRASH-4). The directory is the one `home::writable` names, which is none
+    // under incognito mode, so nothing would start if this process ever engaged it.
+    bravebot_backtrace::start(bravebot_backtrace::Process::Rpc);
+
     // Before a session is assembled, so every turn this process runs reads one answer for the
     // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
     // held to. Nothing in a window sets them. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
