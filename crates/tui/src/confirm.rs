@@ -293,8 +293,16 @@ enum Step<A> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Next {
     Press(KeyEvent),
+    /// A turn of the wheel, by this many rows, positive being further down. It scrolls a body that
+    /// keys scroll and answers nothing (MOUSE-46).
+    Wheel(i16),
     /// Nothing a prompt answers, so it is drawn again and waits on.
     Skip,
+    /// A report of the mouse that is not a turn of the wheel. It answers nothing and changes nothing
+    /// drawn, so the prompt waits on without drawing again: a pointer crossing the window sends one
+    /// for each cell, and a draw of a long body for each is a screen that lags the pointer
+    /// (MOUSE-44).
+    Ignored,
     /// The event stream is gone.
     Lost,
 }
@@ -306,10 +314,21 @@ fn next_from(read: std::io::Result<TermEvent>) -> Next {
         // taken for a press approves whatever the press had just approved, twice.
         Ok(TermEvent::Key(key)) if key.kind != event::KeyEventKind::Press => Next::Skip,
         Ok(TermEvent::Key(key)) => Next::Press(key),
+        Ok(TermEvent::Mouse(mouse)) => match mouse.kind {
+            event::MouseEventKind::ScrollUp => Next::Wheel(-wheel_step()),
+            event::MouseEventKind::ScrollDown => Next::Wheel(wheel_step()),
+            _ => Next::Ignored,
+        },
         Ok(_) => Next::Skip,
         // Losing the event stream must not approve anything.
         Err(_) => Next::Lost,
     }
+}
+
+/// How far a turn of the wheel moves a body that scrolls. The distance the transcript moves at rest
+/// where `tui.wheelRows` is not set: a question is asked from loops that do not hold the setting.
+fn wheel_step() -> i16 {
+    i16::try_from(crate::state::wheel_rows_named(None)).unwrap_or(i16::MAX)
 }
 
 /// Wait for what the terminal does next.
@@ -342,22 +361,29 @@ fn ask_scrolled_reading<B: Backend, A>(
 ) -> A {
     let mut scroll = 0u16;
     let mut seen = Seen::default();
+    let mut drawn = Drawn::default();
+    let mut ignored = false;
     loop {
         // A terminal that cannot be drawn to cannot carry a question, so refuse rather
         // than proceed unseen.
         // How far the body can scroll, and whether a yes is taken, are only knowable once it has
         // been laid out at the width it will be drawn at, so they come back out of the closure.
-        let mut drawn = Drawn::default();
-        if terminal
-            .draw(|frame| drawn = draw(frame, scroll, &mut seen))
-            .is_err()
+        // Not again for a report that changed nothing, so the draw the next key is read against is
+        // the one on the screen.
+        if !ignored
+            && terminal
+                .draw(|frame| drawn = draw(frame, scroll, &mut seen))
+                .is_err()
         {
             return refused;
         }
+        ignored = false;
 
         match next() {
+            Next::Ignored => ignored = true,
             Next::Skip => continue,
             Next::Lost => return refused,
+            Next::Wheel(by) => scroll = drawn.moved(scroll, by),
             Next::Press(pressed) => match key(pressed, &drawn) {
                 Some(Step::Answer(answer)) => return answer,
                 Some(Step::Scroll(by)) => scroll = drawn.moved(scroll, by),
@@ -6745,6 +6771,40 @@ mod tests {
         }
     }
 
+    /// A report of the mouse answers nothing and changes nothing a question draws but for the wheel,
+    /// which moves a body that scrolls, so a prompt waits on without drawing again for any other
+    /// (MOUSE-44). Rejects: a report of the pointer read as an event that asks for a frame, which a
+    /// pointer crossing the window then asks for at each cell.
+    #[test]
+    fn a_report_of_the_mouse_that_is_not_the_wheel_changes_nothing_a_question_draws() {
+        use event::{MouseButton, MouseEvent, MouseEventKind};
+        let report = |kind| {
+            Ok(TermEvent::Mouse(MouseEvent {
+                kind,
+                column: 3,
+                row: 2,
+                modifiers: KeyModifiers::NONE,
+            }))
+        };
+        for kind in [
+            MouseEventKind::Moved,
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+        ] {
+            assert_eq!(next_from(report(kind)), Next::Ignored, "{kind:?}");
+        }
+        assert!(matches!(
+            next_from(report(MouseEventKind::ScrollDown)),
+            Next::Wheel(rows) if rows > 0
+        ));
+        assert!(matches!(
+            next_from(report(MouseEventKind::ScrollUp)),
+            Next::Wheel(rows) if rows < 0
+        ));
+    }
+
     /// A read that fails ends the question, which every prompt then refuses. Skipped like an event
     /// that is not a key, it would leave the prompt reading a stream that is gone.
     #[test]
@@ -7596,4 +7656,6 @@ mod tests {
         assert_eq!(answer.answer, RunAnswer::Reject);
         assert_eq!(answer.note.as_deref(), Some("go"));
     }
+
+    mod mouse_tests;
 }

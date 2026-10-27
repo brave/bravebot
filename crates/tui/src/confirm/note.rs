@@ -124,15 +124,21 @@ pub(super) fn take_reading<B: Backend>(
     let mut typed = String::new();
     // A no until the person switches it: nothing is approved by default.
     let mut yes = false;
+    let mut ignored = false;
     loop {
-        if terminal
-            .draw(|frame| draw(frame, &typed, yes, can_say_yes))
-            .is_err()
+        // Not again for a report that changed nothing (MOUSE-44).
+        if !ignored
+            && terminal
+                .draw(|frame| draw(frame, &typed, yes, can_say_yes))
+                .is_err()
         {
             return Taken::Lost;
         }
+        ignored = false;
         match next() {
-            Next::Skip => continue,
+            Next::Ignored => ignored = true,
+            // The line has nothing to scroll.
+            Next::Skip | Next::Wheel(_) => continue,
             Next::Lost => return Taken::Lost,
             Next::Press(key) => match edit_for(key, alone()) {
                 Edit::Insert(c) => {

@@ -11,21 +11,21 @@ use std::path::Path;
 
 /// What to say to somebody whose configuration names no service that can serve a turn.
 ///
-/// Four routes, each a line, in the order they are worth taking today. The three that reach a
-/// service directly lead: AWS Bedrock, a gateway, and signing in with a ChatGPT account. Importing a
-/// Leo Premium subscription is last and says why, since those models are reached through Brave's AI
-/// gateway and it has open problems of its own. It is still the shortest route for somebody who
-/// already subscribes, which is why it is offered at all.
+/// Five routes, each a line, in the order they are worth taking today. The four that reach a
+/// service directly lead: AWS Bedrock, a gateway, and signing in with a ChatGPT or an xAI account.
+/// Importing a Leo Premium subscription is last and says why, since those models are reached through
+/// Brave's AI gateway and it has open problems of its own. It is still the shortest route for somebody
+/// who already subscribes, which is why it is offered at all.
 ///
-/// `a_service_is_configured` replaces all four with one line. That person set a service up and
+/// `a_service_is_configured` replaces all five with one line. That person set a service up and
 /// left the model this build baked in, which a settings block copied out of another tool does by
 /// design, so what they need is the key that names one of their own models. Where the service is a
-/// stored ChatGPT sign-in the line names the commands that open a session or run a task on one of the
-/// account's models.
+/// stored sign-in the line names the commands that open a session or run a task on one of the
+/// account's models, and where both accounts are stored it names both.
 ///
-/// `chatgpt` is what the sign-in file holds. A file that cannot be read is said before the routes,
-/// with the remedy, since it is not a service and the person has to know why a sign-in they made is
-/// not used.
+/// `chatgpt` and `xai` are what the sign-in files hold. A file that cannot be read is said before the
+/// routes, with the remedy, since it is not a service and the person has to know why a sign-in they
+/// made is not used.
 ///
 /// `refused` is what was wrong with a stored subscription, where something was. It leads, because
 /// it changes what the person should do: a batch that could not be read is one import away.
@@ -49,6 +49,7 @@ pub(crate) fn how_to_configure_a_model(
     refused: Option<&str>,
     a_service_is_configured: bool,
     chatgpt: AccountFile,
+    xai: AccountFile,
     looked: &import::Looked,
     why_no_model_was_offered: Option<&str>,
 ) -> String {
@@ -64,6 +65,11 @@ pub(crate) fn how_to_configure_a_model(
     {
         lines.push(reason);
     }
+    if xai == AccountFile::Unreadable
+        && let crate::xai::Standing::Unusable(reason) = crate::xai::standing()
+    {
+        lines.push(reason);
+    }
     lines.push(String::new());
     if !looked.left().is_empty() {
         lines.extend(looked.left().iter().cloned());
@@ -75,11 +81,17 @@ pub(crate) fn how_to_configure_a_model(
     }
 
     // One line or the routes, never both. Somebody who has a service set up and only the wrong
-    // model in force is one settings key away, and four ways to set up a service is four things
+    // model in force is one settings key away, and five ways to set up a service is five things
     // to read past on the way to the one that applies.
-    if a_service_is_configured && chatgpt == AccountFile::Stored {
-        lines.push(t!(onboarding_chatgpt_signed_in).to_string());
-        lines.push(t!(chatgpt_use_by_name).to_string());
+    let signed_in_to = (chatgpt == AccountFile::Stored, xai == AccountFile::Stored);
+    if a_service_is_configured && signed_in_to != (false, false) {
+        let (signed_in, use_by_name) = match signed_in_to {
+            (true, true) => (t!(onboarding_accounts_signed_in), t!(accounts_use_by_name)),
+            (true, false) => (t!(onboarding_chatgpt_signed_in), t!(chatgpt_use_by_name)),
+            (false, _) => (t!(onboarding_xai_signed_in), t!(xai_use_by_name)),
+        };
+        lines.push(signed_in.to_string());
+        lines.push(use_by_name.to_string());
     } else if a_service_is_configured {
         lines.push(t!(onboarding_name_a_configured_model).to_string());
     } else {
@@ -88,6 +100,7 @@ pub(crate) fn how_to_configure_a_model(
             t!(onboarding_bedrock),
             t!(onboarding_openrouter),
             t!(onboarding_chatgpt),
+            t!(onboarding_xai),
             t!(onboarding_leo),
         ] {
             lines.push(format!("  - {route}"));
@@ -99,22 +112,29 @@ pub(crate) fn how_to_configure_a_model(
     lines.join("\n")
 }
 
-/// Whether `serving` is a start that asks which of the ChatGPT account's models to use
-/// (BACKEND-39): nothing serves the model in force, no model was named on the command line, and the
-/// stored sign-in is the way out. A person who can be asked, and an account that lists a model, are
-/// the further conditions [`ask_which_of_the_accounts_models`] puts.
+/// The accounts whose models a start that asks which to use would list, each a stored sign-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Accounts {
+    chatgpt: bool,
+    xai: bool,
+}
+
+/// The accounts a start asks about, where `serving` is a start that asks which of the accounts' models
+/// to use (BACKEND-39): nothing serves the model in force, no model was named on the command line, and
+/// a stored sign-in, ChatGPT's or xAI's or both, is the way out. A person who can be asked, and an
+/// account that lists a model, are the further conditions [`ask_which_of_the_accounts_models`] puts.
 pub(crate) fn asks_which_of_the_accounts_models(
     serving: &bravebot_agent::backend::Serving,
     named: Option<&str>,
-) -> bool {
-    named.is_none()
-        && matches!(
-            serving,
-            bravebot_agent::backend::Serving::NothingConfigured {
-                chatgpt: AccountFile::Stored,
-                ..
-            }
-        )
+) -> Option<Accounts> {
+    let bravebot_agent::backend::Serving::NothingConfigured { chatgpt, xai, .. } = serving else {
+        return None;
+    };
+    let accounts = Accounts {
+        chatgpt: *chatgpt == AccountFile::Stored,
+        xai: *xai == AccountFile::Stored,
+    };
+    (named.is_none() && (accounts.chatgpt || accounts.xai)).then_some(accounts)
 }
 
 /// What a start that asks which of the account's models to use came to.
@@ -123,19 +143,21 @@ pub(crate) enum Asked {
     Nobody,
     /// A person was asked and gave no row, or the pick could not be remembered, which was said.
     Declined,
-    /// The account offered no row. The sentence says why, for the refusal. The sign-in file may have
-    /// changed, since asking for the listing removes a sign-in that has ended.
+    /// No account offered a row. The sentences say why, a line for each account asked, for the
+    /// refusal. A sign-in file may have changed, since asking for a listing removes a sign-in that has
+    /// ended.
     NothingOffered(String),
     /// The pick is the model the start reads back.
     InForce,
 }
 
-/// Ask which of the ChatGPT account's models the start is to use, and record the answer as `/model`
+/// Ask which of the stored accounts' models the start is to use, and record the answer as `/model`
 /// records a pick (BACKEND-39).
 ///
-/// Asked where a person can be, as an import is, and where the account lists a model: an account
-/// whose listing is unreadable, refused or empty offers nothing to choose from, and is said so by
-/// [`Asked::NothingOffered`]. Nothing is read from stdin where it is not a terminal. An answer that is
+/// Asked where a person can be, as an import is, and where an account lists a model: an account whose
+/// listing is unreadable, refused or empty offers nothing to choose from. Where another account offers
+/// rows, what the first one could not give is said above them, and where none does, [`Asked::NothingOffered`]
+/// carries what each said. Nothing is read from stdin where it is not a terminal. An answer that is
 /// not the number of a row declines, as an empty answer and the end of the input do, and nothing is
 /// recorded for a decline.
 ///
@@ -143,22 +165,47 @@ pub(crate) enum Asked {
 /// bytes the store reads back, and a write that failed, leave the start on another model, and it says
 /// so and ends as a decline does.
 ///
-/// The listing is asked of the serving host with the stored sign-in, which may renew the access token
+/// Each listing is asked of the serving host with the stored sign-in, which may renew the access token
 /// and write the sign-in file as any turn does, or remove it where the sign-in has ended.
-pub(crate) fn ask_which_of_the_accounts_models(config: &Config) -> Asked {
+pub(crate) fn ask_which_of_the_accounts_models(config: &Config, accounts: Accounts) -> Asked {
     if !import::a_person_can_be_asked() {
         return Asked::Nobody;
     }
-    let models = match bravebot_tui::app::account_models_to_start_on(config) {
-        Ok(models) => models,
-        Err(listing) => return Asked::NothingOffered(why_no_model_was_offered(&listing)),
+    let mut models = Vec::new();
+    let mut offered = Accounts {
+        chatgpt: false,
+        xai: false,
     };
-    ask_among(config, &models, t!(chatgpt_start_heading))
+    // What each account that gave no row said, in the order the accounts are asked.
+    let mut said = Vec::new();
+    if accounts.chatgpt {
+        match bravebot_tui::app::account_models_to_start_on(config) {
+            Ok(rows) => {
+                offered.chatgpt = true;
+                models.extend(rows);
+            }
+            Err(listing) => said.push(why_no_model_was_offered(&listing)),
+        }
+    }
+    if accounts.xai {
+        match bravebot_tui::app::xai_models_to_start_on(config) {
+            Ok(rows) => {
+                offered.xai = true;
+                models.extend(rows);
+            }
+            Err(listing) => said.push(why_no_xai_model_was_offered(&listing)),
+        }
+    }
+    if models.is_empty() {
+        return Asked::NothingOffered(said.join("\n"));
+    }
+    ask_among(config, &models, heading_of(offered), &said)
 }
 
 /// Whether `serving` is a start that asks which of a configured service's models to use
-/// (BACKEND-39): nothing serves the model in force, no model was named on the command line, and a
-/// Bedrock or gateway block is configured, which a stored sign-in beside it does not change.
+/// (BACKEND-39): nothing serves the model in force, no model was named on the command line, a
+/// Bedrock or gateway block is configured, and no account is stored, since the question over the
+/// accounts' models is asked where one is.
 pub(crate) fn asks_which_of_the_configured_models(
     serving: &bravebot_agent::backend::Serving,
     named: Option<&str>,
@@ -169,6 +216,7 @@ pub(crate) fn asks_which_of_the_configured_models(
             bravebot_agent::backend::Serving::NothingConfigured {
                 a_service_is_configured: true,
                 chatgpt: AccountFile::NotStored,
+                xai: AccountFile::NotStored,
                 ..
             }
         )
@@ -188,13 +236,22 @@ pub(crate) fn ask_which_of_the_configured_models(config: &Config) -> Asked {
     if models.is_empty() {
         return Asked::Declined;
     }
-    ask_among(config, &models, t!(configured_start_heading))
+    ask_among(config, &models, t!(configured_start_heading), &[])
 }
 
-/// List `models` under `heading`, ask which, and record the pick.
-fn ask_among(config: &Config, models: &[Model], heading: impl AsRef<str>) -> Asked {
+/// List `models` under `heading`, ask which, and record the pick. `above` is said first, above the
+/// rows, as the sentences for the accounts that gave none.
+fn ask_among(
+    config: &Config,
+    models: &[Model],
+    heading: impl AsRef<str>,
+    above: &[String],
+) -> Asked {
     // The process's own stdin, whose buffer later readers share, as the import's question has it.
     let mut asking = Prompting::new(std::io::stdin().lock(), std::io::stderr());
+    for sentence in above {
+        asking.say(sentence);
+    }
     let Some(chosen) = which_of(&mut asking, models, heading.as_ref()) else {
         return Asked::Declined;
     };
@@ -202,12 +259,21 @@ fn ask_among(config: &Config, models: &[Model], heading: impl AsRef<str>) -> Ask
     let name = printable(&chosen.display_name);
     let read_back = model_for_this_run(None, config) == chosen.key;
     asking.say(&match read_back {
-        true => t!(chatgpt_start_chosen, name = name),
-        false => t!(chatgpt_start_not_remembered, name = name),
+        true => t!(account_start_chosen, name = name),
+        false => t!(account_start_not_remembered, name = name),
     });
     match read_back {
         true => Asked::InForce,
         false => Asked::Declined,
+    }
+}
+
+/// What is said above the rows, which names the accounts that offered them.
+fn heading_of(offered: Accounts) -> &'static str {
+    match (offered.chatgpt, offered.xai) {
+        (true, true) => t!(accounts_start_heading),
+        (true, false) => t!(chatgpt_start_heading),
+        (false, _) => t!(xai_start_heading),
     }
 }
 
@@ -220,6 +286,21 @@ fn why_no_model_was_offered(listing: &bravebot_agent::chatgpt::AccountModels) ->
         // The sentence for a listing that gave no row is the same whoever is asked, so what a start
         // would ask is no part of it.
         other => crate::chatgpt::said_of_listing(other, false),
+    }
+}
+
+/// The sentence for an xAI listing that gave no row, as [`why_no_model_was_offered`] words the
+/// ChatGPT account's: an ended sign-in says so, and a listing that could not be had or was read and is
+/// empty says which.
+fn why_no_xai_model_was_offered(listing: &bravebot_agent::xai::AccountModels) -> String {
+    match listing {
+        bravebot_agent::xai::AccountModels::Absent => t!(xai_ended).to_string(),
+        bravebot_agent::xai::AccountModels::Unlisted => {
+            t!(xai_start_listing_unreadable).to_string()
+        }
+        bravebot_agent::xai::AccountModels::Offered(_) => {
+            t!(xai_start_reaches_no_model).to_string()
+        }
     }
 }
 
@@ -237,25 +318,27 @@ fn which_of<'a, R: BufRead, W: Write>(
         asking.say(&format!(
             "  {number}. {}",
             t!(
-                chatgpt_start_row,
+                account_start_row,
                 name = printable(&model.display_name),
                 key = printable(&model.key)
             )
         ));
     }
-    let answer = asking.answer(t!(chatgpt_start_question))?;
+    let answer = asking.answer(t!(account_start_question))?;
     crate::plain::numbered_row(&answer, models)
 }
 
 /// Whether a start with no model named would ask which of the account's models to use, setting aside
 /// the terminals and the mode it also needs ([`asks_which_of_the_accounts_models`]).
 ///
-/// For the sign-in command, which tells a person what to run next. A person with a Bedrock or a gateway
-/// block, or with a model in force that something serves, is not asked, and is told so.
+/// For the sign-in command, which tells a person what to run next. A person with a model in force that
+/// something serves is not asked. One with a Bedrock or a gateway block is asked, by
+/// [`asks_which_of_the_configured_models`], about that service's models and not the account's, so the
+/// command does not promise the account's question to them.
 pub(crate) fn a_start_would_ask(config: &Config) -> bool {
     let model = model_for_this_run(None, config);
     let serving = bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), &model);
-    asks_which_of_the_accounts_models(&serving, None)
+    asks_which_of_the_accounts_models(&serving, None).is_some()
 }
 
 /// How to configure a service, where nothing configured serves `model`, or `None` where something
@@ -270,10 +353,12 @@ pub(crate) fn nothing_serves(config: &Config, model: &str) -> Option<String> {
             subscription,
             a_service_is_configured,
             chatgpt,
+            xai,
         } => Some(how_to_configure_a_model(
             subscription.as_deref(),
             a_service_is_configured,
             chatgpt,
+            xai,
             &import::looked(a_service_is_configured),
             None,
         )),
@@ -455,7 +540,7 @@ mod tests {
             at("  1. GPT A (chatgpt/gpt-a)"),
             at("  2. GPT B (chatgpt/gpt-b)"),
             at("  3. GPT C (chatgpt/gpt-c)"),
-            at(t!(chatgpt_start_question)),
+            at(t!(account_start_question)),
         ];
         assert!(order.is_sorted(), "{shown}");
         for (typed, key) in [("1\n", "chatgpt/gpt-a"), ("3\n", "chatgpt/gpt-c")] {
@@ -512,14 +597,16 @@ mod tests {
     }
 
     /// BACKEND-39: each way to configure a service is named by what to type or write, the ChatGPT
-    /// sign-in among them, and Leo Premium comes last because its line tells the reader to prefer
-    /// the others. A list that left the sign-in out sends somebody who has the account to a gateway
-    /// they do not need.
+    /// and xAI sign-ins among them, and Leo Premium comes last because its line tells the reader to
+    /// prefer the others. A list that left a sign-in out sends somebody who has the account to a gateway
+    /// they do not need, and the xAI line says that its models are then offered in `/model` as
+    /// `xai/<model>`, which is what a person signing in has to know to name one.
     #[test]
     fn the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last() {
         let said = how_to_configure_a_model(
             None,
             false,
+            AccountFile::NotStored,
             AccountFile::NotStored,
             &import::Looked::default(),
             None,
@@ -532,9 +619,19 @@ mod tests {
             at("amazon-bedrock"),
             at("OpenRouter"),
             at("bravebot auth login chatgpt"),
+            at("bravebot auth login xai"),
             at("bravebot auth login leo"),
         ];
         assert!(routes.is_sorted(), "{said}");
+        let line = said
+            .lines()
+            .find(|line| line.contains("bravebot auth login xai"))
+            .expect("the xAI route");
+        assert!(
+            line.contains("/model") && line.contains("xai/<model>"),
+            "the route does not say where its models are offered and how they are named: {line}"
+        );
+        assert!(said.contains("one of the four above"), "{said}");
     }
 
     /// BACKEND-39: somebody who has a service set up and only the wrong model in force is told to
@@ -545,6 +642,7 @@ mod tests {
             None,
             true,
             AccountFile::NotStored,
+            AccountFile::NotStored,
             &import::Looked::default(),
             None,
         );
@@ -553,6 +651,7 @@ mod tests {
             "amazon-bedrock",
             "OpenRouter",
             "bravebot auth login chatgpt",
+            "bravebot auth login xai",
             "bravebot auth login leo",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
@@ -569,12 +668,17 @@ mod tests {
             None,
             true,
             AccountFile::Stored,
+            AccountFile::NotStored,
             &import::Looked::default(),
             None,
         );
         assert!(said.contains(t!(onboarding_chatgpt_signed_in)), "{said}");
         assert!(said.contains(t!(chatgpt_use_by_name)), "{said}");
         assert!(said.contains("chatgpt/<model>"), "{said}");
+        assert!(
+            !said.contains("xai"),
+            "an account that is not signed in to was named: {said}"
+        );
         for route in [
             "amazon-bedrock",
             "OpenRouter",
@@ -584,5 +688,168 @@ mod tests {
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
         }
+    }
+
+    /// BACKEND-39: somebody whose xAI sign-in is stored and nothing else is told so, and to name one of
+    /// the account's models in a command that works as typed, and is not shown the routes, which
+    /// include the one they followed, or told of an account they have no sign-in for. The regressions it
+    /// rejects are the routes shown again to a person who has signed in, so that they sign in once more;
+    /// the ChatGPT account named for a person who never signed in to it, which sends them to a service
+    /// they do not use; and a sentence that does not say how an xAI model is named.
+    #[test]
+    fn a_stored_xai_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes()
+    {
+        let said = how_to_configure_a_model(
+            None,
+            true,
+            AccountFile::NotStored,
+            AccountFile::Stored,
+            &import::Looked::default(),
+            None,
+        );
+        assert!(said.contains(t!(onboarding_xai_signed_in)), "{said}");
+        assert!(said.contains(t!(xai_use_by_name)), "{said}");
+        assert!(said.contains("--model xai/<model>"), "{said}");
+        assert!(
+            !said.to_lowercase().contains("chatgpt"),
+            "an account that is not signed in to was named: {said}"
+        );
+        for route in [
+            "amazon-bedrock",
+            "OpenRouter",
+            "bravebot auth login xai",
+            "bravebot auth login leo",
+            "`model` key",
+        ] {
+            assert!(!said.contains(route), "{route} was offered: {said}");
+        }
+    }
+
+    /// BACKEND-39: where both accounts are signed in the start says both, in one pair of lines, and each
+    /// command it names works as typed for the account whose identifier it carries. The regressions it
+    /// rejects are the sentence of one account alone, which leaves the other's models unnamed, and one
+    /// line for each account, which says the same thing about `/model` and the start's question twice.
+    #[test]
+    fn where_both_accounts_are_signed_in_the_refusal_says_both() {
+        let said = how_to_configure_a_model(
+            None,
+            true,
+            AccountFile::Stored,
+            AccountFile::Stored,
+            &import::Looked::default(),
+            None,
+        );
+        assert!(said.contains(t!(onboarding_accounts_signed_in)), "{said}");
+        assert!(said.contains(t!(accounts_use_by_name)), "{said}");
+        assert!(
+            said.contains("--model chatgpt/<model>") && said.contains("--model xai/<model>"),
+            "{said}"
+        );
+        for single in [
+            t!(onboarding_chatgpt_signed_in),
+            t!(onboarding_xai_signed_in),
+            t!(chatgpt_use_by_name),
+            t!(xai_use_by_name),
+        ] {
+            assert!(
+                !said.contains(single),
+                "{single} was said beside both: {said}"
+            );
+        }
+    }
+
+    /// BACKEND-39: an xAI sign-in file that cannot be read configures nothing, so the routes stay and
+    /// the xAI route is among them, as for the ChatGPT file. The sentence that says why the file is
+    /// unreadable is read from the file, and the tests of the binary cover it. The regression this
+    /// rejects is an unreadable file taken for a stored sign-in, which tells a person to name a model
+    /// no turn can reach.
+    #[test]
+    fn an_xai_sign_in_that_cannot_be_read_configures_nothing_and_the_routes_stay() {
+        let said = how_to_configure_a_model(
+            None,
+            false,
+            AccountFile::NotStored,
+            AccountFile::Unreadable,
+            &import::Looked::default(),
+            None,
+        );
+        assert!(said.contains(t!(onboarding_pick_one)), "{said}");
+        assert!(said.contains("bravebot auth login xai"), "{said}");
+        assert!(!said.contains(t!(onboarding_xai_signed_in)), "{said}");
+    }
+
+    /// BACKEND-39: a start asks the accounts that are stored and only those, and only where no model was
+    /// named and nothing serves the model in force. The regressions it rejects are a start that does not
+    /// ask where only an xAI sign-in is stored (the dead end), one that asks the account that is not
+    /// signed in to, which would send a token from a file that holds none, one that asks about a model
+    /// the command line named, whose pick the flag would outrank, and one that asks where a sign-in
+    /// cannot be read.
+    #[test]
+    fn a_start_asks_the_accounts_that_are_stored_and_nothing_else() {
+        use bravebot_agent::backend::Serving;
+        let nothing = |chatgpt, xai| Serving::NothingConfigured {
+            subscription: None,
+            a_service_is_configured: chatgpt == AccountFile::Stored || xai == AccountFile::Stored,
+            chatgpt,
+            xai,
+        };
+        let asked = |serving: &Serving, named| asks_which_of_the_accounts_models(serving, named);
+        let accounts = |chatgpt, xai| Some(Accounts { chatgpt, xai });
+
+        assert_eq!(
+            asked(&nothing(AccountFile::NotStored, AccountFile::Stored), None),
+            accounts(false, true)
+        );
+        assert_eq!(
+            asked(&nothing(AccountFile::Stored, AccountFile::NotStored), None),
+            accounts(true, false)
+        );
+        assert_eq!(
+            asked(&nothing(AccountFile::Stored, AccountFile::Stored), None),
+            accounts(true, true)
+        );
+        for serving in [
+            nothing(AccountFile::NotStored, AccountFile::NotStored),
+            nothing(AccountFile::Unreadable, AccountFile::Unreadable),
+            nothing(AccountFile::NotStored, AccountFile::Unreadable),
+            Serving::Configured,
+        ] {
+            assert_eq!(asked(&serving, None), None, "{serving:?}");
+        }
+        for stored in [
+            nothing(AccountFile::NotStored, AccountFile::Stored),
+            nothing(AccountFile::Stored, AccountFile::Stored),
+        ] {
+            assert_eq!(asked(&stored, Some("xai/grok-4.5")), None, "{stored:?}");
+        }
+    }
+
+    /// BACKEND-39: each way an xAI listing gives no row has a sentence of its own, and the heading over
+    /// the rows names the accounts that offered them. The regressions it rejects are one sentence for
+    /// all three, which sends a person whose sign-in ended to try again and one whose listing could not
+    /// be had to sign in, and a heading that names an account that gave no row.
+    #[test]
+    fn an_xai_listing_that_gave_no_row_says_which_way_and_the_heading_names_the_accounts_that_offered()
+     {
+        use bravebot_agent::xai::AccountModels;
+        let ended = why_no_xai_model_was_offered(&AccountModels::Absent);
+        let unreadable = why_no_xai_model_was_offered(&AccountModels::Unlisted);
+        let empty = why_no_xai_model_was_offered(&AccountModels::Offered(Vec::new()));
+        assert_eq!(ended, t!(xai_ended));
+        assert!(ended.contains("bravebot auth login xai"), "{ended}");
+        assert!(unreadable.contains("--model xai/<model>"), "{unreadable}");
+        assert!(
+            !unreadable.contains("auth login"),
+            "a listing that could not be had sent the person to sign in again: {unreadable}"
+        );
+        assert!(empty.contains("lists no model"), "{empty}");
+        let mut all = [ended, unreadable, empty];
+        all.sort();
+        assert!(all.windows(2).all(|pair| pair[0] != pair[1]), "{all:?}");
+
+        let heading = |chatgpt, xai| heading_of(Accounts { chatgpt, xai });
+        assert_eq!(heading(true, false), t!(chatgpt_start_heading));
+        assert_eq!(heading(false, true), t!(xai_start_heading));
+        assert_eq!(heading(true, true), t!(accounts_start_heading));
     }
 }

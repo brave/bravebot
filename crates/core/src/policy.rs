@@ -406,12 +406,6 @@ pub struct Policy<'sink, S: Sink> {
     /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
     /// nothing.
     backslash_separates: bool,
-    /// Whether a `request_path` is granted here without a question and opens its directory to the
-    /// file tools, as of the tool call being answered.
-    ///
-    /// Said by the caller before each call, since the permission mode can change between two of
-    /// them, and read only to word a refusal ([`Policy::path_requests_are_granted_unasked`]).
-    path_requests_unasked: bool,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
     /// Which command lines this session has already put to the user at a run prompt.
@@ -599,7 +593,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
-            path_requests_unasked: false,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
@@ -673,6 +666,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             None => format!("the user let programs {access} {path} for this session"),
         };
         self.allow("path_reach", detail);
+    }
+
+    /// Record that the permission mode reached `directory` for the file tools the first time this
+    /// session, without opening it (MODE-4, PATHREQ-7).
+    ///
+    /// `directory` is where the workspace resolved the path, `tool` and `field` are the call and the
+    /// argument that named it, and nothing is marked trusted or opened by it. Nobody was asked.
+    pub fn record_bypass_reach(
+        &mut self,
+        directory: &str,
+        mode: &'static str,
+        tool: &str,
+        field: &str,
+    ) {
+        self.allow(
+            "path_reach",
+            format!(
+                "{mode} mode let the file tools reach {directory}, named in the {field} of \
+                 {tool}, nobody was asked and nothing was opened"
+            ),
+        );
     }
 
     /// Record that a mode that answers in the person's place opened `path` for the file tools and
@@ -1327,7 +1341,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
-            path_requests_unasked: self.path_requests_unasked,
             trust: self.trust.clone(),
             root: self.root.clone(),
             scratch: self.scratch.clone(),
@@ -6986,18 +6999,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// program wrote.
     pub fn record_requested_scopes(&mut self, detail: String) {
         self.allow("requested_scopes", detail);
-    }
-
-    /// Say whether a `request_path` is granted without a question for the call about to be
-    /// answered (PATHREQ-7).
-    pub fn grant_path_requests_unasked(&mut self, unasked: bool) {
-        self.path_requests_unasked = unasked;
-    }
-
-    /// Whether a `request_path` is granted without a question and opens its directory to the file
-    /// tools, which is what a refusal of a file tool tells the planner to rely on (PATHREQ-7).
-    pub fn path_requests_are_granted_unasked(&self) -> bool {
-        self.path_requests_unasked
     }
 
     /// Record the permission mode a turn begins with, by its name.
@@ -18544,6 +18545,46 @@ five
             );
         }
 
+        /// TRACE-1, PATHREQ-7: the reach the permission mode gave the file tools into a directory is a
+        /// permission under `path_reach` that names the mode, the directory, the tool and its
+        /// argument, and records no trust. The regression it rejects is a record that credits nobody
+        /// or the wrong tool, or one that marks the directory trusted as an opened one is.
+        #[test]
+        fn the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing()
+         {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.record_bypass_reach("/srv/out", "bypass", "write_file", "path");
+            drop(turn);
+            let said: Vec<_> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed { gate, detail } if *gate == "path_reach" => {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(said.len(), 1, "{said:?}");
+            for part in [
+                "bypass mode",
+                "/srv/out",
+                "write_file",
+                "path",
+                "nobody was asked",
+            ] {
+                assert!(said[0].contains(part), "{part}: {}", said[0]);
+            }
+            assert!(
+                !sink
+                    .events()
+                    .iter()
+                    .any(|event| matches!(event, Event::GatePassed { gate: "trust", .. })),
+                "a reach was recorded as trust"
+            );
+        }
+
         /// TRACE-1: a delegate withdrawn for its checkout is a refusal in the trail, with the
         /// fixed cause, the directory a person opened where that was it, and how many of the
         /// call's delegates were not started.
@@ -20190,25 +20231,6 @@ five
             assert!(branch.before_capability(Capability::ShellExec).is_err());
             assert!(branch.read_is_denied("/work/secret.txt"));
             assert!(!branch.read_is_denied("/work/other.txt"));
-        }
-    }
-
-    /// A branch words a refusal as the policy it came from would. One that began with the grant of
-    /// an unasked `request_path` unset would tell the planner to ask when the policy grants it
-    /// without a question.
-    #[test]
-    fn a_branch_keeps_whether_path_requests_are_granted_unasked() {
-        for unasked in [true, false] {
-            let mut sink = RecordingSink::new();
-            let mut policy = open_policy(&mut sink);
-            policy.grant_path_requests_unasked(unasked);
-            let mut record = RecordingSink::new();
-            let branch = policy.branch(&mut record);
-            assert_eq!(
-                branch.path_requests_are_granted_unasked(),
-                unasked,
-                "policy granting unasked: {unasked}"
-            );
         }
     }
 

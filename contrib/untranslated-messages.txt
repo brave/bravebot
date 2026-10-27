@@ -7,15 +7,25 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
-fr:chatgpt-start-chosen
-fr:chatgpt-start-heading
-fr:chatgpt-start-not-remembered
-fr:chatgpt-start-question
-fr:chatgpt-start-row
 fr:chatgpt-use-by-asking
 fr:chatgpt-use-by-naming
+fr:command-lsp
 fr:command-outputs
 fr:configured-start-heading
+fr:editor-file-exited-badly
+fr:editor-file-was-stopped
+fr:lsp-none-started
+fr:lsp-server-running
+fr:lsp-started
 fr:outputs-hint
 fr:outputs-none
+fr:panel-rename-line-in-use
+fr:session-link-not-opened
+fr:session-path-not-a-file
+fr:session-preview-denied
+fr:session-preview-lines
+fr:session-preview-too-large
+fr:session-preview-unavailable
+fr:transcript-copy-block
+fr:watching-back
 fr:watching-outputs-title

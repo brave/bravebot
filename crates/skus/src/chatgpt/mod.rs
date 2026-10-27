@@ -26,19 +26,19 @@
 
 mod account;
 mod authorize;
-mod encoding;
 mod exchange;
 mod id_token;
 mod listener;
 mod renew;
-#[cfg(test)]
-mod stand_in;
 #[cfg(any(test, feature = "test-hosts"))]
 pub mod stand_in_key;
 
-pub use account::{Account, AccountError, Defect, path};
+pub use crate::oauth::{Access, AccountError, Class, Defect, TokenError};
+pub use account::{Account, ChatGpt, path};
 pub use listener::Pages;
-pub use renew::{Access, Renewer, TokenError};
+pub use renew::Renewer;
+
+use crate::oauth::{self, encoding};
 
 use std::path::Path;
 use std::time::Duration;
@@ -109,35 +109,6 @@ pub struct Announcement<'a> {
     /// The loopback port the listener is bound to, which a browser on another machine has to be
     /// able to reach.
     pub port: u16,
-}
-
-/// How a request to the authorization server failed, in the categories the backends use for any
-/// other service's failures.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Class {
-    /// The server refused the request, or answered it with a redirect.
-    Refused,
-    /// The server is limiting requests.
-    RateLimited,
-    /// The server is busy or unavailable.
-    Unavailable,
-    /// The reply was not the shape the exchange records.
-    Incomplete,
-    /// The request did not complete.
-    Transport,
-}
-
-/// A short name for the class, for a log or a test.
-impl std::fmt::Display for Class {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Refused => "refused",
-            Self::RateLimited => "rate-limited",
-            Self::Unavailable => "unavailable",
-            Self::Incomplete => "incomplete",
-            Self::Transport => "transport",
-        })
-    }
 }
 
 /// Why the sign-in stopped.
@@ -272,7 +243,7 @@ fn run(
         (None, None) => return Err(SignInError::NoClient),
     };
 
-    let agent = exchange::agent(transport);
+    let agent = oauth::agent(transport);
     let tokens = exchange::exchange(
         &agent,
         hosts,
@@ -312,9 +283,9 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::encoding::{base64url, base64url_decode, utc};
-    use super::stand_in::{Reply, named, parameters, serve, visit};
     use super::stand_in_key::{KID, header, key_set, signed};
     use super::*;
+    use crate::oauth::stand_in::{Reply, named, parameters, serve, visit};
     use sha2::{Digest, Sha256};
 
     /// The client OpenAI issues in these tests, which an ID token names as its audience.
@@ -398,7 +369,7 @@ mod tests {
     type Outcome = (
         Result<SignedIn, SignInError>,
         Option<(String, u16)>,
-        Vec<stand_in::Received>,
+        Vec<crate::oauth::stand_in::Received>,
     );
 
     /// Run the sign-in with a browser that behaves as `returns` says, against a server that gives

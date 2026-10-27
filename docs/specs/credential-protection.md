@@ -122,7 +122,7 @@ features anything here implements.
 
 | Group | Where it lives |
 | --- | --- |
-| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
+| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/leo-premium.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the imported subscription's signed credential batch, deliberately not the OS keychain; `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)); `~/.bravebot/xai-account.json`, kept the same way, the access token and refresh token `bravebot auth login xai` stored for an xAI account ([XAI-5](xai-sign-in.md#XAI-5)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
 | What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown until nothing has written the record for the retention period, 30 days where none is stated ([state-directory.md](state-directory.md#STATE-4)); `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix (values for an HTTP server's headers are read from the environment at launch and never stored); `/export`, which writes a transcript as markdown inside the working directory |
 | Its own project settings | `.bravebot/settings.json` and `.bravebot/settings.local.json` in a checkout, a layer over the one at home, which on some machines carries credentials |
 | Minted access, by a turn | `~/.ssh/`, then deploy key or `authorized_keys`; `gh auth login`, `~/.config/gh/hosts.yml`; `aws iam create-access-key` → `~/.aws/credentials`; `gcloud iam service-accounts keys create`; `az ad sp create-for-rbac`; `npm token create`, `docker login`, `helm registry login` |
@@ -141,7 +141,7 @@ the only answer that costs no one a decision, and the only one that works before
 Everything outside the working tree has it already: `read_file`, `write_file`, `edit_file` and
 `search` resolve a path and refuse one that lands outside, symlinks included. Its strict form
 covers what the agent authenticates with, `~/.bravebot/leo-premium.json`,
-`~/.bravebot/gateway-keys.json`, `~/.bravebot/chatgpt-account.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
+`~/.bravebot/gateway-keys.json`, `~/.bravebot/chatgpt-account.json`, `~/.bravebot/xai-account.json` and the credentials that sign a model request, which CRED-14 puts out of reach of every program, prompt and record with no
 legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
 it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), except `~/.bravebot/sessions`,
 which it reads and never writes, as it reads `~/.ssh/config`. No `allowRead` or `allowWrite`
@@ -597,6 +597,12 @@ about the profile this agent resolved for itself, which it knows, rather than ab
 that resolves them is a program this agent started all the same, so it is handed what the person's
 own environment holds and none of what this agent authenticates with.
 
+**A gateway's bearer key.** The key an `openai` entry sends in `authorization` is in no error text, no event
+of the run, no line of the diagnostic log and nothing a completed reply holds, on the roster path and on both
+chat paths, including where the service repeats the key in the body of its refusal. A one-shot run through the
+entry, answered or refused, leaves it in no file under the state directory, the record of the session and its trail
+included, and in nothing the run prints.
+
 **The stored ChatGPT sign-in.** `~/.bravebot/chatgpt-account.json` holds an access token and a refresh
 token ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)), and this clause holds them as it holds the gateway
 keys. They are in the secret type, so a print of one is a redaction. The file is one of the locations a
@@ -604,6 +610,17 @@ program a turn runs is refused ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and the
 sign-in command starts is handed none of the variables this clause removes. A run that signs in, renews
 and fails leaves none of the values of the sign-in in the streams of each command, the debug log, the files
 left in the home or the environment of a program a turn starts ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)).
+
+**The stored xAI sign-in.** `~/.bravebot/xai-account.json` holds an access token and a refresh token
+([XAI-5](xai-sign-in.md#XAI-5)), and this clause holds them as it holds the ChatGPT sign-in's: they are in
+the secret type, so a print of one is a redaction, the file is one of the locations a program a turn runs is
+refused ([SANDBOX-12](sandboxing.md#SANDBOX-12)), and the sign-in command starts no program. A run that signs
+in leaves none of the values of the sign-in in the streams of each command or the files left in the home, but
+the file that holds the tokens, and the command writes no log ([XAI-8](xai-sign-in.md#XAI-8)). The access token is
+presented to `api.x.ai` alone, as a bearer on a request that follows no redirect, and the refresh token to
+`auth.x.ai` alone ([XAI-1](xai-sign-in.md#XAI-1), [XAI-16](xai-sign-in.md#XAI-16)). A turn that fails on the
+account says a sentence chosen from the step and a status, and repeats nothing a reply said, since an error
+body carried the account's team identifier ([XAI-15](xai-sign-in.md#XAI-15)).
 
 **The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
 the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
@@ -623,6 +640,8 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_cli::running::doctor_push_identity_hands_none_of_this_agents_credentials_to_the_programs_it_starts`
 `verified-by: bravebot_agent::usability::a_program_the_suite_starts_is_not_handed_this_agents_signing_key`
 `verified-by: bravebot_agent::usability::the_gh_the_login_row_starts_is_not_handed_this_agents_signing_key`
+`verified-by: bravebot_tui::editor::an_editor_a_click_opens_is_not_handed_this_agents_credentials_and_the_prompt_editor_is`
+`verified-by: bravebot_tui::editor::the_editor_a_click_opens_is_started_without_this_agents_own_credentials`
 `verified-by: bravebot_bedrock::credentials::the_machines_own_aws_configuration_still_reaches_the_cli`
 `verified-by: bravebot_config::scrub::a_name_from_the_settings_file_is_not_one_of_this_agents_own`
 `verified-by: bravebot_config::scrub::the_variables_a_provider_block_names_are_withheld`
@@ -631,8 +650,12 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
 `verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
-`verified-by: bravebot_cli::chatgpt::the_opener_is_not_handed_this_agents_own_credentials`
+`verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
+`verified-by: bravebot_skus::xai::account::the_tokens_are_redacted_wherever_the_account_is_printed`
+`verified-by: bravebot_cli::xai_sign_in::a_sign_in_runs_end_to_end_and_no_value_it_handled_is_shown_or_kept_but_in_the_file`
+`verified-by: bravebot_aichat::client::an_openai_key_is_in_no_error_event_log_or_reply_on_the_roster_and_chat_paths`
+`verified-by: bravebot_cli::running::an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints`
 
 <a id="CRED-15"></a>
 ### CRED-15: what a turn reads is scanned before the planner receives it
@@ -733,6 +756,17 @@ a scan they turn off. The prompt names the finding, so the question can be answe
 accepting edits both raise it, bypassing answers it, and no rule, vouch or plan clears it
 ([CRED-13](#CRED-13) says who may answer and for how long).
 
+**The providers whose keys declare themselves** are AWS, GitHub, Slack, Google, Stripe, Anthropic and OpenAI. OpenAI
+states no key format in its documentation, so the shapes come from the `openai-api-key` rule of the gitleaks
+scanner, which matches `sk-proj-`, `sk-svcacct-` or `sk-admin-` followed by the text `T3BlbkFJ` between two runs of
+58 or 74 characters, and `sk-` followed by that text between two runs of 20 letters and digits. A key is reported
+for one of the first three prefixes followed by at least 124 letters, digits, `-` and `_`, and for `sk-` followed by
+at least 48 letters and digits that hold `T3BlbkFJ` at any position, so a key a little off the published shape is
+still found. The marker is required for the `sk-` form only, because 48 letters and digits after `sk-` are also
+what other services' keys look like. On 2026-10-26 a project key was 164 characters: `sk-proj-` and 156 characters
+holding the marker. An Anthropic key is tried first, and the `sk-` form ends at a `-` or an `_`, so an Anthropic key
+is never reported as OpenAI's.
+
 A body that arrived as quarantined content is not scanned, so it raises no finding, and a mode that
 answers writes answers that one as it would any other. The driver reading those bytes to decide
 whether to ask would be a decision taken from untrusted content, and the Known costs record it.
@@ -764,6 +798,10 @@ requires of a finding however it is answered.
 `verified-by: bravebot_core::credentials::a_provider_key_is_recognised_when_it_is_assigned_to_a_name`
 `verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`
 `verified-by: bravebot_core::credentials::each_shape_matches_at_its_minimum_and_not_below_it`
+`verified-by: bravebot_core::credentials::an_openai_key_is_recognised_in_each_of_its_forms`
+`verified-by: bravebot_core::credentials::an_anthropic_key_is_not_read_as_an_openai_one`
+`verified-by: bravebot_core::credentials::the_bare_sk_form_ends_at_a_hyphen_or_an_underscore`
+`verified-by: bravebot_core::credentials::a_short_sk_word_and_an_unmarked_run_are_not_an_openai_key`
 `verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
 `verified-by: bravebot_core::credentials::a_provider_key_standing_alone_is_one_finding_and_not_two`
 `verified-by: bravebot_core::credentials::a_rare_token_with_a_document_around_it_is_not_a_whole_file`
@@ -1082,9 +1120,9 @@ hold. CRED-15's scan of what a turn reads reports the same way and reaches this 
 than the other one does. What exists is the record and one surface that reads it, `doctor`, which
 reports
 what would end each credential this configuration holds, a gateway's bearer token and an imported
-subscription's credential batch included, and the ChatGPT sign-in of a machine that made one
-([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)), which is reported from its file rather than from the
-configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
+subscription's credential batch included, and the ChatGPT sign-in and the xAI sign-in of a machine that made
+one ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6), [XAI-12](xai-sign-in.md#XAI-12)), each reported from its file
+rather than from the configuration, since the file is held on every machine that made a sign-in. A gateway key stored with `bravebot auth login gateway`
 is named as stored, since neither the environment nor a settings file shows where it came from, and
 the account of ending it names `bravebot auth logout gateway` beside revoking it at the gateway. A
 file of those keys it cannot read is named, and the report ends on the failure status, since every
@@ -1102,6 +1140,8 @@ writing a second one.
 `verified-by: bravebot_config::lib::a_chatgpt_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
 `verified-by: bravebot_cli::doctor::a_stored_gateway_key_is_named_as_stored_and_never_printed`
 `verified-by: bravebot_cli::running::doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it`
+`verified-by: bravebot_config::lib::an_xai_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation`
+`verified-by: bravebot_cli::xai_sign_in::doctor_names_an_xai_sign_in_by_its_expiry_and_prints_none_of_it`
 `verified-by: bravebot_cli::running::doctor_names_a_stored_gateway_key_without_printing_it`
 `verified-by: bravebot_cli::running::doctor_fails_on_a_file_of_gateway_keys_it_cannot_read`
 
@@ -1157,8 +1197,8 @@ it is recorded like everything else the walk decides.
 
 **What exists.** The record carries `Held::binding`, which says `Bearer` with the answer the gate
 walk uses (`Refused` for an AWS session, whose issuer offers no bound form, and `NotAttempted` for an
-imported subscription batch and the ChatGPT sign-in, which nobody has asked) for the three derived
-credentials, and nothing for the credentials issued once and held as issued. `doctor` reports it on a `binding` line. No
+imported subscription batch, the ChatGPT sign-in and the xAI sign-in, which nobody has asked) for the four
+derived credentials, and nothing for the credentials issued once and held as issued. `doctor` reports it on a `binding` line. No
 credential is yet held in a sender-constrained form, and nothing here requests one: `Binding::SenderConstrained`
 is the value a credential takes when a form is asked for and granted.
 
@@ -1337,7 +1377,8 @@ We accept these deliberately. Do not "fix" one without changing this spec first.
   [TRACE-2](trace.md#TRACE-2) admitting no field one could sit in, and that it is shown only as a
   redaction rests on the type it is held in; neither is pinned by a test that scans a record or a
   screen for every secret the process holds, which is what the clause says is owed. The ChatGPT
-  sign-in is the one credential a test does scan for, in the outputs of one run.
+  sign-in and the xAI sign-in are the credentials a test does scan for, each in the outputs of a run of its
+  own.
 
 - **Most of this is not implemented.** What runs is the scan of what a turn writes, at the three
   write tools and at the two places a `run` line writes, and one performer: a credential a vault

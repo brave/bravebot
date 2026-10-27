@@ -649,6 +649,9 @@ pub struct Settings {
     /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
     /// mouse to the terminal.
     tui_mouse: Option<bool>,
+    /// What `tui.contextMenu` said, if it said a boolean. `Some(false)` is a right click opening no
+    /// menu, for a terminal that keeps it for its own.
+    tui_context_menu: Option<bool>,
     /// What `deepLinks` said, if it said a boolean. `Some(false)` is a `bravebot://` link being
     /// refused by the handler (LINK-6).
     deep_links: Option<bool>,
@@ -1604,6 +1607,7 @@ impl Settings {
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
+            tui_context_menu: tui_context_menu(root),
             deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
@@ -2262,6 +2266,15 @@ impl Settings {
         self.tui_mouse
     }
 
+    /// Whether `tui.contextMenu` said anything: `Some(false)` asks the interface not to open the
+    /// small menu a right click opens over a reply, a delegate's block or a held selection.
+    ///
+    /// A boolean and nothing else, as [`Settings::tui_mouse`] is, for the same reason: the key exists
+    /// to turn something off, so only a real `false` may do it.
+    pub fn tui_context_menu(&self) -> Option<bool> {
+        self.tui_context_menu
+    }
+
     /// Whether `deepLinks` said anything: `Some(false)` is a person who does not want a link to
     /// open a session (LINK-6), and absent is on.
     pub fn deep_links(&self) -> Option<bool> {
@@ -2311,6 +2324,7 @@ impl Settings {
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.tui_mouse.is_none()
+            && self.tui_context_menu.is_none()
             && self.deep_links.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
@@ -2646,6 +2660,7 @@ impl Settings {
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
+            .chain(self.tui_context_menu.is_some().then_some("tui.contextMenu"))
             .chain(self.deep_links.is_some().then_some("deepLinks"))
             .chain(self.env.keys().map(String::as_str))
     }
@@ -3685,6 +3700,14 @@ fn tui_mouse(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> 
         return None;
     };
     tui.get("mouse").and_then(serde_json::Value::as_bool)
+}
+
+/// The `tui.contextMenu` switch, read as `tui.mouse` is: only a real boolean counts.
+fn tui_context_menu(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    let serde_json::Value::Object(tui) = root.get("tui")? else {
+        return None;
+    };
+    tui.get("contextMenu").and_then(serde_json::Value::as_bool)
 }
 
 /// Whether `character` separates one segment of a path from the next on this host.
@@ -4842,6 +4865,50 @@ mod tests {
             .project(r#"{"tui": {"mouse": false}}"#)
             .read();
         assert_eq!(layered.tui_mouse(), Some(false));
+        assert_eq!(layered.unread_keys().count(), 0);
+    }
+
+    /// MOUSE-52: only a real `false` turns the context menu off, so a quoted `"false"` or a misplaced
+    /// key leaves the right click opening it, and the nearest layer that named it wins.
+    #[test]
+    fn only_a_boolean_turns_the_context_menu_off() {
+        let settings = Settings::parse(r#"{"tui": {"contextMenu": false}}"#);
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["tui.contextMenu"]);
+        // The menu and the mouse are two settings, and one does not say the other.
+        assert_eq!(settings.tui_mouse(), None);
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"mouse": false}}"#).tui_context_menu(),
+            None
+        );
+
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"contextMenu": true}}"#).tui_context_menu(),
+            Some(true)
+        );
+        for text in [
+            r#"{"tui": {"contextMenu": "false"}}"#,
+            r#"{"tui": {"contextMenu": 0}}"#,
+            r#"{"tui": {"contextMenu": null}}"#,
+            r#"{"tui": {}}"#,
+            r#"{"tui": false}"#,
+            r#"{"contextMenu": false}"#,
+            r#"{"tui": {"context_menu": false}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).tui_context_menu(),
+                None,
+                "{text:?} turned the menu off"
+            );
+        }
+
+        let layered = Layers::new("tui-context-menu-layers")
+            .global(r#"{"tui": {"contextMenu": true}}"#)
+            .project(r#"{"tui": {"contextMenu": false}}"#)
+            .read();
+        assert_eq!(layered.tui_context_menu(), Some(false));
         assert_eq!(layered.unread_keys().count(), 0);
     }
 

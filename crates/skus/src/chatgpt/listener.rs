@@ -7,8 +7,8 @@
 //! ignored. From the callback it reads three query parameters and nothing else, and it reads no
 //! header.
 
-use super::encoding::{percent_decode, same};
 use crate::Secret;
+use crate::oauth::encoding::{percent_decode, same};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};

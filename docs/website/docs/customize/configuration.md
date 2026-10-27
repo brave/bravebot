@@ -10,13 +10,14 @@ There is one thing to set up before the first session, and it is which service a
 released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
 configured to do this work: no account was named, no gateway was written down, and no subscription
 was imported. So rather than open a session with nothing set up to answer it, a first run **says
-what to configure and stops**. It names four routes, each by the thing to type or write:
+what to configure and stops**. It names five routes, each by the thing to type or write:
 
 | Route | Where |
 |---|---|
 | your own AWS account | [Reaching a model through AWS Bedrock](#reaching-a-model-through-aws-bedrock) |
 | an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
 | a ChatGPT Plus or Pro account | [Reaching a model with a ChatGPT account](providers/chatgpt.md) |
+| an xAI SuperGrok subscription | [Reaching a model with an xAI SuperGrok subscription](providers/xai.md) |
 | a Leo Premium subscription you already have | [Leo Premium](premium.md) |
 
 `bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
@@ -27,11 +28,14 @@ opens, so picking one of Brave's models from `/model` mid-session does not raise
 **If you have configured a service and still see this, you are one key from working.** A settings
 block copied out of another tool names its models and names no default, so the model in force is
 still the one the build came with. That case gets one line naming the [`model`](#model) key rather
-than the routes. A stored [ChatGPT sign-in](providers/chatgpt.md) is such a service where nothing else
-serves the model in force: `bravebot` started on its own in a terminal asks which of the account's
-models to use, and where it does not ask the line names `bravebot -i "<prompt>" --model chatgpt/<model>` and
-`bravebot "<task>" --model chatgpt/<model>`. Beside a gateway or an AWS account the line is the one that
-names the `model` key. A sign-in file that cannot be read configures nothing, and a first run with nothing else
+than the routes. A stored [ChatGPT sign-in](providers/chatgpt.md) or [xAI sign-in](providers/xai.md) is such a
+service where nothing else serves the model in force: `bravebot` started on its own in a terminal asks which of
+the accounts' models to use, and where it does not ask the line says which sign-in is stored and names
+`bravebot -i "<prompt>" --model chatgpt/<model>` or `--model xai/<model>`, and `bravebot "<task>" --model
+chatgpt/<model>` or `--model xai/<model>`, for the account the person has. Beside a gateway or an AWS account `bravebot` started on its own asks which
+of that service's models to use, and not the account's, which are not asked for or read, and where that is
+declined, or in a script, a one-shot run or an incognito session, the line is the one that names the `model`
+key. A sign-in file that cannot be read configures nothing, and a first run with nothing else
 configured says so, with what to run, before the routes.
 
 **If Claude Code or opencode already reaches a service on this machine, or Ollama, LM Studio or
@@ -374,6 +378,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `terminalTitle` | whether the terminal's title is set to the session's name ([below](#terminaltitle)) |
 | `deepLinks` | `false` makes `bravebot --handle-uri` refuse every `bravebot://open` link ([below](#deeplinks)) |
 | `tui.mouse` | `false` stops the interface capturing the mouse, so the terminal's own selection works ([below](#tuimouse)) |
+| `tui.contextMenu` | `false` stops a right click opening the small menu over a reply, a delegate's block or a selection ([below](#tuicontextmenu)) |
 | `tui.wheelRows` | how many rows one mouse wheel notch scrolls ([below](#tuiwheelrows)) |
 | `updateCheck` | whether startup checks for a newer release ([below](#updatecheck)) |
 | `crashReports` | `false` stops crash reports being written and sent. Read from your own file only ([below](#crashreports)) |
@@ -706,7 +711,8 @@ none.
 
 How long the service keeps the cached prompt after the last request that read it: `5m` for five
 minutes or `1h` for one hour. It applies to requests that go to an AWS account and to an
-OpenAI-compatible gateway, and not to Brave's own endpoint. A person who pauses for longer than the
+OpenAI-compatible gateway, and not to Brave's own endpoint or to `api.openai.com`, which caches without
+being asked. A person who pauses for longer than the
 default lifetime between turns pays to read the whole conversation again; the one-hour lifetime avoids
 that, and the providers charge a higher rate to write it. With the key absent, bravebot sends no
 lifetime and every service keeps its own default. Any other word names nothing and sends nothing.
@@ -932,7 +938,44 @@ and wheel scrolling do not (use the keys and the scroller instead). Only the boo
 this: `"false"` in quotes or any other value leaves capture on. Read when the session opens.
 
 While capture is on, most terminals still select natively if you hold a modifier while dragging:
-Shift on most, Option on macOS iTerm2 and Terminal.app.
+Shift on most, Option on macOS iTerm2 and Terminal.app. [The mouse](../using/transcript.md#the-mouse)
+says what the session does with it while it is captured.
+
+**Behind tmux or GNU screen,** the session asks the terminal it is attached to for the buttons, the
+wheel, motion with a button held and motion with none, and for coordinates in the form that can name
+a column or a row past 223 (SGR, mode 1006). Inside a multiplexer the terminal the session is
+attached to is the multiplexer, which has to forward the reports it gets from your terminal, and in
+the form that was asked for. The session cannot tell when it does not: the wheel and a drag then do
+nothing in it, or act on the multiplexer's own scrollback and selection. What the multiplexers' own
+documents show:
+
+- tmux has a `mouse` option, off by default, that makes it capture the mouse for its own key
+  bindings. As of tmux 3.5a its source forwards a mouse report to a program that asked for them with
+  the option off, and with it on through its default key bindings. It keeps one tracking mode for
+  each pane, the last the program asked for, and writes the SGR form to the program only when the
+  program asked for it and your terminal sent that form to tmux. Otherwise it writes the plain older
+  form, in which a position past what the form can hold is set to the last cell it can name, which
+  is a click at the wrong cell on a wide screen.
+- The GNU screen manual lists mouse tracking among the modes it understands as modes 9 and 1000 and
+  no other, so where it is used, assume the wheel and a click arrive, and that a drag, the target
+  under the pointer and a column past 223 may not.
+
+This is what the multiplexers' documents say, and the session has not been run inside either. If the
+wheel and a drag do nothing, check what the multiplexer forwards first. Hold the modifier above to
+select with the terminal in the meantime, or set `tui.mouse` to `false`, which stops the session
+asking for the mouse at all.
+
+### `tui.contextMenu`
+
+```json
+{ "tui": { "contextMenu": false } }
+```
+
+`false` stops a right click opening the [small menu](../using/transcript.md#the-right-click-menu) over a reply, a delegate's
+block or a selection you hold. The mouse is still captured, so the wheel and the drag selection keep
+working, and a terminal that keeps the right click for a menu of its own, or that reports a ctrl-click
+as one, as macOS Terminal does, can then have it. Only the boolean `false` does this: `"false"` in
+quotes or any other value leaves the menu on. Read when the session opens.
 
 ### `tui.wheelRows`
 
@@ -940,9 +983,11 @@ Shift on most, Option on macOS iTerm2 and Terminal.app.
 { "tui": { "wheelRows": 5 } }
 ```
 
-How many rows one mouse wheel notch scrolls, in the transcript of the session view, in
-[the scroller](../using/transcript.md) and in the list and the edits of
-[the files view](../using/sessions.md#the-files-the-session-wrote) alike. Without this key it is 3,
+How many rows of the transcript one mouse wheel notch scrolls, in the session view and in
+[the scroller](../using/transcript.md) alike, and how many rows of the list and of the edits it
+scrolls in [the files view](../using/sessions.md#the-files-the-session-wrote). It is also how many
+rows or items a notch moves the cursor in a picker, in the search over earlier prompts, in the lists of
+sessions, in the list offered under the box and in the right-click menu. Without this key it is 3,
 which is what a terminal's own scrollback moves.
 
 Terminals disagree about how many events a notch sends, and a trackpad swipe sends a stream of them,

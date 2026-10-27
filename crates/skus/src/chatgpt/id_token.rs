@@ -8,10 +8,10 @@
 //! subject. No other claim is read. What leaves this module is whether the token verified, or the
 //! class of the key set request that failed, and no claim of the token.
 
-use super::encoding::{base64url_decode, same};
-use super::exchange::class_of;
 use super::{Class, Hosts};
 use crate::Secret;
+use crate::oauth::class_of;
+use crate::oauth::encoding::{base64url_decode, same};
 use crate::secret::Document;
 use ring::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 
@@ -231,12 +231,12 @@ fn claims_hold(claims: &serde_json::Value, client: &str, nonce: &Secret, now: u6
 
 #[cfg(test)]
 mod tests {
-    use super::super::encoding::base64url;
-    use super::super::stand_in::{Reply, serve};
     use super::super::stand_in_key::{
         KID, another_public, header, key_set, public, sign_input, signed, signed_by_another_key,
     };
     use super::*;
+    use crate::oauth::encoding::base64url;
+    use crate::oauth::stand_in::{Reply, serve};
     use hmac::Mac;
     use serde_json::{Value, json};
     use sha2::{Sha256, Sha512};
@@ -318,7 +318,7 @@ mod tests {
     /// server of the key set took.
     fn checked_at(token: &str, keys: &str, now: u64) -> (Result<(), Failed>, usize) {
         let server = serve(vec![Reply::json(200, keys)]);
-        let agent = super::super::exchange::agent(ureq::Agent::config_builder());
+        let agent = crate::oauth::agent(ureq::Agent::config_builder());
         let result = verify(
             &agent,
             &Hosts::at(&server.base),

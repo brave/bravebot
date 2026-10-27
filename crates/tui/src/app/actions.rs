@@ -85,6 +85,51 @@ impl Held<'_> {
         }
     }
 
+    /// Carry out a click on a file path: show the lines of the file under a call, or say that the
+    /// name is not one the session reads (MOUSE-42).
+    pub(super) fn preview_file(&mut self, path: &crate::text_links::PathRef) {
+        let trail = crate::file_preview::show(
+            self.session,
+            self.workspace,
+            &self.answers.trust,
+            &self.answers.rules.permissions,
+            path,
+        );
+        if !trail.events().is_empty() {
+            self.stored.append_audit(self.session.turns, trail.events());
+        }
+    }
+
+    /// Carry out a click with ctrl held on a file path: open the file in the person's editor at the
+    /// line the path gave, or say that the name is not a file the session reads (MOUSE-43).
+    ///
+    /// Resolved as a preview is, so a name that climbs out or leads out is refused, and not by the
+    /// person's `deny` rules: bravebot reads nothing here, and the editor is the person's own.
+    pub(super) fn edit_file(
+        &mut self,
+        terminal: &mut Tty,
+        path: &crate::text_links::PathRef,
+    ) -> io::Result<()> {
+        let Some(file) = self.file_to_edit(path) else {
+            return Ok(());
+        };
+        super::terminal::open_file_in_editor(terminal, self.session, &file, path.line, path.column)
+    }
+
+    /// The file a click with ctrl held on `path` opens, as the absolute path the file tools reach it
+    /// at, or `None` after saying that the name is not a file the session reads, without repeating
+    /// it. No `deny` rule is asked: the editor is the person's own program.
+    pub(super) fn file_to_edit(
+        &mut self,
+        path: &crate::text_links::PathRef,
+    ) -> Option<std::path::PathBuf> {
+        let file = self.workspace.file_named(&path.path);
+        if file.is_none() {
+            self.session.note(t!(session_path_not_a_file));
+        }
+        file
+    }
+
     /// Put back what a turn returned, and hand on the events it recorded.
     pub(super) fn take_back(&mut self, continued: Continued) -> Vec<Stamped> {
         // Taken apart with no `..`, so an answer a turn learns to remember does not build until it

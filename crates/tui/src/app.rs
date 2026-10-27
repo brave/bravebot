@@ -74,7 +74,7 @@ use models::*;
 // Public for the CLI, which names them as `bravebot_tui::app::..`.
 pub use models::{
     account_models_to_start_on, adopt_listing_for_model, configured_models_to_start_on,
-    reads_structured_output,
+    reads_structured_output, xai_models_to_start_on,
 };
 
 mod opening;
@@ -91,6 +91,7 @@ mod side_requests;
 use side_requests::*;
 
 mod terminal;
+pub(crate) use terminal::TRACK_MOTION_ONLY_WHILE_DRAGGING;
 use terminal::*;
 
 mod turns;
@@ -176,6 +177,8 @@ fn status_report(
         .map(|home| bravebot_agent::reach::listed(&home, stored.id(), workspace.root()))
         .unwrap_or_default();
     let requested_paths = bravebot_agent::reach::requested_paths_listed(&workspace.path_reach());
+    let reached_directories =
+        bravebot_agent::reach::reached_directories_listed(&workspace.reached_directories());
     crate::status::report(&crate::status::Facts {
         session_name: stored.title(),
         session_id: stored.id(),
@@ -226,6 +229,7 @@ fn status_report(
             }),
         reach: &reach,
         requested_paths: &requested_paths,
+        reached_directories: &reached_directories,
         kept_trust: kept
             .as_ref()
             .map(|(when, path, root)| crate::status::KeptTrust {
@@ -273,6 +277,20 @@ fn turn_key(
 ) -> Action {
     let action = handle_key_while_working(session, key);
     carry_out_held_pick(session, beside.config);
+    carry_out_while_working(session, action, cancel, beside)
+}
+
+/// Carry out what a key or a click answered with while a turn runs.
+///
+/// Both come here so a command a click stands for finishes as the same command typed does: a click
+/// on the panel's model row asks for the picker the way `/model` does, and the loop that holds the
+/// configuration opens it (MOUSE-29).
+fn carry_out_while_working(
+    session: &mut Session,
+    action: Action,
+    cancel: &Cancel,
+    beside: &mut Beside<'_>,
+) -> Action {
     match action {
         Action::SendNow => stop_what_is_running(session, cancel),
         Action::Rename(name) => {
@@ -327,6 +345,9 @@ fn turn_key(
         Action::CopyReply(text) => session.answer_while_working(|session| {
             copy_reply(session, &text, crate::clipboard::copy);
         }),
+        // A link `/open` named, opened as a click on it opens it: starting the browser changes
+        // nothing the turn holds (MOUSE-40, CMD-30).
+        Action::OpenUrl(address) => open_link(session, &address, true),
         Action::Export(path) => session.answer_while_working(|session| {
             export_session(session, beside.stored, beside.root, path.as_deref());
         }),
@@ -492,6 +513,26 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.report_context();
         return Action::Redraw;
     }
+    if line.trim() == LSP_COMMAND {
+        session.report_started_language_servers();
+        return Action::Redraw;
+    }
+    if let Some(argument) = argument_to(line, OPEN_COMMAND) {
+        return match crate::open_command::parse(argument) {
+            crate::open_command::Asked::List => {
+                session.list_links();
+                Action::Redraw
+            }
+            crate::open_command::Asked::Number(number) => session.open_listed_link(number),
+            crate::open_command::Asked::Edit(number) => session.edit_listed_link(number),
+            crate::open_command::Asked::Typed(typed) => session.open_typed(&typed, false),
+            crate::open_command::Asked::EditTyped(typed) => session.open_typed(&typed, true),
+            crate::open_command::Asked::Unreadable => {
+                session.note(t!(open_takes));
+                Action::Redraw
+            }
+        };
+    }
     if let Some(figure) = argument_to(line, LIMIT_COMMAND) {
         set_limit(session, figure);
         return Action::Redraw;
@@ -526,7 +567,7 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         };
     }
     if let Some(back) = argument_to(line, COPY_COMMAND) {
-        return match reply_to_copy(session, back) {
+        return match text_to_copy(session, back) {
             Ok(text) => Action::CopyReply(text),
             Err(refused) => {
                 session.note(refused);
@@ -1100,7 +1141,34 @@ fn act_while_working(
     if action == Action::Suspend {
         return Action::Suspend;
     }
+    // A copy that a key asked for, which the item of the menu a right click opened does, needs the
+    // terminal that only [`pump_terminal`] holds (MOUSE-52).
+    if matches!(action, Action::Copy | Action::CopyReply(_)) {
+        return action;
+    }
     Action::None
+}
+
+/// What a working loop is handed to answer: a key, or what a click asked for.
+///
+/// A click is answered by the session where it can be, and what it leaves for a loop to carry out
+/// is handed to the loop with the rest of what the loop holds (MOUSE-29). A copy is not handed on:
+/// a selection needs the terminal that only [`pump_terminal`] holds, and a reply copied by a click is
+/// carried out for every loop alike, both by [`answer_mouse`].
+enum Heard {
+    Key(KeyEvent),
+    Click(Action),
+}
+
+/// A working loop that has no use for what a click asks for, which is every loop but a turn's:
+/// each queues a command a click stands for, as it does one typed, so none is left to carry out.
+fn only_keys(
+    mut on_key: impl FnMut(&mut Session, KeyEvent) -> Action,
+) -> impl FnMut(&mut Session, Heard) -> Action {
+    move |session, heard| match heard {
+        Heard::Key(key) => on_key(session, key),
+        Heard::Click(_) => Action::None,
+    }
 }
 
 /// Wait for the terminal for a frame, and handle everything that has arrived.
@@ -1110,30 +1178,47 @@ fn act_while_working(
 /// not one event per pass: a drag read one event at a time takes seconds to catch up with the
 /// pointer.
 ///
-/// A key goes to `on_key`, which is the one part that differs between the loops. A paste and the
+/// A key goes to `on_input`, which is the one part that differs between the loops. A paste and the
 /// mouse are the same in all of them, so they are answered here, and a paste reaches
-/// [`act_while_working`] so the clipboard is read for it. What `on_key` answers with is carried out
-/// here when it needs the terminal, which no loop's own closure holds: [`Action::Suspend`] gives
-/// the terminal back, stops, and takes it again, and the loop carries on afterwards (INPUT-47).
+/// [`act_while_working`] so the clipboard is read for it. What `on_input` answers a key with is carried
+/// out here when it needs the terminal, which no loop's own closure holds: [`Action::Suspend`] gives
+/// the terminal back, stops, and takes it again, and the loop carries on afterwards (INPUT-47). What a
+/// click asks for other than a copy goes to `on_input` as well.
 fn pump_terminal(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
-    mut on_key: impl FnMut(&mut Session, KeyEvent) -> Action,
+    mut on_input: impl FnMut(&mut Session, Heard) -> Action,
 ) -> io::Result<()> {
-    if input::poll(FRAME)? {
+    // Sooner while a drag held outside the transcript is scrolling it, since the pointer held still
+    // sends nothing to wake the loop for the next step (MOUSE-37).
+    let wait = if session.pulling_at_an_edge() {
+        select::EDGE_TICK
+    } else {
+        FRAME
+    };
+    if input::poll(wait)? {
         while input::poll(Duration::ZERO)? {
             let taken = input::read()?;
             took_input(session, &taken);
             match taken {
                 TermEvent::Key(key) => {
-                    let answered = on_key(session, key);
+                    let answered = on_input(session, Heard::Key(key));
                     // The turn stops with the process and goes on after it.
                     #[cfg(unix)]
                     if answered == Action::Suspend {
                         suspend_session(terminal, session)?;
                     }
-                    #[cfg(not(unix))]
-                    let _ = answered;
+                    // What the menu a right click opened asked for with a key is carried out as a
+                    // click's is (MOUSE-52).
+                    match answered {
+                        Action::Copy => {
+                            copy_selection(terminal, session, crate::clipboard::copy)?;
+                        }
+                        reply @ Action::CopyReply(_) => {
+                            copy_a_reply_clicked(session, reply, crate::clipboard::copy);
+                        }
+                        _ => {}
+                    }
                 }
                 TermEvent::Paste(text) => {
                     let action = handle_paste_while_working(session, &text);
@@ -1141,18 +1226,60 @@ fn pump_terminal(
                     let _ = act_while_working(session, action, crate::clipboard::paste);
                 }
                 TermEvent::Mouse(mouse) => {
-                    // Bound rather than tested inline, because handling the event scrolls and
-                    // moves the selection whatever it returns. A match guard would hide that.
-                    let action = handle_mouse(session, mouse);
-                    if action == Action::Copy {
-                        copy_selection(terminal, session)?;
+                    // What a report leaves that is not a copy is for the loop to carry out
+                    // (MOUSE-29). Nothing a click leaves can suspend or stop anything, so what the
+                    // loop answers is not handed on.
+                    let left = answer_mouse(terminal, session, mouse, crate::clipboard::copy)?;
+                    // A click on the hint that names the paste key asks for the clipboard, which
+                    // only a loop that reads the terminal can take (MOUSE-48).
+                    if left == Action::Paste {
+                        take_from_clipboard(session, crate::clipboard::paste());
+                    } else {
+                        let _ = on_input(session, Heard::Click(left));
                     }
                 }
                 _ => {}
             }
         }
     }
+    // Whether or not anything arrived: the step is owed to a pointer that stayed where it was.
+    session.scroll_toward_the_pointer(Instant::now());
     Ok(())
+}
+
+/// Answer one mouse report where a turn or a command is running: a selection the report ended, or a
+/// reply it asked to copy, goes to the clipboard through `copy`, and a link it opened goes to the
+/// browser (MOUSE-40). Opening a link changes nothing the work in flight holds, so it is not held
+/// back as a command that acts on the conversation would be.
+///
+/// The event is handled before the action is looked at, because handling it scrolls and moves the
+/// selection whatever it returns. A match guard would hide that. What the report asks for that is
+/// not carried out here is given back, for a loop that holds what carrying it out takes (MOUSE-29).
+fn answer_mouse<B>(
+    terminal: &mut Terminal<B>,
+    session: &mut Session,
+    mouse: ratatui::crossterm::event::MouseEvent,
+    copy: impl FnOnce(&str) -> bool,
+) -> io::Result<Action>
+where
+    B: ratatui::backend::Backend,
+    B::Error: Send + Sync + 'static,
+{
+    match handle_mouse(session, mouse) {
+        Action::Copy => {
+            copy_selection(terminal, session, copy)?;
+            Ok(Action::None)
+        }
+        reply @ Action::CopyReply(_) => {
+            copy_a_reply_clicked(session, reply, copy);
+            Ok(Action::None)
+        }
+        Action::OpenUrl(address) => {
+            open_link(session, &address, true);
+            Ok(Action::None)
+        }
+        left => Ok(left),
+    }
 }
 
 /// Interpret a paste.
@@ -1179,8 +1306,8 @@ pub fn handle_paste(session: &mut Session, text: &str) -> Action {
 /// The steps a paste takes at rest and mid-turn alike, kept in one place so the two cannot disagree
 /// about them.
 fn paste_into_box(session: &mut Session, text: &str) -> Action {
-    // The line is the scroller's to leave alone, and the delegate view's, the picker's and the
-    // prompt search's: a paste is not a key, so it arrives from the terminal whatever mode is open
+    // The line is the scroller's to leave alone, and the delegate view's, the picker's, the prompt
+    // search's and the menu's: a paste is not a key, so it arrives from the terminal whatever mode is open
     // and the guard that holds the box still for a keystroke never sees it. Nothing is said about
     // it either way: the scroller and the view have the whole screen but their footer, and a
     // sentence drawn nowhere is no answer. Before the empty case as much as the rest, because that
@@ -1188,8 +1315,7 @@ fn paste_into_box(session: &mut Session, text: &str) -> Action {
     // picture in a box nobody can see.
     if session.scrolling()
         || session.watching().is_some()
-        || session.picking().is_some()
-        || session.searching_history()
+        || session.modal()
         || session.files_open()
     {
         return Action::None;
@@ -1338,10 +1464,18 @@ fn mark_title(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: crat
 /// the frame that drew the screen is the only place the screen can be read from.
 ///
 /// A click that swept over nothing just puts the selection away.
-fn copy_selection(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+///
+/// `copy` puts the text where it is going and says whether anything took it, as the one `/copy`
+/// is given does, so a test can see what a release hands over.
+fn copy_selection<B>(
+    terminal: &mut Terminal<B>,
     session: &mut Session,
-) -> io::Result<()> {
+    copy: impl FnOnce(&str) -> bool,
+) -> io::Result<()>
+where
+    B: ratatui::backend::Backend,
+    B::Error: Send + Sync + 'static,
+{
     let Some(selection) = session.selection else {
         return Ok(());
     };
@@ -1351,13 +1485,17 @@ fn copy_selection(
     }
 
     let text = {
-        // Drawn to be read back rather than to be looked at, and it draws what the last frame
-        // drew, so it has nothing new to tell the session about the layout.
+        // Drawn to be read back rather than to be looked at. The view may have scrolled since the
+        // last frame was drawn, so the layout this one reports is recorded as any frame's is, and the
+        // selection is read against the rows it drew.
+        let mut laid = crate::state::Laid::default();
         let completed = terminal
-            .draw(|frame| {
-                render::draw(frame, session);
-            })
+            .draw(|frame| laid = render::draw(frame, session))
             .map_err(io::Error::other)?;
+        session.note_layout(laid);
+        let Some(selection) = session.selection else {
+            return Ok(());
+        };
         selected_text(session, completed.buffer, &selection)
     };
 
@@ -1367,10 +1505,25 @@ fn copy_selection(
         return Ok(());
     }
 
-    if crate::clipboard::copy(&text) {
-        session.note_copied(text.chars().count());
+    if copy(&text) {
+        session.note_copied_from(text.chars().count(), selection.pane());
     }
     Ok(())
+}
+
+/// Carry out the copy a click on a reply's marker asked for, in a loop that runs while work does.
+///
+/// [`answer_mouse`] carries out a copy of a selection itself, so a reply copied by a click is carried
+/// out here, where `/copy` carries it out mid-turn. A command answered
+/// while work runs takes the view to the tail so its answer is read, and a click is made from
+/// wherever the person is reading, so the view is left there.
+fn copy_a_reply_clicked(session: &mut Session, action: Action, copy: impl FnOnce(&str) -> bool) {
+    let Action::CopyReply(text) = action else {
+        return;
+    };
+    let held = session.scroll;
+    session.answer_while_working(|session| copy_reply(session, &text, copy));
+    session.scroll = held;
 }
 
 /// What `selection` covers on the drawn `buffer`, as it is put on the clipboard.
@@ -1383,6 +1536,15 @@ fn selected_text(
     buffer: &ratatui::buffer::Buffer,
     selection: &select::Selection,
 ) -> String {
+    // A selection of the transcript is read from the transcript's own rows, since it can reach rows
+    // that are off the screen (MOUSE-35).
+    if selection.scrolls() {
+        let Some(window) = session.laid.window else {
+            return String::new();
+        };
+        let rows = render::Rows::new(session, window);
+        return select::text_of_transcript(selection, |first, last| rows.window(first, last));
+    }
     let joined = session
         .laid
         .panes
@@ -1390,12 +1552,66 @@ fn selected_text(
         .find(|(pane, _)| *pane == select::Pane::Panel)
         .map(|(_, rect)| crate::panel::continued_rows(session, *rect))
         .unwrap_or_default();
-    select::text_wrapping(buffer, selection, &joined, &session.laid.continued)
+    select::text_without_chrome(
+        buffer,
+        selection,
+        &joined,
+        &session.laid.continued,
+        &session.laid.chrome,
+    )
+}
+
+/// What `/copy` was asked for: a reply, or with the word `block` a fenced block of one (MOUSE-27), or
+/// with the word `text` a reply as the screen shows it (MOUSE-52).
+fn text_to_copy(session: &Session, argument: &str) -> Result<String, String> {
+    if let Some(back) = after_the_word(argument, COPY_BLOCK) {
+        return block_to_copy(session, back);
+    }
+    if let Some(back) = after_the_word(argument, COPY_TEXT) {
+        return reply_back(session, back).map(copyable_as_text);
+    }
+    reply_to_copy(session, argument)
+}
+
+/// What follows `word` in `argument`, with the blanks around it left out, where `word` is the whole
+/// of the first word: `blocks` is not `block`.
+fn after_the_word<'a>(argument: &'a str, word: &str) -> Option<&'a str> {
+    let back = argument.strip_prefix(word)?;
+    (back.is_empty() || back.starts_with(char::is_whitespace)).then(|| back.trim())
+}
+
+/// The block `/copy block` was asked for: the latest when nothing follows the word, otherwise the
+/// one that many blocks back, counting the blocks of every reply from the latest as the replies
+/// are counted. It is refused as a reply is: a number that is not one, no block at all, and a
+/// number past the oldest block each come back as the note that says so.
+fn block_to_copy(session: &Session, back: &str) -> Result<String, String> {
+    let steps = if back.is_empty() {
+        1
+    } else if back.bytes().all(|byte| byte.is_ascii_digit()) {
+        back.parse::<usize>().unwrap_or(usize::MAX)
+    } else {
+        0
+    };
+    if steps == 0 {
+        return Err(t!(session_copy_block_needs_a_number).to_string());
+    }
+    if let Some(block) = session.blocks_newest_first().nth(steps - 1) {
+        return Ok(copyable(&block));
+    }
+    match session.blocks_newest_first().count() {
+        0 => Err(t!(session_copy_no_block).to_string()),
+        blocks => Err(t!(session_copy_block_goes_no_further, blocks = blocks)),
+    }
+}
+
+/// The words `/copy` puts on the clipboard for the reply it was asked for (CMD-11).
+fn reply_to_copy(session: &Session, back: &str) -> Result<String, String> {
+    reply_back(session, back).map(copyable)
 }
 
 /// The reply `/copy` was asked for: the latest when nothing follows the word, otherwise the one
 /// that many replies back. What it refuses comes back as the note that says so (CMD-11).
-fn reply_to_copy(session: &Session, back: &str) -> Result<String, String> {
+fn reply_back<'a>(session: &'a Session, back: &str) -> Result<&'a str, String> {
     // Digits alone: `+2` is a word, and a number too long to hold is still past the oldest reply.
     let steps = if back.is_empty() {
         1
@@ -1408,13 +1624,20 @@ fn reply_to_copy(session: &Session, back: &str) -> Result<String, String> {
         return Err(t!(session_copy_needs_a_number).to_string());
     }
     if let Some(reply) = session.replies_newest_first().nth(steps - 1) {
-        return Ok(copyable(reply));
+        return Ok(reply);
     }
     // Saying how far back it does go, since the next thing the person types is that number.
     match session.replies_newest_first().count() {
         0 => Err(t!(session_copy_no_reply).to_string()),
         replies => Err(t!(session_copy_goes_no_further, replies = replies)),
     }
+}
+
+/// A reply as the screen shows it, with every control character left out but its line breaks and
+/// tabs: none of the marks of the markdown it was written in, none of the marker and margin the screen
+/// draws, and no wrapping (MOUSE-52). What `/copy text` and the item of the menu that says so copy.
+fn copyable_as_text(words: &str) -> String {
+    copyable(&render::reply_as_text(words))
 }
 
 /// A reply with every control character left out but its line breaks and tabs.
@@ -1438,6 +1661,33 @@ fn copy_reply(session: &mut Session, text: &str, copy: impl FnOnce(&str) -> bool
         session.note_copied(text.chars().count());
     } else {
         session.note(t!(session_copy_failed));
+    }
+}
+
+/// Hand a web address a person clicked to their browser, and say so where no browser was started
+/// (MOUSE-40). The address is the one the cells showed, which the opener tests again.
+///
+/// `working` is whether a turn or a command is running, where a note is kept off the transcript
+/// until it ends as every command's answer is.
+fn open_link(session: &mut Session, address: &str, working: bool) {
+    open_link_with(session, address, working, session.opens_an_address);
+}
+
+/// [`open_link`], with what starts the browser stated so a test starts none.
+pub(crate) fn open_link_with(
+    session: &mut Session,
+    address: &str,
+    working: bool,
+    open: impl FnOnce(&str) -> bool,
+) {
+    if open(address) {
+        return;
+    }
+    let said = t!(session_link_not_opened).to_string();
+    if working {
+        session.answer_while_working(|session| session.note(said));
+    } else {
+        session.note(said);
     }
 }
 
@@ -1550,7 +1800,10 @@ pub fn run(
     // Read before the takeover, which is where capture is asked for, and again with the rest of the
     // settings once the session exists: the file is small and the session is built after the
     // terminal is taken.
-    let mouse = bravebot_config::Settings::load().tui_mouse() != Some(false);
+    let early = bravebot_config::Settings::load();
+    let mouse = early.tui_mouse() != Some(false);
+    // The list of sessions `--resume` opens runs before there is a session to read the step from.
+    let wheel = crate::state::wheel_rows_named(early.wheel_rows());
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout, mouse)?;
     // After the takeover, which has finished asking about the background, and before the first
@@ -1576,7 +1829,7 @@ pub fn run(
                 Start::ChooseFromPr(wanted) => Some(wanted.as_str()),
                 _ => None,
             };
-            match crate::resume::choose(&mut terminal, workspace.root(), from_pr) {
+            match crate::resume::choose(&mut terminal, workspace.root(), from_pr, wheel) {
                 crate::resume::Choice::Resume(record) => Some(Start::Resuming(record)),
                 crate::resume::Choice::Fresh => Some(Start::Fresh),
                 // Leaving at the picker starts nothing. The terminal is still put back below.
@@ -2020,6 +2273,7 @@ fn adopt_settings(
     // under it.
     session.adopt_wheel_rows(settings.wheel_rows());
     session.adopt_mouse(settings.tui_mouse());
+    session.adopt_context_menu(settings.tui_context_menu());
     session.adopt_panel();
     session.adopt_caffeinate();
     session.away.adopt(settings.away_summary_enabled());
@@ -2463,6 +2717,9 @@ fn event_loop(
         needs_draw |= session.settle_previews();
         // The rows of a model picker still being listed are drawn on the pass they arrive.
         needs_draw |= session.settle_picking();
+        // A target that was marked and is not now, as when a key or the terminal's being left ended
+        // it with no other answer that draws (MOUSE-51).
+        needs_draw |= session.take_the_hover_ended();
         // A suggestion the box has stopped being empty for is dropped, and one whose request has
         // answered is taken, before the frame so it is drawn on this pass (INPUT-43).
         session.settle_suggestion();
@@ -2475,6 +2732,9 @@ fn event_loop(
             stored.branch(),
         );
         needs_draw |= session.name_id(stored.resumable());
+        // A drag held outside the transcript scrolls it a step on each pass, with the pointer still
+        // and no report to wake the loop (MOUSE-37).
+        needs_draw |= session.scroll_toward_the_pointer(Instant::now());
         needs_draw |= session.link(
             stored.link(bravebot_session::sessions::Link::Issue),
             stored.link(bravebot_session::sessions::Link::PullRequest),
@@ -2533,7 +2793,13 @@ fn event_loop(
                 Some(prompt) => Action::Submit(prompt),
                 // Then what the queue is holding, before the interface settles down to wait, for
                 // the reason a tick is looked at here.
-                None => match queued_or_recap(&mut session, Instant::now()) {
+                // Then a click on a path that has waited to see whether it was the first of a
+                // double click, which nobody is going to press anything to carry out (MOUSE-42).
+                None => match queued_or_recap(&mut session, Instant::now()).or_else(|| {
+                    session
+                        .take_the_click_due(Instant::now())
+                        .map(Action::Preview)
+                }) {
                     Some(action) => action,
                     None => {
                         if a_countdown_is_owed_a_frame(
@@ -2551,10 +2817,18 @@ fn event_loop(
                             needs_draw = true;
                         }
                         let mut wait = wait_for_a_key(opening, crate::indicator::stilled());
+                        // And sooner while that is going on, for the next step of it.
+                        if session.pulling_at_an_edge() {
+                            wait = wait.min(select::EDGE_TICK);
+                        }
                         // Short while a suggestion is on its way, so it is drawn as it arrives
                         // rather than at the next key.
                         if suggesting.is_some() || session.picking_is_loading() {
                             wait = wait.min(FRAME);
+                        }
+                        // And until a click that waits is due.
+                        if let Some(due) = session.the_click_due_in(Instant::now()) {
+                            wait = wait.min(due);
                         }
                         // Through the reader rather than the terminal, so a run is seen whole.
                         if !input::poll(wait)? {
@@ -2608,8 +2882,11 @@ fn event_loop(
         };
         match action {
             Action::Quit => return Ok(left_behind(held.stored)),
-            Action::Copy => copy_selection(terminal, held.session)?,
+            Action::Copy => copy_selection(terminal, held.session, crate::clipboard::copy)?,
             Action::CopyReply(text) => copy_reply(held.session, &text, crate::clipboard::copy),
+            Action::OpenUrl(address) => open_link(held.session, &address, false),
+            Action::Preview(path) => held.preview_file(&path),
+            Action::EditFile(path) => held.edit_file(terminal, &path)?,
             Action::Paste => take_from_clipboard(held.session, crate::clipboard::paste()),
             Action::Edit => edit_prompt(terminal, held.session)?,
             #[cfg(unix)]
@@ -2856,11 +3133,12 @@ fn take_suggestion(
 
 /// A key press while a command runs from shell mode.
 ///
-/// A view left open when the command began answers the press first, since a queued command line
-/// begins one as the turn ends and nothing closes a view then. The delegate view takes every key
-/// (WATCH-9) and the scroller its own (SCROLL-1), so Ctrl-C and Escape are theirs while either is
-/// open, and the first press after it closes is the one that reaches the command. A picker left
-/// open takes the keys the same way. Otherwise a
+/// A mode left open when the command began answers the press first, since a queued command line
+/// begins one as the turn ends and nothing closes a mode then. They are read in the order every
+/// other loop reads them ([`claimed_by_a_mode`]): a picker, then a selection held, which Escape puts
+/// away and does nothing else (MOUSE-38), then the delegate view, which takes every key (WATCH-9),
+/// and the scroller, which takes its own (SCROLL-1). So Ctrl-C and Escape are theirs while one is
+/// open, and the first press after it closes is the one that reaches the command. Otherwise a
 /// running command is something to stop, so Ctrl-C stops it and stays, for the reason it stops a
 /// turn: the way out is the press after that, at the box. Every other key waits. A command is
 /// brief, and taking a prompt here would leave it half-typed when the output lands on top of it.
@@ -2868,15 +3146,9 @@ fn command_key(session: &mut Session, key: KeyEvent, cancel: &Cancel) {
     if key.kind == KeyEventKind::Release {
         return;
     }
-    // A mode's key never asks for a stop, so what the two read in return is not handed on.
-    if session.watching().is_some() {
-        let action = watching_key(session, key);
+    // A mode's key never asks for a stop, so what it reads in return is not handed on.
+    if let Some(action) = claimed_by_a_mode(session, key) {
         let _ = act_while_working(session, action, crate::clipboard::paste);
-    } else if session.scrolling() {
-        let action = scroller_key(session, key);
-        let _ = act_while_working(session, action, crate::clipboard::paste);
-    } else if session.picking().is_some() {
-        session.press_in_picking(key.code, key.modifiers);
     } else if stops_a_command(session, key) {
         stop_what_is_running(session, cancel);
     }
@@ -2925,6 +3197,7 @@ fn run_command(
     // which measure something no command spends.
     session.begin_command();
     while_the_command_runs(session, &worker, &printing, |session| {
+        session.scroll_toward_the_pointer(Instant::now());
         redraw(terminal, session)?;
 
         while input::poll(Duration::ZERO)? {
@@ -2933,10 +3206,9 @@ fn run_command(
             match taken {
                 TermEvent::Key(key) => command_key(session, key, &cancel),
                 TermEvent::Mouse(mouse) => {
-                    let action = handle_mouse(session, mouse);
-                    if action == Action::Copy {
-                        copy_selection(terminal, session)?;
-                    }
+                    // What a click leaves besides a copy is a command it stands for, which
+                    // `handle_mouse` has queued, since no turn runs here to carry it out.
+                    let _ = answer_mouse(terminal, session, mouse, crate::clipboard::copy)?;
                 }
                 // Everything else waits. A command is brief and the keys that matter during one are
                 // the two above; taking a prompt here would leave it half-typed when the output
@@ -3111,7 +3383,7 @@ fn drive_worker(
         // Input is still read, so a long request does not leave the interface deaf, and the
         // frame's waiting is done here for the reason the turn loop does it here: a key press
         // has to wake the loop rather than queue behind the worker.
-        pump_terminal(terminal, session, &mut on_key)?;
+        pump_terminal(terminal, session, only_keys(&mut on_key))?;
 
         // Drained for the same reason the turn's own loop drains, and waiting on the terminal
         // for the same reason it does: a person may be typing their next prompt while this runs.
@@ -3293,14 +3565,8 @@ mod tests {
     }
 
     fn asked_for(enhanced: bool) -> String {
-        asked_for_on(enhanced, false)
-    }
-
-    /// What is asked of a terminal that draws the pointer shape it is asked for, when `hover`, and
-    /// of one that does not otherwise.
-    fn asked_for_on(enhanced: bool, hover: bool) -> String {
         let mut written = Vec::new();
-        ask_for_modes(&mut written, enhanced, true, hover).expect("ask");
+        ask_for_modes(&mut written, enhanced, true).expect("ask");
         String::from_utf8(written).expect("utf8")
     }
 
@@ -3312,36 +3578,30 @@ mod tests {
 
     /// MOUSE-4: with `tui.mouse` off the interface never asks the terminal to report the mouse, so
     /// the terminal's own selection and wheel keep working, and the rest of the takeover is
-    /// unchanged. Capture is 1000, 1002 and 1006 left on (1003 is turned back off unless the
-    /// terminal draws the pointer shape it is asked for, and with the mouse off it is not asked for
-    /// at all).
+    /// unchanged. With it on, the buttons, a drag, every motion and the coordinates in the form that
+    /// names a column past 223 (1000, 1002, 1003 and 1006) are asked for.
     #[test]
     fn a_session_with_the_mouse_off_never_asks_for_mouse_reporting() {
-        for hover in [false, true] {
-            let mut off = Vec::new();
-            ask_for_modes(&mut off, false, false, hover).expect("ask");
-            let off = String::from_utf8(off).expect("utf8");
-            let left_on = modes_left_on(&off);
-            for mode in ["1000", "1002", "1003", "1006"] {
-                assert!(
-                    !off.contains(&format!("\x1b[?{mode}h")),
-                    "mode {mode} asked for (hover {hover})"
-                );
-                assert!(
-                    !left_on.contains(mode),
-                    "mode {mode} left on (hover {hover})"
-                );
-            }
-            for mode in ["1049", "2004"] {
-                assert!(
-                    left_on.contains(mode),
-                    "mode {mode} was dropped with the mouse (hover {hover})"
-                );
-            }
+        let mut off = Vec::new();
+        ask_for_modes(&mut off, false, false).expect("ask");
+        let off = String::from_utf8(off).expect("utf8");
+        let left_on = modes_left_on(&off);
+        for mode in ["1000", "1002", "1003", "1006"] {
+            assert!(
+                !off.contains(&format!("\x1b[?{mode}h")),
+                "mode {mode} asked for"
+            );
+            assert!(!left_on.contains(mode), "mode {mode} left on");
+        }
+        for mode in ["1049", "2004"] {
+            assert!(
+                left_on.contains(mode),
+                "mode {mode} was dropped with the mouse"
+            );
         }
 
         let on = modes_left_on(&asked_for(false));
-        for mode in ["1000", "1002", "1006"] {
+        for mode in ["1000", "1002", "1003", "1006"] {
             assert!(
                 on.contains(mode),
                 "mode {mode} not asked for with the mouse on"
@@ -3378,14 +3638,14 @@ mod tests {
     /// markers into whatever they type next.
     #[test]
     fn every_mode_a_session_asks_for_is_given_back() {
-        for (enhanced, hover) in [(false, false), (true, false), (false, true), (true, true)] {
-            let asked = modes_left_on(&asked_for_on(enhanced, hover));
+        for enhanced in [false, true] {
+            let asked = modes_left_on(&asked_for(enhanced));
             let handed_back = modes_left_on(&given_back(enhanced));
             assert!(!asked.is_empty(), "nothing was asked for");
             for mode in &asked {
                 assert!(
                     !handed_back.contains(mode),
-                    "mode {mode} is left on (hover {hover}): asked {asked:?}, handed back {handed_back:?}"
+                    "mode {mode} is left on: asked {asked:?}, handed back {handed_back:?}"
                 );
             }
         }
@@ -3403,24 +3663,13 @@ mod tests {
         assert!(!given_back(false).contains("\x1b[<"));
     }
 
-    /// The wheel scrolls the transcript, which is what mouse reporting is asked for, and a pointer
-    /// merely crossing the window is not reported: that arrives as an event and a redraw per pixel
-    /// of travel, for a gesture nothing here reads.
+    /// The pointer is reported with no button held, in every terminal, since that is what shows the
+    /// target under it (MOUSE-51). The last tracking mode requested is the one a terminal that keeps
+    /// a single tracking state ends in, so it has to be the one that reports every movement, or such
+    /// a terminal reports none of them.
     #[test]
-    fn the_session_reads_a_drag_and_not_every_pointer_movement() {
-        let on = modes_left_on(&asked_for(false));
-        assert!(on.contains("1000"), "buttons are not reported: {on:?}");
-        assert!(on.contains("1002"), "a drag is not reported: {on:?}");
-        assert!(!on.contains("1003"), "all motion is reported: {on:?}");
-    }
-
-    /// A terminal that draws the pointer shape it is asked for is also asked to report the pointer
-    /// without a button held, since that report is how the border is found. The last tracking mode
-    /// requested is the one a terminal that keeps a single tracking state ends in, so it has to be
-    /// the one that reports every movement, or such a terminal reports none of them.
-    #[test]
-    fn a_terminal_that_draws_the_pointer_shape_reports_every_movement() {
-        let asked = asked_for_on(false, true);
+    fn every_terminal_is_asked_to_report_the_pointer_and_ends_in_the_mode_that_reports_all_of_it() {
+        let asked = asked_for(false);
         let on = modes_left_on(&asked);
         for mode in ["1000", "1002", "1003", "1006"] {
             assert!(on.contains(mode), "mode {mode} is not on: {on:?}");
@@ -3439,6 +3688,119 @@ mod tests {
             last_tracking.starts_with("1003h"),
             "the last tracking mode asked for is not all motion: {last_tracking:?}"
         );
+    }
+
+    /// INPUT-33: the bytes written to ask for the modes and to give them back. The tracking modes
+    /// (1000, 1002, 1003), the urxvt form of coordinates (1015) and SGR (1006) are asked for in one
+    /// run, with 1003 the last tracking mode so that a terminal that keeps one tracking state ends in
+    /// all motion, and SGR last so that a terminal that knows both forms of coordinates uses the one
+    /// that names a column or row past 223. They are given back in the reverse order. Rejects: SGR
+    /// asked for apart from the tracking modes or not at all, which reads a click at a column past
+    /// 223 as the last cell the older form can name; tracking modes in an order that ends in another
+    /// mode; and a mode asked for that nothing gives back.
+    #[test]
+    fn the_terminal_is_asked_for_sgr_with_the_tracking_modes_and_given_all_of_it_back_in_order() {
+        let mouse = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h";
+        let mouse_off = "\x1b[?1006l\x1b[?1015l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+        let screen = "\x1b[?1049h";
+        let paste_and_focus = "\x1b[?2004h\x1b[?1004h";
+        let leave = "\x1b[?2004l\x1b[?1004l";
+
+        assert_eq!(
+            asked_for(false),
+            format!("{screen}{mouse}{paste_and_focus}")
+        );
+        assert_eq!(
+            asked_for(true),
+            format!("{screen}{mouse}{paste_and_focus}\x1b[>1u")
+        );
+        assert_eq!(given_back(false), format!("{leave}{mouse_off}\x1b[?1049l"));
+        assert_eq!(
+            given_back(true),
+            format!("\x1b[<1u{leave}{mouse_off}\x1b[?1049l")
+        );
+
+        let mut without_the_mouse = Vec::new();
+        ask_for_modes(&mut without_the_mouse, false, false).expect("ask");
+        assert_eq!(
+            String::from_utf8(without_the_mouse).expect("utf8"),
+            format!("{screen}{paste_and_focus}"),
+            "capture off still asked for a mouse mode"
+        );
+    }
+
+    /// INPUT-33: every way the interface is left or handed over (the end of a session, a failure,
+    /// the editor, the viewer and the stop that gives the shell the terminal) goes through
+    /// `hand_back_terminal`, which writes what `give_back_screen` writes before raw mode is left.
+    /// Rejects: a way out that writes less than `give_back_modes`, such as one that leaves out the
+    /// mouse modes, which stay on in the terminal for the next program.
+    #[test]
+    fn what_every_way_out_of_the_interface_writes_includes_every_mode_asked_for() {
+        for enhanced in [false, true] {
+            let mut out = Vec::new();
+            give_back_screen(&mut out, enhanced).expect("give back");
+            let out = String::from_utf8(out).expect("utf8");
+            assert!(
+                out.contains(&given_back(enhanced)),
+                "the way out left a mode on: {out:?}"
+            );
+            let left_on = modes_left_on(&format!("{}{out}", asked_for(enhanced)));
+            assert!(left_on.is_empty(), "left on after the way out: {left_on:?}");
+        }
+    }
+
+    /// INPUT-33. Rejects: a way out that leaves raw mode before it has written the mouse modes off,
+    /// which leaves a window in which a report of the pointer arrives with nothing reading it as one:
+    /// the shell echoes it as text. The test leaves raw mode through a function that says whether the
+    /// mouse had been given back by then, and again with a write that fails, where raw mode is left
+    /// all the same and the failure is what comes back.
+    #[test]
+    fn the_modes_are_given_back_before_raw_mode_is_left_and_it_is_left_whatever_they_do() {
+        use std::cell::Cell;
+        let mouse_off = "\x1b[?1000l";
+        let written = Cell::new(Vec::<u8>::new());
+        struct Recording<'a>(&'a Cell<Vec<u8>>);
+        impl std::io::Write for Recording<'_> {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                let mut held = self.0.take();
+                held.extend_from_slice(bytes);
+                self.0.set(held);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let had_the_mouse_off = Cell::new(None);
+        hand_back(&mut Recording(&written), false, || {
+            let so_far = written.take();
+            had_the_mouse_off.set(Some(String::from_utf8_lossy(&so_far).contains(mouse_off)));
+            Ok(())
+        })
+        .expect("handed back");
+        assert_eq!(
+            had_the_mouse_off.get(),
+            Some(true),
+            "raw mode was left with the mouse still reporting"
+        );
+
+        struct Failing;
+        impl std::io::Write for Failing {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("the terminal went away"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let left = Cell::new(false);
+        let failure = hand_back(&mut Failing, false, || {
+            left.set(true);
+            Ok(())
+        })
+        .expect_err("the failure was swallowed");
+        assert!(left.get(), "raw mode was kept because a write failed");
+        assert_eq!(failure.to_string(), "the terminal went away");
     }
 
     fn listed(key: &str, window: Option<u64>) -> bravebot_aichat::models::Model {
@@ -4849,6 +5211,203 @@ mod tests {
         );
     }
 
+    /// The rows the xAI account's tests script: two models of the account, with windows a budget can
+    /// be told apart from the default by, filed under the provider the listing files them under.
+    fn the_xai_accounts_listing() -> Vec<bravebot_aichat::models::Model> {
+        ["xai/grok-4.5", "xai/grok-build-0.1"]
+            .into_iter()
+            .map(|key| bravebot_aichat::models::Model {
+                provider: Some("xAI".to_string()),
+                reads_effort: false,
+                ..listed(key, Some(131_072))
+            })
+            .collect()
+    }
+
+    /// XAI-19: the picker asks the xAI account whatever model is in force, and offers what it lists
+    /// beside the rows already there and beside the ChatGPT account's, each under its own identifier.
+    /// A picker that asked only for the account's own models would never show them to a person who has yet
+    /// to choose one, and one that took the other rows away would leave a person with the account alone.
+    #[test]
+    fn the_picker_asks_the_xai_account_whatever_model_is_in_force_and_lists_what_it_offers() {
+        use models::scripted_account::offer as offer_chatgpt;
+        use models::scripted_xai::{asked, offer};
+        let config = a_config_with_a_named_roster();
+        assert_eq!(config.default_model, "opus-arn");
+        offer(the_xai_accounts_listing());
+        offer_chatgpt(the_accounts_listing());
+
+        let mut session = Session::new("none");
+        open_model_picker(&mut session, &config);
+        session.settle_picking();
+
+        assert_eq!(asked(), 1, "the picker did not ask");
+        let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+            panic!("no model picker is open");
+        };
+        let rows = picker.matching();
+        let keys: Vec<&str> = rows.iter().map(|m| m.key.as_str()).collect();
+        for key in [
+            "xai/grok-4.5",
+            "xai/grok-build-0.1",
+            "chatgpt/gpt-6-sol",
+            "opus-arn",
+        ] {
+            assert!(keys.contains(&key), "{key} is not offered: {keys:?}");
+        }
+        let row = rows
+            .iter()
+            .find(|m| m.key == "xai/grok-4.5")
+            .expect("a row");
+        assert_eq!(row.provider.as_deref(), Some("xAI"));
+        assert!(
+            !row.reads_effort,
+            "a level is shown as read that is not sent"
+        );
+        assert!(
+            session.transcript.is_empty(),
+            "a listing that was read said something: {:?}",
+            session.transcript
+        );
+    }
+
+    /// XAI-16: a run that chose an effort level is told that a model of the xAI account reads none, for
+    /// every name of the account: one the listing offers, an alias, an id the rule leaves out, one nobody
+    /// listed, and where the listing could not be read. A model of another service is left to its own
+    /// listing, so a name no listing describes still has a level sent. The regression it rejects is the
+    /// answer read from the listing's row alone, which is true for every name the listing does not
+    /// describe and sends no level without saying so.
+    #[test]
+    fn a_run_on_any_name_of_the_xai_account_is_told_the_model_reads_no_level() {
+        use models::scripted_xai::{fail_to_list, offer};
+        for name in [
+            "xai/grok-4.5",
+            "xai/grok-code-fast-1",
+            "xai/grok-imagine-image",
+            "xai/an-id-nobody-listed",
+        ] {
+            offer(the_xai_accounts_listing());
+            let mut config = a_config_with_a_named_roster();
+            assert!(!adopt_listing_for_model(&mut config, name), "{name}");
+        }
+        fail_to_list();
+        let mut config = a_config_with_a_named_roster();
+        assert!(
+            !adopt_listing_for_model(&mut config, "xai/grok-4.5"),
+            "a listing that could not be read left the level to go out"
+        );
+
+        // Another service's model that no listing describes still has the level sent.
+        let mut config = a_config_with_a_named_roster();
+        assert!(adopt_listing_for_model(
+            &mut config,
+            "a-model-nothing-lists"
+        ));
+    }
+
+    /// XAI-19: a session or a turn on a model that is not the xAI account's sends the stored token
+    /// nowhere, and one on its own model asks for its row and takes the window the listing states. Each
+    /// caller that wants the row of the model in force reaches the account only through `list_models`,
+    /// so each is run on a model of another service and then on the account's own. A caller that asked
+    /// for every model would send the token at each of them.
+    #[test]
+    fn a_caller_asks_the_xai_account_only_for_one_of_its_own_models_and_takes_the_window_it_lists()
+    {
+        use models::scripted_xai::{asked, offer};
+        let mut config = a_config_with_a_named_roster();
+        offer(the_xai_accounts_listing());
+
+        let mut session = Session::new("none");
+        adopt_budget_for_current_model(&mut session, &mut config);
+        adopt_listing_for_model(&mut config, "opus-arn");
+        config_for_turn(&config, Some("opus-arn"));
+        reads_structured_output(&config, "opus-arn");
+        reads_structured_output(&config, "xai");
+        assert_eq!(asked(), 0, "a model of another service asked the account");
+
+        let mut config = a_config_with_a_named_roster();
+        let mut session = Session::new("none");
+        session.choose_model("xai/grok-4.5".to_string(), &config);
+        adopt_budget_for_current_model(&mut session, &mut config);
+        assert_eq!(asked(), 1, "the lookup at session start did not ask");
+        assert_eq!(config.context_budget, 131_072);
+
+        offer(the_xai_accounts_listing());
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "xai/grok-4.5");
+        assert_eq!(asked(), 1, "a run's lookup did not ask");
+        assert_eq!(config.context_budget, 131_072);
+
+        // The listing could not be had, so the window is the assumed one and the turn goes on.
+        models::scripted_xai::fail_to_list();
+        let mut config = a_config_with_a_named_roster();
+        adopt_listing_for_model(&mut config, "xai/grok-4.5");
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+    }
+
+    /// XAI-19: a stored sign-in whose listing could not be had offers none of the account's rows, since
+    /// no list is built in for it, and the picker says so once with the commands that work as typed. An
+    /// account nobody signed in to, and a listing that was read, empty or not, say nothing: the first is
+    /// not owed a warning about a service it does not use, and the second is the service's answer. The
+    /// rows already there stay.
+    #[test]
+    fn the_picker_says_why_the_xai_accounts_models_are_missing_and_says_nothing_otherwise() {
+        use models::scripted_xai::{fail_to_list, offer};
+        let config = a_config_with_a_named_roster();
+        let said_after_opening = |script: &dyn Fn()| -> (Vec<String>, Vec<String>) {
+            script();
+            let mut session = Session::new("none");
+            open_model_picker(&mut session, &config);
+            session.settle_picking();
+            let Some(crate::picking::Picking::Model(picker)) = session.picking() else {
+                panic!("no model picker is open");
+            };
+            let rows = picker.matching().iter().map(|m| m.key.clone()).collect();
+            let said = session.transcript.iter().map(|e| e.text.clone()).collect();
+            (said, rows)
+        };
+
+        let (said, rows) = said_after_opening(&fail_to_list);
+        assert_eq!(said, [t!(session_xai_models_unreadable).to_string()]);
+        assert!(said[0].contains("bravebot auth login xai"), "{said:?}");
+        assert!(
+            said[0].contains("--model xai/<model>"),
+            "no command that names a model: {said:?}"
+        );
+        assert!(
+            !said[0].contains("chatgpt") && !said[0].contains("built-in"),
+            "{said:?}"
+        );
+        assert!(rows.contains(&"opus-arn".to_string()), "{rows:?}");
+        assert!(
+            !rows.iter().any(|row| row.starts_with("xai/")),
+            "a listing that could not be read offered rows: {rows:?}"
+        );
+
+        let (said, rows) = said_after_opening(&|| offer(Vec::new()));
+        assert!(said.is_empty(), "an empty listing was said: {said:?}");
+        assert!(!rows.iter().any(|row| row.starts_with("xai/")));
+
+        // Nobody signed in: no script on this thread, so the account answers as an absent one does.
+        let fresh = std::thread::spawn(|| {
+            let config = a_config_with_a_named_roster();
+            let mut session = Session::new("none");
+            open_model_picker(&mut session, &config);
+            session.settle_picking();
+            (session.transcript.len(), models::scripted_xai::asked())
+        })
+        .join()
+        .expect("a picker opened on a thread of its own");
+        assert_eq!(
+            fresh,
+            (0, 1),
+            "a machine nobody signed in on was told something"
+        );
+    }
+
     /// BACKEND-11: the list `/model` opens marks the model in force, and picking a row puts that
     /// model in force. Run with the model set by settings and nothing picked, with a pick, and where
     /// a row is typed to and chosen. The regressions it rejects are the pick alone read as the model
@@ -5267,6 +5826,49 @@ mod tests {
         );
     }
 
+    /// BACKEND-39: a start that nothing serves offers the rows the xAI account listed, in the order the
+    /// picker lists them, and none where the service listed none, with the listing that gave none so the
+    /// start can say why. A listing that could not be had offers nothing, since no list built into this
+    /// program stands in for it, and an account nobody signed in to is not asked about. The regressions
+    /// it rejects are the service's order in place of the picker's, which would number a row differently
+    /// from the `/model` the person meets next, a roster read from the ChatGPT account's answer, and a
+    /// failed listing reported as an empty one.
+    #[test]
+    fn a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else() {
+        use bravebot_agent::xai::AccountModels;
+        use models::scripted_xai::{fail_to_list, offer};
+        let config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            xai_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(the_xai_accounts_listing().into_iter().rev().collect());
+        assert_eq!(keys(&config), ["xai/grok-4.5", "xai/grok-build-0.1"]);
+
+        offer(Vec::new());
+        assert_eq!(
+            xai_models_to_start_on(&config),
+            Err(AccountModels::Offered(Vec::new())),
+            "a listing with no row offered one, or was not said to be empty"
+        );
+        fail_to_list();
+        assert_eq!(
+            xai_models_to_start_on(&config),
+            Err(AccountModels::Unlisted),
+            "a listing that could not be had offered rows or was said to be empty"
+        );
+
+        // Nobody signed in: no script on this thread, so the account answers as an absent one does.
+        let fresh = std::thread::spawn(|| xai_models_to_start_on(&a_config_with_a_named_roster()))
+            .join()
+            .expect("a start on a thread of its own");
+        assert_eq!(fresh, Err(AccountModels::Absent));
+    }
+
     /// BACKEND-48: a start does not offer a model this machine may not request, as the picker does
     /// not, so a person is not refused after choosing it.
     #[test]
@@ -5296,6 +5898,50 @@ mod tests {
 
         config.models = bravebot_config::Managed::at(&path).models().clone();
         assert_eq!(keys(&config), ["chatgpt/gpt-a"]);
+    }
+
+    /// BACKEND-48: a start does not offer a model of the xAI account this machine may not request, as
+    /// the picker does not, so a person is not refused after choosing it. The regression it rejects is
+    /// the xAI rows taken from the listing without the machine-level layer's `models.deny`, which offers
+    /// a row that is refused once picked.
+    #[test]
+    fn a_start_is_not_offered_an_xai_model_the_machine_level_layer_refuses() {
+        use models::scripted_xai::offer;
+        let scratch = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-scratch")
+            .join("tui-start-xai-models-refused");
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let path = scratch.join("managed.json");
+        std::fs::write(&path, r#"{"models": {"deny": ["xai/grok-4.5"]}}"#).expect("a managed file");
+        let mut config = a_config_with_a_named_roster();
+        let keys = |config: &Config| -> Vec<String> {
+            xai_models_to_start_on(config)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        offer(the_xai_accounts_listing());
+        assert_eq!(keys(&config), ["xai/grok-4.5", "xai/grok-build-0.1"]);
+
+        offer(the_xai_accounts_listing());
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(keys(&config), ["xai/grok-build-0.1"]);
+
+        // Where the layer refuses every row the account offers, the start is told the listing gave
+        // none to choose from.
+        std::fs::write(
+            &path,
+            r#"{"models": {"deny": ["xai/grok-4.5", "xai/grok-build-0.1"]}}"#,
+        )
+        .expect("a managed file");
+        offer(the_xai_accounts_listing());
+        config.models = bravebot_config::Managed::at(&path).models().clone();
+        assert_eq!(
+            xai_models_to_start_on(&config),
+            Err(bravebot_agent::xai::AccountModels::Offered(Vec::new()))
+        );
     }
 
     /// CHATGPT-9: a person who signed in to ChatGPT and whose listing could not be had is told why, in
@@ -6262,15 +6908,14 @@ mod tests {
             session.note_layout(crate::state::Laid {
                 width: 80,
                 columns: 80,
+                lines: 0,
                 height: 10,
                 rows: 100,
                 prompts: Vec::new(),
                 matches: Vec::new(),
-                expandable: Vec::new(),
-                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
-                mode: None,
+                ..crate::state::Laid::default()
             });
 
             handle_key_while_working(&mut session, ctrl('u'));
@@ -6911,15 +7556,14 @@ mod tests {
             session.note_layout(Laid {
                 width: 80,
                 columns: 80,
+                lines: 0,
                 height: 10,
                 rows: 100,
                 prompts: vec![0, 30, 60],
                 matches: Vec::new(),
-                expandable: Vec::new(),
-                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
-                mode: None,
+                ..crate::state::Laid::default()
             });
             session
         }
@@ -7468,15 +8112,14 @@ mod tests {
             session.note_layout(Laid {
                 width: 80,
                 columns: 80,
+                lines: 0,
                 height: 100,
                 rows: 300,
                 prompts: Vec::new(),
                 matches: Vec::new(),
-                expandable: Vec::new(),
-                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
-                mode: None,
+                ..crate::state::Laid::default()
             });
             session.open_scroller();
             type_keys(&mut session, "1000b");
@@ -7496,15 +8139,14 @@ mod tests {
             session.note_layout(Laid {
                 width: 80,
                 columns: 80,
+                lines: 0,
                 height: 10,
                 rows: 100,
                 prompts: vec![10, 40, 70],
                 matches: Vec::new(),
-                expandable: Vec::new(),
-                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
-                mode: None,
+                ..crate::state::Laid::default()
             });
             session.open_scroller();
 
@@ -7532,15 +8174,14 @@ mod tests {
             session.note_layout(Laid {
                 width: 80,
                 columns: 80,
+                lines: 0,
                 height: 10,
                 rows: 100,
                 prompts: Vec::new(),
                 matches: vec![20, 50, 80],
-                expandable: Vec::new(),
-                delegates: Vec::new(),
                 continued: Vec::new(),
                 panes: Vec::new(),
-                mode: None,
+                ..crate::state::Laid::default()
             });
             session.open_scroller();
             session.scroller_to_first_row();
@@ -9186,6 +9827,32 @@ mod tests {
         assert!(session.scrolling());
     }
 
+    /// MOUSE-10 and WATCH-7: the watch key opens from the scroller the view the click opens, the
+    /// list where there are several delegates and the one where there is one, and the key that
+    /// closes the view returns to the scroller. It does nothing where the session has started none.
+    /// The regression it rejects is the key answered nowhere in the scroller, which leaves the click
+    /// the only way to a delegate's view from there.
+    #[test]
+    fn the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it() {
+        let mut session = scroller_over_two_delegates();
+        assert_eq!(handle_key(&mut session, ctrl('l')), Action::Redraw);
+        assert!(session.listing_delegates(), "no list of the delegates");
+        assert!(session.scrolling(), "the scroller was left behind");
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Redraw
+        );
+        assert!(session.watching_a_delegate(), "no delegate's view");
+        assert_eq!(handle_key(&mut session, ctrl('l')), Action::Redraw);
+        assert!(session.watching().is_none(), "the view did not close");
+        assert!(session.scrolling(), "closing the view left the scroller");
+
+        let mut none = scroller_over_one_call();
+        assert_eq!(handle_key(&mut none, ctrl('l')), Action::None);
+        assert!(none.watching().is_none());
+        assert!(none.scrolling());
+    }
+
     /// A drag that begins on a delegate is a selection, and a click beside it opens nothing.
     #[test]
     fn a_drag_over_a_delegate_or_a_click_off_one_opens_no_view() {
@@ -9211,6 +9878,1634 @@ mod tests {
         session.toggle_scroller_help();
         click(&mut session, row, column);
         assert!(session.watching().is_none());
+    }
+
+    /// A session at rest with the info panel drawn beside a prompt and two delegates, and the
+    /// frame drawn so that the rows of each are the ones recorded.
+    fn at_rest_over_two_delegates() -> (Session, ratatui::buffer::Buffer) {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let (mut session, _) = two_panes();
+        for (n, task) in [(1, "find the parser"), (2, "write the docs")] {
+            session.delegate_started(Delegation {
+                stop: Default::default(),
+                id: DelegateId::nth(n),
+                kind: "reader".to_string(),
+                task: task.to_string(),
+            });
+        }
+        let buffer = drawn(&mut session);
+        (session, buffer)
+    }
+
+    /// A session at rest with a delegate in each of two turns, and the same number for both: the
+    /// driver numbers them from one in every turn. The frame is drawn so that the rows of each are
+    /// the ones recorded.
+    fn at_rest_over_a_delegate_in_each_of_two_turns() -> (Session, ratatui::buffer::Buffer) {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let (mut session, _) = two_panes();
+        for (prompt, task) in [
+            ("first request", "first turn task"),
+            ("second request", "second turn task"),
+        ] {
+            session.transcript.push(crate::state::Entry::user(prompt));
+            session.delegate_started(Delegation {
+                stop: Default::default(),
+                id: DelegateId::nth(1),
+                kind: "reader".to_string(),
+                task: task.to_string(),
+            });
+        }
+        let buffer = drawn(&mut session);
+        (session, buffer)
+    }
+
+    /// MOUSE-23. A delegate is numbered from one in every turn, so a click on the block of the second
+    /// turn's delegate opens that delegate's view and not that of the first turn's, which has the
+    /// same number. The regression it rejects is a view found by the number the block holds, which
+    /// names the first delegate of any turn that started one. Both blocks are tried, so a view that
+    /// opens the last by number is not enough.
+    #[test]
+    fn a_click_opens_the_delegate_of_the_block_when_two_turns_number_theirs_alike() {
+        for task in ["first turn task", "second turn task"] {
+            let (mut session, buffer) = at_rest_over_a_delegate_in_each_of_two_turns();
+            let (row, column) = find_on(&buffer, task);
+            assert_eq!(click(&mut session, row, column), Action::Redraw);
+            assert_eq!(
+                session
+                    .watched_delegate()
+                    .map(|delegate| delegate.task.as_str()),
+                Some(task)
+            );
+        }
+    }
+
+    /// MOUSE-23: at rest a click on a delegate's block opens the view of that delegate and not of
+    /// the one a row above it, and the view closes as the one the watch key opens does.
+    #[test]
+    fn a_click_on_a_delegate_at_rest_opens_that_delegates_view() {
+        let (mut session, buffer) = at_rest_over_two_delegates();
+        assert!(!session.scrolling());
+        let (row, column) = find_on(&buffer, "write the docs");
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+
+        let delegate = session.watched_delegate().expect("a delegate's view");
+        assert_eq!(delegate.task, "write the docs");
+        assert!(session.watching_a_delegate());
+        assert!(session.selection.is_none());
+        assert!(session.stop_watching());
+        assert!(!session.scrolling());
+
+        let (first, column) = find_on(&buffer, "find the parser");
+        assert_eq!(click(&mut session, first, column), Action::Redraw);
+        assert_eq!(
+            session.watched_delegate().map(|d| d.task.as_str()),
+            Some("find the parser")
+        );
+    }
+
+    /// MOUSE-23: a turn running is when a delegate is there to open, and the click reaches it
+    /// through the loop that runs while the turn does, which carries out nothing but a copy and so
+    /// has to find the view already open.
+    #[test]
+    fn a_click_on_a_delegate_while_a_turn_runs_opens_its_view() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let mut session = Session::new("none");
+        session.type_char('a');
+        session.submit();
+        assert!(session.a_turn_is_running());
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id: DelegateId::nth(1),
+            kind: "reader".to_string(),
+            task: "find the parser".to_string(),
+        });
+        let buffer = drawn(&mut session);
+        let (row, column) = find_on(&buffer, "find the parser");
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert_eq!(
+            session.watched_delegate().map(|d| d.task.as_str()),
+            Some("find the parser")
+        );
+    }
+
+    /// MOUSE-23: the row between two blocks, the info panel on a row of a block, a drag from a
+    /// block, a double click on it and a click on the delegate's own view open nothing, each
+    /// against a fixture where the plain click does open the view.
+    #[test]
+    fn a_click_off_a_delegate_or_a_drag_over_one_opens_no_view_at_rest() {
+        let (mut session, buffer) = at_rest_over_two_delegates();
+        let (row, column) = find_on(&buffer, "find the parser");
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1
+            .x;
+
+        // The blank row the two blocks are held apart by.
+        assert_eq!(click(&mut session, row + 1, column), Action::Copy);
+        assert!(session.watching().is_none());
+        // The panel is drawn on the same rows, and is not the transcript.
+        assert_ne!(click(&mut session, row, panel + 4), Action::Redraw);
+        assert!(session.watching().is_none());
+
+        swept(&mut session, (row, column), (row, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.watching().is_none());
+
+        session.last_click = None;
+        press(&mut session, row, column, KeyModifiers::NONE);
+        press(&mut session, row, column, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.watching().is_none());
+
+        // A press that began elsewhere and was let go on the block is not a click on it.
+        session.clear_selection();
+        session.last_click = None;
+        press(&mut session, 0, 0, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.watching().is_none());
+
+        session.last_click = None;
+        session.clear_selection();
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(
+            session.watching_a_delegate(),
+            "the fixture's click opened nothing"
+        );
+    }
+
+    /// MOUSE-23: a picker, a history search or the files state stands over the transcript and takes
+    /// the mouse's attention, so a click where a block was opens no view.
+    #[test]
+    fn a_click_on_a_delegate_opens_no_view_where_another_mode_is_in_use() {
+        type Setup = fn(&mut Session);
+        let modes: [(&str, Setup); 3] = [
+            ("a history search", |session| {
+                session.history = crate::history::History::from_entries(vec![
+                    bravebot_session::store::Entry::sent("old one", None),
+                ]);
+                assert!(session.open_history_search(), "no search opened");
+            }),
+            ("the files state", |session| {
+                let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+                session.transcript.push(crate::state::Entry::tool(
+                    bravebot_agent::report::Activity::running("Update", "a.rs")
+                        .of_tool("edit_file")
+                        .with_changes(diff.condensed(3))
+                        .with_written(Some(bravebot_agent::report::Written {
+                            landed: "a.rs".into(),
+                            added: diff.added(),
+                            removed: diff.removed(),
+                            numbers: diff.condensed_numbers(3),
+                        }))
+                        .done("done"),
+                ));
+                session.toggle_files();
+                assert!(session.files_open(), "the files state did not open");
+            }),
+            ("a picker", |session| {
+                session.open_picking(crate::picking::Picking::Effort(
+                    crate::effort_prompt::Picker::new(None),
+                ));
+            }),
+        ];
+        for (name, setup) in modes {
+            let (mut session, buffer) = at_rest_over_two_delegates();
+            let (row, column) = find_on(&buffer, "find the parser");
+            setup(&mut session);
+            let buffer = drawn(&mut session);
+            let (row_now, column_now) = find_on(&buffer, "find the parser");
+            assert_eq!(
+                (row_now, column_now),
+                (row, column),
+                "{name}: the block moved"
+            );
+            click(&mut session, row, column);
+            assert!(
+                session.watching().is_none(),
+                "{name}: a click opened a view"
+            );
+        }
+    }
+
+    /// A delegate's view opened by a click, over a delegate that has answered, with the frame drawn
+    /// so the way back out and the sentence that closes the view are recorded.
+    fn a_finished_delegates_view() -> (Session, ratatui::buffer::Buffer) {
+        use bravebot_agent::report::{DelegateId, Reported};
+        let (mut session, buffer) = at_rest_over_two_delegates();
+        session.delegate_finished(
+            DelegateId::nth(2),
+            "a reader delegate answered after 3 rounds".to_string(),
+            false,
+            Some(Reported::Said("it is in src/parser.rs".to_string())),
+        );
+        let (row, column) = find_on(&buffer, "write the docs");
+        click(&mut session, row, column);
+        assert!(session.watching_a_delegate(), "the view did not open");
+        session.last_click = None;
+        let buffer = drawn(&mut session);
+        (session, buffer)
+    }
+
+    /// MOUSE-24: a click on the way back drawn in the delegate's header leaves the view, and the
+    /// transcript it was opened over is where it was left.
+    #[test]
+    fn a_click_on_the_back_label_leaves_a_delegates_view() {
+        let (mut session, buffer) = a_finished_delegates_view();
+        let (row, column) = find_cell(&buffer, "\u{2039} back");
+        assert_eq!(row, 0, "the way back is in the header");
+
+        assert_eq!(click(&mut session, row, column + 2), Action::Redraw);
+
+        assert!(session.watching().is_none());
+        assert!(session.selection.is_none());
+        let after = drawn(&mut session);
+        assert!(find_on(&after, "find the parser").0 > 0);
+    }
+
+    /// MOUSE-24: a click on the sentence that closes the view leaves it too, and a click on the
+    /// words under it, on the header's task or on the header's own words leaves it open.
+    #[test]
+    fn a_click_on_the_sentence_that_closes_a_delegates_view_leaves_it() {
+        let (mut session, buffer) = a_finished_delegates_view();
+        for needle in [
+            "it is in src/parser.rs",
+            "write the docs",
+            "reader delegate d2",
+        ] {
+            let (row, column) = find_on(&buffer, needle);
+            click(&mut session, row, column + 1);
+            assert!(session.watching_a_delegate(), "a click on {needle:?} left");
+        }
+        let (row, column) = find_on(&buffer, "answered after 3 rounds");
+        assert_eq!(click(&mut session, row, column + 5), Action::Redraw);
+        assert!(session.watching().is_none());
+    }
+
+    /// MOUSE-24: a drag that begins on the way back, a double click on the sentence and a press
+    /// let go elsewhere are selections, and the view stays.
+    #[test]
+    fn a_drag_over_the_way_back_or_the_closing_sentence_leaves_the_view_open() {
+        let (mut session, buffer) = a_finished_delegates_view();
+        let (row, column) = find_cell(&buffer, "\u{2039} back");
+        swept(&mut session, (row, column), (row, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.watching_a_delegate());
+
+        let (closing, at) = find_on(&buffer, "answered after 3 rounds");
+        session.last_click = None;
+        press(&mut session, closing, at, KeyModifiers::NONE);
+        press(&mut session, closing, at, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), closing, at);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.watching_a_delegate());
+
+        session.clear_selection();
+        session.last_click = None;
+        press(&mut session, 5, 0, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(session.watching_a_delegate());
+
+        session.clear_selection();
+        session.last_click = None;
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(
+            session.watching().is_none(),
+            "the fixture's click left nothing"
+        );
+    }
+
+    /// MOUSE-24: the view a click in the scroller opened is left by a click on its closing
+    /// sentence, back to the scroller.
+    #[test]
+    fn a_click_on_the_closing_sentence_returns_to_the_scroller_it_was_opened_over() {
+        use bravebot_agent::report::{DelegateId, Reported};
+        let mut session = scroller_over_two_delegates();
+        session.delegate_finished(
+            DelegateId::nth(2),
+            "a reader delegate answered after 3 rounds".to_string(),
+            false,
+            Some(Reported::Said("it is in src/parser.rs".to_string())),
+        );
+        session.note_layout(render::as_last_drawn(&session));
+        let (row, column) = find_on_text(&session, "write the docs");
+        click(&mut session, row, column);
+        assert!(session.watching_a_delegate());
+        session.last_click = None;
+        session.note_layout(render::as_last_drawn(&session));
+
+        let (row, column) = find_on_text(&session, "answered after 3 rounds");
+        assert_eq!(click(&mut session, row, column + 2), Action::Redraw);
+        assert!(session.watching().is_none());
+        assert!(session.scrolling());
+    }
+
+    /// MOUSE-24: the label is the interface's own, so a drag along the header copies the words of
+    /// the header and not it.
+    #[test]
+    fn a_drag_along_the_header_copies_no_way_back() {
+        let (mut session, buffer) = a_finished_delegates_view();
+        swept(&mut session, (0, 0), (0, 119));
+        let selection = session.selection.expect("a selection");
+        let copied = selected_text(&session, &buffer, &selection);
+        assert!(copied.contains("reader delegate d2"), "{copied:?}");
+        assert!(!copied.contains("back"), "{copied:?}");
+    }
+
+    /// MOUSE-24: a header too narrow to hold the label beside its words draws none, and a click
+    /// where it would have been is not a way back.
+    #[test]
+    fn a_header_with_no_room_for_the_label_draws_none() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let (mut session, _) = a_finished_delegates_view();
+        let mut terminal = Terminal::new(TestBackend::new(24, 12)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let on_the_screen: Vec<_> = session
+            .laid
+            .targets
+            .iter()
+            .filter(|target| target.space == crate::state::Space::Screen)
+            .collect();
+        assert!(on_the_screen.is_empty(), "{on_the_screen:?}");
+        assert!(!render::as_text(&session).is_empty());
+        let screen: String = (0..24)
+            .map(|column| {
+                terminal.backend().buffer()[(column, 0)]
+                    .symbol()
+                    .to_string()
+            })
+            .collect();
+        assert!(!screen.contains("back"), "{screen:?}");
+        click(&mut session, 0, 22);
+        assert!(session.watching_a_delegate());
+    }
+
+    /// A delegate's view drawn `columns` wide, the width of the header's words, and the column
+    /// the way back is drawn at, or none when none is drawn.
+    fn header_at(columns: u16) -> (Session, usize, Option<u16>) {
+        let (mut session, _) = a_finished_delegates_view();
+        let buffer = drawn_at(&mut session, columns, 12);
+        let cells: Vec<String> = (0..columns)
+            .map(|column| buffer[(column, 0)].symbol().to_string())
+            .collect();
+        let label = cells.iter().position(|cell| cell == "\u{2039}");
+        let words = cells[..label.unwrap_or(cells.len())]
+            .concat()
+            .trim_end()
+            .chars()
+            .count();
+        (session, words, label.and_then(|at| u16::try_from(at).ok()))
+    }
+
+    /// MOUSE-24: the label is drawn when two blanks, the label and one blank after it fit beside
+    /// the words, and one column fewer draws none.
+    #[test]
+    fn the_label_is_drawn_when_two_blanks_and_one_more_cell_fit_beside_the_words() {
+        let (_, words, label) = header_at(120);
+        assert!(label.is_some(), "no label at 120 columns");
+        let label = "\u{2039} back".chars().count();
+        let exact = u16::try_from(words + 2 + label + 1).expect("a width");
+
+        let (_, _, at_exact) = header_at(exact);
+        assert_eq!(
+            at_exact,
+            Some(exact - 1 - u16::try_from(label).expect("a width")),
+            "the label's column at the width that just fits"
+        );
+        let (_, _, one_short) = header_at(exact - 1);
+        assert_eq!(one_short, None, "the label is drawn with a column too few");
+    }
+
+    /// MOUSE-24: the cells that answer as the way back are the label, the blank before it and the
+    /// last column after it, and the cell before the blank answers nothing.
+    #[test]
+    fn the_cells_that_answer_as_the_way_back_are_the_label_and_a_blank_either_side() {
+        let (_, _, label) = header_at(120);
+        let at = label.expect("the label");
+        let wide = u16::try_from("\u{2039} back".chars().count()).expect("a width");
+        for column in at - 1..=at + wide {
+            let (mut session, _, _) = header_at(120);
+            assert_eq!(
+                click(&mut session, 0, column),
+                Action::Redraw,
+                "column {column} did not answer"
+            );
+            assert!(
+                session.watching().is_none(),
+                "column {column} left the view open"
+            );
+        }
+        for column in [at - 2, at + wide + 1] {
+            if column >= 120 {
+                continue;
+            }
+            let (mut session, _, _) = header_at(120);
+            click(&mut session, 0, column);
+            assert!(
+                session.watching_a_delegate(),
+                "column {column} left the view"
+            );
+        }
+    }
+
+    /// MOUSE-24: a closing sentence that wraps over several rows answers on each of them.
+    #[test]
+    fn a_click_on_each_row_a_closing_sentence_wraps_over_leaves_the_view() {
+        let (mut session, _) = a_finished_delegates_view();
+        let buffer = drawn_at(&mut session, 16, 14);
+        let rows_with = |word: &str| {
+            (0..buffer.area.height)
+                .filter(|&row| {
+                    let line: String = (0..16)
+                        .map(|column| buffer[(column, row)].symbol().to_string())
+                        .collect();
+                    line.contains(word)
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut rows: Vec<u16> = ["answered", "rounds"]
+            .iter()
+            .flat_map(|word| rows_with(word))
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        assert!(
+            rows.len() >= 2,
+            "the sentence did not wrap at this width: {rows:?}"
+        );
+        for row in rows {
+            let (mut session, _) = a_finished_delegates_view();
+            drawn_at(&mut session, 16, 14);
+            assert_eq!(click(&mut session, row, 1), Action::Redraw, "row {row}");
+            assert!(session.watching().is_none(), "row {row} left the view open");
+        }
+    }
+
+    /// The buffer of the session's frame at a size of the caller's, with its layout recorded.
+    fn drawn_at(session: &mut Session, columns: u16, rows: u16) -> ratatui::buffer::Buffer {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(columns, rows)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, session))
+            .expect("draw");
+        session.note_layout(laid);
+        terminal.backend().buffer().clone()
+    }
+
+    /// A session at rest with the info panel drawn, and in its transcript a run that returned fourteen
+    /// lines, a read that returned three and a write of twenty changes, the frame drawn so that the rows of
+    /// each are the ones recorded.
+    fn at_rest_over_calls() -> (Session, ratatui::buffer::Buffer) {
+        use bravebot_agent::diff::Change;
+        use bravebot_agent::report::{Activity, Landing, Returned};
+        let (mut session, _) = two_panes();
+        // Enough before the calls that the view is held below the top of the transcript, so a call
+        // is drawn on a row that is not the first.
+        for n in 0..4 {
+            session
+                .transcript
+                .push(crate::state::Entry::user(format!("question {n}")));
+        }
+        session.finish_activity(Activity::running("Run", "make").done("ok"));
+        session.landed(Landing::Context);
+        let lines: Vec<String> = (0..14).map(|n| format!("out {n}")).collect();
+        session.returned(Returned {
+            lines: lines[..5].to_vec(),
+            total: 14,
+            from_the_end: false,
+            whole: lines,
+        });
+        session.finish_activity(Activity::running("Read", "short.txt").done("3 lines"));
+        session.landed(Landing::Context);
+        session.returned(Returned {
+            lines: vec!["tiny 0".into(), "tiny 1".into(), "tiny 2".into()],
+            total: 3,
+            from_the_end: false,
+            whole: vec!["tiny 0".into(), "tiny 1".into(), "tiny 2".into()],
+        });
+        session.transcript.push(crate::state::Entry::tool(
+            Activity::running("Write", "out.txt")
+                .done("wrote 20 lines")
+                .with_changes(
+                    (0..20)
+                        .map(|n| Change::Added(format!("change {n}")))
+                        .collect(),
+                ),
+        ));
+        session.laid.columns = 120;
+        let buffer = drawn_at(&mut session, 120, 40);
+        (session, buffer)
+    }
+
+    /// MOUSE-25: at rest a click on a call that returned more than it draws opens the scroller on it
+    /// with the call expanded, and the heading stays on the row it was drawn on.
+    #[test]
+    fn a_click_on_a_call_at_rest_opens_the_scroller_on_it_expanded() {
+        let (mut session, buffer) = at_rest_over_calls();
+        assert!(!session.scrolling());
+        let (row, column) = find_on(&buffer, "Run(make)");
+        assert!(!buffer_text(&buffer).contains("out 13"));
+
+        assert_eq!(click(&mut session, row + 2, column), Action::Redraw);
+
+        assert!(session.scrolling());
+        assert!(session.selection.is_none());
+        let after = drawn_at(&mut session, 120, 40);
+        assert!(
+            buffer_text(&after).contains("out 13"),
+            "the call was not expanded"
+        );
+        assert_eq!(find_on(&after, "Run(make)").0, row);
+
+        // In the scroller a second click on the call collapses it, as it always did.
+        session.last_click = None;
+        let (row, column) = find_on(&after, "out 3");
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(session.scrolling());
+        let collapsed = drawn_at(&mut session, 120, 40);
+        assert!(!buffer_text(&collapsed).contains("out 13"));
+    }
+
+    /// The text of a drawn frame, one line to a row.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// MOUSE-25: a write drawn past its twelve lines is a call with more to show, and the click
+    /// opens the scroller on it with every change drawn.
+    #[test]
+    fn a_click_on_a_long_write_at_rest_opens_the_scroller_on_every_change() {
+        let (mut session, buffer) = at_rest_over_calls();
+        let (row, column) = find_on(&buffer, "Write(out.txt)");
+        assert!(!buffer_text(&buffer).contains("change 19"));
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+
+        assert!(session.scrolling());
+        let after = drawn_at(&mut session, 120, 40);
+        assert!(buffer_text(&after).contains("change 19"));
+        // The write was drawn at the bottom of the screen, so it is shown whole from its heading.
+        assert!(find_on(&after, "Write(out.txt)").0 <= row);
+    }
+
+    /// MOUSE-9: a click on each row of a call, down to the last, expands it, and the row after it
+    /// does not.
+    #[test]
+    fn a_click_on_every_row_of_a_call_in_the_scroller_expands_it() {
+        let session = scroller_over_one_call();
+        let (first, _) = find_on_text(&session, "Run(make)");
+        let (last, _) = find_on_text(&session, "25 more lines");
+        assert!(last > first + 1, "the call is drawn over {first} to {last}");
+        for row in first..=last {
+            let mut session = scroller_over_one_call();
+            assert_eq!(click(&mut session, row, 4), Action::Redraw, "row {row}");
+            assert!(
+                render::as_text(&session).contains("out 29"),
+                "a click on row {row} expanded nothing"
+            );
+        }
+        let mut session = scroller_over_one_call();
+        click(&mut session, last + 1, 4);
+        assert!(!render::as_text(&session).contains("out 29"));
+    }
+
+    /// MOUSE-25: a click on each row of a call at rest, down to the last, opens the scroller on it
+    /// expanded, and the row after it does not.
+    #[test]
+    fn a_click_on_every_row_of_a_call_at_rest_opens_the_scroller_on_it() {
+        for (heading, ending, unseen) in [
+            ("Run(make)", "9 more lines", "out 13"),
+            ("Write(out.txt)", "8 more lines", "change 19"),
+        ] {
+            let (_, buffer) = at_rest_over_calls();
+            let (first, _) = find_on(&buffer, heading);
+            let (last, _) = find_on(&buffer, ending);
+            assert!(
+                last > first + 1,
+                "{heading} is drawn over {first} to {last}"
+            );
+            for row in first..=last {
+                let (mut session, _) = at_rest_over_calls();
+                assert_eq!(
+                    click(&mut session, row, 4),
+                    Action::Redraw,
+                    "{heading} {row}"
+                );
+                assert!(session.scrolling(), "{heading}: row {row} opened nothing");
+                let after = drawn_at(&mut session, 120, 40);
+                assert!(
+                    buffer_text(&after).contains(unseen),
+                    "{heading}: row {row} did not expand the call"
+                );
+            }
+            let (mut session, _) = at_rest_over_calls();
+            click(&mut session, last + 1, 4);
+            assert!(
+                !session.scrolling(),
+                "{heading}: the row after it opened the scroller"
+            );
+        }
+    }
+
+    /// What a delegate was asked to do, long enough to be drawn over several rows beside the
+    /// heading, and ending in a word that is on no other row.
+    const A_LONG_TASK: &str = "find every place the parser reads a token and list the callers of \
+        each one by name, with the file and the line, and say which of them hold a lock while \
+        they do it, zebra";
+
+    /// The scroller over one call and a delegate whose block is drawn over more than one row, and
+    /// the frame at 80 by 40.
+    fn scroller_over_a_delegate_with_a_long_task() -> (Session, ratatui::buffer::Buffer) {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let mut session = scroller_over_one_call();
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id: DelegateId::nth(1),
+            kind: "reader".to_string(),
+            task: A_LONG_TASK.to_string(),
+        });
+        let buffer = drawn_at(&mut session, 80, 40);
+        (session, buffer)
+    }
+
+    /// MOUSE-10: a click on each row of a delegate's block in the scroller, down to the last,
+    /// opens its view, and the row after it does not.
+    #[test]
+    fn a_click_on_every_row_of_a_delegates_block_in_the_scroller_opens_its_view() {
+        let (_, buffer) = scroller_over_a_delegate_with_a_long_task();
+        let (first, _) = find_on(&buffer, "reader delegate");
+        let (last, _) = find_on(&buffer, "zebra");
+        assert!(
+            last > first + 1,
+            "the block is drawn over {first} to {last}"
+        );
+        for row in first..=last {
+            let (mut session, _) = scroller_over_a_delegate_with_a_long_task();
+            assert_eq!(click(&mut session, row, 4), Action::Redraw, "row {row}");
+            assert!(session.watching_a_delegate(), "row {row} opened no view");
+        }
+        let (mut session, _) = scroller_over_a_delegate_with_a_long_task();
+        click(&mut session, last + 1, 4);
+        assert!(session.watching().is_none());
+    }
+
+    /// MOUSE-23: a click on each row of a delegate's block at rest, down to the last, opens its
+    /// view, and the row after it does not.
+    #[test]
+    fn a_click_on_every_row_of_a_delegates_block_at_rest_opens_its_view() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let at_rest = || {
+            let (mut session, _) = two_panes();
+            session.delegate_started(Delegation {
+                stop: Default::default(),
+                id: DelegateId::nth(1),
+                kind: "reader".to_string(),
+                task: A_LONG_TASK.to_string(),
+            });
+            let buffer = drawn(&mut session);
+            (session, buffer)
+        };
+        let (_, buffer) = at_rest();
+        let (first, _) = find_on(&buffer, "reader delegate");
+        let (last, _) = find_on(&buffer, "zebra");
+        assert!(
+            last > first + 1,
+            "the block is drawn over {first} to {last}"
+        );
+        for row in first..=last {
+            let (mut session, _) = at_rest();
+            assert_eq!(click(&mut session, row, 4), Action::Redraw, "row {row}");
+            assert!(session.watching_a_delegate(), "row {row} opened no view");
+        }
+        let (mut session, _) = at_rest();
+        click(&mut session, last + 1, 4);
+        assert!(session.watching().is_none());
+    }
+
+    /// MOUSE-25: a call with nothing more to show, the info panel on the call's row, a drag, a
+    /// double click and a press let go elsewhere open nothing, each against a fixture where the
+    /// plain click on the call does open the scroller.
+    #[test]
+    fn a_click_off_a_call_or_a_drag_over_one_opens_no_scroller_at_rest() {
+        let (mut session, buffer) = at_rest_over_calls();
+        let (row, column) = find_on(&buffer, "Run(make)");
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1
+            .x;
+
+        let (short, short_column) = find_on(&buffer, "Read(short.txt)");
+        assert_eq!(click(&mut session, short, short_column), Action::Copy);
+        assert_eq!(click(&mut session, short + 1, short_column), Action::Copy);
+        assert!(!session.scrolling(), "a call with nothing more opened it");
+        assert_ne!(click(&mut session, row, panel + 4), Action::Redraw);
+        assert!(!session.scrolling());
+
+        swept(&mut session, (row, column), (row, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(!session.scrolling());
+
+        session.last_click = None;
+        press(&mut session, row, column, KeyModifiers::NONE);
+        press(&mut session, row, column, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(!session.scrolling());
+
+        session.clear_selection();
+        session.last_click = None;
+        press(&mut session, 0, 0, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(!session.scrolling());
+
+        session.clear_selection();
+        session.last_click = None;
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(session.scrolling(), "the fixture's click opened nothing");
+    }
+
+    /// MOUSE-25: a picker, a history search, the files state and a delegate's view each stand over
+    /// the transcript, and a click on a call opens no scroller under them.
+    #[test]
+    fn a_click_on_a_call_opens_no_scroller_where_another_mode_is_in_use() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        type Setup = fn(&mut Session);
+        let modes: [(&str, Setup); 4] = [
+            ("a history search", |session| {
+                session.history = crate::history::History::from_entries(vec![
+                    bravebot_session::store::Entry::sent("old one", None),
+                ]);
+                assert!(session.open_history_search(), "no search opened");
+            }),
+            ("the files state", |session| {
+                session.toggle_files();
+                assert!(session.files_open(), "the files state did not open");
+            }),
+            ("a picker", |session| {
+                session.open_picking(crate::picking::Picking::Effort(
+                    crate::effort_prompt::Picker::new(None),
+                ));
+            }),
+            ("a delegate's view", |session| {
+                session.delegate_started(Delegation {
+                    stop: Default::default(),
+                    id: DelegateId::nth(1),
+                    kind: "reader".to_string(),
+                    task: "find the parser".to_string(),
+                });
+                assert!(session.watch(), "no view opened");
+            }),
+        ];
+        for (name, setup) in modes {
+            let (mut session, buffer) = at_rest_over_calls();
+            let (row, column) = find_on(&buffer, "Run(make)");
+            // Written files are what the state lists, so the fixture has one.
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", "a.rs")
+                    .of_tool("edit_file")
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: "a.rs".into(),
+                        added: 1,
+                        removed: 0,
+                        numbers: Vec::new(),
+                    }))
+                    .done("done"),
+            ));
+            setup(&mut session);
+            let _ = drawn_at(&mut session, 120, 40);
+            click(&mut session, row, column);
+            assert!(!session.scrolling(), "{name}: a click opened the scroller");
+        }
+    }
+
+    /// MOUSE-25: a turn running is when a person most wants to read what a call returned, and the
+    /// click works there as it does at rest.
+    #[test]
+    fn a_click_on_a_call_while_a_turn_runs_opens_the_scroller_on_it() {
+        let (mut session, _) = at_rest_over_calls();
+        session.type_char('a');
+        session.submit();
+        assert!(session.a_turn_is_running());
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, column) = find_on(&buffer, "Run(make)");
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(session.scrolling());
+        let after = drawn_at(&mut session, 120, 40);
+        assert!(buffer_text(&after).contains("out 13"));
+    }
+
+    /// The words of a reply that has a control character, a tab and a paragraph break in them, and
+    /// is wide enough to be drawn over more than one row beside the info panel.
+    const AN_EARLIER_REPLY: &str = "The first answer.\n\nA \u{1b}[31mmarked\u{1b}[0m paragraph with\ta tab in it, long enough that the screen has to wrap it over several rows of the transcript.";
+
+    /// A session at rest with the info panel drawn, a prompt between two replies, and the frame drawn
+    /// so that the marker of each reply is a place the layout recorded.
+    fn at_rest_over_two_replies() -> (Session, ratatui::buffer::Buffer) {
+        let (mut session, _) = two_panes();
+        session
+            .transcript
+            .push(crate::state::Entry::assistant(AN_EARLIER_REPLY, Vec::new()));
+        // A reply of nothing but blanks draws no row, so what is drawn after it is not its.
+        session
+            .transcript
+            .push(crate::state::Entry::assistant("  \n", Vec::new()));
+        session
+            .transcript
+            .push(crate::state::Entry::user("and then"));
+        session.transcript.push(crate::state::Entry::assistant(
+            "The latest answer.",
+            Vec::new(),
+        ));
+        session.transcript.push(
+            crate::state::Entry::assistant("A named answer.", Vec::new())
+                .answered_as(Some("reader".to_string())),
+        );
+        let buffer = drawn(&mut session);
+        (session, buffer)
+    }
+
+    /// MOUSE-26: a click on the marker that leads a reply copies that reply, and copies exactly what
+    /// `/copy` copies for it: the latest for the latest and an earlier one for the earlier, with the
+    /// control character left out and the paragraph break and the tab kept.
+    #[test]
+    fn a_click_on_a_replys_marker_copies_that_reply_as_copy_does() {
+        let (mut session, buffer) = at_rest_over_two_replies();
+        let (row, column) = find_cell(&buffer, "A named answer.");
+        assert_eq!(column, 2, "the marker leads the words");
+        let latest = reply_to_copy(&session, "").expect("a latest reply");
+        assert_eq!(latest, "A named answer.");
+        for marker in [0, 1] {
+            let action = click(&mut session, row, marker);
+            assert_eq!(action, Action::CopyReply(latest.clone()), "column {marker}");
+            assert!(session.selection.is_none());
+            session.last_click = None;
+        }
+        // The line that says which definition answered is above the marker and is not it.
+        assert_eq!(click(&mut session, row - 1, 0), Action::Copy);
+
+        let (row, _) = find_cell(&buffer, "The first answer.");
+        let earlier = reply_to_copy(&session, "3").expect("an earlier reply");
+        assert_eq!(
+            reply_to_copy(&session, "2").as_deref(),
+            Ok("The latest answer."),
+            "the blank reply is not one"
+        );
+        assert_ne!(earlier, latest);
+        assert!(
+            earlier.contains("\n\n") && earlier.contains('\t'),
+            "{earlier:?}"
+        );
+        assert!(!earlier.contains('\u{1b}'), "{earlier:?}");
+        assert_eq!(click(&mut session, row, 0), Action::CopyReply(earlier));
+    }
+
+    /// MOUSE-26: the cell after the marker, the rows a wrapped reply continues on, the prompt's own
+    /// marker above, the info panel on the marker's row, a drag, a double click and a press that began
+    /// elsewhere copy no reply, each against a fixture where the plain click on the marker does.
+    #[test]
+    fn a_click_off_a_replys_marker_copies_no_reply() {
+        let (mut session, buffer) = at_rest_over_two_replies();
+        let (row, _) = find_cell(&buffer, "The first answer.");
+        let (prompt, _) = find_cell(&buffer, "and then");
+        let (wrapped, _) = find_cell(&buffer, "transcript.");
+        assert!(wrapped > row + 2, "the paragraph was not wrapped");
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1
+            .x;
+        let copies_a_reply = |action: Action| matches!(action, Action::CopyReply(_));
+
+        assert!(!copies_a_reply(click(&mut session, row, 2)));
+        assert!(!copies_a_reply(click(&mut session, row, 5)));
+        assert!(!copies_a_reply(click(&mut session, wrapped, 0)));
+        assert!(!copies_a_reply(click(&mut session, wrapped, 1)));
+        assert!(!copies_a_reply(click(&mut session, prompt, 0)));
+        assert!(!copies_a_reply(click(&mut session, prompt, 1)));
+        // The blank reply draws a marker of its own and has nothing to copy, as `/copy` finds.
+        assert_eq!(buffer[(0, prompt - 2)].symbol(), "\u{23fa}");
+        assert!(!copies_a_reply(click(&mut session, prompt - 2, 0)));
+        assert!(!copies_a_reply(click(&mut session, row, panel + 1)));
+
+        swept(&mut session, (row, 0), (row, 8));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, 8);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        session.last_click = None;
+        press(&mut session, row, 0, KeyModifiers::NONE);
+        press(&mut session, row, 0, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, 0);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        session.clear_selection();
+        session.last_click = None;
+        press(&mut session, row + 1, 30, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, 0);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        session.clear_selection();
+        session.last_click = None;
+        assert!(
+            copies_a_reply(click(&mut session, row, 0)),
+            "the fixture's click copied nothing"
+        );
+    }
+
+    /// MOUSE-26: a reply still arriving is not a reply yet, so its marker copies nothing until the
+    /// round ends and the words are an entry. `/copy` copies finished replies only.
+    #[test]
+    fn a_reply_still_arriving_has_no_marker_to_click() {
+        let (mut session, _) = at_rest_over_two_replies();
+        session.type_char('a');
+        session.submit();
+        session.streaming("An answer that is still being written");
+        let buffer = drawn(&mut session);
+        let (row, column) = find_cell(&buffer, "An answer that is still");
+        assert_eq!(column, 2);
+        assert_eq!(click(&mut session, row, 0), Action::Copy);
+        session.last_click = None;
+
+        session.complete("An answer that is still being written", Vec::new(), 0);
+        let buffer = drawn(&mut session);
+        let (row, _) = find_cell(&buffer, "An answer that is still");
+        assert_eq!(
+            click(&mut session, row, 0),
+            Action::CopyReply("An answer that is still being written".to_string())
+        );
+    }
+
+    /// MOUSE-26: an earlier reply is copied while a turn runs, and in the scroller, where the same
+    /// marker leads it.
+    #[test]
+    fn a_reply_is_copied_by_its_marker_while_a_turn_runs_and_in_the_scroller() {
+        let (mut session, _) = at_rest_over_two_replies();
+        session.type_char('a');
+        session.submit();
+        assert!(session.a_turn_is_running());
+        let buffer = drawn(&mut session);
+        let (row, _) = find_cell(&buffer, "A named answer.");
+        let latest = "A named answer.".to_string();
+        assert_eq!(
+            click(&mut session, row, 0),
+            Action::CopyReply(latest.clone())
+        );
+
+        session.last_click = None;
+        session.open_scroller();
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, _) = find_cell(&buffer, "A named answer.");
+        assert_eq!(click(&mut session, row, 0), Action::CopyReply(latest));
+    }
+
+    /// MOUSE-26: a picker, a history search, the files state and a delegate's view each stand over
+    /// the transcript, and a click on a marker copies nothing under them.
+    #[test]
+    fn a_click_on_a_replys_marker_copies_nothing_where_another_mode_is_in_use() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        type Setup = fn(&mut Session);
+        let modes: [(&str, Setup); 4] = [
+            ("a history search", |session| {
+                session.history = crate::history::History::from_entries(vec![
+                    bravebot_session::store::Entry::sent("old one", None),
+                ]);
+                assert!(session.open_history_search(), "no search opened");
+            }),
+            ("the files state", |session| {
+                session.toggle_files();
+                assert!(session.files_open(), "the files state did not open");
+            }),
+            ("a picker", |session| {
+                session.open_picking(crate::picking::Picking::Effort(
+                    crate::effort_prompt::Picker::new(None),
+                ));
+            }),
+            ("a delegate's view", |session| {
+                session.delegate_started(Delegation {
+                    stop: Default::default(),
+                    id: DelegateId::nth(1),
+                    kind: "reader".to_string(),
+                    task: "find the parser".to_string(),
+                });
+                assert!(session.watch(), "no view opened");
+            }),
+        ];
+        for (name, setup) in modes {
+            let (mut session, buffer) = at_rest_over_two_replies();
+            let (row, _) = find_cell(&buffer, "A named answer.");
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", "a.rs")
+                    .of_tool("edit_file")
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: "a.rs".into(),
+                        added: 1,
+                        removed: 0,
+                        numbers: Vec::new(),
+                    }))
+                    .done("done"),
+            ));
+            setup(&mut session);
+            let _ = drawn(&mut session);
+            let action = click(&mut session, row, 0);
+            assert!(
+                !matches!(action, Action::CopyReply(_)),
+                "{name}: a click copied a reply"
+            );
+        }
+    }
+
+    /// MOUSE-26: the loops that run while work does carry out the copy a click on a marker asked
+    /// for, say how much was copied, leave the view where it was, and carry out nothing else a mouse
+    /// report returned.
+    #[test]
+    fn the_loops_that_run_while_work_does_copy_the_reply_a_click_named() {
+        let mut session = Session::new("none");
+        session.scroll = 7;
+        let mut handed = Vec::new();
+        copy_a_reply_clicked(
+            &mut session,
+            Action::CopyReply("déjà vu".to_string()),
+            |text| {
+                handed.push(text.to_string());
+                true
+            },
+        );
+        assert_eq!(handed, ["déjà vu"]);
+        assert_eq!(session.copied, Some(7));
+        assert_eq!(session.scroll, 7, "the view was taken to the tail");
+
+        copy_a_reply_clicked(&mut session, Action::ChooseEffort, |text| {
+            handed.push(text.to_string());
+            true
+        });
+        copy_a_reply_clicked(&mut session, Action::Redraw, |text| {
+            handed.push(text.to_string());
+            true
+        });
+        assert_eq!(handed.len(), 1, "an action that is not a copy copied");
+
+        copy_a_reply_clicked(&mut session, Action::CopyReply("gone".to_string()), |_| {
+            false
+        });
+        assert_eq!(session.copied, None);
+        assert_eq!(
+            said_in_the_transcript(&session).last().map(String::as_str),
+            Some(t!(session_copy_failed))
+        );
+    }
+
+    /// A reply that holds two fenced blocks. The first has a tab, markers a reader would take for
+    /// markdown, and a line wider than the transcript beside the info panel, which the screen wraps.
+    const A_REPLY_WITH_BLOCKS: &str = "Run this first:\n\n```sh\ncargo test -p bravebot-tui --lib\n\techo \"a *star* and a_b_c\" # and a comment long enough that the transcript has to wrap it over a second row\n```\n\nThen this one:\n\n~~~\nthe second block\n~~~\n\nDone.";
+
+    /// The row and column of every cell where `needle` begins in a drawn frame, top to bottom.
+    fn cells_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Vec<(u16, u16)> {
+        let first = needle.chars().next().expect("a needle").to_string();
+        let mut found = Vec::new();
+        for row in 0..buffer.area.height {
+            let cells: Vec<String> = (0..buffer.area.width)
+                .map(|column| buffer[(column, row)].symbol().to_string())
+                .collect();
+            for column in 0..cells.len() {
+                if cells[column] == first && cells[column..].concat().starts_with(needle) {
+                    found.push((row, column as u16));
+                }
+            }
+        }
+        found
+    }
+
+    /// A session at rest with the info panel drawn and a reply of two fenced blocks, the frame drawn
+    /// so that the word at the right of each block's header is a place the layout recorded.
+    fn at_rest_over_a_reply_with_blocks() -> (Session, ratatui::buffer::Buffer) {
+        let (mut session, _) = two_panes();
+        session.transcript.push(crate::state::Entry::assistant(
+            A_REPLY_WITH_BLOCKS,
+            Vec::new(),
+        ));
+        let buffer = drawn_at(&mut session, 120, 40);
+        (session, buffer)
+    }
+
+    /// The words of the first block as the reply wrote them: no fence, the tab kept, the markers
+    /// kept, and the long line one line though the screen drew it over two rows.
+    const THE_FIRST_BLOCK: &str = "cargo test -p bravebot-tui --lib\n\techo \"a *star* and a_b_c\" # and a comment long enough that the transcript has to wrap it over a second row";
+
+    /// MOUSE-27: a click on the word at the right of a block's header copies that block alone, as the
+    /// reply wrote it, and each block copies its own.
+    #[test]
+    fn a_click_on_a_blocks_copy_word_copies_the_block_alone() {
+        let (mut session, buffer) = at_rest_over_a_reply_with_blocks();
+        let words = cells_of(&buffer, "copy");
+        assert_eq!(words.len(), 2, "one word to a block: {words:?}");
+
+        for cell in 0..4 {
+            let action = click(&mut session, words[0].0, words[0].1 + cell);
+            assert_eq!(
+                action,
+                Action::CopyReply(THE_FIRST_BLOCK.to_string()),
+                "cell {cell}"
+            );
+            assert!(session.selection.is_none());
+            session.last_click = None;
+        }
+        assert_eq!(
+            click(&mut session, words[1].0, words[1].1),
+            Action::CopyReply("the second block".to_string())
+        );
+    }
+
+    /// MOUSE-27: the cells beside the word, the name the fence gave, the block's own rows, the info
+    /// panel on the header's row, a drag, a double click and a press that began elsewhere copy no
+    /// block, each against a fixture where the plain click on the word does.
+    #[test]
+    fn a_click_off_a_blocks_copy_word_copies_no_block() {
+        let (mut session, buffer) = at_rest_over_a_reply_with_blocks();
+        let (row, column) = cells_of(&buffer, "copy")[0];
+        let (name, name_column) = cells_of(&buffer, "sh")[0];
+        assert_eq!(name, row, "the name is on the header");
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1
+            .x;
+        let copies = |action: Action| matches!(action, Action::CopyReply(_));
+
+        assert!(!copies(click(&mut session, row, column - 1)));
+        assert!(!copies(click(&mut session, row, column + 4)));
+        assert!(!copies(click(&mut session, row, name_column)));
+        assert!(!copies(click(&mut session, row + 1, column)));
+        assert!(!copies(click(&mut session, row + 2, column)));
+        assert!(!copies(click(&mut session, row, panel + 1)));
+        assert!(!copies(click(&mut session, row - 1, column)));
+
+        swept(&mut session, (row, column), (row, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        session.last_click = None;
+        press(&mut session, row, column, KeyModifiers::NONE);
+        press(&mut session, row, column, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        session.clear_selection();
+        session.last_click = None;
+        press(&mut session, row + 1, 30, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        session.clear_selection();
+        session.last_click = None;
+        assert!(
+            copies(click(&mut session, row, column)),
+            "the fixture's click copied nothing"
+        );
+    }
+
+    /// MOUSE-27: the word is the interface's own, so a drag over the header copies what the fence
+    /// named and a drag over the block copies its lines, and neither takes the word.
+    #[test]
+    fn a_drag_over_a_block_does_not_copy_its_copy_word() {
+        let (mut session, buffer) = at_rest_over_a_reply_with_blocks();
+        let (row, _) = cells_of(&buffer, "copy")[0];
+        swept(&mut session, (row, 0), (row + 2, 83));
+        let selection = session.selection.expect("a selection");
+        let copied = selected_text(&session, &buffer, &selection);
+        assert!(copied.contains("sh\n"), "{copied:?}");
+        assert!(
+            copied.contains("cargo test -p bravebot-tui --lib"),
+            "{copied:?}"
+        );
+        assert!(!copied.contains("copy"), "{copied:?}");
+    }
+
+    /// MOUSE-27: a reply still arriving draws a block without the word, and a click where it would
+    /// be copies nothing. The word is there when the round ends.
+    #[test]
+    fn a_block_in_a_reply_still_arriving_has_no_copy_word_until_it_ends() {
+        let (mut session, _) = at_rest_over_two_replies();
+        session.type_char('a');
+        session.submit();
+        session.streaming("Here:\n```sh\nls -la\n");
+        let buffer = drawn_at(&mut session, 120, 40);
+        assert!(cells_of(&buffer, "copy").is_empty());
+        let (row, _) = cells_of(&buffer, "ls -la")[0];
+        assert_eq!(click(&mut session, row - 1, 80), Action::Copy);
+        session.last_click = None;
+
+        session.complete("Here:\n```sh\nls -la\n", Vec::new(), 0);
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, column) = cells_of(&buffer, "copy")[0];
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::CopyReply("ls -la".to_string()),
+            "a block nobody closed is the rest of the reply"
+        );
+    }
+
+    /// MOUSE-27: the word works in the scroller and while a turn runs.
+    #[test]
+    fn a_blocks_copy_word_works_in_the_scroller_and_while_a_turn_runs() {
+        let (mut session, _) = at_rest_over_a_reply_with_blocks();
+        session.type_char('a');
+        session.submit();
+        assert!(session.a_turn_is_running());
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, column) = cells_of(&buffer, "copy")[1];
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::CopyReply("the second block".to_string())
+        );
+
+        session.last_click = None;
+        session.open_scroller();
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, column) = cells_of(&buffer, "copy")[0];
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::CopyReply(THE_FIRST_BLOCK.to_string())
+        );
+    }
+
+    /// MOUSE-27: a picker, a history search, the files state and a delegate's view each stand over
+    /// the transcript, and a click on a block's word copies nothing under them.
+    #[test]
+    fn a_click_on_a_blocks_copy_word_copies_nothing_where_another_mode_is_in_use() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        type Setup = fn(&mut Session);
+        let modes: [(&str, Setup); 4] = [
+            ("a history search", |session| {
+                session.history = crate::history::History::from_entries(vec![
+                    bravebot_session::store::Entry::sent("old one", None),
+                ]);
+                assert!(session.open_history_search(), "no search opened");
+            }),
+            ("the files state", |session| {
+                session.toggle_files();
+                assert!(session.files_open(), "the files state did not open");
+            }),
+            ("a picker", |session| {
+                session.open_picking(crate::picking::Picking::Effort(
+                    crate::effort_prompt::Picker::new(None),
+                ));
+            }),
+            ("a delegate's view", |session| {
+                session.delegate_started(Delegation {
+                    stop: Default::default(),
+                    id: DelegateId::nth(1),
+                    kind: "reader".to_string(),
+                    task: "find the parser".to_string(),
+                });
+                assert!(session.watch(), "no view opened");
+            }),
+        ];
+        for (name, setup) in modes {
+            let (mut session, buffer) = at_rest_over_a_reply_with_blocks();
+            let (row, column) = cells_of(&buffer, "copy")[0];
+            session.transcript.push(crate::state::Entry::tool(
+                bravebot_agent::report::Activity::running("Update", "a.rs")
+                    .of_tool("edit_file")
+                    .with_written(Some(bravebot_agent::report::Written {
+                        landed: "a.rs".into(),
+                        added: 1,
+                        removed: 0,
+                        numbers: Vec::new(),
+                    }))
+                    .done("done"),
+            ));
+            setup(&mut session);
+            let _ = drawn_at(&mut session, 120, 40);
+            let action = click(&mut session, row, column);
+            assert!(
+                !matches!(action, Action::CopyReply(_)),
+                "{name}: a click copied a block"
+            );
+        }
+    }
+
+    /// A session whose turn is running, with three prompts typed and sent behind it, and the frame
+    /// drawn so the rows each one waits on are the ones recorded.
+    fn working_with_three_waiting() -> (Session, ratatui::buffer::Buffer) {
+        let (mut session, _) = two_panes();
+        session.type_char('a');
+        session.submit();
+        for line in ["second question", "third question", "fourth question"] {
+            for c in line.chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+        }
+        assert_eq!(session.queued.len(), 3);
+        let buffer = drawn_at(&mut session, 120, 30);
+        (session, buffer)
+    }
+
+    fn waiting(session: &Session) -> Vec<&str> {
+        session
+            .queued
+            .iter()
+            .map(|waiting| waiting.prompt.as_str())
+            .collect()
+    }
+
+    /// MOUSE-28: a click on a waiting prompt's words or on its mark takes that prompt and the ones
+    /// typed after it back into the box, one to a line in the order they were typed, and leaves the
+    /// ones before it waiting. The rows are two to a prompt, one apart from the next prompt's.
+    #[test]
+    fn a_click_on_a_waiting_prompt_takes_it_and_the_ones_after_it_back_into_the_box() {
+        let (mut session, buffer) = working_with_three_waiting();
+        let (third, column) = find_cell(&buffer, "third question");
+        let reaching = session.interjections();
+
+        // The mark under it is the same prompt's, and the words of the one above are not.
+        assert_eq!(click(&mut session, third + 1, column + 2), Action::Redraw);
+        assert_eq!(session.input(), "third question\nfourth question");
+        assert_eq!(waiting(&session), ["second question"]);
+        assert!(session.selection.is_none());
+        assert_eq!(reaching.take().as_deref(), Some("second question"));
+        assert_eq!(
+            reaching.take(),
+            None,
+            "a prompt taken back was still on its way"
+        );
+    }
+
+    /// MOUSE-28: the command a click on the panel's MCP row queued is no prompt anybody typed, so taking
+    /// the prompts back, with the key or with a click, leaves it waiting and does not put it in the
+    /// box, where Enter would send `/mcp` to the planner as words. The regression it rejects is the
+    /// line coming back with the prompts as one more row of the box.
+    #[test]
+    fn a_click_queued_command_stays_waiting_when_the_prompts_come_back() {
+        for by_click in [false, true] {
+            let (mut session, _) = panel_of_command_rows(true);
+            for c in "second question".chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+            let buffer = drawn_at(&mut session, 120, 30);
+            let (row, column) = find_cell(&buffer, "notes-server");
+            click(&mut session, row, column + 1);
+            assert_eq!(waiting(&session), ["second question", "/mcp"]);
+            let buffer = drawn_at(&mut session, 120, 30);
+
+            match by_click {
+                true => {
+                    let (row, column) = find_cell(&buffer, "second question");
+                    assert_eq!(click(&mut session, row, column), Action::Redraw);
+                }
+                false => {
+                    handle_key_while_working(&mut session, key(KeyCode::Up));
+                }
+            }
+
+            assert_eq!(session.input(), "second question", "by click: {by_click}");
+            assert_eq!(waiting(&session), ["/mcp"], "by click: {by_click}");
+        }
+    }
+
+    /// MOUSE-28: a click on the oldest waiting prompt is what the key is: the box, the queue and what
+    /// the turn can still reach are what Up leaves.
+    #[test]
+    fn a_click_on_the_oldest_waiting_prompt_leaves_what_the_key_leaves() {
+        let (mut clicked, buffer) = working_with_three_waiting();
+        let (second, column) = find_cell(&buffer, "second question");
+        let reaching = clicked.interjections();
+        assert_eq!(click(&mut clicked, second, column), Action::Redraw);
+
+        let (mut keyed, _) = working_with_three_waiting();
+        assert_eq!(
+            handle_key_while_working(&mut keyed, key(KeyCode::Up)),
+            Action::Redraw
+        );
+
+        assert_eq!(clicked.input(), keyed.input());
+        assert_eq!(
+            clicked.input(),
+            "second question\nthird question\nfourth question"
+        );
+        assert_eq!(waiting(&clicked), waiting(&keyed));
+        assert!(clicked.queued.is_empty());
+        assert_eq!(reaching.take(), None);
+    }
+
+    /// MOUSE-28: a click on the last prompt takes that one alone, and what is still being typed stays
+    /// below what comes back, as it does when the key takes the queue.
+    #[test]
+    fn a_click_on_the_newest_waiting_prompt_takes_that_one_and_keeps_the_line_in_the_box() {
+        let (mut session, _) = working_with_three_waiting();
+        for c in "half typed".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (fourth, column) = find_cell(&buffer, "fourth question");
+
+        assert_eq!(click(&mut session, fourth, column), Action::Redraw);
+        assert_eq!(session.input(), "fourth question\nhalf typed");
+        assert_eq!(waiting(&session), ["second question", "third question"]);
+    }
+
+    /// MOUSE-28: the rows beside the queue, a drag from a waiting prompt, a double click on it, a press
+    /// that began elsewhere, the info panel on its row, and a click where nothing waits take nothing
+    /// back, each against a fixture where the plain click does.
+    #[test]
+    fn a_click_off_a_waiting_prompt_or_a_drag_over_one_takes_nothing_back() {
+        let (mut session, buffer) = working_with_three_waiting();
+        let (second, column) = find_cell(&buffer, "second question");
+        let last_mark = second + 5;
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1
+            .x;
+
+        // The row above the first prompt is the box's, the row below the last mark is the hint's.
+        click(&mut session, second - 1, column);
+        click(&mut session, last_mark + 1, column);
+        click(&mut session, second, panel + 1);
+        assert_eq!(session.queued.len(), 3);
+        assert!(session.input().is_empty());
+
+        swept(&mut session, (second, column), (second, column + 3));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), second, column + 3);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert_eq!(session.queued.len(), 3);
+
+        session.last_click = None;
+        press(&mut session, second, column, KeyModifiers::NONE);
+        press(&mut session, second, column, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), second, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert_eq!(session.queued.len(), 3);
+
+        session.clear_selection();
+        session.last_click = None;
+        press(&mut session, 0, 0, KeyModifiers::NONE);
+        let up = drag(MouseEventKind::Up(MouseButton::Left), second, column);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert_eq!(session.queued.len(), 3);
+
+        session.clear_selection();
+        session.last_click = None;
+        assert_eq!(click(&mut session, second, column), Action::Redraw);
+        assert!(
+            session.queued.is_empty(),
+            "the fixture's click took nothing"
+        );
+
+        // The frame that showed the rows is the last one drawn, but nothing waits now.
+        session.last_click = None;
+        let input = session.input().to_string();
+        click(&mut session, second, column);
+        assert_eq!(session.input(), input);
+    }
+
+    /// MOUSE-28: a line put away sits between the box and the queue, so the rows the waiting prompts
+    /// are drawn on move down with it, and a click on a prompt takes that prompt and no other.
+    #[test]
+    fn a_line_put_away_above_the_queue_does_not_move_what_a_click_takes() {
+        let (mut session, _) = working_with_three_waiting();
+        for c in "put away".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key_while_working(&mut session, ctrl('s'));
+        assert!(session.stashed().is_some(), "nothing was put away");
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (stashed, _) = find_cell(&buffer, "put away");
+        let (third, column) = find_cell(&buffer, "third question");
+        assert!(third > stashed, "the queue is under the line put away");
+
+        // The mark under the words, which is where a row counted one short would be the next prompt's.
+        assert_eq!(click(&mut session, third + 1, column), Action::Redraw);
+
+        assert_eq!(session.input(), "third question\nfourth question");
+        assert_eq!(waiting(&session), ["second question"]);
+    }
+
+    /// MOUSE-28: a file attached to the line in the box is drawn between the box and the queue, so
+    /// the rows the waiting prompts are drawn on move down with it, and a click on a prompt takes
+    /// that prompt and no other.
+    #[test]
+    fn a_file_attached_above_the_queue_does_not_move_what_a_click_takes() {
+        let directory = crate::testutil::scratch_dir("bravebot-app-queue-attached");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        std::fs::write(directory.join("shot.png"), [0x89u8, 0x50]).expect("write");
+        let mut session = Session::new("kernel-enforced").in_workspace(&directory);
+        session.type_char('a');
+        session.submit();
+        for line in ["second question", "third question", "fourth question"] {
+            for c in line.chars() {
+                handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+            }
+            handle_key_while_working(&mut session, key(KeyCode::Enter));
+        }
+        let path = directory.join("shot.png").to_string_lossy().to_string();
+        assert!(session.drop_files(&path), "not recognised as a drop");
+        assert_eq!(session.attached_to_the_line().count(), 1);
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (attached, _) = find_cell(&buffer, "shot.png");
+        let (third, column) = find_cell(&buffer, "third question");
+        assert!(third > attached, "the queue is under the attached file");
+
+        // The mark under the words, which is where a row counted one short would be the next prompt's.
+        assert_eq!(click(&mut session, third + 1, column), Action::Redraw);
+
+        assert!(
+            session
+                .input()
+                .starts_with("third question\nfourth question"),
+            "{:?}",
+            session.input()
+        );
+        assert_eq!(waiting(&session), ["second question"]);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// MOUSE-28: a prompt the turn has already been given is not given back, and the click leaves the
+    /// box as it was.
+    #[test]
+    fn a_click_on_a_prompt_the_turn_has_taken_leaves_the_box_alone() {
+        let (mut session, buffer) = working_with_three_waiting();
+        let reaching = session.interjections();
+        let (second, column) = find_cell(&buffer, "second question");
+        while reaching.take().is_some() {}
+
+        click(&mut session, second, column);
+
+        assert!(session.input().is_empty(), "{:?}", session.input());
+        assert_eq!(session.queued.len(), 3);
+    }
+
+    /// MOUSE-28: a picker or a history search over the screen takes the click's attention, so a click
+    /// on a waiting prompt under it takes nothing back.
+    #[test]
+    fn a_click_on_a_waiting_prompt_takes_nothing_back_where_another_mode_is_in_use() {
+        type Setup = fn(&mut Session);
+        let modes: [(&str, Setup); 2] = [
+            ("a history search", |session| {
+                session.history = crate::history::History::from_entries(vec![
+                    bravebot_session::store::Entry::sent("old one", None),
+                ]);
+                assert!(session.open_history_search(), "no search opened");
+            }),
+            ("a picker", |session| {
+                session.open_picking(crate::picking::Picking::Effort(
+                    crate::effort_prompt::Picker::new(None),
+                ));
+            }),
+        ];
+        for (name, setup) in modes {
+            let (mut session, buffer) = working_with_three_waiting();
+            let (second, column) = find_cell(&buffer, "second question");
+            setup(&mut session);
+            click(&mut session, second, column);
+            assert_eq!(
+                session.queued.len(),
+                3,
+                "{name}: a click took a prompt back"
+            );
+        }
     }
 
     /// A session with the info panel drawn, a model chosen and an effort in force, and the frame
@@ -9259,7 +11554,7 @@ mod tests {
     #[test]
     fn a_click_off_the_models_rows_asks_for_no_picker() {
         let (mut session, buffer) = panel_with_a_model();
-        let (row, column) = find_on(&buffer, "PANELMARK");
+        let (row, column) = find_on(&buffer, "/work/dir");
         assert_eq!(click(&mut session, row, column), Action::Copy);
         let (row, column) = find_on(&buffer, "TRANSCRIPTMARK");
         assert_eq!(click(&mut session, row, column), Action::Copy);
@@ -9285,10 +11580,11 @@ mod tests {
         );
     }
 
-    /// A drag that began on the model row, a drag that ended on it, and a double click on it are
-    /// selections, so the picker is not opened and the copy is.
+    /// A drag that began on the model row and a drag that ended on it are selections, so the picker
+    /// is not opened and the copy is. A double click on it, as a terminal reports one, asks for the
+    /// picker once with its first click, and its second press begins no selection and copies nothing.
     #[test]
-    fn a_drag_or_a_double_click_over_the_model_row_opens_no_picker() {
+    fn a_drag_over_the_model_row_opens_no_picker_and_a_double_click_opens_it_once() {
         let (mut session, buffer) = panel_with_a_model();
         let (row, column) = find_on(&buffer, "claude-sonnet");
         swept(&mut session, (row, column), (row, column + 4));
@@ -9300,14 +11596,10 @@ mod tests {
         let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
         assert_eq!(handle_mouse(&mut session, up), Action::Copy);
 
-        press(&mut session, row, column, KeyModifiers::NONE);
-        handle_mouse(
-            &mut session,
-            drag(MouseEventKind::Up(MouseButton::Left), row, column),
-        );
-        press(&mut session, row, column, KeyModifiers::NONE);
-        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
-        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        session.last_click = None;
+        assert_eq!(click(&mut session, row, column), Action::ChooseModel);
+        assert_eq!(click(&mut session, row, column), Action::None);
+        assert!(session.selection.is_none(), "the second click selected");
     }
 
     /// The commands are typed at the plain prompt, so a click over the scroller asks for no picker.
@@ -9428,48 +11720,6 @@ mod tests {
         assert_ne!(click(&mut session, row, column), Action::Mcp(String::new()));
     }
 
-    /// MOUSE-22: a click on a started language server's row says which servers the session
-    /// started, in a note, and nothing else.
-    #[test]
-    fn a_click_on_the_panels_language_server_row_names_the_servers() {
-        use bravebot_agent::lsp::{Language, Roster};
-        let (mut session, _) = panel_with_a_context();
-        session.report_language_servers(Roster::of([Language::Python, Language::Rust]));
-        let programs = session.language_servers().programs();
-        assert_eq!(programs.len(), 2);
-        let buffer = drawn(&mut session);
-        let (row, column) = find_on(&buffer, &programs[0]);
-        let before = session.transcript.len();
-        assert_eq!(click(&mut session, row, column), Action::Redraw);
-        assert_eq!(session.transcript.len(), before + 1);
-        let note = last_note(&session).to_string();
-        assert!(
-            programs
-                .iter()
-                .all(|program| note.contains(program.as_str())),
-            "the note does not name every server: {note}"
-        );
-        assert!(session.selection.is_none());
-    }
-
-    /// MOUSE-22: a drag over the row and a click over the scroller add no note.
-    #[test]
-    fn a_drag_over_a_language_server_row_or_a_click_in_the_scroller_says_nothing() {
-        use bravebot_agent::lsp::{Language, Roster};
-        let (mut session, _) = panel_with_a_context();
-        session.report_language_servers(Roster::of([Language::Rust]));
-        let program = session.language_servers().programs().remove(0);
-        let buffer = drawn(&mut session);
-        let (row, column) = find_on(&buffer, &program);
-        let before = session.transcript.len();
-        swept(&mut session, (row, column), (row, column + 3));
-        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 3);
-        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
-        session.open_scroller();
-        click(&mut session, row, column);
-        assert_eq!(session.transcript.len(), before, "a note was added");
-    }
-
     /// The cell of the first letter of the panel's hide row. `find_on` counts bytes, and the border
     /// drawn before the text is more than one.
     fn on_the_hide_row(buffer: &ratatui::buffer::Buffer) -> (u16, u16) {
@@ -9506,6 +11756,755 @@ mod tests {
         assert!(session.panel_open());
     }
 
+    /// A frame of the panel with a model and an effort chosen, a measured context and a started MCP
+    /// server, so that every row a click stands for a command on is drawn, with a turn running on
+    /// the session or not. The frame is drawn last so the rows recorded are the ones on the screen.
+    fn panel_of_command_rows(turn_running: bool) -> (Session, ratatui::buffer::Buffer) {
+        let (mut session, _) = panel_with_a_context();
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.com".into()),
+            _ => None,
+        })
+        .expect("config");
+        session.choose_model("claude-sonnet".to_string(), &config);
+        session.note_model_reads_effort(true);
+        session.choose_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+        session.servers.started = vec!["notes-server".to_string()];
+        let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+        session.transcript.push(crate::state::Entry::tool(
+            bravebot_agent::report::Activity::running("Update", "src/a.rs")
+                .of_tool("edit_file")
+                .with_changes(diff.condensed(3))
+                .with_written(Some(bravebot_agent::report::Written {
+                    landed: "src/a.rs".into(),
+                    added: diff.added(),
+                    removed: diff.removed(),
+                    numbers: diff.condensed_numbers(3),
+                }))
+                .done("added 1 line, removed 1 line"),
+        ));
+        session.report_language_servers(bravebot_agent::lsp::Roster::of([
+            bravebot_agent::lsp::Language::Rust,
+        ]));
+        if turn_running {
+            type_line(&mut session, "first");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert!(session.a_turn_is_running());
+        }
+        let buffer = drawn(&mut session);
+        (session, buffer)
+    }
+
+    /// What each row a click stands for a command on is drawn as, and the command it stands for.
+    fn command_rows(session: &Session) -> Vec<(String, &'static str)> {
+        vec![
+            ("claude-sonnet".to_string(), "/model"),
+            (t!(panel_effort, level = "xhigh").to_string(), "/effort"),
+            (render::context_reading(session), "/context"),
+            ("notes-server".to_string(), "/mcp"),
+            ("rust-analyzer".to_string(), "/lsp"),
+            (
+                t!(panel_files_total, count = session.written_totals().0).to_string(),
+                "/diff",
+            ),
+        ]
+    }
+
+    /// Run `act` with what the turn's own loop holds beside the session.
+    fn beside_a_turn<R>(act: impl FnOnce(&mut Beside<'_>) -> R) -> R {
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let workspace = a_workspace();
+        let managed = bravebot_config::Managed::default();
+        let mut config = a_config_needing_no_sign_in();
+        act(&mut Beside {
+            managed: &managed,
+            stored: &mut stored,
+            root,
+            home: None,
+            workspace: &workspace,
+            scratch: None,
+            config: &mut config,
+        })
+    }
+
+    thread_local! {
+        /// The addresses a test's opener was handed, in order.
+        static OPENED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// An opener that starts no browser and keeps the address it was handed, so a test can say what
+    /// would have been opened.
+    fn records_the_address(address: &str) -> bool {
+        OPENED.with(|opened| opened.borrow_mut().push(address.to_string()));
+        true
+    }
+
+    /// The addresses handed to the opener so far on this thread, and none after.
+    fn addresses_opened() -> Vec<String> {
+        OPENED.with(|opened| std::mem::take(&mut *opened.borrow_mut()))
+    }
+
+    /// A click on `row` and `column` taken the way the turn's own loop takes it: the press and the
+    /// release go through the mouse handler, and what the release asks for that is not a copy goes
+    /// to the loop.
+    fn clicked_during_a_turn(
+        session: &mut Session,
+        row: u16,
+        column: u16,
+        beside: &mut Beside<'_>,
+    ) {
+        let cancel = Cancel::new();
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            let action = handle_mouse(session, drag(kind, row, column));
+            if action != Action::Copy {
+                carry_out_while_working(session, action, &cancel, beside);
+            }
+        }
+    }
+
+    /// MOUSE-29: a click on a row of the panel that stands for a command does what the command
+    /// typed does at the plain prompt: the same action for the loop, the same words in the
+    /// transcript, nothing queued and the box as it was. The regression it rejects is a click that
+    /// calls the command's own function and so says something the line would not, or leaves out what
+    /// the line does first.
+    #[test]
+    fn a_click_on_a_panel_row_does_what_the_command_typed_does_at_rest() {
+        let (probe, _) = panel_of_command_rows(false);
+        for (needle, line) in command_rows(&probe) {
+            let (mut clicked, buffer) = panel_of_command_rows(false);
+            let (row, column) = find_cell(&buffer, &needle);
+            let (mut typed, _) = panel_of_command_rows(false);
+
+            let by_click = click(&mut clicked, row, column + 1);
+            type_line(&mut typed, line);
+            let by_typing = handle_key(&mut typed, key(KeyCode::Enter));
+
+            assert_eq!(by_click, by_typing, "{line}: what the loop is asked for");
+            assert_eq!(
+                said_in_the_transcript(&clicked),
+                said_in_the_transcript(&typed),
+                "{line}: what is said"
+            );
+            assert!(clicked.queued.is_empty(), "{line} was queued at rest");
+            assert_eq!(clicked.input(), typed.input(), "{line}: the box");
+        }
+    }
+
+    /// MOUSE-29: while a turn runs the click is carried out as the command typed is: the model and
+    /// the effort ask for their picker as a mode of the session, the context is said under the turn,
+    /// and `/mcp`, which waits for the turn, waits with the note a typed one gets. With a prompt
+    /// waiting ahead of it, a command that could be changed by it waits behind it and says so, as
+    /// typed. The regression it rejects is the click dropped, which is what the loop did with
+    /// everything but a copy, and a click that says its words outside the turn's own record of what
+    /// the commands said.
+    #[test]
+    fn a_click_on_a_panel_row_does_what_the_command_typed_does_while_a_turn_runs() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (probe, _) = panel_of_command_rows(true);
+        for waiting in [None, Some("second")] {
+            for (needle, line) in command_rows(&probe) {
+                let (mut clicked, buffer) = panel_of_command_rows(true);
+                let (row, column) = find_cell(&buffer, &needle);
+                let (mut typed, _) = panel_of_command_rows(true);
+                if let Some(waiting) = waiting {
+                    wait_as(&mut clicked, waiting);
+                    wait_as(&mut typed, waiting);
+                }
+
+                beside_a_turn(|beside| {
+                    clicked_during_a_turn(&mut clicked, row, column + 1, beside);
+                });
+                beside_a_turn(|beside| {
+                    typed_during_a_turn(&mut typed, line, key(KeyCode::Enter), beside);
+                });
+
+                let behind = format!("{line} behind {waiting:?}");
+                assert_eq!(
+                    said_under_the_turn(&clicked),
+                    said_under_the_turn(&typed),
+                    "{behind}: what was said under the turn"
+                );
+                assert_eq!(
+                    said_in_the_transcript(&clicked),
+                    said_in_the_transcript(&typed),
+                    "{behind}: the transcript"
+                );
+                assert_eq!(
+                    waiting_prompts(&clicked),
+                    waiting_prompts(&typed),
+                    "{behind}: the queue"
+                );
+                assert_eq!(
+                    clicked.picking().is_some(),
+                    typed.picking().is_some(),
+                    "{behind}: the picker"
+                );
+                assert_eq!(clicked.input(), typed.input(), "{behind}: the box");
+            }
+        }
+
+        // What each of them comes to, so that two clicks that both did nothing do not pass for the
+        // same as two typed lines that both did something. The model's picker opens as a mode of the
+        // session with its rows still to come, which a unit test cannot wait for.
+        let (mut session, buffer) = panel_of_command_rows(true);
+        let rows = command_rows(&session);
+        let at = |needle: &str| find_cell(&buffer, needle);
+        let (row, column) = at("claude-sonnet");
+        let (mut model, _) = panel_of_command_rows(true);
+        beside_a_turn(|beside| clicked_during_a_turn(&mut model, row, column + 1, beside));
+        assert!(model.picking().is_some(), "the model picker did not open");
+        let (row, column) = at(&rows[1].0);
+        let (mut effort, _) = panel_of_command_rows(true);
+        beside_a_turn(|beside| clicked_during_a_turn(&mut effort, row, column + 1, beside));
+        assert!(effort.picking().is_some(), "the effort picker did not open");
+        let (row, column) = at(&rows[2].0);
+        beside_a_turn(|beside| clicked_during_a_turn(&mut session, row, column + 1, beside));
+        assert!(
+            !said_under_the_turn(&session).is_empty(),
+            "the context was said outside what the turn keeps apart"
+        );
+        let (mut session, _) = panel_of_command_rows(true);
+        let (row, column) = at("rust-analyzer");
+        beside_a_turn(|beside| clicked_during_a_turn(&mut session, row, column + 1, beside));
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![
+                t!(lsp_started, count = 1).to_string(),
+                t!(lsp_server_running, program = "rust-analyzer").to_string()
+            ],
+            "the language servers were not said under the turn"
+        );
+        assert!(session.queued.is_empty(), "/lsp waited");
+        let (mut session, _) = panel_of_command_rows(true);
+        let (row, column) = at("notes-server");
+        let remembered = session.history.len();
+        beside_a_turn(|beside| clicked_during_a_turn(&mut session, row, column + 1, beside));
+        assert_eq!(waiting_prompts(&session), vec!["/mcp"]);
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(command_waits_for_the_turn, command = "/mcp").to_string()]
+        );
+        assert_eq!(
+            session.history.len(),
+            remembered,
+            "a click was remembered as a line somebody typed"
+        );
+        let (mut files, _) = panel_of_command_rows(true);
+        let (row, column) = at(&rows[5].0);
+        beside_a_turn(|beside| clicked_during_a_turn(&mut files, row, column + 1, beside));
+        assert!(files.files_open(), "the files state did not open");
+        assert!(
+            waiting_prompts(&files).is_empty(),
+            "a command that runs mid-turn was queued"
+        );
+    }
+
+    /// MOUSE-29: where the session is working and no turn is running, as it is under a summary, an
+    /// aside or a command, a command typed waits in the queue and so does the click, every one of
+    /// them, with what a typed line gets. The regression it rejects is a click that carries a
+    /// command out in a loop that holds nothing to carry it out with.
+    #[test]
+    fn a_click_on_a_panel_row_queues_the_command_where_no_turn_is_running() {
+        let (probe, _) = panel_of_command_rows(false);
+        for (needle, line) in command_rows(&probe) {
+            let (mut clicked, buffer) = panel_of_command_rows(false);
+            let (row, column) = find_cell(&buffer, &needle);
+            let (mut typed, _) = panel_of_command_rows(false);
+            clicked.status = Status::Working;
+            typed.status = Status::Working;
+            assert!(!clicked.a_turn_is_running());
+
+            let by_click = click(&mut clicked, row, column + 1);
+            let by_typing = type_while_working(&mut typed, line);
+
+            assert_eq!(by_click, by_typing, "{line}");
+            assert_eq!(
+                waiting_prompts(&clicked),
+                vec![line],
+                "{line} was not queued"
+            );
+            assert_eq!(waiting_prompts(&clicked), waiting_prompts(&typed));
+            assert_eq!(
+                said_in_the_transcript(&clicked),
+                said_in_the_transcript(&typed),
+                "{line}: what is said"
+            );
+            assert_eq!(clicked.picking().is_some(), typed.picking().is_some());
+        }
+    }
+
+    /// A press and a release on one cell answered as the loop that runs a command the person typed
+    /// answers them, with what each leaves for the loop to carry out.
+    fn clicked_while_a_command_runs(session: &mut Session, row: u16, column: u16) -> Vec<Action> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        [MouseEventKind::Down, MouseEventKind::Up]
+            .into_iter()
+            .map(|kind| {
+                answer_mouse(
+                    &mut terminal,
+                    session,
+                    drag(kind(MouseButton::Left), row, column),
+                    |_| true,
+                )
+                .expect("the report was answered")
+            })
+            .collect()
+    }
+
+    /// MOUSE-29: while a command the person typed runs, nothing can carry out what a click on a panel
+    /// row stands for and nothing reads a line typed, so the click waits in the queue as it does under
+    /// a summary, with a note that says what it waits for, and is carried out when the command has
+    /// ended. The regressions it rejects are a click that asks for its picker or says its answer into
+    /// the transcript while the command is still printing, and one that the loop that runs the command
+    /// drops without a word.
+    #[test]
+    fn a_click_on_a_panel_row_waits_for_the_command_that_is_running() {
+        let (probe, _) = panel_of_command_rows(false);
+        for (needle, line) in command_rows(&probe) {
+            let (mut session, buffer) = panel_of_command_rows(false);
+            let (row, column) = find_cell(&buffer, &needle);
+            session.begin_command();
+            let said = said_in_the_transcript(&session);
+
+            let left = clicked_while_a_command_runs(&mut session, row, column + 1);
+
+            assert_eq!(left, vec![Action::Redraw, Action::Redraw], "{line}");
+            assert_eq!(waiting_prompts(&session), vec![line], "{line}: not queued");
+            assert!(session.picking().is_none(), "{line}: a picker opened");
+            let spoken = said_in_the_transcript(&session);
+            assert_eq!(
+                spoken[said.len()..],
+                [t!(command_waits_for_the_command, command = line).to_string()],
+                "{line}: what was said while the command ran"
+            );
+            assert!(session.input().is_empty(), "{line}: the box was written in");
+
+            session.finish_command();
+            let carried_out = queued_next(&mut session).expect("the line waited for its turn");
+            let typed = {
+                let (mut typed, _) = panel_of_command_rows(false);
+                type_line(&mut typed, line);
+                handle_key(&mut typed, key(KeyCode::Enter))
+            };
+            assert_eq!(carried_out, typed, "{line}: carried out as typed at rest");
+            assert!(session.queued.is_empty(), "{line}: carried out twice");
+        }
+    }
+
+    /// MOUSE-29: a click on a row that stands for a command leaves a line the person has begun in the
+    /// box as it is, at rest, while a turn runs, under a summary and while a command runs, whether the
+    /// click carries the command out or queues it. The regression it rejects is a click that clears
+    /// the box to make room for the command it stands for, which the fixtures of the other tests never
+    /// show since they click over an empty box.
+    #[test]
+    fn a_click_on_a_panel_row_leaves_a_line_being_typed_in_the_box() {
+        let (probe, _) = panel_of_command_rows(false);
+        for (needle, line) in command_rows(&probe) {
+            for state in ["at rest", "a turn", "a summary", "a command"] {
+                let (mut session, buffer) = panel_of_command_rows(state == "a turn");
+                type_line(&mut session, "half a sentence");
+                match state {
+                    "a summary" => session.status = Status::Working,
+                    "a command" => session.begin_command(),
+                    _ => {}
+                }
+                let (row, column) = find_cell(&buffer, &needle);
+
+                clicked_while_a_command_runs(&mut session, row, column + 1);
+
+                assert_eq!(
+                    session.input(),
+                    "half a sentence",
+                    "{line} clicked at {state} changed the box"
+                );
+            }
+        }
+    }
+
+    /// MOUSE-29: a click on a panel row over a picker that is open is on the picker, which is drawn
+    /// over the frame and takes every key, so it asks for nothing and the picker stays. The
+    /// regression it rejects is the click reaching the row under the popup.
+    #[test]
+    fn a_click_on_a_panel_row_under_an_open_picker_asks_for_nothing() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let (mut session, buffer) = panel_of_command_rows(true);
+        open_effort_picker(&mut session);
+        let said = said_in_the_transcript(&session);
+        for (needle, _) in command_rows(&session) {
+            let (row, column) = find_cell(&buffer, &needle);
+            beside_a_turn(|beside| clicked_during_a_turn(&mut session, row, column + 1, beside));
+        }
+        assert!(session.picking().is_some(), "the picker was closed");
+        assert_eq!(said_in_the_transcript(&session), said);
+        assert!(session.queued.is_empty(), "a command was queued");
+    }
+
+    /// MOUSE-30: a click on any row of the session's name in the panel puts `/rename` and the whole
+    /// name in the box with the caret after it, and Enter then renames. The name is the one the
+    /// session has and not the rows the panel drew: an address in it is drawn as its shorthand and
+    /// a long name is wrapped. The regression it rejects is a box holding what was on the screen.
+    #[test]
+    fn a_click_on_the_session_name_puts_rename_and_the_name_in_the_box() {
+        let name = "tidy the parser, see https://github.com/brave/bravebot/pull/12 for the rest";
+        for needle in ["tidy", "rest"] {
+            let (mut session, _) = two_panes();
+            session.identify(name, "/work/dir".to_string(), None);
+            let buffer = drawn(&mut session);
+            let drawn_rows: Vec<String> = crate::panel::lines(&session, crate::panel::WIDTH, 24)
+                .iter()
+                .map(|line| line.to_string())
+                .collect();
+            assert!(
+                drawn_rows
+                    .iter()
+                    .any(|row| row.contains("brave/bravebot#12"))
+            );
+            assert!(!drawn_rows.iter().any(|row| row.contains("https://")));
+            let (row, column) = find_cell(&buffer, needle);
+
+            assert_eq!(click(&mut session, row, column), Action::Redraw);
+
+            assert_eq!(session.input(), format!("{RENAME_COMMAND} {name}"));
+            assert_eq!(session.caret(), session.input().len());
+            assert!(session.selection.is_none());
+            type_line(&mut session, " v2");
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Rename(format!("{name} v2")),
+                "Enter did not confirm the edited name"
+            );
+        }
+    }
+
+    /// MOUSE-30: while a turn runs the click puts the line in the box as typing it would, and Enter
+    /// carries `/rename` out as typed, which the turn does not hold anything of.
+    #[test]
+    fn a_click_on_the_session_name_while_a_turn_runs_puts_rename_in_the_box() {
+        let (mut session, buffer) = panel_of_command_rows(true);
+        let (row, column) = find_cell(&buffer, "PANELMARK");
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "/rename PANELMARK");
+        assert_eq!(
+            handle_key_while_working(&mut session, key(KeyCode::Enter)),
+            Action::Rename("PANELMARK".to_string())
+        );
+        assert!(session.queued.is_empty(), "/rename waited");
+    }
+
+    /// MOUSE-30: the note a click on the name leaves while a turn runs, that the line is in use, is
+    /// what a command says while a turn works and not something the turn did, so stopping the turn
+    /// with nothing else recorded still gives the prompt back to the box. The regression it rejects
+    /// is the note written outside the record of what commands said, which counts it as the turn's
+    /// work and leaves the stopped prompt sent.
+    #[test]
+    fn the_note_of_a_click_on_the_name_while_a_turn_runs_is_not_something_the_turn_did() {
+        for armed in ["shell mode", "a half-typed line"] {
+            let (mut session, _) = panel_of_command_rows(true);
+            match armed {
+                "shell mode" => session.shell = true,
+                _ => type_line(&mut session, "half a sentence"),
+            }
+            let buffer = drawn(&mut session);
+            let (row, column) = find_cell(&buffer, "PANELMARK");
+
+            click(&mut session, row, column);
+
+            let said = said_in_the_transcript(&session);
+            assert_eq!(
+                said.last(),
+                Some(&t!(panel_rename_line_in_use).to_string()),
+                "{armed}: the click said nothing"
+            );
+            assert_eq!(
+                session.said_while_working().len(),
+                1,
+                "{armed}: the note was not recorded as said while the turn ran"
+            );
+            if armed == "a half-typed line" {
+                // The box is taken by the line, which keeps it, so the stop cannot give the prompt
+                // back; shell mode is left by a stop and the box is free.
+                continue;
+            }
+            assert!(
+                session.restore("first"),
+                "{armed}: the stop left the prompt sent for a note a command made"
+            );
+        }
+    }
+
+    /// MOUSE-30: control characters in the name are left out of the line, since no key types one.
+    #[test]
+    fn a_name_with_control_characters_is_put_in_the_box_without_them() {
+        let (mut session, _) = two_panes();
+        session.identify("a\u{1b}[31mred\u{7}", "/work/dir".to_string(), None);
+        let buffer = drawn(&mut session);
+        let (row, column) = find_cell(&buffer, "red");
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "/rename a[31mred");
+    }
+
+    /// MOUSE-30: a tab in the name is the space the panel draws it as, so the box holds the words the
+    /// person read. The regression it rejects is a tab left out with the other control characters,
+    /// which joins the two words the panel shows apart.
+    #[test]
+    fn a_tab_in_the_name_is_put_in_the_box_as_the_space_the_panel_draws() {
+        let (mut session, _) = two_panes();
+        session.identify("fix\tthe bug", "/work/dir".to_string(), None);
+        let buffer = drawn(&mut session);
+        let (row, column) = find_cell(&buffer, "fix the bug");
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "/rename fix the bug");
+    }
+
+    /// MOUSE-30: over a line somebody has begun, in shell mode and in the vi style of box, the click
+    /// leaves the box as it was and says it did, and a click off the name, a drag over it and a click
+    /// over the scroller put nothing in the box. The fixtures are the gestures that would fill the box
+    /// if their guards were missing.
+    #[test]
+    fn a_click_that_cannot_put_rename_in_the_box_leaves_it_alone() {
+        let line_in_use = t!(panel_rename_line_in_use).to_string();
+
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "PANELMARK");
+        type_line(&mut session, "half a sentence");
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "half a sentence", "a draft was replaced");
+        assert_eq!(said_in_the_transcript(&session).last(), Some(&line_in_use));
+
+        let (mut session, _) = two_panes();
+        session.shell = true;
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "", "shell mode took the line");
+        assert_eq!(said_in_the_transcript(&session).last(), Some(&line_in_use));
+
+        let (mut session, _) = two_panes();
+        session.choose_editing(crate::vim::Editing::Vi);
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "", "the vi box took the line");
+        assert_eq!(said_in_the_transcript(&session).last(), Some(&line_in_use));
+
+        let (mut session, _) = two_panes();
+        let said = said_in_the_transcript(&session);
+        let (directory, directory_column) = find_cell(&buffer, "/work/dir");
+        click(&mut session, directory, directory_column);
+        click(&mut session, row - 1, column);
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        session.open_scroller();
+        click(&mut session, row, column);
+        assert_eq!(session.input(), "", "something put a line in the box");
+        assert_eq!(said_in_the_transcript(&session), said);
+    }
+
+    /// MOUSE-30 and MOUSE-50: a double click on the name, as a terminal reports one, puts the line in
+    /// the box with its first click, and the second press begins nothing: it selects no word of the
+    /// panel, copies none, and does not find the box taken by the line the first click wrote and say
+    /// so. The regression it rejects is the second click acting as a click of its own.
+    #[test]
+    fn a_double_click_on_the_session_name_puts_rename_in_the_box_once() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "PANELMARK");
+        let said = said_in_the_transcript(&session);
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert_eq!(session.input(), "/rename PANELMARK");
+        assert_eq!(click(&mut session, row, column), Action::None);
+
+        assert_eq!(session.input(), "/rename PANELMARK");
+        assert!(
+            session.selection.is_none(),
+            "the second press selected a word"
+        );
+        assert_eq!(
+            said_in_the_transcript(&session),
+            said,
+            "the second click said something"
+        );
+    }
+
+    /// A string nothing in the interface says, which the tools of the fixture below returned.
+    const FROM_A_TOOL: &str = "TOOLSAID-7f3c1e";
+
+    /// A session with every row of the panel a click acts on, whose tools returned
+    /// [`FROM_A_TOOL`] in a result, in what a call showed and in what it was told, and whose reply
+    /// repeats it, with a turn running on it or not.
+    fn a_session_whose_tools_returned_something(turn_running: bool) -> Session {
+        use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
+        use bravebot_core::todo::{Item, List, Status};
+        let (mut session, _) = panel_of_command_rows(false);
+        type_line(&mut session, "do the work");
+        handle_key(&mut session, key(KeyCode::Enter));
+        session.set_todos(bravebot_core::todo::rows(&List::new(vec![
+            Item::new(
+                "Read the tokenizer and list every place a token is consumed twice, then write down what each does",
+                Status::Done,
+            ),
+            Item::new("Fix it", Status::Active),
+        ])));
+        session.finish_activity(
+            Activity::running("Run", "make").done(format!("{FROM_A_TOOL} finished")),
+        );
+        session.landed(Landing::Context);
+        session.returned(Returned {
+            lines: vec![FROM_A_TOOL.to_string()],
+            total: 1,
+            from_the_end: false,
+            whole: vec![FROM_A_TOOL.to_string()],
+        });
+        session.show(Shown {
+            origin: FROM_A_TOOL.to_string(),
+            reach: Reach::NotThePlanner,
+            label: "untrusted".to_string(),
+            preview: vec![FROM_A_TOOL.to_string()],
+            lines: 1,
+        });
+        session.complete(format!("it says {FROM_A_TOOL}"), Vec::new(), 0);
+        if turn_running {
+            type_line(&mut session, "next");
+            handle_key(&mut session, key(KeyCode::Enter));
+            assert!(session.a_turn_is_running());
+        }
+        session
+    }
+
+    /// The text of the cells of `area` in a frame, one string.
+    fn text_in(buffer: &ratatui::buffer::Buffer, area: ratatui::layout::Rect) -> String {
+        (area.top()..area.bottom())
+            .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect()
+    }
+
+    /// One cell for each different thing in the panel a click acts on, found by trying every cell.
+    fn the_panels_targets(session: &Session) -> Vec<(crate::panel::Target, u16, u16)> {
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1;
+        let mut found: Vec<(crate::panel::Target, u16, u16)> = Vec::new();
+        for row in panel.top()..panel.bottom() {
+            for column in panel.left()..panel.right() {
+                if let Some(target) = session.panel_target_at(row, column)
+                    && !found.iter().any(|(seen, ..)| *seen == target)
+                {
+                    found.push((target, row, column));
+                }
+            }
+        }
+        found
+    }
+
+    /// MOUSE-33: nothing a tool returned reaches the panel, whichever of its targets is clicked, at
+    /// the plain prompt and while a turn runs, and nothing a click says holds it either. The
+    /// fixture holds the string in a result, in what a call showed and in the reply, and the panel
+    /// has every kind of target there is. The regression it rejects is a click that puts what a
+    /// tool returned where the panel draws it, such as a task's detail taken from the result of the
+    /// call that did it.
+    #[test]
+    fn a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        use crate::panel::Target;
+        for turn_running in [false, true] {
+            let mut fixture = a_session_whose_tools_returned_something(turn_running);
+            let frame = drawn_at(&mut fixture, 120, 32);
+            assert!(
+                render::as_text(&fixture).contains(FROM_A_TOOL),
+                "the transcript does not hold what the tools returned"
+            );
+            let panel = fixture
+                .laid
+                .panes
+                .iter()
+                .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+                .expect("panel recorded")
+                .1;
+            assert!(
+                !text_in(&frame, panel).contains(FROM_A_TOOL),
+                "the panel drew it before any click"
+            );
+
+            let targets = the_panels_targets(&fixture);
+            for wanted in [
+                Target::Hide,
+                Target::Name,
+                Target::Model,
+                Target::Effort,
+                Target::Context,
+                Target::Servers,
+                Target::Languages,
+                Target::Task(0),
+                Target::Task(1),
+                Target::Detail(0),
+            ] {
+                assert!(
+                    targets.iter().any(|(found, ..)| *found == wanted),
+                    "{wanted:?} is not a target of the fixture's panel: {targets:?}"
+                );
+            }
+
+            for (target, row, column) in targets {
+                let mut session = a_session_whose_tools_returned_something(turn_running);
+                drawn_at(&mut session, 120, 32);
+                let said = session.transcript.len();
+                if turn_running {
+                    beside_a_turn(|beside| {
+                        clicked_during_a_turn(&mut session, row, column, beside);
+                    });
+                } else {
+                    click(&mut session, row, column);
+                }
+
+                let after = drawn_at(&mut session, 120, 32);
+                if let Some((_, panel)) = session
+                    .laid
+                    .panes
+                    .iter()
+                    .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+                {
+                    assert!(
+                        !text_in(&after, *panel).contains(FROM_A_TOOL),
+                        "{target:?} drew what a tool returned (turn running: {turn_running})"
+                    );
+                }
+                let spoken: String = session.transcript[said..]
+                    .iter()
+                    .map(|entry| entry.text.as_str())
+                    .collect();
+                assert!(
+                    !spoken.contains(FROM_A_TOOL),
+                    "{target:?} said what a tool returned"
+                );
+                assert!(
+                    !session.input().contains(FROM_A_TOOL),
+                    "{target:?} put what a tool returned in the box"
+                );
+            }
+        }
+    }
+
     /// The buffer of the session's frame, with its layout recorded.
     fn drawn(session: &mut Session) -> ratatui::buffer::Buffer {
         use ratatui::Terminal;
@@ -9518,6 +12517,54 @@ mod tests {
             .expect("draw");
         session.note_layout(laid);
         terminal.backend().buffer().clone()
+    }
+
+    /// MOUSE-22: a drag over a language server's row, a click beside it and a click over the
+    /// scroller say nothing about the servers. The fixtures are each a gesture that would say it if
+    /// its guard were missing.
+    #[test]
+    fn a_drag_over_a_language_server_row_or_a_click_in_the_scroller_says_nothing() {
+        let (mut session, buffer) = panel_of_command_rows(false);
+        let (row, column) = find_cell(&buffer, "rust-analyzer");
+        let said = said_in_the_transcript(&session);
+
+        swept(&mut session, (row, column), (row, column + 4));
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 4);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+
+        let (other, other_column) = find_cell(&buffer, "notes-server");
+        click(&mut session, other + 1, other_column);
+        click(&mut session, row - 1, column);
+        assert_eq!(said_in_the_transcript(&session), said);
+
+        session.open_scroller();
+        click(&mut session, row, column);
+        assert_eq!(said_in_the_transcript(&session), said);
+    }
+
+    /// MOUSE-22 and MOUSE-50: a double click on a language server's row, as a terminal reports one,
+    /// says which servers are running once, with its first click, and the second press begins no
+    /// selection and says nothing more. The regression it rejects is the second click saying it
+    /// again, or beginning a selection of the word under it.
+    #[test]
+    fn a_double_click_on_a_language_server_row_says_it_once() {
+        let (mut session, buffer) = panel_of_command_rows(false);
+        let (row, column) = find_cell(&buffer, "rust-analyzer");
+        let said = said_in_the_transcript(&session);
+
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        let after_the_first = said_in_the_transcript(&session);
+        assert!(
+            after_the_first.len() > said.len(),
+            "the first click said nothing"
+        );
+
+        assert_eq!(click(&mut session, row, column), Action::None);
+        assert_eq!(said_in_the_transcript(&session), after_the_first);
+        assert!(
+            session.selection.is_none(),
+            "the second press selected a word"
+        );
     }
 
     /// MOUSE-14: a click on the permission mode under the box cycles it, as the key does.
@@ -9534,6 +12581,94 @@ mod tests {
         assert_eq!(click(&mut session, row, column + 1), Action::Redraw);
         assert_ne!(session.permission_mode(), first);
         assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-14: a click on the permission mode moves to the mode the key moves to and says nothing
+    /// the key does not, at the plain prompt and while a turn runs, at each step as far as the row
+    /// draws a name to click on, with one difference: the key reaches bypass and the click never
+    /// does, because a stray click on the indicator would otherwise stop every later question
+    /// being asked. The regressions it rejects are a click that cycles by another order than the key,
+    /// one that reaches a mode the key does not, one that writes a note, and one that moves into
+    /// bypass, which the key still does from the same state.
+    #[test]
+    fn a_click_on_the_permission_mode_moves_as_the_key_does_and_never_into_bypass() {
+        use bravebot_agent::PermissionMode;
+        for turn_running in [false, true] {
+            let start = |turn_running: bool| {
+                let mut session = match turn_running {
+                    true => a_turn_running_on("first"),
+                    false => Session::new("none"),
+                };
+                session.cycle_permission_mode();
+                session
+            };
+            let press_the_key = |session: &mut Session| {
+                let back_tab = key(KeyCode::BackTab);
+                match turn_running {
+                    true => handle_key_while_working(session, back_tab),
+                    false => handle_key(session, back_tab),
+                };
+            };
+            let (mut clicked, mut keyed) = (start(turn_running), start(turn_running));
+            let (mut steps, mut key_reached_bypass) = (0, false);
+            while let Some(name) = crate::status::named_mode(clicked.permission_mode(), false) {
+                let buffer = drawn(&mut clicked);
+                let (row, column) = find_cell(&buffer, name);
+                // The name moves under the pointer, so a second click on the cell is not a double
+                // one here.
+                clicked.last_click = None;
+                click(&mut clicked, row, column + 1);
+                press_the_key(&mut keyed);
+                assert_ne!(
+                    clicked.permission_mode(),
+                    PermissionMode::Bypass,
+                    "step {steps}, turn running: {turn_running}: the click moved into bypass"
+                );
+                if keyed.permission_mode() == PermissionMode::Bypass {
+                    key_reached_bypass = true;
+                    // The key goes on round from bypass to where the click already is.
+                    press_the_key(&mut keyed);
+                }
+                assert_eq!(
+                    clicked.permission_mode(),
+                    keyed.permission_mode(),
+                    "step {steps}, turn running: {turn_running}"
+                );
+                assert_eq!(
+                    said_in_the_transcript(&clicked),
+                    said_in_the_transcript(&keyed),
+                    "step {steps}, turn running: {turn_running}"
+                );
+                steps += 1;
+                assert!(steps < 6, "the modes never came back round");
+            }
+            assert!(steps >= 2, "fewer modes than the key has were reached");
+            assert!(
+                key_reached_bypass,
+                "the key no longer reaches bypass from the state the click left"
+            );
+        }
+    }
+
+    /// MOUSE-14: a click on the permission mode while the session is in bypass moves out of it, to the
+    /// mode the key goes to from there, and a session where a settings layer took bypass off the
+    /// ladder cycles by click as it does by key. Rejects: a click that is refused in bypass, so
+    /// that the indicator that shows bypass is one the click cannot leave.
+    #[test]
+    fn a_click_on_the_permission_mode_in_bypass_moves_out_of_it() {
+        use bravebot_agent::PermissionMode;
+        let mut session = Session::new("none");
+        for _ in 0..3 {
+            session.cycle_permission_mode();
+        }
+        assert_eq!(session.permission_mode(), PermissionMode::Bypass);
+        let buffer = drawn(&mut session);
+        let (row, column) = find_cell(
+            &buffer,
+            crate::status::named_mode(PermissionMode::Bypass, false).expect("named"),
+        );
+        click(&mut session, row, column + 1);
+        assert_eq!(session.permission_mode(), PermissionMode::Ask);
     }
 
     /// MOUSE-14: a drag over the mode, a click on the rest of the row, a mode that is not drawn
@@ -9614,6 +12749,38 @@ mod tests {
         assert_eq!(session.caret(), "hello world\n".len());
     }
 
+    /// MOUSE-16: a report at the largest column or row a terminal can name, and at the first cells
+    /// past the screen, is a cell outside the box, so a click there leaves the caret where it was.
+    /// The click on the same row inside the box is the control.
+    #[test]
+    fn a_click_at_the_largest_column_or_row_lands_outside_the_box() {
+        let (mut session, buffer) = typing("hello world\nsecond row");
+        let (row, column) = find_cell(&buffer, "world");
+        let end = session.input().len();
+        assert_eq!(session.caret(), end);
+        for (at_row, at_column) in [
+            (row, u16::MAX),
+            (row, u16::MAX - 1),
+            (row, 120),
+            (row, 224),
+            (u16::MAX, column),
+            (u16::MAX - 1, column),
+            (u16::MAX, u16::MAX),
+        ] {
+            session.last_click = None;
+            click(&mut session, at_row, at_column);
+            assert_eq!(
+                session.caret(),
+                end,
+                "a click at row {at_row}, column {at_column} moved the caret"
+            );
+            assert_eq!(session.input(), "hello world\nsecond row");
+        }
+        session.last_click = None;
+        click(&mut session, row, column + 2);
+        assert_eq!(session.caret(), "hello wo".len(), "the click in the box");
+    }
+
     /// MOUSE-16: a character drawn two cells wide is taken from either of its cells, and a click
     /// after it lands after it.
     #[test]
@@ -9626,6 +12793,24 @@ mod tests {
         assert_eq!(session.caret(), "日".len());
         click(&mut session, row, column + 6);
         assert_eq!(session.caret(), "日本語".len());
+    }
+
+    /// MOUSE-16: a click on a row the box drew for a line that has since been shortened lands
+    /// nowhere. A key can change the line between a frame and the click that follows it, and a row
+    /// recorded for the longer line is then a range of bytes the line no longer has.
+    #[test]
+    fn a_click_on_a_row_of_a_line_that_has_changed_since_it_was_drawn_lands_nowhere() {
+        let (mut session, buffer) = typing("a line of words to click in");
+        let (row, column) = find_cell(&buffer, "words");
+        for _ in 0.."a line of words to click in".len() - 2 {
+            handle_key(&mut session, key(KeyCode::Backspace));
+        }
+        let end = session.caret();
+        assert_eq!(session.input(), "a ");
+
+        click(&mut session, row, column);
+        assert_eq!(session.caret(), end);
+        assert_eq!(session.input(), "a ");
     }
 
     /// MOUSE-16: a click on a folded paste puts the caret at the start of the marker, never inside it.
@@ -9894,12 +13079,2403 @@ mod tests {
         }
     }
 
-    /// Dragging past the bottom of the transcript stops at its last row, which is above the box.
+    /// Press at `from`, drag to `to` and let go through the function the loops answer a mouse report
+    /// with while a turn or a command runs, on a terminal of `size`, and say what the clipboard was
+    /// handed. The clipboard is a closure that records, so nothing reaches the real one.
+    fn dragged_and_released(
+        session: &mut Session,
+        size: (u16, u16),
+        from: (u16, u16),
+        to: (u16, u16),
+    ) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).expect("terminal");
+        let mut handed = Vec::new();
+        for event in [
+            drag(MouseEventKind::Down(MouseButton::Left), from.0, from.1),
+            drag(MouseEventKind::Drag(MouseButton::Left), to.0, to.1),
+            drag(MouseEventKind::Up(MouseButton::Left), to.0, to.1),
+        ] {
+            answer_mouse(&mut terminal, session, event, |text| {
+                handed.push(text.to_string());
+                true
+            })
+            .expect("the report was answered");
+        }
+        handed
+    }
+
+    /// The same drag answered the way the loop at rest answers it: the event goes to the idle
+    /// loop's handler and a release it reports as a copy is carried out.
+    fn dragged_and_released_at_rest(
+        session: &mut Session,
+        size: (u16, u16),
+        from: (u16, u16),
+        to: (u16, u16),
+    ) -> Vec<String> {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let mut terminal = Terminal::new(TestBackend::new(size.0, size.1)).expect("terminal");
+        let mut handed = Vec::new();
+        for event in [
+            drag(MouseEventKind::Down(MouseButton::Left), from.0, from.1),
+            drag(MouseEventKind::Drag(MouseButton::Left), to.0, to.1),
+            drag(MouseEventKind::Up(MouseButton::Left), to.0, to.1),
+        ] {
+            if idle_action(session, TermEvent::Mouse(event)) == Action::Copy {
+                copy_selection(&mut terminal, session, |text| {
+                    handed.push(text.to_string());
+                    true
+                })
+                .expect("the copy was made");
+            }
+        }
+        handed
+    }
+
+    /// The text of a drag from the transcript's first word to the far edge of the screen is what the
+    /// clipboard is handed, with nothing of the info panel beside it, and the notice counts it.
+    #[test]
+    fn a_release_over_the_transcript_hands_the_clipboard_its_text_and_none_of_the_panel() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+        let handed = dragged_and_released(&mut session, (120, 24), (row, column), (row, 119));
+        assert_eq!(handed, vec!["TRANSCRIPTMARK one two three".to_string()]);
+        assert_eq!(session.copied, Some("TRANSCRIPTMARK one two three".len()));
+    }
+
+    /// At rest the release reaches the clipboard through the idle loop's handler and not the one a
+    /// running turn uses, and it hands over the same words.
+    #[test]
+    fn a_release_at_rest_hands_the_clipboard_what_was_swept() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+        let handed =
+            dragged_and_released_at_rest(&mut session, (120, 24), (row, column), (row, 119));
+        assert_eq!(handed, vec!["TRANSCRIPTMARK one two three".to_string()]);
+
+        let (row, column) = find_cell(&buffer, "PANELMARK");
+        let handed =
+            dragged_and_released_at_rest(&mut session, (120, 24), (row, column), (row, 119));
+        assert_eq!(handed, vec!["PANELMARK".to_string()]);
+    }
+
+    /// The reverse: a drag across a row of the panel hands over the panel's words and none of the
+    /// transcript's, which are drawn on the same rows.
+    #[test]
+    fn a_release_over_the_panel_hands_the_clipboard_its_text_and_none_of_the_transcript() {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "PANELMARK");
+        let handed = dragged_and_released(&mut session, (120, 24), (row, column), (row, 119));
+        assert_eq!(handed, vec!["PANELMARK".to_string()]);
+    }
+
+    /// The same release while a turn is running, with a reply arriving under the words: the loop that
+    /// answers the mouse then is not the one at rest, and what it hands over has to be the same.
+    #[test]
+    fn a_release_while_a_turn_runs_hands_the_clipboard_what_was_swept() {
+        let (mut session, _) = two_panes();
+        session.status = Status::Working;
+        session.streaming("a reply that is still arriving");
+        let buffer = drawn(&mut session);
+        let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+        let handed = dragged_and_released(&mut session, (120, 24), (row, column), (row, 119));
+        assert_eq!(handed, vec!["TRANSCRIPTMARK one two three".to_string()]);
+    }
+
+    /// In the scroller the whole screen is one pane, and a drag across a wrapped reply hands over one
+    /// paragraph.
+    #[test]
+    fn a_release_in_the_scroller_hands_the_clipboard_the_paragraph_that_was_swept() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        const REPLY: &str = "the quick brown fox jumps over the lazy dog and then keeps on running";
+        let mut session = Session::new("none");
+        session.complete(REPLY.to_string(), Vec::new(), 0);
+        session.open_scroller();
+        let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
+        session.note_layout(laid);
+        let buffer = terminal.backend().buffer().clone();
+        let (first, _) = find_on(&buffer, "the quick");
+        let (last, _) = find_on(&buffer, "running");
+        let handed = dragged_and_released(&mut session, (40, 20), (first, 0), (last, 39));
+        assert_eq!(handed, vec![format!("\u{23fa} {REPLY}")]);
+    }
+
+    /// A click that swept nothing hands the clipboard nothing and puts the selection away, and a
+    /// copier that took nothing leaves no notice saying it did.
+    #[test]
+    fn a_click_hands_over_nothing_and_a_refused_copy_is_not_reported() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+        let handed = dragged_and_released(&mut session, (120, 24), (row, column), (row, column));
+        assert!(handed.is_empty(), "a click copied {handed:?}");
+        assert!(session.selection.is_none());
+        assert_eq!(session.copied, None);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).expect("terminal");
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+        ] {
+            let column = if kind == MouseEventKind::Down(MouseButton::Left) {
+                column
+            } else {
+                119
+            };
+            answer_mouse(&mut terminal, &mut session, drag(kind, row, column), |_| {
+                false
+            })
+            .expect("answered");
+        }
+        assert_eq!(session.copied, None, "a copy nothing took was reported");
+    }
+
+    /// What a drawn frame has marked as selected, row by row, without the blanks after the text.
+    fn highlighted(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+        let marked = crate::theme::picked_out().bg;
+        (0..buffer.area.height)
+            .filter_map(|row| {
+                let text: String = (0..buffer.area.width)
+                    .filter(|&column| buffer[(column, row)].style().bg == marked)
+                    .map(|column| buffer[(column, row)].symbol().to_string())
+                    .collect();
+                let text = text.trim_end().to_string();
+                (!text.is_empty()).then_some(text)
+            })
+            .collect()
+    }
+
+    /// A session whose one reply is `lines` numbered lines, each on a row of its own.
+    fn a_long_reply(lines: usize) -> Session {
+        let mut session = Session::new("none");
+        let reply: Vec<String> = (0..lines)
+            .map(|n| format!("row {n:02} of the reply"))
+            .collect();
+        session.complete(reply.join("\n"), Vec::new(), 0);
+        session
+    }
+
+    fn wheel_up(session: &mut Session) {
+        handle_mouse(session, drag(MouseEventKind::ScrollUp, 5, 5));
+    }
+
+    /// MOUSE-34: a wheel turn with a selection held moves the highlight with the words it was put
+    /// on. A selection that stayed on its screen cells would cover whatever scrolled under them.
+    #[test]
+    fn a_wheel_turn_leaves_the_selection_on_the_text_it_was_put_on() {
+        let _held = crate::theme::exclusive();
+        let mut session = a_long_reply(60);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 50");
+        swept(&mut session, (row, column), (row + 1, column + 6));
+        let buffer = drawn_at(&mut session, 120, 24);
+        let swept_over = vec!["row 50 of the reply".to_string(), "  row 51".to_string()];
+        assert_eq!(highlighted(&buffer), swept_over);
+
+        wheel_up(&mut session);
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert_eq!(highlighted(&buffer), swept_over);
+        assert_eq!(
+            find_cell(&buffer, "row 50").0,
+            row + session.wheel_rows(),
+            "the view did not scroll"
+        );
+
+        // Further back, until the words have gone off the bottom of the transcript.
+        for _ in 0..8 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert_eq!(highlighted(&buffer), Vec::<String>::new());
+        assert!(session.selection.is_some(), "scrolling away dropped it");
+    }
+
+    /// A transcript longer than the screen with a target of each kind beside it: a long reply to
+    /// select in, a last reply with its marker, the info panel with its rows, and a line in the box.
+    fn a_transcript_with_a_target_of_each_kind() -> (Session, ratatui::buffer::Buffer) {
+        let (mut session, _) = panel_of_command_rows(false);
+        let long: Vec<String> = (0..60)
+            .map(|n| format!("row {n:02} of the reply"))
+            .collect();
+        session
+            .transcript
+            .push(crate::state::Entry::assistant(long.join("\n"), Vec::new()));
+        session
+            .transcript
+            .push(crate::state::Entry::assistant(A_LAST_REPLY, Vec::new()));
+        session.paste("draft text");
+        let buffer = drawn_at(&mut session, 120, 24);
+        (session, buffer)
+    }
+
+    /// The last reply of [`a_transcript_with_a_target_of_each_kind`].
+    const A_LAST_REPLY: &str = "Final answer.\nsecond\nthird\nfourth\nfifth\nsixth";
+
+    /// MOUSE-34, MOUSE-26, MOUSE-29 and MOUSE-16: a selection of the transcript held by its rows,
+    /// with the view scrolled so that no row of the transcript is the screen row it was, does not
+    /// stand in the way of a click that sweeps nothing. The click reaches the marker of a reply, a
+    /// row of the info panel and a place in the box, and puts the selection away as the click on
+    /// that target does without one. The regression it rejects is a press that leaves a selection
+    /// of rows for the release to find, so that the release is answered as the end of a drag, and a
+    /// target looked up by the screen row that the scroll offset makes the wrong row.
+    #[test]
+    fn a_click_that_sweeps_nothing_reaches_its_target_while_a_selection_of_rows_is_held() {
+        let (mut session, _) = a_transcript_with_a_target_of_each_kind();
+        // Drag over two rows of the long reply and let go. The copy is asked for and the selection
+        // stays held, counting the transcript's rows.
+        let hold_a_selection = |session: &mut Session| {
+            let buffer = drawn_at(session, 120, 24);
+            let (row, column) = find_cell(&buffer, "of the reply");
+            swept(session, (row, column), (row + 1, column + 4));
+            let up = drag(MouseEventKind::Up(MouseButton::Left), row + 1, column + 4);
+            assert_eq!(handle_mouse(session, up), Action::Copy);
+            assert!(
+                session.holds_a_selection() && session.selection.is_some_and(|s| s.scrolls()),
+                "no selection of rows was held"
+            );
+        };
+        hold_a_selection(&mut session);
+        wheel_up(&mut session);
+        assert!(session.scroll > 0, "the view did not scroll back");
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert!(session.holds_a_selection(), "scrolling put it away");
+
+        // A reply's marker.
+        let (row, column) = find_cell(&buffer, "Final answer.");
+        assert_eq!(column, 2, "the marker leads the words");
+        assert_eq!(
+            click(&mut session, row, 0),
+            Action::CopyReply(A_LAST_REPLY.to_string())
+        );
+        assert!(session.selection.is_none(), "the marker click kept it");
+
+        // A row of the info panel, which says what the command typed says.
+        hold_a_selection(&mut session);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let effort = command_rows(&session)[1].0.clone();
+        let (row, column) = find_cell(&buffer, &effort);
+        assert_eq!(click(&mut session, row, column + 1), Action::ChooseEffort);
+        assert!(session.selection.is_none(), "the panel click kept it");
+
+        // A place in the box.
+        hold_a_selection(&mut session);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "draft text");
+        click(&mut session, row, column + 3);
+        assert_eq!(
+            session.caret(),
+            "dra".len(),
+            "the box did not take the click"
+        );
+        assert!(session.selection.is_none(), "the box click kept it");
+    }
+
+    /// MOUSE-34 with MOUSE-27, MOUSE-29, MOUSE-22, MOUSE-40, MOUSE-41, MOUSE-42 and MOUSE-43: a
+    /// selection of the transcript held by its rows does not stand in the way of a click that sweeps
+    /// nothing on a web address (with ctrl), a file path (with ctrl for the editor, and plain to show
+    /// the file), the word that copies a block, the marker of a reply or a row of the info panel,
+    /// whichever arm of the handler answers it. The regression it rejects is an arm placed or
+    /// widened so that it takes another's cell, or a press that leaves the click nothing to answer.
+    /// A drag over the address is a selection that copies the address and marks nothing.
+    #[test]
+    fn a_click_that_sweeps_nothing_reaches_a_link_a_path_a_block_and_the_panel_while_rows_are_held()
+    {
+        use ratatui::style::Modifier;
+        const GUIDE: &str = "https://example.test/guide";
+        const PULL_REQUEST: &str = "https://github.com/brave/bravebot/pull/3200";
+        const REPLY: &str = "Read https://example.test/guide and src/main.rs:7 first:\n```sh\nls -la\n```\nthen carry on.";
+        let (mut session, _) = panel_of_command_rows(false);
+        session.link(None, Some(PULL_REQUEST));
+        session
+            .transcript
+            .push(crate::state::Entry::assistant(REPLY, Vec::new()));
+        session.paste("draft text");
+
+        // Drag over the first row, which is no target, and let go: the selection stays held.
+        let hold_a_selection = |session: &mut Session| {
+            let buffer = drawn_at(session, 120, 40);
+            let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+            swept(session, (row, column), (row, column + 10));
+            let up = drag(MouseEventKind::Up(MouseButton::Left), row, column + 10);
+            assert_eq!(handle_mouse(session, up), Action::Copy);
+            assert!(
+                session
+                    .selection
+                    .is_some_and(|selection| selection.scrolls()),
+                "no selection of rows was held"
+            );
+            drawn_at(session, 120, 40)
+        };
+        let with_ctrl = |session: &mut Session, row: u16, column: u16| {
+            for kind in [
+                MouseEventKind::Down(MouseButton::Left),
+                MouseEventKind::Up(MouseButton::Left),
+            ] {
+                let mut event = drag(kind, row, column);
+                event.modifiers = KeyModifiers::CONTROL;
+                let acted = handle_mouse(session, event);
+                if kind == MouseEventKind::Up(MouseButton::Left) {
+                    return acted;
+                }
+            }
+            unreachable!("the release answers")
+        };
+        let path = crate::text_links::PathRef {
+            path: "src/main.rs".to_string(),
+            line: Some(7),
+            column: None,
+        };
+
+        // The address, with ctrl.
+        let buffer = hold_a_selection(&mut session);
+        let (row, column) = find_cell(&buffer, GUIDE);
+        assert_eq!(
+            with_ctrl(&mut session, row, column + 3),
+            Action::OpenUrl(GUIDE.to_string())
+        );
+        assert!(session.selection.is_none(), "the link click kept it");
+
+        // The path, with ctrl for the editor, and plain for the file once nothing follows it.
+        let buffer = hold_a_selection(&mut session);
+        let (row, column) = find_cell(&buffer, "src/main.rs");
+        assert_eq!(
+            with_ctrl(&mut session, row, column + 4),
+            Action::EditFile(path.clone())
+        );
+        assert!(session.selection.is_none(), "the editor click kept it");
+        let buffer = hold_a_selection(&mut session);
+        let (row, column) = find_cell(&buffer, "src/main.rs");
+        assert_eq!(click(&mut session, row, column + 4), Action::Redraw);
+        assert!(session.selection.is_none(), "the path click kept it");
+        let later = std::time::Instant::now() + std::time::Duration::from_millis(600);
+        assert_eq!(session.take_the_click_due(later), Some(path));
+
+        // The word that copies the block, and the marker of the reply.
+        let buffer = hold_a_selection(&mut session);
+        let (row, column) = cells_of(&buffer, "copy")[0];
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::CopyReply("ls -la".to_string())
+        );
+        assert!(session.selection.is_none(), "the block click kept it");
+        let buffer = hold_a_selection(&mut session);
+        let (row, _) = find_cell(&buffer, "Read");
+        assert_eq!(
+            click(&mut session, row, 0),
+            Action::CopyReply(REPLY.to_string())
+        );
+        assert!(session.selection.is_none(), "the marker click kept it");
+
+        // The address the panel was given, without ctrl, and a row that stands for a command.
+        let buffer = hold_a_selection(&mut session);
+        let (row, column) = find_cell(&buffer, "Pull request");
+        assert_eq!(
+            click(&mut session, row, column + 2),
+            Action::OpenUrl(PULL_REQUEST.to_string())
+        );
+        assert!(session.selection.is_none(), "the panel link click kept it");
+        let buffer = hold_a_selection(&mut session);
+        let effort = command_rows(&session)[1].0.clone();
+        let (row, column) = find_cell(&buffer, &effort);
+        assert_eq!(click(&mut session, row, column + 1), Action::ChooseEffort);
+
+        // A place in the box.
+        let buffer = hold_a_selection(&mut session);
+        let (row, column) = find_cell(&buffer, "draft text");
+        click(&mut session, row, column + 3);
+        assert_eq!(
+            session.caret(),
+            "dra".len(),
+            "the box did not take the click"
+        );
+
+        // And a drag over the address is a selection of it: the copy is the address, the highlight
+        // covers its cells, and no mark the matcher put on them is left on the screen.
+        let buffer = drawn_at(&mut session, 120, 40);
+        let (row, column) = find_cell(&buffer, GUIDE);
+        let end = column + GUIDE.len() as u16;
+        let held = {
+            let mut event = drag(MouseEventKind::Down(MouseButton::Left), row, column);
+            event.modifiers = KeyModifiers::CONTROL;
+            handle_mouse(&mut session, event);
+            let mut event = drag(MouseEventKind::Drag(MouseButton::Left), row, end);
+            event.modifiers = KeyModifiers::CONTROL;
+            handle_mouse(&mut session, event);
+            let mut up = drag(MouseEventKind::Up(MouseButton::Left), row, end);
+            up.modifiers = KeyModifiers::CONTROL;
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40))
+                .expect("terminal");
+            let mut handed = Vec::new();
+            let action = answer_mouse(&mut terminal, &mut session, up, |text| {
+                handed.push(text.to_string());
+                true
+            })
+            .expect("answered");
+            assert_eq!(action, Action::None, "the sweep was answered as a click");
+            handed
+        };
+        assert_eq!(held, vec![GUIDE.to_string()]);
+        let after = drawn_at(&mut session, 120, 40);
+        assert!(
+            highlighted(&after).iter().any(|text| text == GUIDE),
+            "{:?}",
+            highlighted(&after)
+        );
+        for row in 0..after.area.height {
+            for column in 0..after.area.width {
+                assert!(
+                    !after[(column, row)]
+                        .modifier
+                        .intersects(Modifier::SLOW_BLINK | Modifier::RAPID_BLINK),
+                    "a mark was left on {row},{column}"
+                );
+            }
+        }
+    }
+
+    /// MOUSE-34: the keys that scroll the transcript at rest, the arrows, the page keys and the ends
+    /// under Ctrl, move the view and the selection stays on its words, marked where they are in view
+    /// and held where they are not.
+    #[test]
+    fn the_keys_that_scroll_at_rest_leave_the_selection_on_the_text_it_was_put_on() {
+        let _held = crate::theme::exclusive();
+        let mut session = a_long_reply(80);
+        drawn_at(&mut session, 120, 24);
+        for _ in 0..4 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 56");
+        swept(&mut session, (row, column), (row + 1, column + 6));
+        let swept_over = vec!["row 56 of the reply".to_string(), "  row 57".to_string()];
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+        let mut at = row;
+        for (press, rows) in [
+            (key(KeyCode::Up), 1),
+            (key(KeyCode::PageUp), 10),
+            (key(KeyCode::Down), -1),
+            (key(KeyCode::PageDown), -10),
+        ] {
+            handle_key(&mut session, press);
+            let buffer = drawn_at(&mut session, 120, 24);
+            assert_eq!(highlighted(&buffer), swept_over, "{press:?}");
+            at = (i32::from(at) + rows) as u16;
+            assert_eq!(
+                find_cell(&buffer, "row 56").0,
+                at,
+                "{press:?}: the view did not move as far as it was asked to"
+            );
+        }
+
+        // The ends take the view past the words, which are then out of view and no longer marked, and
+        // the selection is still held there, and marked again where the words come back into view.
+        for end in [KeyCode::Home, KeyCode::End] {
+            handle_key(&mut session, ctrl_key(end));
+            let buffer = drawn_at(&mut session, 120, 24);
+            assert!(highlighted(&buffer).is_empty(), "{end:?}");
+            assert!(
+                session.holds_a_selection(),
+                "{end:?} put the selection away"
+            );
+        }
+        for _ in 0..12 {
+            if highlighted(&drawn_at(&mut session, 120, 24)) == swept_over {
+                break;
+            }
+            wheel_up(&mut session);
+        }
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+    }
+
+    /// Two calls in the turn's own run, the second finished and the first still running above it.
+    fn two_calls_the_second_finished() -> Session {
+        use bravebot_agent::report::Activity;
+        let mut session = Session::new("kernel-enforced");
+        session.status = Status::Working;
+        session
+            .transcript
+            .push(crate::state::Entry::user("read both files"));
+        session.start_activity(Activity::running("Read", "a.rs"));
+        session.start_activity(Activity::running("Read", "b.rs"));
+        session.finish_activity(Activity::running("Read", "b.rs").done("20 lines"));
+        session
+    }
+
+    /// What the clipboard is handed is the text that was swept or nothing, never other text.
+    fn assert_swept_or_nothing(handed: &[String], swept: &str, what: &str) {
+        assert!(
+            handed.iter().all(|text| text == swept) && handed.len() <= 1,
+            "{what}: the clipboard was handed {handed:?}, and {swept:?} was swept"
+        );
+    }
+
+    /// MOUSE-34: a call that finishes above a selection gains rows, which moves every row below it,
+    /// so the rows the selection holds are rows of other text. The frame drawn after marks nothing
+    /// there, the selection goes, and a release copies what was swept or nothing.
+    #[test]
+    fn a_call_finishing_above_a_selection_does_not_leave_it_over_other_text() {
+        use bravebot_agent::report::Activity;
+        for scrolling in [false, true] {
+            let _held = crate::theme::exclusive();
+            let mut session = two_calls_the_second_finished();
+            drawn_at(&mut session, 120, 24);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (row, column) = find_cell(&buffer, "Read(b.rs)");
+            swept(&mut session, (row, column), (row, column + 10));
+            let swept_over = vec!["Read(b.rs)".to_string()];
+            assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+            session.finish_activity(Activity::running("Read", "a.rs").done("40 lines"));
+            let buffer = drawn_at(&mut session, 120, 24);
+            let marked = highlighted(&buffer);
+            assert!(
+                marked.is_empty() || marked == swept_over,
+                "scrolling: {scrolling}: the frame marked {marked:?}"
+            );
+            let handed = let_go(&mut session, (120, 24), row, column + 10);
+            assert_swept_or_nothing(&handed, "Read(b.rs)", &format!("scrolling: {scrolling}"));
+            assert!(session.selection.is_none(), "scrolling: {scrolling}");
+        }
+    }
+
+    /// MOUSE-34: the same in a delegate's view, where the calls are the delegate's own lines.
+    #[test]
+    fn a_call_finishing_above_a_selection_in_a_delegates_view_does_not_leave_it_over_other_text() {
+        use bravebot_agent::report::{Activity, DelegateId, Delegation};
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        let id = DelegateId::nth(1);
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id,
+            kind: "reader".to_string(),
+            task: "find the parser".to_string(),
+        });
+        session.reporting_for(Some(id));
+        session.start_activity(Activity::running("Read", "a.rs"));
+        session.start_activity(Activity::running("Read", "b.rs"));
+        session.finish_activity(Activity::running("Read", "b.rs").done("20 lines"));
+        assert!(session.watch());
+        assert!(session.watching_a_delegate());
+        drawn_at(&mut session, 120, 24);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "Read(b.rs)");
+        swept(&mut session, (row, column), (row, column + 10));
+        let swept_over = vec!["Read(b.rs)".to_string()];
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+        session.finish_activity(Activity::running("Read", "a.rs").done("40 lines"));
+        let marked = highlighted(&drawn_at(&mut session, 120, 24));
+        assert!(
+            marked.is_empty() || marked == swept_over,
+            "the frame marked {marked:?}"
+        );
+        let handed = let_go(&mut session, (120, 24), row, column + 10);
+        assert_swept_or_nothing(&handed, "Read(b.rs)", "a delegate's view");
+        assert!(session.selection.is_none());
+    }
+
+    /// A delegate with two calls, the second finished, and the view open on it.
+    fn watching_a_delegate_with_two_calls() -> Session {
+        use bravebot_agent::report::{Activity, DelegateId, Delegation};
+        let mut session = Session::new("kernel-enforced");
+        let id = DelegateId::nth(1);
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id,
+            kind: "reader".to_string(),
+            task: "find the parser".to_string(),
+        });
+        session.reporting_for(Some(id));
+        session.start_activity(Activity::running("Read", "a.rs"));
+        session.start_activity(Activity::running("Read", "b.rs"));
+        session.finish_activity(Activity::running("Read", "b.rs").done("20 lines"));
+        assert!(session.watch());
+        assert!(session.watching_a_delegate());
+        session
+    }
+
+    /// MOUSE-34: a row put ahead of the delegate in the list the view opens moves the delegate's place
+    /// in it, and the delegate's lines stay where they are. The selection in them is kept, and what
+    /// is copied is what was swept.
+    #[test]
+    fn a_row_put_ahead_of_the_watched_delegate_leaves_a_selection_of_its_lines_alone() {
+        let _held = crate::theme::exclusive();
+        let mut session = watching_a_delegate_with_two_calls();
+        drawn_at(&mut session, 120, 24);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "Read(b.rs)");
+        swept(&mut session, (row, column), (row, column + 10));
+        let swept_over = vec!["Read(b.rs)".to_string()];
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+        let place = session.watching().map(|watching| watching.at);
+
+        session.put_an_aside_ahead_of_the_watched_row();
+        assert_ne!(session.watching().map(|watching| watching.at), place);
+        assert!(
+            session.watching_a_delegate(),
+            "the view moved off the delegate"
+        );
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+        let handed = let_go(&mut session, (120, 24), row, column + 10);
+        assert_eq!(handed, vec!["Read(b.rs)".to_string()]);
+    }
+
+    /// MOUSE-34: the view moved to another delegate holds other lines, so the selection goes.
+    #[test]
+    fn stepping_to_another_delegate_drops_a_selection_of_the_one_before() {
+        use bravebot_agent::report::{DelegateId, Delegation};
+        let _held = crate::theme::exclusive();
+        let mut session = watching_a_delegate_with_two_calls();
+        session.reporting_for(None);
+        session.delegate_started(Delegation {
+            stop: Default::default(),
+            id: DelegateId::nth(2),
+            kind: "reader".to_string(),
+            task: "find the lexer".to_string(),
+        });
+        drawn_at(&mut session, 120, 24);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "Read(b.rs)");
+        swept(&mut session, (row, column), (row, column + 10));
+        assert!(session.selection.is_some());
+
+        session.watch_next();
+        drawn_at(&mut session, 120, 24);
+        assert!(session.selection.is_none());
+        let handed = let_go(&mut session, (120, 24), row, column + 10);
+        assert!(handed.is_empty(), "copied {handed:?}");
+    }
+
+    /// MOUSE-34: what a turn does below a selection leaves it alone: a call finishing and gaining rows,
+    /// an entry arriving and a reply being written under it, in the plain view and in the scroller.
+    #[test]
+    fn calls_finishing_and_a_reply_arriving_below_a_selection_leave_it_alone() {
+        use bravebot_agent::report::Activity;
+        for scrolling in [false, true] {
+            let _held = crate::theme::exclusive();
+            let mut session = two_calls_the_second_finished();
+            drawn_at(&mut session, 120, 24);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (row, column) = find_cell(&buffer, "read both files");
+            swept(&mut session, (row, column), (row, column + 15));
+            let swept_over = vec!["read both files".to_string()];
+            assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+            session.finish_activity(Activity::running("Read", "a.rs").done("40 lines"));
+            session.transcript.push(crate::state::Entry::assistant(
+                "both read\nand compared",
+                Vec::new(),
+            ));
+            for words in [
+                "a reply ",
+                "being written ",
+                "under the selection\n",
+                "and going on",
+            ] {
+                session.streaming(words);
+                let buffer = drawn_at(&mut session, 120, 24);
+                assert_eq!(
+                    highlighted(&buffer),
+                    swept_over,
+                    "scrolling: {scrolling}: after {words:?}"
+                );
+            }
+            let handed = let_go(&mut session, (120, 24), row, column + 15);
+            assert_eq!(
+                handed,
+                vec!["read both files".to_string()],
+                "scrolling: {scrolling}"
+            );
+        }
+    }
+
+    /// MOUSE-34: a selection that ends on the line a reply is being written on keeps it as the line
+    /// gets longer and wraps, since what it was put on, the words so far, is still where it was.
+    #[test]
+    fn a_selection_ending_on_a_line_still_being_written_survives_the_line_growing() {
+        for scrolling in [false, true] {
+            let _held = crate::theme::exclusive();
+            let mut session = Session::new("none");
+            session
+                .transcript
+                .push(crate::state::Entry::user("an earlier prompt"));
+            session.status = Status::Working;
+            session.streaming("alpha beta gamma");
+            drawn_at(&mut session, 40, 20);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 40, 20);
+            let (row, column) = find_cell(&buffer, "alpha");
+            swept(&mut session, (row, column), (row, column + 5));
+            let swept_over = vec!["alpha".to_string()];
+            assert_eq!(highlighted(&drawn_at(&mut session, 40, 20)), swept_over);
+
+            for more in [
+                " delta",
+                " epsilon zeta eta theta",
+                " iota kappa lambda mu nu xi omicron",
+            ] {
+                session.streaming(more);
+                assert_eq!(
+                    highlighted(&drawn_at(&mut session, 40, 20)),
+                    swept_over,
+                    "scrolling: {scrolling}: after {more:?}"
+                );
+            }
+            let handed = let_go(&mut session, (40, 20), row, column + 5);
+            assert_eq!(handed, vec!["alpha".to_string()], "scrolling: {scrolling}");
+        }
+    }
+
+    /// MOUSE-34: a reply written at the tail becomes an entry in the same place and shape when its
+    /// round ends. With no thinking above it nothing moves, and a selection of it is kept.
+    #[test]
+    fn a_reply_becoming_an_entry_keeps_a_selection_of_its_rows() {
+        let reply: String = (1..=6).map(|n| format!("reply {n:02}\n")).collect();
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("none");
+        session
+            .transcript
+            .push(crate::state::Entry::user("an earlier prompt"));
+        session.status = Status::Working;
+        session.streaming(&reply);
+        drawn_at(&mut session, 120, 24);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "reply 03");
+        swept(&mut session, (row, column), (row, column + 8));
+        let swept_over = vec!["reply 03".to_string()];
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+        session.narrate(reply.trim_end());
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+        let handed = let_go(&mut session, (120, 24), row, column + 8);
+        assert_eq!(handed, vec!["reply 03".to_string()]);
+    }
+
+    /// MOUSE-34 and MOUSE-27: the word that copies a fenced block is drawn on the block's header
+    /// only once the reply is an entry, so the header gains it when the round ends. It is no text of
+    /// the reply, so a selection from the header down, in the plain view and in the scroller, keeps
+    /// its words and still copies them. The regression it rejects is a mark that reads the word and
+    /// the blanks before it, which puts the selection away when the reply ends.
+    #[test]
+    fn a_reply_with_a_block_becoming_an_entry_keeps_a_selection_from_its_header_down() {
+        let reply: String = format!(
+            "Here:\n```sh\nls -la\n```\n{}",
+            (1..=6)
+                .map(|n| format!("reply {n:02}\n"))
+                .collect::<String>()
+        );
+        for scrolling in [false, true] {
+            let _held = crate::theme::exclusive();
+            let mut session = Session::new("none");
+            session
+                .transcript
+                .push(crate::state::Entry::user("an earlier prompt"));
+            session.status = Status::Working;
+            session.streaming(&reply);
+            if scrolling {
+                session.open_scroller();
+            }
+            drawn_at(&mut session, 120, 24);
+            let buffer = drawn_at(&mut session, 120, 24);
+            assert!(
+                cells_of(&buffer, "copy").is_empty(),
+                "scrolling {scrolling}: the word was drawn before the reply ended"
+            );
+            let (header, _) = find_cell(&buffer, "sh");
+            let (row, column) = find_cell(&buffer, "reply 03");
+            swept(&mut session, (header, 2), (row, column + 8));
+            let swept_over = highlighted(&drawn_at(&mut session, 120, 24));
+            assert!(
+                swept_over.len() > 4,
+                "scrolling {scrolling}: {swept_over:?}"
+            );
+
+            session.narrate(reply.trim_end());
+            let after = drawn_at(&mut session, 120, 24);
+            assert_eq!(
+                cells_of(&after, "copy").len(),
+                1,
+                "scrolling {scrolling}: the word was not drawn once the reply ended"
+            );
+            assert_eq!(
+                highlighted(&after),
+                swept_over,
+                "scrolling {scrolling}: the selection was put away or moved"
+            );
+            let handed = let_go(&mut session, (120, 24), row, column + 8);
+            let [copied] = handed.as_slice() else {
+                panic!("scrolling {scrolling}: the clipboard was handed {handed:?}");
+            };
+            assert!(
+                copied.starts_with("sh\n") && copied.ends_with("reply 03"),
+                "scrolling {scrolling}: {copied:?}"
+            );
+            assert!(
+                !copied.contains("copy"),
+                "scrolling {scrolling}: {copied:?}"
+            );
+        }
+    }
+
+    /// MOUSE-34 and MOUSE-28: a prompt queued behind the turn is drawn under the box and not among
+    /// the transcript's lines, so putting one there leaves a selection of the transcript held on its
+    /// words, though the room the transcript has shrinks by the rows it takes. The info panel's
+    /// glyph, the `back` label of a delegate's view and the rows of the transcript's own lines are
+    /// drawn beside those lines and not in them, which is why none of them is a case here.
+    #[test]
+    fn a_prompt_queued_under_the_box_leaves_a_selection_of_the_transcript_held() {
+        let _held = crate::theme::exclusive();
+        let mut session = a_long_reply(40);
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.a_turn_is_running());
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 30");
+        swept(&mut session, (row, column), (row + 1, column + 6));
+        let swept_over = highlighted(&drawn_at(&mut session, 120, 24));
+        assert_eq!(swept_over.len(), 2, "{swept_over:?}");
+
+        wait_as(&mut session, "second");
+        assert_eq!(waiting_prompts(&session), vec!["second"]);
+        let after = drawn_at(&mut session, 120, 24);
+        assert!(
+            session.holds_a_selection(),
+            "the queued prompt put the selection away"
+        );
+        // The badge on the queued prompt is painted in the ink a selection is, so it is read too.
+        let marked: Vec<String> = highlighted(&after)
+            .into_iter()
+            .filter(|row| !row.contains("QUEUED"))
+            .collect();
+        assert_eq!(marked, swept_over);
+    }
+
+    /// MOUSE-34: a search in the scroller draws over the text it matches, splitting the spans that
+    /// hold it, and that is a change of what is drawn and not of the text, so a selection held while
+    /// a search runs and is cleared is kept.
+    #[test]
+    fn a_search_over_a_selection_does_not_drop_it() {
+        let _held = crate::theme::exclusive();
+        let mut session = a_long_reply(40);
+        drawn_at(&mut session, 120, 24);
+        session.open_scroller();
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 30");
+        swept(&mut session, (row, column), (row, column + 6));
+        let swept_over = vec!["row 30".to_string()];
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+        handle_key(&mut session, key(KeyCode::Char('/')));
+        for c in "of the".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_key(&mut session, key(KeyCode::Enter));
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert!(
+            session.selection.is_some(),
+            "the search dropped the selection"
+        );
+        let (searched, _) = find_cell(&buffer, "row 30");
+        assert_eq!(
+            highlighted(&buffer).first().map(String::as_str),
+            Some("row 30"),
+            "row {searched}"
+        );
+        let handed = let_go(&mut session, (120, 24), searched, column + 6);
+        assert_eq!(handed, vec!["row 30".to_string()]);
+    }
+
+    /// MOUSE-34: the opening screen is the mark with the face on it, which glances about from frame to
+    /// frame, so what is selected under it stays selected. When the first entry ends the screen its
+    /// rows hold other text, and the selection goes.
+    #[test]
+    fn a_selection_on_the_opening_screen_goes_when_the_opening_ends() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("none");
+        drawn_at(&mut session, 120, 30);
+        let buffer = drawn_at(&mut session, 120, 30);
+        let (row, column) = find_cell(&buffer, "Ask a question");
+        swept(&mut session, (row, column), (row, column + 14));
+        let swept_over = vec!["Ask a question".to_string()];
+        for _ in 0..3 {
+            assert_eq!(highlighted(&drawn_at(&mut session, 120, 30)), swept_over);
+        }
+
+        let reply: String = (1..=40).map(|n| format!("reply {n:02}\n")).collect();
+        session
+            .transcript
+            .push(crate::state::Entry::assistant(reply, Vec::new()));
+        let marked = highlighted(&drawn_at(&mut session, 120, 30));
+        assert!(
+            marked.is_empty() || marked == swept_over,
+            "the frame marked {marked:?}"
+        );
+        let handed = let_go(&mut session, (120, 30), row, column + 14);
+        assert_swept_or_nothing(&handed, "Ask a question", "the opening screen");
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-34: the model's thinking is drawn above its reply while it is shown, and is taken down
+    /// when the round ends and the reply becomes an entry, which moves the reply's rows up. A
+    /// selection of the reply is dropped then, and what is copied is what was swept or nothing.
+    #[test]
+    fn thinking_taken_down_above_a_selection_does_not_leave_it_over_other_text() {
+        let reply: String = (1..=12).map(|n| format!("reply {n:02}\n")).collect();
+        for scrolling in [false, true] {
+            let _held = crate::theme::exclusive();
+            let mut session = Session::new("none");
+            session
+                .transcript
+                .push(crate::state::Entry::user("an earlier prompt"));
+            session.toggle_thinking();
+            session.status = Status::Working;
+            session.thinking("first thought\nsecond thought\nthird thought");
+            session.streaming(&reply);
+            drawn_at(&mut session, 120, 30);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 120, 30);
+            let (row, column) = find_cell(&buffer, "reply 03");
+            swept(&mut session, (row, column), (row, column + 8));
+            let swept_over = vec!["reply 03".to_string()];
+            assert_eq!(highlighted(&drawn_at(&mut session, 120, 30)), swept_over);
+
+            session.narrate(reply.trim_end());
+            let buffer = drawn_at(&mut session, 120, 30);
+            assert!(
+                !(0..30).any(|row| {
+                    (0..120)
+                        .map(|column| buffer[(column, row)].symbol().to_string())
+                        .collect::<String>()
+                        .contains("second thought")
+                }),
+                "the thinking is still drawn"
+            );
+            let marked = highlighted(&buffer);
+            assert!(
+                marked.is_empty() || marked == swept_over,
+                "scrolling: {scrolling}: the frame marked {marked:?}"
+            );
+            let handed = let_go(&mut session, (120, 30), row, column + 8);
+            assert_swept_or_nothing(&handed, "reply 03", &format!("scrolling: {scrolling}"));
+            assert!(session.selection.is_none(), "scrolling: {scrolling}");
+        }
+    }
+
+    /// MOUSE-34: the scroller's keys move the view and the selection stays on its words.
+    #[test]
+    fn the_scrollers_keys_leave_the_selection_on_the_text_it_was_put_on() {
+        let _held = crate::theme::exclusive();
+        let mut session = a_long_reply(60);
+        drawn_at(&mut session, 120, 24);
+        session.open_scroller();
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 40");
+        swept(&mut session, (row, column), (row + 1, column + 6));
+        let swept_over = vec!["row 40 of the reply".to_string(), "  row 41".to_string()];
+        assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+        handle_key(&mut session, key(KeyCode::Char('k')));
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert_eq!(highlighted(&buffer), swept_over);
+        assert_eq!(find_cell(&buffer, "row 40").0, row + 1);
+
+        handle_key(&mut session, ctrl('u'));
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert_eq!(highlighted(&buffer), swept_over);
+        assert_eq!(find_cell(&buffer, "row 40").0, row + 1 + 11);
+    }
+
+    /// MOUSE-34: rows that a turn adds below a selection move the view when it follows the tail,
+    /// and the highlight with it, and leave both alone in the scroller, which holds the view.
+    #[test]
+    fn rows_a_turn_adds_below_do_not_move_the_selection_off_its_text() {
+        let _held = crate::theme::exclusive();
+        for scrolling in [false, true] {
+            let mut session = a_long_reply(60);
+            session.status = Status::Working;
+            drawn_at(&mut session, 120, 24);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (row, column) = find_cell(&buffer, "row 50");
+            swept(&mut session, (row, column), (row, column + 6));
+            let swept_over = vec!["row 50".to_string()];
+            assert_eq!(highlighted(&drawn_at(&mut session, 120, 24)), swept_over);
+
+            session.transcript.push(crate::state::Entry::assistant(
+                "later one\nlater two",
+                Vec::new(),
+            ));
+            let buffer = drawn_at(&mut session, 120, 24);
+            assert_eq!(
+                highlighted(&buffer),
+                swept_over,
+                "scrolling: {scrolling}: the selection left its words"
+            );
+            let moved = find_cell(&buffer, "row 50").0;
+            if scrolling {
+                assert_eq!(moved, row, "the scroller's view moved");
+            } else {
+                assert_eq!(moved + 3, row, "the view did not follow the tail");
+            }
+        }
+    }
+
+    /// MOUSE-3: opening or closing the info panel changes the width the transcript wraps at, so the
+    /// rows a selection of it holds are rows of other text. It is dropped by the frame that is drawn
+    /// at the new width, in both directions, and a release after it copies nothing.
+    #[test]
+    fn toggling_the_panel_drops_a_selection_of_the_transcript_it_would_leave_over_other_text() {
+        let mut session = Session::new("none");
+        session.laid.columns = 120;
+        session.complete(
+            "the quick brown fox jumps over the lazy dog and then keeps on running through the \
+             field until it reaches the far fence beside the old stone wall at the edge of the farm \
+             where the grass is long",
+            Vec::new(),
+            0,
+        );
+        for opening in [true, false] {
+            if !opening {
+                session.toggle_panel();
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (row, column) = find_cell(&buffer, "the quick");
+            swept(&mut session, (row, column), (row + 2, 30));
+            assert!(session.selection.is_some());
+
+            session.toggle_panel();
+            drawn_at(&mut session, 120, 24);
+            assert!(
+                session.selection.is_none(),
+                "opening: {opening}: the selection stayed over text that was wrapped again"
+            );
+            let up = drag(MouseEventKind::Up(MouseButton::Left), row + 2, 30);
+            assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24))
+                .expect("terminal");
+            let mut handed = Vec::new();
+            copy_selection(&mut terminal, &mut session, |text| {
+                handed.push(text.to_string());
+                true
+            })
+            .expect("copy");
+            assert!(handed.is_empty(), "opening: {opening}: copied {handed:?}");
+            if opening {
+                session.toggle_panel();
+            }
+        }
+    }
+
+    /// MOUSE-3: a resize in the middle of a drag, in either direction or both, drops the selection,
+    /// and what the drag does afterwards neither panics nor copies cells that hold other text.
+    #[test]
+    fn a_resize_in_the_middle_of_a_drag_leaves_nothing_to_extend_or_copy() {
+        for resized in [(100, 24), (120, 20), (90, 15), (200, 60), (30, 5), (1, 1)] {
+            let mut session = a_long_reply(40);
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (row, column) = find_cell(&buffer, "row 30");
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Down(MouseButton::Left), row, column),
+            );
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Drag(MouseButton::Left), row + 1, column + 8),
+            );
+            drawn_at(&mut session, resized.0, resized.1);
+            assert!(
+                session.selection.is_none(),
+                "{resized:?}: the drag survived"
+            );
+
+            let handed = {
+                let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+                    resized.0, resized.1,
+                ))
+                .expect("terminal");
+                let mut handed = Vec::new();
+                for event in [
+                    drag(
+                        MouseEventKind::Drag(MouseButton::Left),
+                        row + 2,
+                        column + 20,
+                    ),
+                    drag(MouseEventKind::Up(MouseButton::Left), row + 2, column + 20),
+                ] {
+                    answer_mouse(&mut terminal, &mut session, event, |text| {
+                        handed.push(text.to_string());
+                        true
+                    })
+                    .expect("answered");
+                }
+                handed
+            };
+            assert!(handed.is_empty(), "{resized:?}: copied {handed:?}");
+        }
+    }
+
+    /// MOUSE-34: a transcript that has fewer rows than a selection reaches no longer has the text
+    /// the selection was put on, so the selection goes; one that still has every row it reaches
+    /// stays, and copies what it did.
+    #[test]
+    fn a_transcript_that_shrinks_drops_a_selection_that_reached_what_went() {
+        let mut session = Session::new("none");
+        session
+            .transcript
+            .push(crate::state::Entry::user("first prompt"));
+        session
+            .transcript
+            .push(crate::state::Entry::assistant("first answer", Vec::new()));
+        session
+            .transcript
+            .push(crate::state::Entry::user("second prompt"));
+        session
+            .transcript
+            .push(crate::state::Entry::assistant("second answer", Vec::new()));
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (early, early_column) = find_cell(&buffer, "first prompt");
+        let (late, late_column) = find_cell(&buffer, "second answer");
+
+        swept(
+            &mut session,
+            (early, early_column),
+            (early, early_column + 5),
+        );
+        swept(&mut session, (late, late_column), (late, late_column + 6));
+        assert!(session.selection.is_some());
+        session.transcript.truncate(2);
+        drawn_at(&mut session, 120, 24);
+        assert!(
+            session.selection.is_none(),
+            "the selection stayed over rows the transcript no longer has"
+        );
+
+        swept(
+            &mut session,
+            (early, early_column),
+            (early, early_column + 5),
+        );
+        session.transcript.truncate(2);
+        drawn_at(&mut session, 120, 24);
+        let selection = session.selection.expect("the rows are still there");
+        assert!(selection.covers(early, early_column));
+    }
+
+    /// MOUSE-34: a terminal with one row, or one column, draws what little it can, and a mouse
+    /// report anywhere on it, or at the far corner of the coordinates, does not panic.
+    #[test]
+    fn a_terminal_one_row_high_takes_a_mouse_report_anywhere_without_panicking() {
+        for size in [(80, 1), (1, 1), (1, 24), (3, 2), (40, 3)] {
+            for scrolling in [false, true] {
+                let mut session = a_long_reply(30);
+                drawn_at(&mut session, 120, 24);
+                if scrolling {
+                    session.open_scroller();
+                }
+                drawn_at(&mut session, size.0, size.1);
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(size.0, size.1))
+                        .expect("terminal");
+                let corners = [0, 1, size.1.saturating_sub(1), size.1, u16::MAX - 1];
+                for row in corners {
+                    for column in [0, size.0.saturating_sub(1), size.0, u16::MAX - 1] {
+                        // A drag, and then a triple click and a drag from it, which take whole words
+                        // and rows and read the cells there.
+                        let down = drag(MouseEventKind::Down(MouseButton::Left), row, column);
+                        let up = drag(MouseEventKind::Up(MouseButton::Left), row, column);
+                        for event in [
+                            down,
+                            drag(MouseEventKind::Drag(MouseButton::Left), 0, 0),
+                            drag(MouseEventKind::Drag(MouseButton::Left), row, column),
+                            up,
+                            down,
+                            up,
+                            down,
+                            up,
+                            down,
+                            drag(MouseEventKind::Drag(MouseButton::Left), 0, 0),
+                            up,
+                        ] {
+                            answer_mouse(&mut terminal, &mut session, event, |_| true)
+                                .expect("answered");
+                            drawn_at(&mut session, size.0, size.1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// MOUSE-34: a drag that began with the view scrolled back selects the rows under the pointer
+    /// then, and a release hands over those rows and not the ones that were at those screen rows when
+    /// the view was at the tail.
+    #[test]
+    fn a_drag_that_began_with_the_view_scrolled_back_selects_the_rows_under_it() {
+        let mut session = a_long_reply(60);
+        drawn_at(&mut session, 120, 24);
+        for _ in 0..4 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 40");
+        let (last, _) = find_cell(&buffer, "row 42");
+        let handed =
+            dragged_and_released(&mut session, (120, 24), (row, column), (last, column + 6));
+        assert_eq!(
+            handed,
+            vec!["row 40 of the reply\n  row 41 of the reply\n  row 42".to_string()]
+        );
+    }
+
+    /// MOUSE-34: expanding a call with `x` changes how many rows it takes, so the rows below it
+    /// move and a selection held over them would be over other text. It is dropped.
+    #[test]
+    fn expanding_a_call_drops_a_selection_held_in_the_scroller() {
+        let mut session = scroller_over_one_call();
+        let buffer = drawn_at(&mut session, 80, 11);
+        let (row, column) = find_cell(&buffer, "out 3");
+        swept(&mut session, (row, column), (row, column + 5));
+        assert!(session.selection.is_some());
+
+        handle_key(&mut session, key(KeyCode::Char('x')));
+        assert!(
+            render::as_text(&session).contains("out 29"),
+            "the call was not expanded"
+        );
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-34: the scroller counts some calls' rows differently from the plain view, so a selection
+    /// held when it opens holds rows of other text there. It is dropped, with no info panel to have
+    /// changed the width.
+    #[test]
+    fn opening_the_scroller_drops_a_selection_held_in_the_plain_view() {
+        let mut session = a_long_reply(60);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 50");
+        swept(&mut session, (row, column), (row, column + 6));
+        assert!(session.selection.is_some());
+        session.open_scroller();
+        drawn_at(&mut session, 120, 24);
+        assert!(session.selection.is_none());
+    }
+
+    /// MOUSE-34: the button is let go before the frame that shows a wheel turn has been drawn. What
+    /// is copied is the text that was swept, not the text now on the rows it was on.
+    #[test]
+    fn a_release_straight_after_a_wheel_turn_copies_the_text_that_was_swept() {
+        let mut session = a_long_reply(60);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 50");
+        swept(&mut session, (row, column), (row, column + 6));
+        wheel_up(&mut session);
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24)).expect("terminal");
+        let mut handed = Vec::new();
+        answer_mouse(
+            &mut terminal,
+            &mut session,
+            drag(MouseEventKind::Up(MouseButton::Left), row, column + 6),
+            |text| {
+                handed.push(text.to_string());
+                true
+            },
+        )
+        .expect("answered");
+        assert_eq!(handed, vec!["row 50".to_string()]);
+    }
+
+    /// The scroller draws the transcript on every row but the footer, so a terminal that is shorter
+    /// by itself changes which rows are in view without changing a column. The selection goes.
+    #[test]
+    fn a_height_only_resize_in_the_scroller_drops_the_selection() {
+        let mut session = a_long_reply(60);
+        drawn_at(&mut session, 120, 24);
+        session.open_scroller();
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 50");
+        swept(&mut session, (row, column), (row, column + 6));
+        assert!(session.selection.is_some());
+        drawn_at(&mut session, 120, 20);
+        assert!(session.selection.is_none());
+    }
+
+    /// Release the button where the last event left it, through the loop's own function, and say
+    /// what the clipboard was handed.
+    fn let_go(session: &mut Session, size: (u16, u16), row: u16, column: u16) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(size.0, size.1))
+                .expect("terminal");
+        let mut handed = Vec::new();
+        answer_mouse(
+            &mut terminal,
+            session,
+            drag(MouseEventKind::Up(MouseButton::Left), row, column),
+            |text| {
+                handed.push(text.to_string());
+                true
+            },
+        )
+        .expect("answered");
+        handed
+    }
+
+    /// What `row_range` rows of a reply `row 00` to `row N` read, as a copy of them from the start
+    /// of the first to the end of the sixth character of the last gives them.
+    fn the_reply_rows(first: usize, last: usize) -> String {
+        let mut text = format!("row {first:02} of the reply");
+        for row in first + 1..last {
+            text.push_str(&format!("\n  row {row:02} of the reply"));
+        }
+        text.push_str(&format!("\n  row {last:02}"));
+        text
+    }
+
+    /// MOUSE-35: a selection that reaches past the screen copies every row it reaches, in order, the
+    /// ones scrolled out of view as much as the ones in it. The ends are set by a press, the wheel
+    /// and a shift-click, so no row of it was ever on the screen together with both ends.
+    #[test]
+    fn a_selection_longer_than_the_screen_copies_in_full() {
+        for scrolling in [false, true] {
+            let mut session = a_long_reply(80);
+            drawn_at(&mut session, 120, 24);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (row, column) = find_cell(&buffer, "row 79");
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Down(MouseButton::Left), row, column + 6),
+            );
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Drag(MouseButton::Left), row, column + 6),
+            );
+            for _ in 0..16 {
+                wheel_up(&mut session);
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let (first, column) = find_cell(&buffer, "row 30");
+            press(&mut session, first, column, KeyModifiers::SHIFT);
+
+            let handed = let_go(&mut session, (120, 24), first, column);
+            assert_eq!(
+                handed,
+                vec![the_reply_rows(30, 79)],
+                "scrolling: {scrolling}"
+            );
+        }
+    }
+
+    /// MOUSE-35: the rows copied are the ones that were swept even when every one of them has
+    /// scrolled out of view by the time the button is let go, and none of the panel beside the
+    /// transcript is in them.
+    #[test]
+    fn a_selection_wholly_out_of_view_copies_its_rows_and_nothing_of_the_panel() {
+        let mut session = a_long_reply(80);
+        session.laid.columns = 120;
+        session.toggle_panel();
+        session.identify("PANELMARK", "/work/dir".to_string(), None);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 70");
+        swept(&mut session, (row, column), (row + 3, column + 6));
+        for _ in 0..12 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert!(
+            !(0..buffer.area.height).any(|r| (0..buffer.area.width)
+                .map(|c| buffer[(c, r)].symbol().to_string())
+                .collect::<String>()
+                .contains("row 70")),
+            "the rows swept are still in view"
+        );
+        let handed = let_go(&mut session, (120, 24), row, column);
+        assert_eq!(handed, vec![the_reply_rows(70, 73)]);
+    }
+
+    /// What a transcript's rows read as when they are drawn on the screen and when they are drawn on
+    /// their own, row by row, for the rows in view.
+    fn the_rows_in_view_read_alike(session: &mut Session, size: (u16, u16), what: &str) {
+        let buffer = drawn_at(session, size.0, size.1);
+        let window = session.laid.window.expect("the transcript was drawn");
+        let rows = render::Rows::new(session, window);
+        let rendered = rows.window(window.top, window.top + window.area.height - 1);
+        for at in 0..window.area.height {
+            let read = |buffer: &ratatui::buffer::Buffer, row: u16| {
+                (window.area.left()..window.area.right())
+                    .map(|column| crate::hyperlink::shown(buffer[(column, row)].symbol()))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            };
+            assert_eq!(
+                read(&rendered.buffer, at),
+                read(&buffer, window.area.top() + at),
+                "{what}: row {} of the transcript",
+                window.top + at
+            );
+        }
+    }
+
+    /// A transcript with a prompt, a quarantined result with an escape in it, a reply with a
+    /// heading, wrapped paragraphs, a list, a code block and wide characters.
+    fn a_varied_transcript() -> Session {
+        use bravebot_agent::report::{Activity, Landing, Reach, Shown};
+        let mut session = Session::new("kernel-enforced");
+        session.transcript.push(crate::state::Entry::user(
+            "explain the layout of the repository in detail, naming every directory and what it holds",
+        ));
+        session.finish_activity(Activity::running("Read", "README.md").done("40 lines"));
+        session.landed(Landing::Quarantined);
+        session.show(Shown {
+            origin: "README.md".to_string(),
+            reach: Reach::NotThePlanner,
+            label: "(U,priv)".to_string(),
+            preview: vec![
+                "the haystack holds a needle that is long enough to wrap onto another row"
+                    .to_string(),
+                "behind \u{1b}[31m\u{1b}[2J an escape".to_string(),
+            ],
+            lines: 2,
+        });
+        session.complete(
+            "# A heading\n\nA paragraph that is long enough to need wrapping by the transcript at \
+             forty columns, with \u{65e5}\u{672c}\u{8a9e} in it.\n\n- the first item\n- a second \
+             item that is long enough to wrap as well\n\n```\ncode line one\ncode line two   \n```\n\n\
+             the last words",
+            Vec::new(),
+            0,
+        );
+        session
+    }
+
+    /// MOUSE-35: a selection of the whole transcript, taken from its first row to its last in a view
+    /// a screenful of rows tall, reads a wrapped line as one line and a code block without the blanks
+    /// that pad it, for the rows that were never on the screen at all as for the ones that were.
+    #[test]
+    fn a_whole_transcript_copies_as_the_lines_it_is_made_of() {
+        let mut session = a_varied_transcript();
+        drawn_at(&mut session, 40, 12);
+        session.open_scroller();
+        drawn_at(&mut session, 40, 12);
+        assert!(render::as_text(&session).contains("code line two"));
+        handle_key(&mut session, key(KeyCode::Char('g')));
+        let buffer = drawn_at(&mut session, 40, 12);
+        let (row, column) = find_cell(&buffer, "> explain");
+        handle_mouse(
+            &mut session,
+            drag(MouseEventKind::Down(MouseButton::Left), row, column),
+        );
+        handle_mouse(
+            &mut session,
+            drag(MouseEventKind::Drag(MouseButton::Left), row, column + 2),
+        );
+        handle_key(&mut session, key(KeyCode::Char('G')));
+        let buffer = drawn_at(&mut session, 40, 12);
+        let (last, _) = find_cell(&buffer, "the last words");
+        press(&mut session, last, 39, KeyModifiers::SHIFT);
+
+        let handed = let_go(&mut session, (40, 12), last, 39);
+        let [copied] = handed.as_slice() else {
+            panic!("the clipboard was handed {handed:?}");
+        };
+        let lines: Vec<&str> = copied.lines().collect();
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("A paragraph that is long enough to need wrapping by the transcript at forty columns, with \u{65e5}\u{672c}\u{8a9e} in it.")),
+            "{copied}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.ends_with("a second item that is long enough to wrap as well")),
+            "{copied}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.trim_start() == "code line two"),
+            "{copied}"
+        );
+        assert!(
+            lines.iter().all(|line| line.trim_end() == *line),
+            "{copied}"
+        );
+        let at = |needle: &str| {
+            lines
+                .iter()
+                .position(|line| line.contains(needle))
+                .expect(needle)
+        };
+        assert!(at("> explain") < at("A heading"));
+        assert!(at("A heading") < at("code line one"));
+        assert!(at("code line one") < at("the last words"));
+    }
+
+    /// A drag across a line of wide characters in the box hands over each character once, as the
+    /// copy of the transcript does, so the line is pasted as it was typed.
+    #[test]
+    fn a_drag_over_wide_characters_in_the_box_copies_them_once() {
+        let (mut session, buffer) = typing("\u{65e5}\u{672c}\u{8a9e} end");
+        let (row, column) = find_cell(&buffer, "\u{65e5}");
+        // The last column of the box is its border, which the drag stops short of.
+        let handed = dragged_and_released(&mut session, (120, 24), (row, column), (row, 118));
+        assert_eq!(handed, vec!["\u{65e5}\u{672c}\u{8a9e} end".to_string()]);
+    }
+
+    /// Where the transcript was last drawn.
+    fn the_transcript_pane(session: &Session) -> ratatui::layout::Rect {
+        session.laid.window.expect("the transcript was drawn").area
+    }
+
+    /// The number `NN` of the `row NN` that the row `at` of the drawn frame shows.
+    fn the_reply_row_on(buffer: &ratatui::buffer::Buffer, at: u16) -> usize {
+        let text: String = (0..buffer.area.width)
+            .map(|column| buffer[(column, at)].symbol().to_string())
+            .collect();
+        let found = text
+            .find("row ")
+            .unwrap_or_else(|| panic!("no row of the reply on {text:?}"));
+        text[found + 4..found + 6].parse().expect("a row number")
+    }
+
+    fn at_a_step(start: Instant, steps: u32) -> Instant {
+        start + select::EDGE_TICK * steps
+    }
+
+    /// MOUSE-37: a drag held below the transcript scrolls it on and extends the selection to the
+    /// row that comes into view, each step, until the button is let go. What is copied runs from the
+    /// row the drag began on to the last row in view then, which is more than one screen of rows.
+    #[test]
+    fn a_drag_held_below_the_transcript_scrolls_it_and_extends_the_selection() {
+        for scrolling in [false, true] {
+            let mut session = a_long_reply(80);
+            drawn_at(&mut session, 120, 24);
+            if scrolling {
+                session.open_scroller();
+            }
+            for _ in 0..12 {
+                wheel_up(&mut session);
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let pane = the_transcript_pane(&session);
+            let (row, column) = find_cell(&buffer, "row 40");
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Down(MouseButton::Left), row, column),
+            );
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Drag(MouseButton::Left), pane.bottom(), 8),
+            );
+            assert!(session.pulling_at_an_edge(), "scrolling: {scrolling}");
+
+            let start = Instant::now();
+            for step in 0..25 {
+                assert!(
+                    session.scroll_toward_the_pointer(at_a_step(start, step)),
+                    "scrolling: {scrolling}: step {step}"
+                );
+                drawn_at(&mut session, 120, 24);
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let last = the_reply_row_on(&buffer, pane.bottom() - 1);
+            assert!(
+                last - 40 + 1 > usize::from(pane.height),
+                "scrolling: {scrolling}: the selection is not longer than the screen"
+            );
+
+            let handed = let_go(&mut session, (120, 24), pane.bottom(), 8);
+            assert_eq!(
+                handed,
+                vec![the_reply_rows(40, last)],
+                "scrolling: {scrolling}"
+            );
+        }
+    }
+
+    /// MOUSE-37: the same above the transcript, where the first row of the screen is the edge since a
+    /// pointer dragged out of the window is reported at the nearest cell inside it.
+    #[test]
+    fn a_drag_held_on_the_first_row_scrolls_the_transcript_back_and_extends_the_selection() {
+        for scrolling in [false, true] {
+            let mut session = a_long_reply(80);
+            drawn_at(&mut session, 120, 24);
+            if scrolling {
+                session.open_scroller();
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let pane = the_transcript_pane(&session);
+            let (row, column) = find_cell(&buffer, "row 70");
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Down(MouseButton::Left), row, column + 6),
+            );
+            handle_mouse(
+                &mut session,
+                drag(MouseEventKind::Drag(MouseButton::Left), 0, column),
+            );
+            assert_eq!(pane.top(), 0);
+
+            let start = Instant::now();
+            for step in 0..25 {
+                assert!(
+                    session.scroll_toward_the_pointer(at_a_step(start, step)),
+                    "scrolling: {scrolling}: step {step}"
+                );
+                drawn_at(&mut session, 120, 24);
+            }
+            let buffer = drawn_at(&mut session, 120, 24);
+            let first = the_reply_row_on(&buffer, 0);
+            assert!(70 - first + 1 > usize::from(pane.height), "{first}");
+
+            let handed = let_go(&mut session, (120, 24), 0, column);
+            assert_eq!(
+                handed,
+                vec![the_reply_rows(first, 70)],
+                "scrolling: {scrolling}"
+            );
+        }
+    }
+
+    /// A session scrolled back from the tail of a long reply, with a selection begun on "row 40" and
+    /// dragged on to `to`, and the frame drawn.
+    fn dragged_from_row_40(to: (u16, u16)) -> Session {
+        let mut session = a_long_reply(80);
+        drawn_at(&mut session, 120, 24);
+        for _ in 0..12 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 40");
+        swept(&mut session, (row, column), to);
+        drawn_at(&mut session, 120, 24);
+        session
+    }
+
+    /// MOUSE-37: the view moves only while the left button is held and has moved a selection of the
+    /// transcript, and the pointer is past an edge. A pointer inside the transcript, a press that
+    /// has not moved, a button let go, a move with no button, another button and a window that lost
+    /// focus each leave it where it is, with a pointer that would otherwise have scrolled it.
+    #[test]
+    fn nothing_scrolls_unless_a_held_drag_is_past_an_edge_of_the_transcript() {
+        let outside = the_transcript_pane(&dragged_from_row_40((5, 5))).bottom();
+        let scrolled = |session: &mut Session| session.scroll_toward_the_pointer(Instant::now());
+
+        // Inside the transcript.
+        let mut session = dragged_from_row_40((5, 5));
+        let before = session.scroll;
+        assert!(!scrolled(&mut session));
+        assert_eq!(session.scroll, before);
+
+        // A press that has not moved, with the pointer outside: it is a click.
+        let mut session = dragged_from_row_40((5, 5));
+        handle_mouse(
+            &mut session,
+            drag(MouseEventKind::Down(MouseButton::Left), outside, 8),
+        );
+        assert!(!scrolled(&mut session));
+
+        type Ending = fn(&mut Session, u16);
+        let ends: [(&str, Ending); 5] = [
+            ("the button is let go", |session, row| {
+                handle_mouse(session, drag(MouseEventKind::Up(MouseButton::Left), row, 8));
+            }),
+            ("a move with no button", |session, row| {
+                handle_mouse(session, drag(MouseEventKind::Moved, row, 8));
+            }),
+            ("another button", |session, row| {
+                handle_mouse(
+                    session,
+                    drag(MouseEventKind::Down(MouseButton::Right), row, 8),
+                );
+            }),
+            ("a drag of another button", |session, row| {
+                handle_mouse(
+                    session,
+                    drag(MouseEventKind::Drag(MouseButton::Middle), row, 8),
+                );
+            }),
+            ("the window loses focus", |session, _| {
+                took_input(session, &TermEvent::FocusLost);
+            }),
+        ];
+        for (what, end) in ends {
+            let mut session = dragged_from_row_40((outside, 8));
+            assert!(
+                session.pulling_at_an_edge(),
+                "{what}: the fixture was not pulling"
+            );
+            end(&mut session, outside);
+            assert!(!session.pulling_at_an_edge(), "{what}");
+            assert!(!scrolled(&mut session), "{what}");
+        }
+
+        // A drag that began in the info panel or the box has no rows of the transcript to scroll,
+        // with rows of it above and below the view to scroll to.
+        let mut session = a_long_reply(80);
+        session.laid.columns = 120;
+        session.toggle_panel();
+        session.identify("PANELMARK", "/work/dir".to_string(), None);
+        session.paste("hello world");
+        drawn_at(&mut session, 120, 24);
+        for _ in 0..6 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert!(session.rows_below() > 0 && session.top_row() > 0);
+        for (needle, name) in [("PANELMARK", "the panel"), ("hello", "the box")] {
+            let (row, column) = find_cell(&buffer, needle);
+            swept(&mut session, (row, column), (row, column + 3));
+            for past in [0, 23] {
+                handle_mouse(
+                    &mut session,
+                    drag(MouseEventKind::Drag(MouseButton::Left), past, column + 3),
+                );
+                assert!(!session.pulling_at_an_edge(), "{name}: row {past}");
+            }
+        }
+    }
+
+    /// MOUSE-37: a view that cannot go the way the pointer is has nothing to scroll: at the first row
+    /// a drag on the first row of the screen does nothing, and at the tail a drag below does nothing.
+    #[test]
+    fn a_view_at_the_end_the_drag_is_past_stays_where_it_is() {
+        let mut session = a_long_reply(80);
+        let buffer = drawn_at(&mut session, 120, 24);
+        let pane = the_transcript_pane(&session);
+        let (row, column) = find_cell(&buffer, "row 70");
+        swept(&mut session, (row, column), (pane.bottom(), 8));
+        assert!(!session.pulling_at_an_edge(), "the view is at the tail");
+        assert!(!session.scroll_toward_the_pointer(Instant::now()));
+        assert_eq!(session.scroll, 0);
+
+        session.scroller_to_first_row();
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert_eq!(session.top_row(), 0);
+        let (row, column) = find_cell(&buffer, "row 05");
+        swept(&mut session, (row, column), (0, 8));
+        assert!(
+            !session.pulling_at_an_edge(),
+            "the view is at the first row"
+        );
+        assert!(!session.scroll_toward_the_pointer(Instant::now()));
+    }
+
+    /// MOUSE-37: a step is owed for each tick that has passed, so a loop that wakes less often scrolls
+    /// as far, up to a few; two calls at one instant take one step; and the further past the edge the
+    /// pointer, the more rows a step moves, up to four.
+    #[test]
+    fn the_steps_owed_follow_the_time_and_the_distance_past_the_edge() {
+        let from_the_pane = |past: u16| {
+            let pane = the_transcript_pane(&dragged_from_row_40((5, 5)));
+            dragged_from_row_40((pane.bottom() + past - 1, 8))
+        };
+        let top = |session: &Session| session.top_row();
+        let start = Instant::now();
+
+        let mut session = from_the_pane(1);
+        let before = top(&session);
+        assert!(session.scroll_toward_the_pointer(start));
+        assert_eq!(top(&session), before + 1, "the first step is taken at once");
+        assert!(!session.scroll_toward_the_pointer(start));
+        assert!(!session.scroll_toward_the_pointer(start + select::EDGE_TICK / 2));
+        assert!(session.scroll_toward_the_pointer(at_a_step(start, 1)));
+        assert_eq!(top(&session), before + 2);
+
+        // A pass that came back after ten ticks makes up three.
+        assert!(session.scroll_toward_the_pointer(at_a_step(start, 11)));
+        assert_eq!(top(&session), before + 5);
+
+        for (past, rows) in [(2, 2), (3, 3), (4, 4), (9, 4)] {
+            let mut session = from_the_pane(past);
+            let before = top(&session);
+            assert!(session.scroll_toward_the_pointer(start));
+            assert_eq!(top(&session), before + rows, "{past} rows past the edge");
+        }
+    }
+
+    /// MOUSE-37: while a turn runs and writes under a view that is held, a drag held below the
+    /// transcript scrolls toward the tail and stops there. At the tail the view follows what the turn
+    /// writes, and the end of the selection stays on the last row in view, so what is copied reaches
+    /// the rows the turn went on to add.
+    #[test]
+    fn a_drag_held_below_a_transcript_a_turn_is_writing_under_follows_it_to_the_tail() {
+        let mut session = a_long_reply(80);
+        session.status = Status::Working;
+        drawn_at(&mut session, 120, 24);
+        for _ in 0..4 {
+            wheel_up(&mut session);
+        }
+        let buffer = drawn_at(&mut session, 120, 24);
+        let pane = the_transcript_pane(&session);
+        let (row, column) = find_cell(&buffer, "row 60");
+        swept(&mut session, (row, column), (pane.bottom(), 8));
+
+        let start = Instant::now();
+        let mut steps = 0;
+        while session.scroll_toward_the_pointer(at_a_step(start, steps)) {
+            steps += 1;
+            drawn_at(&mut session, 120, 24);
+            assert!(steps < 20, "the view never reached the tail");
+        }
+        assert_eq!(session.scroll, 0, "the view stopped short of the tail");
+        drawn_at(&mut session, 120, 24);
+
+        // The turn writes two rows more, and the view follows them to the tail.
+        session.transcript.push(crate::state::Entry::assistant(
+            "later one\nlater two",
+            Vec::new(),
+        ));
+        drawn_at(&mut session, 120, 24);
+        assert!(
+            session.scroll_toward_the_pointer(at_a_step(start, steps + 1)),
+            "the end of the selection stayed on the row it was on"
+        );
+        assert!(!session.scroll_toward_the_pointer(at_a_step(start, steps + 2)));
+
+        let handed = let_go(&mut session, (120, 24), pane.bottom(), 8);
+        let [copied] = handed.as_slice() else {
+            panic!("the clipboard was handed {handed:?}");
+        };
+        assert!(
+            copied.starts_with(&format!("{} of the reply\n", the_reply_rows(60, 79))),
+            "{copied:?}"
+        );
+        assert!(copied.contains("later two"), "{copied:?}");
+    }
+
+    /// A session with the info panel and a selection of the transcript held after a copy.
+    fn with_a_selection_held() -> Session {
+        let (mut session, buffer) = two_panes();
+        let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, column + 10));
+        assert!(
+            session.holds_a_selection(),
+            "the fixture holds no selection"
+        );
+        assert!(session.copied.is_some(), "the fixture copied nothing");
+        session
+    }
+
+    /// MOUSE-38: Escape puts a selection held away and does nothing else, so the box keeps the line
+    /// in it for the press after, which is the one that clears it. Whatever the style of the box.
+    #[test]
+    fn escape_puts_a_held_selection_away_before_it_clears_the_box() {
+        for editing in [crate::vim::Editing::Ordinary, crate::vim::Editing::Vi] {
+            let mut session = with_a_selection_held();
+            session.choose_editing(editing);
+            session.paste("half a thought");
+
+            assert_eq!(handle_key(&mut session, key(KeyCode::Esc)), Action::Redraw);
+            assert!(session.selection.is_none(), "{editing:?}");
+            assert_eq!(session.copied, None, "{editing:?}: the count stayed up");
+            assert_eq!(session.input(), "half a thought", "{editing:?}");
+            if editing == crate::vim::Editing::Vi {
+                assert_eq!(
+                    session.vi_mode(),
+                    Some(crate::vim::Mode::Insert),
+                    "the press also left INSERT"
+                );
+            }
+
+            handle_key(&mut session, key(KeyCode::Esc));
+            if editing == crate::vim::Editing::Ordinary {
+                assert_eq!(
+                    session.input(),
+                    "",
+                    "the second press did not clear the box"
+                );
+            } else {
+                assert_eq!(session.vi_mode(), Some(crate::vim::Mode::Normal));
+            }
+        }
+    }
+
+    /// MOUSE-38: with a turn running the first Escape puts the selection away and the turn goes on,
+    /// and the second stops it, in the loops that read the keys against `stops_the_turn`. Ctrl-C is
+    /// not taken by the selection, and stops the turn on the first press.
+    #[test]
+    fn escape_puts_a_held_selection_away_before_it_stops_a_turn_and_the_next_stops_it() {
+        let mut session = with_a_selection_held();
+        session.status = Status::Working;
+        let escape = key(KeyCode::Esc);
+
+        assert!(
+            !stops_the_turn(&session, escape),
+            "the selection did not take the key"
+        );
+        assert_eq!(
+            handle_key_while_working(&mut session, escape),
+            Action::Redraw
+        );
+        assert!(session.selection.is_none());
+        assert_eq!(session.status, Status::Working);
+        assert!(
+            stops_the_turn(&session, escape),
+            "the turn could not be stopped"
+        );
+
+        let session = with_a_selection_held();
+        assert!(
+            stops_the_turn(&session, ctrl('c')),
+            "the selection took Ctrl-C"
+        );
+        assert!(session.holds_a_selection());
+    }
+
+    /// MOUSE-38: the same order over the modes that stand over the box, which each have an Escape of
+    /// their own: the scroller closes on the press after the selection goes, a history search too.
+    #[test]
+    fn escape_puts_a_held_selection_away_before_a_mode_takes_it() {
+        // The scroller.
+        let mut session = a_long_reply(40);
+        drawn_at(&mut session, 120, 24);
+        session.open_scroller();
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 30");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, column + 6));
+        assert!(session.holds_a_selection());
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.selection.is_none() && session.scrolling());
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(!session.scrolling());
+
+        // A history search, with the mouse captured as it is unless the settings turn it off. The
+        // search holds the mouse (MOUSE-47), so the selection is the one held when it opened. It is
+        // drawn with no scrollbar (VIEW-39), so the transcript keeps its width across it, and the
+        // selection with it, only where it had none either: a transcript that fits its pane. The
+        // selection is marked under the search, and is the first thing Escape puts away.
+        let mut session = Session::new("none");
+        session.complete("row 30 of the reply".to_string(), Vec::new(), 0);
+        session.history =
+            crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
+                "old one", None,
+            )]);
+        assert!(session.mouse_captured());
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "row 30");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, column + 6));
+        assert!(session.open_history_search());
+        let buffer = drawn_at(&mut session, 120, 24);
+        assert!(session.holds_a_selection());
+        assert_eq!(
+            highlighted(&buffer),
+            ["row 30"],
+            "the selection held under the search is not marked"
+        );
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.selection.is_none() && session.searching_history());
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(!session.searching_history());
+    }
+
+    /// MOUSE-38: a press that swept nothing holds no selection, so Escape does what it always did,
+    /// and a picker opened over a selection takes the key before it.
+    #[test]
+    fn escape_is_not_taken_by_a_click_and_a_picker_takes_it_before_a_selection() {
+        let (mut session, buffer) = two_panes();
+        session.paste("half a thought");
+        let (row, column) = find_cell(&buffer, "TRANSCRIPTMARK");
+        press(&mut session, row, column, KeyModifiers::NONE);
+        assert!(session.selection.is_some() && !session.holds_a_selection());
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.input(), "", "Escape did not clear the box");
+
+        let mut session = with_a_selection_held();
+        session.open_picking(crate::picking::Picking::Effort(
+            crate::effort_prompt::Picker::new(None),
+        ));
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert!(session.picking().is_none(), "the picker was not closed");
+        assert!(session.holds_a_selection(), "the selection took the key");
+    }
+
+    /// A mouse report names a row and a column that are as large as 65535 and a terminal can send
+    /// them, so arithmetic on either must not overflow, in the box, the panel, the scroller, the
+    /// transcript and the rest of the screen, for every kind of report and while a selection is held.
+    /// A test build panics where arithmetic overflows, so the run finishing is the assertion that
+    /// none did, and no report types, so what the box held when the run began is what it holds at
+    /// the end.
+    #[test]
+    fn a_mouse_report_at_the_last_coordinate_overflows_nothing() {
+        let kinds = [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Moved,
+            MouseEventKind::ScrollUp,
+            MouseEventKind::ScrollDown,
+        ];
+        let edges = [0, 1, u16::MAX - 1, u16::MAX];
+        // And the rows of the box, so that a column at the last coordinate meets a row inside it.
+        let rows = [0, 1, 20, 21, 22, 23, u16::MAX - 1, u16::MAX];
+        type Fixture = fn() -> Session;
+        let states: [(&str, Fixture); 3] = [
+            ("the box and the panel", || {
+                let (mut session, _) = two_panes();
+                session.paste("a line of text in the box\nand a second row of it");
+                session
+            }),
+            ("the scroller", || {
+                let mut session = a_long_reply(40);
+                drawn_at(&mut session, 120, 24);
+                session.open_scroller();
+                session
+            }),
+            ("the plain view", || {
+                let mut session = a_long_reply(40);
+                session.paste("text");
+                session
+            }),
+        ];
+        for (name, state) in states {
+            // Each way a report reaches the session is its own run, since a press sent twice to
+            // one cell is a double click and the click that follows it is not a single one.
+            for through in ["the handler", "the loop at rest", "the loop of a turn"] {
+                let mut session = state();
+                let typed = session.input().to_string();
+                let mut terminal =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24))
+                        .expect("terminal");
+                // Each cell gets the whole run of reports, press first, so a release is the end of a
+                // click on it.
+                for row in rows {
+                    for column in edges {
+                        for kind in kinds {
+                            let event = drag(kind, row, column);
+                            match through {
+                                "the handler" => {
+                                    handle_mouse(&mut session, event);
+                                }
+                                "the loop at rest" => {
+                                    idle_action(&mut session, TermEvent::Mouse(event));
+                                }
+                                _ => {
+                                    answer_mouse(&mut terminal, &mut session, event, |_| true)
+                                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                                }
+                            }
+                            drawn_at(&mut session, 120, 24);
+                            session.scroll_toward_the_pointer(Instant::now());
+                        }
+                    }
+                }
+                assert_eq!(session.input(), typed, "{name}, through {through}");
+            }
+            // A selection begun inside the transcript and dragged out to each of the cells, which
+            // is the one run in which a report far past the screen reaches a selection that is held.
+            let mut session = state();
+            for row in rows {
+                for column in edges {
+                    press(&mut session, 1, 2, KeyModifiers::NONE);
+                    handle_mouse(
+                        &mut session,
+                        drag(MouseEventKind::Drag(MouseButton::Left), row, column),
+                    );
+                    drawn_at(&mut session, 120, 24);
+                    session.scroll_toward_the_pointer(Instant::now());
+                    handle_mouse(
+                        &mut session,
+                        drag(MouseEventKind::Up(MouseButton::Left), row, column),
+                    );
+                    session.last_click = None;
+                }
+            }
+        }
+    }
+
+    /// MOUSE-2: the files state draws the panel's border where the panel's own state does, and a
+    /// press on it begins no selection, clears the one held, and copies nothing on release. A press
+    /// on the cell after it is on the panel, and begins one.
+    #[test]
+    fn a_press_on_the_panels_border_starts_no_selection_in_the_files_state() {
+        let mut session = Session::new("none");
+        let diff = bravebot_agent::diff::Diff::compute("old\n", "new\n");
+        session.transcript.push(crate::state::Entry::tool(
+            bravebot_agent::report::Activity::running("Update", "a.rs")
+                .of_tool("edit_file")
+                .with_changes(diff.condensed(3))
+                .with_written(Some(bravebot_agent::report::Written {
+                    landed: "a.rs".into(),
+                    added: diff.added(),
+                    removed: diff.removed(),
+                    numbers: diff.condensed_numbers(3),
+                }))
+                .done("done"),
+        ));
+        session.laid.columns = 120;
+        session.toggle_files();
+        assert!(session.files_open(), "the files state did not open");
+        drawn_at(&mut session, 120, 24);
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("the files state records the panel")
+            .1;
+        let row = panel.y + 1;
+
+        // One held in the transcript is put away by the press.
+        swept(&mut session, (0, 0), (0, 5));
+        assert!(session.selection.is_some());
+        press(&mut session, row, panel.x, KeyModifiers::NONE);
+        assert!(
+            session.selection.is_none(),
+            "the border press began a selection"
+        );
+        assert!(!session.dragging_panel(), "the files state is not resized");
+        let up = drag(MouseEventKind::Up(MouseButton::Left), row, panel.x);
+        assert_eq!(handle_mouse(&mut session, up), Action::Copy);
+        assert!(let_go(&mut session, (120, 24), row, panel.x).is_empty());
+
+        // And the next cell, the first of the panel's own.
+        press(&mut session, row, panel.x + 1, KeyModifiers::NONE);
+        assert_eq!(
+            session.selection.map(|selection| selection.pane()),
+            Some(crate::select::Pane::Panel)
+        );
+    }
+
+    /// The text of the footer row of a drawn frame.
+    fn the_footer_of(buffer: &ratatui::buffer::Buffer) -> String {
+        let row = buffer.area.height - 1;
+        (0..buffer.area.width)
+            .map(|column| buffer[(column, row)].symbol().to_string())
+            .collect()
+    }
+
+    /// MOUSE-39: through the release, the notice names the pane a drag in the panel, the box or the
+    /// footer began in, keeps the count of what was copied, and says nothing of the pane for the
+    /// transcript. A reply copied with `/copy` after one of them does not name it either, and a click
+    /// takes the notice down with the name.
+    #[test]
+    fn the_notice_of_a_copy_names_the_pane_it_was_taken_from() {
+        let (mut session, _) = two_panes();
+        session.paste("text in the box");
+        let buffer2 = drawn_at(&mut session, 120, 24);
+
+        let (row, column) = find_cell(&buffer2, "PANELMARK");
+        let handed = dragged_and_released(&mut session, (120, 24), (row, column), (row, 119));
+        assert_eq!(handed, vec!["PANELMARK".to_string()]);
+        let footer = the_footer_of(&drawn_at(&mut session, 120, 24));
+        assert!(
+            footer.contains("9 chars to clipboard, from the panel"),
+            "{footer}"
+        );
+
+        let (row, column) = find_cell(&buffer2, "text in");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, column + 7));
+        let footer = the_footer_of(&drawn_at(&mut session, 120, 24));
+        assert!(
+            footer.contains("7 chars to clipboard, from the box"),
+            "{footer}"
+        );
+
+        let footer_row = 23;
+        let (_, column) = find_cell(&buffer2, "? for shortcuts");
+        dragged_and_released(
+            &mut session,
+            (120, 24),
+            (footer_row, column),
+            (footer_row, column + 5),
+        );
+        let footer = the_footer_of(&drawn_at(&mut session, 120, 24));
+        assert!(
+            footer.contains("5 chars to clipboard, from the footer"),
+            "{footer}"
+        );
+
+        let (row, column) = find_cell(&buffer2, "TRANSCRIPTMARK");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, column + 6));
+        let footer = the_footer_of(&drawn_at(&mut session, 120, 24));
+        assert!(footer.contains("6 chars to clipboard"), "{footer}");
+        assert!(!footer.contains("from the"), "{footer}");
+
+        // A reply copied with /copy after a copy from the panel does not carry the panel's name.
+        let (row, column) = find_cell(&buffer2, "PANELMARK");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, 119));
+        copy_reply(&mut session, "a reply", |_| true);
+        let footer = the_footer_of(&drawn_at(&mut session, 120, 24));
+        assert!(footer.contains("7 chars to clipboard"), "{footer}");
+        assert!(!footer.contains("from the"), "{footer}");
+
+        // And a click takes the notice down altogether.
+        let (row, column) = find_cell(&buffer2, "PANELMARK");
+        dragged_and_released(&mut session, (120, 24), (row, column), (row, 119));
+        click(&mut session, 0, 0);
+        let footer = the_footer_of(&drawn_at(&mut session, 120, 24));
+        assert!(!footer.contains("to clipboard"), "{footer}");
+    }
+
+    /// MOUSE-5: the info panel draws a long session id over two rows and a copy of the panel reads
+    /// them as one line. The transcript beside it is drawn on the same rows, and its lines are not
+    /// joined there: they are the lines their author broke.
+    #[test]
+    fn a_copy_of_the_transcript_beside_the_session_id_keeps_its_lines_apart() {
+        let mut session = a_long_reply(40);
+        session.laid.columns = 120;
+        session.toggle_panel();
+        session.name_id(Some("d23f56fe-8328-429c-b51b-74cb8431957b"));
+        let buffer = drawn_at(&mut session, 120, 24);
+        let panel = session
+            .laid
+            .panes
+            .iter()
+            .find(|(pane, _)| *pane == crate::select::Pane::Panel)
+            .expect("panel recorded")
+            .1;
+        let joined = crate::panel::continued_rows(&session, panel);
+        assert!(!joined.is_empty(), "the id is not drawn over two rows");
+
+        let first = joined[0];
+        let (top, column) = (first.saturating_sub(1), 0);
+        let handed = dragged_and_released(&mut session, (120, 24), (top, column), (first + 2, 119));
+        let [copied] = handed.as_slice() else {
+            panic!("the clipboard was handed {handed:?}");
+        };
+        let _ = buffer;
+        assert_eq!(copied.lines().count(), 4, "{copied:?}");
+        assert!(
+            copied.lines().all(|line| line.contains("of the reply")),
+            "{copied:?}"
+        );
+    }
+
+    /// MOUSE-1 and MOUSE-47: a history search holds the mouse, so a drag in it marks nothing and a
+    /// release copies nothing, which is what a drag that marked nothing copies. A press above the
+    /// panel closes the search and begins no selection, and a drag over a prompt of the list selects
+    /// none of it. The regression it rejects is a drag in the search that is a selection beneath a
+    /// panel that has the input.
+    #[test]
+    fn a_drag_in_a_history_search_begins_no_selection_and_copies_nothing() {
+        let _held = crate::theme::exclusive();
+        let mut session = a_long_reply(40);
+        session.history = crate::history::History::from_entries(vec![
+            bravebot_session::store::Entry::sent("old one", None),
+            bravebot_session::store::Entry::sent("another prompt", None),
+        ]);
+        drawn_at(&mut session, 120, 24);
+        assert!(session.open_history_search());
+        let buffer = drawn_at(&mut session, 120, 24);
+
+        let (row, column) = find_cell(&buffer, "row 30");
+        swept(&mut session, (row, column), (row + 1, column + 6));
+        assert!(
+            session.selection.is_none(),
+            "a drag above the search began a selection"
+        );
+        assert!(
+            !session.searching_history(),
+            "a press above the search did not close it"
+        );
+        assert!(highlighted(&drawn_at(&mut session, 120, 24)).is_empty());
+        assert!(let_go(&mut session, (120, 24), row + 1, column + 6).is_empty());
+
+        assert!(session.open_history_search());
+        let buffer = drawn_at(&mut session, 120, 24);
+        let (row, column) = find_cell(&buffer, "another prompt");
+        swept(&mut session, (row, column), (row, column + 7));
+        assert!(
+            session.selection.is_none(),
+            "a drag over a prompt began a selection"
+        );
+        assert!(
+            session.searching_history(),
+            "a press on a prompt closed the search"
+        );
+        assert!(highlighted(&drawn_at(&mut session, 120, 24)).is_empty());
+        assert!(let_go(&mut session, (120, 24), row, column + 7).is_empty());
+    }
+
+    /// MOUSE-35: the same row, read off the screen where it is in view and from the transcript's own
+    /// rendering where it is not, gives the same text, at every position of the view, in the plain
+    /// view and in the scroller, with and without the panel beside it, and at two widths.
+    #[test]
+    fn a_row_reads_the_same_on_the_screen_and_off_it() {
+        for (size, panel) in [((40, 16), false), ((120, 16), false), ((120, 16), true)] {
+            for scrolling in [false, true] {
+                let mut session = a_varied_transcript();
+                session.laid.columns = size.0;
+                if panel {
+                    session.toggle_panel();
+                }
+                drawn_at(&mut session, size.0, size.1);
+                if scrolling {
+                    session.open_scroller();
+                }
+                drawn_at(&mut session, size.0, size.1);
+                for step in 0..30 {
+                    the_rows_in_view_read_alike(
+                        &mut session,
+                        size,
+                        &format!("{size:?} panel {panel} scrolling {scrolling} step {step}"),
+                    );
+                    if scrolling {
+                        session.scroller_back(2);
+                    } else {
+                        session.scroll_up(2);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Dragging past the bottom of the transcript stops at its last row, which is above the box. With
+    /// the view scrolled back the last row of the pane is a row of text, and at the tail the last row
+    /// that holds text is the one above the blank row that closes the transcript.
     #[test]
     fn a_drag_past_the_bottom_stops_at_the_last_row_of_the_pane() {
         let (mut session, _) = two_panes();
-        swept(&mut session, (0, 0), (23, 10));
+        for n in 0..30 {
+            session
+                .transcript
+                .push(crate::state::Entry::user(format!("row {n}")));
+        }
+        drawn_at(&mut session, 120, 24);
         let transcript = session.laid.panes[0].1;
+
+        swept(&mut session, (0, 0), (23, 10));
+        let selection = session.selection.expect("selection");
+        assert!(selection.covers(transcript.bottom() - 2, 0));
+        assert!(!selection.covers(transcript.bottom() - 1, 0));
+
+        wheel_up(&mut session);
+        drawn_at(&mut session, 120, 24);
+        swept(&mut session, (0, 0), (23, 10));
         let selection = session.selection.expect("selection");
         assert!(selection.covers(transcript.bottom() - 1, 0));
         assert!(!selection.covers(transcript.bottom(), 0));
@@ -9941,16 +15517,20 @@ mod tests {
         assert!(session.selection.is_none());
     }
 
+    /// The same for a terminal that is shorter, drawn at the new size.
     #[test]
     fn a_height_change_drops_the_selection() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
         let (mut session, _) = two_panes();
         swept(&mut session, (0, 0), (0, 10));
         assert!(session.selection.is_some());
-        let mut laid = session.laid.clone();
-        for (_, rect) in &mut laid.panes {
-            rect.height = rect.height.saturating_sub(1);
-            rect.y = rect.y.saturating_sub(1);
-        }
+        let mut terminal = Terminal::new(TestBackend::new(120, 20)).expect("terminal");
+        let mut laid = crate::state::Laid::default();
+        terminal
+            .draw(|frame| laid = render::draw(frame, &session))
+            .expect("draw");
         session.note_layout(laid);
         assert!(session.selection.is_none());
     }
@@ -19841,6 +25421,323 @@ mod tests {
         );
     }
 
+    /// CMD-29: `/lsp` says which language servers the session has started, by the program the
+    /// person approved and in name order, and says none has where none has. The rows are the ones the
+    /// panel draws, so the two cannot name different servers.
+    #[test]
+    fn the_lsp_command_says_which_language_servers_the_session_has_started() {
+        use bravebot_agent::lsp::{Language, Roster};
+        let mut session = Session::new("none");
+        assert_eq!(
+            dispatch_command(&mut session, commanded("/lsp")),
+            Action::Redraw
+        );
+        assert_eq!(
+            said_in_the_transcript(&session),
+            vec![t!(lsp_none_started).to_string()]
+        );
+
+        let mut session = Session::new("none");
+        session.report_language_servers(Roster::of([Language::Rust, Language::Go]));
+        dispatch_command(&mut session, commanded("/lsp"));
+        assert_eq!(
+            said_in_the_transcript(&session),
+            vec![
+                t!(lsp_started, count = 2).to_string(),
+                t!(lsp_server_running, program = "gopls").to_string(),
+                t!(lsp_server_running, program = "rust-analyzer").to_string(),
+            ]
+        );
+
+        let mut session = Session::new("none");
+        session.report_language_servers(Roster::of([Language::Python]));
+        dispatch_command(&mut session, commanded("/lsp"));
+        assert_eq!(
+            said_in_the_transcript(&session)[0],
+            t!(lsp_started, count = 1).to_string(),
+            "one server is not said as a count of many"
+        );
+    }
+
+    /// CMD-29: `/lsp` takes no argument, so a sentence that mentions it is a prompt, as one that
+    /// mentions `/context` is (CMD-2).
+    #[test]
+    fn a_prompt_containing_the_lsp_command_is_still_a_prompt() {
+        let mut session = Session::new("none");
+        for c in "what does /lsp show".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("what does /lsp show".to_string())
+        );
+        let mut session = Session::new("none");
+        for c in "/lsp now".chars() {
+            handle_key(&mut session, key(KeyCode::Char(c)));
+        }
+        assert_eq!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit("/lsp now".to_string())
+        );
+    }
+
+    /// CMD-29: typed while a turn runs `/lsp` answers at once, under the turn, since it reads a list
+    /// the session keeps beside the servers and the turn holds none of it (CMD-8).
+    #[test]
+    fn the_lsp_command_answers_at_once_while_a_turn_runs() {
+        let mut session = a_turn_running_on("first");
+        type_while_working(&mut session, "/lsp");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(lsp_none_started).to_string()]
+        );
+        assert!(session.queued.is_empty(), "/lsp waited");
+    }
+
+    /// CMD-30: `/open` takes a number, so a sentence that mentions it is a prompt, as one that mentions
+    /// `/copy` is (CMD-2).
+    #[test]
+    fn a_prompt_containing_the_open_command_is_still_a_prompt() {
+        for line in ["what does /open show", "why does /open 1 do that"] {
+            let mut session = Session::new("none");
+            for c in line.chars() {
+                handle_key(&mut session, key(KeyCode::Char(c)));
+            }
+            assert_eq!(
+                handle_key(&mut session, key(KeyCode::Enter)),
+                Action::Submit(line.to_string())
+            );
+        }
+    }
+
+    /// CMD-30: `edit` with nothing to open is the command saying what it takes, and is neither a prompt
+    /// nor an action.
+    #[test]
+    fn edit_with_nothing_to_open_says_what_the_open_command_takes() {
+        for line in ["/open edit", "/open edit  "] {
+            let mut session = Session::new("none");
+            assert_eq!(
+                dispatch_command(&mut session, commanded(line)),
+                Action::Redraw,
+                "{line:?}"
+            );
+            assert_eq!(
+                said_in_the_transcript(&session),
+                vec![t!(open_takes).to_string()],
+                "{line:?}"
+            );
+        }
+    }
+
+    /// CMD-30: an address or a name typed after `/open` while a summary runs waits as every command
+    /// does and asks for what a click on it asks for when the work is over, the name as typed with the
+    /// place after it read as a click reads it.
+    #[test]
+    fn a_typed_link_waits_behind_a_summary_and_is_opened_when_it_is_over() {
+        for (line, asked) in [
+            (
+                "/open https://example.test/a",
+                Action::OpenUrl("https://example.test/a".to_string()),
+            ),
+            (
+                "/open src/main.rs:3:7",
+                Action::Preview(crate::text_links::PathRef {
+                    path: "src/main.rs".to_string(),
+                    line: Some(3),
+                    column: Some(7),
+                }),
+            ),
+            (
+                "/open edit Makefile",
+                Action::EditFile(crate::text_links::PathRef {
+                    path: "Makefile".to_string(),
+                    line: None,
+                    column: None,
+                }),
+            ),
+        ] {
+            let mut session = Session::new("none");
+            session.status = Status::Working;
+            type_while_working(&mut session, line);
+            assert_eq!(waiting_prompts(&session), vec![line]);
+            session.status = Status::Idle;
+            let waited = session.take_queued_command().expect("the line waited");
+            assert_eq!(dispatch_command(&mut session, waited), asked, "{line}");
+        }
+    }
+
+    /// CMD-30: a number typed while a turn runs is carried out by the turn's own loop as a click on the
+    /// link is: an address starts the browser at once, with what the list printed, and where none could
+    /// be started the person is told under the turn. The regression it rejects is the action dropped,
+    /// which is what that loop does with every action it holds nothing for.
+    #[test]
+    fn a_number_typed_while_a_turn_runs_starts_the_browser_for_an_address() {
+        let mut session = a_turn_running_on("first");
+        session.transcript.push(crate::state::Entry::assistant(
+            "read https://example.test/a and src/main.rs:3",
+            Vec::new(),
+        ));
+        let _ = addresses_opened();
+        session.opens_an_address = records_the_address;
+        beside_a_turn(|beside| {
+            typed_during_a_turn(&mut session, "/open", key(KeyCode::Enter), beside);
+            typed_during_a_turn(&mut session, "/open 1", key(KeyCode::Enter), beside);
+        });
+        assert_eq!(addresses_opened(), vec!["https://example.test/a"]);
+        assert!(session.queued.is_empty(), "/open 1 waited");
+
+        session.opens_an_address = |_| false;
+        beside_a_turn(|beside| {
+            typed_during_a_turn(&mut session, "/open 1", key(KeyCode::Enter), beside);
+        });
+        assert_eq!(
+            said_under_the_turn(&session).last().copied(),
+            Some(t!(session_link_not_opened).to_string().as_str())
+        );
+    }
+
+    /// CMD-30: while a summary or an aside is written, which is working and no turn, a number waits as
+    /// every command does, and is carried out against the list it was typed beside when the work is
+    /// over: the file is shown then, where nothing is running.
+    #[test]
+    fn a_number_typed_while_a_summary_runs_waits_and_shows_the_file_when_it_is_over() {
+        let mut session = Session::new("none");
+        session.transcript.push(crate::state::Entry::assistant(
+            "read https://example.test/a and src/main.rs:3",
+            Vec::new(),
+        ));
+        assert_eq!(
+            dispatch_command(&mut session, commanded("/open")),
+            Action::Redraw
+        );
+        session.status = Status::Working;
+        type_while_working(&mut session, "/open 2");
+        assert_eq!(waiting_prompts(&session), vec!["/open 2"]);
+
+        session.status = Status::Idle;
+        let waited = session.take_queued_command().expect("the line waited");
+        assert_eq!(
+            dispatch_command(&mut session, waited),
+            Action::Preview(crate::text_links::PathRef {
+                path: "src/main.rs".to_string(),
+                line: Some(3),
+                column: None,
+            })
+        );
+    }
+
+    /// CMD-30: another turn ends the list, as it ends the list of `/hunks`: a number typed after it is
+    /// not read against links of a reply the person has since been given another to read after.
+    #[test]
+    fn another_turn_ends_the_list_a_number_was_read_beside() {
+        let mut session = Session::new("none");
+        session.transcript.push(crate::state::Entry::assistant(
+            "read https://example.test/a",
+            Vec::new(),
+        ));
+        dispatch_command(&mut session, commanded("/open"));
+        assert_eq!(session.listed_links().len(), 1);
+
+        type_line(&mut session, "first");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.a_turn_is_running());
+        assert!(session.listed_links().is_empty());
+        let action = type_while_working(&mut session, "/open 1");
+        assert!(!matches!(action, Action::OpenUrl(_)), "{action:?}");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(open_list_first).to_string()]
+        );
+    }
+
+    /// CMD-30: a rewind ends the list, as it ends the list of `/hunks`: the replies it listed were
+    /// in turns that are gone, and a number typed after it names nothing the person can read.
+    #[test]
+    fn a_rewind_ends_the_list_a_number_was_read_beside() {
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-rewind-links");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let mut trust = TrustStore::new(&root);
+        let mut programs = TrustedPrograms::new();
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut session = Session::new("none");
+        let mut conversation = Conversation::new();
+        for (prompt, reply) in [
+            ("first", "nothing to open here"),
+            ("second", "read https://listed.test/one"),
+        ] {
+            let start = conversation.recounted().len();
+            type_line(&mut session, prompt);
+            session.submit().expect("the prompt is sent");
+            let point = rewind_point(&session, &conversation, &trust, &programs, &stored);
+            session.rewind.open(point, prompt.to_string());
+            session.prompt_recorded(conversation.recounted().len());
+            conversation.push(Message::user(prompt));
+            conversation.push(Message::assistant(reply));
+            session.complete(reply, vec![], 10);
+            session.record_turn(start, &conversation);
+        }
+        dispatch_command(&mut session, commanded("/open"));
+        assert_eq!(
+            session.listed_links().len(),
+            1,
+            "the fixture listed nothing"
+        );
+
+        rewind(
+            &mut session,
+            &mut conversation,
+            &mut trust,
+            &mut programs,
+            &mut stored,
+            &workspace,
+            &mut None,
+            1,
+        );
+
+        assert_eq!(session.turns, 1, "the rewind did not go back");
+        assert!(session.listed_links().is_empty());
+        let before = session.transcript.len();
+        let action = dispatch_command(&mut session, commanded("/open 1"));
+        assert!(!matches!(action, Action::OpenUrl(_)), "{action:?}");
+        assert_eq!(
+            session.transcript[before..]
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>(),
+            vec![t!(open_list_first).to_string()]
+        );
+    }
+
+    /// CMD-30: typed while a turn runs `/open` lists at once, under the turn, since it reads what the
+    /// transcript holds and the turn holds none of it (CMD-8), and what it says is not the turn's own.
+    #[test]
+    fn the_open_command_answers_at_once_while_a_turn_runs() {
+        let mut session = a_turn_running_on("first");
+        session.transcript.push(crate::state::Entry::assistant(
+            "read https://example.test/a and src/main.rs:3",
+            Vec::new(),
+        ));
+        type_while_working(&mut session, "/open");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![
+                t!(open_listed, count = 2).to_string(),
+                t!(open_item, number = 1, link = "https://example.test/a").to_string(),
+                t!(open_item, number = 2, link = "src/main.rs:3").to_string(),
+            ]
+        );
+        assert!(session.queued.is_empty(), "/open waited");
+        assert_eq!(session.listed_links().len(), 2);
+    }
+
     /// Asking the planner about the context is a question, not a command.
     #[test]
     fn a_prompt_containing_the_context_command_is_still_a_prompt() {
@@ -20131,6 +26028,387 @@ mod tests {
             said_in_the_transcript(&session).last().map(String::as_str),
             Some(t!(session_copy_failed))
         );
+    }
+
+    /// MOUSE-27: `/copy block` is the keyboard route to the word that copies a block. Typed, it puts
+    /// on the clipboard exactly the words the click on that block's word puts there, the last block
+    /// of the latest reply first and the one before it for `2`, so the two cannot disagree about
+    /// which block is meant or what it holds.
+    #[test]
+    fn a_typed_block_command_copies_the_words_the_click_on_that_block_copies() {
+        let (mut session, buffer) = at_rest_over_a_reply_with_blocks();
+        let words = cells_of(&buffer, "copy");
+        assert_eq!(words.len(), 2);
+        let mut clicked = Vec::new();
+        for (row, column) in words {
+            let Action::CopyReply(text) = click(&mut session, row, column) else {
+                panic!("a click on a block's word copied nothing");
+            };
+            clicked.push(text);
+            session.last_click = None;
+        }
+
+        assert_eq!(clicked[1], "the second block");
+        assert_eq!(
+            copied_by(&mut session, "/copy block"),
+            Ok(clicked[1].clone())
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy block 1"),
+            Ok(clicked[1].clone())
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy block 2"),
+            Ok(clicked[0].clone())
+        );
+        assert!(session.input().is_empty(), "the command stayed on the line");
+    }
+
+    /// MOUSE-27: blocks are counted back from the latest through every reply, as replies are, a
+    /// reply with none is passed over, a block with nothing in it is not one, and a control
+    /// character is left out of what is copied as it is for a reply.
+    #[test]
+    fn a_typed_block_command_counts_blocks_back_through_the_replies() {
+        let mut session = Session::new("none");
+        answered(&mut session, "one", "intro\n```sh\nrm\u{1b}[0m -rf\tx\n```");
+        answered(&mut session, "two", "a reply with no block");
+        answered(
+            &mut session,
+            "three",
+            "text\n```\nfirst of three\n```\n```\n```\n~~~py\nsecond of three\n~~~",
+        );
+
+        assert_eq!(
+            copied_by(&mut session, "/copy block"),
+            Ok("second of three".to_string())
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy block 2"),
+            Ok("first of three".to_string())
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy block 3"),
+            Ok("rm[0m -rf\tx".to_string())
+        );
+        // The reply command is as it was, and a block is not a reply back.
+        assert_eq!(
+            copied_by(&mut session, "/copy 2"),
+            Ok("a reply with no block".to_string())
+        );
+    }
+
+    /// MOUSE-27: `/copy block` refuses as `/copy` does. With no block anywhere, a number that is not
+    /// one, zero, and a number past the oldest block each say so in a note and copy nothing, and the
+    /// last says how many blocks there are.
+    #[test]
+    fn a_typed_block_command_refuses_what_it_cannot_take_and_copies_nothing() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            copied_by(&mut session, "/copy block"),
+            Err(t!(session_copy_no_block).to_string()),
+            "no reply at all"
+        );
+        answered(
+            &mut session,
+            "one",
+            "a reply with no block, only `inline` code",
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy block 2"),
+            Err(t!(session_copy_no_block).to_string()),
+            "a reply with no block"
+        );
+
+        answered(&mut session, "two", "```\nonly\n```");
+        for line in [
+            "/copy block 0",
+            "/copy block x",
+            "/copy block -1",
+            "/copy block 2x",
+            "/copy block 1 2",
+        ] {
+            assert_eq!(
+                copied_by(&mut session, line),
+                Err(t!(session_copy_block_needs_a_number).to_string()),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            copied_by(&mut session, "/copy block 2"),
+            Err(t!(session_copy_block_goes_no_further, blocks = 1)),
+            "a number past the oldest block"
+        );
+        assert_eq!(
+            copied_by(&mut session, "/copy block 99999999999999999999999999"),
+            Err(t!(session_copy_block_goes_no_further, blocks = 1)),
+            "a number too long to hold"
+        );
+        // A longer word is not the word, so it is read as a reply count and refused as one.
+        assert_eq!(
+            copied_by(&mut session, "/copy blocks"),
+            Err(t!(session_copy_needs_a_number).to_string())
+        );
+        assert_eq!(session.copied, None, "a refusal reported a copy");
+        assert_eq!(
+            copied_by(&mut session, "/copy block"),
+            Ok("only".to_string())
+        );
+    }
+
+    /// MOUSE-27: a block is wanted on the clipboard while a turn runs as a reply is, so the command
+    /// does not wait, and a block with nothing in it, or only blank lines, has no word to click and no
+    /// number.
+    #[test]
+    fn a_typed_block_command_runs_mid_turn_and_counts_the_blocks_that_have_a_word() {
+        let (mut session, buffer) = at_rest_over_a_reply_with_blocks();
+        assert_eq!(cells_of(&buffer, "copy").len(), 2);
+        session.transcript.push(crate::state::Entry::assistant(
+            "```\nA\n```\n```\n```\n```\n\n  \n```\n```\nC\n```",
+            Vec::new(),
+        ));
+        let buffer = drawn_at(&mut session, 120, 40);
+        let words = cells_of(&buffer, "copy");
+        assert_eq!(
+            words.len(),
+            4,
+            "a block with nothing in it drew a word: {words:?}"
+        );
+
+        session.type_char('a');
+        session.submit();
+        assert!(session.a_turn_is_running());
+        assert_eq!(
+            type_while_working(&mut session, "/copy block"),
+            Action::CopyReply("C".to_string())
+        );
+        assert_eq!(
+            type_while_working(&mut session, "/copy block 2"),
+            Action::CopyReply("A".to_string())
+        );
+        // The click on the last word is the same block.
+        let (row, column) = words[3];
+        assert_eq!(
+            click(&mut session, row, column),
+            Action::CopyReply("C".to_string())
+        );
+    }
+
+    /// MOUSE-27: Tab finishes the word after `/copy`, and leaves a number or a word it does not know.
+    #[test]
+    fn tab_finishes_block_after_the_copy_command_and_leaves_a_number_alone() {
+        for (typed, finished) in [("/copy b", "/copy block"), ("/copy bl", "/copy block")] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+            assert_eq!(session.input(), finished, "{typed:?}");
+        }
+        for typed in ["/copy 2", "/copy block", "/copy x", "/copy "] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), typed, "{typed:?}");
+        }
+    }
+
+    /// CMD-30: Tab finishes `edit` after `/open`, and leaves a number or a word it does not know.
+    #[test]
+    fn tab_finishes_edit_after_the_open_command_and_leaves_a_number_alone() {
+        for (typed, finished) in [("/open e", "/open edit"), ("/open ed", "/open edit")] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+            assert_eq!(session.input(), finished, "{typed:?}");
+        }
+        for typed in ["/open 2", "/open edit", "/open x", "/open "] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), typed, "{typed:?}");
+        }
+    }
+
+    /// CMD-30: `edit` and a number typed while a summary runs waits as every command does, and asks for
+    /// the editor at the line the path gave once the work is over.
+    #[test]
+    fn edit_typed_while_a_summary_runs_waits_and_asks_for_the_editor_when_it_is_over() {
+        let mut session = Session::new("none");
+        session.transcript.push(crate::state::Entry::assistant(
+            "read https://example.test/a and src/main.rs:3:7",
+            Vec::new(),
+        ));
+        dispatch_command(&mut session, commanded("/open"));
+        session.status = Status::Working;
+        type_while_working(&mut session, "/open edit 2");
+        assert_eq!(waiting_prompts(&session), vec!["/open edit 2"]);
+
+        session.status = Status::Idle;
+        let waited = session.take_queued_command().expect("the line waited");
+        assert_eq!(
+            dispatch_command(&mut session, waited),
+            Action::EditFile(crate::text_links::PathRef {
+                path: "src/main.rs".to_string(),
+                line: Some(3),
+                column: Some(7),
+            })
+        );
+    }
+
+    /// MOUSE-52: `/copy text` is the keyboard route to the menu's `copy as text`. Typed, it puts on the
+    /// clipboard the reply as the screen shows it, with none of the marks of the markdown it was written
+    /// in, none of the marker and margin and no wrapping, and `/copy` still puts the markdown the
+    /// planner wrote. A number counts replies back as it does for `/copy`.
+    #[test]
+    fn a_typed_text_command_copies_a_reply_as_the_screen_shows_it_and_counts_back_as_copy_does() {
+        let mut session = Session::new("none");
+        answered(&mut session, "one", "an older **answer** with `code`");
+        answered(
+            &mut session,
+            "two",
+            "# A heading\n\nSome **bold** and `code` in a paragraph that the screen would wrap over \
+             several rows in a narrow transcript, kept as one line.\n\n- one\n- two",
+        );
+
+        let text = copied_by(&mut session, "/copy text").expect("a reply as text");
+        assert!(text.contains("A heading"), "{text:?}");
+        assert!(
+            text.contains("Some bold and code in a paragraph"),
+            "{text:?}"
+        );
+        assert!(text.contains("kept as one line."), "{text:?}");
+        for mark in ["# ", "**", "`", "\u{23fa}"] {
+            assert!(!text.contains(mark), "{mark:?} is in {text:?}");
+        }
+        assert_eq!(copied_by(&mut session, "/copy text 1"), Ok(text.clone()));
+        assert_eq!(
+            copied_by(&mut session, "/copy text 2"),
+            Ok("an older answer with code".to_string())
+        );
+        let markdown = copied_by(&mut session, "/copy").expect("the markdown");
+        assert!(markdown.contains("**bold**"), "{markdown:?}");
+        assert_ne!(markdown, text);
+    }
+
+    /// MOUSE-52: `/copy text` copies what the menu item copies, from the same function, so the two
+    /// cannot disagree about what a reply is as the screen shows it.
+    #[test]
+    fn a_typed_text_command_copies_what_the_menu_item_copies() {
+        let words = "# A heading\n\nSome **bold** and a [link](https://example.test/a) and `code`.\n\n\
+                     1. one\n2. two\n\n> quoted";
+        let mut session = Session::new("none");
+        answered(&mut session, "ask", words);
+        assert_eq!(
+            copied_by(&mut session, "/copy text"),
+            Ok(copyable_as_text(words))
+        );
+        assert_ne!(copyable_as_text(words), copyable(words));
+    }
+
+    /// MOUSE-52: `/copy text` refuses as `/copy` does, with the notes `/copy` gives, and a longer word
+    /// is read as a number of replies back and refused as one.
+    #[test]
+    fn a_typed_text_command_refuses_what_it_cannot_take_and_copies_nothing() {
+        let mut session = Session::new("none");
+        assert_eq!(
+            copied_by(&mut session, "/copy text"),
+            Err(t!(session_copy_no_reply).to_string())
+        );
+        answered(&mut session, "one", "the only reply");
+        for line in [
+            "/copy text 0",
+            "/copy text x",
+            "/copy text -1",
+            "/copy text 1 2",
+        ] {
+            assert_eq!(
+                copied_by(&mut session, line),
+                Err(t!(session_copy_needs_a_number).to_string()),
+                "{line}"
+            );
+        }
+        for line in ["/copy text 2", "/copy text 99999999999999999999999999"] {
+            assert_eq!(
+                copied_by(&mut session, line),
+                Err(t!(session_copy_goes_no_further, replies = 1)),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            copied_by(&mut session, "/copy texts"),
+            Err(t!(session_copy_needs_a_number).to_string())
+        );
+        assert_eq!(session.copied, None, "a refusal reported a copy");
+        assert_eq!(
+            copied_by(&mut session, "/copy text"),
+            Ok("the only reply".to_string())
+        );
+    }
+
+    /// MOUSE-52: a reply is wanted on the clipboard while a turn runs, so `/copy text` does not wait,
+    /// as `/copy` does not.
+    #[test]
+    fn a_typed_text_command_takes_the_reply_without_waiting_while_a_turn_runs() {
+        let mut session = Session::new("none");
+        answered(&mut session, "first", "an **older** answer");
+        type_line(&mut session, "second");
+        assert!(matches!(
+            handle_key(&mut session, key(KeyCode::Enter)),
+            Action::Submit(_)
+        ));
+        assert_eq!(
+            type_while_working(&mut session, "/copy text"),
+            Action::CopyReply("an older answer".to_string())
+        );
+        assert!(session.queued.is_empty(), "/copy text waited");
+    }
+
+    /// MOUSE-52: Tab finishes `text` after `/copy` as it finishes `block`, and leaves what it does not
+    /// know.
+    #[test]
+    fn tab_finishes_text_after_the_copy_command() {
+        for (typed, finished) in [("/copy t", "/copy text"), ("/copy te", "/copy text")] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            assert_eq!(handle_key(&mut session, key(KeyCode::Tab)), Action::Redraw);
+            assert_eq!(session.input(), finished, "{typed:?}");
+        }
+        for typed in ["/copy text", "/copy text 2", "/copy tx"] {
+            let mut session = Session::new("none");
+            for c in typed.chars() {
+                session.type_char(c);
+            }
+            handle_key(&mut session, key(KeyCode::Tab));
+            assert_eq!(session.input(), typed, "{typed:?}");
+        }
+    }
+
+    /// MOUSE-27: the command names the word in the list of commands, and the words after `/copy` are
+    /// still `/copy`'s, so a line with `block` in it is not sent as a prompt.
+    #[test]
+    fn the_copy_command_names_block_and_keeps_the_words_after_it() {
+        let all = commands();
+        let command = all
+            .iter()
+            .find(|command| command.name == COPY_COMMAND)
+            .expect("the copy command");
+        assert_eq!(command.argument, "[n | block [n] | text [n]]");
+        assert!(
+            command.description.contains("block"),
+            "{}",
+            command.description
+        );
+        for line in ["/copy block", "/copy block 2", "/copy 3"] {
+            assert_eq!(command_typed(line), Some(COPY_COMMAND), "{line}");
+        }
     }
 
     /// Asking the planner how to copy something is a question, not a command.
@@ -21090,8 +27368,10 @@ mod tests {
                 LANGUAGE_COMMAND,
                 LIMIT_COMMAND,
                 LOOP_COMMAND,
+                LSP_COMMAND,
                 MODEL_COMMAND,
                 NOTE_COMMAND,
+                OPEN_COMMAND,
                 OUTPUTS_COMMAND,
                 PANEL_COMMAND,
                 PR_COMMAND,
@@ -27515,6 +33795,100 @@ mod tests {
         );
     }
 
+    /// MOUSE-42 and MOUSE-43: a click on a path is carried out against the working directory and the
+    /// session's rules. A name that climbs out, leads out, names a directory or names nothing is
+    /// refused with the one sentence and without the name, by the preview and by the editor alike.
+    /// A file a `deny` rule covers is refused by the preview, which reads it, and is opened by the
+    /// editor, which is the person's own program.
+    #[test]
+    fn a_click_on_a_path_is_held_to_the_working_directory_and_only_the_preview_to_the_deny_rules() {
+        use crate::text_links::PathRef;
+        use bravebot_core::permissions::{Anchors, Permissions};
+        use bravebot_session::sessions;
+
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let base = crate::test_profile::project("bravebot-app-click-on-a-path");
+        let root = base.join("project");
+        std::fs::create_dir_all(root.join("src")).expect("create");
+        std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("a file");
+        std::fs::write(root.join(".env"), "TOKEN=1\n").expect("a file");
+        std::fs::write(base.join("outside.txt"), "outside\n").expect("a file");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(base.join("outside.txt"), root.join("leads-out.txt"))
+            .expect("a link");
+        let mut workspace = Workspace::new(&root).expect("a workspace");
+        let mut session = Session::new("none");
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(TrustStore::new(&root), TrustedPrograms::new(), rules);
+        let (denying, rejected) =
+            Permissions::parse(&["Read(.env)".to_string()], &[], &[], &Anchors::none());
+        assert!(rejected.is_empty());
+        answers.rules.permissions = denying;
+        let mut stored =
+            sessions::Handle::begin(&root, sessions::Front::Terminal, bravebot_stamp::BUILD);
+        let mut conversation = Conversation::new();
+        let mut scratch = None;
+        let settings = bravebot_config::Settings::default();
+        let run_settings = RunSettings::from_settings(&settings);
+        let mut held = Held {
+            session: &mut session,
+            conversation: &mut conversation,
+            stored: &mut stored,
+            answers: &mut answers,
+            workspace: &mut workspace,
+            scratch: &mut scratch,
+            settings: &settings,
+            run_settings: &run_settings,
+        };
+        let path = |name: &str| PathRef {
+            path: name.to_string(),
+            line: None,
+            column: None,
+        };
+        let outside = base.join("outside.txt").display().to_string();
+        let last_note = |held: &Held| held.session.transcript.last().expect("a note").text.clone();
+
+        let refused = t!(session_path_not_a_file).to_string();
+        for named in [
+            "../outside.txt",
+            "src/../../outside.txt",
+            outside.as_str(),
+            "leads-out.txt",
+            "src",
+            "missing.rs",
+        ] {
+            assert_eq!(held.file_to_edit(&path(named)), None, "{named:?}");
+            assert_eq!(last_note(&held), refused, "{named:?}");
+            held.preview_file(&path(named));
+            assert_eq!(last_note(&held), refused, "{named:?}");
+            assert!(!last_note(&held).contains(named), "{named:?}");
+        }
+
+        let denied = t!(session_preview_denied).to_string();
+        held.preview_file(&path(".env"));
+        assert_eq!(last_note(&held), denied);
+        assert_eq!(
+            held.file_to_edit(&path(".env")),
+            Some(held.workspace.root().join(".env")),
+            "the editor was refused a file a deny rule covers"
+        );
+
+        held.preview_file(&path("src/main.rs"));
+        let shown = held
+            .session
+            .transcript
+            .last()
+            .and_then(|entry| entry.shown.as_ref())
+            .expect("the file was shown");
+        assert_eq!(shown.preview, ["1  fn main() {}"]);
+        assert_eq!(
+            held.file_to_edit(&path("src/main.rs")),
+            Some(held.workspace.root().join("src/main.rs"))
+        );
+    }
+
     /// PERM-16 at the other door onto the same reach: `/add-dir` is refused with the key named, and
     /// nothing is vouched for, where a settings layer asked for the tools to stay inside.
     #[test]
@@ -31400,6 +37774,60 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// CMD-30: a path of the list `/open` printed names a file of the directory it was listed in, so
+    /// `/cd` ends the list and a number typed in the new directory says to list first.
+    #[test]
+    fn moving_to_another_directory_ends_the_list_a_number_was_read_beside() {
+        let root = crate::testutil::scratch_dir("bravebot-cd-links-test");
+        let _ = std::fs::remove_dir_all(&root);
+        let (a, b) = (root.join("a"), root.join("b"));
+        std::fs::create_dir_all(a.join("src")).expect("scratch");
+        std::fs::create_dir_all(&b).expect("scratch");
+        std::fs::write(a.join("src/main.rs"), "fn main() {}\n").expect("a file");
+        std::fs::write(b.join("main.rs"), "another file\n").expect("a file");
+
+        let mut workspace = Workspace::new(&a).expect("workspace");
+        let mut session = Session::new("none");
+        session.transcript.push(crate::state::Entry::assistant(
+            "read src/main.rs and https://example.test/a",
+            Vec::new(),
+        ));
+        let trust = TrustStore::new(workspace.root());
+        let rules = starting_rules(&mut session, &root.join("state"), workspace.root());
+        let mut answers = Answers::opening(trust, TrustedPrograms::new(), rules);
+        dispatch_command(&mut session, commanded("/open"));
+        assert_eq!(
+            session.listed_links().len(),
+            2,
+            "the fixture listed nothing"
+        );
+
+        assert_eq!(
+            change_directory(
+                &mut session,
+                &mut workspace,
+                &mut answers,
+                "a-session",
+                b.to_str().expect("utf-8 path"),
+                never_asked,
+            ),
+            Changed::Moved
+        );
+
+        assert!(session.listed_links().is_empty());
+        let before = session.transcript.len();
+        let action = dispatch_command(&mut session, commanded("/open 1"));
+        assert!(!matches!(action, Action::Preview(_)), "{action:?}");
+        assert_eq!(
+            session.transcript[before..]
+                .iter()
+                .map(|entry| entry.text.clone())
+                .collect::<Vec<_>>(),
+            vec![t!(open_list_first).to_string()]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// PERM-15: the checkout moved to has its own settings read, so a `deny` rule it writes is in
     /// force from the first turn there, as it is for a session started in it.
     #[test]
@@ -33534,6 +39962,60 @@ mod tests {
         assert!(!said.contains("unauthorized"), "{said}");
     }
 
+    /// XAI-15: a `/compact` that failed on the xAI account says that failure's own sentence in the line it
+    /// leaves, which names the command that signs in to xAI and none of ChatGPT's, and not the name of a
+    /// category, which cannot. The thread that summarises is the real one, on a model of the account in a
+    /// profile nobody signed in to, so nothing is sent. The regressions it rejects are the category's name
+    /// for a failure of the account, and the ChatGPT account's sentence for the xAI account's failure,
+    /// which sends a person to sign in to the wrong service.
+    #[test]
+    fn a_compact_that_failed_on_the_xai_account_says_its_own_sentence() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let root = crate::test_profile::project("bravebot-app-compact-xai-account");
+        std::fs::create_dir_all(&root).expect("a project");
+        let workspace = Workspace::new(&root).expect("workspace");
+        let config = a_config_needing_no_sign_in();
+        let mut conversation = Conversation::new();
+        for (prompt, answer) in [
+            ("port the parser to the new lexer", "started on it"),
+            ("what about the error type", "widened it"),
+            ("now the tests", "updated them"),
+            ("carry on", "carrying on"),
+        ] {
+            conversation.push(bravebot_aichat::protocol::Message::user(prompt));
+            conversation.push(bravebot_aichat::protocol::Message::assistant(answer));
+        }
+        let (to_main, _from_worker) = mpsc::channel();
+
+        let (done, _unchanged, _trail) = summarise_on_a_worker(
+            &config,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            conversation,
+            Some("xai/grok-4.5"),
+            TrustStore::new(&root),
+            None,
+            &Cancel::new(),
+            &workspace,
+            None,
+            to_main,
+        );
+
+        let mut session = having_sent(&["first question"]);
+        session.begin_aside();
+        compact_ended(&mut session, 100_000, &done, false);
+        let said = last_note(&session);
+        assert!(said.contains("not signed in to xAI"), "{said}");
+        assert!(said.contains("bravebot auth login xai"), "{said}");
+        assert!(
+            !said.contains("unauthorized")
+                && !said.contains("ChatGPT")
+                && !said.contains("auth login chatgpt"),
+            "{said}"
+        );
+    }
+
     /// CHATGPT-8: a `/compact` that the account refused as a 429 with a wait says the refusal's
     /// sentence, which holds the wait, and has no status after it, which the terminal's line for a
     /// failed turn has. The error is the one the thread that summarises hands back, which
@@ -35358,6 +41840,22 @@ mod tests {
             "the removal was not counted"
         );
     }
+
+    mod box_text;
+    mod chrome;
+    mod clicks;
+    mod completions;
+    mod hints;
+    mod history_search;
+    mod hover;
+    mod menu;
+    mod pickers;
+    mod popups;
+    mod scrollbar;
+    mod selection;
+    mod standing;
+    mod wide;
+    mod wrapped;
 }
 
 #[cfg(test)]

@@ -67,6 +67,35 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 /// [`Provider::answers_under_the_model_behind_an_alias`].
 const OPENAI_ID: &str = "openai";
 
+/// The models OpenAI's published API description gives to the Responses request alone: the
+/// `ResponsesOnlyModel` list under `ModelIdsResponses` in version 2.3.0 of `openai-openapi`.
+///
+/// OpenAI's own listing states no capability for a model, so this list is the only statement of
+/// which ids a chat completions route cannot serve. It changes with each release of that
+/// description.
+const RESPONSES_ONLY_MODELS: &[&str] = &[
+    "o1-pro",
+    "o1-pro-2025-03-19",
+    "o3-pro",
+    "o3-pro-2025-06-10",
+    "o3-deep-research",
+    "o3-deep-research-2025-06-26",
+    "o4-mini-deep-research",
+    "o4-mini-deep-research-2025-06-26",
+    "computer-use-preview",
+    "computer-use-preview-2025-03-11",
+    "gpt-5.5-pro",
+    "gpt-5.5-pro-2026-04-23",
+    "gpt-5-codex",
+    "gpt-5-pro",
+    "gpt-5-pro-2025-10-06",
+    "gpt-5.1-codex-max",
+    "gpt-daybreak-blue-latest",
+    "gpt-daybreak-red-latest",
+    "gpt-5.6-cyber",
+    "gpt-rosalind-research",
+];
+
 /// The id a model of the ChatGPT account is qualified by
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 ///
@@ -99,6 +128,40 @@ fn chatgpt_serving_host() -> String {
         return format!("{base}/v1");
     }
     CHATGPT_SERVING_HOST.to_string()
+}
+
+/// The id a model of the xAI account is qualified by
+/// ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
+///
+/// Not the id of a gateway: where a `provider` entry has it, the entry keeps the name and no model
+/// is the account's.
+pub const XAI_ID: &str = "xai";
+
+/// Where an xAI account's model requests go
+/// ([XAI-1](../../../docs/specs/xai-sign-in.md#XAI-1)).
+///
+/// A constant of the source. Nothing a settings file, a variable, a page or a reply says names
+/// another, so the account's access token goes to this host and no other.
+const XAI_SERVING_HOST: &str = "https://api.x.ai/v1";
+
+/// The variable that names a stand-in for the xAI serving host, at `<base>/v1`, in a build with the
+/// `test-hosts` feature. It is the one `bravebot_skus::xai::XAI_STAND_IN` reads, so one stand-in
+/// answers the sign-in and the requests. A build without the feature holds no code that reads it, and
+/// a release build with it does not compile.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub const XAI_STAND_IN: &str = "BRAVEBOT_TEST_XAI_STAND_IN";
+
+/// Where the account's requests go: [`XAI_SERVING_HOST`], or in a build with the `test-hosts`
+/// feature, a stand-in [`XAI_STAND_IN`] names.
+fn xai_serving_host() -> String {
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    if let Some(base) = std::env::var(XAI_STAND_IN)
+        .ok()
+        .filter(|base| !base.is_empty())
+    {
+        return format!("{base}/v1");
+    }
+    XAI_SERVING_HOST.to_string()
 }
 
 /// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
@@ -134,6 +197,35 @@ pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
         .iter()
         .find(|(known, _, _)| *known == id)
         .map(|(_, url, _)| *url)
+}
+
+/// The host and port the requests of `url` reach, in the form two spellings of one place share:
+/// the host in lower case without one trailing dot, and the scheme's default port where none is
+/// written. `None` for a url that is not `http` or `https`, or whose port is not a number.
+///
+/// The authority is read as [`without_userinfo`] reads it, so a `user:token@` is not part of the
+/// host.
+fn reached_at(url: &str) -> Option<(String, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let (host, port) = match authority.rsplit_once(':') {
+        None => (authority, default),
+        Some((host, "")) => (host, default),
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => {
+            (host, port.parse().ok()?)
+        }
+        Some(_) => return None,
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    Some((host.to_ascii_lowercase(), port))
 }
 
 /// Every id [`known_endpoint`] has an endpoint for, in the order the table lists them.
@@ -477,6 +569,26 @@ impl Provider {
             unreachable!("a JSON object literal");
         };
         match Self::one(CHATGPT_ID, &entry) {
+            Some(account) => account,
+            None => unreachable!("an entry that states its endpoint is reachable"),
+        }
+    }
+
+    /// The service a stored xAI sign-in reaches, spoken to in chat completions as every other
+    /// gateway is ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
+    ///
+    /// Built by the same reading as an entry that states its endpoint, from constants. It names no
+    /// variable, holds no key and lists no model: its token is the account's and its models are
+    /// the account's.
+    pub fn xai_account() -> Self {
+        let entry = serde_json::json!({
+            "name": "xAI",
+            "options": {"baseURL": xai_serving_host()},
+        });
+        let serde_json::Value::Object(entry) = entry else {
+            unreachable!("a JSON object literal");
+        };
+        match Self::one(XAI_ID, &entry) {
             Some(account) => account,
             None => unreachable!("an entry that states its endpoint is reachable"),
         }
@@ -865,6 +977,46 @@ impl Provider {
     /// Another service either ignores the member or refuses the request for carrying it.
     pub fn takes_extra_content(&self) -> bool {
         self.id == GOOGLE_VERTEX_ID
+    }
+
+    /// Whether this entry's requests go to OpenAI's own API, from the host and port they are sent
+    /// to compared with the endpoint compiled in for [`OPENAI_ID`].
+    ///
+    /// The entry's id does not matter: an entry keyed `openai` that states a proxy behaves as that
+    /// proxy, and an entry under another id that states OpenAI's endpoint behaves as OpenAI's. Case,
+    /// a trailing dot on the host and a port that is the scheme's default are spellings of the same
+    /// place ([`reached_at`]). A port that is not the default is another service listening on
+    /// OpenAI's name, so it is not OpenAI's own API.
+    fn at_openais_api(&self) -> bool {
+        let own = known_endpoint(OPENAI_ID).and_then(reached_at);
+        own.is_some() && own == reached_at(&self.base_url)
+    }
+
+    /// The ids a listing of this service is not offered, because the models they name take
+    /// requests through the Responses API only.
+    ///
+    /// Empty except for OpenAI's own API reached in the chat completions protocol. An entry that
+    /// names `@ai-sdk/openai` is reached in the Responses protocol, which serves them, and a
+    /// proxy at another host may serve them over chat completions. A block that names `models`
+    /// is offered those and no others, so a Responses-only model is still one somebody can name.
+    pub fn responses_only_models(&self) -> &'static [&'static str] {
+        if self.protocol == Protocol::ChatCompletions && self.at_openais_api() {
+            RESPONSES_ONLY_MODELS
+        } else {
+            &[]
+        }
+    }
+
+    /// Whether a request to this service carries `cache_control` marks on the prefix it will send
+    /// again ([BACKEND-32]).
+    ///
+    /// False for OpenAI's own API, which caches a repeated prefix without being asked and whose
+    /// published request schema has no such mark on a content part. Sending them there could cost
+    /// one refused request for each model in each process.
+    ///
+    /// [BACKEND-32]: ../../../docs/specs/backends.md#BACKEND-32
+    pub fn takes_cache_markers(&self) -> bool {
+        !self.at_openais_api()
     }
 
     /// Whether a reply names the model behind the name the request carried, not that name.
@@ -2317,6 +2469,31 @@ mod tests {
         );
     }
 
+    /// XAI-1 and XAI-15: the account is reached at the serving host in chat completions, and it names
+    /// no variable to read a key from, so `XAI_API_KEY` and a gateway's key are never what a request
+    /// to it carries.
+    #[test]
+    fn the_xai_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own() {
+        let account = Provider::xai_account();
+        assert_eq!(account.id, "xai");
+        assert_eq!(account.display_name(), "xAI");
+        assert_eq!(account.protocol(), Protocol::ChatCompletions);
+        assert_eq!(account.host(), "api.x.ai");
+        assert_eq!(
+            account.completion_url(),
+            "https://api.x.ai/v1/chat/completions"
+        );
+        assert_eq!(account.models_url(), "https://api.x.ai/v1/models");
+        assert!(account.models.is_empty());
+        assert!(account.headers.is_empty());
+
+        let everything = |name: &str| Some(format!("{name}-value"));
+        assert!(
+            matches!(account.credential(everything), Credential::NotNeeded),
+            "a variable was read for the account"
+        );
+    }
+
     /// A proxy, or an Azure-style deployment of the same protocol, is reached by stating where it
     /// is; the host compiled in for the name is only what an absent `baseURL` falls back to.
     #[test]
@@ -2327,6 +2504,115 @@ mod tests {
             }}}"#);
         assert_eq!(provider.base_url, "https://proxy.example.invalid/openai/v1");
         assert_eq!(provider.host(), "proxy.example.invalid");
+    }
+
+    /// BACKEND-19 and BACKEND-32 treat OpenAI's own API differently from any other chat
+    /// completions service: its listing leaves out the models only its Responses API takes, and its
+    /// requests carry no cache marks. Both follow the host a request goes to. Keying them by the id
+    /// `openai` would take the marks from a proxy that reads them and the models from a proxy that
+    /// serves them over chat completions, and keying them by a stated `baseURL` alone would miss an
+    /// entry that states OpenAI's host.
+    #[test]
+    fn openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called() {
+        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(own.host(), "api.openai.com");
+        assert!(!own.takes_cache_markers());
+        assert_eq!(own.responses_only_models(), RESPONSES_ONLY_MODELS);
+        assert!(own.responses_only_models().contains(&"o3-pro"));
+        assert!(own.responses_only_models().contains(&"gpt-5-pro"));
+        assert!(!own.responses_only_models().contains(&"gpt-4o-mini"));
+
+        let stated = one(r#"{"provider": {"work": {
+                "options": {"baseURL": "https://API.OpenAI.com/v1"}
+            }}}"#);
+        assert!(!stated.takes_cache_markers(), "{}", stated.host());
+        assert_eq!(stated.responses_only_models(), RESPONSES_ONLY_MODELS);
+
+        let proxy = one(r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#);
+        assert!(proxy.takes_cache_markers());
+        assert!(proxy.responses_only_models().is_empty());
+
+        let responses = one(r#"{"provider": {"openai": {
+                "npm": "@ai-sdk/openai",
+                "env": ["OPENAI_API_KEY"]
+            }}}"#);
+        assert_eq!(responses.protocol(), Protocol::Responses);
+        assert_eq!(responses.host(), "api.openai.com");
+        assert!(
+            responses.responses_only_models().is_empty(),
+            "the Responses route serves those models"
+        );
+
+        let other = one(r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"]}}}"#);
+        assert!(other.takes_cache_markers());
+        assert!(other.responses_only_models().is_empty());
+    }
+
+    /// OpenAI's own API is told from a proxy by the host and port the entry's `baseURL` reaches, so
+    /// the spellings of that place are OpenAI's and any other host or port is not. A comparison with
+    /// the text `api.openai.com` as the entry spells it takes `:443` and a trailing dot for another
+    /// service, and one that drops whatever port is written takes a tunnel on another port for
+    /// OpenAI. The scheme gives the default port, so `http` reaches port 80.
+    #[test]
+    fn the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not() {
+        let at = |url: &str| {
+            one(&format!(
+                r#"{{"provider": {{"work": {{"options": {{"baseURL": "{url}"}}}}}}}}"#
+            ))
+        };
+        for url in [
+            "https://api.openai.com/v1",
+            "https://API.OpenAI.com/v1",
+            "https://api.openai.com:443/v1",
+            "https://api.openai.com./v1",
+            "https://API.OPENAI.COM.:443/v1/",
+            "https://api.openai.com:/v1",
+            "https://api.openai.com",
+            "https://api.openai.com/v1?api-version=1",
+            "https://user:token@api.openai.com/v1",
+        ] {
+            let provider = at(url);
+            assert!(
+                !provider.takes_cache_markers(),
+                "{url} was taken for a proxy"
+            );
+            assert_eq!(
+                provider.responses_only_models(),
+                RESPONSES_ONLY_MODELS,
+                "{url}"
+            );
+        }
+        for url in [
+            "https://api.openai.com:8443/v1",
+            "https://api.openai.com:444/v1",
+            "https://api.openai.com:80/v1",
+            "http://api.openai.com/v1",
+            "https://api.openai.com:abc/v1",
+            "https://api.openai.com:+443/v1",
+            "https://api.openai.com.proxy.example.invalid/v1",
+            "https://notapi.openai.com/v1",
+            "https://proxy.example.invalid/api.openai.com/v1",
+            "https://proxy.example.invalid/v1?host=api.openai.com",
+        ] {
+            let provider = at(url);
+            assert!(provider.takes_cache_markers(), "{url} was taken for OpenAI");
+            assert!(provider.responses_only_models().is_empty(), "{url}");
+        }
+    }
+
+    /// The list is a set of ids that each name one model once.
+    #[test]
+    fn the_responses_only_list_names_each_model_once() {
+        let mut seen = std::collections::HashSet::new();
+        for id in RESPONSES_ONLY_MODELS {
+            assert!(
+                !id.is_empty() && id.trim() == *id && seen.insert(*id),
+                "{id:?}"
+            );
+        }
     }
 
     /// Anthropic is the one known name reached in another protocol, so everything that differs

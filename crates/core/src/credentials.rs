@@ -46,6 +46,8 @@ pub enum Kind {
     StripeKey,
     /// An Anthropic API key.
     AnthropicKey,
+    /// An OpenAI API key, in the project, service account, admin or older form.
+    OpenAiKey,
     /// The body of a private key in PEM armour.
     PrivateKey,
     /// The password in a connection string, which the URL's own syntax says is one.
@@ -66,6 +68,7 @@ impl Kind {
             Kind::GoogleApiKey => "a Google API key",
             Kind::StripeKey => "a live Stripe key",
             Kind::AnthropicKey => "an Anthropic API key",
+            Kind::OpenAiKey => "an OpenAI API key",
             Kind::PrivateKey => "a private key",
             Kind::UrlPassword => "a password in a connection string",
             Kind::Assigned => "a secret assigned by name",
@@ -336,33 +339,69 @@ impl Body {
     }
 }
 
-/// The providers whose keys say what they are: a prefix, an alphabet, and how much of it.
+/// The providers whose keys say what they are: a prefix, an alphabet, how much of it, and a marker
+/// the body has to hold where the prefix alone does not say whose key it is.
 ///
 /// A rule matches a run that *begins* with the prefix, never one that contains it, so a variable
-/// named after a provider is not a key from it.
-const SHAPES: &[(Kind, &[&str], Body, usize)] = &[
-    (Kind::AwsAccessKey, &["AKIA", "ASIA"], Body::Capitals, 16),
+/// named after a provider is not a key from it. The marker is empty where there is none, and a
+/// marker counts toward the length.
+///
+/// OpenAI states no key format in its documentation. Its rows are the forms the `openai-api-key`
+/// rule of the gitleaks scanner matches: `sk-proj-`, `sk-svcacct-` and `sk-admin-` over two runs of
+/// 58 or 74 characters around the text `T3BlbkFJ`, and `sk-` over two runs of 20 around it. A row
+/// takes any run at least as long as the shortest published form, 124 characters for the first
+/// three and 48 for the bare `sk-`, so a key a little off the published shape is still found. The
+/// first three need no marker to be told from other keys, and at 124 characters no phrase is long
+/// enough to be taken for one. The bare `sk-` does: 48 letters and digits after it are also what
+/// other services' keys and some identifiers look like, so it takes a run holding the marker at
+/// any position. Anthropic's `sk-ant-` is listed first and shares no prefix with these, and the
+/// bare `sk-` takes no `-` into its body, so an Anthropic key is never read as OpenAI's.
+const SHAPES: &[(Kind, &[&str], Body, usize, &str)] = &[
+    (
+        Kind::AwsAccessKey,
+        &["AKIA", "ASIA"],
+        Body::Capitals,
+        16,
+        "",
+    ),
     (
         Kind::GitHubToken,
         &["ghp_", "gho_", "ghu_", "ghs_", "ghr_"],
         Body::Alphanumeric,
         36,
+        "",
     ),
-    (Kind::GitHubToken, &["github_pat_"], Body::UrlSafe, 22),
+    (Kind::GitHubToken, &["github_pat_"], Body::UrlSafe, 22, ""),
     (
         Kind::SlackToken,
         &["xoxb-", "xoxp-", "xoxa-", "xoxs-", "xoxr-"],
         Body::UrlSafe,
         10,
+        "",
     ),
-    (Kind::GoogleApiKey, &["AIza"], Body::UrlSafe, 35),
+    (Kind::GoogleApiKey, &["AIza"], Body::UrlSafe, 35, ""),
     (
         Kind::StripeKey,
         &["sk_live_", "rk_live_"],
         Body::Alphanumeric,
         16,
+        "",
     ),
-    (Kind::AnthropicKey, &["sk-ant-"], Body::UrlSafe, 24),
+    (Kind::AnthropicKey, &["sk-ant-"], Body::UrlSafe, 24, ""),
+    (
+        Kind::OpenAiKey,
+        &["sk-proj-", "sk-svcacct-", "sk-admin-"],
+        Body::UrlSafe,
+        124,
+        "",
+    ),
+    (
+        Kind::OpenAiKey,
+        &["sk-"],
+        Body::Alphanumeric,
+        48,
+        "T3BlbkFJ",
+    ),
 ];
 
 /// Every named provider key on one line, each cut to where its alphabet stops.
@@ -374,11 +413,12 @@ const SHAPES: &[(Kind, &[&str], Body, usize)] = &[
 fn shaped(line: &str) -> Vec<(Kind, String)> {
     let mut found = Vec::new();
     for run in line.split(|c: char| !is_token(c)) {
-        for (kind, prefixes, body, least) in SHAPES {
+        for (kind, prefixes, body, least, marker) in SHAPES {
             let matched = prefixes.iter().find_map(|prefix| {
                 let tail = run.strip_prefix(prefix)?;
                 let taken: String = tail.chars().take_while(|c| body.admits(*c)).collect();
-                (taken.len() >= *least).then(|| format!("{prefix}{taken}"))
+                (taken.len() >= *least && taken.contains(marker))
+                    .then(|| format!("{prefix}{taken}"))
             });
             if let Some(value) = matched {
                 // A prefix and a length are a shape, and a documented placeholder has both: the
@@ -1027,7 +1067,7 @@ mod tests {
     /// test saying so.
     #[test]
     fn each_shape_matches_at_its_minimum_and_not_below_it() {
-        for (kind, prefixes, body, least) in SHAPES {
+        for (kind, prefixes, body, least, marker) in SHAPES {
             // Written in the rule's own alphabet, or the length would not be the thing under test:
             // an AWS body admits capitals only, so a lower case filler fails it for the wrong
             // reason.
@@ -1036,23 +1076,182 @@ mod tests {
                 .chain('0'..='9')
                 .filter(|c| body.admits(*c))
                 .collect();
+            // A body of `length` characters, opening with the marker a rule requires so that a
+            // body one short fails on its length and still holds the marker.
+            let written = |length: usize| -> String {
+                let filler: String = alphabet
+                    .chars()
+                    .cycle()
+                    .take(length.saturating_sub(marker.len()))
+                    .collect();
+                format!("{marker}{filler}")
+            };
             for prefix in *prefixes {
-                let body: String = alphabet.chars().cycle().take(*least).collect();
-                let at_minimum = format!("{prefix}{body}");
+                let at_minimum = format!("{prefix}{}", written(*least));
                 let found = scan("t.txt", &format!("{at_minimum}\n"), 1);
                 assert!(
                     found.iter().any(|f| f.kind == *kind),
                     "{kind:?} did not match at its minimum of {least}: {at_minimum}"
                 );
 
-                let short: String = alphabet.chars().cycle().take(least - 1).collect();
-                let below = format!("{prefix}{short}");
+                let below = format!("{prefix}{}", written(least - 1));
                 let found = scan("t.txt", &format!("{below}\n"), 1);
                 assert!(
                     !found.iter().any(|f| f.kind == *kind),
                     "{kind:?} matched one character below its minimum: {below}"
                 );
             }
+        }
+    }
+
+    /// A run of `length` letters and digits that no issuer stamped, for building a key-shaped
+    /// fixture at run time so that this file holds no value a secret scanner would take for one.
+    fn counted_off(length: usize) -> String {
+        ('a'..='z').chain('0'..='9').cycle().take(length).collect()
+    }
+
+    /// The project, service account and admin forms of an OpenAI key, and the older form, are each
+    /// found as the key they are, however the line around them is written. The forms are the ones
+    /// the published `openai-api-key` rule of the gitleaks scanner states: the marker between two
+    /// runs of 58 or 74 characters, and between two of 20. The older form is also found where the
+    /// run is 48 or more letters and digits with the marker at its start, at its end or off
+    /// centre, which is what a rule that required two runs of 20 would miss.
+    #[test]
+    fn an_openai_key_is_recognised_in_each_of_its_forms() {
+        let marker = "T3BlbkFJ";
+        let keys = [
+            format!("sk-proj-{}{marker}{}", counted_off(74), counted_off(74)),
+            format!("sk-proj-{}{marker}{}", counted_off(58), counted_off(58)),
+            format!("sk-svcacct-{}{marker}{}", counted_off(74), counted_off(58)),
+            format!("sk-admin-{}{marker}{}", counted_off(58), counted_off(74)),
+            format!("sk-{}{marker}{}", counted_off(20), counted_off(20)),
+            format!("sk-{marker}{}", counted_off(40)),
+            format!("sk-{}{marker}", counted_off(40)),
+            format!("sk-{}{marker}{}", counted_off(10), counted_off(50)),
+        ];
+        for key in &keys {
+            for (path, text) in [
+                (".env", format!("OPENAI_API_KEY={key}\n")),
+                ("notes.md", format!("the key is {key}, rotate it\n")),
+                ("key.txt", format!("{key}\n")),
+                ("conf.json", format!("{{\"provider\": \"{key}\"}}\n")),
+            ] {
+                let found = scan(path, &text, 1);
+                assert_eq!(
+                    found.iter().map(|f| f.kind).collect::<Vec<_>>(),
+                    [Kind::OpenAiKey],
+                    "a key of {} characters in {path}: {found:?}",
+                    key.len()
+                );
+            }
+        }
+        let declared = scan("notes.md", &format!("the key is {}\n", keys[0]), 1);
+        assert!(declared[0].kind.is_declared());
+        assert_eq!(
+            declared[0].preview,
+            "164 characters of upper case, lower case, digits, punctuation"
+        );
+        assert!(
+            declared[0]
+                .describe()
+                .starts_with("an OpenAI API key at notes.md:1"),
+            "{}",
+            declared[0].describe()
+        );
+    }
+
+    /// `sk-ant-` and the OpenAI prefixes share their first three characters, and the finding a
+    /// person reads names the service, so an Anthropic key has to be reported as Anthropic's.
+    ///
+    /// Two things keep it so, and either one does alone: Anthropic's rule is listed ahead of the
+    /// OpenAI rows, and the bare `sk-` row reads letters and digits only, so it stops at the `-`
+    /// after `sk-ant` with three characters taken. No key can tell one of them from the other, which
+    /// is why this test fails only where both are lost and the next one holds the alphabet. The body
+    /// holds OpenAI's marker and the characters a URL-safe alphabet adds, so that the key is long
+    /// enough for the bare row to take it if that row admitted them.
+    #[test]
+    fn an_anthropic_key_is_not_read_as_an_openai_one() {
+        let key = format!(
+            "sk-ant-api03-{}_{}T3BlbkFJ{}-{}",
+            counted_off(40),
+            counted_off(20),
+            counted_off(40),
+            counted_off(20)
+        );
+        for text in [
+            format!("ANTHROPIC_API_KEY={key}\n"),
+            format!("the key is {key}, rotate it\n"),
+        ] {
+            let found = scan(".env", &text, 1);
+            let kinds: Vec<Kind> = found.iter().map(|f| f.kind).collect();
+            assert!(kinds.contains(&Kind::AnthropicKey), "{kinds:?}");
+            assert!(!kinds.contains(&Kind::OpenAiKey), "{kinds:?}");
+        }
+    }
+
+    /// The bare `sk-` row reads letters and digits, so a `-` or an `_` ends its body. A run that
+    /// holds the marker and is long enough only because its body is read past one is not an OpenAI
+    /// key, and a key that has one after its second run is cut there. The runs do not begin
+    /// `sk-ant-`, so nothing about the order of the rows decides them.
+    #[test]
+    fn the_bare_sk_form_ends_at_a_hyphen_or_an_underscore() {
+        let marker = "T3BlbkFJ";
+        for separator in ['-', '_'] {
+            let before_the_marker = format!(
+                "sk-{}{separator}{marker}{}",
+                counted_off(30),
+                counted_off(20)
+            );
+            let found = scan(
+                "notes.md",
+                &format!("the key is {before_the_marker}, ok\n"),
+                1,
+            );
+            let kinds: Vec<Kind> = found.iter().map(|f| f.kind).collect();
+            assert!(
+                !kinds.contains(&Kind::OpenAiKey),
+                "a `{separator}` did not end the body: {found:?}"
+            );
+
+            let after_it = format!(
+                "sk-{}{marker}{}{separator}{}",
+                counted_off(20),
+                counted_off(20),
+                counted_off(10)
+            );
+            let found = scan("notes.md", &format!("the key is {after_it}, ok\n"), 1);
+            let keys: Vec<_> = found.iter().filter(|f| f.kind == Kind::OpenAiKey).collect();
+            assert_eq!(keys.len(), 1, "{found:?}");
+            assert!(
+                keys[0].preview.starts_with("51 characters"),
+                "a `{separator}` did not end the key: {}",
+                keys[0].preview
+            );
+        }
+    }
+
+    /// A short word that begins `sk-`, 48 letters and digits after it that hold no marker (the
+    /// length of other services' keys), a project key one character short, and a documented
+    /// placeholder carrying the real prefix are each not a key of OpenAI's.
+    #[test]
+    fn a_short_sk_word_and_an_unmarked_run_are_not_an_openai_key() {
+        let unmarked = format!("sk-{}", counted_off(48));
+        let short = format!("sk-proj-{}", counted_off(123));
+        let filler = format!("sk-proj-{}", "x".repeat(130));
+        for line in [
+            "pip install sk-learn scikit-image\n".to_string(),
+            "the sk-ipped test was sk-ewed\n".to_string(),
+            format!("TOKEN_NAME={unmarked}\n"),
+            format!("{unmarked}\n"),
+            format!("{short}\n"),
+            format!("OPENAI_API_KEY={filler}\n"),
+            "OPENAI_API_KEY=sk-proj-your-key-goes-here\n".to_string(),
+        ] {
+            let found: Vec<_> = scan(".env", &line, 1)
+                .into_iter()
+                .filter(|f| f.kind == Kind::OpenAiKey)
+                .collect();
+            assert!(found.is_empty(), "reported for {line:?}: {found:?}");
         }
     }
 

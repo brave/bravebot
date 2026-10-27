@@ -303,7 +303,8 @@ again for that note.
 The title says which session a terminal holds. The info panel says the rest: press Ctrl-X, or type
 `/panel`, and a column 36 wide opens on the right of the screen. Drag the border between it and the transcript to give
 it more room or less; it keeps at least 24 columns and leaves the transcript at least 64. Kitty,
-Ghostty and foot change the pointer to a resize arrow over the border. It holds
+Ghostty and foot change the pointer to a resize arrow over the border. What a click on its rows does
+is in [the mouse](transcript.md#what-a-click-does). It holds
 
 - the session's name, with a GitHub pull request or issue address in it shown as
   `brave/bravebot#1975` and still a link to the address in a terminal that supports links,
@@ -327,7 +328,7 @@ Ghostty and foot change the pointer to a resize arrow over the border. It holds
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
 - the files the session has written, as a count with the lines added and removed, once one has been
-  written. Clicking its heading or the count opens the files view below,
+  written. Clicking the count opens the files view below,
 - the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
   filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
   that wrote the list has ended or in a resumed session. Where it runs past the bottom it shows the
@@ -351,7 +352,7 @@ session's own counters, the servers you approved and where the session runs, and
 
 ### The files the session wrote
 
-Type `/diff`, or click the Files section of the panel, and the panel lists every file the session's write calls changed, in the order each was
+Type `/diff`, or click the count in the Files section of the panel, and the panel lists every file the session's write calls changed, in the order each was
 first written, with the lines added and removed at the right edge. Under the list are all the edits to
 the highlighted file, oldest first, each under a header with its place, its turn and its counts, with
 line numbers in a gutter and every change drawn, where the transcript draws the first twelve of each
@@ -409,8 +410,8 @@ background session states its mode on its opening lines and again when `attach` 
 refusal of bypass says that a session nobody watches does not run in a mode that answers every
 question, and names a one-shot run (`-p`) as the way to ask for that. `--dangerously-bypass-approvals-and-sandbox`
 is refused the same way. With no model service configured, `--bg` is refused in the terminal you
-typed it in, with the configuration status and the four routes (Bedrock, an OpenAI-compatible
-gateway, a ChatGPT sign-in, importing Leo), and no background process is started.
+typed it in, with the configuration status and the five routes (Bedrock, an OpenAI-compatible
+gateway, a ChatGPT sign-in, an xAI sign-in, importing Leo), and no background process is started.
 
 | Command | What it does |
 |---|---|

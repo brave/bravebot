@@ -405,6 +405,7 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::the_cursor_falls_to_the_first_match_when_what_it_was_on_is_filtered_out`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_leaves_nothing_to_choose`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`
+`verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
 
@@ -426,6 +427,7 @@ a gateway has.
 
 `verified-by: bravebot_tui::model_prompt::every_service_heads_its_own_section`
 `verified-by: bravebot_tui::model_prompt::a_service_that_appears_twice_in_the_roster_is_still_one_section`
+`verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::a_heading_stays_above_the_rows_when_the_list_is_scrolled`
 `verified-by: bravebot_tui::model_prompt::a_heading_is_held_where_the_list_has_room_for_two_rows`
 `verified-by: bravebot_tui::model_prompt::a_blank_row_is_given_up_so_the_heading_and_the_cursor_both_fit`
@@ -1220,6 +1222,93 @@ taken for the interface's own, as a forged margin would be.
 `verified-by: bravebot_tui::panel::a_printed_plan_draws_open_rows_as_the_panel_does_and_keeps_that_after_the_turn`
 `verified-by: bravebot_tui::app::the_todos_command_prints_the_plan_and_starts_no_turn`
 `verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
+
+<a id="VIEW-38"></a>
+### VIEW-38: a fenced block in a reply is drawn as a block, with its lines as they were written
+
+A line of three or more backticks or tildes, indented by any number of spaces, opens a fenced block,
+and the next line of the same character at least as long with nothing after it closes it. A block no
+line closes runs to the end of the reply. A fence of backticks cannot hold a backtick after it, so a
+line that opens with a code span is prose. The block is drawn as a header row where the opening
+fence was, saying what the fence named and cut to the room there is, with the word `copy` at its
+right where the mouse is reported and a click on it copies the block ([MOUSE-27](mouse.md#MOUSE-27);
+`/copy block` does it from the keyboard, [CMD-11](commands.md#CMD-11)), and then each of its lines in
+the ink of inline code under the margin of the reply and two columns further in, with the indent of
+the fence taken off, a tab drawn as four spaces and nothing else changed. The closing fence is not
+drawn. What is inside is not read as markdown, a table, a heading or a number, so a marker in it is
+the character it is and a `#12` in it is not linked ([VIEW-32](#VIEW-32)). A reply still arriving
+draws a block as the finished reply does, closed or not, but for the word `copy`, which comes with the
+end of the round and takes the room at the right of the header, so no row of the screen moves when the
+round ends and the name the fence gave is cut to what the word leaves.
+
+**Why.** A reply is drawn from its lines one at a time, and a line read as prose changes what it
+says. Read as prose, a `*` or `_` in a command makes words italic and vanishes, a `#` makes a comment
+a heading, and a pipe makes a row of code a table. The code a reply asks a person to run has to read
+as it will be run.
+
+The words are a reply's, released for the screen like the rest of it, and the block is drawn after
+no decision about them: the fences are found from the characters that open and close them and
+nothing a block holds is read to decide how it is drawn.
+
+`verified-by: bravebot_tui::render::transcript::a_fenced_block_is_drawn_under_a_header_with_its_lines_as_written`
+`verified-by: bravebot_tui::render::transcript::an_unclosed_block_is_drawn_as_it_will_be_closed_and_a_number_in_one_is_not_a_link`
+`verified-by: bravebot_tui::render::transcript::what_a_block_holds_is_never_a_table_a_heading_or_a_fence`
+`verified-by: bravebot_tui::markdown::a_fence_closes_on_the_same_character_at_least_as_long`
+`verified-by: bravebot_tui::markdown::a_block_that_is_never_closed_runs_to_the_end_and_a_close_has_nothing_after_it`
+`verified-by: bravebot_tui::markdown::a_line_that_opens_with_a_code_span_is_not_a_fence`
+`verified-by: bravebot_tui::markdown::the_text_of_a_block_is_its_lines_without_the_fence_or_its_indent`
+`verified-by: bravebot_tui::markdown::blocks_come_in_the_order_they_are_written`
+`verified-by: bravebot_tui::render::transcript::the_word_that_copies_a_block_sits_where_the_layout_says_at_every_width`
+
+<a id="VIEW-39"></a>
+### VIEW-39: a transcript longer than the pane has a scrollbar in the pane's last column
+
+In the plain frame, while the mouse is captured ([MOUSE-49](mouse.md#MOUSE-49)), a transcript longer
+than the pane is drawn with a scrollbar in the pane's last column. The thumb is drawn with `▐` in the
+muted colour, one row at least and never the whole column. Its length is the share of the transcript
+that the pane shows, and its place in the column is the share of the way down that the first row shown
+is, so it is at the bottom while the view is at the tail and at the top at the first row. The rest of
+the column is blank. The lines are wrapped to the columns the bar leaves.
+
+Whether the transcript is longer is read at that narrower width, so a transcript that fits the pane
+exactly and no more than that draws no bar and keeps the whole width, and one that is longer at the
+narrower width draws the bar however the wider one wraps it. One that fits is laid out at both widths
+in a frame, which costs lines of no more than the pane has rows. No bar is drawn without the mouse
+captured, in the scroller or the delegate view, over the search of earlier prompts, in the opening
+screen, or in a pane with fewer than three rows.
+
+The column is chrome and not text: the transcript's pane for selecting and copying ends before it, so
+a drag that reaches it takes no cell of it. The wheel, the arrow keys and the page keys move the view.
+
+What a copy takes and what a click on a link opens are read at the width the lines were wrapped to,
+so a wrapped line copies as one line and an address or a path that wraps is one link, with the bar
+drawn as without it. A selection of the transcript held when the bar appears or goes away is put away,
+as it is at any other change of width ([MOUSE-34](mouse.md#MOUSE-34)), and one held while the thumb
+only moves is kept.
+
+**Why.** The wheel and the keys move the view and show nothing of where it is, and a drag could scroll
+nothing. The width is read narrower so that the bar and the width the lines were wrapped to cannot
+disagree, which a bar that is added after a layout at the full width cannot promise.
+
+The scroller draws the transcript at the full width of the screen, and the words at the top of the
+view stay at the top across the change of width ([SCROLL-1](scroller.md#SCROLL-1)), as they do when
+the info panel is open and the widths differ.
+
+`verified-by: bravebot_tui::app::tests::scrollbar::a_transcript_longer_than_the_pane_has_a_thumb_where_the_view_is_and_wraps_to_the_columns_left`
+`verified-by: bravebot_tui::app::tests::scrollbar::no_bar_is_drawn_without_the_mouse_in_the_scroller_or_in_a_pane_too_short`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_pane_of_three_rows_has_a_bar_and_one_of_two_has_none`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_transcript_that_fills_the_pane_exactly_has_no_bar_and_one_row_more_has_one`
+`verified-by: bravebot_tui::app::tests::scrollbar::the_opening_screen_has_no_bar_however_much_it_holds`
+`verified-by: bravebot_tui::render::a_transcript_that_fits_the_pane_costs_lines_of_no_more_than_the_pane_each_frame`
+`verified-by: bravebot_tui::app::tests::scrollbar::opening_the_scroller_with_the_view_scrolled_back_beside_a_bar_leaves_the_same_words_at_the_top`
+`verified-by: bravebot_tui::app::tests::scrollbar::the_thumb_stands_for_the_rows_shown_and_gives_the_row_back`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_selection_that_reaches_the_last_column_never_takes_the_thumb`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_drag_from_the_text_into_the_bar_copies_the_text_and_not_the_thumb`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_selection_longer_than_the_screen_copies_the_same_with_the_bar_as_without_it`
+`verified-by: bravebot_tui::app::tests::scrollbar::an_address_or_a_path_wrapped_beside_the_bar_is_one_link`
+`verified-by: bravebot_tui::app::tests::scrollbar::the_word_that_copies_a_block_is_left_of_the_bar_and_a_press_on_the_bar_copies_nothing`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_selection_held_when_the_bar_first_appears_is_put_away_and_not_when_it_only_moves`
+`verified-by: bravebot_tui::render::drawing_the_visible_slice_matches_wrapping_the_whole_transcript`
 
 ## Known costs
 

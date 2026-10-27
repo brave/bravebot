@@ -70,7 +70,8 @@ address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 A request may instead refuse redirects (`Request::refusing_redirects`). A redirect in answer to it is
 returned as the failure it is, with the status it came with, and nothing is sent to the address it names,
 so there is no hop to revalidate. It is for a request that carries a credential to a destination compiled
-into the program, such as the serving host of a ChatGPT account ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)).
+into the program, such as the serving host of a ChatGPT account ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)) and of
+an xAI account ([XAI-16](xai-sign-in.md#XAI-16)).
 
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
@@ -78,6 +79,8 @@ into the program, such as the serving host of a ChatGPT account ([CHATGPT-2](cha
 `verified-by: bravebot_net::lib::redirect_status_codes_are_recognised`
 `verified-by: bravebot_net::lib::absolute_redirects_are_used_as_given`
 `verified-by: bravebot_net::lib::path_absolute_redirects_keep_the_authority`
+`verified-by: bravebot_aichat::client::a_gateway_client_refusing_redirects_goes_nowhere_a_reply_names`
+`verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_xai_listing_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_net::lib::relative_redirects_resolve_against_the_parent_path`
 `verified-by: bravebot_net::lib::scheme_relative_redirects_keep_the_scheme`
 `verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
@@ -473,20 +476,21 @@ failed request.
   default, and a token replacement or a backoff waits behind it. A stop ends the wait where the request was
   made with a way to stop it, and a request made without one waits it out.
 - **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds HTTP clients
-  of its own: one for the subscription service and one for the ChatGPT sign-in. That traffic carries
+  of its own: one for the subscription service and one for each of the ChatGPT and xAI sign-ins. That traffic carries
   credentials, an order id, an authorization code and tokens, never workspace content or model
   output, so no labelled value escapes the gate. NET-1 is about everything carrying labelled
   content. A second egress in this process that ever carried content would be a violation. Its
-  clients are its own; its transport is not. `register`, the ChatGPT sign-in and the renewal of its
+  clients are its own; its transport is not. `register`, the ChatGPT and xAI sign-ins and the renewal of an
   access token are handed the transport configuration this module resolved, by a caller that
   depends on both crates, so NET-7, NET-8 and NET-11 hold of them too and a machine whose authority
-  or route off it is stated in the environment reaches both services on the terms it reaches
+  or route off it is stated in the environment reaches each service on the terms it reaches
   everything else. What stays separate is the policy gate, which those clients have nothing to put
   to, and the redirect loop, so NET-9 does not reach them either. What each does with a redirect
   differs:
   - The ChatGPT clients follow none. A redirect in answer to a request that carries an
     authorization code, a verifier or a token is a failure, and nothing is sent to the address it
-    names ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)).
+    names ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)). The xAI client follows none either, for a
+    request that carries a device code or a refresh token ([XAI-1](xai-sign-in.md#XAI-1)).
   - The subscription client follows its hops through its library's default, which refuses nothing,
     so the subscription service can redirect its own traffic into cleartext and put an order id and
     a credential on the wire. Holding it to the same rule means either following its redirects here
@@ -508,6 +512,16 @@ failed request.
   which credential is [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)'s, and so is the seam by which a
   debug build with the `test-hosts` feature sends the flow to a stand-in, which a build that ships
   cannot.
+
+- **An xAI sign-in reaches xAI's hosts, each a constant of the source, and [XAI-1](xai-sign-in.md#XAI-1)
+  names them.** The code request, the poll and the renewal of an access token are made by the
+  `bravebot-skus` clients above, over the shared transport, with no redirect followed. A turn's request
+  and the listing of the account's models go through the one way out of NET-1 as any model request does,
+  and each refuses redirects ([NET-2](#NET-2)): the request carries the access token and a conversation,
+  and a person did not choose the host. Neither asks for the body of a refusal, so none of it is read
+  ([XAI-18](xai-sign-in.md#XAI-18)). Which destination takes which token is
+  [XAI-1](xai-sign-in.md#XAI-1)'s and [XAI-16](xai-sign-in.md#XAI-16)'s, and so is the seam by which a debug
+  build with the `test-hosts` feature sends the flow to a stand-in, which a build that ships cannot.
 
 - **The machine's own trust store is not read.** `SSL_CERT_FILE` and `SSL_CERT_DIR` are, so on a
   machine where neither is set an authority installed into the platform store is invisible here.
@@ -549,9 +563,10 @@ failed request.
   bounds what a downgrade costs, not where a hop may land. What stands in front of this is that the
   endpoint is one a person chose and already sends every request to; what would bound it is holding
   those chains to a host as well, which is a decision about which hosts a configured endpoint may
-  redirect to and is not made here. A request to the serving host of a ChatGPT account is the
-  exception: it carries the access token, and a person did not choose that host, so it refuses
-  redirects ([NET-2](#NET-2), [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)).
+  redirect to and is not made here. A request to the serving host of a ChatGPT account or of an xAI
+  account is the exception: it carries the access token, and a person did not choose that host, so it
+  refuses redirects ([NET-2](#NET-2), [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2),
+  [XAI-16](xai-sign-in.md#XAI-16)).
 
 - **Two pairs of phases share a bound rather than having one each.** The transport gives a phase
   the earliest of its own deadline and those of the phases before it, so a bound tight enough to

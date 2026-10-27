@@ -25,6 +25,12 @@ threads), so read [the pr-fix skill](../pr-fix/SKILL.md) first. Its rules about 
 signing and refused `run` arguments apply here unchanged. Below, `...` stands for
 `python3 agents/skills/pr-fix/pr-fix.py`.
 
+`make implement-issues ISSUES="<argument>"` starts this skill in the terminal client with the argument
+unchanged. First, with no model, [implement-issues.py](implement-issues.py) stops when an item is
+assigned to anybody but the account `gh` writes as, assigns that account to each open issue, and adds
+`bot/in-progress` to each, which it removes when the session ends. Where an item already has both,
+the script did that, so leave the assignee and the label as they are.
+
 An **item** is one issue. The **ledger** is the file in step 0 that records every item's state and
 its checklist. A pull request number given alone, as the whole argument, asks for
 [a round of review comments](#after-review-comments). Among other items, a pull request is left
@@ -114,7 +120,8 @@ subagents made up 84% of the token cost, and workers and the orchestrator reache
 Make `<tmp>/implement-issues/<branch>.md` at the end of step 1, once the items are known and the
 integration branch has its name. `<tmp>` is `${TMPDIR:-/tmp}`. The path follows from the branch,
 so a later session finds it from the pull request's head ref. Keep it outside every worktree. It
-holds one row per item (`item | group | worktree | branch | status | commits`), the path of each
+holds one row per item (`item | group | worktree | branch | status | commits`, with the issue as `#<n>`
+in the item cell, which `implement-issues.py` reads to claim a resumed run's issues), the path of each
 item's brief, which holds its checklist ([step 3](#3-plan)) and reproduction, the decisions, every
 dependency commit that bypassed the hook, and the follow-ups. The briefs, the handoff files and the
 subagents' reports are in `<tmp>/implement-issues/<branch>/`. Update the ledger at every status

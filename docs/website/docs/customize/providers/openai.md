@@ -30,12 +30,13 @@ bravebot send the key your shell holds, so the entry the sign-in adds does not n
 variable a `provider` block names, it is [withheld from the programs bravebot
 runs](../../reference/run-tool.md#what-a-program-is-handed).
 
-With no `models` key, OpenAI is asked what it serves and `/model` offers everything it lists. The
-listing says nothing about what a model can do, so embedding, speech and image models are in it beside
-the chat models, and so are models OpenAI serves only through its Responses API. An entry reaches those
-by naming `@ai-sdk/openai` in `npm`, as it does in opencode, and without that line picking one fails. A
-block that lists `models` is offered those and no others, which is how to keep the picker to the models
-you use:
+With no `models` key, OpenAI is asked what it serves and `/model` offers what it lists, less the
+models OpenAI documents as taking only its Responses API, which the chat-completions route cannot reach.
+The listing says nothing about what a model can do, so embedding, speech and image models are in it
+beside the chat models, and picking one of those fails. A Responses-only model the documentation does
+not name is offered too, and fails when picked. An entry that names `@ai-sdk/openai` in `npm`, as it
+does in opencode, reaches the Responses API and is offered the whole listing. A block that lists
+`models` is offered those and no others, which is how to keep the picker to the models you use:
 
 ```json
 {
@@ -47,6 +48,10 @@ you use:
   }
 }
 ```
+
+OpenAI caches a repeated prompt without being asked, so bravebot sends no cache marks to
+`api.openai.com`, and [`promptCacheTtl`](../configuration.md#promptcachettl) does not apply to it. A proxy
+you reach by writing its `baseURL` is sent them, whatever the entry is called.
 
 ## The Responses API
 

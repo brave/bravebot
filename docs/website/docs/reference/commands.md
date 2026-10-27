@@ -60,11 +60,13 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
+| `/lsp` | | Say which language servers this session has started |
+| `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
 | `/commit-message` | `[source] [format]` | Draft a commit message from the staged changes into the box, for you to edit |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
-| `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
+| `/copy` | `[n \| block [n] \| text [n]]` | Put a reply on the clipboard; block copies a code block, text the drawn words |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/hunks` | `[number]` | List the hunks the last turn wrote, or put one back as it stood before the turn |
@@ -89,6 +91,8 @@ Reports everything the session knows about itself:
 
 - the working directory, and anything opened with `/add-dir`, and whether a later session started
   there will trust it without asking because a yes was [kept](#forget-trust);
+- under [bypass](../security/permission-modes.md#bypassing), each directory outside the workspace the file
+  tools were taken into, with the tool that first reached it. Nothing is opened or trusted by it;
 - each [checkout](../customize/agents.md#a-checkout-of-its-own) a delegate kept or that could not be
   removed, with its number, the commit it holds and the delegate it was made for, since the
   transcript says one was kept but not where;
@@ -155,6 +159,16 @@ The figures are scaled from the bytes of each section to the measured count, so 
 are approximate. Only the last request is broken down, since the cache split and sizes are not kept
 per turn. Before anything is measured it says so, and after a compaction it says the conversation was
 compacted. It takes no argument: `/context` followed by words is a prompt.
+
+## `/lsp`
+
+Says which language servers the session has started: how many, and each by the program you approved,
+in name order, with a note that it runs with your own access until the session ends. A server starts
+the first time the model asks about a file it has a server for, after you approve it, so a session
+that has asked nothing about code has none, and `/lsp` says so. It lists the same programs as the
+Language servers section of the [info panel](../using/sessions.md#telling-sessions-apart), which is
+where to look when the panel is open, and clicking one of its rows says the same. Typed while a turn
+runs, it answers at once. It takes no argument: `/lsp` followed by words is a prompt.
 
 ## `/cost`
 
@@ -769,7 +783,7 @@ Draws the info panel in its files state, opening the panel if it is closed: a li
 session wrote, with the lines added and removed, and every edit to the highlighted one under it. `q`,
 Escape or Ctrl-C leave the state and put the panel back as it was. Typing `/diff` does not, since no
 character reaches the box while the state is open; a second `/diff` queued earlier, while a compaction
-or an aside ran, does leave it. Clicking the Files section of
+or an aside ran, does leave it. Clicking the count in the Files section of
 the panel draws it too. It needs a terminal at
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
 nothing. It shows what the session's own write calls changed. A change another program made is not
@@ -1277,7 +1291,7 @@ is working on is marked `**Outcome:** still running when exported`. Without a pa
 session's default name, which an export after the turn then finds taken, so give that one a path of
 its own.
 
-## `/copy [n]`
+## `/copy [n | block [n] | text [n]]`
 
 Puts the latest reply on the clipboard, and `/copy 2` the one before it. What is copied is the
 markdown the model wrote, so it pastes as whole paragraphs, where a sweep with the mouse copies the
@@ -1292,6 +1306,60 @@ than a line break or a tab is left out, as the screen leaves it out, so a pasted
 the sequence that ends a shell's bracketed paste. Its line breaks are kept, so a shell that does not
 use bracketed paste runs each line as it arrives. A number past the oldest reply says how many there
 are and copies nothing.
+
+`/copy block` puts the last code block of the latest reply that has one on the clipboard, and
+`/copy block 2` the one before it, counting the blocks of every reply from the latest. A code block is
+the lines between two fences of backticks or tildes, and what is copied is those lines as the reply
+wrote them, with no fence, the same as clicking `copy` at the right of the block's header. A
+block with nothing in it, or nothing but blank lines, is not counted, as it has no `copy` to click.
+It is counted when the row is too narrow to draw the word. Tab after `/copy b` finishes
+the word. `/copy block` says so and copies nothing where no reply holds a block, where the number is
+not one or is zero, and where it is past the oldest block, which it says how many there are.
+
+`/copy text` puts the latest reply on the clipboard as the screen shows it, and `/copy text 2` the one
+before it. It has none of the marks of the markdown the model wrote it in, such as `**`, backticks and
+the `#` of a heading, none of the `⏺` and the indent the screen draws beside it, and no wrapping, so a
+paragraph is one line. It is what the `copy as text` item of the right-click menu copies, and it is
+refused as `/copy` is. Tab after `/copy t` finishes the word.
+
+## `/open [edit] [n | address | path]`
+
+Lists the web addresses and file paths in the latest reply that has any, one line each, numbered from 1
+in the order they are drawn and as they are drawn. The reply still arriving is the latest where it has
+one, and otherwise it is the newest reply that does. A link is found by the rules a click on it uses,
+so one you can click is in the list, and a reply longer than the screen lists the links above and
+below the view as well. A reply with more than 50 is listed up to the 50th, and a line says how many are
+left out; a link past the 50th is opened by typing it after the command. It says so where no reply has
+one.
+
+`/open 2` opens the second link as a click on it does. An address opens in your browser, as a ctrl-click
+on it does, and does so while a turn is running. A path shows the file at the end of the transcript, as
+a click on it does, with the same refusals and the same notes, and shows nothing while a turn or a
+command runs: it says that a file is shown when nothing is running, and you type it again then. A number
+names the link in the list `/open` printed last, so a reply that arrives afterwards does not change
+which link it opens. `/clear`, the start of another turn, a rewind with `/undo` or `/rewind`, and `/cd` end
+the list, and a number typed before any list, after it ended or past its last link says so and opens
+nothing.
+
+`/open edit 2` does what a click with ctrl on the second link does: a path opens in your editor, at the
+line and column it gave, started as the click starts it, and an address is refused, since the browser
+opens it. The editor takes the terminal, so it is not started while a turn or a command runs, where the
+command says so and you type it again. Tab after `/open e` finishes `edit`.
+
+`/open https://example.test/guide` opens the address you type, and `/open src/main.rs:12` shows the file you
+name, from the line after the colon, and `/open edit src/main.rs:12` opens it in your editor. Typing the
+exact address or name is what asks for it, so it need not be in a reply. An address is checked as a click's
+is: only a web address with a host, as `http` or `https`, in plain ASCII, and one that names a user or holds
+anything else is refused and not opened. Any other text is a file name. It is resolved as a click on a path
+resolves one, so a name outside the directory the session works in, or that is a directory, or that is
+not there, is refused in the same words, and a name with no extension or with a blank in it, which a click
+could not reach, works when the file is there. Digits alone are a number, so a file named by digits is typed
+as `./12`. `edit` with nothing after it says what the command takes.
+
+Typed while a turn runs, the list answers at once, and so does an address, as a click on one opens it
+then. A file name is not queued: it says that a file is shown when nothing is running, and you type it
+again. While a summary or an aside is being written, a line waits like every command, and a number is read
+against the list it was typed beside.
 
 ## `/undo`
 
@@ -1455,7 +1523,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so

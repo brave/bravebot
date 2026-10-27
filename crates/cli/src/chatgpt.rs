@@ -15,13 +15,11 @@ use bravebot_agent::confirm::Decision;
 use bravebot_config::Config;
 use bravebot_i18n::t;
 use bravebot_net::Transport;
-use bravebot_sandbox::programs::{Inherits, Resolved, SearchPath};
 use bravebot_skus::chatgpt::{
     Account, AccountError, Announcement, Class, Defect, Hosts, Limits, Pages, SignInError, SignedIn,
 };
-use std::ffi::OsStr;
 use std::io::IsTerminal;
-use std::process::{ExitCode, Stdio};
+use std::process::ExitCode;
 
 /// The id of the provider block that would be taken for this service's own name.
 const NAME: &str = "chatgpt";
@@ -193,8 +191,9 @@ fn finish(
 ///
 /// Each sentence that names a way to use the account names a command that works as typed: `bravebot`
 /// only where `asks` says a start would ask which model to use, or a command that names one together
-/// with the prompt or the task that starts something. A person with a service of their own configured,
-/// or a model in force that something serves, is not asked, and is not told they will be. `/model` is
+/// with the prompt or the task that starts something. A person with a model in force that something
+/// serves is not asked, and one with a Bedrock or gateway block is asked about that service's models and
+/// not the account's, so neither is told the account's question will be asked. `/model` is
 /// named only as what lists the models once a session is open, since the sign-in does not open one.
 pub(crate) fn said_of_listing(listing: &AccountModels, asks: bool) -> String {
     match listing {
@@ -216,7 +215,11 @@ pub(crate) fn said_of_listing(listing: &AccountModels, asks: bool) -> String {
 
 /// Show the address and the port, then ask for the browser.
 fn announce(announcement: &Announcement<'_>) {
-    announce_to(announcement, &mut std::io::stderr(), open_browser);
+    announce_to(announcement, &mut std::io::stderr(), |address| {
+        // Not reported: the address has been shown, and the sign-in carries on waiting whether or
+        // not a browser opened.
+        bravebot_tui::opener::open_address(address);
+    });
 }
 
 /// [`announce`], with the stream the lines go to and what asks for the browser stated.
@@ -234,61 +237,6 @@ fn announce_to(
     let _ = writeln!(shown, "{}", t!(chatgpt_waiting, port = announcement.port));
     let _ = shown.flush();
     open(announcement.url);
-}
-
-/// The program that opens an address in the platform's browser, and the arguments it takes, for
-/// the operating system named.
-///
-/// The address is one argument and no shell is between it and the program: the query holds `&`, which a
-/// shell would read. Windows has no program for this that is not a shell builtin, so it is
-/// `rundll32` with the library's entry point rather than `start`.
-fn opener(os: &str, url: &str) -> (&'static str, Vec<String>) {
-    match os {
-        "macos" => ("open", vec![url.to_string()]),
-        "windows" => (
-            "rundll32",
-            vec!["url.dll,FileProtocolHandler".to_string(), url.to_string()],
-        ),
-        _ => ("xdg-open", vec![url.to_string()]),
-    }
-}
-
-/// Ask the platform to open `url`. The opener failing is not the sign-in failing, so nothing here
-/// is reported: the address has been shown and the sign-in carries on waiting.
-///
-/// The program is the platform's own, looked up by name and started as
-/// [SANDBOX-30](../../../docs/specs/sandboxing.md#SANDBOX-30) says a program bravebot looks up is:
-/// resolved first, from where a confined stage could not have written, and without the variables
-/// that spec removes.
-fn open_browser(url: &str) {
-    let (program, arguments) = opener(std::env::consts::OS, url);
-    let Some(program) = Resolved::find(OsStr::new(program)) else {
-        return;
-    };
-    let Ok(mut child) = opening(&program, &arguments).spawn() else {
-        return;
-    };
-    // Waited for on a thread of its own, so the opener is not left a zombie and a browser that
-    // keeps it running does not hold up the sign-in.
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-}
-
-/// The command that opens the browser, which is handed no standard stream and the person's
-/// environment without this agent's own credentials.
-fn opening(program: &Resolved, arguments: &[String]) -> std::process::Command {
-    let mut command = bravebot_sandbox::programs::start(
-        program,
-        Inherits::Without(&bravebot_config::scrub::own_credentials()),
-        SearchPath::Reduced,
-    );
-    command
-        .args(arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command
 }
 
 /// `bravebot auth logout chatgpt`: remove the sign-in stored here.
@@ -491,69 +439,6 @@ mod tests {
         assert_eq!(refused.1, t!(chatgpt_not_while_incognito));
     }
 
-    /// CHATGPT-13: the address is one argument and no shell is between it and the program. The query
-    /// holds `&`, which a shell reads as the end of a command, and Windows has no opener that is not
-    /// a builtin of `cmd` except `rundll32` with the library's entry point.
-    #[test]
-    fn the_address_is_one_argument_of_the_platforms_own_opener() {
-        let url = "https://auth.example/authorize?a=1&b=2";
-
-        assert_eq!(opener("macos", url), ("open", vec![url.to_string()]));
-        assert_eq!(opener("linux", url), ("xdg-open", vec![url.to_string()]));
-        assert_eq!(
-            opener("windows", url),
-            (
-                "rundll32",
-                vec!["url.dll,FileProtocolHandler".to_string(), url.to_string()]
-            )
-        );
-        for os in ["macos", "linux", "windows", "freebsd"] {
-            let (program, arguments) = opener(os, url);
-            assert!(
-                !["sh", "cmd", "start", "bash"].contains(&program),
-                "{os} goes through a shell: {program}"
-            );
-            assert_eq!(
-                arguments
-                    .iter()
-                    .filter(|argument| argument.as_str() == url)
-                    .count(),
-                1,
-                "{os}: {arguments:?}"
-            );
-        }
-    }
-
-    /// What a command was told to unset, which is how `env_remove` reads back.
-    fn withheld_from(command: &std::process::Command) -> Vec<String> {
-        let mut names: Vec<String> = command
-            .get_envs()
-            .filter(|(_, value)| value.is_none())
-            .map(|(name, _)| name.to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        names
-    }
-
-    /// CHATGPT-13: the opener is started with the variables [CRED-14] removes left out and the
-    /// arguments it was given. A start that inherited everything would hand this agent's own
-    /// credentials to whatever `open` or `xdg-open` resolves to.
-    #[test]
-    fn the_opener_is_not_handed_this_agents_own_credentials() {
-        let program = Resolved::found_earlier("/usr/bin/open");
-        let arguments = vec!["https://example.invalid/".to_string()];
-
-        let command = opening(&program, &arguments);
-
-        let mut expected = bravebot_config::scrub::own_credentials();
-        expected.sort();
-        assert_eq!(withheld_from(&command), expected);
-        assert_eq!(
-            command.get_args().collect::<Vec<_>>(),
-            ["https://example.invalid/"]
-        );
-    }
-
     /// A stream that records what was written to it, in a buffer the test can also read while the
     /// code under test is still running.
     #[derive(Clone, Default)]
@@ -724,8 +609,9 @@ mod tests {
 
     /// CHATGPT-8, BACKEND-39: the sign-in promises the question only where a start would ask it. The
     /// sentence that sends a person to run `bravebot` for it is said where one would, and where it
-    /// would not, because a service of the person's own is configured or a model is in force that
-    /// something serves, the sentence names the commands and says nothing of being asked. No other
+    /// would not ask about the account, because a service of the person's own is configured, whose models
+    /// it asks about instead, or a model is in force that something serves, the sentence names the
+    /// commands and says nothing of being asked. No other
     /// sentence the command ends with promises it: where the listing could not be had nothing can be
     /// asked, whoever the person is. The regression it rejects is the promise made to everybody.
     #[test]
@@ -947,109 +833,6 @@ mod tests {
         }
         assert!(ran_after(true, "y\n"), "a yes did not replace it");
         assert!(ran_after(false, ""), "a first sign-in asked a question");
-    }
-
-    /// PATH-005: what the opener is started as goes through `open_browser`, in a child run of this
-    /// test binary whose `PATH` is a directory SANDBOX-30 leaves out, an installed directory and the
-    /// system directories, in that order. Each name the opener could be has a planted file in the
-    /// first directory and an installed one in the second, and each records that it ran.
-    #[cfg(unix)]
-    fn through_open_browser(test: &str, installed_opener: impl Fn(&str) -> String, expect: &str) {
-        use crate::test_support::Scratch;
-        use std::os::unix::fs::PermissionsExt;
-        const SESSION: &str = "BRAVEBOT_TEST_OPENER_SESSION";
-
-        if let Some(session) = std::env::var_os(SESSION) {
-            let session = std::path::PathBuf::from(session);
-            std::fs::write(session.join("ran"), "").unwrap();
-            bravebot_sandbox::programs::keep_out(&session);
-
-            open_browser("https://example.invalid/");
-
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
-            while !session.join(expect).exists() && std::time::Instant::now() < until {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            assert!(
-                !session.join("planted-ran").exists(),
-                "a file in a directory a stage may write was run"
-            );
-            assert!(
-                session.join(expect).exists(),
-                "the installed opener did not run"
-            );
-            return;
-        }
-
-        let session = Scratch::new(&format!("chatgpt-opener-{expect}"));
-        let installed = Scratch::new(&format!("chatgpt-opener-installed-{expect}"));
-        let planted = session.path.join(".venv/bin");
-        std::fs::create_dir_all(&planted).unwrap();
-        let write = |directory: &std::path::Path, name: &str, body: String| {
-            let file = directory.join(name);
-            std::fs::write(&file, body).unwrap();
-            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
-        };
-        let records =
-            |marker: &str| format!("#!/bin/sh\n: > '{}'\n", session.path.join(marker).display());
-        for name in ["open", "xdg-open", "interp"] {
-            write(&planted, name, records("planted-ran"));
-        }
-        for name in ["open", "xdg-open"] {
-            write(
-                &installed.path,
-                name,
-                installed_opener(&session.path.display().to_string()),
-            );
-        }
-        write(&installed.path, "interp", records("installed-interp-ran"));
-        let path = std::env::join_paths([
-            planted,
-            installed.path.clone(),
-            std::path::PathBuf::from("/usr/bin"),
-            std::path::PathBuf::from("/bin"),
-        ])
-        .unwrap();
-
-        let own = Resolved::own_executable().unwrap();
-        let child = bravebot_sandbox::programs::start(&own, Inherits::All, SearchPath::Inherited)
-            .args(["--exact", test, "--test-threads=1", "--nocapture"])
-            .env(SESSION, &session.path)
-            .env("PATH", &path)
-            .output()
-            .unwrap();
-
-        let report = String::from_utf8_lossy(&child.stderr).into_owned();
-        assert!(
-            session.path.join("ran").exists(),
-            "the child did not run the test: {report}"
-        );
-        assert!(child.status.success(), "{report}");
-    }
-
-    /// PATH-005, the program: a file named `open` or `xdg-open` in a directory SANDBOX-30 leaves out,
-    /// first on `PATH`, is not the opener. The installed one in the next directory is.
-    #[cfg(unix)]
-    #[test]
-    fn a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started() {
-        through_open_browser(
-            "chatgpt::tests::a_browser_opener_in_a_directory_a_stage_may_write_is_not_the_one_started",
-            |session| format!("#!/bin/sh\n: > '{session}/installed-opener-ran'\n"),
-            "installed-opener-ran",
-        );
-    }
-
-    /// PATH-005, a name the program starts: the installed opener is `#!/usr/bin/env interp`, and an
-    /// `interp` in the directory a stage may write comes first on the `PATH` bravebot inherits. The
-    /// opener is started with the reduced `PATH`, so `env` finds the installed `interp`.
-    #[cfg(unix)]
-    #[test]
-    fn a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written() {
-        through_open_browser(
-            "chatgpt::tests::a_program_the_opener_starts_by_name_is_never_one_a_stage_may_have_written",
-            |_| "#!/usr/bin/env interp\n".to_string(),
-            "installed-interp-ran",
-        );
     }
 
     fn signed_in_account() -> Account {

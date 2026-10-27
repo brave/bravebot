@@ -91,6 +91,11 @@ fn a_directory_named_in_the_environment_is_the_state_directory_in_every_crate() 
             "the ChatGPT sign-in is kept somewhere the state directory is not"
         );
         assert_eq!(
+            bravebot_skus::xai::path().expect("a named directory"),
+            named.join("xai-account.json"),
+            "the xAI sign-in is kept somewhere the state directory is not"
+        );
+        assert_eq!(
             bravebot_agent::home::profile(),
             Some(home.clone()),
             "the profile directory a `~` stands for followed the state directory"
@@ -112,10 +117,15 @@ fn a_value_that_names_no_directory_leaves_no_state_directory_to_guess() {
                 bravebot_agent::home::directory(),
                 bravebot_skus::store::path().ok(),
                 bravebot_skus::chatgpt::path().ok(),
+                bravebot_skus::xai::path().ok(),
             )
         });
 
-        assert_eq!(found, (None, None, None), "{value:?} produced a location");
+        assert_eq!(
+            found,
+            (None, None, None, None),
+            "{value:?} produced a location"
+        );
     }
 }
 

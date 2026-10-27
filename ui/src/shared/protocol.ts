@@ -492,7 +492,7 @@ export interface TurnError {
   rewind?: RewindPoint[]
   category?: string | null
   /**
-   * Which failure of a ChatGPT account it was, by a fixed name from a closed set, and `null` for a
+   * Which failure of a ChatGPT or an xAI account it was, by a fixed name from a closed set, and `null` for a
    * failure that did not come from the account. Look it up and never draw it.
    */
   account?: string | null

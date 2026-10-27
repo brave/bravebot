@@ -140,6 +140,7 @@ impl fmt::Display for ChatError {
                 }
                 f.write_str(". Raise it with BRAVEBOT_OUTPUT_BUDGET, or ask for less in one turn")
             }
+            Self::Account(failure @ AccountFailure::Xai(_)) => write!(f, "xAI account: {failure}"),
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
@@ -282,12 +283,13 @@ pub trait AccountAccess {
     fn replace_refused(&mut self, refused: &Secret) -> Result<Secret, AccountFailure>;
 }
 
-/// Why a ChatGPT account's request was not sent, or was refused.
+/// Why a ChatGPT account's request was not sent, or was refused, or an xAI account's was not.
 ///
 /// Each is a step, or a code compared with a closed list, and no text from a reply, so a sentence
-/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)). The
-/// sentence for each is in the message catalog and is chosen by the layer that shows the failure,
-/// since this crate has none: it names the condition and says nothing to a person.
+/// made from it quotes nothing ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8),
+/// [XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)). The sentence for each is in the message
+/// catalog and is chosen by the layer that shows the failure, since this crate has none: it names
+/// the condition and says nothing to a person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountFailure {
     /// Nothing is stored.
@@ -322,6 +324,54 @@ pub enum AccountFailure {
     Unusable,
     /// The token could not be renewed, and the reason is the class of the reply.
     Renewal(RenewalFailure),
+    /// The xAI account failed, in one of the ways [`XaiFailure`] names. Kept apart from the ChatGPT
+    /// account's, since its sentences name another service and another command.
+    Xai(XaiFailure),
+}
+
+/// Why an xAI account's request was not sent, or was refused
+/// ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
+///
+/// Chosen from the step that failed or from a status, and never from a reply's text: the service
+/// answers a token it does not accept with a 400, and an error body can carry an identifier, so the
+/// body of a refusal is not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XaiFailure {
+    /// Nothing is stored.
+    NotSignedIn,
+    /// The authorization server said the refresh token is no longer valid, and the stored sign-in
+    /// was removed.
+    Ended,
+    /// The serving host refused the access token it was sent with a 400, a 401 or a 403, and refused
+    /// the new one it was then sent with a 401 ([XAI-18](../../../docs/specs/xai-sign-in.md#XAI-18)).
+    Rejected,
+    /// The serving host refused the request with a 403 after the access token was replaced, so the
+    /// token is not one it could not validate. No refusal for a plan was observed, and the failure is
+    /// decided from the status alone ([XAI-18](../../../docs/specs/xai-sign-in.md#XAI-18)). Signing in
+    /// again does not change a refusal that a new token did not, so no command is named.
+    NotPermitted,
+    /// The sign-in file could not be read, or the claim on it could not be taken.
+    Unusable,
+    /// The token could not be renewed, and the reason is the class of the reply.
+    Renewal(RenewalFailure),
+}
+
+impl XaiFailure {
+    /// A fixed name for a front end to word the failure from, one for each value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NotSignedIn => "xai-not-signed-in",
+            Self::Ended => "xai-ended",
+            Self::Rejected => "xai-token-refused",
+            Self::NotPermitted => "xai-not-permitted",
+            Self::Unusable => "xai-unusable",
+            Self::Renewal(RenewalFailure::Refused) => "xai-renewal-refused",
+            Self::Renewal(RenewalFailure::RateLimited) => "xai-renewal-rate-limited",
+            Self::Renewal(RenewalFailure::Unavailable) => "xai-renewal-unavailable",
+            Self::Renewal(RenewalFailure::Incomplete) => "xai-renewal-incomplete",
+            Self::Renewal(RenewalFailure::Transport) => "xai-renewal-transport",
+        }
+    }
 }
 
 /// The class of a failed renewal, in the categories the other services' failures have.
@@ -350,6 +400,7 @@ impl AccountFailure {
             Self::Renewal(RenewalFailure::Unavailable) => "renewal-unavailable",
             Self::Renewal(RenewalFailure::Incomplete) => "renewal-incomplete",
             Self::Renewal(RenewalFailure::Transport) => "renewal-transport",
+            Self::Xai(failure) => failure.name(),
         }
     }
 
@@ -455,6 +506,10 @@ struct Gateway<'a> {
     /// one the gateway has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Whether a redirect in answer is a failure and nothing is sent to the address it names, as it
+    /// is for a request to a host this program compiled in
+    /// ([`AichatClient::refusing_redirects`]).
+    redirects_refused: bool,
     /// The headers the block asked for, resolved by the caller.
     ///
     /// Resolved elsewhere for the reason the token is: a value may name a variable, and this crate
@@ -515,8 +570,23 @@ impl<'a> AichatClient<'a> {
             provider,
             model: model.into(),
             token,
+            redirects_refused: false,
             headers: Vec::new(),
         });
+        self
+    }
+
+    /// Answer a redirect with the status it came with and send nothing to the address it names, with
+    /// the token on the socket the request is addressed to alone.
+    ///
+    /// For a gateway whose host is a constant of this program and whose token is the person's own
+    /// sign-in ([XAI-16](../../../docs/specs/xai-sign-in.md#XAI-16)): a redirect re-sends the request, and
+    /// the conversation with it, to a place a reply named. A configured gateway keeps following
+    /// redirects, since its host is the person's own. Does nothing where no gateway is set.
+    pub fn refusing_redirects(mut self) -> Self {
+        if let Some(gateway) = self.gateway.as_mut() {
+            gateway.redirects_refused = true;
+        }
         self
     }
 
@@ -697,9 +767,16 @@ impl<'a> AichatClient<'a> {
             if let Some(gap) = gateway.provider.patience.idle_timeout {
                 http = http.idle_within(gap);
             }
+            if gateway.redirects_refused {
+                http = http.refusing_redirects();
+            }
             if let Some(token) = gateway.token.as_ref().map(Secret::expose) {
                 let (name, value) = gateway.provider.credential_header(token);
-                http = http.header(name, value);
+                http = if gateway.redirects_refused {
+                    http.socket_header(name, value)
+                } else {
+                    http.header(name, value)
+                };
             }
             // After the credential, and never over it: a name this request already set is refused
             // where the block is read, because `Request::header` appends and a second copy of one
@@ -1177,8 +1254,22 @@ impl Driven for AichatClient<'_> {
         &mut self.refusals
     }
 
+    /// What the model is remembered to refuse, with the breakpoints given up from the start where
+    /// the service is one that takes none ([`bravebot_config::provider::Provider::takes_cache_markers`]).
+    ///
+    /// They are recorded as given up as well as left out of the body, so a refusal of a request
+    /// that carried no breakpoints is not read as a refusal of them: [`call::drive`] would send the
+    /// same body again before it blamed the level.
     fn recall(&self, key: &str) -> Refusals {
-        remembered(key)
+        let found = remembered(key);
+        Refusals {
+            caching: found.caching
+                || self
+                    .gateway
+                    .as_ref()
+                    .is_some_and(|gateway| !gateway.provider.takes_cache_markers()),
+            ..found
+        }
     }
 
     fn remember(&self, key: &str, found: Refusals) {
@@ -1939,6 +2030,116 @@ mod tests {
             cache_controls(&refused),
             [plain(), plain()],
             "a refused lifetime was sent again"
+        );
+    }
+
+    /// BACKEND-32: a request to OpenAI's own API carries no breakpoints, because that service
+    /// caches without being asked and its request schema has no such mark on a content part, and a
+    /// request to any other host under the same id still does. The breakpoints are given up before
+    /// the first request, so a refusal that follows is about something else, and the body is not
+    /// sent again for it as it would be for the breakpoints.
+    #[test]
+    fn a_request_to_openais_own_api_is_sent_no_breakpoints_and_one_to_a_proxy_is() {
+        let egress = Egress::new();
+        let config = config();
+        let asked = ChatRequest::new(
+            "gpt-4o-mini",
+            vec![Message::system("be brief"), Message::user("hello")],
+        );
+        let own = provider_block(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let proxy = provider_block(
+            r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#,
+        );
+
+        let sent_to = |provider: &bravebot_config::provider::Provider| {
+            let mut client =
+                AichatClient::new(&config, &egress).for_gateway(provider, "gpt-4o-mini", None);
+            let key = client.refusal_key(&asked);
+            let recalled = client.recall(&key);
+            client.refusals = recalled;
+            let body = client.body(&asked).expect("a body").to_string();
+            (recalled.caching, body.contains("cache_control"))
+        };
+        assert_eq!(sent_to(&own), (true, false), "OpenAI was sent breakpoints");
+        assert_eq!(
+            sent_to(&proxy),
+            (false, true),
+            "a proxy keyed openai was taken for OpenAI"
+        );
+    }
+
+    /// BACKEND-22: at OpenAI's own API the level is the one concession, since the breakpoints were
+    /// given up before the first request. A request refused on its contents is sent again once,
+    /// without the level, and then the refusal is reported. A gateway that is sent the breakpoints
+    /// is sent the body three times before it is.
+    #[test]
+    fn a_refusal_at_openais_own_api_gives_up_the_level_and_nothing_else() {
+        use protocol::Effort;
+
+        let egress = Egress::new();
+        let config = config();
+        let own = provider_block(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let proxy = provider_block(
+            r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#,
+        );
+
+        // Each request a service that refuses every one is sent, as whether it carried a
+        // breakpoint and whether it carried a level.
+        let sent_to = |provider: &bravebot_config::provider::Provider, model: &str| {
+            let asked = ChatRequest::new(
+                model,
+                vec![Message::system("be brief"), Message::user("hello")],
+            )
+            .with_effort(Some(Effort::High));
+            let mut client = AichatClient::new(&config, &egress).for_gateway(provider, model, None);
+            let key = client.refusal_key(&asked);
+            let plan = Plan {
+                key: &key,
+                order: &AichatClient::CONCESSIONS,
+            };
+            let mut seen = Vec::new();
+            let result = drive(
+                &mut client,
+                &asked,
+                plan,
+                &mut (),
+                |client, (), _| {
+                    let body = client.body(&asked).expect("a body").to_string();
+                    seen.push((
+                        body.contains("cache_control"),
+                        body.contains("reasoning_effort"),
+                    ));
+                    Err(ChatError::Egress(EgressError::Status {
+                        url: "https://api.openai.com/v1/chat/completions".to_string(),
+                        status: 400,
+                        retry_after: None,
+                        body: None,
+                    }))
+                },
+                |(), _| {},
+            );
+            assert!(
+                result.is_err(),
+                "a service that refused everything answered"
+            );
+            seen
+        };
+
+        let seen = sent_to(&own, "backend-22-own");
+        assert_eq!(seen, [(false, true), (false, false)], "{seen:?}");
+
+        // A proxy keyed openai is sent the breakpoints, and gives them up before the level.
+        let seen = sent_to(&proxy, "backend-22-proxy");
+        assert_eq!(
+            seen,
+            [(true, true), (false, true), (false, false)],
+            "{seen:?}"
         );
     }
 }

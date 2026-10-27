@@ -273,7 +273,8 @@ session opens and cannot change while it runs. It is stated once at startup, and
 bypassing every check. It types nothing, is read before Tab so it never completes a half-typed line,
 and works while a turn runs. A turn in flight follows the mode you pressed last, from its next
 question or tool call; a question already on your screen is left as it is. Both spellings of the chord are answered, since which one arrives is the
-terminal's choice rather than yours.
+terminal's choice rather than yours. A click on the mode drawn on the row beneath the box moves to the
+next one too, but never into bypassing every check: only the key reaches that.
 
 The mode leads the row beneath the box and is the only part of it drawn in a colour. Asking about
 everything takes no room at all: what is drawn is a mode somebody chose. When the terminal is too
@@ -448,6 +449,10 @@ the box exactly as it was.
 
 They stay in the prompt history. From your side they were sent, and taking them back does not unsay
 them.
+
+A click on a waiting prompt does the same for it and the ones typed after it
+([the mouse](transcript.md#what-a-click-does)). The prompts before it keep waiting. Clearing the box is
+what cancels what came back.
 
 With nothing waiting the key is unchanged: it walks the history, and scrolls once there is nothing
 left to walk. Inside a paragraph it moves between rows first, and reaches the queue from the top
@@ -731,7 +736,7 @@ session asks for four things, each because something here cannot work without it
 
 | What it asks for | What it buys |
 |---|---|
-| mouse reporting, narrowed to the buttons, the wheel, and motion while a button is held (not asked for where [`tui.mouse`](../customize/configuration.md#tuimouse) is `false`) | the wheel scrolls the transcript |
+| mouse reporting of the buttons, the wheel, and the pointer's motion with a button held and with none, with coordinates in the form that can name a column or a row past 223 (not asked for where [`tui.mouse`](../customize/configuration.md#tuimouse) is `false`) | the wheel scrolls the transcript, a drag selects text, the target under the pointer is shown, and a click at the far side of a wide screen lands where it was made |
 | bracketed paste | a pasted prompt does not send itself on the newline most clipboards carry |
 | focus reporting | the clipboard is worth a look the moment a picture appears on it, rather than polled forever |
 | disambiguated keys, where the terminal says it understands the request | Shift-Enter and Ctrl-Enter arrive at all |

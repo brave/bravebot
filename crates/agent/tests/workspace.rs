@@ -12915,3 +12915,459 @@ fn a_name_typed_with_at_that_is_a_directory_or_nothing_is_not_a_file() {
     workspace.record_mention("src/lib.rs");
     assert_eq!(workspace.touched_files(), ["src/lib.rs"]);
 }
+
+// MODE-4, PATHREQ-7: what the permission mode reaches outside the workspace for one call.
+
+use bravebot_agent::workspace::BypassReach;
+use bravebot_sandbox::rules::{Entry, Lists};
+
+/// A directory beside the project and a home directory the refusals are judged against, neither
+/// inside the other.
+struct BypassPlaces {
+    _project: Scratch,
+    _beside: Scratch,
+    _home: Scratch,
+    workspace: Workspace,
+    beside: PathBuf,
+    home: PathBuf,
+}
+
+impl BypassPlaces {
+    fn new(name: &str) -> Self {
+        let project = Scratch::new(&format!("bypass-reach-project-{name}"));
+        let beside = Scratch::new(&format!("bypass-reach-beside-{name}"));
+        let home = Scratch::new(&format!("bypass-reach-home-{name}"));
+        for place in [".ssh", ".bravebot/sessions", "work"] {
+            std::fs::create_dir_all(home.path.join(place)).unwrap();
+        }
+        std::fs::write(beside.path.join("notes.txt"), "NOTES").unwrap();
+        let workspace = Workspace::new(&project.path).expect("workspace");
+        let beside_path = beside.path.canonicalize().unwrap();
+        let home_path = home.path.canonicalize().unwrap();
+        Self {
+            _project: project,
+            _beside: beside,
+            _home: home,
+            workspace,
+            beside: beside_path,
+            home: home_path,
+        }
+    }
+
+    fn reach(&self, tool: &str, write: bool) -> BypassReach {
+        self.reach_with(tool, write, Lists::default(), Vec::new())
+    }
+
+    fn reach_with(
+        &self,
+        tool: &str,
+        write: bool,
+        lists: Lists,
+        excluded: Vec<PathBuf>,
+    ) -> BypassReach {
+        BypassReach {
+            tool: tool.to_string(),
+            field: "path",
+            mode: "bypass",
+            profile: Some(self.home.clone()),
+            person: bravebot_sandbox::rules::resolve(
+                &lists,
+                Some(&self.home),
+                self.workspace.root(),
+            ),
+            excluded,
+            write,
+        }
+    }
+
+    fn read(&self, path: &std::path::Path) -> Result<String, WorkspaceError> {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+        let named = Labelled::trusted(path.display().to_string());
+        let contents = self.workspace.read(&mut policy, &named)?;
+        let proof = policy.authorise_content_release("test", "contents");
+        Ok(contents.declassify(&proof).to_string())
+    }
+
+    fn write(&self, path: &std::path::Path) -> Result<PathBuf, WorkspaceError> {
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            all_file_capabilities(),
+            &mut sink,
+        )
+        .expect("policy");
+        self.workspace.write(
+            &mut policy,
+            &Labelled::trusted(path.display().to_string()),
+            &Labelled::trusted("WRITTEN".to_string()),
+        )
+    }
+}
+
+fn escapes_the_workspace(result: Result<impl std::fmt::Debug, WorkspaceError>, what: &str) {
+    match result {
+        Err(WorkspaceError::Escapes { .. }) => {}
+        other => panic!("{what}: expected a refusal for leaving the workspace, got {other:?}"),
+    }
+}
+
+/// A call holding the reach reads and writes a sibling directory, nothing is opened, the first
+/// reach is recorded once with the tool and the field, and the same read is refused after the
+/// call. The regressions it rejects: a reach that opens the directory (`/add-dir` lists it and
+/// the next call finds it open), a reach that outlives its call, and no record of the first
+/// reach.
+#[test]
+fn a_call_holding_the_reach_reads_and_writes_a_sibling_directory_and_opens_nothing() {
+    let places = BypassPlaces::new("reads-and-writes");
+    let notes = places.beside.join("notes.txt");
+    escapes_the_workspace(places.read(&notes), "before the reach is held");
+
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("read_file", false)));
+    assert_eq!(places.read(&notes).expect("reach to read"), "NOTES");
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("write_file", true)));
+    let created = places.beside.join("created.txt");
+    places.write(&created).expect("reach to write");
+    assert_eq!(std::fs::read_to_string(&created).unwrap(), "WRITTEN");
+    places.write(&places.beside.join("again.txt")).unwrap();
+
+    assert!(places.workspace.added_directories().is_empty());
+    assert!(places.workspace.path_reach().is_empty());
+    let reached = places.workspace.take_new_reaches();
+    assert_eq!(reached.len(), 1, "{reached:?}");
+    assert_eq!(reached[0].directory, places.beside);
+    assert_eq!(
+        (reached[0].tool.as_str(), reached[0].mode),
+        ("read_file", "bypass")
+    );
+    assert_eq!(places.workspace.reached_directories(), reached);
+    assert!(places.workspace.take_new_reaches().is_empty());
+
+    places.workspace.hold_bypass_reach(None);
+    escapes_the_workspace(places.read(&notes), "after the call");
+}
+
+/// Two sibling directories whose names differ only in a byte that is not UTF-8 and the character
+/// a lossy conversion turns it into, each reached through a link, are two reached directories.
+/// The regression it rejects: a first-reach record keyed on the lossy spelling, which takes the
+/// second directory for one already reached and never reports it (PATH-003).
+#[cfg(target_os = "linux")]
+#[test]
+fn two_directories_whose_names_differ_only_in_a_non_utf8_byte_are_two_reaches() {
+    use std::os::unix::ffi::OsStrExt;
+    let places = BypassPlaces::new("non-utf8-siblings");
+    let raw = places.beside.join(std::ffi::OsStr::from_bytes(b"x-\xff"));
+    let lookalike = places.beside.join("x-\u{FFFD}");
+    for (dir, link) in [(&raw, "raw"), (&lookalike, "lookalike")] {
+        std::fs::create_dir(dir).unwrap();
+        std::fs::write(dir.join("f.txt"), link).unwrap();
+        std::os::unix::fs::symlink(dir, places.beside.join(link)).unwrap();
+    }
+    assert_eq!(raw.to_string_lossy(), lookalike.to_string_lossy());
+
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("read_file", false)));
+    assert_eq!(
+        places.read(&places.beside.join("raw/f.txt")).unwrap(),
+        "raw"
+    );
+    assert_eq!(
+        places.read(&places.beside.join("lookalike/f.txt")).unwrap(),
+        "lookalike"
+    );
+    let reached: Vec<PathBuf> = places
+        .workspace
+        .take_new_reaches()
+        .into_iter()
+        .map(|first| first.directory)
+        .collect();
+    assert_eq!(reached.len(), 2, "{reached:?}");
+    assert!(reached.contains(&raw), "{reached:?}");
+    assert!(reached.contains(&lookalike), "{reached:?}");
+}
+
+/// The refusals of a granted request hold under bypass, judged where the path leads: a filesystem
+/// root, the home directory, `~/.ssh`, the state directory, a link into one of them, a wildcard
+/// and a control character. A reach that looked at the spelling alone would pass the link; one
+/// that dropped a refusal would pass its row.
+#[cfg(unix)]
+#[test]
+fn a_path_a_request_would_be_refused_is_not_reached_under_bypass() {
+    let places = BypassPlaces::new("refused");
+    std::fs::write(places.home.join(".ssh/id_ed25519"), "KEY").unwrap();
+    std::fs::write(places.home.join(".bravebot/secret"), "SECRET").unwrap();
+    let link = places.beside.join("to-ssh");
+    std::os::unix::fs::symlink(places.home.join(".ssh"), &link).unwrap();
+    let spelled = |tail: &str| PathBuf::from(format!("{}{tail}", places.beside.display()));
+    let cases = [
+        ("root", PathBuf::from("/")),
+        ("home", places.home.clone()),
+        ("ssh key", places.home.join(".ssh/id_ed25519")),
+        ("state directory", places.home.join(".bravebot/secret")),
+        ("a link into ~/.ssh", link.join("id_ed25519")),
+        ("a wildcard", spelled("/*.txt")),
+        ("a control character", spelled("/no\ntes.txt")),
+    ];
+    for write in [false, true] {
+        places
+            .workspace
+            .hold_bypass_reach(Some(places.reach("read_file", write)));
+        for (what, path) in &cases {
+            escapes_the_workspace(places.read(path), &format!("{what}, write {write}"));
+        }
+        // The control: the same reach is held and a path beside is reached.
+        assert_eq!(
+            places.read(&places.beside.join("notes.txt")).unwrap(),
+            "NOTES"
+        );
+    }
+    // Reading the sessions directory of the state directory is the one read allowed there.
+    std::fs::write(places.home.join(".bravebot/sessions/one.json"), "{}").unwrap();
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("read_file", false)));
+    assert_eq!(
+        places
+            .read(&places.home.join(".bravebot/sessions/one.json"))
+            .unwrap(),
+        "{}"
+    );
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("write_file", true)));
+    escapes_the_workspace(
+        places.write(&places.home.join(".bravebot/sessions/two.json")),
+        "a write to the sessions directory",
+    );
+}
+
+/// A write makes what it names, so a new entry is judged by the directory it lands in: directly
+/// in the home directory it is refused, and in a directory below it it is made. A persistence
+/// location is refused for a write and read as before.
+#[test]
+fn a_new_entry_directly_in_the_home_directory_or_a_persistence_location_is_refused() {
+    let places = BypassPlaces::new("new-entries");
+    std::fs::create_dir_all(places.home.join(".config/autostart")).unwrap();
+    std::fs::write(places.home.join(".config/autostart/app.desktop"), "X").unwrap();
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("write_file", true)));
+    escapes_the_workspace(
+        places.write(&places.home.join(".bashrc")),
+        "a new entry in the home directory",
+    );
+    escapes_the_workspace(
+        places.write(&places.home.join(".config/autostart/new.desktop")),
+        "a new entry in a persistence location",
+    );
+    places
+        .write(&places.home.join("work/new.txt"))
+        .expect("below the home directory");
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("read_file", false)));
+    assert_eq!(
+        places
+            .read(&places.home.join(".config/autostart/app.desktop"))
+            .unwrap(),
+        "X"
+    );
+}
+
+/// The person's `denyRead` covers a path for a read and a write, and `denyWrite` for a write
+/// alone, and `permissions.readsStayInWorkspace` takes the reach away whole. A reach that took
+/// `denyWrite` for a read, or ignored either list, fails one row.
+#[test]
+fn the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass() {
+    let places = BypassPlaces::new("deny");
+    let read_denied = places.beside.join("read-denied");
+    let write_denied = places.beside.join("write-denied");
+    for dir in [&read_denied, &write_denied] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("f.txt"), "F").unwrap();
+    }
+    let entry = |path: &PathBuf| Entry {
+        path: path.display().to_string(),
+        by: None,
+        pinned: false,
+    };
+    let lists = || Lists {
+        deny_read: vec![entry(&read_denied)],
+        deny_write: vec![entry(&write_denied)],
+        ..Lists::default()
+    };
+    let hold = |write: bool| {
+        places.workspace.hold_bypass_reach(Some(places.reach_with(
+            "read_file",
+            write,
+            lists(),
+            Vec::new(),
+        )));
+    };
+    hold(false);
+    escapes_the_workspace(
+        places.read(&read_denied.join("f.txt")),
+        "denyRead for a read",
+    );
+    assert_eq!(places.read(&write_denied.join("f.txt")).unwrap(), "F");
+    hold(true);
+    escapes_the_workspace(
+        places.write(&read_denied.join("g.txt")),
+        "denyRead for a write",
+    );
+    escapes_the_workspace(
+        places.write(&write_denied.join("g.txt")),
+        "denyWrite for a write",
+    );
+    places
+        .write(&places.beside.join("ok.txt"))
+        .expect("a path no list covers");
+
+    let kept = BypassPlaces::new("kept-inside");
+    let workspace = kept.workspace.clone().with_reads_kept_inside(true);
+    workspace.hold_bypass_reach(Some(kept.reach("read_file", false)));
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let named = Labelled::trusted(kept.beside.join("notes.txt").display().to_string());
+    escapes_the_workspace(workspace.read(&mut policy, &named), "readsStayInWorkspace");
+}
+
+/// A delegate in a checkout reaches neither the working directory nor another checkout, whatever
+/// the mode gives: the reach carries the directories to leave out. A reach that left the list
+/// out would let the delegate write the person's tree.
+#[test]
+fn a_directory_the_call_excludes_is_not_reached_and_its_sibling_is() {
+    let places = BypassPlaces::new("excluded");
+    let held_out = places.beside.join("working");
+    std::fs::create_dir_all(&held_out).unwrap();
+    std::fs::write(held_out.join("f.txt"), "F").unwrap();
+    places.workspace.hold_bypass_reach(Some(places.reach_with(
+        "read_file",
+        false,
+        Lists::default(),
+        vec![held_out.clone()],
+    )));
+    escapes_the_workspace(
+        places.read(&held_out.join("f.txt")),
+        "the excluded directory",
+    );
+    assert_eq!(
+        places.read(&places.beside.join("notes.txt")).unwrap(),
+        "NOTES"
+    );
+}
+
+/// A reach held by one clone of a workspace is not seen by another, so a delegate's call cannot
+/// give the lead session's call its reach or take it away.
+#[test]
+fn a_clone_holds_a_reach_of_its_own() {
+    let places = BypassPlaces::new("clone");
+    let other = places.workspace.clone();
+    places
+        .workspace
+        .hold_bypass_reach(Some(places.reach("read_file", false)));
+    escapes_the_workspace(
+        {
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                all_file_capabilities(),
+                &mut sink,
+            )
+            .expect("policy");
+            other.read(
+                &mut policy,
+                &Labelled::trusted(places.beside.join("notes.txt").display().to_string()),
+            )
+        },
+        "the clone",
+    );
+    assert_eq!(
+        places.read(&places.beside.join("notes.txt")).unwrap(),
+        "NOTES"
+    );
+}
+
+/// CHECKOUT-7: a delegate in a checkout is given no reach to the working directory or to another
+/// checkout, whatever the mode gives, and the directories to leave out are what the workspace
+/// itself says they are. The control is a directory beside, which the same reach reads; a delegate
+/// that was given the reach whole would read the person's tree by its absolute path.
+#[test]
+fn a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout() {
+    let (scratch, state, workspace) =
+        repository_with_a_state_directory("bypass-checkout", &[("README", "hello\n")]);
+    let home = outside("bypass-checkout-home");
+    let beside = outside("bypass-checkout-beside");
+    std::fs::write(beside.path.join("notes.md"), "a note").unwrap();
+    let mut sink = RecordingSink::new();
+    let mut policy = checkout_policy(&workspace, &mut sink, &["."], &[]);
+    let made = workspace
+        .checkout_for(&policy, &state.path, d1())
+        .expect("a checkout");
+    let sibling = workspace
+        .checkout_for(
+            &policy,
+            &state.path,
+            bravebot_core::delegate::DelegateId::nth(2),
+        )
+        .expect("a checkout for another delegate");
+
+    let excluded = made.checkout_exclusions();
+    assert!(
+        excluded.contains(&scratch.path.canonicalize().unwrap()),
+        "{excluded:?}"
+    );
+    assert!(
+        excluded.contains(&sibling.root().to_path_buf()),
+        "{excluded:?}"
+    );
+    assert!(
+        !excluded.contains(&made.root().to_path_buf()),
+        "{excluded:?}"
+    );
+    assert!(workspace.checkout_exclusions().is_empty());
+
+    made.hold_bypass_reach(Some(BypassReach {
+        tool: "read_file".to_string(),
+        field: "path",
+        mode: "bypass",
+        profile: Some(home.path.canonicalize().unwrap()),
+        person: bravebot_sandbox::rules::resolve(
+            &bravebot_sandbox::rules::Lists::default(),
+            Some(&home.path),
+            made.root(),
+        ),
+        excluded,
+        write: false,
+    }));
+    for forbidden in [scratch.path.join("README"), sibling.root().join("README")] {
+        let error = made
+            .read(&mut policy, &trusted_text(&forbidden.display().to_string()))
+            .expect_err("the delegate reached a tree it is held out of");
+        assert!(matches!(error, WorkspaceError::Escapes { .. }), "{error:?}");
+    }
+    made.read(
+        &mut policy,
+        &trusted_text(&beside.path.join("notes.md").display().to_string()),
+    )
+    .expect("a directory beside is reached");
+}

@@ -34,13 +34,23 @@ pub struct Queued {
     /// Decided by the caller, since which words are commands and which mode the box was in are
     /// the input box's to know and not this type's.
     waiting: Waiting,
-    recall: crate::history::Ticket,
+    /// The history entry the line made, for a line that was typed. A line a click queued was not
+    /// typed and leaves none.
+    recall: Option<crate::history::Ticket>,
     /// Whether Ctrl-Enter asked for this prompt to go now, with the others it asked for.
     ///
     /// On the line rather than the session, because what the press asked for is the lines waiting
     /// when it was made: one typed after it was not part of that, and one taken back with Up is no
     /// longer anywhere to be sent.
     hurried: bool,
+}
+
+impl Queued {
+    /// Whether the line was typed, which a line a click on the info panel queued was not
+    /// (MOUSE-29).
+    fn was_typed(&self) -> bool {
+        self.recall.is_some()
+    }
 }
 
 /// Where a waiting line is going, which is what its row under the box says.
@@ -223,7 +233,32 @@ impl Session {
             attached,
             pasted,
             waiting,
-            recall,
+            recall: Some(recall),
+            hurried: false,
+        });
+        self.scroll = 0;
+        true
+    }
+
+    /// Queue `line` as a command to carry out when the turn in flight has finished, for a click
+    /// that stands for the command ([MOUSE-29](../../../docs/specs/mouse.md#MOUSE-29)).
+    ///
+    /// The line a person typed would be taken off the box and remembered. This one was never in the
+    /// box, which is left as it is, and was not typed, so the history is too. Everything else about
+    /// the wait is the same: where it goes, what it waits behind and how it is carried out are read
+    /// from the queue and not from how the line got there. While the session is working, as
+    /// [`Session::queue_command`] requires, and while a command the person typed is running, which
+    /// the queue is carried out after as it is after a turn (MOUSE-29).
+    pub fn queue_command_line(&mut self, line: &str) -> bool {
+        if !matches!(self.status, Status::Working | Status::Running) {
+            return false;
+        }
+        self.queued.push(Queued {
+            prompt: line.to_string(),
+            attached: Vec::new(),
+            pasted: Vec::new(),
+            waiting: Waiting::Command,
+            recall: None,
             hurried: false,
         });
         self.scroll = 0;
@@ -362,7 +397,7 @@ impl Session {
             prompts.push(next.prompt);
             attached.extend(next.attached);
             pasted.extend(next.pasted);
-            recall.push(next.recall);
+            recall.extend(next.recall);
         }
         // The copies of the prompts going now leave the buffer: a copy still there would reach the
         // planner a second time, as an interjection into the very turn this line started. What
@@ -446,7 +481,19 @@ impl Session {
     /// The prompts stay in the history. From the person's side they were sent, and taking them back
     /// does not unsay them.
     pub fn unqueue(&mut self) -> bool {
-        if self.queued.is_empty() {
+        self.unqueue_from(0)
+    }
+
+    /// Take the waiting prompt at `first` back out of the queue and into the box, and every prompt
+    /// typed after it (MOUSE-28).
+    ///
+    /// What the key does with the whole queue, stopped at the line pointed to: the queue gives up its
+    /// lines from the end the person types at, so a prompt has gone back only once the ones after it
+    /// have, and the order they were typed in is the order they come back in. A click on the oldest
+    /// is the key. Says whether anything came back, which it does not where nothing waits at `first`
+    /// or the turn has taken the newest line already.
+    pub fn unqueue_from(&mut self, first: usize) -> bool {
+        if self.queued.len() <= first {
             return false;
         }
         // From the back, which is the end this key takes from, and only as far as the turn has not
@@ -462,13 +509,29 @@ impl Session {
         // nothing to take back from: neither was ever offered to the turn, so no copy of either is
         // anywhere for the planner to have been given. What makes a prompt unreclaimable is that it
         // has already gone.
+        //
+        // A line a click queued does not come back at all. Nobody typed it, so the box would hold a
+        // command the person never wrote, and Enter on it would send the line to the planner as
+        // words. It keeps its place among what is left and is carried out in its turn.
         let mut reclaimed = Vec::new();
-        while let Some(waiting) = self.queued.last().map(|line| line.waiting) {
-            if waiting.is_sent() && !self.pending.forget_last() {
+        let mut stays = Vec::new();
+        while self.queued.len() > first
+            && let Some((waiting, typed)) = self
+                .queued
+                .last()
+                .map(|line| (line.waiting, line.was_typed()))
+        {
+            if typed && waiting.is_sent() && !self.pending.forget_last() {
                 break;
             }
-            reclaimed.push(self.queued.pop().expect("the queue was not empty"));
+            let line = self.queued.pop().expect("the queue was not empty");
+            match typed {
+                true => reclaimed.push(line),
+                false => stays.push(line),
+            }
         }
+        // Taken from the end, so the order they waited in is the reverse of the order they were taken.
+        self.queued.extend(stays.into_iter().rev());
         if reclaimed.is_empty() {
             return false;
         }

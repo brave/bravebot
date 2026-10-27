@@ -16,13 +16,15 @@
 
 use bravebot_aichat::models::Model;
 use ratatui::Frame;
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use std::sync::mpsc;
 
+use crate::list_picker::Placed;
+use crate::select::{self, Click};
 use crate::theme;
 use crate::wrap::display_width;
 use bravebot_i18n::t;
@@ -56,6 +58,11 @@ pub struct Picker {
     current: Option<String>,
     /// Where the rows will come from, while the endpoints are still being asked for them.
     listing: Option<mpsc::Receiver<Listed>>,
+    /// The first row drawn, held where a press left it: a press moves the cursor to a model that is
+    /// already drawn and the rows stay where they are, so a second press on the same cell is on the
+    /// same model. A key, a turn of the wheel or a letter typed lets go of it, and the list moves as
+    /// it always did.
+    held_from: Option<usize>,
 }
 
 impl Picker {
@@ -67,6 +74,7 @@ impl Picker {
             selected: 0,
             current: current.map(str::to_string),
             listing: None,
+            held_from: None,
         };
         picker.select_current();
         picker
@@ -178,10 +186,12 @@ impl Picker {
     fn down(&mut self) {
         let last = self.matching().len().saturating_sub(1);
         self.selected = (self.selected + 1).min(last);
+        self.held_from = None;
     }
 
     fn up(&mut self) {
         self.selected = self.selected.saturating_sub(1);
+        self.held_from = None;
     }
 
     fn typed(&mut self, c: char) {
@@ -213,6 +223,7 @@ impl Picker {
             .iter()
             .position(|model| Some(&model.key) == was.as_ref());
         self.selected = found.unwrap_or(0);
+        self.held_from = None;
     }
 
     /// Whether this row is the model already in use.
@@ -297,6 +308,119 @@ pub fn handle_key(picker: &mut Picker, code: KeyCode, modifiers: KeyModifiers) -
     }
 }
 
+/// What a mouse event did to the picker.
+///
+/// A left press on a model puts the cursor on it, and a second press on the same model within
+/// [`select::MULTI_CLICK`] takes it, as Enter does (MOUSE-15). A press on a service's heading or on
+/// the space between two sections is on no model and does nothing. A turn of the wheel moves the
+/// cursor `wheel` models, stopping at the first and the last (MOUSE-46), over the headings. A left
+/// press outside the panel leaves the model alone, as Escape does (MOUSE-47). Nothing else the mouse
+/// does leaves the picker or takes a row. `placed` is where [`draw`] drew the panel, and `last` the
+/// press that was answered before this one.
+pub fn handle_mouse(
+    picker: &mut Picker,
+    placed: Placed,
+    mouse: MouseEvent,
+    last: &mut Option<Click>,
+    now: std::time::Instant,
+    wheel: u16,
+) -> Outcome {
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            for _ in 0..wheel {
+                picker.down();
+            }
+            return Outcome::Continue;
+        }
+        MouseEventKind::ScrollUp => {
+            for _ in 0..wheel {
+                picker.up();
+            }
+            return Outcome::Continue;
+        }
+        MouseEventKind::Down(MouseButton::Left) => {}
+        _ => return Outcome::Continue,
+    }
+    let cell = Position::new(mouse.column, mouse.row);
+    if !placed.area.contains(cell) {
+        *last = None;
+        return Outcome::Cancel;
+    }
+    let Some(index) = model_at(picker, placed.list, cell) else {
+        *last = None;
+        return Outcome::Continue;
+    };
+    let model = picker.matching().get(index).map(|model| model.key.clone());
+    // The rows drawn stay where they were: the cursor moves to a model already on the screen.
+    picker.held_from = Some(first_drawn(picker, placed.list));
+    picker.selected = index;
+    let (click, count) = select::count_press_on(*last, now, (mouse.row, mouse.column), &model);
+    *last = Some(click);
+    if count == 2 {
+        Outcome::Select
+    } else {
+        Outcome::Continue
+    }
+}
+
+/// The row of the list, counting headings and gaps, that is the first drawn in `area`.
+fn first_drawn(picker: &Picker, area: Rect) -> usize {
+    let matching = picker.matching();
+    let rows = rows(&matching);
+    window(
+        &rows,
+        cursor_row(&rows, picker.selected),
+        (area.height as usize).max(1),
+        picker.held_from,
+    )
+    .1
+}
+
+/// Where the row of the model at `selected` is among the rows of the list.
+fn cursor_row(rows: &[Row<'_>], selected: usize) -> usize {
+    rows.iter()
+        .position(|row| matches!(row, Row::Model(index, _) if *index == selected))
+        .unwrap_or(0)
+}
+
+/// Which of the matching models is drawn at `cell` of a list drawn in `list`, if one is.
+fn model_at(picker: &Picker, list: Rect, cell: Position) -> Option<usize> {
+    if !list.contains(cell) {
+        return None;
+    }
+    let drawn = laid_out(picker, list);
+    drawn.get(usize::from(cell.y - list.y))?.0
+}
+
+/// Where [`draw`] draws the panel in a frame of `frame`: the panel with its border, and the rows of
+/// the list in it.
+pub fn placed(frame: Rect, picker: &Picker) -> Placed {
+    let area = centred(frame, picker.rows_needed());
+    let inside = Block::default().borders(Borders::ALL).inner(area);
+    Placed {
+        area,
+        list: split(inside)[2],
+    }
+}
+
+/// The search, the list and the keys inside the border of the panel.
+fn split(inside: Rect) -> std::rc::Rc<[Rect]> {
+    // The blank rows are given up where keeping them would leave the list one row: that row cannot
+    // hold a heading and the row under the cursor, and VIEW-15 wants no row on screen without the
+    // name of its service. The blank above the key line goes first.
+    let blanks = inside.height.saturating_sub(4).min(2);
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),                        // search
+            Constraint::Length(blanks.min(1)),            // blank
+            Constraint::Min(1),                           // list
+            Constraint::Length(blanks.saturating_sub(1)), // blank
+            Constraint::Length(1),                        // keys
+        ])
+        .split(inside)
+}
+
 /// Draw the panel.
 pub fn draw(frame: &mut Frame, picker: &Picker) {
     let area = centred(frame.area(), picker.rows_needed());
@@ -319,20 +443,7 @@ pub fn draw(frame: &mut Frame, picker: &Picker) {
     let inside = block.inner(area);
     frame.render_widget(block, area);
 
-    // The blank rows are given up where keeping them would leave the list one row: that row cannot
-    // hold a heading and the row under the cursor, and VIEW-15 wants no row on screen without the
-    // name of its service. The blank above the key line goes first.
-    let blanks = inside.height.saturating_sub(4).min(2);
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),                        // search
-            Constraint::Length(blanks.min(1)),            // blank
-            Constraint::Min(1),                           // list
-            Constraint::Length(blanks.saturating_sub(1)), // blank
-            Constraint::Length(1),                        // keys
-        ])
-        .split(inside);
+    let layout = split(inside);
 
     let search = match picker.search.is_empty() {
         true => Span::styled(
@@ -401,37 +512,56 @@ fn rows<'a>(matching: &[&'a Model]) -> Vec<Row<'a>> {
 
 /// The list itself, and a word when the search matches nothing.
 fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
+    laid_out(picker, area)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect()
+}
+
+/// Each row of the list as drawn in `area`, with which of the matching models it is, or `None` for a
+/// heading, a gap and the word for no match. The one place the rows are laid out, so the model a
+/// press lands on is the one drawn there.
+fn laid_out(picker: &Picker, area: Rect) -> Vec<(Option<usize>, Line<'static>)> {
     let matching = picker.matching();
     if matching.is_empty() && picker.is_loading() {
-        return vec![Line::from(Span::styled(
-            format!(" {}", t!(model_picker_loading)),
-            Style::default().fg(theme::muted()),
-        ))];
+        return vec![(
+            None,
+            Line::from(Span::styled(
+                format!(" {}", t!(model_picker_loading)),
+                Style::default().fg(theme::muted()),
+            )),
+        )];
     }
     if matching.is_empty() {
-        return vec![Line::from(Span::styled(
-            format!(" {}", t!(model_picker_nothing_matches)),
-            Style::default().fg(theme::muted()),
-        ))];
+        return vec![(
+            None,
+            Line::from(Span::styled(
+                format!(" {}", t!(model_picker_nothing_matches)),
+                Style::default().fg(theme::muted()),
+            )),
+        )];
     }
 
     let rows = rows(&matching);
     let visible = (area.height as usize).max(1);
-    let cursor = rows
-        .iter()
-        .position(|row| matches!(row, Row::Model(index, _) if *index == picker.selected))
-        .unwrap_or(0);
-    let (heading, first, shown) = window(&rows, cursor, visible);
+    let cursor = cursor_row(&rows, picker.selected);
+    let (heading, first, shown) = window(&rows, cursor, visible, picker.held_from);
 
-    let mut lines: Vec<Line<'static>> = heading.map(service_line).into_iter().collect();
+    let mut lines: Vec<(Option<usize>, Line<'static>)> = heading
+        .map(|service| (None, service_line(service)))
+        .into_iter()
+        .collect();
     lines.extend(rows.iter().skip(first).take(shown).map(|row| match row {
-        Row::Service(service) => service_line(service),
-        Row::Gap => Line::raw(""),
-        Row::Model(index, model) => model_line(
-            model,
-            *index == picker.selected,
-            picker.is_current(model),
-            area.width as usize,
+        Row::Service(service) => (None, service_line(service)),
+        Row::Gap => (None, Line::raw("")),
+        Row::Model(index, model) => (
+            Some(*index),
+            model_line(
+                model,
+                *index == picker.selected,
+                picker.is_current(model),
+                area.width as usize,
+            ),
         ),
     }));
     lines
@@ -444,7 +574,20 @@ fn list_lines(picker: &Picker, area: Rect) -> Vec<Line<'static>> {
 /// the top row belongs to is kept on the top line, at the cost of one row of the list. The top
 /// row's section rather than the cursor's, because a window straddling a boundary begins in the
 /// section before the cursor's, and those rows are the ones whose heading is off screen.
-fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a str>, usize, usize) {
+fn window<'a>(
+    rows: &[Row<'a>],
+    cursor: usize,
+    visible: usize,
+    held_from: Option<usize>,
+) -> (Option<&'a str>, usize, usize) {
+    // Where a press has held the rows they stay, with the heading they had, while the cursor is
+    // among them.
+    if let Some(first) = held_from {
+        let held = window_from(rows, first, visible);
+        if cursor >= first && cursor < first + held.2 && first + held.2 <= rows.len() {
+            return held;
+        }
+    }
     let first = start(rows.len(), cursor, visible);
     // A list one row tall is the only one with nothing to hold a heading over: the row under the
     // cursor is what a person is there to read, and a heading that displaced it would leave the
@@ -469,6 +612,20 @@ fn window<'a>(rows: &[Row<'a>], cursor: usize, visible: usize) -> (Option<&'a st
         // The shorter window begins on a heading or on the gap above one, so every model in it is
         // under a heading it draws, and the row a held heading would have taken is drawn instead.
         None => (None, held_from, visible),
+    }
+}
+
+/// The window that begins at `first`: the heading of the section it begins inside held above it, at
+/// the cost of a row, as [`window`] draws one that has moved there, or none where it begins on a
+/// heading or a gap.
+fn window_from<'a>(
+    rows: &[Row<'a>],
+    first: usize,
+    visible: usize,
+) -> (Option<&'a str>, usize, usize) {
+    match section_of(rows, first) {
+        Some(service) if visible > 1 => (Some(service), first, visible - 1),
+        _ => (None, first, visible),
     }
 }
 
@@ -968,6 +1125,128 @@ mod tests {
             .collect()
     }
 
+    /// What an `openai` entry that names no models is offered (BACKEND-19): the rows OpenAI lists
+    /// less the Responses-only ids. The rows state no capability, so chat, reasoning, embedding,
+    /// speech, image and moderation models arrive in one list. Each is keyed by the entry's id and
+    /// filed under it.
+    fn an_openai_roster() -> Vec<Model> {
+        [
+            "babbage-002",
+            "davinci-002",
+            "chat-latest",
+            "chatgpt-image-latest",
+            "gpt-3.5-turbo",
+            "gpt-3.5-turbo-0125",
+            "gpt-3.5-turbo-instruct",
+            "gpt-4.1",
+            "gpt-4.1-2025-04-14",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-2024-11-20",
+            "gpt-4o-mini",
+            "gpt-4o-mini-2024-07-18",
+            "gpt-4o-mini-search-preview",
+            "gpt-4o-mini-transcribe",
+            "gpt-4o-mini-tts",
+            "gpt-4o-search-preview",
+            "gpt-4o-transcribe",
+            "gpt-5",
+            "gpt-5-2025-08-07",
+            "gpt-5-chat-latest",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-5.1",
+            "gpt-5.1-chat-latest",
+            "gpt-5.2",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "gpt-audio",
+            "gpt-image-1",
+            "gpt-image-1-mini",
+            "gpt-realtime",
+            "gpt-realtime-mini",
+            "o1",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "omni-moderation-latest",
+            "sora-2",
+            "text-embedding-3-large",
+            "text-embedding-3-small",
+            "text-embedding-ada-002",
+            "tts-1",
+            "tts-1-hd",
+            "whisper-1",
+        ]
+        .iter()
+        .map(|id| served_by("openai", &format!("openai/{id}"), id))
+        .collect()
+    }
+
+    /// VIEW-14, VIEW-15: a roster that mixes chat, embedding, speech and image models, as an
+    /// `openai` entry naming no models is offered, is one section under one heading with nothing
+    /// capped. A person reaches an embedding or a speech model by typing words from its name, and a
+    /// pick is recorded under the entry's id. Rejects a roster cut to a count, a heading repeated
+    /// for each row, and a search that matches any word typed where the clause says every word.
+    /// The roster is given to the picker as it is, so this test does not reach the filter that
+    /// leaves the Responses-only ids out of a listing ([BACKEND-19]).
+    ///
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    #[test]
+    fn an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable() {
+        let roster = an_openai_roster();
+        let mut picker = Picker::new(roster.clone(), Some("openai/gpt-4o-mini"));
+
+        assert_eq!(picker.matching().len(), roster.len(), "a row was dropped");
+        assert_eq!(
+            picker.chosen().map(|model| model.key.as_str()),
+            Some("openai/gpt-4o-mini"),
+            "the picker did not open on the model in use"
+        );
+        let output = rendered_at(&picker, 60, 20);
+        assert_eq!(output.matches("openai").count(), 1, "{output}");
+        assert!(output.contains("● gpt-4o-mini"), "{output}");
+        assert!(!output.contains("openai/gpt-4o-mini"), "{output}");
+
+        let found = |picker: &mut Picker, text: &str| -> Vec<String> {
+            for _ in 0..picker.search.len() {
+                handle_key(picker, KeyCode::Backspace, KeyModifiers::NONE);
+            }
+            typing(picker, text);
+            picker
+                .matching()
+                .iter()
+                .map(|model| model.key.clone())
+                .collect()
+        };
+        assert_eq!(found(&mut picker, "whisper"), ["openai/whisper-1"]);
+        assert_eq!(
+            found(&mut picker, "embedding"),
+            [
+                "openai/text-embedding-3-large",
+                "openai/text-embedding-3-small",
+                "openai/text-embedding-ada-002"
+            ]
+        );
+        assert_eq!(
+            found(&mut picker, "gpt-5.4"),
+            ["openai/gpt-5.4", "openai/gpt-5.4-mini"]
+        );
+        assert_eq!(found(&mut picker, "o3 mini"), ["openai/o3-mini"]);
+
+        found(&mut picker, "tts-1-hd");
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Select
+        );
+        assert_eq!(
+            picker.chosen().map(|model| model.key.as_str()),
+            Some("openai/tts-1-hd")
+        );
+    }
+
     /// A premium model returns 403 without a subscription, so which rows those are has to be on the
     /// screen rather than discovered by a request failing.
     #[test]
@@ -1260,5 +1539,446 @@ mod tests {
         let output = rendered_at(&Picker::new(vec![long], None), 30, 12);
         assert!(output.contains("some/very-long"), "{output}");
         assert!(output.contains('…'), "{output}");
+    }
+
+    fn press(row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    fn event(kind: MouseEventKind, row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            ..press(row, column)
+        }
+    }
+
+    /// The panel as a `width` by `height` frame draws it, and the text of every row of the frame.
+    fn shown_in(picker: &Picker, width: u16, height: u16) -> (Placed, Vec<String>) {
+        (
+            placed(Rect::new(0, 0, width, height), picker),
+            screen_at(picker, width, height),
+        )
+    }
+
+    /// The row of the frame a text is drawn on, and a cell in it.
+    fn row_of(screen: &[String], text: &str) -> (u16, u16) {
+        let row = screen
+            .iter()
+            .position(|row| row.contains(text))
+            .unwrap_or_else(|| panic!("{text} is not on the screen: {screen:#?}"));
+        let column = screen[row].find(text).expect("it is on the row");
+        (row as u16, column as u16 + 1)
+    }
+
+    fn named(picker: &Picker) -> Option<&str> {
+        picker.chosen().map(|model| model.display_name.as_str())
+    }
+
+    /// MOUSE-15. Rejects: a press that moves nothing, one that takes at once, and a model found from
+    /// the row it was not drawn on: the first press puts the cursor on the model it landed on, among
+    /// models under two headings, and a second on the same cell takes it.
+    #[test]
+    fn a_press_on_a_model_moves_the_cursor_and_a_second_takes_it() {
+        let mut picker = Picker::new(from_two_services(), None);
+        let (shown, screen) = shown_in(&picker, 80, 24);
+        let (row, column) = row_of(&screen, "moonshot/kimi-k2");
+        let (mut last, now) = (None, std::time::Instant::now());
+
+        let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Continue);
+        assert_eq!(named(&picker), Some("moonshot/kimi-k2"));
+
+        let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+        assert_eq!(outcome, Outcome::Select);
+        assert_eq!(named(&picker), Some("moonshot/kimi-k2"));
+
+        // A model under the second heading is found past the gap and the heading between them.
+        let mut picker = Picker::new(from_two_services(), None);
+        let (row, column) = row_of(&screen, "Claude 4 Sonnet");
+        handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+        assert_eq!(named(&picker), Some("Claude 4 Sonnet"));
+    }
+
+    /// MOUSE-15. Rejects: a second press on another model, or after the window, taking a model.
+    #[test]
+    fn two_presses_on_different_models_or_far_apart_take_nothing() {
+        let mut picker = Picker::new(from_two_services(), None);
+        let (shown, screen) = shown_in(&picker, 80, 24);
+        let first = row_of(&screen, "z-ai/glm-4.6");
+        let second = row_of(&screen, "moonshot/kimi-k2");
+        let (mut last, now) = (None, std::time::Instant::now());
+        let late = now + select::MULTI_CLICK + std::time::Duration::from_millis(1);
+        for (at, (row, column), when) in [
+            ("first", first, now),
+            ("second", second, now),
+            ("second again, late", second, late),
+        ] {
+            let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, when, 3);
+            assert_eq!(outcome, Outcome::Continue, "{at}");
+        }
+        assert_eq!(named(&picker), Some("moonshot/kimi-k2"));
+    }
+
+    /// MOUSE-15. Rejects: a press on a service's heading, on the space between two sections, on the
+    /// search box, on the line of keys or on the border moving the cursor or taking a model, a second
+    /// press doing either, and a press of another button, a drag or a release acting.
+    #[test]
+    fn a_press_on_no_model_and_any_other_mouse_event_leave_the_picker_alone() {
+        let mut picker = Picker::new(from_two_services(), None);
+        let (shown, screen) = shown_in(&picker, 80, 24);
+        let (heading, column) = row_of(&screen, "OpenRouter");
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let before = named(&picker).map(str::to_string);
+
+        // The heading, the gap above the second heading, the box the search is typed into, the line
+        // of keys and the border.
+        let gap = shown.list.y + 3;
+        assert!(
+            screen[usize::from(gap)].trim().is_empty() || screen[usize::from(gap)].contains('│')
+        );
+        for (row, column) in [
+            (heading, column),
+            (gap, shown.list.x + 2),
+            (shown.list.y.saturating_sub(2), shown.list.x),
+            (shown.area.bottom() - 2, shown.list.x),
+            (shown.area.y, shown.list.x + 3),
+        ] {
+            for _ in 0..2 {
+                let outcome =
+                    handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+                assert_eq!(outcome, Outcome::Continue, "({row}, {column})");
+            }
+        }
+        for kind in [
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Down(MouseButton::Middle),
+            MouseEventKind::Moved,
+        ] {
+            let mouse = event(kind, shown.list.y + 1, shown.list.x + 2);
+            for _ in 0..2 {
+                assert_eq!(
+                    handle_mouse(&mut picker, shown, mouse, &mut last, now, 3),
+                    Outcome::Continue,
+                    "{kind:?}"
+                );
+            }
+        }
+        assert_eq!(named(&picker).map(str::to_string), before);
+    }
+
+    /// MOUSE-47. Rejects: a left press outside the panel leaving the model picker open or taking the
+    /// model under the cursor, and a press on the panel's border counting as outside.
+    #[test]
+    fn a_left_press_outside_the_panel_keeps_the_current_model() {
+        let picker = Picker::new(from_two_services(), None);
+        let (shown, _) = shown_in(&picker, 80, 24);
+        let panel = shown.area;
+        let (now, mut last) = (std::time::Instant::now(), None);
+        for (row, column) in [
+            (0, 0),
+            (panel.y - 1, panel.x + 3),
+            (panel.bottom(), panel.x + 3),
+            (panel.y + 2, panel.x - 1),
+            (panel.y + 2, panel.right()),
+        ] {
+            let mut picker = Picker::new(from_two_services(), None);
+            let outcome = handle_mouse(&mut picker, shown, press(row, column), &mut last, now, 3);
+            assert_eq!(outcome, Outcome::Cancel, "({row}, {column})");
+        }
+        let mut picker = picker;
+        let outcome = handle_mouse(
+            &mut picker,
+            shown,
+            press(panel.y, panel.x),
+            &mut last,
+            now,
+            3,
+        );
+        assert_eq!(outcome, Outcome::Continue, "the corner of the border");
+        let right = event(MouseEventKind::Down(MouseButton::Right), 0, 0);
+        assert_eq!(
+            handle_mouse(&mut picker, shown, right, &mut last, now, 3),
+            Outcome::Continue
+        );
+    }
+
+    /// MOUSE-46. Rejects: a wheel turn that counts headings and gaps as rows, moves the other way,
+    /// goes past either end, or takes or leaves the picker.
+    #[test]
+    fn the_wheel_moves_the_cursor_by_the_models_asked_over_the_headings() {
+        let mut picker = Picker::new(from_two_services(), None);
+        let (shown, _) = shown_in(&picker, 80, 24);
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let mut turn = |picker: &mut Picker, kind, wheel| {
+            let outcome = handle_mouse(picker, shown, event(kind, 0, 0), &mut last, now, wheel);
+            assert_eq!(outcome, Outcome::Continue, "{kind:?}");
+            named(picker).map(str::to_string)
+        };
+        // The models in the order drawn: two under OpenRouter, then automatic and Claude, with the
+        // cursor opening on automatic.
+        let automatic = Model::automatic().display_name;
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollUp, 9).as_deref(),
+            Some("z-ai/glm-4.6"),
+            "past the first model"
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 2).as_deref(),
+            Some(automatic.as_str()),
+            "the gap and the heading between the sections were counted as rows"
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 1).as_deref(),
+            Some("Claude 4 Sonnet")
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollDown, 5).as_deref(),
+            Some("Claude 4 Sonnet"),
+            "past the last model"
+        );
+        assert_eq!(
+            turn(&mut picker, MouseEventKind::ScrollUp, 1).as_deref(),
+            Some(automatic.as_str())
+        );
+    }
+
+    /// MOUSE-15. Rejects: finding a press's model from where it sits in the roster, when the list has
+    /// scrolled and a held heading takes the top row: each model drawn is the one a press on its row
+    /// moves the cursor to, and the held heading is no model.
+    #[test]
+    fn a_press_finds_its_model_in_a_list_that_has_scrolled_under_a_held_heading() {
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
+        for _ in 0..30 {
+            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        }
+        let (shown, screen) = shown_in(&picker, 60, 14);
+        let (now, mut last) = (std::time::Instant::now(), None);
+
+        let held = usize::from(shown.list.y);
+        assert!(screen[held].contains("OpenRouter"), "{:?}", screen[held]);
+        handle_mouse(
+            &mut picker,
+            shown,
+            press(shown.list.y, shown.list.x + 2),
+            &mut last,
+            now,
+            3,
+        );
+        assert_eq!(
+            named(&picker),
+            Some("model-29"),
+            "the held heading moved the cursor"
+        );
+
+        for row in shown.list.y + 1..shown.list.bottom() {
+            let drawn = screen[usize::from(row)].clone();
+            let name = drawn
+                .split_whitespace()
+                .find(|word| word.starts_with("model-"))
+                .unwrap_or_else(|| panic!("row {row} holds no model: {drawn:?}"))
+                .to_string();
+            let mut picker = picker_at(30);
+            handle_mouse(
+                &mut picker,
+                shown,
+                press(row, shown.list.x + 2),
+                &mut last,
+                now,
+                3,
+            );
+            assert_eq!(named(&picker), Some(name.as_str()), "row {row}: {drawn:?}");
+        }
+    }
+
+    /// The `model-N` a row of the screen draws, where it draws one.
+    fn model_in(screen: &[String], row: u16) -> Option<String> {
+        screen[usize::from(row)]
+            .split_whitespace()
+            .find(|word| word.starts_with("model-"))
+            .map(str::to_string)
+    }
+
+    /// The rows of the list as drawn: what the screen holds from the first row of the list to the
+    /// last.
+    fn list_rows(screen: &[String], shown: Placed) -> Vec<String> {
+        screen[usize::from(shown.list.y)..usize::from(shown.list.bottom())].to_vec()
+    }
+
+    /// A press and a release on a cell, as a terminal sends them. The release takes nothing.
+    fn click(
+        picker: &mut Picker,
+        shown: Placed,
+        last: &mut Option<Click>,
+        now: std::time::Instant,
+        (row, column): (u16, u16),
+    ) -> Outcome {
+        let outcome = handle_mouse(picker, shown, press(row, column), last, now, 3);
+        let released = event(MouseEventKind::Up(MouseButton::Left), row, column);
+        assert_eq!(
+            handle_mouse(picker, shown, released, last, now, 3),
+            Outcome::Continue
+        );
+        outcome
+    }
+
+    /// MOUSE-15. Rejects: a double click in place that does not take the model pointed at, because a
+    /// press that moved the cursor to a row already drawn slid the list, so the second press landed on
+    /// another model. On every model drawn in a list that has not scrolled, and in one that has, a
+    /// press and a release, a frame, and a press and a release on the same cell put the cursor on the
+    /// model drawn there, leave the rows where they were, and take it.
+    #[test]
+    fn a_double_click_in_place_takes_the_model_pointed_at_on_every_row_of_a_list_scrolled_or_not() {
+        let short = || {
+            let mut roster = vec![Model::automatic()];
+            for index in 0..3 {
+                roster.push(served_by(
+                    "OpenRouter",
+                    &format!("openrouter/model-{index}"),
+                    &format!("model-{index}"),
+                ));
+            }
+            Picker::new(roster, None)
+        };
+        for (opened, scrolled, height) in [
+            (short as fn() -> Picker, false, 24),
+            (|| picker_at(40) as Picker, true, 14),
+        ] {
+            let (shown, screen) = shown_in(&opened(), 60, height);
+            let rows: Vec<u16> = (shown.list.y..shown.list.bottom())
+                .filter(|&row| model_in(&screen, row).is_some())
+                .collect();
+            assert!(rows.len() >= 3, "{screen:#?}");
+            assert_eq!(
+                opened().rows_needed() > usize::from(shown.list.height),
+                scrolled,
+                "{screen:#?}"
+            );
+            for row in rows {
+                let mut picker = opened();
+                let (shown, screen) = shown_in(&picker, 60, height);
+                let name = model_in(&screen, row).expect("a model");
+                let (now, mut last) = (std::time::Instant::now(), None);
+                let cell = (row, shown.list.x + 2);
+
+                let first = click(&mut picker, shown, &mut last, now, cell);
+                assert_eq!(first, Outcome::Continue, "scrolled {scrolled}, row {row}");
+                assert_eq!(named(&picker), Some(name.as_str()));
+                let (_, redrawn) = shown_in(&picker, 60, height);
+                let second = click(&mut picker, shown, &mut last, now, cell);
+                assert_eq!(second, Outcome::Select, "scrolled {scrolled}, row {row}");
+                assert_eq!(named(&picker), Some(name.as_str()));
+                assert_eq!(
+                    list_rows(&redrawn, shown),
+                    list_rows(&screen, shown),
+                    "scrolled {scrolled}, row {row}: the press slid the list"
+                );
+            }
+        }
+    }
+
+    /// MOUSE-15. Rejects: a second press counted with the first when the list moved between them,
+    /// which takes a model the first press did not name: the wheel moves the cursor and the list with
+    /// it, so the cell holds another model, and a press there is a first press on that model. A press
+    /// where the model first named is drawn now is the second press on it, and takes it.
+    #[test]
+    fn a_press_where_the_wheel_has_since_drawn_another_model_is_a_first_press_on_it() {
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let mut picker = picker_at(40);
+        let (shown, screen) = shown_in(&picker, 60, 14);
+        let row = (shown.list.y..shown.list.bottom())
+            .find(|&row| model_in(&screen, row).is_some())
+            .expect("a model");
+        let cell = (row, shown.list.x + 2);
+        let first_named = model_in(&screen, row).expect("a model");
+
+        click(&mut picker, shown, &mut last, now, cell);
+        assert_eq!(named(&picker), Some(first_named.as_str()));
+        let wheel = |kind| event(kind, row, cell.1);
+        handle_mouse(
+            &mut picker,
+            shown,
+            wheel(MouseEventKind::ScrollUp),
+            &mut last,
+            now,
+            3,
+        );
+        let (_, redrawn) = shown_in(&picker, 60, 14);
+        let drawn_there_now = model_in(&redrawn, row).expect("a model");
+        assert_ne!(
+            drawn_there_now, first_named,
+            "the wheel did not move the list"
+        );
+        let outcome = click(&mut picker, shown, &mut last, now, cell);
+        assert_eq!(
+            outcome,
+            Outcome::Continue,
+            "a model nobody pressed first was taken"
+        );
+        assert_eq!(named(&picker), Some(drawn_there_now.as_str()));
+
+        let mut picker = picker_at(40);
+        let mut last = None;
+        click(&mut picker, shown, &mut last, now, cell);
+        handle_mouse(
+            &mut picker,
+            shown,
+            wheel(MouseEventKind::ScrollDown),
+            &mut last,
+            now,
+            3,
+        );
+        let (_, redrawn) = shown_in(&picker, 60, 14);
+        let moved_to = (shown.list.y..shown.list.bottom())
+            .find(|&at| model_in(&redrawn, at).as_deref() == Some(first_named.as_str()))
+            .expect("the model first named is still drawn");
+        let outcome = click(&mut picker, shown, &mut last, now, (moved_to, cell.1));
+        assert_eq!(
+            outcome,
+            Outcome::Select,
+            "the model first named was not taken"
+        );
+        assert_eq!(named(&picker), Some(first_named.as_str()));
+    }
+
+    /// MOUSE-15. Rejects: a window that stays where a press left it once a key moves the cursor: the
+    /// keys and the wheel move it as they always did, so the picker a press and a key left draws what
+    /// the picker the keys alone reach the same model in draws.
+    #[test]
+    fn a_key_after_a_press_moves_the_list_as_the_keys_alone_do() {
+        let mut pressed = picker_at(40);
+        let (shown, screen) = shown_in(&pressed, 60, 14);
+        let (now, mut last) = (std::time::Instant::now(), None);
+        let row = (shown.list.y..shown.list.bottom())
+            .find(|&row| model_in(&screen, row).is_some())
+            .expect("a model");
+        let first_named = model_in(&screen, row).expect("a model");
+        click(&mut pressed, shown, &mut last, now, (row, shown.list.x + 2));
+        handle_key(&mut pressed, KeyCode::Down, KeyModifiers::NONE);
+        let (_, after_a_key) = shown_in(&pressed, 60, 14);
+
+        let mut keys = picker_at(40);
+        while named(&keys) != Some(first_named.as_str()) {
+            handle_key(&mut keys, KeyCode::Up, KeyModifiers::NONE);
+        }
+        handle_key(&mut keys, KeyCode::Down, KeyModifiers::NONE);
+        let (_, by_keys) = shown_in(&keys, 60, 14);
+
+        assert_eq!(named(&pressed), named(&keys));
+        assert_eq!(list_rows(&after_a_key, shown), list_rows(&by_keys, shown));
+    }
+
+    fn picker_at(index: usize) -> Picker {
+        let mut picker = Picker::new(a_roster_longer_than_the_panel(), None);
+        for _ in 0..index {
+            handle_key(&mut picker, KeyCode::Down, KeyModifiers::NONE);
+        }
+        picker
     }
 }

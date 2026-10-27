@@ -19,7 +19,7 @@ guards:
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 14
+      - crates/agent/src/workspace.rs: 15
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
@@ -42,6 +42,7 @@ guards:
     sites:
       - crates/agent/src/aside.rs: 3
       - crates/agent/src/commit_message.rs: 2
+      - crates/agent/src/file_preview.rs: 1
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
@@ -50,7 +51,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 59
+      - crates/agent/tests/workspace.rs: 60
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -75,7 +76,7 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 279
+      - crates/agent/tests/workspace.rs: 284
       - crates/core/src/policy.rs: 28
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
@@ -143,6 +144,7 @@ guards:
     sites:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/commit_message.rs: 2
+      - crates/agent/src/file_preview.rs: 1
       - crates/agent/src/manifest.rs: 8
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
@@ -472,6 +474,7 @@ and the content has no say in it.
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
 | the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
+| the lines of a file a person clicked a path to see | untrusted and private whatever the trust map says of the path, from the label a write's review reads the file it replaces under, because the lines go to a screen as a quarantined block and a click has not asked for the file to be read by anything that acts on it ([MOUSE-42](mouse.md#MOUSE-42)) | `verified-by: bravebot_agent::file_preview::a_path_the_map_vouches_for_is_still_shown_as_untrusted` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed, fed content | private, and trusted only where what was fed in is, because a program prints what it was given and a run is not a release | `verified-by: bravebot_core::policy::a_filter_fed_an_untrusted_label_prints_untrusted_output` `verified-by: bravebot_core::policy::a_filter_fed_a_trusted_label_prints_trusted_private_output` |
