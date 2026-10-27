@@ -122,6 +122,8 @@ pub struct Finished<'a> {
     pub conversation: &'a Conversation,
     pub outcome: &'a Outcome,
     pub trust: &'a TrustStore,
+    /// The kept facts injected on the session so far (RECALL-9).
+    pub injected_facts: &'a std::collections::BTreeSet<String>,
     /// The length of the recounted conversation before the turn, and where the prompt entered it.
     pub begins: usize,
     pub prompt_at: Option<usize>,
@@ -155,6 +157,7 @@ pub fn keep(
         Some((Continuing { record, mut handle }, rewind)) => {
             let turn_number = record.turns + 1;
             handle.set_agent(turn.agent.map(str::to_string));
+            handle.set_injected_facts(turn.injected_facts.clone());
             let written = handle.save_continuation(
                 record,
                 Continuation {
@@ -180,6 +183,7 @@ pub fn keep(
             let mut handle =
                 Handle::begin(root, Front::Terminal, bravebot_stamp::BUILD).began_at(turn.started);
             handle.set_agent(turn.agent.map(str::to_string));
+            handle.set_injected_facts(turn.injected_facts.clone());
             let history = [bravebot_session::sessions::StoredTurn::completed(
                 1,
                 turn.prompt,

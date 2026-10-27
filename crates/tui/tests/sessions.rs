@@ -1704,6 +1704,7 @@ fn a_rewind_point_survives_being_written_and_read_back() {
         coverage: Default::default(),
         snapshot: a_point_before_turn_two(&conversation),
         backups: vec![Backup {
+            kept: false,
             captured_trust: bravebot_core::label::Integrity::Trusted,
             path: scratch.project.join("notes.md"),
             was: Before::Bytes(b"the first line\n".to_vec()),
@@ -1785,6 +1786,7 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
         snapshot: a_point_before_turn_two(&conversation),
         backups: vec![
             Backup {
+                kept: false,
                 captured_trust: bravebot_core::label::Integrity::Trusted,
                 path: scratch.project.join("notes.md"),
                 was: Before::Bytes(b"the first line\n".to_vec()),
@@ -1792,6 +1794,7 @@ fn what_a_file_nobody_vouched_for_held_is_not_written_down() {
             // The one path `a_trust_map` marks untrusted: a file a fetch was written into, which
             // the trust map records as untrusted so reading it back does not launder it.
             Backup {
+                kept: false,
                 captured_trust: bravebot_core::label::Integrity::Untrusted,
                 path: scratch.project.join("src/fetched.json"),
                 was: Before::Bytes(secret.to_vec()),
@@ -2126,6 +2129,7 @@ fn a_rewind_point_keeps_no_cache_figure_in_the_record() {
         coverage: Default::default(),
         snapshot,
         backups: vec![Backup {
+            kept: false,
             captured_trust: bravebot_core::label::Integrity::Trusted,
             path: scratch.project.join("notes.md"),
             was: Before::Bytes(b"the first line\n".to_vec()),
@@ -2198,6 +2202,7 @@ fn a_rename_takes_the_points_it_gave_up_out_of_the_record() {
         coverage: Default::default(),
         snapshot: a_point_before_turn_two(&conversation),
         backups: vec![Backup {
+            kept: false,
             captured_trust: bravebot_core::label::Integrity::Trusted,
             path: scratch.project.join("notes.md"),
             was: Before::Bytes(kept.to_vec()),

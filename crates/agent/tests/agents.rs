@@ -4,10 +4,12 @@
 //! suite from depending on whatever the developer happens to have installed.
 
 use bravebot_agent::agents;
+use bravebot_agent::agents::project_rules_file;
 use bravebot_agent::workspace::Workspace;
 use bravebot_core::capability::{Capability, CapabilitySet, ServerAlias};
 use bravebot_core::delegate::{Definitions, Kind};
 use bravebot_core::event::RecordingSink;
+use bravebot_core::permissions::{Anchors, Permissions};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_core::trust::TrustStore;
 use std::path::{Path, PathBuf};
@@ -1150,4 +1152,61 @@ fn a_definition_naming_a_skill_kept_from_the_planner_is_told_it_is_offered_none(
         said[1].contains("keeps from the planner") && said[1].ends_with(": ship-it"),
         "the kept skill was not said once, by name: {said:?}"
     );
+}
+
+fn rules_project(name: &str, files: &[(&str, &str)]) -> (Workspace, TrustStore) {
+    let root = std::env::temp_dir().join(format!(
+        "bravebot-agent-rules-file-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    for (path, text) in files {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().expect("a file has a parent")).expect("create");
+        std::fs::write(path, text).expect("write");
+    }
+    let workspace = Workspace::new(&root).expect("workspace");
+    let mut trust = TrustStore::new("/work");
+    trust.trust(".");
+    (workspace, trust)
+}
+
+fn denying_reads(rules: &[&str]) -> Permissions {
+    let rules: Vec<String> = rules.iter().map(|rule| rule.to_string()).collect();
+    Permissions::parse(&rules, &[], &[], &Anchors::none()).0
+}
+
+/// RECALL-11. The file listed is the one the planner is given: a pointer lists its target.
+#[test]
+fn a_pointer_lists_its_target() {
+    let (workspace, trust) = rules_project(
+        "pointer",
+        &[
+            ("AGENTS.md", "See `docs/RULES.md`.\n"),
+            ("docs/RULES.md", "real\nrules\n"),
+        ],
+    );
+    let listed = project_rules_file(&workspace, trust, Permissions::new());
+    assert_eq!(listed, Some(workspace.root().join("docs/RULES.md")));
+}
+
+#[test]
+fn a_plain_file_lists_itself_and_an_untrusted_directory_lists_none() {
+    let (workspace, trust) = rules_project("plain", &[("AGENTS.md", "just rules\n")]);
+    assert_eq!(
+        project_rules_file(&workspace, trust, Permissions::new()),
+        Some(workspace.root().join("AGENTS.md"))
+    );
+    assert_eq!(
+        project_rules_file(&workspace, TrustStore::new("/work"), Permissions::new()),
+        None
+    );
+}
+
+/// RECALL-11. A file a `deny` rule stops the planner reading is not listed.
+#[test]
+fn a_file_a_deny_rule_covers_is_not_listed() {
+    let (workspace, trust) = rules_project("denied", &[("AGENTS.md", "just rules\n")]);
+    let listed = project_rules_file(&workspace, trust, denying_reads(&["Read(./AGENTS.md)"]));
+    assert_eq!(listed, None);
 }

@@ -191,7 +191,7 @@ impl std::fmt::Display for Kind {
 ///
 /// `spawn_agent` is not here. Whether a delegate may delegate is a question about where it sits,
 /// not about what it is, so it is answered by [`MAX_DEPTH`] rather than by name.
-pub const NEVER_DELEGATED: [&str; 8] = [
+pub const NEVER_DELEGATED: [&str; 11] = [
     "ask_user",
     "request_path",
     "apply_checkout",
@@ -200,6 +200,9 @@ pub const NEVER_DELEGATED: [&str; 8] = [
     "fetch_url",
     "download_url",
     "vet_content",
+    "remember",
+    "recall",
+    "propose_rule",
 ];
 
 /// The capability a delegate needs before it is offered this tool, or `None` where the name is

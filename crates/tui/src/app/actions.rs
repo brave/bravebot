@@ -421,6 +421,38 @@ impl Held<'_> {
             &mut Trail::new(),
         );
         self.session.report_memories(&memories);
+        let home = bravebot_agent::home::directory();
+        let own = bravebot_agent::agents::project_rules_file(
+            self.workspace,
+            self.recorded_trust(),
+            self.answers.rules.permissions.clone(),
+        );
+        let overview = home.as_deref().map(|home| {
+            bravebot_agent::recall::overview::overview(
+                home,
+                self.workspace,
+                self.workspace_trusted(),
+                own.as_deref(),
+            )
+        });
+        self.session.report_recall(&overview.unwrap_or_default());
+    }
+
+    /// Whether the working directory is trusted as a turn decides it: by the session's map with
+    /// the record of untrusted memories applied, asked the way `Policy::trusts_path` asks it. That
+    /// asks the map for `trust_key(".")` unrooted, which is what this does, so the project a
+    /// listing names is the project a turn would.
+    fn workspace_trusted(&self) -> bool {
+        self.workspace.is_trusted_in(&self.recorded_trust())
+    }
+
+    /// The session's map with the record of untrusted memories applied, as a turn starts from it.
+    fn recorded_trust(&self) -> TrustStore {
+        bravebot_agent::memory::with_recorded(
+            &self.answers.trust,
+            self.workspace,
+            bravebot_agent::home::directory().as_deref(),
+        )
     }
 
     pub(super) fn remove_checkout_command(&mut self, terminal: &mut Tty, id: &str) {

@@ -7,6 +7,14 @@
 # No count is kept here. Two branches that each translate a message both edit the count, so it
 # conflicts where the lists themselves merge cleanly, and a count nothing reads is wrong quietly.
 
+fr:agent-rule-approval-file
+fr:agent-rule-approval-header
+fr:agent-rule-approval-keep
+fr:agent-rule-approval-keep-detail
+fr:agent-rule-approval-no-words
+fr:agent-rule-approval-refuse
+fr:agent-rule-approval-why
+fr:agent-rule-approval-yes-words
 fr:chatgpt-use-by-asking
 fr:chatgpt-use-by-naming
 fr:command-lsp
@@ -17,6 +25,20 @@ fr:editor-file-was-stopped
 fr:lsp-none-started
 fr:lsp-server-running
 fr:lsp-started
+fr:memory-fact
+fr:memory-label-private
+fr:memory-label-public
+fr:memory-no-facts
+fr:memory-no-rules
+fr:memory-rules-file
+fr:memory-rules-file-more
+fr:memory-scope-everywhere
+fr:memory-scope-project
+fr:memory-source-agent
+fr:memory-source-person
+fr:memory-standing-live
+fr:memory-standing-superseded
+fr:memory-verified-never
 fr:outputs-hint
 fr:outputs-none
 fr:panel-rename-line-in-use

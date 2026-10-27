@@ -3658,6 +3658,59 @@ impl Session {
         }
     }
 
+    /// Say which rule files are kept and each fact in scope with its standing (RECALL-11). Front
+    /// matter and line counts only: a fact's text is not shown. What a file says of itself is
+    /// untrusted text, so each value is made printable and cut short before it is drawn.
+    pub fn report_recall(&mut self, kept: &bravebot_agent::recall::overview::Overview) {
+        use bravebot_agent::recall::fact::{Scope, Source};
+        use bravebot_core::label::Confidentiality;
+        if kept.rules.is_empty() {
+            self.note(t!(memory_no_rules));
+        }
+        for rules in &kept.rules {
+            let path = shown(&rules.path.display().to_string());
+            self.note(if rules.more {
+                t!(memory_rules_file_more, path = path, lines = rules.lines)
+            } else {
+                t!(memory_rules_file, path = path, lines = rules.lines)
+            });
+        }
+        if kept.facts.is_empty() {
+            self.note(t!(memory_no_facts));
+        }
+        for (scope, fact) in &kept.facts {
+            let scope = match scope {
+                Scope::Project => t!(memory_scope_project),
+                Scope::Everywhere => t!(memory_scope_everywhere),
+            };
+            let source = match fact.source {
+                Source::Person => t!(memory_source_person),
+                Source::Agent => t!(memory_source_agent),
+            };
+            let label = match fact.label {
+                Confidentiality::Public => t!(memory_label_public),
+                Confidentiality::Private => t!(memory_label_private),
+            };
+            let standing = match &fact.superseded_by {
+                None => t!(memory_standing_live).to_string(),
+                Some(by) => t!(memory_standing_superseded, by = shown(by)),
+            };
+            let verified = match &fact.verified {
+                Some(date) => shown(date),
+                None => t!(memory_verified_never).to_string(),
+            };
+            self.note(t!(
+                memory_fact,
+                key = shown(&fact.key),
+                scope = scope,
+                source = source,
+                label = label,
+                verified = verified,
+                standing = standing
+            ));
+        }
+    }
+
     /// Say which checkouts the session keeps, what each took on disk, whether a remote branch is
     /// at its commit as `pushed` reads it, and what the record shows done in each, or that it keeps
     /// none (CHECKOUT-15).
@@ -4252,6 +4305,22 @@ fn on_disk(size: &bravebot_agent::git::checkout::Size) -> String {
         Amount::Megabytes(megabytes) => t!(megabytes, size = tenths(megabytes)),
         Amount::Gigabytes(gigabytes) => t!(gigabytes, size = tenths(gigabytes)),
     }
+}
+
+/// The most characters of a value a file supplied that one note shows.
+const SHOWN_AT_MOST: usize = 120;
+
+/// A value read out of a file, as one safe line: control characters drawn as pictures and a long
+/// value cut short.
+fn shown(text: &str) -> String {
+    let mut out: String = crate::render::printable(text)
+        .chars()
+        .take(SHOWN_AT_MOST)
+        .collect();
+    if text.chars().count() > SHOWN_AT_MOST {
+        out.push('\u{2026}');
+    }
+    out
 }
 
 #[cfg(test)]

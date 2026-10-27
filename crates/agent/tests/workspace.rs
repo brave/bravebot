@@ -8011,6 +8011,7 @@ fn a_rewind_names_the_paths_it_could_not_put_back() {
     let refused = restore_for_test(
         &workspace,
         vec![Backup {
+            kept: false,
             captured_trust: bravebot_core::label::Integrity::Trusted,
             path: blocked.clone(),
             was: Before::Bytes(b"whatever was there".to_vec()),
@@ -8032,6 +8033,7 @@ fn a_created_file_already_gone_is_not_reported_as_refused() {
     let refused = restore_for_test(
         &workspace,
         vec![Backup {
+            kept: false,
             captured_trust: bravebot_core::label::Integrity::Trusted,
             path: scratch.path.join("never-there.txt"),
             was: Before::Nothing,
@@ -9588,6 +9590,7 @@ fn a_rewind_into_a_memory_in_another_case_is_recorded_in_the_state_directory() {
         bravebot_agent::rewind::restore(
             &workspace,
             vec![Backup {
+                kept: false,
                 captured_trust: Integrity::Untrusted,
                 path: spelled.clone(),
                 was: Before::Bytes(b"FROM-A-PAGE".to_vec()),

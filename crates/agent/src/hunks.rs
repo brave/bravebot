@@ -383,6 +383,7 @@ mod tests {
 
         fn kept(&self, was: Before) -> Backup {
             Backup {
+                kept: false,
                 path: self.path.clone(),
                 was,
                 captured_trust: Integrity::Trusted,
@@ -812,6 +813,7 @@ mod tests {
             std::fs::create_dir_all(memory.parent().unwrap()).unwrap();
             std::fs::write(&memory, AFTER).unwrap();
             let backup = Backup {
+                kept: false,
                 path: memory.clone(),
                 was: Before::Bytes(BEFORE.as_bytes().to_vec()),
                 captured_trust: Integrity::Trusted,
@@ -865,6 +867,7 @@ mod tests {
         let backups = [
             project.kept_text(),
             Backup {
+                kept: false,
                 path: other.clone(),
                 was: Before::Bytes(b"x\nz\n".to_vec()),
                 captured_trust: Integrity::Trusted,
@@ -914,6 +917,7 @@ mod tests {
         std::fs::write(&by_bytes, AFTER).unwrap();
         std::fs::write(&lookalike, &lookalike_now).unwrap();
         let kept = |path: &Path| Backup {
+            kept: false,
             path: path.to_path_buf(),
             was: Before::Bytes(BEFORE.as_bytes().to_vec()),
             captured_trust: Integrity::Trusted,

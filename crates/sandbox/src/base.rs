@@ -822,6 +822,28 @@ mod tests {
         lifted || !refused
     }
 
+    /// RECALL-8: the facts and the rules a person keeps are in the state directory, and no stage
+    /// reads or writes them. Only `remember` and the person put bytes there, so a program that
+    /// could write one would be a writer the spec says does not exist.
+    #[test]
+    fn programs_are_refused_the_fact_store() {
+        let state = under(Path::new(A_HOME), STATE_DIRECTORY);
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let policy = a_run_base(prelude);
+            for name in [
+                "facts",
+                "facts/prefers-tabs.md",
+                "projects",
+                "projects/-repo/rules.md",
+            ] {
+                assert!(
+                    !state_path_is_read(&policy, &state.join(name)),
+                    "{prelude:?} {name}"
+                );
+            }
+        }
+    }
+
     /// The regression it rejects: the state directory lifted whole or by a glob, which reads the
     /// gateway keys, the Leo token, the MCP configuration and the files read back to decide what
     /// runs; or a lift list that stops covering `sessions`, which sends back every script that

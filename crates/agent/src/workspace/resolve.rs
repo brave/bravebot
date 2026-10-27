@@ -3,7 +3,7 @@
 //! on typed names and the file system's answers about where a name lands (`canonicalize`,
 //! `symlink_metadata`, `read_link`). None of it reads a file's bytes or gives anything a label.
 
-use super::{Remedy, Workspace, WorkspaceError, names};
+use super::{Remedy, Workspace, WorkspaceError, names, within_stores};
 use bravebot_core::spelling::to_key;
 use bravebot_core::trust::is_absolute_key;
 use std::ffi::OsString;
@@ -196,8 +196,10 @@ impl Workspace {
         added || self.scratch().is_some_and(|dir| resolved.starts_with(dir))
     }
 
-    /// Whether a resolved path lands where this workspace's file tools may write: the root or a
-    /// directory reached by its absolute name.
+    /// Whether a resolved path lands in the root or a directory reached by its absolute name.
+    ///
+    /// Reach only: the person's fact and rule stores can lie inside it and are refused separately
+    /// ([`Workspace::in_the_stores`]) by the callers that stand for a file tool.
     pub(crate) fn lands_in_reach(&self, resolved: &Path) -> bool {
         resolved.starts_with(&self.root) || self.is_opened(resolved)
     }
@@ -227,7 +229,9 @@ impl Workspace {
             remedy: Remedy::Nothing,
         };
         let resolved = destination(path).ok_or_else(escapes)?;
-        if self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write) {
+        if (self.lands_in_reach(&resolved) || self.bypass_reaches(&resolved, write))
+            && !self.in_the_stores(&resolved)
+        {
             return Ok(());
         }
         Err(escapes())
@@ -302,7 +306,50 @@ impl Workspace {
     /// lexical test that saw nothing wrong. What comes back is that destination, so a caller that
     /// needs the file rather than the name has it.
     pub(crate) fn resolve(&self, relative: &str) -> Result<PathBuf, WorkspaceError> {
-        self.resolve_with_home(relative, self.home.as_deref())
+        let resolved = self.resolve_with_home(relative, self.home.as_deref())?;
+        if self.in_the_stores(&resolved) {
+            return Err(WorkspaceError::Escapes {
+                path: relative.to_string(),
+                remedy: Remedy::Nothing,
+            });
+        }
+        Ok(resolved)
+    }
+
+    /// The directories under `state` that hold the person's facts and rules, as a path lands on
+    /// them: the facts, and `projects`, which holds each project's `rules.md`.
+    pub(crate) fn stores_in(state: &Path) -> Vec<PathBuf> {
+        ["facts", "projects"]
+            .into_iter()
+            .map(|name| destination(&state.join(name)).unwrap_or_else(|| state.join(name)))
+            .collect()
+    }
+
+    /// What under `state` the file tools refuse, as a path lands on it: the fact and rule stores of
+    /// [`Workspace::stores_in`], the one file `~/.bravebot/AGENTS.md` that holds the person's rules
+    /// for every project, and `sessions`, which holds every session's record (RECALL-8).
+    pub(crate) fn refused_in(state: &Path) -> Vec<PathBuf> {
+        let mut refused = Self::stores_in(state);
+        refused.extend(
+            [crate::preamble::AGENTS_FILE, "sessions"]
+                .into_iter()
+                .map(|name| destination(&state.join(name)).unwrap_or_else(|| state.join(name))),
+        );
+        refused
+    }
+
+    /// Whether a resolved path is in the person's fact or rule store, is their home rules file, or
+    /// is in the session records (RECALL-8).
+    pub(crate) fn in_the_stores(&self, resolved: &Path) -> bool {
+        within_stores(&self.stores, resolved)
+    }
+
+    /// Stand in for the state directory, so a test does not depend on whose machine it runs on.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_state(mut self, state: &Path) -> Self {
+        self.stores = Self::refused_in(state);
+        self
     }
 
     /// `named` with a leading `~` spelled out as the home directory, and as given otherwise,

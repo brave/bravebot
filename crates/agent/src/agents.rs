@@ -688,6 +688,23 @@ pub fn memories<S: Sink>(
         .collect()
 }
 
+/// The file of the project's own standing instructions a turn reads here, for `/memory`
+/// (RECALL-11): the one the preamble picks, so a pointer gives its target, and none in a safe
+/// session, where a `deny` rule covers it, or where the trust map or confinement refuses it.
+pub fn project_rules_file(
+    workspace: &Workspace,
+    trust: bravebot_core::trust::TrustStore,
+    permissions: bravebot_core::permissions::Permissions,
+) -> Option<std::path::PathBuf> {
+    if bravebot_core::safe::engaged() {
+        return None;
+    }
+    let mut sink = bravebot_core::event::NullSink;
+    let mut policy = discovery_policy(workspace, trust, permissions, &mut sink)?;
+    let name = crate::preamble::workspace_agents_file(&mut policy, workspace)?;
+    Some(workspace.root().join(name))
+}
+
 /// The policy definitions are read through: only the read and the turn's rules.
 fn discovery_policy<'a, S: Sink>(
     workspace: &Workspace,

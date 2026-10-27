@@ -1157,6 +1157,10 @@ fn prepare_the_run(
         // Every round is told the condition it is judged against, the first one included (GOAL-14).
         .working_towards(goal.clone());
     task = task_from_the_settings(task, &settings, effort);
+    // The kept facts a continued session has already had put in front of its planner (RECALL-9).
+    if let Some(record) = &continued {
+        task = task.with_injected_facts(record.injected_facts.clone());
+    }
     for file in files {
         task = task.with_file(file);
     }
@@ -1919,6 +1923,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
         programs: _,
         asked_about: _,
         exposed: _,
+        injected_facts,
     } = completed.decisions;
     if let Ok(finished) = &completed.outcome {
         session = continued::keep(
@@ -1929,6 +1934,7 @@ fn run_turn<C: bravebot_agent::Confirmer + Send>(
                 conversation: &conversation,
                 outcome: finished,
                 trust: &trust,
+                injected_facts: &injected_facts,
                 begins,
                 prompt_at,
                 agent,

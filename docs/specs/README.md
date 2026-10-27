@@ -23,6 +23,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [delegation.md](delegation.md) | `DELEGATE` | 30 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 13 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
+| [recall.md](recall.md) | `RECALL` | 11 | what a person's sessions remember across projects: rules loaded in full every turn, facts ranked and recalled, and how neither lets untrusted content in (proposed: built, thresholds not yet measured on a bravebot store) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
 | [turns.md](turns.md) | `TURN` | 14 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, what the note under a finished turn says about refusals, what is done about the planner's task list when a turn answers with tasks still open, what the planner is told when a turn ends in a failure, and what a limit a person gave a run does to it |
@@ -115,6 +116,9 @@ the routing-versus-content split they share.
 | [tools/ask-user.md](tools/ask-user.md) | `ASK` | 11 | `ask_user` |
 | [tools/request-path.md](tools/request-path.md) | `PATHREQ` | 7 | `request_path` |
 | [tools/advisor.md](tools/advisor.md) | `ADVISOR` | 9 | `advisor` |
+| [tools/remember.md](tools/remember.md) | `REMEMBER` | 3 | `remember` |
+| [tools/propose-rule.md](tools/propose-rule.md) | `RULE` | 3 | `propose_rule` |
+| [tools/recall.md](tools/recall.md) | `RECALLTOOL` | 3 | `recall` |
 
 Topics with no spec yet are ordinary code. Adding one is how a topic becomes review-required.
 

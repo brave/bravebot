@@ -867,4 +867,27 @@ mod tests {
 
         assert!(directories_in(&held).is_empty());
     }
+
+    #[test]
+    fn two_writers_never_leave_a_torn_file() {
+        let scratch = Scratch::new("home-atomic");
+        let path = scratch.path.join("file");
+        let payloads = [vec![b'a'; 10_000], vec![b'b'; 10_000]];
+        replace(&path, &payloads[0]).expect("first write");
+
+        std::thread::scope(|scope| {
+            for payload in &payloads {
+                let path = &path;
+                scope.spawn(move || {
+                    for _ in 0..200 {
+                        replace(path, payload).expect("write");
+                    }
+                });
+            }
+            for _ in 0..400 {
+                let read = std::fs::read(&path).expect("read");
+                assert!(payloads.contains(&read), "torn: {} bytes", read.len());
+            }
+        });
+    }
 }

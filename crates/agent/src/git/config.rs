@@ -44,17 +44,17 @@ pub(super) fn check_config(bytes: &[u8]) -> Result<(), Declined> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct ConfigEntry {
-    pub(super) section: String,
-    pub(super) subsection: Option<Vec<u8>>,
-    pub(super) key: String,
-    pub(super) value: Option<Vec<u8>>,
+pub(crate) struct ConfigEntry {
+    pub(crate) section: String,
+    pub(crate) subsection: Option<Vec<u8>>,
+    pub(crate) key: String,
+    pub(crate) value: Option<Vec<u8>>,
 }
 
 /// A section's name, and its subsection where it has one.
 type Section = (String, Option<Vec<u8>>);
 
-pub(super) fn parse_config(bytes: &[u8]) -> Option<Vec<ConfigEntry>> {
+pub(crate) fn parse_config(bytes: &[u8]) -> Option<Vec<ConfigEntry>> {
     let bytes = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
     let mut text = Vec::with_capacity(bytes.len());
     let mut i = 0;
