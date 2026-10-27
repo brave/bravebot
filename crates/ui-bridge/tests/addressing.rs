@@ -482,6 +482,30 @@ fn a_summon_in_a_bots_conversation_leaves_the_bots_own_definition_standing() {
     );
 }
 
+/// MEMORY-14: a summon that is the first turn of a bot's conversation still stands the bot's own
+/// definition up, so a turn that names nothing, as a watch's does, is the bot's and not the
+/// session's whole reach.
+#[test]
+fn a_summon_as_the_first_turn_of_a_bots_conversation_still_leaves_its_definition_standing() {
+    let scratch = Scratch::new("bridge-addressing-summon-first");
+    scratch.define("harbour");
+    scratch.define_for("lantern", OTHER_PURPOSE);
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    window
+        .turn(json!({"prompt": "FIRST-GUEST-TURN", "definition": "harbour", "address": "lantern"}));
+    let back = window.turn(json!({"prompt": "FIRST-BACK-TURN"}));
+    assert_eq!(back["event"], "turn.done", "{back}");
+
+    let asked = requests(&received);
+    let back = asked_with(&asked, "FIRST-BACK-TURN");
+    assert!(
+        back.contains("addressed this turn to harbour") && !offers(back, "write_file"),
+        "the turn after a first-turn summon was not the bot's own: {back}"
+    );
+}
+
 /// MEMORY-14: a summoned name is held to the terms the conversation's own name is. A path, or
 /// anything that is not a slug, is refused before a turn starts rather than sent unaddressed.
 #[test]

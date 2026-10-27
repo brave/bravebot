@@ -293,6 +293,16 @@ function summonedTurn(
       ownerOf: (handle, folder) => botHandles.get(handle) ?? bots().find((each) => each.home === folder)?.slug,
       adopt: (handle, slug) => { botHandles.set(handle, slug) },
       migrate: migrateBot,
+      host: async (handle, slug, folder, request) => {
+        const held = bot(slug)
+        if (!held) return null
+        // As `sendBotTurn` does: the old notes are recorded before a definition replaces them, and
+        // are asked about once the turn that gave the bot one has ended.
+        const owes = owesCarryOver(held, folder)
+        const migrated = await migrateBot(held, request)
+        if (owes) owedCarryOver.add(handle)
+        return migrated
+      },
       carry: (handle, params, carried) => {
         params.files = attachmentPaths(handle, carried.attachments)
         return withPastes(handle, carried.pastes, withDrops(handle, carried.drops, params))

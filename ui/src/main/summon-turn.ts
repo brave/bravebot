@@ -66,6 +66,12 @@ export interface Services {
   adopt(session: string, slug: string): void
   /** Give a bot made before definitions one. Throws where it cannot. */
   migrate(held: Bot, request: Request | null): Promise<Bot>
+  /**
+   * The bot whose conversation this is, given a definition if it has none, with what a turn of its
+   * own owes noted against the handle. Null where the row is gone. Throws where it cannot be given
+   * one.
+   */
+  host(session: string, slug: string, folder: string, request: Request | null): Promise<Bot | null>
   /** Add the files, drops and pasted pictures a send names to its parameters. Throws on a refusal. */
   carry(
     session: string,
@@ -82,7 +88,10 @@ export interface Services {
  * The turn runs in the folder the agent confirmed the session works in and under the session's
  * history, so it holds nothing a turn of that conversation did not. The bot's definition name is
  * the row's, judged a slug when it was stored, and is sent as `address`, which the bridge applies
- * to this turn alone. No briefing is attached: a bot without a definition is given one first.
+ * to this turn alone. In a bot's conversation the bot's own definition goes with it as `definition`,
+ * which the bridge keeps standing, so a turn that follows without one (a watch, a consolidation) is
+ * the bot's own. The summoned bot's model is its definition's, so only the conversation's goes as
+ * `model`. No briefing is attached: a bot without a definition is given one first.
  *
  * Whose conversation this is comes from this process's own records: the bot whose handle this is,
  * or the bot whose home the session runs in. Anything else is a project's.
@@ -111,11 +120,21 @@ export async function sendSummonedTurn(
     return { error: { code: 'no_definition', message: `${summoned.name} has no definition` } }
   }
   // A bot's home conversation is that bot's from its first turn, summoned or not, so the turn's end
-  // is recorded against it as one of its own would be.
-  if (owner !== undefined) services.adopt(session, owner)
+  // is recorded against it as one of its own would be, and the turn is sent as one of its own would
+  // be: with its definition standing, which the summoned bot's address does not replace.
+  let hosting: Bot | null = null
+  if (owner !== undefined) {
+    try {
+      hosting = await services.host(session, owner, folder, request)
+    } catch (error) {
+      return { error: { code: 'no_definition', message: `the bot this is the conversation of could not be given a definition: ${String(error)}` } }
+    }
+    services.adopt(session, owner)
+  }
 
   const params: Record<string, unknown> = { session, prompt, address: summoned.definition }
-  const selectedModel = summoned.model ?? options.model
+  if (hosting?.definition) params.definition = hosting.definition
+  const selectedModel = hosting?.model ?? options.model
   if (selectedModel !== undefined) params.model = selectedModel
   services.summoning.begin(session, {
     slug: summoned.slug,

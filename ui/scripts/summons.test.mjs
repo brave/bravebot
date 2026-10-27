@@ -205,6 +205,8 @@ const lantern = {
   archived: 0, remembered: 0, quiet: 0, retired: 0, created: 1, updated: 1,
 }
 
+const host =  { ...lantern, slug: 'ada', name: 'Ada', home: '/homes/ada', definition: 'ada-def', lastHome: null }
+
 /** The services a summoned send reads, with the agent's requests recorded. `ada`'s home is /homes/ada. */
 function world(over = {}) {
   const sent = []
@@ -217,6 +219,7 @@ function world(over = {}) {
     ownerOf: (session, folder) => ({ '/homes/ada': 'ada', '/homes/lantern': 'lantern' })[folder],
     adopt: (session, slug) => adopted.push([session, slug]),
     migrate: async (held) => held,
+    host: async (session, slug) => (slug === 'ada' ? host : null),
     carry: (session, params) => ({ ...params, files: [] }),
     failure: (error) => ({ code: 'internal', message: String(error) }),
     ...over,
@@ -244,16 +247,37 @@ test('the address is the bot row’s definition, whatever the bot’s name and p
   assert.equal(there.sent[0].params.address, 'lantern-def')
 })
 
-test('a bot’s own model is sent for the turn, and the person’s where it has none', async () => {
-  const own = world()
-  await turn.sendSummonedTurn(own.services, 'project', { ...lantern, model: 'own' }, 'hi', { model: 'picked' })
-  assert.equal(own.sent[0].params.model, 'own')
-  const picked = world()
-  await turn.sendSummonedTurn(picked.services, 'project', lantern, 'hi', { model: 'picked' })
-  assert.equal(picked.sent[0].params.model, 'picked')
+test('the summoned bot’s model is left to its definition, and the conversation’s own model is the one sent', async () => {
+  const project = world()
+  await turn.sendSummonedTurn(project.services, 'project', { ...lantern, model: 'guest' }, 'hi', { model: 'picked' })
+  assert.equal(project.sent[0].params.model, 'picked', 'the guest’s model is not made the session’s')
   const neither = world()
-  await turn.sendSummonedTurn(neither.services, 'project', lantern, 'hi', {})
+  await turn.sendSummonedTurn(neither.services, 'project', { ...lantern, model: 'guest' }, 'hi', {})
   assert.equal('model' in neither.sent[0].params, false)
+  const inBot = world({ host: async () => ({ ...host, model: 'host' }) })
+  await turn.sendSummonedTurn(inBot.services, 'ada', { ...lantern, model: 'guest' }, 'hi', { model: 'picked' })
+  assert.equal(inBot.sent[0].params.model, 'host', 'a bot’s conversation keeps the bot’s own model')
+})
+
+test('in a bot’s conversation the bot’s own definition stands beside the summoned address, and in a project none does', async () => {
+  const inBot = world()
+  await turn.sendSummonedTurn(inBot.services, 'ada', lantern, 'hi', {})
+  assert.equal(inBot.sent[0].params.address, 'lantern-def')
+  assert.equal(inBot.sent[0].params.definition, 'ada-def')
+  const project = world()
+  await turn.sendSummonedTurn(project.services, 'project', lantern, 'hi', {})
+  assert.equal('definition' in project.sent[0].params, false)
+  const gone = world({ host: async () => null })
+  await turn.sendSummonedTurn(gone.services, 'ada', lantern, 'hi', {})
+  assert.equal('definition' in gone.sent[0].params, false, 'a host whose row is gone is not given a definition')
+})
+
+test('a host bot that cannot be given a definition is refused before anything is sent', async () => {
+  const there = await refused('host migration', { host: async () => { throw new Error('agent said no') } },
+    lantern, 'ada', 'no_definition', /could not be given a definition: Error: agent said no/)
+  assert.equal(there.sent.length, 0)
+  assert.deepEqual(there.adopted, [])
+  assert.equal(there.summoning.has('ada'), false)
 })
 
 const refused = async (name, over, held, session, code, message) => {

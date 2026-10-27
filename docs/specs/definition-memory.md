@@ -725,8 +725,11 @@ the main process sends that bot's definition name, judged a slug when it was sto
 `address` parameter of `turn.send`. It strips `address` from anything a window sends, as it strips
 `definition`. The bridge takes only a name that is a slug, refusing anything else when the turn is
 asked for, addresses that turn to it, and does not keep it on the session. Nothing a turn produced
-and no word of the prompt chooses the name. The marker is not an `@` name, so the bridge does not
-read it as a file ([NAME-9](naming-files.md#NAME-9)).
+and no word of the prompt chooses the name. In a bot's conversation the main process sends that
+bot's own definition as `definition` on the same turn, so the session has it standing even when the
+summon is the first turn, and a turn that names no definition, such as a watch's, is the bot's own. The summoned
+bot's model is its definition's, so the only `model` sent is the conversation's. The marker is not an
+`@` name, so the bridge does not read it as a file ([NAME-9](naming-files.md#NAME-9)).
 
 **What stands in for the keystroke.** [ADDRESS-3](addressing-a-definition.md#ADDRESS-3) rests an
 addressed run on a person's act. Here it is picking the bot for the message. It lasts one turn for
@@ -760,9 +763,10 @@ listed on a page of their own, reached from the conversation's header.
 
 `verified-by: bravebot_ui_bridge::addressing::a_summoned_turn_runs_under_the_summoned_definition_and_the_next_does_not`
 `verified-by: bravebot_ui_bridge::addressing::a_summon_in_a_bots_conversation_leaves_the_bots_own_definition_standing`
+`verified-by: bravebot_ui_bridge::addressing::a_summon_as_the_first_turn_of_a_bots_conversation_still_leaves_its_definition_standing`
 `verified-by: bravebot_ui_bridge::addressing::an_address_that_is_no_slug_is_refused_before_a_turn_starts`
 `verified-by: bravebot_mentions::lib::a_bot_marker_is_not_collected_as_a_reference`
-`verified-by: by-construction (the desktop's main process and window are not crates this workspace compiles, so ui/scripts/sanitise.test.mjs pins that a window's address is stripped, ui/scripts/summons.test.mjs pins the record's shape, that a record is replaced at its ordinal and removed with its conversation, the marker and the one-summon rule of the staging, where a card is placed, and that the summoned send sets address from the bot row alone and refuses a bot's own conversation, a session that is not open, a stopped agent and a bot with no definition, and leaves nothing waiting when a send fails, and ui/scripts/drive-bot-summon.mjs drives the real app and bridge against a stub model: a bot summoned in a project and in another bot's conversation answers under its label, the next turn is not summoned, the summoned bot's conversation shows the card, which opens the reply, and a window that calls the channel itself is refused for an unknown or archived bot, a malformed request and its own bot, and a summoned turn that fails records nothing; make check-ui runs the tests)`
+`verified-by: by-construction (the desktop's main process and window are not crates this workspace compiles, so ui/scripts/sanitise.test.mjs pins that a window's address is stripped, ui/scripts/summons.test.mjs pins the record's shape, that a bot's conversation sends the bot's own definition beside the address and the conversation's model and not the summoned bot's, that a record is replaced at its ordinal and removed with its conversation, the marker and the one-summon rule of the staging, where a card is placed, and that the summoned send sets address from the bot row alone and refuses a bot's own conversation, a session that is not open, a stopped agent and a bot with no definition, and leaves nothing waiting when a send fails, and ui/scripts/drive-bot-summon.mjs drives the real app and bridge against a stub model: a bot summoned in a project and in another bot's conversation answers under its label, the next turn is not summoned, the summoned bot's conversation shows the card, which opens the reply, and a window that calls the channel itself is refused for an unknown or archived bot, a malformed request and its own bot, and a summoned turn that fails records nothing; make check-ui runs the tests)`
 
 ## Seeing it
 
