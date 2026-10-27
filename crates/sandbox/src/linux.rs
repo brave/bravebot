@@ -1417,6 +1417,7 @@ mod tests {
             ".bravebot/gateway-keys.json",
             ".bravebot/leo-premium.json",
             ".bravebot/chatgpt-account.json",
+            ".bravebot/xai-account.json",
             ".bravebot/mcp.json",
             ".bravebot-browser/secret",
             ".ssh/id_ed25519",

@@ -1,6 +1,7 @@
 //! What the window says of the ChatGPT account when a turn failed on it or its models could not be
 //! listed ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8),
-//! [CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+//! [CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)), and of the xAI account when a turn
+//! failed on it ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
 //!
 //! The window draws one sentence in sentence case that says what happened and what to do, with a
 //! command in a code element where one is the remedy. The terminal's sentences are lower case, take
@@ -15,7 +16,7 @@
 
 use bravebot_agent::chatgpt::{AccountModels, Remedy, remedy_of_failure, remedy_of_listing};
 use bravebot_aichat::responses::protocol::Refusal;
-use bravebot_aichat::{AccountFailure, RenewalFailure};
+use bravebot_aichat::{AccountFailure, RenewalFailure, XaiFailure};
 use bravebot_i18n::t;
 
 /// A sentence for the window, and the command it names where one is the remedy. A failure's card and a
@@ -94,6 +95,28 @@ pub(crate) fn of_failure(failure: AccountFailure) -> Said {
         AccountFailure::Renewal(RenewalFailure::Transport) => {
             Said::plain(t!(desktop_chatgpt_renewal_transport))
         }
+        AccountFailure::Xai(xai) => match xai {
+            XaiFailure::NotSignedIn => said(t!(desktop_xai_not_signed_in, command = shown)),
+            XaiFailure::Ended => said(t!(desktop_xai_ended, command = shown)),
+            XaiFailure::Rejected => said(t!(desktop_xai_token_refused, command = shown)),
+            XaiFailure::NotPermitted => Said::plain(t!(desktop_xai_not_permitted)),
+            XaiFailure::Unusable => said(t!(desktop_xai_unusable, command = shown)),
+            XaiFailure::Renewal(RenewalFailure::Refused) => {
+                Said::plain(t!(desktop_xai_renewal_refused))
+            }
+            XaiFailure::Renewal(RenewalFailure::RateLimited) => {
+                Said::plain(t!(desktop_xai_renewal_rate_limited))
+            }
+            XaiFailure::Renewal(RenewalFailure::Unavailable) => {
+                Said::plain(t!(desktop_xai_renewal_unavailable))
+            }
+            XaiFailure::Renewal(RenewalFailure::Incomplete) => {
+                Said::plain(t!(desktop_xai_renewal_incomplete))
+            }
+            XaiFailure::Renewal(RenewalFailure::Transport) => {
+                Said::plain(t!(desktop_xai_renewal_transport))
+            }
+        },
     }
 }
 
@@ -112,6 +135,13 @@ pub(crate) fn of_summary_failure(failure: AccountFailure) -> [Said; 2] {
 /// reaches it, since every other failure of the account is a category no fallback answers for.
 pub(crate) fn of_fall_back(failure: AccountFailure, from: &str, to: &str) -> Said {
     Said::plain(match failure {
+        AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::RateLimited)) => {
+            t!(desktop_xai_fell_back_rate_limited, from = from, to = to)
+        }
+        AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::Unavailable)) => {
+            t!(desktop_xai_fell_back_unavailable, from = from, to = to)
+        }
+        AccountFailure::Xai(_) => t!(desktop_xai_fell_back, from = from, to = to),
         AccountFailure::Renewal(RenewalFailure::RateLimited) => {
             t!(desktop_chatgpt_fell_back_rate_limited, from = from, to = to)
         }
@@ -120,6 +150,22 @@ pub(crate) fn of_fall_back(failure: AccountFailure, from: &str, to: &str) -> Sai
         }
         _ => t!(desktop_chatgpt_fell_back, from = from, to = to),
     })
+}
+
+/// The warning the model picker shows where the xAI account's models could not be listed, or `None`
+/// where there is nothing to warn of: nobody signed in, or a listing that was read, empty or not.
+pub(crate) fn of_xai_listing(account: &bravebot_agent::xai::AccountModels) -> Option<Said> {
+    match account {
+        bravebot_agent::xai::AccountModels::Absent
+        | bravebot_agent::xai::AccountModels::Offered(_) => None,
+        bravebot_agent::xai::AccountModels::Unlisted => {
+            let command = Remedy::XaiSignIn.command();
+            Some(Said {
+                sentence: t!(desktop_xai_models_unreadable, command = command),
+                command: Some(command),
+            })
+        }
+    }
 }
 
 /// The warning the model picker shows where the account's models could not be listed, or `None`
@@ -181,7 +227,80 @@ mod tests {
             AccountFailure::Renewal(RenewalFailure::Unavailable),
             AccountFailure::Renewal(RenewalFailure::Incomplete),
             AccountFailure::Renewal(RenewalFailure::Transport),
+            AccountFailure::Xai(XaiFailure::NotSignedIn),
+            AccountFailure::Xai(XaiFailure::Ended),
+            AccountFailure::Xai(XaiFailure::Rejected),
+            AccountFailure::Xai(XaiFailure::NotPermitted),
+            AccountFailure::Xai(XaiFailure::Unusable),
+            AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::Refused)),
+            AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::RateLimited)),
+            AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::Unavailable)),
+            AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::Incomplete)),
+            AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::Transport)),
         ]
+    }
+
+    /// XAI-15: the window names xAI's command where signing in again or looking at the stored sign-in is
+    /// the remedy, and none where a renewal that may pass is what failed, and it never names ChatGPT's
+    /// command or either service by the other's name. A window that reused ChatGPT's sentences for
+    /// xAI would send a person to sign in to the wrong service.
+    #[test]
+    fn the_xai_sentences_name_xais_command_where_it_is_the_remedy_and_never_chatgpts() {
+        let said = |failure| of_failure(AccountFailure::Xai(failure));
+        for failure in [
+            XaiFailure::NotSignedIn,
+            XaiFailure::Ended,
+            XaiFailure::Rejected,
+        ] {
+            assert_eq!(
+                said(failure).command,
+                Some("bravebot auth login xai"),
+                "{failure:?}"
+            );
+        }
+        // A refusal for the account is not mended by signing in again, so the card draws no command and
+        // says that signing in again will not change it.
+        let plan = said(XaiFailure::NotPermitted);
+        assert_eq!(plan.command, None);
+        assert!(
+            plan.sentence.contains("will not change that")
+                && plan.sentence.contains("check the plan at xAI")
+                && !plan.sentence.contains("run "),
+            "{}",
+            plan.sentence
+        );
+        assert_eq!(
+            said(XaiFailure::Unusable).command,
+            Some("bravebot auth status xai")
+        );
+        for class in [
+            RenewalFailure::Refused,
+            RenewalFailure::RateLimited,
+            RenewalFailure::Unavailable,
+            RenewalFailure::Incomplete,
+            RenewalFailure::Transport,
+        ] {
+            assert_eq!(said(XaiFailure::Renewal(class)).command, None, "{class:?}");
+        }
+        for failure in every_failure() {
+            let sentence = of_failure(failure).sentence;
+            let xai = matches!(failure, AccountFailure::Xai(_));
+            assert_eq!(sentence.contains("xAI"), xai, "{failure:?}: {sentence}");
+            assert_eq!(
+                sentence.contains("ChatGPT") || sentence.contains("OpenAI"),
+                !xai,
+                "{failure:?}: {sentence}"
+            );
+            // A move to the fallback model says which service's sign-in it was, the same way.
+            let moved = of_fall_back(failure, "a", "b").sentence;
+            assert_eq!(moved.contains("xAI"), xai, "{failure:?}: {moved}");
+            assert_eq!(moved.contains("ChatGPT"), !xai, "{failure:?}: {moved}");
+        }
+        let moved = |class| {
+            of_fall_back(AccountFailure::Xai(XaiFailure::Renewal(class)), "a", "b").sentence
+        };
+        assert!(moved(RenewalFailure::RateLimited).contains("limiting requests"));
+        assert!(moved(RenewalFailure::Unavailable).contains("unavailable"));
     }
 
     /// What every sentence of the window is held to: one sentence in sentence case, with no backtick
@@ -261,6 +380,7 @@ mod tests {
                 AccountFailure::Named { .. }
                     | AccountFailure::ModelNotOffered
                     | AccountFailure::Renewal(_)
+                    | AccountFailure::Xai(XaiFailure::Renewal(_))
             ) {
                 assert_eq!(command_of(failure), None, "{failure:?}");
             }
@@ -356,6 +476,30 @@ mod tests {
         assert!(
             sentence(AccountFailure::Renewal(RenewalFailure::Unavailable)).contains("unavailable")
         );
+    }
+
+    /// XAI-19: the picker's warning for the xAI account is one sentence in sentence case that names xAI
+    /// and the command that signs in, drawn from `command`, and says nothing where nothing failed. It
+    /// is not the ChatGPT warning, and it does not say a list is built in, since none is.
+    #[test]
+    fn the_xai_pickers_warning_is_one_sentence_naming_the_sign_in_and_nothing_is_said_where_nothing_failed()
+     {
+        use bravebot_agent::xai::AccountModels;
+        assert_eq!(of_xai_listing(&AccountModels::Absent), None);
+        assert_eq!(of_xai_listing(&AccountModels::Offered(Vec::new())), None);
+
+        let said = of_xai_listing(&AccountModels::Unlisted).expect("a warning");
+
+        assert_one_sentence_naming(&said, "the xAI listing");
+        assert_eq!(said.command, Some("bravebot auth login xai"));
+        assert!(said.sentence.contains("xAI"), "{}", said.sentence);
+        assert!(
+            !said.sentence.contains("ChatGPT") && !said.sentence.contains("built in"),
+            "{}",
+            said.sentence
+        );
+        assert!(!said.sentence.contains("/model"), "{}", said.sentence);
+        assert!(!said.sentence.contains("--model"), "{}", said.sentence);
     }
 
     /// The model picker's warnings are held to the same rule, are told apart, and say nothing where

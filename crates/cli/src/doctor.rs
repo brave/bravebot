@@ -756,6 +756,7 @@ fn report_backends(
         report_held(held);
     }
     report_chatgpt_sign_in(ending);
+    report_xai_sign_in(ending);
     subscription
 }
 
@@ -806,6 +807,27 @@ fn report_chatgpt_sign_in(ending: &mut Ending) {
             fact(t!(doctor_chatgpt), reason);
         }
         crate::chatgpt::Standing::NotSignedIn | crate::chatgpt::Standing::Nowhere => {}
+    }
+}
+
+/// What `doctor` says of an xAI sign-in ([XAI-12](../../../docs/specs/xai-sign-in.md#XAI-12)): that one
+/// is stored, when its access token expires and that the refresh token goes to `auth.x.ai` alone, then
+/// the account of the credential like any other that is held.
+///
+/// Nothing at all where none is stored, and a file that cannot be read is reported with its remedy and
+/// ends the run in failure, both as for the ChatGPT sign-in. Only the instant is shown: the file also
+/// holds the tokens, and neither belongs in a report people paste.
+fn report_xai_sign_in(ending: &mut Ending) {
+    match crate::xai::standing() {
+        crate::xai::Standing::SignedIn { expires } => {
+            fact(t!(doctor_xai), t!(doctor_xai_signed_in, expires = expires));
+            report_held(bravebot_config::Held::XaiAccount);
+        }
+        crate::xai::Standing::Unusable(reason) => {
+            *ending = ends_on(*ending, Ending::Failed);
+            fact(t!(doctor_xai), reason);
+        }
+        crate::xai::Standing::NotSignedIn | crate::xai::Standing::Nowhere => {}
     }
 }
 
@@ -884,14 +906,16 @@ fn report_serving(config: &Config, ending: &mut Ending) {
             subscription,
             a_service_is_configured,
             chatgpt,
+            xai,
         } => {
             *ending = ends_on(*ending, Ending::Configuration);
             // A sign-in file that cannot be read has its own line above, with the remedy, so the
             // how-to does not say it a second time.
-            let chatgpt = match chatgpt {
+            let unsaid = |file| match file {
                 AccountFile::Unreadable => AccountFile::NotStored,
                 other => other,
             };
+            let (chatgpt, xai) = (unsaid(chatgpt), unsaid(xai));
             println!();
             println!(
                 "{}",
@@ -899,6 +923,7 @@ fn report_serving(config: &Config, ending: &mut Ending) {
                     subscription.as_deref(),
                     a_service_is_configured,
                     chatgpt,
+                    xai,
                     &import::looked(a_service_is_configured),
                     None,
                 )
@@ -972,6 +997,7 @@ pub(crate) fn doctor() -> ExitCode {
             // configuration: a held credential is missing from the report exactly when somebody is
             // debugging a setup that does not load.
             report_chatgpt_sign_in(&mut ending);
+            report_xai_sign_in(&mut ending);
             // The one line from the section above that still has to be printed. A pin is the case
             // where the person reading this can do nothing about the error, so the file that holds
             // it is the only actionable thing in the report.
@@ -1412,6 +1438,7 @@ pub(crate) fn what_would_end(held: bravebot_config::Held<'_>) -> String {
         }
         bravebot_config::Held::SubscriptionBatch => t!(doctor_ends_subscription_batch).to_string(),
         bravebot_config::Held::ChatgptAccount => t!(doctor_ends_chatgpt_account).to_string(),
+        bravebot_config::Held::XaiAccount => t!(doctor_ends_xai_account).to_string(),
     }
 }
 
@@ -1460,7 +1487,8 @@ pub(crate) fn how_soon_a_leak_is_noticed(held: bravebot_config::Held<'_>) -> Opt
         | bravebot_config::Held::AwsAccessKey
         | bravebot_config::Held::GatewayToken { .. }
         | bravebot_config::Held::SubscriptionBatch
-        | bravebot_config::Held::ChatgptAccount => None,
+        | bravebot_config::Held::ChatgptAccount
+        | bravebot_config::Held::XaiAccount => None,
     }
 }
 
@@ -1591,6 +1619,21 @@ pub(crate) fn why_it_dropped(
             gate = gate,
             answer = answer
         ),
+        (Held::XaiAccount, Condition::NothingDecidesEachUse) => t!(
+            doctor_dropped_xai_account_nothing_decides_each_use,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::XaiAccount, Condition::NoBoundFixedBeforeIssue) => t!(
+            doctor_dropped_xai_account_no_bound_fixed_before_issue,
+            gate = gate,
+            answer = answer
+        ),
+        (Held::XaiAccount, Condition::RenewableWithoutAuthority) => t!(
+            doctor_dropped_xai_account_renewable_without_authority,
+            gate = gate,
+            answer = answer
+        ),
         // The conditions each credential's walk does not hold. Gate 2 is passed by the
         // subscription batch, which is why it has no account of the gates below the one it
         // stopped at; the rest are the other conditions of the gates each credential does drop
@@ -1612,7 +1655,7 @@ pub(crate) fn why_it_dropped(
             | Condition::IssuerEndsNothing,
         )
         | (
-            Held::ChatgptAccount,
+            Held::ChatgptAccount | Held::XaiAccount,
             Condition::NothingCanRefuseAUse
             | Condition::BoundEnforcedWithinReach
             | Condition::BoundWithNoEnd
@@ -1658,6 +1701,7 @@ pub(crate) fn what_outlives_revoking(held: bravebot_config::Held<'_>) -> Option<
     match held {
         bravebot_config::Held::AwsAccessKey => Some(t!(doctor_outlives_aws_access_key)),
         bravebot_config::Held::ChatgptAccount => Some(t!(doctor_outlives_chatgpt_account)),
+        bravebot_config::Held::XaiAccount => Some(t!(doctor_outlives_xai_account)),
         bravebot_config::Held::SigningKey
         | bravebot_config::Held::AwsSession
         | bravebot_config::Held::GatewayToken { .. }

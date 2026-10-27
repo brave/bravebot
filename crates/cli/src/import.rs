@@ -83,8 +83,8 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
     // the model this start requests as it is. Where nothing is picked, or the pick is not the model the
     // start reads back, the start goes on to the refusal.
     let mut why_no_model_was_offered = None;
-    if crate::model::asks_which_of_the_accounts_models(&serving, named) {
-        match crate::model::ask_which_of_the_accounts_models(config) {
+    if let Some(accounts) = crate::model::asks_which_of_the_accounts_models(&serving, named) {
+        match crate::model::ask_which_of_the_accounts_models(config, accounts) {
             crate::model::Asked::InForce => return None,
             // Asking for the listing removes a sign-in that has ended, so what the refusal says about
             // the sign-in is read again, and says why the account offered no model.
@@ -102,7 +102,7 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
     {
         return None;
     }
-    let (subscription, a_service_is_configured, chatgpt) = match serving {
+    let (subscription, a_service_is_configured, chatgpt, xai) = match serving {
         bravebot_agent::backend::Serving::Configured => return None,
         bravebot_agent::backend::Serving::Refused { file, why } => {
             return Some(fail(
@@ -114,7 +114,8 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
             subscription,
             a_service_is_configured,
             chatgpt,
-        } => (subscription, a_service_is_configured, chatgpt),
+            xai,
+        } => (subscription, a_service_is_configured, chatgpt, xai),
     };
     match at_the_start(a_service_is_configured, named) {
         Start::Serving(imported) => {
@@ -128,6 +129,7 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
                 subscription.as_deref(),
                 a_service_is_configured,
                 chatgpt,
+                xai,
                 &looked,
                 why_no_model_was_offered.as_deref(),
             ),
@@ -226,12 +228,14 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
             subscription,
             a_service_is_configured,
             chatgpt,
+            xai,
         } => Start::Ended(fail(
             Ending::Configuration,
             crate::model::how_to_configure_a_model(
                 subscription.as_deref(),
                 a_service_is_configured,
                 chatgpt,
+                xai,
                 &Looked::default(),
                 None,
             ),

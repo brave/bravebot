@@ -480,6 +480,39 @@ fn a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_sign
     );
 }
 
+/// XAI-15: a turn that failed on the xAI account tells the editor which command signs in to xAI, in the
+/// window's own sentence for the step that failed, and not the name of the category, and never ChatGPT's
+/// command. The turn is on a model of the account in a profile nobody signed in to, so it fails before
+/// any request is sent and no model service is asked.
+///
+/// The faults this rejects: the category's name for a failure of the account, the ChatGPT account's
+/// sentence for the xAI account's failure, and the terminal's lower case wording with its backticks
+/// reaching an editor that draws them as they are.
+#[test]
+fn a_turn_that_failed_on_the_xai_account_tells_the_editor_which_command_signs_in() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let account_project = project("xai-account-failure");
+    let mut editor = Editor::on_model("xai/grok-4.5", "http://127.0.0.1:9", &account_project);
+    let session = editor.session(&account_project);
+    let prompt = editor.prompt(&session, text("hello"));
+    editor.answer_next(selected("allow-once"));
+
+    let done = editor.response(prompt);
+
+    let said = done["error"]["message"].as_str().expect("a failure");
+    assert_eq!(
+        said,
+        "the turn failed: You are not signed in to xAI, so run bravebot auth login xai in a terminal to sign in.",
+        "{done}"
+    );
+    assert!(
+        !said.contains("unauthorized") && !said.contains("ChatGPT"),
+        "{said}"
+    );
+}
+
 /// CHATGPT-8: a summary of the conversation that could not be made because the account's sign-in is
 /// not there is told to the editor in the window's own sentences, one each, the second naming the
 /// command that signs in again, and the prompt still ends normally on the model that was asked. The

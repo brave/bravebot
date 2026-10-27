@@ -230,7 +230,7 @@ fn a_configuration_error_exits_non_zero() {
 /// service configured to serve a turn, which is what a released binary arrives as. A run that went
 /// ahead would be answered by whatever that endpoint gives it, and read as the agent being poor.
 ///
-/// So the run stops before it asks anything, and says the four ways to configure a service. Each
+/// So the run stops before it asks anything, and says the five ways to configure a service. Each
 /// is asserted by the words somebody has to type or write, not by the sentence around them: a
 /// refusal that named the problem and no route out is the first-use experience this replaced.
 #[test]
@@ -264,6 +264,7 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         "amazon-bedrock",
         "OpenRouter",
         "bravebot auth login chatgpt",
+        "bravebot auth login xai",
         "bravebot auth login leo",
     ] {
         assert!(
@@ -9144,21 +9145,21 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt]"),
+        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]"),
         "{stderr}"
     );
 
-    // The refusal for `import` names the ways that can be asked about, ChatGPT among them, in the
-    // language the interface is in.
+    // The refusal for `import` names the ways that can be asked about, ChatGPT and xAI among them, in
+    // the language the interface is in.
     let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
     assert!(
-        english.contains("name leo, bedrock, gateway or chatgpt"),
+        english.contains("name leo, bedrock, gateway, chatgpt or xai"),
         "{english}"
     );
     let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
     let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
     assert!(
-        french.contains("nommez leo, bedrock, gateway ou chatgpt"),
+        french.contains("nommez leo, bedrock, gateway, chatgpt ou xai"),
         "{french}"
     );
 }

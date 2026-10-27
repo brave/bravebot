@@ -248,11 +248,26 @@ to a port bravebot holds open on `127.0.0.1`, and the command waits five minutes
 stored only where OpenAI's reply grants the scope that lets bravebot use the account's tokens. On a machine with no browser, open the printed address
 somewhere else and forward that port. Once the sign-in is stored, `bravebot` started on its own in a
 terminal asks which of the account's models to use and remembers the answer, where nothing serves the
-model in force. `/model` offers the models the account reaches once a session is open, named
-`chatgpt/<model>`, and `--model chatgpt/<model>`, given with a prompt or a task as in
+model in force and no gateway or AWS account is configured. `/model` offers the models the account reaches
+once a session is open, named `chatgpt/<model>`, and `--model chatgpt/<model>`, given with a prompt or a task as in
 `bravebot -i "<prompt>" --model chatgpt/<model>`, names one. A `provider` block named
 `chatgpt` that states an endpoint is a gateway and keeps the name, and the sign-in is refused until
 it is renamed. The design is [specs/chatgpt-sign-in.md](specs/chatgpt-sign-in.md).
+
+### An xAI SuperGrok subscription, if you have one
+
+```sh
+bravebot auth login xai
+```
+
+This prints an address and a code. Open the address on any device, the one you are typing on or a phone, sign in
+to xAI there and enter the code if the page asks for one. Once the sign-in is stored, `bravebot` started on its
+own in a terminal asks which of the account's models to use and remembers the answer, where nothing serves the
+model in force and no gateway or AWS account is configured. `/model` offers the models the account reaches once a
+session is open, named `xai/<model>`, and
+`--model xai/<model>`, given with a prompt or a task as in `bravebot -i "<prompt>" --model xai/<model>`, names
+one. A `provider` block named `xai` is a gateway and keeps the name, and the sign-in is refused until it is
+renamed. The design is [specs/xai-sign-in.md](specs/xai-sign-in.md).
 
 ### Brave Leo Premium, if you already subscribe
 

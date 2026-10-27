@@ -597,7 +597,7 @@ test('a failure of the ChatGPT account says its sentence with the command drawn 
 
   const drawn = draw({ category: 'unauthorized', accountMessage: sentence, accountCommand: command, detail: 'chat: unauthorized' })
   // The title is the account's, and the description is the sentence, as one paragraph.
-  assert.match(drawn, /<span slot="title">The ChatGPT account could not be used<\/span>/, drawn)
+  assert.match(drawn, /<span slot="title">The account could not be used<\/span>/, drawn)
   assert.match(
     drawn,
     /<p>The ChatGPT sign-in has ended, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in again\.<\/p>/,
@@ -632,6 +632,30 @@ test('a failure of the ChatGPT account says its sentence with the command drawn 
   const described = draw({ category: 'unauthorized', accountMessage: null, accountCommand: command, detail: 'chat: unauthorized' })
   assert.match(described, /Check the model service credentials in Agent settings/, described)
   assert.doesNotMatch(described, /<code>/, described)
+})
+
+/**
+ * The xAI account's failure is drawn as the ChatGPT account's is: the sentence the bridge wrote, the
+ * command it names as code, and the title every account's failure has, which names neither service
+ * since the sentence under it does.
+ */
+test('a failure of the xAI account says its sentence under the title every account has', () => {
+  const { ErrorCard } = load('src/renderer/components/ErrorCard.tsx')
+  const draw = (props) => renderToStaticMarkup(React.createElement(ErrorCard, props))
+  const command = 'bravebot auth login xai'
+  const sentence = `You are not signed in to xAI, so run ${command} in a terminal to sign in.`
+
+  const drawn = draw({ category: 'unauthorized', accountMessage: sentence, accountCommand: command, detail: 'chat: unauthorized' })
+
+  assert.match(drawn, /<span slot="title">The account could not be used<\/span>/, drawn)
+  assert.doesNotMatch(drawn, /ChatGPT/, drawn)
+  assert.match(
+    drawn,
+    /<p>You are not signed in to xAI, so run <code>bravebot auth login xai<\/code> in a terminal to sign in\.<\/p>/,
+    drawn,
+  )
+  assert.doesNotMatch(drawn, /Agent settings/, drawn)
+  assert.equal((drawn.match(/<code>/g) ?? []).length, 1, drawn)
 })
 
 // The same sentence on the card of a run that stopped, which draws the bridge's sentence in place of

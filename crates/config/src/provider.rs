@@ -101,6 +101,40 @@ fn chatgpt_serving_host() -> String {
     CHATGPT_SERVING_HOST.to_string()
 }
 
+/// The id a model of the xAI account is qualified by
+/// ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
+///
+/// Not the id of a gateway: where a `provider` entry has it, the entry keeps the name and no model
+/// is the account's.
+pub const XAI_ID: &str = "xai";
+
+/// Where an xAI account's model requests go
+/// ([XAI-1](../../../docs/specs/xai-sign-in.md#XAI-1)).
+///
+/// A constant of the source. Nothing a settings file, a variable, a page or a reply says names
+/// another, so the account's access token goes to this host and no other.
+const XAI_SERVING_HOST: &str = "https://api.x.ai/v1";
+
+/// The variable that names a stand-in for the xAI serving host, at `<base>/v1`, in a build with the
+/// `test-hosts` feature. It is the one `bravebot_skus::xai::XAI_STAND_IN` reads, so one stand-in
+/// answers the sign-in and the requests. A build without the feature holds no code that reads it, and
+/// a release build with it does not compile.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub const XAI_STAND_IN: &str = "BRAVEBOT_TEST_XAI_STAND_IN";
+
+/// Where the account's requests go: [`XAI_SERVING_HOST`], or in a build with the `test-hosts`
+/// feature, a stand-in [`XAI_STAND_IN`] names.
+fn xai_serving_host() -> String {
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    if let Some(base) = std::env::var(XAI_STAND_IN)
+        .ok()
+        .filter(|base| !base.is_empty())
+    {
+        return format!("{base}/v1");
+    }
+    XAI_SERVING_HOST.to_string()
+}
+
 /// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
 /// protocol rather than the chat completions one: see [`Provider::protocol`].
 pub(crate) const ANTHROPIC_ID: &str = "anthropic";
@@ -477,6 +511,26 @@ impl Provider {
             unreachable!("a JSON object literal");
         };
         match Self::one(CHATGPT_ID, &entry) {
+            Some(account) => account,
+            None => unreachable!("an entry that states its endpoint is reachable"),
+        }
+    }
+
+    /// The service a stored xAI sign-in reaches, spoken to in chat completions as every other
+    /// gateway is ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
+    ///
+    /// Built by the same reading as an entry that states its endpoint, from constants. It names no
+    /// variable, holds no key and lists no model: its token is the account's and its models are
+    /// the account's.
+    pub fn xai_account() -> Self {
+        let entry = serde_json::json!({
+            "name": "xAI",
+            "options": {"baseURL": xai_serving_host()},
+        });
+        let serde_json::Value::Object(entry) = entry else {
+            unreachable!("a JSON object literal");
+        };
+        match Self::one(XAI_ID, &entry) {
             Some(account) => account,
             None => unreachable!("an entry that states its endpoint is reachable"),
         }
@@ -2307,6 +2361,31 @@ mod tests {
             account.completion_url(),
             "https://api.openai.com/v1/responses"
         );
+        assert!(account.models.is_empty());
+        assert!(account.headers.is_empty());
+
+        let everything = |name: &str| Some(format!("{name}-value"));
+        assert!(
+            matches!(account.credential(everything), Credential::NotNeeded),
+            "a variable was read for the account"
+        );
+    }
+
+    /// XAI-1 and XAI-15: the account is reached at the serving host in chat completions, and it names
+    /// no variable to read a key from, so `XAI_API_KEY` and a gateway's key are never what a request
+    /// to it carries.
+    #[test]
+    fn the_xai_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own() {
+        let account = Provider::xai_account();
+        assert_eq!(account.id, "xai");
+        assert_eq!(account.display_name(), "xAI");
+        assert_eq!(account.protocol(), Protocol::ChatCompletions);
+        assert_eq!(account.host(), "api.x.ai");
+        assert_eq!(
+            account.completion_url(),
+            "https://api.x.ai/v1/chat/completions"
+        );
+        assert_eq!(account.models_url(), "https://api.x.ai/v1/models");
         assert!(account.models.is_empty());
         assert!(account.headers.is_empty());
 

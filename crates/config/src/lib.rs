@@ -662,6 +662,25 @@ pub enum Held<'a> {
     /// No parameter. The file holds one sign-in whatever the account, and an identifier or an email
     /// in a pasted report is the one thing in it that says whose account it was.
     ChatgptAccount,
+    /// The sign-in a person made to xAI with a SuperGrok subscription, kept in
+    /// `~/.bravebot/xai-account.json` as an access token and the refresh token that replaces it.
+    ///
+    /// Held, on the same walk as [`Held::ChatgptAccount`] and for the same reasons: this program holds
+    /// the access token itself and nothing is asked to authorise a use of it, nothing asks xAI to
+    /// narrow it to this run, and the refresh token replaces it without asking anybody. One entry for
+    /// the pair, since the two are one arrangement.
+    ///
+    /// The surface that ends it is xAI, and what ends each token is different. The access token was
+    /// issued for 21600 seconds, observed once with one account, and what the serving host answers a
+    /// token past that instant was not observed. The
+    /// refresh token ends when xAI revokes it: its revocation endpoint did so on 2026-10-26, and a
+    /// refresh afterwards was refused as `invalid_grant`. This program does not call that endpoint, so
+    /// signing out here ends this machine's custody and nothing at xAI. One request made right after
+    /// that revocation, with an access token issued before it, was accepted, once with one account. How
+    /// long such a token keeps working was not observed.
+    ///
+    /// No parameter, for the reason the ChatGPT sign-in has none.
+    XaiAccount,
 }
 
 impl<'a> Held<'a> {
@@ -670,7 +689,7 @@ impl<'a> Held<'a> {
     /// The gateway arrangement is a credential plus the host that would end it, so a list of the
     /// kinds has to be given one: a caller walking this is asking which arrangements exist rather
     /// than which are configured, and the host it passes is what the gateway entry will name.
-    pub const fn all(gateway_host: &'a str) -> [Self; 6] {
+    pub const fn all(gateway_host: &'a str) -> [Self; 7] {
         [
             Self::SigningKey,
             Self::AwsAccessKey,
@@ -678,6 +697,7 @@ impl<'a> Held<'a> {
             Self::GatewayToken { host: gateway_host },
             Self::SubscriptionBatch,
             Self::ChatgptAccount,
+            Self::XaiAccount,
         ]
     }
 
@@ -794,7 +814,7 @@ impl<'a> Held<'a> {
             // and the refresh token replaces it without anybody being asked. Not attempted rather
             // than refused: nothing here asks OpenAI for a narrower or bound form, so no refusal of
             // one has been seen.
-            Self::ChatgptAccount => &[
+            Self::ChatgptAccount | Self::XaiAccount => &[
                 GateDrop {
                     condition: Condition::NothingDecidesEachUse,
                     attempt: Attempt::NotAttempted,
@@ -827,7 +847,8 @@ impl<'a> Held<'a> {
             | Self::AwsAccessKey
             | Self::AwsSession
             | Self::GatewayToken { .. }
-            | Self::ChatgptAccount => Tier::Held,
+            | Self::ChatgptAccount
+            | Self::XaiAccount => Tier::Held,
         }
     }
 
@@ -862,7 +883,8 @@ impl<'a> Held<'a> {
             | Self::AwsAccessKey
             | Self::GatewayToken { .. }
             | Self::SubscriptionBatch
-            | Self::ChatgptAccount => None,
+            | Self::ChatgptAccount
+            | Self::XaiAccount => None,
         }
     }
 
@@ -891,8 +913,17 @@ impl<'a> Held<'a> {
     /// one account's sign-in. That shows nothing of the two surfaces or of other accounts, so the
     /// report says what was seen and that the rest has not been observed, and does not tell
     /// somebody that nothing survives.
+    ///
+    /// True for the xAI sign-in as well, on one observation: an access token issued before the refresh
+    /// token was revoked at xAI's revocation endpoint, which this program does not call, was accepted
+    /// on a request made right after it, once with one account. That shows nothing of how long such a
+    /// token keeps working, so the report says what was seen and no more, and does not tell somebody
+    /// that nothing survives.
     pub fn outlives_revocation(self) -> bool {
-        matches!(self, Self::AwsAccessKey | Self::ChatgptAccount)
+        matches!(
+            self,
+            Self::AwsAccessKey | Self::ChatgptAccount | Self::XaiAccount
+        )
     }
 
     /// Whether this derived credential is bound to its presenter or a bearer secret, which CRED-26
@@ -915,7 +946,7 @@ impl<'a> Held<'a> {
     pub fn binding(self) -> Option<Binding> {
         match self {
             Self::AwsSession => Some(Binding::Bearer(Attempt::Refused)),
-            Self::SubscriptionBatch | Self::ChatgptAccount => {
+            Self::SubscriptionBatch | Self::ChatgptAccount | Self::XaiAccount => {
                 Some(Binding::Bearer(Attempt::NotAttempted))
             }
             Self::SigningKey | Self::AwsAccessKey | Self::GatewayToken { .. } => None,
@@ -1047,6 +1078,30 @@ impl CacheTtl {
     /// else. A word that names neither is absence rather than a guess at the nearest lifetime.
     pub fn parse(word: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|ttl| ttl.wire() == word.trim())
+    }
+}
+
+/// Which accounts a roster asks for its rows: a stored sign-in's token goes to the serving host of each
+/// that is asked
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9),
+/// [XAI-19](../../../docs/specs/xai-sign-in.md#XAI-19)).
+///
+/// One rule for the terminal's roster and the window's, so neither holds its own copy of which accounts
+/// are asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RosterAccounts {
+    pub chatgpt: bool,
+    pub xai: bool,
+}
+
+impl RosterAccounts {
+    /// What a picker asks: both accounts, whatever model is in force, since it lists every model a
+    /// person could choose.
+    pub fn for_a_picker() -> Self {
+        Self {
+            chatgpt: true,
+            xai: true,
+        }
     }
 }
 
@@ -1620,7 +1675,9 @@ impl Config {
     /// ([`Config::chatgpt_model`], [CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
     /// A gateway of another id that lists such a model is reached by the spelling its row has,
     /// `<id>/chatgpt/<name>`, and a `provider` entry that has the account's id and states an endpoint
-    /// is a gateway like any other and takes the name through the qualified form above.
+    /// is a gateway like any other and takes the name through the qualified form above. The xAI
+    /// account's id is held apart in the same way ([`Config::xai_model`],
+    /// [XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
     ///
     /// The returned name is what goes on the wire. A gateway has never heard of the id this crate
     /// files it under, so returning them together is what stops the qualified form reaching it.
@@ -1636,7 +1693,7 @@ impl Config {
         {
             return Some((provider, wire));
         }
-        if self.chatgpt_model(model).is_some() {
+        if self.chatgpt_model(model).is_some() || self.xai_model(model).is_some() {
             return None;
         }
         self.providers
@@ -1662,6 +1719,44 @@ impl Config {
             .then_some(wire)
     }
 
+    /// The name the xAI account knows `model` by, where `model` is one of its models
+    /// ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
+    ///
+    /// Only the qualified form is: `xai/` and then the name. A bare name never selects the account,
+    /// so `grok-4.5` keeps meaning a gateway's model or Brave's. A `provider` entry with the id
+    /// `xai` keeps the name, since one name cannot select two services, and then no model is the
+    /// account's.
+    ///
+    /// The returned name is what the request carries, and it is read from the model's own name:
+    /// the account has never heard of the id this crate files its models under.
+    pub fn xai_model<'name>(&self, model: &'name str) -> Option<&'name str> {
+        let (id, wire) = model.split_once('/')?;
+        (id == provider::XAI_ID && !wire.is_empty() && self.offers_xai_account()).then_some(wire)
+    }
+
+    /// Whether the model a turn runs on is one of the xAI account's: `model` where it names one,
+    /// and otherwise the configured default.
+    ///
+    /// What decides whether the account's listing is worth asking for outside a picker. A turn on
+    /// any other model needs nothing from it, and asking would send a stored sign-in's token to
+    /// the serving host for a session that never uses the account.
+    pub fn runs_on_xai_account(&self, model: Option<&str>) -> bool {
+        self.xai_model(model.unwrap_or(&self.default_model))
+            .is_some()
+    }
+
+    /// Whether the xAI account may be reached at all, which it may not where a `provider` entry has
+    /// its id ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
+    ///
+    /// One name cannot select two services, so the entry keeps it: its models go to its gateway,
+    /// and none is the account's, in a request or in a picker.
+    pub fn offers_xai_account(&self) -> bool {
+        !self
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider::XAI_ID)
+    }
+
     /// Whether the model a turn runs on is one of the ChatGPT account's: `model` where it names
     /// one, and otherwise the configured default.
     ///
@@ -1671,6 +1766,17 @@ impl Config {
     pub fn runs_on_chatgpt_account(&self, model: Option<&str>) -> bool {
         self.chatgpt_model(model.unwrap_or(&self.default_model))
             .is_some()
+    }
+
+    /// The accounts a roster asks for the sake of a turn on `model`, or on the configured default
+    /// where `model` is `None`: the account that model belongs to, and no other. The turn needs the
+    /// row of its own model, so a turn on a Brave or a gateway model sends no stored sign-in's token
+    /// to a serving host for a listing it has no use for.
+    pub fn roster_accounts_for_a_turn(&self, model: Option<&str>) -> RosterAccounts {
+        RosterAccounts {
+            chatgpt: self.runs_on_chatgpt_account(model),
+            xai: self.runs_on_xai_account(model),
+        }
     }
 
     /// Whether the ChatGPT account may be reached at all, which it may not where a `provider`
@@ -1692,13 +1798,14 @@ impl Config {
     ///
     /// A name that begins `chatgpt/` is never Bedrock's: it is the account's, or the gateway
     /// entry's that has the account's id ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    /// A name that begins `xai/` is held apart in the same way
+    /// ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
     /// A Bedrock model is reached by the id as it stands, with no qualified spelling to be reached
     /// by instead, so one listed under such a name is not asked about it.
     pub fn bedrock_for(&self, model: &str) -> Option<&bedrock::Bedrock> {
-        if model
-            .split_once('/')
-            .is_some_and(|(id, wire)| id == provider::CHATGPT_ID && !wire.is_empty())
-        {
+        if model.split_once('/').is_some_and(|(id, wire)| {
+            matches!(id, provider::CHATGPT_ID | provider::XAI_ID) && !wire.is_empty()
+        }) {
             return None;
         }
         if let Some(bedrock) = self.bedrock.as_ref().filter(|it| it.offers(model)) {
@@ -1779,9 +1886,9 @@ impl Config {
     /// because the batch buys the premium half of that backend's roster and nothing else reads it,
     /// and CRED-2 gives a credential nothing reads no tier.
     ///
-    /// [`Held::ChatgptAccount`] is not in it, for the opposite reason: the sign-in is held on every
-    /// machine that made one, whatever backend this configuration reaches, so a caller that reads
-    /// the file adds it.
+    /// [`Held::ChatgptAccount`] and [`Held::XaiAccount`] are not in it, for the opposite reason: a
+    /// sign-in is held on every machine that made one, whatever backend this configuration reaches,
+    /// so a caller that reads the file adds it.
     pub fn held(&self, subscription_imported: bool) -> Vec<Held<'_>> {
         let mut held = Vec::new();
         if self.serves_aichat() {
@@ -2749,6 +2856,46 @@ mod tests {
         );
     }
 
+    /// CRED-25 and XAI-12: the xAI sign-in is the ChatGPT sign-in's arrangement, a permanent secret
+    /// this program renews by itself, so it stands at Held on the same walk, is a bearer secret nobody
+    /// has asked a bound form of, and is recorded as possibly leaving an access token working after
+    /// the refresh token is revoked, since one was accepted on a request made right after a revocation.
+    /// Held to each, since a record that put it at Granted would call a token the refresh token
+    /// replaces unaided a bounded one, and one that said nothing survives would send somebody who
+    /// revoked it away believing the access token had stopped. It is not in what a configuration
+    /// holds, for the reason the ChatGPT sign-in is not.
+    #[test]
+    fn an_xai_sign_in_is_held_renewed_unaided_and_possibly_outlives_revocation() {
+        assert_eq!(Held::XaiAccount.tier(), Tier::Held);
+        assert_eq!(Held::XaiAccount.walk(), Held::ChatgptAccount.walk());
+        let conditions: Vec<Condition> = Held::XaiAccount
+            .walk()
+            .iter()
+            .map(|drop| drop.condition)
+            .collect();
+        assert_eq!(
+            conditions,
+            [
+                Condition::NothingDecidesEachUse,
+                Condition::NoBoundFixedBeforeIssue,
+                Condition::RenewableWithoutAuthority,
+            ]
+        );
+        assert!(Held::XaiAccount.outlives_revocation());
+        assert_eq!(Held::XaiAccount.noticed_within(), None);
+        assert_eq!(
+            Held::XaiAccount.binding(),
+            Some(Binding::Bearer(Attempt::NotAttempted))
+        );
+
+        let brave = Config::from_lookup(complete_env).expect("configured");
+        assert!(
+            !brave.held(true).contains(&Held::XaiAccount),
+            "a configuration is accounted for a sign-in only the machine can say it holds"
+        );
+        assert!(Held::all("gateway.invalid").contains(&Held::XaiAccount));
+    }
+
     /// Without Bedrock the aichat credentials are still required. Relaxing them for everyone would
     /// turn a missing key into a confusing runtime failure instead of a startup error.
     #[test]
@@ -3265,6 +3412,206 @@ mod tests {
             .provider_for("chatgpt/gpt-5.5")
             .expect("the entry that holds the id");
         assert_eq!(provider.id, "chatgpt");
+    }
+
+    /// XAI-13: a name selects the xAI account only by carrying the account's id, since a bare
+    /// `grok-4.5` already means a gateway's model or Brave's and a remembered choice would otherwise
+    /// change service silently. The account is asked for the part after the id. A name that carries
+    /// the id of ChatGPT's account is not xAI's, and one that carries xAI's is not ChatGPT's.
+    #[test]
+    fn only_the_qualified_name_selects_the_xai_account_and_only_the_rest_of_it_is_sent() {
+        let config = with_a_gateway("{}");
+        assert!(config.offers_xai_account());
+        assert!(config.runs_on_xai_account(Some("xai/grok-4.5")));
+        assert!(!config.runs_on_xai_account(Some("grok-4.5")));
+        assert!(!config.runs_on_xai_account(None), "the default is Brave's");
+        assert_eq!(config.xai_model("xai/grok-4.5"), Some("grok-4.5"));
+        assert_eq!(config.xai_model("xai/org/model"), Some("org/model"));
+        for name in [
+            "grok-4.5",
+            "xai",
+            "xai/",
+            "x-ai/grok-4.5",
+            "Xai/grok-4.5",
+            "xai-grok/grok-4.5",
+            "chatgpt/grok-4.5",
+            "openrouter/z-ai/glm-4.6",
+            DEFAULT_MODEL,
+        ] {
+            assert_eq!(
+                config.xai_model(name),
+                None,
+                "{name:?} selected the account"
+            );
+        }
+        assert_eq!(config.chatgpt_model("xai/grok-4.5"), None);
+        assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), Some("gpt-5"));
+    }
+
+    /// CHATGPT-9, XAI-19: a roster asks the account a turn runs on and no other, and a picker asks both
+    /// whatever is in force. This is the one rule the terminal's roster and the window's both take, so
+    /// it is pinned here and not once in each. The regressions it rejects are a turn on a Brave or a
+    /// gateway model that asks an account, which sends a stored sign-in's token for a listing it does
+    /// not use, and a picker that leaves an account out.
+    #[test]
+    fn a_roster_asks_the_account_a_turn_runs_on_and_no_other_and_a_picker_asks_both() {
+        let config = with_a_gateway("{}");
+        let only = |chatgpt, xai| RosterAccounts { chatgpt, xai };
+
+        assert_eq!(
+            config.roster_accounts_for_a_turn(Some("chatgpt/gpt-5")),
+            only(true, false)
+        );
+        assert_eq!(
+            config.roster_accounts_for_a_turn(Some("xai/grok-4.5")),
+            only(false, true)
+        );
+        for model in [
+            Some("gpt-5"),
+            Some("grok-4.5"),
+            Some("openrouter/z-ai/glm-4.6"),
+        ] {
+            assert_eq!(
+                config.roster_accounts_for_a_turn(model),
+                only(false, false),
+                "{model:?}"
+            );
+        }
+        assert_eq!(
+            config.roster_accounts_for_a_turn(None),
+            only(false, false),
+            "the default is Brave's"
+        );
+        assert_eq!(RosterAccounts::for_a_picker(), only(true, true));
+
+        // Where the default is an account's model, a turn that names none is on that account.
+        let mut default_on_xai = with_a_gateway("{}");
+        default_on_xai.default_model = "xai/grok-4.5".to_string();
+        assert_eq!(
+            default_on_xai.roster_accounts_for_a_turn(None),
+            only(false, true)
+        );
+        assert_eq!(
+            default_on_xai.roster_accounts_for_a_turn(Some("chatgpt/gpt-5")),
+            only(true, false)
+        );
+    }
+
+    /// XAI-13: an entry that already has the id keeps it. Taking the id over would send a working
+    /// gateway's requests, and the key that gateway holds, to another service.
+    #[test]
+    fn a_provider_entry_named_xai_keeps_the_name_and_no_model_is_the_accounts() {
+        let settings = Settings::parse(
+            r#"{"provider": {"xai": {
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"grok-4.5": {}}
+            }}}"#,
+        );
+        let mut config = Config::from_lookup(complete_env).expect("configured");
+        config.providers = settings.providers().to_vec();
+
+        assert!(!config.offers_xai_account());
+        assert!(!config.runs_on_xai_account(Some("xai/grok-4.5")));
+        assert_eq!(config.xai_model("xai/grok-4.5"), None);
+        let (provider, wire) = config.provider_for("xai/grok-4.5").expect("the gateway");
+        assert_eq!(provider.base_url, "https://gateway.example.invalid/v1");
+        assert_eq!(wire, "grok-4.5");
+    }
+
+    /// XAI-13: an entry named `xai` that states no endpoint and is no known name is no gateway, so it
+    /// holds nothing: no provider is made of it, the account is offered, and the models the entry lists are
+    /// not read for the account, whose roster is its own listing. The regressions it rejects are a bare
+    /// entry that holds the name and refuses the sign-in, and one whose `models` stand in for the
+    /// account's listing, which would offer rows the account may not reach.
+    #[test]
+    fn an_entry_named_xai_that_states_no_endpoint_holds_nothing_and_its_models_are_not_read() {
+        let settings =
+            Settings::parse(r#"{"provider": {"xai": {"models": {"grok-bare-row": {}}}}}"#);
+        let mut config = Config::from_lookup(complete_env).expect("configured");
+        config.providers = settings.providers().to_vec();
+
+        assert!(
+            config.providers.is_empty(),
+            "an entry with no endpoint made a provider: {:?}",
+            config.providers
+        );
+        assert!(config.offers_xai_account());
+        assert_eq!(config.xai_model("xai/grok-4.5"), Some("grok-4.5"));
+        assert!(config.provider_for("xai/grok-bare-row").is_none());
+        assert_eq!(
+            config.xai_model("xai/grok-bare-row"),
+            Some("grok-bare-row"),
+            "a model the bare entry lists is named through the account like any other"
+        );
+    }
+
+    /// XAI-13: a gateway of another id that lists a model whose own name begins `xai/` does not take
+    /// the name from the account. `xai/<name>` is the account's, and the gateway's model is reached
+    /// as its row is keyed, `<id>/xai/<name>`, which sends the gateway the name it lists. The
+    /// gateway's bare listing is still found for every other name. A lookup that matched the bare
+    /// listing before the account would send a signed-in person's turn, and the gateway's key, to
+    /// the gateway they did not choose.
+    #[test]
+    fn a_gateway_listing_a_name_that_begins_with_xai_is_reached_by_its_qualified_name_alone() {
+        let config = with_a_gateway(r#"{"xai/grok-4.5": {}, "z-ai/glm-4.6": {}}"#);
+        assert!(config.offers_xai_account());
+        assert_eq!(config.xai_model("xai/grok-4.5"), Some("grok-4.5"));
+        assert!(
+            config.provider_for("xai/grok-4.5").is_none(),
+            "the gateway's bare listing took a name that begins with the account's id"
+        );
+
+        let (provider, wire) = config
+            .provider_for("openrouter/xai/grok-4.5")
+            .expect("the gateway, by the name its row has");
+        assert_eq!(provider.id, "openrouter");
+        assert_eq!(wire, "xai/grok-4.5");
+        let (provider, wire) = config
+            .provider_for("z-ai/glm-4.6")
+            .expect("a bare name that does not begin with the account's id");
+        assert_eq!(provider.id, "openrouter");
+        assert_eq!(wire, "z-ai/glm-4.6");
+    }
+
+    /// XAI-13: a Bedrock account that lists a model under a name beginning `xai/`, in a block or in
+    /// a tier variable, does not take the name from the account, as a gateway does not. Bedrock is
+    /// asked about every other name it lists.
+    #[test]
+    fn a_bedrock_account_listing_a_name_that_begins_with_xai_does_not_take_it_from_the_account() {
+        let settings = Settings::parse(
+            r#"{"provider": {"amazon-bedrock": {
+                "options": {"region": "us-west-2"},
+                "models": {"xai/grok-4.5": {}, "openai.gpt-5.6-sol": {}}
+            }}}"#,
+        );
+        let config =
+            Config::from_lookup_with_providers(complete_env, settings.providers().to_vec())
+                .expect("configured");
+        assert!(config.bedrock_for("openai.gpt-5.6-sol").is_some());
+        assert!(
+            config.bedrock_for("xai/grok-4.5").is_none(),
+            "a Bedrock block took a name that begins with the account's id"
+        );
+        assert_eq!(config.xai_model("xai/grok-4.5"), Some("grok-4.5"));
+
+        let config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("xai/grok-4.5".into()),
+            other => complete_env(other),
+        })
+        .expect("configured");
+        assert!(
+            config
+                .bedrock
+                .as_ref()
+                .is_some_and(|it| it.offers("xai/grok-4.5")),
+            "the tier variable did not name the model, so this test holds nothing"
+        );
+        assert!(
+            config.bedrock_for("xai/grok-4.5").is_none(),
+            "a tier variable took a name that begins with the account's id"
+        );
     }
 
     /// CHATGPT-9: the models an entry with the account's id names, where it states no endpoint,

@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 mod chatgpt_run;
 #[path = "../../agent/test-support/chatgpt_stand_in.rs"]
 mod chatgpt_stand_in;
+mod terminal;
 
 use chatgpt_run::{
     SIGN_IN_HOST, Scratch, Shown, bravebot, environment, in_a_terminal, said, sign_in,

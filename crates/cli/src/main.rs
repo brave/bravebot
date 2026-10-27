@@ -40,6 +40,7 @@ mod test_support;
 mod update;
 mod usage;
 mod workspace;
+mod xai;
 use bravebot_agent::servers;
 
 use crate::exit::{Ending, fail};

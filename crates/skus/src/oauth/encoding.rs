@@ -1,7 +1,7 @@
-//! The small encodings the sign-in is written in, spelled here rather than taken from a crate.
+//! The small encodings the sign-ins are written in, spelled here rather than taken from a crate.
 //!
 //! This crate depends on no other crate here and adds none for these: base64 for the PKCE values
-//! and the parts of an ID token, percent encoding for a URL and a form, a comparison that does not
+//! and the parts of a token, percent encoding for a URL and a form, a comparison that does not
 //! stop at the first different byte, and a date for the one line that says when a token expires.
 
 /// Base64 with the URL-safe alphabet and no padding, which is what PKCE and the `state` are
