@@ -27,6 +27,8 @@ use std::time::Duration;
 
 #[path = "../test-support/account_body.rs"]
 mod account_body;
+#[path = "../test-support/openai_chat.rs"]
+mod openai_chat;
 #[path = "../test-support/refusal_codes.rs"]
 mod refusal_codes;
 
@@ -1927,6 +1929,224 @@ fn a_gateway_that_refused_a_level_is_not_sent_one_again() {
             "turn {turn} asked a gateway that had already refused: {}",
             sent.body
         );
+    }
+}
+
+/// BACKEND-22: api.openai.com refuses a level in two bodies. A model that does not reason answers 400
+/// with `invalid_request_error` and a null `code` and `param`, and a reasoning model that does not
+/// take the level answers 400 with the code `unsupported_value` and the param `reasoning_effort`.
+/// The client decides from the status and from the request having carried a level, so both are
+/// answered the same way: the level is given up, the turn completes, and no later request to that
+/// model carries one. The refusal's body reaches the code that decides as a labelled value it does
+/// not open, so a recogniser reading the param cannot be written there and this test does not show
+/// one failing. A gateway on this machine stands in for the service, so the breakpoints are given up
+/// first, as they are on any gateway; the order at `api.openai.com`, which sends none, is held by
+/// `a_refusal_at_openais_own_api_gives_up_the_level_and_nothing_else`.
+#[test]
+fn a_level_refused_in_either_body_openai_answers_with_is_given_up_and_the_turn_completes() {
+    let refusals = [
+        (
+            "a-model-that-does-not-reason",
+            openai_chat::LEVEL_TO_A_MODEL_THAT_DOES_NOT_REASON,
+        ),
+        (
+            "a-model-that-does-not-take-xhigh",
+            openai_chat::A_LEVEL_THE_MODEL_DOES_NOT_TAKE,
+        ),
+    ];
+    for (model, body) in refusals {
+        let reply = || {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        };
+        let (endpoint, received) = serve_attempts(vec![
+            Attempt::Refused(400, body.to_string()),
+            Attempt::Refused(400, body.to_string()),
+            reply(),
+            reply(),
+        ]);
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&endpoint, model);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+
+        for turn in 1..=2 {
+            AichatClient::new(&config, &egress)
+                .for_gateway(&gateway, model, None)
+                .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+                .unwrap_or_else(|e| panic!("{model}: turn {turn} was not answered: {e:?}"));
+        }
+
+        let sent: Vec<_> = (0..4)
+            .map(|_| received.recv().expect("a request"))
+            .collect();
+        assert!(
+            sent[0].body.contains("reasoning_effort") && sent[1].body.contains("reasoning_effort"),
+            "{model}: the level was given up before the breakpoints: {}",
+            sent[1].body
+        );
+        assert!(
+            !sent[2].body.contains("reasoning_effort"),
+            "{model}: the level was sent again after the refusal: {}",
+            sent[2].body
+        );
+        assert!(
+            !sent[3].body.contains("reasoning_effort"),
+            "{model}: the next turn asked a model that had refused: {}",
+            sent[3].body
+        );
+    }
+}
+
+/// BACKEND-22: an unknown field is refused with the same status as a level, and names the field in
+/// its param. The client reads neither. A gateway on this machine stands in for the service, so the
+/// request is sent again without the breakpoints, then without the level, and is refused each time.
+/// That refusal says nothing about the level, so the model is not remembered as refusing one: a
+/// later request carries it.
+#[test]
+fn a_refusal_naming_another_field_does_not_make_the_level_one_a_model_refuses() {
+    let model = "a-model-that-refuses-a-field-it-does-not-know";
+    let (endpoint, received) = serve_attempts(vec![
+        Attempt::Refused(
+            400,
+            openai_chat::A_FIELD_THE_SERVICE_DOES_NOT_KNOW.to_string(),
+        ),
+        Attempt::Refused(
+            400,
+            openai_chat::A_FIELD_THE_SERVICE_DOES_NOT_KNOW.to_string(),
+        ),
+        Attempt::Refused(
+            400,
+            openai_chat::A_FIELD_THE_SERVICE_DOES_NOT_KNOW.to_string(),
+        ),
+        Attempt::Frames(vec![
+            frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+            frame("[DONE]"),
+        ]),
+    ]);
+    let config = config_for(&endpoint);
+    let gateway = gateway_naming(&endpoint, model);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .expect("policy");
+
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect_err("a field the service does not know stays refused without the level");
+    AichatClient::new(&config, &egress)
+        .for_gateway(&gateway, model, None)
+        .complete_streaming(&mut policy, &asking_a_level(model), |_| {})
+        .expect("the next turn is answered");
+
+    for _ in 0..3 {
+        received.recv().expect("a request of the refused turn");
+    }
+    let asked_again = received.recv().expect("the next turn's request");
+    assert!(
+        asked_again.body.contains("reasoning_effort"),
+        "a refusal that named another field took the level away: {}",
+        asked_again.body
+    );
+}
+
+/// BACKEND-31: a reply from api.openai.com, whole or streamed, read through the transport. A stream
+/// ends in a chunk of its own with no choices, after the chunk that carries the finish reason, and
+/// the chunks before it carry `usage: null`. A client that stopped reading at the finish reason, or
+/// took a chunk with no choices for nothing, would report a round that cost nothing, and one that
+/// inferred a write from the prompt would report a write no reply stated. The usage the call
+/// recorded as the service's own is read as well, since the client reads a reply's usage twice, for
+/// the turn and for the call's total, and the second reader has to take the same shapes.
+#[test]
+fn a_reply_as_openai_sends_it_reports_its_cache_figures_whole_and_streamed() {
+    for streaming in [false, true] {
+        for shape in openai_chat::USAGE_SHAPES {
+            let attempt = if streaming {
+                let mut frames: Vec<String> = openai_chat::stream_chunks(shape.model, shape.json)
+                    .iter()
+                    .map(|payload| frame(payload))
+                    .collect();
+                frames.push(frame("[DONE]"));
+                Attempt::Frames(frames)
+            } else {
+                Attempt::Json(openai_chat::whole_reply(shape.model, shape.json))
+            };
+            let (endpoint, _received) = serve_attempts(vec![attempt]);
+            let config = config_for(&endpoint);
+            let egress = Egress::new();
+            let mut sink = RecordingSink::new();
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy");
+            let request = ChatRequest::new("gpt-4o-mini", vec![Message::user("hi")]);
+            let mut client = AichatClient::new(&config, &egress);
+
+            let completion = if streaming {
+                client.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                client.complete(&mut policy, &request)
+            }
+            .unwrap_or_else(|e| panic!("streaming={streaming}, {}: {e:?}", shape.what));
+
+            let context = format!("streaming={streaming}, {}", shape.what);
+            let stated: serde_json::Value = serde_json::from_str(shape.json).expect("usage");
+            assert_eq!(completion.model, shape.model, "{context}");
+            assert_eq!(
+                completion.usage.prompt_tokens, shape.prompt_tokens,
+                "{context}"
+            );
+            assert_eq!(completion.context_tokens, shape.prompt_tokens, "{context}");
+            assert_eq!(
+                completion.usage.completion_tokens, shape.completion_tokens,
+                "{context}"
+            );
+            assert_eq!(
+                completion.usage.total(),
+                stated["total_tokens"],
+                "{context}"
+            );
+            assert_eq!(
+                completion.usage.cached.read_tokens, shape.read_tokens,
+                "{context}"
+            );
+            assert_eq!(
+                completion.usage.cached.written_tokens, shape.written_tokens,
+                "{context}"
+            );
+
+            let recorded = client
+                .completed_usage()
+                .unwrap_or_else(|| panic!("{context}: the call recorded no usage"));
+            assert_eq!(recorded.prompt_tokens, shape.prompt_tokens, "{context}");
+            assert_eq!(
+                recorded.completion_tokens, shape.completion_tokens,
+                "{context}"
+            );
+            assert_eq!(recorded.cached.read_tokens, shape.read_tokens, "{context}");
+            assert_eq!(
+                recorded.cached.written_tokens, shape.written_tokens,
+                "{context}"
+            );
+        }
     }
 }
 
