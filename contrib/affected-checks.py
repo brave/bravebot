@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "npm", "deps", "fuzz")
+AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "help", "npm", "deps", "fuzz")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -136,6 +136,7 @@ HOST = {
     "ui": ("check-ui", "check-agent-client"),
     "mobile": ("check-mobile",),
     "docs": ("check-docs",),
+    "help": ("check-help",),
     "npm": ("check-npm",),
     "deps": ("check-deps",),
 }
@@ -210,7 +211,14 @@ def classify_by_area(path, desktop, fuzz):
     for under, area in (("docs/website/", "docs"), ("ui/", "ui"), ("mobile/", "mobile")):
         if path.startswith(under):
             lockfile = path[len(under):] in PACKAGE_FILES
-            return frozenset({area, "npm"} if lockfile else {area})
+            found = {area, "npm"} if lockfile else {area}
+            # help.rs compiles each page under docs/website/docs into a fixed table, builds an
+            # index naming every page's title from its front matter, and loads a page by the
+            # name that index gives. An add, an edit that breaks a page's front matter, or a
+            # remove can each fail a test that reads one of those, whatever the path's status.
+            if area == "docs" and path.startswith("docs/website/docs/"):
+                found |= {"help"}
+            return frozenset(found)
     if path in PACKAGE_FILES or path.startswith("npm/"):
         return frozenset({"npm"})
     if path in QUIET or path.startswith(QUIET_UNDER):
@@ -416,7 +424,8 @@ CASES = (
     ("CHANGELOG.md", {"rust"}),
     ("docs/specs/routing.md", {"rust"}),
     ("docs/specs/tools/read-file.md", {"rust"}),
-    ("docs/website/docs/intro.md", {"docs"}),
+    ("docs/website/docs/intro.md", {"docs", "help"}),
+    ("docs/website/docs/using/watches.md", {"docs", "help"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
     ("docs/website/pnpm-workspace.yaml", {"docs", "npm"}),
@@ -565,11 +574,22 @@ def selftest():
         run("init", "-q", "-b", "main")
         write("crates/tui/src/moved.rs", "fn moved() {}\n")
         write("docs/development/checks.md", "old\n")
+        write("docs/website/docs/using/existing.md", "old\n")
         run("add", ".")
         run("commit", "-q", "-m", "base")
         run("checkout", "-q", "-b", "prose")
         write("docs/development/checks.md", "new\n")
         run("commit", "-q", "-am", "prose only")
+        run("checkout", "-q", "-b", "docs-add", "main")
+        write("docs/website/docs/using/new.md", "new\n")
+        run("add", ".")
+        run("commit", "-q", "-m", "a new page")
+        run("checkout", "-q", "-b", "docs-edit", "main")
+        write("docs/website/docs/using/existing.md", "edited\n")
+        run("commit", "-q", "-am", "edited a page")
+        run("checkout", "-q", "-b", "docs-remove", "main")
+        run("rm", "-q", "docs/website/docs/using/existing.md")
+        run("commit", "-q", "-m", "removed a page")
         run("checkout", "-q", "-b", "move", "main")
         run("mv", "crates/tui/src/moved.rs", "docs/moved.rs")
         run("commit", "-q", "-m", "a move out of crates/")
@@ -579,7 +599,16 @@ def selftest():
         run("commit", "-q", "-m", "base moves on")
 
         pull_request = dict(env, GITHUB_EVENT_NAME="pull_request")
-        for branch, wanted in (("prose", NOTHING), ("move", {"rust"})):
+        # A page added, edited or removed under docs/website/docs between docs-add/-edit/-remove
+        # here needs help whatever its status, with "move" kept last so the assertions below it
+        # still read the merge they name.
+        for branch, wanted in (
+            ("prose", NOTHING),
+            ("docs-add", {"docs", "help"}),
+            ("docs-edit", {"docs", "help"}),
+            ("docs-remove", {"docs", "help"}),
+            ("move", {"rust"}),
+        ):
             run("checkout", "-q", "--detach", "main")
             run("merge", "-q", "--no-ff", "-m", "merge", branch)
             got = frozenset(needed(pull_request_paths(root, pull_request), NOTHING, NOTHING))
