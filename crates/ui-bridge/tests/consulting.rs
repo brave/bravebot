@@ -480,3 +480,32 @@ fn the_next_bot_is_briefed_from_the_line_and_not_the_brief_before_it() {
     assert_eq!(next["data"]["line"], line, "{next}");
     assert_eq!(next["data"]["brief"], format!("{line}\n\ndone"), "{next}");
 }
+
+/// CONSULT-5: a held brief whose bot is gone since it was drafted is refused, and is not sent to
+/// the host instead. A file of the bot's name is left, so the line still names something.
+#[test]
+fn a_held_brief_whose_bot_can_no_longer_be_consulted_is_refused() {
+    let scratch = Scratch::new("bridge-consult-gone");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let line = "ask @harbour about GONE-LINE";
+    window.call("consult.brief", json!({"line": line}));
+    window.event("consult.brief");
+    std::fs::remove_file(scratch.home().join(".bravebot/agents/harbour.md"))
+        .expect("the definition removed");
+    std::fs::write(scratch.project().join("harbour"), "a file named harbour\n").expect("a file");
+    let _: Vec<String> = received.try_iter().collect();
+
+    let sent = window.call(
+        "turn.send",
+        json!({"prompt": format!("{line}\n\ndone"), "brief": true}),
+    );
+    assert!(
+        sent["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("can no longer be consulted")),
+        "{sent}"
+    );
+    assert_eq!(received.try_iter().count(), 0, "a request went out");
+}

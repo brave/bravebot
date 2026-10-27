@@ -37177,8 +37177,7 @@ fn a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered(
 /// CONSULT-5, CONSULT-6. A brief drafted over an exchange that has met untrusted content, which a
 /// session addressing no definition drafts as one addressing a definition does, is checked and put
 /// to the person, and only their yes keeps it. Without the check the draft would reach the box as
-/// words the host could not have held. A kept brief says whether a yes is what kept it, since only
-/// one the host could have held anyway is sent without being read again.
+/// words the host could not have held.
 #[test]
 fn a_brief_drafted_over_an_untrusted_exchange_is_kept_only_on_a_persons_yes() {
     fn draft<C: bravebot_agent::confirm::Confirmer>(
@@ -37227,18 +37226,12 @@ fn a_brief_drafted_over_an_untrusted_exchange_is_kept_only_on_a_persons_yes() {
         "{:?}",
         promoted.kept
     );
-    assert!(promoted.promoted, "a brief a yes kept was not marked so");
     let declined = draft(&mut bravebot_agent::confirm::Unattended, true);
     assert_eq!(declined.kept, None, "a brief nobody said yes to was kept");
-    assert!(!declined.promoted);
     let clean = draft(&mut bravebot_agent::confirm::Unattended, false);
     assert!(
         clean.kept.is_some(),
         "a brief the host could hold was not kept"
-    );
-    assert!(
-        !clean.promoted,
-        "a brief nobody was asked about was marked promoted"
     );
 }
 

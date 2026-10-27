@@ -2768,8 +2768,8 @@ fn shown_path(path: &Path, project: &Path) -> String {
 /// What `consult.brief` says of a drafted brief, holding it for `turn.send` where it is offered.
 ///
 /// Only a brief the planner could have held, or one a person promoted, is offered, and the words
-/// offered are the kept ones (CONSULT-6). One the host could have held anyway, and that holds
-/// nothing private, is sent as it is: the person sent the line that asked for it (CONSULT-5).
+/// offered are the kept ones (CONSULT-6). One that holds nothing private is sent as it is: the
+/// person sent the line that asked for it, and said yes to a promoted one whole (CONSULT-5).
 fn drafted(
     done: Result<bravebot_agent::aside::Answered, bravebot_agent::aside::AsideError>,
     cancelled: bool,
@@ -2789,7 +2789,7 @@ fn drafted(
                 Some(kept) => {
                     data["brief"] = json!(bravebot_agent::aside::brief_prompt(&brief.line, &kept));
                     data["private"] = json!(answered.private);
-                    data["send"] = json!(!answered.promoted && !answered.private);
+                    data["send"] = json!(!answered.private);
                     brief.private = answered.private;
                     if let Ok(mut held) = held.lock() {
                         *held = Some(brief);
@@ -4633,6 +4633,10 @@ mod opening_tests;
 #[cfg(test)]
 #[path = "failure_tests.rs"]
 mod failure_tests;
+
+#[cfg(test)]
+#[path = "drafted_tests.rs"]
+mod drafted_tests;
 
 #[cfg(test)]
 #[path = "account_session_tests.rs"]

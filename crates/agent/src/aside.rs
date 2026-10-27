@@ -430,9 +430,6 @@ pub struct Answered {
     /// Whether the answer was written from private content, so whatever is given it holds that
     /// too (CONSULT-6).
     pub private: bool,
-    /// Whether a person's yes on the promotion card is what let the planner hold it, so it has
-    /// been read once already and may go no further without being read again (CONSULT-5).
-    pub promoted: bool,
     /// What the question cost, so the session can charge it.
     pub usage: Usage,
 }
@@ -555,7 +552,6 @@ pub fn draft_brief<S: Sink, C: crate::confirm::Confirmer, R: crate::report::Repo
         Presentation::Visible(body) => Some(body),
         Presentation::Quarantined(_) => None,
     };
-    answered.promoted = answered.kept.is_some();
     Ok(answered)
 }
 
@@ -638,7 +634,6 @@ fn answer<S: Sink>(
             shown,
             kept,
             private,
-            promoted: false,
             usage: completion.usage,
         },
         drawn,

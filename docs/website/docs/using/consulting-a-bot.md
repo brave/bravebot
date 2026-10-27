@@ -53,10 +53,10 @@ since it is the one that knows what "this" refers to. This is the same in a plai
 whose turns address a definition. The brief opens with your line as you wrote it and the host's
 draft follows.
 
-A brief drafted only from content the host could have held anyway, and holding nothing private, is
-sent at once: sending your line was the go-ahead. Any other brief, one you promoted or one drafted
-from private content, is put in the input box, where you can read and edit all of it, under a note
-naming the bot and its bound:
+A brief holding nothing private is sent at once: sending your line was the go-ahead, and for a brief
+you promoted, so was your yes on the card that showed all of it. A brief drafted from private content
+is put in the input box, where you can read and edit all of it, under a note naming the bot and its
+bound:
 
 ```
 the brief for rule-reviewer (bot · haiku · up to 60 rounds) is in the box. Enter sends it to

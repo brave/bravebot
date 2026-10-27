@@ -21739,7 +21739,6 @@ mod tests {
                 shown: "a brief an attacker may have shaped".to_string(),
                 kept: None,
                 private: false,
-                promoted: false,
                 usage: Default::default(),
             }),
         );
@@ -21774,7 +21773,6 @@ mod tests {
                 shown: "where things stand".to_string(),
                 kept: Some("where things stand".to_string()),
                 private: false,
-                promoted: false,
                 usage: Default::default(),
             }),
         );
@@ -21939,7 +21937,6 @@ mod tests {
                 shown: "because the grammar nests".to_string(),
                 kept: Some("because the grammar nests".to_string()),
                 private: false,
-                promoted: false,
                 usage: Default::default(),
             },
         );
@@ -23316,26 +23313,14 @@ mod tests {
         }
     }
 
-    /// How the host's brief came back: whether it was private, and whether a person's yes on the
-    /// promotion card is what kept it.
+    /// How the host's brief came back: whether it was private.
     #[derive(Clone, Copy)]
     struct Came {
         private: bool,
-        promoted: bool,
     }
 
-    const CLEAN: Came = Came {
-        private: false,
-        promoted: false,
-    };
-    const PROMOTED: Came = Came {
-        private: false,
-        promoted: true,
-    };
-    const PRIVATE: Came = Came {
-        private: true,
-        promoted: false,
-    };
+    const CLEAN: Came = Came { private: false };
+    const PRIVATE: Came = Came { private: true };
 
     /// The session the host's brief for `@rule-reviewer` came back to, and the brief it sent at
     /// once, where it sent one.
@@ -23373,7 +23358,6 @@ mod tests {
                 shown: "the diff touches the parser".to_string(),
                 kept: kept.map(str::to_string),
                 private: came.private,
-                promoted: came.promoted,
                 usage: Default::default(),
             }),
         );
@@ -23409,9 +23393,10 @@ mod tests {
     /// The brief the host drafted for `@rule-reviewer` over "the diff touches the parser".
     const A_BRIEF: &str = "@rule-reviewer is this safe?\n\nthe diff touches the parser";
 
-    /// CONSULT-5. A brief the host could have held, neither private nor promoted, is sent as the
-    /// person's line the moment it is drafted, with the consult it starts set on the session:
-    /// sending the line was the grant. Nothing waits in the box, and no note says something does.
+    /// CONSULT-5. A brief that is not private, whether the host could have held it or a person's
+    /// yes promoted it, is sent as the person's line the moment it is drafted, with the consult it
+    /// starts set on the session: sending the line was the grant, and the yes was given to the
+    /// whole brief. Nothing waits in the box, and no note says something does.
     #[test]
     fn a_brief_the_host_could_have_held_is_sent_at_once() {
         let (mut session, sent) =
@@ -23432,15 +23417,14 @@ mod tests {
         assert_eq!(briefed.line, "@rule-reviewer is this safe?");
     }
 
-    /// CONSULT-5, CONSULT-10. A brief a person's yes promoted goes into the box under the line,
-    /// with a note naming the bot and its bound, and only Enter sends it as the person's line with
-    /// the consult it starts set on the session. Sending it at once would let the draft go further
-    /// than the card it was read on.
+    /// CONSULT-5, CONSULT-10. A private brief goes into the box under the line, with a note naming
+    /// the bot and its bound, and only Enter sends it as the person's line with the consult it
+    /// starts set on the session.
     #[test]
-    fn a_promoted_brief_is_offered_and_enter_sends_it() {
+    fn a_private_brief_is_offered_under_a_note_naming_its_bound() {
         let (mut session, sent) =
-            a_session_offered_a_brief(Some("the diff touches the parser"), PROMOTED);
-        assert_eq!(sent, None, "a promoted brief went without being sent");
+            a_session_offered_a_brief(Some("the diff touches the parser"), PRIVATE);
+        assert_eq!(sent, None, "a private brief went without being sent");
         assert_eq!(session.input(), A_BRIEF);
         assert!(session.brief_pending().is_some());
         assert_eq!(
@@ -23500,19 +23484,17 @@ mod tests {
     /// asks again.
     #[test]
     fn esc_on_a_brief_puts_the_line_back() {
-        for came in [PROMOTED, PRIVATE] {
-            let (mut session, _) =
-                a_session_offered_a_brief(Some("the diff touches the parser"), came);
-            handle_key(&mut session, key(KeyCode::Esc));
-            assert_eq!(session.input(), "@rule-reviewer is this safe?");
-            assert!(session.brief_pending().is_none());
-            assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Brief);
-        }
+        let (mut session, _) =
+            a_session_offered_a_brief(Some("the diff touches the parser"), PRIVATE);
+        handle_key(&mut session, key(KeyCode::Esc));
+        assert_eq!(session.input(), "@rule-reviewer is this safe?");
+        assert!(session.brief_pending().is_none());
+        assert_eq!(handle_key(&mut session, key(KeyCode::Enter)), Action::Brief);
     }
 
     /// CONSULT-5. A session addressing no definition sends its host's brief as one addressing a
-    /// definition does: a brief the host could have held at once, and a promoted one only from the
-    /// box, where Esc puts the line back.
+    /// definition does: one that is not private at once, and a private one only from the box,
+    /// where Esc puts the line back.
     #[test]
     fn a_plain_session_sends_its_hosts_brief_as_a_definitions_does() {
         let (mut session, sent) =
@@ -23524,7 +23506,7 @@ mod tests {
         );
 
         let (mut session, sent) =
-            a_plain_session_offered_a_brief(Some("the diff touches the parser"), PROMOTED);
+            a_plain_session_offered_a_brief(Some("the diff touches the parser"), PRIVATE);
         assert_eq!(sent, None);
         assert_eq!(session.input(), A_BRIEF);
         handle_key(&mut session, key(KeyCode::Esc));
@@ -32592,7 +32574,6 @@ mod tests {
             shown: "a brief".to_string(),
             kept: kept.map(str::to_string),
             private: false,
-            promoted: false,
             usage,
         };
         let mut handed = Session::new("none");
@@ -41369,7 +41350,6 @@ mod tests {
             shown: "run the tests again".to_string(),
             kept: kept.map(str::to_string),
             private: false,
-            promoted: false,
             usage: bravebot_aichat::protocol::Usage {
                 prompt_tokens: 70,
                 completion_tokens: 30,
@@ -41953,7 +41933,6 @@ mod tests {
             shown: text.to_string(),
             kept: Some(text.to_string()),
             private: false,
-            promoted: false,
             usage: Default::default(),
         })
     }
@@ -42446,7 +42425,6 @@ mod tests {
                 shown: "a rewrite an attacker may have shaped".to_string(),
                 kept: None,
                 private: false,
-                promoted: false,
                 usage: Default::default(),
             }),
         );
@@ -42555,7 +42533,6 @@ mod tests {
                     shown: "Fix it.".to_string(),
                     kept: kept.map(str::to_string),
                     private: false,
-                    promoted: false,
                     usage: bravebot_aichat::protocol::Usage {
                         prompt_tokens: 120,
                         completion_tokens: 30,

@@ -181,14 +181,14 @@ The host drafts a brief from its conversation for each bot the line consults, wh
 turns address a definition or not. The brief opens with the person's line as they wrote it, and the
 host's draft follows.
 
-A brief the planner could have held without anyone's yes, and that holds nothing private, is sent as
-soon as it is drafted, and is drawn as the person's line in the transcript, so what the bot was sent
-is on the screen. Sending the line was the grant.
+A brief that holds nothing private is sent as soon as it is drafted, and is drawn as the person's
+line in the transcript, so what the bot was sent is on the screen. That holds for one the planner
+could have held without anyone's yes and for one a person's yes on its promotion card kept
+([CONSULT-6](#CONSULT-6)). Sending the line was the grant, and for a promoted brief so was the yes.
 
-Any other brief, one a person's yes on its promotion card kept ([CONSULT-6](#CONSULT-6)) or one
-drafted after the host was shown private content, waits in full, editable, in the box the line was
-typed in (the terminal's input line, the desktop's composer), under a note naming the bot and its
-bound. Sending it is what starts that consult. Declining it with Esc starts nothing, and the line
+A brief drafted after the host was shown private content waits in full, editable, in the box the
+line was typed in (the terminal's input line, the desktop's composer), under a note naming the bot
+and its bound. Sending it is what starts that consult. Declining it with Esc starts nothing, and the line
 goes back into the box. Wiping the brief out of the box declines it as well, so what is typed next
 goes to the host.
 
@@ -211,9 +211,11 @@ quarantine, and a consult may do no more than its host may ([CONSULT-7](#CONSULT
 given no way out the host did not already have. What waiting would add is a chance to reword the brief,
 and that is not worth a second keystroke on every consult.
 
-**Why the others still wait.** A promoted brief carries words out of quarantine. The yes was given to
-those words, and an edit or a second look is still the person's to make before they leave. A private
-brief hands the bot what the host held, and the person sees what is shared before it is.
+**Why a promoted brief does not wait either.** Its card drew the whole brief, so the yes was given to
+the words that are sent. Asking again would be a second yes to the same words.
+
+**Why a private brief still waits.** It hands the bot what the host held, and the person sees what is
+shared before it is.
 
 **Why every host.** A plain session's host knows what "this" is as well as a definition's does. A bot
 sent only the line answers a question it cannot see, and asks what "this" means.
@@ -231,9 +233,14 @@ shown, and its reply would be labelled by all of it.
 `verified-by: bravebot_ui_bridge::consulting::the_hosts_brief_is_offered_and_only_sending_it_consults_the_bot`
 `verified-by: bravebot_ui_bridge::consulting::the_brief_is_drafted_on_the_model_the_window_asks_for`
 `verified-by: bravebot_ui_bridge::consulting::a_line_consults_a_bot_only_through_a_drafted_brief`
-`verified-by: bravebot_tui::app::a_promoted_brief_is_offered_and_enter_sends_it`
+`verified-by: bravebot_tui::app::a_private_brief_is_offered_under_a_note_naming_its_bound`
 `verified-by: bravebot_tui::app::esc_on_a_brief_puts_the_line_back`
 `verified-by: bravebot_tui::app::a_declined_brief_is_not_offered`
+`verified-by: bravebot_ui_bridge::drafted_tests::a_brief_holding_nothing_private_is_marked_to_go_at_once`
+`verified-by: bravebot_ui_bridge::drafted_tests::a_private_brief_is_marked_to_wait_and_held_as_private`
+`verified-by: bravebot_ui_bridge::drafted_tests::a_declined_draft_holds_no_brief`
+`verified-by: bravebot_ui_bridge::drafted_tests::a_stopped_draft_holds_no_brief`
+`verified-by: bravebot_ui_bridge::consulting::a_held_brief_whose_bot_can_no_longer_be_consulted_is_refused`
 
 <a id="CONSULT-6"></a>
 ### CONSULT-6: a brief drafted by a host that has met untrusted content is a promotion, and is checked first
@@ -351,7 +358,7 @@ the person may not know is there. The draft is the last moment they can stop it 
 view, where the brief is sent at once.
 
 `verified-by: bravebot_tui::app::the_drafting_note_names_the_bots_model_and_bound`
-`verified-by: bravebot_tui::app::a_promoted_brief_is_offered_and_enter_sends_it`
+`verified-by: bravebot_tui::app::a_private_brief_is_offered_under_a_note_naming_its_bound`
 `verified-by: bravebot_tui::app::a_bot_whose_model_needs_a_sign_in_is_refused_and_not_consulted`
 `verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_on_the_card`
 `verified-by: bravebot_tui::confirm::a_refused_consult_card_names_the_model_and_takes_no_yes`
@@ -382,6 +389,7 @@ already the fact that tells the two apart.
 `verified-by: bravebot_agent::consult::a_trusted_reply_reaches_the_host_under_the_drivers_note`
 `verified-by: bravebot_agent::consult::an_untrusted_reply_is_a_reference_and_leaves_the_host_trusted`
 `verified-by: bravebot_agent::consult::a_private_reply_leaves_the_host_holding_private_content`
+`verified-by: bravebot_agent::consult::a_consult_that_failed_leaves_the_host_alone`
 `verified-by: bravebot_tui::state::a_resumed_consult_is_drawn_as_the_bots_reply`
 `verified-by: bravebot_tui::app::a_line_naming_a_bot_consults_it`
 `verified-by: bravebot_ui_bridge::wire::a_consulted_reply_crosses_under_the_bot_that_answered`
@@ -405,6 +413,8 @@ said.
 
 `verified-by: bravebot_agent::consult::a_trusted_reply_reaches_the_host_under_the_drivers_note`
 `verified-by: bravebot_agent::consult::the_line_comes_before_the_reply`
+`verified-by: bravebot_agent::consult::a_reply_is_handed_back_to_the_host`
+`verified-by: bravebot_agent::consult::a_reply_the_host_may_not_be_given_becomes_the_consults_refusal`
 `verified-by: bravebot_tui::app::a_stopped_consult_leaves_the_host_as_it_was`
 `verified-by: bravebot_ui_bridge::consulting::the_host_is_handed_the_line_and_not_the_hosts_draft`
 

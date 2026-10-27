@@ -726,8 +726,8 @@ pub(super) fn handoff_answered(
 /// never the copy released for the screen. `row` is the bot's model and bound, which the note
 /// names so a person knows what Enter starts (CONSULT-10).
 ///
-/// A brief the host could have held, that is neither private nor promoted, is sent at once, and
-/// the brief to send is returned: sending the line was the grant (CONSULT-5).
+/// A brief that is not private is sent at once, and the brief to send is returned: sending the
+/// line was the grant, and for a promoted one so was the yes given to its whole text (CONSULT-5).
 pub(super) fn brief_answered(
     session: &mut Session,
     mut brief: crate::state::Brief,
@@ -739,7 +739,6 @@ pub(super) fn brief_answered(
         Ok(bravebot_agent::aside::Answered {
             kept: Some(kept),
             private,
-            promoted,
             usage,
             ..
         }) => {
@@ -747,7 +746,7 @@ pub(super) fn brief_answered(
             brief.private = private;
             let text = bravebot_agent::aside::brief_prompt(&brief.line, &kept);
             session.propose_brief(brief, &text);
-            if !private && !promoted {
+            if !private {
                 return session.send_brief();
             }
             session.note(t!(consult_brief_ready, bot = bot, bound = row.to_string()));
