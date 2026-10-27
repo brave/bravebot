@@ -40,6 +40,8 @@ interface Props {
   /** Start a chat in this folder, or ask for one with the picker when none is named. */
   onDelete: (summary: SessionSummary) => void
   onNew: (directory?: string) => void
+  onPurge: (directory: string, project: string) => void
+  onImport: (directory: string, project: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
   /** Said when somebody switches the tab, so the first item of the other list can be opened. */
@@ -68,6 +70,8 @@ export const Sidebar = memo(function Sidebar({
   onOpen,
   onDelete,
   onNew,
+  onPurge,
+  onImport,
   onNewChat,
   onTab,
   bots,
@@ -149,6 +153,8 @@ export const Sidebar = memo(function Sidebar({
           onOpen={onOpen}
           onDelete={onDelete}
           onNew={onNew}
+          onPurge={onPurge}
+          onImport={onImport}
           onNewChat={onNewChat}
           grouped={grouped}
           onGroup={setGrouped}

@@ -423,6 +423,78 @@ is unaffected.
 - `turn_in_flight` while a turn is running in it.
 - `internal` if a file could not be removed. The trail goes first, so the session still opens.
 
+#### `session.purge`
+
+```json
+{ "id": 7, "method": "session.purge",
+  "params": { "directory": "…", "dryRun": true } }
+```
+
+```json
+{ "id": 7, "ok": {
+  "delete": [ { "id": "1756300000-4711", "title": "fix the parser", "updated": 1756300100 } ],
+  "held": [ "1756300200-4712" ] } }
+```
+
+```json
+{ "id": 8, "method": "session.purge",
+  "params": { "directory": "…", "ids": [ "1756300000-4711" ] } }
+```
+
+```json
+{ "id": 8, "ok": { "deleted": [ "1756300000-4711" ], "failed": [], "held": [] } }
+```
+
+Removes the records one project wrote, the way `session.delete` removes one (SESSION-30,
+CLI-33). A
+store is shared by every folder whose path flattens to the same name, so only records whose
+directory is this one are counted. The directory is taken as named, not resolved, the way
+`session.open` takes it, so a folder opened through a link is purged by that link's path. With `dryRun` it lists them and deletes nothing: `delete` is
+what would go, newest first, and `held` is what is kept because a session of this bridge has it
+open or a background job is running in it. A held id the caller has open is deleted once the
+caller closes it.
+
+Without `dryRun`, `ids` is required and only the listed records among them are touched. `deleted`
+is what went, `failed` what could not be removed, and `held` the named ids kept.
+
+- `not_a_directory` if the path is not one.
+- `bad_request` without `ids` (checked first), and while a session of this project is open in this bridge and
+  idle in a way that keeps the store busy.
+- `turn_in_flight` while a turn is running in a session of this project.
+
+#### `session.import`
+
+```json
+{ "id": 9, "method": "session.import", "params": { "directory": "…" } }
+```
+
+```json
+{ "id": 9, "ok": { "found": [
+  { "sourceId": "4b0c5a6e-…", "id": "1759752001-…", "title": "fix the parser",
+    "updated": 1759752002, "imported": false } ] } }
+```
+
+```json
+{ "id": 10, "method": "session.import",
+  "params": { "directory": "…", "ids": [ "4b0c5a6e-…" ] } }
+```
+
+```json
+{ "id": 10, "ok": { "copied": [ "1759752001-…" ], "already": [], "failed": [] } }
+```
+
+Copies Claude Code's sessions for a folder into this store (SESSION-32). Without `ids` it lists
+them and writes nothing; `imported` says a copy is already here, under `id`. With `ids`, each
+must be a `sourceId` the listing gives, matched exactly; one that is not refuses the whole call
+before anything is copied. A copy that is already here is reported in `already` and left alone.
+`failed` holds `{ "sourceId", "message" }` for a copy that could not be written. `title` is the
+first thing asked in that session, cut to 80 characters: another program's text, to be shown as
+plain text.
+
+- `not_a_directory` if the path is not one.
+- `bad_request` if `ids` is not a list of names the listing gives.
+- `no_home` if there is no home directory to read from, or no state directory to copy into.
+
 #### `session.fork`
 
 ```json

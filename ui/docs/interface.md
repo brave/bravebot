@@ -94,7 +94,7 @@ sent while a bot's memory is being updated, is queued. Stop or an error pauses t
 **Resume queue** is required to continue it. Automatic bot-memory maintenance reserves the session
 until it finishes.
 
-Conversation actions include pin, archive and restore. Archiving asks for confirmation first; restoring does not. An archived conversation also offers **Delete conversation**, which asks first and then removes the record from disk; it cannot be undone. Code blocks offer copy and wrap
+Conversation actions include pin, archive and restore. Archiving asks for confirmation first; restoring does not. An archived conversation also offers **Delete conversation**, which asks first and then removes the record from disk; it cannot be undone. With chats grouped by project, each project heading has an actions menu beside its **+**. **Import from Claude Code…** lists the sessions Claude Code kept for that folder, with ones copied before marked **Imported**, and copies the ticked ones in as chats. **Delete all chats in <project>…** asks first, saying how many conversations go and how many a background session keeps, then removes them; it cannot be undone. A conversation open in this window is closed and deleted with the rest; while one of the project's chats is still answering, nothing is closed and the delete is refused. A copied session stays here if it is later deleted in Claude Code. Code blocks offer copy and wrap
 controls; local file references can open previews. **New activity** returns to the latest
 entries when new events arrive while you are reading older ones. The header pills show only
 what can be acted on (**Approval needed**, **Jump to latest**); whether a turn is running is

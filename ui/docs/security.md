@@ -79,6 +79,14 @@ store records a conversation in. The main process records a folder only when a t
 under that rule ends, so a window cannot widen the set by opening a session somewhere. Memory reads
 and edits from the window name a folder from that recorded set and are refused for any other.
 
+Deleting a conversation, deleting every conversation of a project (`session.purge`) and copying
+Claude Code's sessions in (`session.import`) name a directory, and the main process holds them to
+the folders a session may open in. A purge deletes only ids the renderer names, among the records
+that directory wrote, and the main process forgets only those it named. An import copies only
+names the bridge listed for that folder, matched exactly. The titles it lists are another
+program's text and are drawn as plain text. A copy is this app's record from then on: deleting
+the session in Claude Code does not remove it, and it goes only when deleted here.
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,

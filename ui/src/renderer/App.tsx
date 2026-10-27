@@ -48,6 +48,9 @@ import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
 import { RewindConfirm } from './components/Rewind'
+import { PurgeProject } from './components/PurgeProject'
+import { ImportSessions } from './components/ImportSessions'
+import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -466,6 +469,44 @@ export function App(): React.JSX.Element {
     } catch (error) { setProblem(String(error)) }
   }, [closeSession, refresh, readForks, readBots])
 
+  /** The project whose group menu asked to delete all its chats or to import some, while it asks. */
+  const [projectAction, setProjectAction] = useState<{ kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> } | null>(null)
+  const askPurge = useCallback((directory: string) => {
+    const opened = new Set([...openedLives.current.values()].flatMap((item) => item.summary.directory === directory && item.summary.id ? [item.summary.id] : []))
+    setProjectAction({ kind: 'purge', directory, opened })
+  }, [])
+  const askImport = useCallback((directory: string) => setProjectAction({ kind: 'import', directory, opened: new Set() }), [])
+  const leaveProjectAction = useCallback(() => setProjectAction(null), [])
+
+  /**
+   * Delete the named conversations of one project, the way [`deleteConversation`] deletes one:
+   * every handle this window holds on them is closed first, since the agent keeps what is open.
+   */
+  const purgeProject = useCallback(async (directory: string, ids: string[]) => {
+    setProjectAction(null)
+    if (turnRunningIn(openedLives.current.values(), directory)) {
+      setProblem('A chat in this project is still answering. Wait for it to finish, then delete the project’s chats.')
+      return
+    }
+    try {
+      const chosen = new Set(ids)
+      const held = [...openedLives.current.values()].filter((item) => item.summary.directory === directory && item.summary.id !== null && chosen.has(item.summary.id))
+      for (const item of held) {
+        if (item.handle === handleRef.current) await closeSession()
+        else {
+          await call('session.close', { session: item.handle }).catch(() => undefined)
+          openedLives.current.delete(item.handle)
+        }
+      }
+      const answer = await call<Purged>('session.purge', { directory, ids })
+      for (const id of answer.deleted) dropConversation(conversationKey(directory, id))
+      const report = purgeReport(answer)
+      if ('problem' in report) setProblem(report.problem)
+      else showToast(report.done, projectLabel(directory))
+      await Promise.all([refresh(), readForks(), readBots()])
+    } catch (error) { setProblem(String(error)) }
+  }, [closeSession, refresh, readForks, readBots])
+
   const about = useCallback(async () => {
     try {
       const info = await call<AboutInfo>('agent.info')
@@ -838,6 +879,8 @@ export function App(): React.JSX.Element {
         onOpen={stableShowSession}
         onDelete={deleteConversation}
         onNew={stableCreate}
+        onPurge={askPurge}
+        onImport={askImport}
         onNewChat={stableNewChat}
         onTab={stableSwitchTab}
         bots={bots}
@@ -971,6 +1014,13 @@ export function App(): React.JSX.Element {
       {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
       {notice && (
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
+      )}
+      {projectAction?.kind === 'purge' && (
+        <PurgeProject directory={projectAction.directory} opened={projectAction.opened} onClose={leaveProjectAction}
+          onConfirm={(ids) => void purgeProject(projectAction.directory, ids)} />
+      )}
+      {projectAction?.kind === 'import' && (
+        <ImportSessions directory={projectAction.directory} onClose={leaveProjectAction} onImported={() => void refresh()} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
       {rewinding && live?.handle === rewinding.handle && (() => {
