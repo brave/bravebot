@@ -76,8 +76,8 @@ name, a purpose, a model, a home folder the desktop makes for it under its own d
 name of the definition written for it ([MEMORY-8](#MEMORY-8)), and a history of conversations, each
 with the folder it ran in. Opening a bot opens its newest conversation in the home folder, and a
 person sends it into a project by summoning it for one turn in that project's chat
-([MEMORY-14](#MEMORY-14)). Conversations it had in project folders before that are still listed
-([MEMORY-7](#MEMORY-7)). A bot that has a definition has every turn addressed to it
+([MEMORY-14](#MEMORY-14)). The conversations recorded for it in project folders are listed on its
+earlier-conversations page ([MEMORY-7](#MEMORY-7)). A bot that has a definition has every turn addressed to it
 ([MEMORY-10](#MEMORY-10)): the purpose reaches the run as the definition's body, and its memory is
 `.bravebot/memory/<definition>.md` in the folder the conversation runs in, which the run is told
 about and reads with its ordinary tools. A bot made before definitions existed has none. Its purpose
@@ -762,7 +762,7 @@ listed on a page of their own, reached from the conversation's header.
 `verified-by: bravebot_ui_bridge::addressing::a_summon_in_a_bots_conversation_leaves_the_bots_own_definition_standing`
 `verified-by: bravebot_ui_bridge::addressing::an_address_that_is_no_slug_is_refused_before_a_turn_starts`
 `verified-by: bravebot_mentions::lib::a_bot_marker_is_not_collected_as_a_reference`
-`verified-by: by-construction (the desktop's main process and window are not crates this workspace compiles, so ui/scripts/sanitise.test.mjs pins that a window's address is stripped, ui/scripts/summons.test.mjs pins the record's shape, that a record is replaced at its ordinal and removed with its conversation, the marker and the one-summon rule of the staging, where a card is placed, and that only the main process's summoned send sets address, and ui/scripts/drive-bot-summon.mjs drives the real app and bridge against a stub model: a bot summoned in a project and in another bot's conversation answers under its label, the next turn is not summoned, and the summoned bot's conversation shows the card, which opens the reply; make check-ui runs the tests)`
+`verified-by: by-construction (the desktop's main process and window are not crates this workspace compiles, so ui/scripts/sanitise.test.mjs pins that a window's address is stripped, ui/scripts/summons.test.mjs pins the record's shape, that a record is replaced at its ordinal and removed with its conversation, the marker and the one-summon rule of the staging, where a card is placed, and that the summoned send sets address from the bot row alone and refuses a bot's own conversation, a session that is not open, a stopped agent and a bot with no definition, and leaves nothing waiting when a send fails, and ui/scripts/drive-bot-summon.mjs drives the real app and bridge against a stub model: a bot summoned in a project and in another bot's conversation answers under its label, the next turn is not summoned, the summoned bot's conversation shows the card, which opens the reply, and a window that calls the channel itself is refused for an unknown or archived bot, a malformed request and its own bot, and a summoned turn that fails records nothing; make check-ui runs the tests)`
 
 ## Seeing it
 

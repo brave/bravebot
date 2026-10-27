@@ -71,7 +71,8 @@ import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
-import { forgetSummons, noteTurnEnded, summons, type Pending } from './summons'
+import { forgetSummons, noteTurnEnded, summons } from './summons'
+import { Summoning, sendSummonedTurn, type Answer } from './summon-turn'
 
 /**
  * Which live session belongs to which bot, for the length of this run.
@@ -108,14 +109,8 @@ const consolidating = new Set<string>()
  */
 const owedCarryOver = new Set<string>()
 
-/**
- * The handles running a turn a person summoned a bot for, and what the record of it will say once
- * the turn ends (MEMORY-13).
- *
- * Not written down, for the reason `consolidating` is not. Set before the send, because the
- * answer can arrive before an `await` resumes.
- */
-const summoning = new Map<string, Pending>()
+/** The handles running a turn a person summoned a bot for (MEMORY-13). See `Summoning`. */
+const summoning = new Summoning()
 
 /** Why a bot's turn could not be sent, in the shape `bravebot:request` already answers with. */
 interface BotFailure {
@@ -281,59 +276,38 @@ async function sendBotTurn(
 }
 
 /**
- * Send one turn addressed to a bot a person picked in the composer (MEMORY-13).
- *
- * The turn runs in the folder the agent confirmed the session works in and under the session's
- * history, so it holds nothing a turn of that conversation did not. The bot's definition name is
- * the row's, judged a slug when it was stored, and is sent as `address`, which the bridge applies
- * to this turn alone. No briefing is attached: a bot without a definition is given one first.
- *
- * Whose conversation this is comes from this process's own records: the bot whose handle this is,
- * or the bot whose home the session runs in. Anything else is a project's.
+ * Send one turn addressed to a bot a person picked in the composer (MEMORY-13), with this
+ * process's own services. The send is `sendSummonedTurn`.
  */
-async function sendSummonedTurn(
+function summonedTurn(
   session: string,
   summoned: Bot,
   prompt: string,
   options: { model?: string | null; attachments?: unknown; staged?: { drops?: unknown; pastes?: unknown } },
-): Promise<{ ok?: unknown; error?: BotFailure }> {
-  if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
-  const folder = rootForSession(session)
-  if (folder === undefined) return { error: { code: 'bad_request', message: 'that session is not open' } }
-  const owner = botHandles.get(session) ?? bots().find((each) => each.home === folder)?.slug
-  if (owner === summoned.slug) {
-    return { error: { code: 'bad_request', message: `this is ${summoned.name}’s own conversation` } }
-  }
-  try {
-    summoned = await migrateBot(summoned, (method, params) => bridge!.request(method, params))
-  } catch (error) {
-    return { error: { code: 'no_definition', message: `${summoned.name} could not be given a definition: ${String(error)}` } }
-  }
-  if (summoned.definition === null) {
-    return { error: { code: 'no_definition', message: `${summoned.name} has no definition` } }
-  }
-  // A bot's home conversation is that bot's from its first turn, summoned or not, so the turn's end
-  // is recorded against it as one of its own would be.
-  if (owner !== undefined) botHandles.set(session, owner)
-
-  const params: Record<string, unknown> = { session, prompt, address: summoned.definition }
-  const selectedModel = summoned.model ?? options.model
-  if (selectedModel !== undefined) params.model = selectedModel
-  summoning.set(session, {
-    slug: summoned.slug,
-    host: owner === undefined ? { kind: 'project' } : { kind: 'bot', slug: owner },
-    after: summoned.lastHome,
-  })
-  try {
-    params.files = attachmentPaths(session, options.attachments)
-    const carried = withPastes(session, options.staged?.pastes, withDrops(session, options.staged?.drops, params))
-    return { ok: await bridge.request('turn.send', carried) }
-  } catch (error) {
-    summoning.delete(session)
-    if (error instanceof SendRefused) return { error: { code: 'bad_request', message: error.message } }
-    if (error instanceof BridgeError) return { error: { code: error.code, message: error.message } }
-    return { error: { code: 'internal', message: String(error) } }
-  }
+): Promise<Answer> {
+  return sendSummonedTurn(
+    {
+      request: bridge ? (method, params) => bridge!.request(method, params) : null,
+      summoning,
+      folderOf: rootForSession,
+      ownerOf: (handle, folder) => botHandles.get(handle) ?? bots().find((each) => each.home === folder)?.slug,
+      adopt: (handle, slug) => { botHandles.set(handle, slug) },
+      migrate: migrateBot,
+      carry: (handle, params, carried) => {
+        params.files = attachmentPaths(handle, carried.attachments)
+        return withPastes(handle, carried.pastes, withDrops(handle, carried.drops, params))
+      },
+      failure: (error) => {
+        if (error instanceof SendRefused) return { code: 'bad_request', message: error.message }
+        if (error instanceof BridgeError) return { code: error.code, message: error.message }
+        return { code: 'internal', message: String(error) }
+      },
+    },
+    session,
+    summoned,
+    prompt,
+    { model: options.model, attachments: options.attachments, drops: options.staged?.drops, pastes: options.staged?.pastes },
+  )
 }
 
 /**
@@ -451,8 +425,7 @@ function createWindow(): void {
       const handle = message.session
       const slug = botHandles.get(handle)
       const folder = rootForSession(handle)
-      const pending = summoning.get(handle) ?? null
-      summoning.delete(handle)
+      const pending = summoning.finish(handle)
       // Which bot answered is the pick's, and where is the agent's answer (MEMORY-13). The reply is
       // carried for the card and nothing here reads it.
       const { id, prompt } = message.data
@@ -494,7 +467,7 @@ function createWindow(): void {
     // ordinary `turn.error` it is about to receive.
     if (message.event === 'turn.error' && typeof message.session === 'string') {
       const handle = message.session
-      summoning.delete(handle)
+      summoning.abandon(handle)
       const slug = botHandles.get(handle)
       const folder = rootForSession(handle)
       if (slug && folder && message.data.id) noteBotSession(slug, message.data.id, folder)
@@ -730,7 +703,7 @@ app.whenReady().then(() => {
           forgetDrops(closing)
           forgetPastes(closing)
           botHandles.delete(closing)
-          summoning.delete(closing)
+          summoning.abandon(closing)
           // A session being released takes any turn of its with it, this app's own included.
           consolidating.delete(closing)
           owedCarryOver.delete(closing)
@@ -985,7 +958,7 @@ app.whenReady().then(() => {
   /**
    * Send one turn addressed to a bot a person picked in the composer (MEMORY-13), in a project's
    * chat or in another bot's conversation. The window names the bot; this process names its
-   * definition. See `sendSummonedTurn`.
+   * definition. See `sendSummonedTurn` in `summon-turn.ts`.
    */
   ipcMain.handle(
     'bravebot:bots:summon',
@@ -1003,7 +976,7 @@ app.whenReady().then(() => {
       const held = bot(slug)
       if (!held) return { error: { code: 'no_such_bot', message: 'no bot by that name' } }
       if (held.retired !== 0) return { error: { code: 'bot_archived', message: 'that bot is archived' } }
-      return sendSummonedTurn(session, held, prompt, {
+      return summonedTurn(session, held, prompt, {
         model: model as string | null | undefined,
         attachments,
         staged: { drops, pastes },

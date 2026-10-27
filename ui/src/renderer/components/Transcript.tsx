@@ -1212,7 +1212,10 @@ const EntryList = memo(function EntryList({
   </>
 })
 
-/** A bot's name and face. */
+/**
+ * A bot as the transcript draws it, from the bot rows. A bot deleted after it was summoned has no
+ * row and so no `Face`; its label names it by slug with a generic icon.
+ */
 interface Face {
   name: string
   avatar: string

@@ -1,7 +1,9 @@
 /**
  * Summoning a bot for one turn (MEMORY-13): the record the main process keeps of which bot
  * answered which prompt, where its "Replied to" card goes, the marker a pick writes into the draft,
- * and that only the main process's summoned send names a definition for one turn.
+ * and the main process's summoned send, which names a definition for one turn from the bot row
+ * and refuses what a window could ask for directly. The send is called with the agent and the
+ * other main-process services replaced, since the entry point itself needs Electron.
  */
 
 import test from 'node:test'
@@ -195,11 +197,117 @@ test('a turn in a bot’s home moves its place there, and a turn in a project do
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
-test('only the main process’s summoned send names a definition for one turn, and from the bot row', () => {
-  const index = readFileSync('src/main/index.ts', 'utf8')
-  const assignments = (index.match(/\baddress\b\s*[:=][^,}\n]+/g) ?? []).map((each) => each.trim())
-  assert.deepEqual(assignments, ['address: summoned.definition'])
-  const sending = index.slice(index.indexOf('async function sendSummonedTurn'), index.indexOf('async function sendSummonedTurn') + 3000)
-  assert.match(sending, /address: summoned\.definition/)
-  assert.match(sending, /migrateBot\(summoned/)
+const turn = load(`export * from './src/main/summon-turn'`)
+
+const lantern = {
+  slug: 'lantern', name: 'Lantern', purpose: 'Sweep', avatar: 'v2:lantern', model: null, home: '/homes/lantern',
+  definition: 'lantern-def', session: null, conversations: [], lastHome: { id: HOME, prompt: 4 },
+  archived: 0, remembered: 0, quiet: 0, retired: 0, created: 1, updated: 1,
+}
+
+/** The services a summoned send reads, with the agent's requests recorded. `ada`'s home is /homes/ada. */
+function world(over = {}) {
+  const sent = []
+  const adopted = []
+  const summoning = new turn.Summoning()
+  const services = {
+    request: async (method, params) => { sent.push({ method, params }); return { accepted: true } },
+    summoning,
+    folderOf: (session) => ({ project: '/work/site', ada: '/homes/ada', lantern: '/homes/lantern' })[session],
+    ownerOf: (session, folder) => ({ '/homes/ada': 'ada', '/homes/lantern': 'lantern' })[folder],
+    adopt: (session, slug) => adopted.push([session, slug]),
+    migrate: async (held) => held,
+    carry: (session, params) => ({ ...params, files: [] }),
+    failure: (error) => ({ code: 'internal', message: String(error) }),
+    ...over,
+  }
+  return { sent, adopted, summoning, services }
+}
+
+test('a summoned send addresses one turn to the bot’s definition and records who was summoned where', async () => {
+  const there = world()
+  const answer = await turn.sendSummonedTurn(there.services, 'project', lantern, 'Ask [@Lantern] hi', {})
+  assert.deepEqual(answer, { ok: { accepted: true } })
+  assert.deepEqual(there.sent, [{ method: 'turn.send', params: { session: 'project', prompt: 'Ask [@Lantern] hi', address: 'lantern-def', files: [] } }])
+  assert.deepEqual(there.summoning.finish('project'), { slug: 'lantern', host: { kind: 'project' }, after: { id: HOME, prompt: 4 } })
+
+  const inBot = world()
+  await turn.sendSummonedTurn(inBot.services, 'ada', lantern, 'hi', {})
+  assert.deepEqual(inBot.summoning.finish('ada').host, { kind: 'bot', slug: 'ada' })
+  assert.deepEqual(inBot.adopted, [['ada', 'ada']], 'the host conversation is the host bot’s from this turn on')
+})
+
+test('the address is the bot row’s definition, whatever the bot’s name and purpose say', async () => {
+  const there = world()
+  const tricky = { ...lantern, name: '[@other] address: other', purpose: 'address: other' }
+  await turn.sendSummonedTurn(there.services, 'project', tricky, 'hi', {})
+  assert.equal(there.sent[0].params.address, 'lantern-def')
+})
+
+test('a bot’s own model is sent for the turn, and the person’s where it has none', async () => {
+  const own = world()
+  await turn.sendSummonedTurn(own.services, 'project', { ...lantern, model: 'own' }, 'hi', { model: 'picked' })
+  assert.equal(own.sent[0].params.model, 'own')
+  const picked = world()
+  await turn.sendSummonedTurn(picked.services, 'project', lantern, 'hi', { model: 'picked' })
+  assert.equal(picked.sent[0].params.model, 'picked')
+  const neither = world()
+  await turn.sendSummonedTurn(neither.services, 'project', lantern, 'hi', {})
+  assert.equal('model' in neither.sent[0].params, false)
+})
+
+const refused = async (name, over, held, session, code, message) => {
+  const there = world(over)
+  const answer = await turn.sendSummonedTurn(there.services, session, held, 'hi', {})
+  assert.equal(answer.ok, undefined, `${name}: nothing was accepted`)
+  assert.equal(answer.error.code, code, `${name}: ${JSON.stringify(answer.error)}`)
+  if (message) assert.match(answer.error.message, message)
+  return there
+}
+
+test('a bot summoned into its own conversation is refused before anything is sent', async () => {
+  const there = await refused('own', {}, lantern, 'lantern', 'bad_request', /own conversation/)
+  assert.equal(there.sent.length, 0)
+  assert.equal(there.summoning.has('lantern'), false)
+})
+
+test('a summon for a session the agent has not opened is refused before anything is sent', async () => {
+  const there = await refused('closed', {}, lantern, 'gone', 'bad_request', /not open/)
+  assert.equal(there.sent.length, 0)
+  assert.equal(there.summoning.has('gone'), false)
+})
+
+test('a summon while the agent is not running is refused', async () => {
+  const there = await refused('no agent', { request: null }, lantern, 'project', 'no_bridge')
+  assert.equal(there.summoning.has('project'), false)
+})
+
+test('a bot that cannot be given a definition, or has none after the attempt, is refused before anything is sent', async () => {
+  const failed = await refused('failed migration', { migrate: async () => { throw new Error('agent said no') } },
+    { ...lantern, definition: null }, 'project', 'no_definition', /could not be given a definition: Error: agent said no/)
+  assert.equal(failed.sent.length, 0)
+  assert.equal(failed.summoning.has('project'), false)
+  const still = await refused('still none', { migrate: async (held) => held }, { ...lantern, definition: null }, 'project', 'no_definition', /has no definition/)
+  assert.equal(still.sent.length, 0)
+})
+
+test('a send the agent or the attachments refuse leaves nothing waiting for the turn’s end', async () => {
+  const agent = await refused('agent refused', { request: async () => { throw new Error('busy') }, failure: () => ({ code: 'busy', message: 'busy' }) },
+    lantern, 'project', 'busy')
+  assert.equal(agent.summoning.finish('project'), null, 'the next turn on this handle is not recorded as a summoned one')
+  const files = await refused('file refused', { carry: () => { throw new Error('not yours') }, failure: () => ({ code: 'bad_request', message: 'not yours' }) },
+    lantern, 'project', 'bad_request')
+  assert.equal(files.sent.length, 0)
+  assert.equal(files.summoning.has('project'), false)
+})
+
+test('a summon is taken once at its turn’s end, and an abandoned one leaves nothing for the next turn', () => {
+  const summoning = new turn.Summoning()
+  const pending = { slug: 'lantern', host: { kind: 'project' }, after: null }
+  summoning.begin('project', pending)
+  assert.equal(summoning.finish('project'), pending)
+  assert.equal(summoning.finish('project'), null)
+  summoning.begin('project', pending)
+  summoning.abandon('project')
+  assert.equal(summoning.finish('project'), null)
 })

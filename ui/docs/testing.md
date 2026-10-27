@@ -127,8 +127,10 @@ matter:
   `crates/ui-bridge/tests/mentions.rs`.
 - After building, `node scripts/drive-bot-summon.mjs` (`npm run drive:bot-summon`): a bot picked
   from the `@` list answering one message in a project's chat and one in another bot's
-  conversation under its label, the next turn running as before, and the summoned bot's
-  **Replied to** cards opening the reply
+  conversation under its label, the next turn running as before, the summoned bot's
+  **Replied to** cards opening the reply, and the channel refusing what a window sends it
+  directly (an unknown or archived bot, a malformed request, the conversation's own bot) and
+  recording nothing for a summoned turn that fails
   ([MEMORY-13](../../docs/specs/definition-memory.md#MEMORY-13)). The real app and bridge against
   a model service the script serves; which definition a turn ran under is read off the sentence
   the agent adds for it. Disposable `HOME` and profile; screenshots of the list, the draft, the

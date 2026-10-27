@@ -22,7 +22,10 @@ const LANTERN = 'SWEEP-THE-LANTERN-ROOM'
 const HARBOUR = 'MIND-THE-HARBOUR-WALL'
 const under = (body) =>
   body.includes('addressed this turn to lantern') ? 'lantern' : body.includes('addressed this turn to harbour') ? 'harbour' : 'plain'
-const { service, rounds } = await startModelService(({ body }) => ({ content: under(body) }))
+// A message that asks for it is refused by the service, so the turn it starts ends in an error.
+const FAIL = 'FAIL-THIS-TURN'
+const { service, rounds } = await startModelService(({ body, messages }) =>
+  JSON.stringify(messages.at(-1) ?? '').includes(FAIL) ? { status: 400 } : { content: under(body) })
 const ranUnder = (round) => under(rounds[round] ?? '')
 
 const { root, project, profile, env } = makeWorld('bravebot-bot-summon-', { service })
@@ -151,6 +154,63 @@ try {
   assert.equal(await page.locator('[data-test="bot-page"] .composer').count(), 0, 'the page has no composer')
   await page.locator('[data-test="earlier-back"]').click()
   await page.locator('[data-test="bot-greeting"], .entries .bubble').first().waitFor()
+
+  // ---- a window can call the channel itself, so the main process refuses what the list never offers --
+  const summonedBefore = await page.evaluate(() => window.bravebot.readSummons())
+  const direct = await page.evaluate(async ({ directory, lanternHome, FAIL }) => {
+    const api = window.bravebot
+    const open = async (where) => {
+      const made = await api.request('session.new', { directory: where })
+      await api.request('trust.reply', { session: made.ok.session, trusted: true })
+      return made.ok.session
+    }
+    const waitFor = (session, names) => new Promise((resolve) => {
+      const stop = api.onEvent((event) => {
+        if (event.session === session && names.includes(event.event)) { stop(); resolve(event.event) }
+      })
+    })
+    const refusals = {}
+    const session = await open(directory)
+    const home = await open(lanternHome)
+    refusals.unknown = await api.summonBot({ session, slug: 'nobody', prompt: 'hi' })
+    refusals.notASlug = await api.summonBot({ session, slug: { slug: 'lantern' }, prompt: 'hi' })
+    refusals.badSession = await api.summonBot({ session: '../x', slug: 'lantern', prompt: 'hi' })
+    refusals.badPrompt = await api.summonBot({ session, slug: 'lantern', prompt: 7 })
+    refusals.own = await api.summonBot({ session: home, slug: 'lantern', prompt: 'hi' })
+    await api.retireBot('harbour', true)
+    refusals.archived = await api.summonBot({ session, slug: 'harbour', prompt: 'hi' })
+    await api.retireBot('harbour', false)
+    await api.request('session.close', { session: home })
+    refusals.closed = await api.summonBot({ session: home, slug: 'lantern', prompt: 'hi' })
+
+    // A summoned turn that fails leaves nothing behind, so the next turn on the handle is not
+    // recorded as a summoned one.
+    const failed = waitFor(session, ['turn.error', 'turn.done'])
+    refusals.sentFailing = await api.summonBot({ session, slug: 'lantern', prompt: FAIL })
+    const failedWith = await failed
+    const plain = waitFor(session, ['turn.done', 'turn.error'])
+    await api.request('turn.send', { session, prompt: 'A plain follow-up' })
+    const plainWith = await plain
+    await api.request('session.close', { session })
+    return { refusals, failedWith, plainWith }
+  }, { directory: project, lanternHome: made[0].home, FAIL })
+  const { refusals } = direct
+  const code = (answer) => answer?.error?.code
+  assert.equal(code(refusals.unknown), 'no_such_bot')
+  assert.equal(code(refusals.notASlug), 'no_such_bot')
+  assert.equal(code(refusals.badSession), 'bad_request')
+  assert.equal(code(refusals.badPrompt), 'bad_request')
+  assert.equal(code(refusals.own), 'bad_request')
+  assert.match(refusals.own.error.message, /own conversation/)
+  assert.equal(code(refusals.archived), 'bot_archived')
+  assert.equal(code(refusals.closed), 'bad_request')
+  assert.match(refusals.closed.error.message, /not open/)
+  assert.equal(refusals.sentFailing.error, undefined, 'the failing turn was accepted and failed afterwards')
+  assert.equal(direct.failedWith, 'turn.error', 'the summoned turn the service refused ended in an error')
+  assert.equal(direct.plainWith, 'turn.done', 'the follow-up turn on the same session finished')
+  assert.equal(ranUnder(rounds.length - 1), 'plain', 'the follow-up was addressed to no bot')
+  const summonedAfter = await page.evaluate(() => window.bravebot.readSummons())
+  assert.deepEqual(summonedAfter, summonedBefore, 'refused and failed summons recorded nothing, and the plain follow-up was not recorded as one')
 
   assert.deepEqual(errors, [])
   console.log(`PASS: the @ list offered bots before files and never a conversation's own; a summoned bot answered one turn in a project's chat and one in another bot's, under its label, and the next turn ran as before; the summoned bot's conversation showed a card for each reply, and one opened the reply. Screenshots in ${output}/bot-summon-*.png`)
