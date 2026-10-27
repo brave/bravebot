@@ -2799,10 +2799,16 @@ of the line that has no `NAME=value` in front of it. A name outside the menu, co
 - Accepted in `strict`, `read-only` and `workspace-write` ([SANDBOX-22](#SANDBOX-22)). `workspace-write` reads the machine
   except the credential table ([SANDBOX-12](#SANDBOX-12)), so a scope there lifts the part of that table
   it names.
-- Refused, with one sentence that does not say which setting withheld it, in a session whose mode is
-  `off`, which has no profile to add to, with no profile directory, and in a workspace the person
-  has not trusted ([TRUST-7](trust-map.md#TRUST-7)). The trail records the refusal under `sandbox`,
-  naming `scopes` and each cause that held ([TRACE-1](trace.md#TRACE-1)).
+- Accepted and dropped where the stages of the line start with no profile whatever is asked: in a
+  session whose mode is `off`, and in a turn that confines none of its runs. The line already runs
+  with the person's own access, so there is nothing to lend. The arguments are still checked, so a
+  name outside the menu, a value that is not an array, and `scopes` with `unconfined` are errors in
+  those sessions as in every other. The line is then put to the person as a line that asked for
+  nothing is, with no names shown, its output is quarantined as an unvouched line's is, and the
+  trail holds no refusal.
+- Refused, with one sentence that does not say which setting withheld it, with no profile directory
+  and in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)). The trail records
+  the refusal under `sandbox`, naming `scopes` and each cause that held ([TRACE-1](trace.md#TRACE-1)).
   A run with nobody to ask refuses it, as it refuses any question; the mode that asks nothing
   approves it, as it approves any run.
 - A stage with a `NAME=value` in front of it gets no requested scope, for the reason it gets no
@@ -2844,7 +2850,8 @@ for a different line.
 `verified-by: bravebot_agent::turn::a_request_on_an_audited_line_quarantines_what_it_prints_and_the_trail_says_so`
 `verified-by: bravebot_core::policy::a_line_that_asked_for_a_request_is_untrusted_by_every_road_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::a_standing_answer_to_a_request_remembers_nothing`
-`verified-by: bravebot_agent::turn::scopes_are_refused_under_off`
+`verified-by: bravebot_agent::turn::scopes_are_accepted_and_dropped_under_off`
+`verified-by: bravebot_agent::tools::a_request_where_no_profile_applies_is_accepted_and_dropped`
 `verified-by: bravebot_agent::turn::scopes_are_asked_about_and_run_under_workspace_write`
 `verified-by: bravebot_agent::turn::scopes_are_refused_in_a_workspace_the_person_declined_to_trust`
 `verified-by: bravebot_agent::turn::scopes_are_refused_unattended_unless_the_mode_that_asks_nothing_was_given`
@@ -3067,8 +3074,12 @@ none to add to.
   for its line. It goes to the confirmer in that mode as in every other, and a run with nobody to
   ask refuses it. A redirection into a directory the permission mode reaches
   ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) needs no such request.
+- **Accepted and dropped where the line starts with no profile anyway:** under `off` and in a turn
+  that confines none of its runs. Nothing is removed that was there, so the line is put to the
+  person as an ordinary line is, its output is quarantined, and no refusal is recorded. The value is
+  still checked, so one that is not a boolean, or `unconfined` with `scopes`, is an error there too.
 - **Refused, with one sentence that does not say which setting withheld it,** in `strict`, in
-  `read-only`, under `off`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
+  `read-only`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
   managed `run.network` of `closed`, for the reason the managed file floors `off` there
   ([SANDBOX-22](#SANDBOX-22)), and in a delegate's `run`, since a sub-task asking to run unconfined
   is reach the person never set up. A managed `sandbox.mode` of `strict` is the mode `strict`.
