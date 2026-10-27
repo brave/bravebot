@@ -85,7 +85,6 @@ function inherited(): StoredState {
     // missing here is a key erased from disk by the next write of any other one.
     bots: [],
     summons: [],
-    caffeinateConfirmed: false,
   }
 }
 
@@ -120,11 +119,6 @@ export function putView(view: StoredView): void {
 /** Remember which appearance the window follows. */
 export function putTheme(theme: string): void {
   update({ theme })
-}
-
-/** Remember that the person agreed, once, to keep the computer awake during turns. */
-export function putCaffeinateConfirmed(): void {
-  update({ caffeinateConfirmed: true })
 }
 
 /** Remember the projects opened. Main-process only; there is no channel that reaches this. */

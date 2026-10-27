@@ -910,8 +910,10 @@ app. It is off at every launch, and while it is on the main process holds Electr
 `powerSaveBlocker` with `prevent-app-suspension` whenever any session has a turn in flight, and
 lets go once none has, when the setting goes off, when the window closes and when the app quits.
 The first time it is turned on a dialog says the same as the first `/caffeinate`, and nothing is
-held until the person presses Enable; that agreement is kept in the window's own state file rather
-than in `~/.bravebot/caffeinate`. The window runs no loop, and a watch holds nothing.
+held until the person presses Enable. Enable writes `confirmed` to `~/.bravebot/caffeinate`, the
+file the first `/caffeinate` writes, and the dialog is not shown where that file already says so,
+so agreeing in the terminal or the window is agreeing in both. The window runs no loop, and a
+watch holds nothing.
 
 **Why.** A laptop that sleeps during a long turn, a loop or a `schedule_next` wait stops the request
 in flight and the programs the turn runs, and the person comes back to a stalled session or a failed

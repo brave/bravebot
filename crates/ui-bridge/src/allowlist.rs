@@ -159,6 +159,9 @@ pub const DENIED: &[&str] = &[
     // What the desktop window reports about its own page, which a client of the host has none of.
     "window.fault",
     "update.status",
+    // The host's own person's agreement to keep its computer awake (CMD-12).
+    "caffeinate.confirmed",
+    "caffeinate.confirm",
     // Read files or attach them to a turn.
     "mentions.offer",
     "mentions.named",

@@ -43,11 +43,6 @@ export interface StoredState {
   summons: Summon[]
   /** Which appearance the window follows: `system`, `light`, or `dark`. */
   theme: string
-  /**
-   * Whether the person has been told what keeping the computer awake does, and said yes once
-   * (CMD-12). Only the confirmation is kept: the setting itself is off at every launch.
-   */
-  caffeinateConfirmed: boolean
 }
 
 /**
@@ -73,6 +68,5 @@ export function parseState(value: unknown, homeFor?: (slug: string) => string): 
     // the same arrangement the four above have, where the validator sits with the shape it
     // understands. The key stays `theme` so existing `bravebot-ui.json` files keep working.
     theme: parseAppearance(held.theme),
-    caffeinateConfirmed: held.caffeinateConfirmed === true,
   }
 }

@@ -6,46 +6,22 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { build, buildSync } from 'esbuild'
+import { loadComponents, loadSync } from './render-support.mjs'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
-function load(path) {
-  const source = buildSync({ entryPoints: [path], bundle: true, write: false, platform: 'node', format: 'cjs' }).outputFiles[0].text
-  const module = { exports: {} }
-  new Function('require', 'module', 'exports', source)(require, module, module.exports)
-  return module.exports
-}
-const { Caffeinate, trackTurns } = load('src/main/caffeinate.ts')
-const { NOTHING_OPEN, isChecked, isEnabled, parseWindowState, command } = load('src/shared/commands.ts')
+const { Caffeinate, trackTurns } = loadSync('src/main/caffeinate.ts')
+const { NOTHING_OPEN, isChecked, isEnabled, parseWindowState, command } = loadSync('src/shared/commands.ts')
 
-const inPlaceModal = {
-  name: 'in-place-modal',
-  setup(built) {
-    built.onResolve({ filter: /^\.\/Modal$/ }, () => ({ path: 'modal', namespace: 'in-place-modal' }))
-    built.onLoad({ filter: /.*/, namespace: 'in-place-modal' }, () => ({
-      loader: 'js',
-      resolveDir: process.cwd(),
-      contents: `import { createElement } from 'react'
-        export function Modal({ title, children, actions }) { return createElement('div', { className: 'modal', 'data-title': title }, children, actions) }`,
-    }))
-  },
-}
 let bundle
-async function dialog() {
-  bundle ??= build({
-    entryPoints: ['src/renderer/components/CaffeinateConfirm.tsx'],
-    bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic',
-    external: ['react', 'react-dom', 'react/jsx-runtime'],
-    plugins: [inPlaceModal],
-  }).then((built) => {
-    const module = { exports: {} }
-    new Function('require', 'module', 'exports', built.outputFiles[0].text)(require, module, module.exports)
-    return module.exports
-  })
-  return bundle
+const dialog = () => (bundle ??= loadComponents('src/renderer/components/CaffeinateConfirm.tsx'))
+
+function agreed(fake) {
+  const awake = new Caffeinate(fake)
+  awake.confirm()
+  return awake
 }
 
 function blocker() {
@@ -61,7 +37,7 @@ function blocker() {
 
 test('the computer is kept awake only while the setting is on and a turn runs', () => {
   const fake = blocker()
-  const awake = new Caffeinate(fake, true)
+  const awake = agreed(fake)
   awake.setBusy(true)
   assert.equal(fake.started(), 0, 'off at launch, so a turn alone holds nothing')
   awake.setEnabled(true)
@@ -88,12 +64,11 @@ test('the setting holds nothing until the dialog has been agreed to', () => {
   awake.confirm()
   awake.setEnabled(true)
   assert.equal(fake.started(), 1, 'held once agreed to')
-  assert.equal(new Caffeinate(blocker(), true).isConfirmed, true, 'an agreement from an earlier run is kept')
 })
 
 test('closing the window lets go, and the setting is off until the next window turns it on', () => {
   const fake = blocker()
-  const awake = new Caffeinate(fake, true)
+  const awake = agreed(fake)
   awake.setEnabled(true)
   awake.setBusy(true)
   awake.windowClosed()
@@ -104,7 +79,7 @@ test('closing the window lets go, and the setting is off until the next window t
 
 test('quitting lets go of a hold', () => {
   const fake = blocker()
-  const awake = new Caffeinate(fake, true)
+  const awake = agreed(fake)
   awake.setEnabled(true)
   awake.setBusy(true)
   awake.release()
@@ -115,7 +90,7 @@ test('quitting lets go of a hold', () => {
 
 test('the turns in flight follow the bridge’s events, so the hold follows the last turn', () => {
   const fake = blocker()
-  const awake = new Caffeinate(fake, true)
+  const awake = agreed(fake)
   awake.setEnabled(true)
   const running = new Set()
   const feed = (event, session) => { trackTurns(running, { event, session }); awake.setBusy(running.size > 0) }
@@ -135,9 +110,14 @@ test('the main process feeds every event, the window’s setting, the agreement,
   const index = readFileSync('src/main/index.ts', 'utf8')
   const listener = /new Bridge\(\(message\) => \{\s*trackTurns\(runningHandles, message\)\s*caffeinate\?\.setBusy\(runningHandles\.size > 0\)/
   assert.match(index, listener, 'each bridge event updates the turns in flight before anything else')
-  assert.match(index, /new Caffeinate\(powerSaveBlocker, readState\(\)\.caffeinateConfirmed\)/)
+  assert.match(index, /new Caffeinate\(powerSaveBlocker\)/)
   assert.match(index, /parseWindowState\(value\)[\s\S]{0,120}caffeinate\?\.setEnabled\(state\.caffeinated\)/)
-  assert.match(index, /'bravebot:caffeinate:confirm', \(\) => \{\s*caffeinate\?\.confirm\(\)\s*putCaffeinateConfirmed\(\)/)
+  assert.match(index, /'bravebot:caffeinate:confirm', async \(\) => \{\s*await bridge\?\.request\('caffeinate\.confirm'\)\s*caffeinate\?\.confirm\(\)/,
+    'agreeing is written where `/caffeinate` keeps it before anything is held')
+  assert.match(index, /'bravebot:caffeinate:confirmed', async \(\) => \{[^}]*bridge\.request<\{ confirmed: boolean \}>\('caffeinate\.confirmed'\)\s*if \(read\.confirmed\) caffeinate\?\.confirm\(\)/,
+    'an agreement given to `/caffeinate` is the window’s too')
+  assert.equal(index.match(/caffeinate\?\.confirm\(\)/g).length, 2, 'nothing else agrees for the person')
+  assert.ok(!readFileSync('src/main/state.ts', 'utf8').includes('caffeinate'), 'the window keeps no copy of it')
   assert.match(index, /window\.on\('closed', \(\) => \{[^}]*caffeinate\?\.windowClosed\(\)/)
   assert.match(index, /app\.on\('before-quit', \(\) => \{\s*caffeinate\?\.release\(\)/)
   assert.equal(index.match(/caffeinate\?\.set(Enabled|Busy)\(/g).length, 2, 'nothing else switches it')
@@ -186,5 +166,6 @@ test('the dialog says what staying awake means and offers Cancel and Enable', as
   assert.ok(markup.includes('data-title="Keep computer awake during turns?"'))
   assert.ok(markup.includes('with your credentials in reach of the turn'))
   assert.ok(markup.includes('It’s off again each time Brave Bot opens.'))
-  assert.ok(markup.includes('data-test="caffeinate-cancel"') && markup.includes('data-test="caffeinate-enable"'))
+  assert.ok(markup.indexOf('data-test="caffeinate-cancel"') < markup.indexOf('data-test="caffeinate-enable"'), 'Cancel just before Enable')
+  assert.ok(!markup.includes('modal-leading'), 'both at the right-hand end, as Nala’s dialog lays them out')
 })

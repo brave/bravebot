@@ -96,8 +96,10 @@ Keep Computer Awake During Turns holds Electron's `powerSaveBlocker` (`prevent-a
 in the main process, only while the setting is on and a turn runs, and lets go when either ends,
 when the window closes and when the app quits. The screen still locks, but the computer stays up
 with whatever credentials it holds, so nothing is held until the person has agreed to a dialog that
-says so; the main process keeps that agreement and ignores the setting without it. It is off at
-every launch and reaches no agent method ([CMD-12](../../docs/specs/commands.md#CMD-12)).
+says so; the main process ignores the setting without that agreement. The agreement is
+`/caffeinate`'s, read and written through `caffeinate.confirmed` and `caffeinate.confirm`, which
+only the main process sends and the host does not offer. It is off at every launch
+([CMD-12](../../docs/specs/commands.md#CMD-12)).
 
 ## Decisions and refusal
 

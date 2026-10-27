@@ -17,9 +17,9 @@ export class Caffeinate {
   private enabled = false
   private busy = false
   private held: number | null = null
+  private confirmed = false
 
-  /** `confirmed` is whether the dialog was agreed to in an earlier run. */
-  constructor(private readonly blocker: Blocker, private confirmed = false) {}
+  constructor(private readonly blocker: Blocker) {}
 
   /** Whether the person has the setting on. Ignored until the dialog has been agreed to. */
   setEnabled(enabled: boolean): void {
@@ -33,7 +33,6 @@ export class Caffeinate {
     this.apply()
   }
 
-  /** The person agreed to the dialog. */
   confirm(): void {
     this.confirmed = true
   }
@@ -54,7 +53,6 @@ export class Caffeinate {
     this.windowClosed()
   }
 
-  /** Whether the computer is being kept awake now. */
   get holding(): boolean {
     return this.held !== null
   }

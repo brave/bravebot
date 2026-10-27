@@ -3,7 +3,7 @@
 // powerSaveBlocker is watched rather than replaced.
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -72,6 +72,16 @@ try {
     await page.getByRole('button', { name: 'Send', exact: true }).click()
     return before
   }
+  // Cancel sits just left of the primary action, Nala's spacing-m apart, both at the right-hand end.
+  const besidePrimary = async (dialog, cancel, primary) => {
+    const box = name => dialog.getByRole('button', { name, exact: true }).boundingBox()
+    const [left, right] = [await box(cancel), await box(primary)]
+    const frame = await dialog.evaluate(host => host.shadowRoot.querySelector('dialog').getBoundingClientRect().toJSON())
+    const gap = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--leo-spacing-m')))
+    assert.ok(Math.abs(left.y + left.height / 2 - (right.y + right.height / 2)) < 2, `${cancel} and ${primary} on one row`)
+    assert.ok(Math.abs(right.x - (left.x + left.width) - gap) < 1.5, `${cancel} is ${gap}px left of ${primary}`)
+    assert.ok(left.x > frame.x + frame.width / 2, `${cancel} is at the right-hand end, not the left`)
+  }
   const turnEnded = async (before) => {
     await until(async () => (await ended()).length > before, 'turn end')
     assert.equal((await ended()).at(-1).event, 'turn.done')
@@ -107,6 +117,7 @@ try {
   const text = 'Check <b>this</b> & **that** later.'
   await dialog.locator('textarea').fill(text)
   await page.waitForTimeout(200)
+  await besidePrimary(dialog, 'Cancel', 'Add')
   await page.screenshot({ path: join(shots, 'note-dialog.png') })
   await dialog.getByRole('button', { name: 'Add', exact: true }).click()
   await dialog.waitFor({ state: 'detached' })
@@ -123,16 +134,20 @@ try {
   await choose('app.caffeinate')
   const awake = page.getByRole('dialog', { name: 'Keep computer awake during turns?', exact: true })
   await awake.waitFor()
+  await besidePrimary(awake, 'Cancel', 'Enable')
   await page.screenshot({ path: join(shots, 'keep-awake-dialog.png') })
   await awake.getByRole('button', { name: 'Cancel', exact: true }).click()
   await awake.waitFor({ state: 'detached' })
   await page.waitForTimeout(200)
   assert.equal((await menuItem('app.caffeinate')).checked, false, 'Cancel leaves the tick off')
   await choose('app.caffeinate')
+  const agreement = join(home, '.bravebot/caffeinate')
+  assert.equal(existsSync(agreement), false, 'Cancel agrees to nothing')
   await awake.waitFor()
   await awake.getByRole('button', { name: 'Enable', exact: true }).click()
   await awake.waitFor({ state: 'detached' })
   await until(async () => (await menuItem('app.caffeinate')).checked, 'the tick on')
+  assert.equal(readFileSync(agreement, 'utf8'), 'confirmed\n', 'Enable is kept where /caffeinate keeps it')
   assert.equal(await held(), 0, 'nothing held between turns')
 
   let release

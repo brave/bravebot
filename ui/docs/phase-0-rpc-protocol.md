@@ -1582,6 +1582,12 @@ Still open:
   text. Where the build carries none for that version they are the newest release's, `version`
   names that release and `running` is false. `notes` is null where the build carries no release.
   Nothing is read or fetched, and the window shows `notes` as plain text (CMD-25).
+- `caffeinate.confirmed` takes no parameters and returns `{ confirmed }`: whether
+  `~/.bravebot/caffeinate` says the person agreed to keeping the computer awake, as `/caffeinate`
+  reads it. `caffeinate.confirm` writes that agreement and returns `{ kept }`, false where the
+  state directory is not writable, as in an incognito profile. Both are main-process-only: the
+  window reaches them through `bravebot:caffeinate:confirmed` and `bravebot:caffeinate:confirm`
+  (CMD-12).
 - `session.note` takes `{ session, text }` and keeps the text as a note on the session's record,
   on its last finished turn, as the terminal's `/note` does (SESSION-36). It returns
   `{ noted, notes }`: `noted` is `kept`, `unwritable` where the session writes no record and the

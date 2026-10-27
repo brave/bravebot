@@ -354,6 +354,13 @@ impl Bridge {
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
             "changelog.read" => Ok(crate::help::changelog()),
+            "caffeinate.confirmed" => {
+                Ok(json!({"confirmed": bravebot_session::store::load_caffeinate_confirmed()}))
+            }
+            "caffeinate.confirm" => {
+                bravebot_session::store::save_caffeinate_confirmed();
+                Ok(json!({"kept": bravebot_session::store::load_caffeinate_confirmed()}))
+            }
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),

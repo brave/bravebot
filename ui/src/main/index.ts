@@ -17,7 +17,7 @@ import { parseView } from '../shared/view'
 import { parseContextRef, parseWindowState } from '../shared/commands'
 import { installMenu, popupContext, rebuildMenu, refreshMenu } from './menu'
 import { noteProject, recents } from './recents'
-import { putBots, putCaffeinateConfirmed, putLayout, putTheme, putView, readState } from './state'
+import { putBots, putLayout, putTheme, putView, readState } from './state'
 import { Caffeinate, trackTurns } from './caffeinate'
 import { isProjectPath } from '../shared/recents'
 import { forgetFork, forks, noteFork } from './forks'
@@ -643,7 +643,7 @@ function noteOpenedRoot(method: string, params: unknown, ok: unknown): void {
 
 app.whenReady().then(() => {
   if (!app.isPackaged && process.platform === 'darwin') app.dock?.setIcon(join(DEV_ICON_DIR, 'icon.png'))
-  caffeinate = new Caffeinate(powerSaveBlocker, readState().caffeinateConfirmed)
+  caffeinate = new Caffeinate(powerSaveBlocker)
   ipcMain.handle('bravebot:request', async (_event, method: unknown, params: unknown) => {
     if (typeof method !== 'string' || !ALLOWED.has(method)) {
       return { error: { code: 'bad_request', message: `not a permitted method: ${String(method)}` } }
@@ -1147,11 +1147,17 @@ app.whenReady().then(() => {
     caffeinate?.setEnabled(state.caffeinated)
   })
 
-  // Whether the dialog that explains keeping the computer awake has been agreed to, and agreeing.
-  ipcMain.handle('bravebot:caffeinate:confirmed', () => caffeinate?.isConfirmed ?? false)
-  ipcMain.handle('bravebot:caffeinate:confirm', () => {
+  // The agreement is `/caffeinate`'s, in the agent's state directory, so either one asks once.
+  ipcMain.handle('bravebot:caffeinate:confirmed', async () => {
+    if (!caffeinate?.isConfirmed && bridge) {
+      const read = await bridge.request<{ confirmed: boolean }>('caffeinate.confirmed')
+      if (read.confirmed) caffeinate?.confirm()
+    }
+    return caffeinate?.isConfirmed ?? false
+  })
+  ipcMain.handle('bravebot:caffeinate:confirm', async () => {
+    await bridge?.request('caffeinate.confirm')
     caffeinate?.confirm()
-    putCaffeinateConfirmed()
   })
 
   // A right-click on something in the window. The reference is validated rather than
