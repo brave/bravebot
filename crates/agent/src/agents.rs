@@ -1414,6 +1414,10 @@ pub fn set_servers(
 
 /// What a desktop bot's definition says about the servers it may use.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate answer the bridge hands the window as it stands"
+)]
 pub struct ServerChoice {
     /// The servers `mcpServers:` lists, or `None` where there is no such line.
     pub servers: Option<Vec<String>>,
