@@ -1380,9 +1380,10 @@ mod tests {
         assert_eq!((decided, shown.0), (WriteDecision::approve_always(), 1));
     }
 
-    /// Says every server moved and counts the times it was asked; refuses everything else.
+    /// Says yes to every server move and every consult, counting the times each was asked; refuses
+    /// everything else.
     #[derive(Default)]
-    struct SaysItMoved(usize);
+    struct SaysItMoved(usize, usize);
 
     impl Confirmer for SaysItMoved {
         fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
@@ -1441,7 +1442,8 @@ mod tests {
             &mut self,
             _request: &crate::confirm::ConsultRequest,
         ) -> crate::confirm::Decision {
-            crate::confirm::Decision::Reject
+            self.1 += 1;
+            crate::confirm::Decision::Approve
         }
 
         fn confirm_move(&mut self, _request: &crate::confirm::MoveRequest) -> Decision {
@@ -1644,6 +1646,38 @@ mod tests {
         let mut confining = Confining::new(&mut moved, PermissionMode::Ask, false);
         assert_eq!(confining.confirm_move(&a_move()), Decision::Approve);
         assert_eq!(moved.0, 1, "asking did not put the move to the person");
+    }
+
+    /// Bypassing refuses a proposed consult without putting it to anyone, and every other mode puts
+    /// it to the person, since only their send is the grant (CONSULT-12). The double says yes, so
+    /// the no is the mode's own.
+    #[test]
+    fn bypassing_refuses_a_consult_and_every_other_mode_asks() {
+        let consult = crate::confirm::ConsultRequest {
+            bot: "rule-reviewer".into(),
+            definition: "rule-reviewer".into(),
+            model: "haiku".into(),
+            rounds: 60,
+            budget: None,
+            brief: "is the label change safe?".into(),
+            label: bravebot_core::label::Label::trusted_public(),
+            refused: None,
+        };
+        let mut asked = SaysItMoved::default();
+        let mut confining = Confining::new(&mut asked, PermissionMode::Bypass, false);
+        assert_eq!(confining.confirm_consult(&consult), Decision::Reject);
+        assert_eq!(asked.1, 0, "bypassing put the consult to the person");
+
+        for mode in [
+            PermissionMode::Ask,
+            PermissionMode::AcceptEdits,
+            PermissionMode::Plan,
+        ] {
+            let mut asked = SaysItMoved::default();
+            let mut confining = Confining::new(&mut asked, mode, false);
+            assert_eq!(confining.confirm_consult(&consult), Decision::Approve);
+            assert_eq!(asked.1, 1, "{mode:?} did not put the consult to the person");
+        }
     }
 
     /// Bypassing answers a fetch the planner proposed and not the host a redirect led it to: that

@@ -2825,7 +2825,8 @@ fn work(work: Work) {
         finished,
         interjections,
     } = work;
-    // A consult is a turn addressed to the bot (CONSULT-2).
+    // A consult is a turn addressed to the bot, holding no more than its host (CONSULT-2, CONSULT-7).
+    let consulted_from = consulting.as_ref().and(addressing.clone());
     let addressing = consulting
         .as_ref()
         .map(|consulting| consulting.bot.clone())
@@ -2924,6 +2925,7 @@ fn work(work: Work) {
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
         // produced chooses it; the kernel compares it against the set this session resolved.
         .addressing(addressing)
+        .consulted_from(consulted_from)
         // A consult is offered no way to propose another (CONSULT-8).
         .consulting(consulting.is_some())
         // The window draws the card a proposal is sent from (CONSULT-12).
@@ -3029,7 +3031,7 @@ fn work(work: Work) {
             answer: &replied.answer,
         };
         if let Err(denied) =
-            bravebot_agent::consult::record(&prompt, &answered, &mut state.conversation, &mut sink)
+            bravebot_agent::consult::record(&named,&answered, &mut state.conversation, &mut sink)
         {
             outcome = Err(TurnError::Precommit(denied.to_string()));
         }

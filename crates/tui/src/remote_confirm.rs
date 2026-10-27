@@ -492,11 +492,13 @@ impl Reporter for RemoteReporter {
     }
 
     fn consult_started(&mut self, bot: String) {
-        let _ = self.outbound.send(ToMain::ConsultStarted(bot));
+        self.outbound.send(ToMain::ConsultStarted(bot)).ok();
     }
 
     fn consult_finished(&mut self, bot: String, reply: Option<String>) {
-        let _ = self.outbound.send(ToMain::ConsultFinished { bot, reply });
+        self.outbound
+            .send(ToMain::ConsultFinished { bot, reply })
+            .ok();
     }
 }
 

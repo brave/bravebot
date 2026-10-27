@@ -312,6 +312,93 @@ pub(super) fn note_drafting(session: &mut Session, bot: &str, row: &str) {
     session.note(t!(consult_drafting, bot = bot, bound = row.to_string()));
 }
 
+/// What the aside asks, taken before the worker starts because the request crosses to it and the
+/// conversation does not.
+///
+/// The pictures go with the question, in the order the markers in it number them, the way they go
+/// with a prompt: somebody asking about a screenshot beside the work is asking about the thing
+/// they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
+fn question_for(
+    conversation: &Conversation,
+    question: &str,
+    recap: bool,
+    writing: Option<Writing<'_>>,
+    pasted: &[crate::state::AttachedImage],
+) -> bravebot_agent::aside::Question {
+    match writing {
+        Some(Writing::Brief(goal)) => bravebot_agent::aside::Question::handoff(conversation, goal),
+        Some(Writing::Enhancement(draft)) => {
+            bravebot_agent::aside::Question::enhance(conversation, draft)
+        }
+        Some(Writing::Consult { bot, line }) => {
+            bravebot_agent::aside::Question::brief(conversation, bot, line)
+        }
+        None if recap => bravebot_agent::aside::Question::recap(conversation),
+        None => bravebot_agent::aside::Question::about(
+            conversation,
+            question,
+            pasted
+                .iter()
+                .map(|image| PastedImage {
+                    media_type: image.media_type,
+                    bytes: image.bytes.clone(),
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// The files dropped onto the line, as paths to read rather than as bytes: the read itself is the
+/// worker's, so that it lands in the same trail as the request it travels in. Only what is carried
+/// as bytes reaches here, since `crate::state::without_text_files` settled the rest to their names
+/// before the action was built.
+fn dropped_attachments(
+    attached: &[crate::state::Attached],
+) -> Vec<bravebot_agent::turn::Attachment> {
+    attached
+        .iter()
+        .filter_map(|file| match file.kind {
+            bravebot_filetype::by_name::Kind::Attachment(media) => {
+                Some(bravebot_agent::turn::Attachment {
+                    path: file.name.clone(),
+                    media: media.to_string(),
+                })
+            }
+            bravebot_filetype::by_name::Kind::Text => None,
+        })
+        .collect()
+}
+
+/// What an aside's worker said: a brief's vet is put to the person (CONSULT-6), and nothing else is
+/// asked here, nor anything once the request is stopped, so a question that is gets no.
+fn aside_message(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    session: &mut Session,
+    cancel: &Cancel,
+    answer_tx: &mpsc::Sender<crate::remote_confirm::Reply>,
+    message: crate::remote_confirm::ToMain,
+) {
+    match message {
+        crate::remote_confirm::ToMain::Vet(request) if !cancel.is_cancelled() => {
+            let answer = crate::confirm::ask_vet(terminal, &request);
+            reply_to(
+                session,
+                cancel,
+                answer_tx,
+                answer,
+                note_vetting_turned_on,
+                crate::remote_confirm::Reply::Vet,
+            );
+        }
+        other => match refusal(&other) {
+            Some(reply) => {
+                answer_tx.send(reply).ok();
+            }
+            None => aside_reported(session, other),
+        },
+    }
+}
+
 /// The request an aside, a handoff's brief and an enhancement share, drawn while it is answered.
 ///
 /// Hands back what came of it and leaves what that means to the caller: a question's answer is a
@@ -355,46 +442,8 @@ pub(super) fn ask_animated(
     // the conversation. The conversation stays on this thread and is not touched again, so there
     // is no path by which an aside could add anything to it.
     //
-    // The pictures go with the question, in the order the markers in it number them, the way they go
-    // with a prompt: somebody asking about a screenshot beside the work is asking about the thing
-    // they pasted, and pasting.md PASTE-2 is the whole of why it may be looked at.
-    let asking = match writing {
-        Some(Writing::Brief(goal)) => bravebot_agent::aside::Question::handoff(conversation, goal),
-        Some(Writing::Enhancement(draft)) => {
-            bravebot_agent::aside::Question::enhance(conversation, draft)
-        }
-        Some(Writing::Consult { bot, line }) => {
-            bravebot_agent::aside::Question::brief(conversation, bot, line)
-        }
-        None if recap => bravebot_agent::aside::Question::recap(conversation),
-        None => bravebot_agent::aside::Question::about(
-            conversation,
-            question,
-            pasted
-                .iter()
-                .map(|image| PastedImage {
-                    media_type: image.media_type,
-                    bytes: image.bytes.clone(),
-                })
-                .collect(),
-        ),
-    };
-    // The files dropped onto the line, as paths to read rather than as bytes: the read itself is the
-    // worker's, so that it lands in the same trail as the request it travels in. Only what is carried
-    // as bytes reaches here, since `crate::state::without_text_files` settled the rest to their names
-    // before the action was built.
-    let dropped: Vec<_> = attached
-        .iter()
-        .filter_map(|file| match file.kind {
-            bravebot_filetype::by_name::Kind::Attachment(media) => {
-                Some(bravebot_agent::turn::Attachment {
-                    path: file.name.clone(),
-                    media: media.to_string(),
-                })
-            }
-            bravebot_filetype::by_name::Kind::Text => None,
-        })
-        .collect();
+    let asking = question_for(conversation, question, recap, writing, pasted);
+    let dropped = dropped_attachments(attached);
     session.begin_aside();
 
     // A brief the host could not have held is put to the person before it comes back (CONSULT-6),
@@ -475,27 +524,7 @@ pub(super) fn ask_animated(
         &from_worker,
         // The same shape as a summary's keys, and the same function reads them.
         |session, key| one_request_key(session, key, &cancel),
-        |terminal, session, message| match message {
-            crate::remote_confirm::ToMain::Vet(request) if !cancel.is_cancelled() => {
-                let answer = crate::confirm::ask_vet(terminal, &request);
-                reply_to(
-                    session,
-                    &cancel,
-                    &answer_tx,
-                    answer,
-                    note_vetting_turned_on,
-                    crate::remote_confirm::Reply::Vet,
-                );
-            }
-            other => match refusal(&other) {
-                // Nothing else is asked here, and nothing is once the request is stopped; a
-                // question that is gets no.
-                Some(reply) => {
-                    let _ = answer_tx.send(reply);
-                }
-                None => aside_reported(session, other),
-            },
-        },
+        |terminal, session, message| aside_message(terminal, session, &cancel, &answer_tx, message),
     )?;
 
     let (done, sink, vouched) = worker.join().unwrap_or_else(|_| {

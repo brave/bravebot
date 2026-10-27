@@ -360,6 +360,69 @@ fn the_brief_is_drafted_on_the_model_the_window_asks_for() {
     assert_eq!(sent["model"], "picked-model", "{draft}");
 }
 
+/// CONSULT-15: the host's conversation is handed the person's line, and not the draft that followed
+/// it in the brief.
+#[test]
+fn the_host_is_handed_the_line_and_not_the_hosts_draft() {
+    let scratch = Scratch::new("bridge-consult-handed");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let line = "ask @harbour about HANDED-LINE";
+    window.call("consult.brief", json!({"line": line}));
+    window.event("consult.brief");
+    let brief = format!("{line}\n\nHOSTS-OWN-DRAFT");
+    let ended = window.turn(json!({"prompt": brief, "brief": true}));
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    let _: Vec<String> = received.try_iter().collect();
+
+    let ended = window.turn(json!({"prompt": "AFTER-THE-CONSULT"}));
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    let asked: Vec<String> = received.try_iter().collect();
+    let host = asked
+        .iter()
+        .find(|body| body.contains("AFTER-THE-CONSULT"))
+        .unwrap_or_else(|| panic!("the host was not asked: {asked:?}"));
+    assert!(host.contains("HANDED-LINE"), "{host}");
+    assert!(
+        !host.contains("HOSTS-OWN-DRAFT"),
+        "the draft was handed to the host as the person's line: {host}"
+    );
+}
+
+/// CONSULT-7: a bot consulted from a session addressed to a reader holds no more than the reader,
+/// whatever its own kind.
+#[test]
+fn a_consult_holds_no_more_than_the_definition_it_was_consulted_from() {
+    let scratch = Scratch::new("bridge-consult-narrowed");
+    std::fs::write(
+        scratch.home().join(".bravebot/agents/smith.md"),
+        "---\nname: smith\ndescription: Forges.\nkind: worker\n---\n\nFORGE-THE-ANCHORS\n",
+    )
+    .expect("a worker definition");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let ended = window.turn(json!({"prompt": "OPENING-TURN", "definition": "harbour"}));
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    let line = "ask @smith about NARROWED-LINE";
+    window.call("consult.brief", json!({"line": line}));
+    window.event("consult.brief");
+    let _: Vec<String> = received.try_iter().collect();
+
+    let ended = window.turn(json!({"prompt": format!("{line}\n\ndone"), "brief": true}));
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    let asked: Vec<String> = received.try_iter().collect();
+    let bot = asked
+        .iter()
+        .find(|body| body.contains("FORGE-THE-ANCHORS"))
+        .unwrap_or_else(|| panic!("the brief consulted no bot: {asked:?}"));
+    assert!(
+        !bot.contains(r#""name":"write_file""#) && bot.contains(r#""name":"read_file""#),
+        "a worker consulted from a reader holds more than the reader: {bot}"
+    );
+}
+
 /// CONSULT-9: once the first bot a line named replies, the next one's brief is drafted from the
 /// person's line, not from the first brief as the person edited and sent it.
 #[test]

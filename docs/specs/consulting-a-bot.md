@@ -276,6 +276,7 @@ on which file it is. Every other write is gated on whether the data and the dest
 and that is the gate a memory needs.
 
 `verified-by: bravebot_core::policy::a_consult_holds_no_more_than_the_definition_it_was_consulted_from`
+`verified-by: bravebot_ui_bridge::consulting::a_consult_holds_no_more_than_the_definition_it_was_consulted_from`
 `verified-by: bravebot_core::policy::a_consult_from_a_host_the_session_did_not_resolve_does_not_run`
 `verified-by: bravebot_agent::turn::a_consult_precommits_the_host_it_was_sent_from`
 
@@ -396,6 +397,7 @@ said.
 `verified-by: bravebot_agent::consult::a_trusted_reply_reaches_the_host_under_the_drivers_note`
 `verified-by: bravebot_agent::consult::the_line_comes_before_the_reply`
 `verified-by: bravebot_tui::app::a_stopped_consult_leaves_the_host_as_it_was`
+`verified-by: bravebot_ui_bridge::consulting::the_host_is_handed_the_line_and_not_the_hosts_draft`
 
 <a id="CONSULT-12"></a>
 ### CONSULT-12: a host may propose a consult, and the proposal runs nothing until a person sends it
@@ -435,6 +437,7 @@ person should not have to retype the brief it already wrote. Only sending the ca
 `verified-by: bravebot_ui_bridge::wire::a_proposed_consult_crosses_with_its_bot_model_bound_and_brief`
 `verified-by: bravebot_ui_bridge::refusal::a_proposed_consult_is_put_to_the_window_and_sent_only_on_its_own_yes`
 `verified-by: bravebot_ui_bridge::dispatch::a_consult_answer_for_no_waiting_proposal_is_refused_as_an_answer_to_nothing`
+`verified-by: bravebot_agent::permission_mode::bypassing_refuses_a_consult_and_every_other_mode_asks`
 `verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the card is pinned by ui/scripts/consult-card.test.mjs, which asserts that it names the bot, its definition, model and bound, draws the brief and its label as text, offers to send it or not, takes only a consult answer, and that the main process lets consult.reply through; ui/scripts/shown.test.mjs asserts that a yes waits on the card being on screen; ui/scripts/drive-consult.mjs drives the real app and bridge against a stub model and asserts nothing reaches the bot before the yes and the brief does after it)`
 `verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_on_the_card`
 `verified-by: bravebot_agent::tools::a_brief_from_an_untrusted_context_is_refused_before_any_card`
