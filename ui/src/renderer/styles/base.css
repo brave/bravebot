@@ -184,6 +184,7 @@ leo-icon { flex: none; }
 }
 .icon-button.plain-faint:hover { background: var(--surface-hover); --leo-button-color: var(--ink-primary); }
 
-/* An icon button that is a toggle says it is on with a wash, not a colour change alone. */
+/* An icon button that is a toggle says it is on with a wash, not a colour change alone. The avatar
+   edit button is a filled button that Leo draws, and it keeps Leo's own states. */
 .icon-button[aria-pressed='true'],
-.icon-button[aria-expanded='true'][aria-haspopup] { background: var(--surface-selected); --leo-button-color: var(--ink-primary); }
+.icon-button[aria-expanded='true'][aria-haspopup]:not(.bot-avatar-edit) { background: var(--surface-selected); --leo-button-color: var(--ink-primary); }
