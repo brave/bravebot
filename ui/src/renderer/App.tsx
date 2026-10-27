@@ -25,7 +25,7 @@ import { Gutter, useColumns } from './components/Gutter'
 import { shown } from './columns'
 import { TrustPrompt } from './components/TrustPrompt'
 import { Unconfigured } from './components/Unconfigured'
-import { Notice } from './components/Notice'
+import { Notice, releaseNotesNotice, type ReleaseNotes } from './components/Notice'
 import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
@@ -58,7 +58,7 @@ import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
-import { CaffeinateConfirm } from './components/CaffeinateConfirm'
+import { CaffeinateConfirm, KEPT_OFF, keepAwakeAgreed, keepAwakeChosen, type KeepAwake } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -572,16 +572,7 @@ export function App(): React.JSX.Element {
   // link as its label, so nothing in this dialog opens anything.
   const changelog = useCallback(async () => {
     try {
-      const read = await call<{ version: string; running: boolean; notes: string | null }>('changelog.read')
-      if (read.notes === null) {
-        setNotice({ title: 'Release notes', body: 'No release notes in this build.' })
-        return
-      }
-      setNotice({
-        title: `Release notes for ${read.version}`,
-        subtitle: read.running ? undefined : 'This build has no notes of its own. These are the newest release’s.',
-        body: read.notes,
-      })
+      setNotice(releaseNotesNotice(await call<ReleaseNotes>('changelog.read')))
     } catch (error) {
       setProblem(String(error))
     }
@@ -589,17 +580,13 @@ export function App(): React.JSX.Element {
 
   // Keeping the computer awake during turns (CMD-12): off at launch, and the main process holds
   // the computer awake only while this is on and a turn runs.
-  const [caffeinated, setCaffeinated] = useState(false)
-  const [askingCaffeinate, setAskingCaffeinate] = useState(false)
+  const [keepAwake, setKeepAwake] = useState<KeepAwake>(KEPT_OFF)
+  const caffeinated = keepAwake.on
   const caffeinate = useCallback(async () => {
-    if (caffeinated) return setCaffeinated(false)
-    if (await window.bravebot.caffeinateConfirmed()) setCaffeinated(true)
-    else setAskingCaffeinate(true)
-  }, [caffeinated])
+    setKeepAwake(await keepAwakeChosen(keepAwake, () => window.bravebot.caffeinateConfirmed()))
+  }, [keepAwake])
   const enableCaffeinate = useCallback(async () => {
-    setAskingCaffeinate(false)
-    await window.bravebot.confirmCaffeinate()
-    setCaffeinated(true)
+    setKeepAwake(await keepAwakeAgreed(() => window.bravebot.confirmCaffeinate()))
   }, [])
 
   // The open chat's handle while its note dialog is up.
@@ -1152,8 +1139,8 @@ export function App(): React.JSX.Element {
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
       )}
-      {askingCaffeinate && (
-        <CaffeinateConfirm onCancel={() => setAskingCaffeinate(false)} onEnable={() => void enableCaffeinate()} />
+      {keepAwake.asking && (
+        <CaffeinateConfirm onCancel={() => setKeepAwake(KEPT_OFF)} onEnable={() => void enableCaffeinate()} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
       {rewinding && live?.handle === rewinding.handle && (() => {

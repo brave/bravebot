@@ -1,6 +1,22 @@
 import { Modal } from './Modal'
 import { Button } from '../nala'
 
+/** Whether the setting is on, and whether the dialog is up. */
+export interface KeepAwake { on: boolean; asking: boolean }
+export const KEPT_OFF: KeepAwake = { on: false, asking: false }
+
+/** The menu item was chosen: off if on, otherwise on, or the dialog if it was never agreed to. */
+export async function keepAwakeChosen(now: KeepAwake, confirmed: () => Promise<boolean>): Promise<KeepAwake> {
+  if (now.on) return KEPT_OFF
+  return (await confirmed()) ? { on: true, asking: false } : { on: false, asking: true }
+}
+
+/** Enable was pressed in the dialog. */
+export async function keepAwakeAgreed(confirm: () => Promise<void>): Promise<KeepAwake> {
+  await confirm()
+  return { on: true, asking: false }
+}
+
 /** Asked the first time keeping the computer awake is turned on (CMD-12), and not again. */
 export function CaffeinateConfirm({ onCancel, onEnable }: {
   onCancel: () => void
