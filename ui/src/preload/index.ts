@@ -345,7 +345,7 @@ const api = {
   },
 
   /**
-   * Send one turn addressed to a bot a person picked in the composer (MEMORY-13).
+   * Send one turn addressed to a bot a person picked in the composer (MEMORY-14).
    *
    * Names the bot and the session. The main process names the bot's definition, and the turn runs
    * where the session runs.

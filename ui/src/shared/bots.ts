@@ -86,7 +86,7 @@ export interface Bot {
   /**
    * The last turn that ended in a conversation in its home folder: the conversation's id and the
    * prompt's ordinal, or `null` before one has. A summon elsewhere records it, so the "Replied to"
-   * card is drawn after that turn (MEMORY-13). Main-written, off what the agent answered.
+   * card is drawn after that turn (MEMORY-14). Main-written, off what the agent answered.
    */
   lastHome: HomeTurn | null
   /**

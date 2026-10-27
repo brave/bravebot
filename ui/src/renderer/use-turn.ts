@@ -75,7 +75,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     // still names: a marker deleted before sending took its file or picture off.
     const staged = queuedStaged ?? named(sending?.staging, prompt)
     const grants = grantsOf(staged)
-    // The bot picked from the `@` list for this message, which answers this turn alone (MEMORY-13).
+    // The bot picked from the `@` list for this message, which answers this turn alone (MEMORY-14).
     const summoned = summonOf(staged)
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge

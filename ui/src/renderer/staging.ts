@@ -16,7 +16,7 @@ import type { DropOutcome, DroppedFile } from '../shared/drops'
 import type { PastedPicture } from '../shared/pastes'
 import { summonMarker } from '../shared/summons'
 
-/** A bot picked from the `@` list for one message (MEMORY-13). */
+/** A bot picked from the `@` list for one message (MEMORY-14). */
 export interface SummonedBot {
   slug: string
   name: string

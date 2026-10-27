@@ -406,7 +406,7 @@ export function worksIn(held: Bot, directory: string | undefined): directory is 
  * Record a durable conversation and the folder it ran in, without discarding any earlier ones.
  *
  * A turn that ended in the home folder at a prompt the agent numbered also moves `lastHome` there,
- * which is where a summon elsewhere places its card (MEMORY-13).
+ * which is where a summon elsewhere places its card (MEMORY-14).
  */
 export function noteBotSession(slug: string, id: string, directory: string, prompt?: number): void {
   const held = bot(slug)

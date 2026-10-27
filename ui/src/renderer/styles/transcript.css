@@ -494,7 +494,7 @@
 .bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); }
 .bot-first-hero h1 { margin: 0; }
 
-/* ---- a summoned bot (MEMORY-13)
+/* ---- a summoned bot (MEMORY-14)
 
    A bot's face and name in a Nala label: over the reply it gave, on the reply's own left edge,
    and inside the message that summoned it, where the person typed its marker. */

@@ -165,7 +165,7 @@ interface Props {
   onEarlier: (bot: Bot) => void
   /** Go back from the earlier conversations to the bot's current one. */
   onBackToBot: (bot: Bot) => void
-  /** Every bot, for the faces over summoned replies and the bots the `@` list offers (MEMORY-13). */
+  /** Every bot, for the faces over summoned replies and the bots the `@` list offers (MEMORY-14). */
   bots: Bot[]
   /** Which bot answered which summoned turn, as the main process recorded it. */
   summons: Summon[]
@@ -506,7 +506,7 @@ export function Transcript({
     restage(live.handle, stagePaste(live.staging ?? EMPTY_STAGING, paste.outcome.picture, draft, caret()))
   })
   useEffect(() => window.bravebot.onPaste(pasted), [pasted])
-  /** Stage a bot picked from the `@` list to answer this message (MEMORY-13). */
+  /** Stage a bot picked from the `@` list to answer this message (MEMORY-14). */
   const summon = useEvent((picked: SummonedBot, word: string | null) => {
     if (!live) return
     const next = stageSummon(live.staging ?? EMPTY_STAGING, picked, draft, word)
@@ -1260,7 +1260,7 @@ function SaidText({ text, summoned, face }: { text: string; summoned: string | u
 }
 
 /**
- * A reply this bot gave in another conversation, drawn in its own (MEMORY-13). Not an entry and
+ * A reply this bot gave in another conversation, drawn in its own (MEMORY-14). Not an entry and
  * never part of what the bot is sent: it is drawn from the main process's record, and pressing it
  * opens the conversation the reply is in, at the prompt that summoned it.
  */

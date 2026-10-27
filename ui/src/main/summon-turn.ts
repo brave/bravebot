@@ -1,5 +1,5 @@
 /**
- * The send behind `bravebot:bots:summon` (MEMORY-13), kept apart from the Electron entry point so
+ * The send behind `bravebot:bots:summon` (MEMORY-14), kept apart from the Electron entry point so
  * that a test can call it with the services it needs in hand. A window can invoke the channel
  * directly, so every refusal here has to hold without the window's own `@` list having filtered
  * the pick first.

@@ -82,7 +82,7 @@ export function forgetCheckoutSessions(checkout) {
 }
 
 /**
- * Make a bot and open its conversation, which runs in the bot's home folder (MEMORY-13), and
+ * Make a bot and open its conversation, which runs in the bot's home folder (MEMORY-14), and
  * answer the trust question a new folder asks. `row` is the `/^Name$/` pattern the caller already
  * writes. Returns the bot's home folder.
  */

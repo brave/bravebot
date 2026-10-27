@@ -1,4 +1,4 @@
-// Summoning a bot for one turn (MEMORY-13): a bot picked from the `@` list answers one message in
+// Summoning a bot for one turn (MEMORY-14): a bot picked from the `@` list answers one message in
 // a project's chat and in another bot's conversation, under a label with its face and name, and the
 // next message is answered as before. The summoned bot's own conversation shows a "Replied to"
 // card for each, and pressing one opens the conversation it names.

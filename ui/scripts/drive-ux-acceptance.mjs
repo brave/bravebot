@@ -114,7 +114,7 @@ try {
   await openBot();await page.locator('[data-test="bot-greeting"]').waitFor();await composer.fill('First turn failure fixture');await page.getByRole('button',{name:'Send',exact:true}).click();await snap('39-new-bot-conversation')
   await emit('turn.error',{kind:'chat',category:'unauthorized',message:'401 credentials rejected',turn:1,id:'33333333-3333-4333-8333-333333333333'},'s-home');await page.getByText('Authentication failed',{exact:true}).waitFor()
   await page.getByRole('button',{name:'Chats',exact:true}).click();assert.equal(await page.locator('.session').filter({hasText:'First turn failure fixture'}).count(),1);await snap('40-first-turn-failure')
-  // A bot works in a project by being summoned in that project's chat, for one message (MEMORY-13).
+  // A bot works in a project by being summoned in that project's chat, for one message (MEMORY-14).
   await page.locator('[data-test="new-project"]').click();await page.getByRole('button',{name:"Don't trust",exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'})
   await composer.click();await page.keyboard.type('Ask @Rev');await page.locator('[data-test="mention-bot"]',{hasText:'Review Bot'}).waitFor();await page.keyboard.press('Enter')
   for(let tries=0;tries<100&&!(await composer.inputValue()).includes('[@Review Bot]');tries++)await page.waitForTimeout(50)

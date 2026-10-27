@@ -75,7 +75,7 @@ export interface ComposerProps {
   staged: Staged[]
   /** Take a staged file or picture off, by taking its marker out of the draft. */
   onRemoveStaged: (marker: string) => void
-  /** The bots the `@` list offers to answer a message, which never includes this chat's own (MEMORY-13). */
+  /** The bots the `@` list offers to answer a message, which never includes this chat's own (MEMORY-14). */
   summonable?: SummonedBot[]
   /** Stage a bot picked from the list, replacing the half-typed `word`. */
   onSummon?: (bot: SummonedBot, word: string | null) => void

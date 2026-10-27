@@ -49,7 +49,7 @@ export type Entry = (
    * conversation but the window does not know where, and a fork is refused rather than guessed.
    *
    * `summoned` is the slug of the bot a person picked for this message, which answered it
-   * (MEMORY-13). Set from the pick when it is sent, and from the main process's record of summons
+   * (MEMORY-14). Set from the pick when it is sent, and from the main process's record of summons
    * when a conversation is reopened. Never read off the text.
    */
   | { kind: 'user'; id: string; text: string; prompt?: number; summoned?: string }

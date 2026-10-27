@@ -1,6 +1,6 @@
 /**
  * Which bot answered which turn when a person summoned it, and the one judgement about whether a
- * file on disk is that list (MEMORY-13).
+ * file on disk is that list (MEMORY-14).
  *
  * The agent's record cannot hold this for the reason `forks.ts` gives about lineage: `Record` has
  * no field for it, and the agent rewrites the whole record after every turn. So the main process

@@ -109,7 +109,7 @@ const consolidating = new Set<string>()
  */
 const owedCarryOver = new Set<string>()
 
-/** The handles running a turn a person summoned a bot for (MEMORY-13). See `Summoning`. */
+/** The handles running a turn a person summoned a bot for (MEMORY-14). See `Summoning`. */
 const summoning = new Summoning()
 
 /** Why a bot's turn could not be sent, in the shape `bravebot:request` already answers with. */
@@ -276,7 +276,7 @@ async function sendBotTurn(
 }
 
 /**
- * Send one turn addressed to a bot a person picked in the composer (MEMORY-13), with this
+ * Send one turn addressed to a bot a person picked in the composer (MEMORY-14), with this
  * process's own services. The send is `sendSummonedTurn`.
  */
 function summonedTurn(
@@ -426,7 +426,7 @@ function createWindow(): void {
       const slug = botHandles.get(handle)
       const folder = rootForSession(handle)
       const pending = summoning.finish(handle)
-      // Which bot answered is the pick's, and where is the agent's answer (MEMORY-13). The reply is
+      // Which bot answered is the pick's, and where is the agent's answer (MEMORY-14). The reply is
       // carried for the card and nothing here reads it.
       const { id, prompt } = message.data
       if (folder && id && typeof prompt === 'number') noteTurnEnded({ directory: folder, id }, prompt, pending, message.data.reply)
@@ -956,7 +956,7 @@ app.whenReady().then(() => {
   )
 
   /**
-   * Send one turn addressed to a bot a person picked in the composer (MEMORY-13), in a project's
+   * Send one turn addressed to a bot a person picked in the composer (MEMORY-14), in a project's
    * chat or in another bot's conversation. The window names the bot; this process names its
    * definition. See `sendSummonedTurn` in `summon-turn.ts`.
    */

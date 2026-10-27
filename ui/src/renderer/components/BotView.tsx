@@ -88,7 +88,7 @@ const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }:
 
 /**
  * A bot's earlier conversations, in its home folder and in the projects it worked in before it
- * was summoned there instead (MEMORY-13). Reached from the header of the bot's conversation, which
+ * was summoned there instead (MEMORY-14). Reached from the header of the bot's conversation, which
  * is where talking to it happens, so this page has no composer.
  */
 export function BotView({ notices, bot, history, filtering, onOpen }: {

@@ -727,7 +727,7 @@ export function App(): React.JSX.Element {
 
   /**
    * Open a bot's conversation: the newest one in its home folder, or a new one there when it has
-   * none (MEMORY-13). A bot works in a project by being summoned in that project's chat, so there
+   * none (MEMORY-14). A bot works in a project by being summoned in that project's chat, so there
    * is no project to choose here.
    */
   const openBot = useCallback((bot: Bot) => {

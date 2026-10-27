@@ -7,7 +7,7 @@ import { FileGlyph } from './FileGlyph'
 /**
  * What a half-typed `@` name could become, drawn above the message box (NAME-4).
  *
- * The person's bots come first and the project's files after them (MEMORY-13). Picking a bot stages
+ * The person's bots come first and the project's files after them (MEMORY-14). Picking a bot stages
  * it beside the draft to answer this message; picking a file writes its name.
  *
  * The field keeps focus the whole time: the keys that walk this list are handled by the composer,

@@ -39,7 +39,7 @@ export function botHistory(bot: Bot, sessions: SessionSummary[], experience: Exp
 
 /**
  * The conversation opening `bot` goes back to: the newest one in its home folder that is not
- * archived (MEMORY-13). The page of earlier conversations lists every other row.
+ * archived (MEMORY-14). The page of earlier conversations lists every other row.
  */
 export function homeConversation(bot: Bot, rows: BotConversation[]): BotConversation | null {
   return rows.find((row) => row.directory === bot.home && row.session !== null && !row.archived) ?? null
