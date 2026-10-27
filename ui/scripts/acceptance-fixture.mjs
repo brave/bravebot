@@ -65,6 +65,8 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
   globalThis.ux = {
     emit,
     sent: [],
+    // The folder of each session the app asked for, in order.
+    created: [],
     configured: true,
     choose: directory,
     grants: {
@@ -134,6 +136,7 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
     // other than the project's gets a handle of its own.
     if (method === 'session.new') {
       const where = p.directory ?? directory
+      globalThis.ux.created.push(where)
       return { ok: { session: where === directory ? 's-new' : 's-home', directory: where, branch: 'main', model: 'sample/fast' } }
     }
     if (method === 'session.open') {

@@ -157,6 +157,23 @@ try {
   await page.locator('[data-test="earlier-back"]').click()
   await page.locator('[data-test="bot-greeting"], .entries .bubble').first().waitFor()
 
+  // ---- deleting the project's conversation takes the card for the reply given in it ------------
+  await page.getByRole('button', { name: 'Chats', exact: true }).click()
+  const projectChat = page.getByRole('button', { name: /^Actions for Ask/ })
+  await projectChat.click()
+  await page.getByRole('menuitem', { name: 'Archive conversation' }).click()
+  await page.getByRole('button', { name: 'Archive', exact: true }).click()
+  await page.locator('[data-test="view-options"]').click()
+  await page.getByRole('menuitemcheckbox', { name: 'Show archived' }).click()
+  await projectChat.click()
+  await page.getByRole('menuitem', { name: 'Delete conversation' }).click()
+  await page.locator('[data-test="delete-confirm"]').click()
+  await projectChat.waitFor({ state: 'detached' })
+  await openBot('Lantern')
+  await cards.first().waitFor()
+  assert.equal(await cards.count(), 1, 'the card for a reply given in a deleted conversation is gone')
+  assert.deepEqual((await cards.locator('.replied-where').allInnerTexts()).map((text) => text.trim()), ['Harbour'])
+
   // ---- a window can call the channel itself, so the main process refuses what the list never offers --
   const summonedBefore = await page.evaluate(() => window.bravebot.readSummons())
   const direct = await page.evaluate(async ({ directory, lanternHome, FAIL }) => {

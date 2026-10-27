@@ -118,6 +118,20 @@ try {
   await openBot();
   assert.equal(await page.getByRole('textbox',{name:COMPOSER_NAME}).inputValue(),'Keep this newer conversation draft');
   await snap('05-draft-restored-after-reload');
+  // With the home conversation archived, opening the bot makes a new one. The archived one stays
+  // open in the window, and reopening it would leave the bot with no conversation that is not archived.
+  const made=()=>app.evaluate(()=>globalThis.ux.created.length);
+  const before=await made();
+  await page.getByRole('button',{name:'Chats',exact:true}).click();
+  await page.getByRole('button',{name:'Actions for New Chat'}).click();
+  await page.getByRole('menuitem',{name:'Archive conversation'}).click();
+  const confirm=page.getByRole('button',{name:/^Archive$/});
+  if(await confirm.count()) await confirm.click();
+  await page.getByRole('button',{name:'Bots',exact:true}).click();
+  await openBot();
+  await page.locator('[data-test="bot-greeting"]').waitFor();
+  assert.equal(await made(),before+1,'opening the bot asked for a new conversation instead of reopening the archived one');
+  await snap('05-new-home-after-archive');
   await overview();await searchHistory('no-such-conversation');
   await page.getByText(/No conversation matches/).waitFor();await snap('06-no-results');
   assert.deepEqual(errors,[]);console.log('PASS: opening a bot opens its home conversation; its earlier conversations, archived navigation and search are a page reached from the header; a message in the home conversation goes to the bot, and a draft is kept across restart.');

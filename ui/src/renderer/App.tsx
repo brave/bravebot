@@ -500,9 +500,9 @@ export function App(): React.JSX.Element {
       }
       await call('session.delete', { directory: summary.directory, id: summary.id })
       dropConversation(conversationKey(summary.directory, summary.id))
-      await Promise.all([refresh(), readForks(), readBots()])
+      await Promise.all([refresh(), readForks(), readBots(), readSummons()])
     } catch (error) { setProblem(String(error)) }
-  }, [closeSession, refresh, readForks, readBots])
+  }, [closeSession, refresh, readForks, readBots, readSummons])
 
   /** The project whose group menu asked to delete all its chats or to import some, while it asks. */
   const [projectAction, setProjectAction] = useState<{ kind: 'purge' | 'import'; directory: string; opened: ReadonlySet<string> } | null>(null)
@@ -734,7 +734,9 @@ export function App(): React.JSX.Element {
     const owner = { slug: bot.slug, model: bot.model }
     const newest = homeConversation(bot, botHistory(bot, ownSessionsRef.current, preferencesRef.current))
     if (newest?.session) { void showSession(newest.session, undefined, owner); return }
-    const waiting = [...openedLives.current.values()].find((item) => item.bot?.slug === bot.slug && item.summary.directory === bot.home)
+    // One already open and not archived: an archived one is left where it is, and a new one is made.
+    const waiting = [...openedLives.current.values()].find((item) => item.bot?.slug === bot.slug && item.summary.directory === bot.home
+      && !preferencesRef.current.conversations[liveKey(item)]?.archived)
     if (waiting) { setLive(waiting); return }
     // A second open while the first is still being made would make a second home conversation.
     if (startingHome.current.has(bot.slug)) return
