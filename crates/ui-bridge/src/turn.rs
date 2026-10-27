@@ -237,7 +237,8 @@ impl BridgeReporter {
         self
     }
 
-    /// Keep each request the turn builds in `last`.
+    /// Opt-in because building the view walks the whole request, which a turn with no open
+    /// session to read it from should not pay for.
     pub fn keeping_requests(mut self, last: LastRequest) -> Self {
         self.last_request = Some(last);
         self

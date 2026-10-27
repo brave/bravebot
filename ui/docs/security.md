@@ -90,7 +90,9 @@ the session in Claude Code does not remove it, and it goes only when deleted her
 The [Diagnostics](interface.md#diagnostics) dialog's last-request view (`request.last`) is built
 from the request the planner was sent, not from the transcript, so it holds only what the planner
 already held: content held under a reference appears as the reference and its body never crosses
-IPC. Each part is drawn as plain text in a `<pre>` under the label naming where it came from,
+IPC. Content the planner was shown does cross it: the system prompt, trusted files, the person's own
+messages, and tool output that was vetted or released from a reference, each with its body. The
+view is kept in the bridge's memory for as long as the session is open. Each part is drawn as plain text in a `<pre>` under the label naming where it came from,
 never as Markdown or HTML, and is copied only by the person's own click on that part. It is not
 written to a log, a toast or a notice. The permission check (`permissions.check`) matches a typed
 call against the rules the session opened under and reads, runs and fetches nothing. No call the

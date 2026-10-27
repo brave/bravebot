@@ -732,7 +732,14 @@ fn a_permission_check_finds_no_rule_a_checkout_allowed() {
 fn a_permission_check_of_no_one_call_is_refused() {
     let mut run = fetching("bridge-rules-check-bad", |_| {});
     let (session, _rules) = run.front.session(&run.scratch);
-    for (family, specifier) in [("Shell", "ls"), ("Bash", "git diff | less"), ("Read", "")] {
+    for (family, specifier) in [
+        ("Shell", "ls"),
+        ("Bash", "git diff | less"),
+        ("Read", ""),
+        ("Read", "   "),
+        ("Mcp", "github:"),
+        ("Mcp", ":create_issue"),
+    ] {
         let answered = run.front.answered(
             "permissions.check",
             json!({"session": session, "family": family, "specifier": specifier}),
@@ -827,6 +834,43 @@ fn a_rewind_forgets_the_last_request() {
         run.front.call("request.last", json!({"session": session})),
         Value::Null
     );
+}
+
+/// A closed session takes its last request with it.
+#[test]
+fn a_closed_session_drops_its_last_request() {
+    let mut run = fetching("bridge-rules-last-request-close", |scratch| {
+        scratch.the_person_writes(json!({"deny": [THE_SITE]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    assert_eq!(run.front.ask(&session)["event"], "turn.done");
+    assert_ne!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+
+    run.front.call("session.close", json!({"session": session}));
+    let answered = run
+        .front
+        .answered("request.last", json!({"session": session}));
+    assert_eq!(answered["error"]["code"], "no_such_session", "{answered}");
+}
+
+/// PERM-12: a check answers with the rules the session opened under, so a rule taken out of the
+/// file afterwards still decides, with no file named for it.
+#[test]
+fn a_rule_taken_out_of_its_file_after_opening_still_decides_the_check() {
+    let mut run = fetching("bridge-rules-check-edited", |scratch| {
+        scratch.the_person_writes(json!({"deny": ["Read(.env)"]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    run.scratch.the_person_writes(json!({}));
+    let checked = run.front.call(
+        "permissions.check",
+        json!({"session": session, "family": "Read", "specifier": ".env"}),
+    );
+    assert_eq!(checked["decision"], "deny", "{checked}");
+    assert_eq!(checked["file"], Value::Null, "{checked}");
 }
 
 /// The last request and a check are of an open session, and a handle that names none is refused.

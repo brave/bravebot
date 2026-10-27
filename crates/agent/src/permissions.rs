@@ -466,7 +466,8 @@ impl Call {
             )),
             (Subject::Mcp, [target]) => {
                 let (alias, tool) = target.split_once(':')?;
-                Some(Self::Tool(alias.to_string(), tool.to_string()))
+                (!alias.is_empty() && !tool.is_empty())
+                    .then(|| Self::Tool(alias.to_string(), tool.to_string()))
             }
             _ => None,
         }
@@ -475,6 +476,7 @@ impl Call {
     /// What `family` and one typed specifier name. A command is split as the planner's are, by
     /// [`crate::cmdline::parse`], and must be one command of literal words.
     pub fn typed(family: &str, specifier: &str) -> Option<Self> {
+        let specifier = specifier.trim();
         if specifier.is_empty() {
             return None;
         }
@@ -1687,6 +1689,10 @@ mod tests {
             Call::typed("Mcp", "github:create_issue"),
             Some(Call::Tool("github".into(), "create_issue".into()))
         );
+        assert_eq!(
+            Call::typed("Read", "  src/lib.rs\n"),
+            Some(Call::Path(Subject::Read, "src/lib.rs".into()))
+        );
     }
 
     /// A line that is not one command of plain words, an empty specifier and an unknown family
@@ -1700,8 +1706,12 @@ mod tests {
             ("Bash", "rm *.txt"),
             ("Bash", ""),
             ("Mcp", "no-colon"),
+            ("Mcp", "github:"),
+            ("Mcp", ":create_issue"),
             ("Shell", "ls"),
             ("Read", ""),
+            ("Read", "   "),
+            ("Edit", "\t\n"),
         ] {
             assert_eq!(Call::typed(family, specifier), None, "{family} {specifier}");
         }

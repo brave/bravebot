@@ -118,6 +118,30 @@ try {
   await laidOut('empty')
   await shot(page, '01-empty-before-first-turn')
 
+  const family = page.locator('[data-test="diagnostics-family"]')
+  assert.deepEqual(await family.evaluate((element) => ({
+    tag: element.tagName.toLowerCase(),
+    leo: customElements.get(element.tagName.toLowerCase()) !== undefined && element.shadowRoot !== null,
+  })), { tag: 'leo-dropdown', leo: true }, 'the Kind field is not the Nala dropdown')
+  await family.click()
+  await page.getByRole('option', { name: 'WebFetch', exact: true }).waitFor({ state: 'visible' })
+  await page.waitForTimeout(400)
+  const field = await family.boundingBox()
+  const options = await family.locator('leo-option').evaluateAll((all) => all.map((option) => {
+    const rect = option.getBoundingClientRect()
+    return { top: rect.top, bottom: rect.bottom }
+  }))
+  const frame = await page.evaluate(() => {
+    const host = document.querySelector('[data-test="modal"]')
+    const rect = (host.shadowRoot?.querySelector('dialog') ?? host).getBoundingClientRect()
+    return { top: rect.top, bottom: rect.bottom }
+  })
+  assert.equal(options.length, 5)
+  assert.ok(options[0].top >= field.y + field.height - 1 && options[0].top < field.y + field.height + 24, `the menu opens under the Kind field (${options[0].top} vs ${field.y + field.height})`)
+  assert.ok(options.every((option) => option.bottom <= frame.bottom + 1), 'every option is inside the dialog')
+  await shot(page, '01b-kind-options')
+  await page.getByRole('option', { name: 'Bash', exact: true }).click()
+
   // ---- the permission check -------------------------------------------------------------------
   await check('Bash', 'git push origin main')
   let seen = await decided()
