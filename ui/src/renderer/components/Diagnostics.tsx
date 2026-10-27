@@ -118,7 +118,9 @@ function LastRequestView({ session }: { session: string }): React.JSX.Element {
 
 /** One part of the request, as plain text under its label. */
 export function RequestSpan({ span }: { span: Span }): React.JSX.Element {
-  const long = span.text.length > COLLAPSE_AT
+  // The blank lines that separate parts in the request would open each block with empty rows; Copy keeps them.
+  const text = span.text.replace(/^\n+|\n+$/g, '')
+  const long = text.length > COLLAPSE_AT
   const [open, setOpen] = useState(false)
   return <li className="diagnostics-span" data-kind={span.kind}>
     <div className="diagnostics-span-head">
@@ -126,7 +128,7 @@ export function RequestSpan({ span }: { span: Span }): React.JSX.Element {
       <Label color="neutral" mode="outline" data-test="diagnostics-span-label">{span.label}</Label>
       <CopyButton text={() => span.text} label="Copy this part" className="diagnostics-copy" />
     </div>
-    <pre className="diagnostics-span-text">{long && !open ? `${span.text.slice(0, COLLAPSE_AT)}…` : span.text}</pre>
+    <pre className="diagnostics-span-text">{long && !open ? `${text.slice(0, COLLAPSE_AT)}…` : text}</pre>
     {long && <Button size="small" kind="plain-faint" className="diagnostics-toggle" onClick={() => setOpen((value) => !value)}>{open ? 'Show less' : 'Show all'}</Button>}
   </li>
 }
