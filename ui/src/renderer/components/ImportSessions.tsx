@@ -22,6 +22,13 @@ interface Copied {
   failed: { sourceId: string; message: string }[]
 }
 
+/** The list after a copy that partly failed: what went in is marked imported and no longer chosen. */
+export function afterCopy(found: Found[], chosen: ReadonlySet<string>, answer: Copied): { found: Found[]; chosen: ReadonlySet<string> } {
+  const done = new Set([...answer.copied, ...answer.already])
+  const rows = found.map((one) => (done.has(one.id) ? { ...one, imported: true } : one))
+  return { found: rows, chosen: new Set([...chosen].filter((sourceId) => !rows.some((one) => one.sourceId === sourceId && one.imported))) }
+}
+
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`
 
 /**
@@ -65,6 +72,9 @@ export function ImportSessions({ directory, onImported, onClose }: {
       const answer = await call<Copied>('session.import', { directory, ids: [...chosen] })
       onImported()
       if (answer.failed.length > 0) {
+        const after = afterCopy(found ?? [], chosen, answer)
+        setFound(after.found)
+        setChosen(after.chosen)
         setProblem(`${plural(answer.failed.length, 'session')} could not be copied: ${answer.failed[0]!.message}`)
         setCopying(false)
         return

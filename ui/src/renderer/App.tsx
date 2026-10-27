@@ -50,7 +50,7 @@ import { call } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
-import { type Purged, purgeReport } from './purge'
+import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -483,6 +483,10 @@ export function App(): React.JSX.Element {
    */
   const purgeProject = useCallback(async (directory: string, ids: string[]) => {
     setProjectAction(null)
+    if (turnRunningIn(openedLives.current.values(), directory)) {
+      setProblem('A chat in this project is still answering. Wait for it to finish, then delete the project’s chats.')
+      return
+    }
     try {
       const chosen = new Set(ids)
       const held = [...openedLives.current.values()].filter((item) => item.summary.directory === directory && item.summary.id !== null && chosen.has(item.summary.id))

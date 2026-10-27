@@ -955,13 +955,19 @@ impl Bridge {
     /// holds, or that a session open here holds, is left.
     fn purge_sessions(&mut self, request: &Request) -> Result<Value, Failure> {
         use bravebot_session::sessions;
-        let directory = existing_directory(request)?;
+        let directory = named_directory(request)?;
+        let dry_run = request.flag("dryRun", false);
+        let named = if dry_run {
+            Vec::new()
+        } else {
+            strings(request, "ids")?
+        };
         let using = self.in_use(&directory);
         let plan = sessions::purge_plan(&directory, |id| {
             using.held.iter().any(|(held, _)| held == id) || bravebot_session::jobs::is_running(id)
         });
 
-        if request.flag("dryRun", false) {
+        if dry_run {
             let listed = sessions::list(&directory);
             let delete: Vec<Value> = plan
                 .delete
@@ -990,7 +996,6 @@ impl Bridge {
                 )
             });
         }
-        let named = strings(request, "ids")?;
         let chosen = sessions::Purge {
             delete: plan
                 .delete
@@ -2278,6 +2283,23 @@ struct InUse {
     held: Vec<(String, bool)>,
     /// Whether a turn is running in the first session whose lock could not be taken, if any was.
     busy: Option<bool>,
+}
+
+/// The `directory` a request names, as named, which has to be a directory.
+///
+/// Not resolved: a session opened through a link keeps the path it was opened by, and its records
+/// are kept under that path.
+fn named_directory(request: &Request) -> Result<PathBuf, Failure> {
+    let named = request.string("directory")?;
+    let path = PathBuf::from(&named);
+    if path.is_dir() {
+        Ok(path)
+    } else {
+        Err(Failure::new(
+            ErrorCode::NotADirectory,
+            format!("{named} is not a directory"),
+        ))
+    }
 }
 
 /// The `directory` a request names, resolved, which has to be a directory.

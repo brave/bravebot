@@ -624,10 +624,51 @@ fn a_purge_waits_for_a_running_turn() {
     holding
         .recv_timeout(PATIENCE)
         .expect("the service never received the held request");
+    let unnamed = purge(&mut window, &project, json!({}));
+    assert_eq!(unnamed["error"]["code"], "bad_request", "{unnamed}");
     let refused = purge(&mut window, &project, json!({"ids": [stored_id]}));
 
     assert_eq!(refused["error"]["code"], "turn_in_flight", "{refused}");
     assert_eq!(stored(&home), before, "a stored session was deleted");
+}
+
+/// A project opened through a symbolic link keeps its chats under the path it was opened by, and a
+/// purge of that path finds them rather than looking where the link points.
+#[cfg(unix)]
+#[test]
+fn a_purge_through_a_link_finds_the_chats_opened_through_it() {
+    let scratch = Scratch::new("bridge-purge-link");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let home = scratch.home();
+    let link = scratch.path.join("link");
+    std::os::unix::fs::symlink(scratch.project(), &link).expect("a link");
+    let id = take_turn(&home, &link, &endpoint, None, "a question");
+    let mut window = Window::open(&home, &link, &endpoint, None);
+
+    let planned = purge(&mut window, &link, json!({"dryRun": true}));
+    assert_eq!(ids(&planned["ok"]["delete"]), vec![id.clone()], "{planned}");
+    let purged = purge(&mut window, &link, json!({"ids": [id.clone()]}));
+    assert_eq!(purged["ok"]["deleted"], json!([id]), "{purged}");
+    assert!(
+        !stored(&home).iter().any(|name| name.starts_with(&id)),
+        "{:?}",
+        stored(&home)
+    );
+}
+
+/// A purge of a path that is not a directory is refused as such.
+#[test]
+fn a_purge_of_a_missing_directory_is_refused() {
+    let scratch = Scratch::new("bridge-purge-missing");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let home = scratch.home();
+    let mut window = Window::open(&home, &scratch.project(), &endpoint, None);
+    let refused = purge(
+        &mut window,
+        &scratch.path.join("gone"),
+        json!({"dryRun": true}),
+    );
+    assert_eq!(refused["error"]["code"], "not_a_directory", "{refused}");
 }
 
 /// Enter `id` in the home's roster of background sessions, as a running one: an entry naming

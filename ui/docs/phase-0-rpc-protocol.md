@@ -448,7 +448,8 @@ is unaffected.
 Removes the records one project wrote, the way `session.delete` removes one (SESSION-30,
 CLI-33). A
 store is shared by every folder whose path flattens to the same name, so only records whose
-directory is this one are counted. With `dryRun` it lists them and deletes nothing: `delete` is
+directory is this one are counted. The directory is taken as named, not resolved, the way
+`session.open` takes it, so a folder opened through a link is purged by that link's path. With `dryRun` it lists them and deletes nothing: `delete` is
 what would go, newest first, and `held` is what is kept because a session of this bridge has it
 open or a background job is running in it. A held id the caller has open is deleted once the
 caller closes it.
@@ -457,7 +458,7 @@ Without `dryRun`, `ids` is required and only the listed records among them are t
 is what went, `failed` what could not be removed, and `held` the named ids kept.
 
 - `not_a_directory` if the path is not one.
-- `bad_request` without `ids`, and while a session of this project is open in this bridge and
+- `bad_request` without `ids` (checked first), and while a session of this project is open in this bridge and
   idle in a way that keeps the store busy.
 - `turn_in_flight` while a turn is running in a session of this project.
 

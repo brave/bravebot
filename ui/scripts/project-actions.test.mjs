@@ -23,8 +23,8 @@ function load(path) {
   return module.exports
 }
 
-const { ImportList } = load('src/renderer/components/ImportSessions.tsx')
-const { purgeReport } = load('src/renderer/purge.ts')
+const { ImportList, afterCopy } = load('src/renderer/components/ImportSessions.tsx')
+const { purgeReport, turnRunningIn } = load('src/renderer/purge.ts')
 
 const found = (sourceId, title, imported = false) => ({ sourceId, id: `claude-code-${sourceId}`, title, updated: 1759752002, imported })
 const draw = (rows, chosen = new Set()) =>
@@ -53,5 +53,23 @@ test('a purge that kept any named chat is an error, and one that kept none is a 
   assert.deepEqual(purgeReport({ deleted: ['a', 'b'], failed: [], held: [] }), { done: 'Deleted 2 chats' })
   assert.deepEqual(purgeReport({ deleted: ['a'], failed: [], held: [] }), { done: 'Deleted 1 chat' })
   assert.deepEqual(purgeReport({ deleted: ['a'], failed: ['b'], held: [] }), { problem: '1 chat deleted. 1 chat could not be deleted and was kept.' })
-  assert.deepEqual(purgeReport({ deleted: [], failed: ['b'], held: ['c'] }), { problem: '0 chats deleted. 2 chats could not be deleted and were kept.' })
+  assert.deepEqual(purgeReport({ deleted: [], failed: ['b'], held: ['c'] }), { problem: '0 chats deleted. 1 chat could not be deleted and was kept. 1 chat still in use by a background session was kept.' })
+  assert.deepEqual(purgeReport({ deleted: ['a'], failed: [], held: ['c', 'd'] }), { problem: '1 chat deleted. 2 chats still in use by a background session were kept.' })
+})
+
+test('a purge is refused before anything closes while a chat of the project is answering', () => {
+  const open = (directory, running) => ({ summary: { directory }, running })
+  assert.equal(turnRunningIn([open('/p', false), open('/q', true)], '/p'), false)
+  assert.equal(turnRunningIn([open('/p', false), open('/p', true)], '/p'), true)
+  assert.equal(turnRunningIn([], '/p'), false)
+})
+
+test('after a copy that partly failed, what went in is marked imported and no longer chosen', () => {
+  const rows = [found('a', 'one'), found('b', 'two'), found('c', 'three')]
+  const after = afterCopy(rows, new Set(['a', 'b', 'c']), {
+    copied: ['claude-code-a'], already: ['claude-code-b'], failed: [{ sourceId: 'c', message: 'disk full' }],
+  })
+  assert.deepEqual(after.found.map((one) => one.imported), [true, true, false])
+  assert.deepEqual([...after.chosen], ['c'])
+  assert.equal(rows[0].imported, false, 'the list it was given was changed')
 })

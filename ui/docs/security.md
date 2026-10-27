@@ -84,7 +84,8 @@ Claude Code's sessions in (`session.import`) name a directory, and the main proc
 the folders a session may open in. A purge deletes only ids the renderer names, among the records
 that directory wrote, and the main process forgets only those it named. An import copies only
 names the bridge listed for that folder, matched exactly. The titles it lists are another
-program's text and are drawn as plain text.
+program's text and are drawn as plain text. A copy is this app's record from then on: deleting
+the session in Claude Code does not remove it, and it goes only when deleted here.
 
 ## Decisions and refusal
 
