@@ -8,6 +8,8 @@ governs:
   - crates/cli/src/bug_report.rs
   - crates/ui-bridge/src/bug_report.rs
   - crates/ui-bridge/src/bin/bravebot-rpc.rs
+  - ui/src/main/bug-report.ts
+  - ui/src/renderer/components/BugReport.tsx
 documented-by: docs/website/docs/reference/cli.md
 ---
 
@@ -202,7 +204,8 @@ holds none of. Save Report… writes it where the person chooses, `bravebot-bug-
 Documents by default, readable by its owner alone, and the main process asks the agent for the text
 again rather than taking the window's copy. Copy puts it on the clipboard. Open an Issue opens the
 repository's new issue page, a literal with nothing in its query. Show Log reveals the named log in
-the file manager, only where the main process finds the path under the state directory's `logs/`.
+the file manager, only where the main process finds the path is a plain file with a log's name
+directly in a `logs` directory, and never opens it.
 An incognito session, or a machine with no home, is told a report is not available, and nothing is
 offered to save. It holds nothing the terminal's file holds none of, and not the agent's standard
 error either.
@@ -225,3 +228,4 @@ hand: nothing sends it.
 `verified-by: bravebot_ui_bridge::bug_report::the_report_names_the_build_the_settings_file_and_the_log_and_holds_neither`
 `verified-by: bravebot_ui_bridge::bug_report::an_interface_version_of_another_shape_is_unknown_and_no_log_is_none`
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/bug-report.test.mjs pins the window's half: compose states the app's own version as the interface, a save composes again after the sheet closes and writes that text with mode 0600 even over a file that was 0644, a cancelled sheet writes nothing and an unavailable report fails, only the two named pages open and at their literal URLs, the log is shown only where it is a plain file with a log's name in a logs directory and never through a link, the modal carries the privacy note and hands the main process no text, URL or path, and bug-report.compose is not on the window's allow-list; make check-ui runs it, and the governs list above holds the files to existing)`

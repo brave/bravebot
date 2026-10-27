@@ -10,6 +10,9 @@ governs:
   - npm/bin/bravebot.js
   - install.sh
   - install.ps1
+  - ui/src/shared/update.ts
+  - ui/src/renderer/components/UpdateBanner.tsx
+  - ui/src/renderer/components/About.tsx
 documented-by:
   - docs/website/docs/quickstart.md
   - docs/website/docs/install.md
@@ -277,8 +280,8 @@ learns to ignore, and one that never came back would hide the next release too.
 **Known costs.** The notice names the version running, not the one the page offers, for UPDATE-5's
 reason. The window cannot tell one recorded release from the next, since it is told no version, so
 a dismissal is kept by the version running: a second release published while the same version
-runs does not bring the notice back, and About is where it is still said. A window started in development is never told anything, since its agent
-asks nobody.
+runs does not bring the notice back, and About is where it is still said. A window started in
+development is never told anything, since its agent asks nobody.
 
 `verified-by: bravebot_update::lib::the_desktop_app_asks_the_release_listing_and_shares_the_scripts_record`
 `verified-by: bravebot_update::lib::the_desktop_app_is_told_only_whether_a_newer_version_is_recorded`
@@ -289,6 +292,7 @@ asks nobody.
 `verified-by: bravebot_ui_bridge::update_status::a_release_this_build_is_not_behind_is_a_no_and_npm_s_record_is_none`
 `verified-by: bravebot_ui_bridge::update_status::nothing_recorded_is_no_answer`
 `verified-by: bravebot_ui_bridge::update_status::the_check_turned_off_in_settings_says_off_and_nothing_of_the_record`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/update-banner.test.mjs pins the window's half: an update.status answer is read only in its shape and a check that is off says nothing of a release, About says one of four lines and names no release, the banner shows only for a recorded newer release and hides for the running version once dismissed and shows again for another, and the dismissal is kept in the experience file with mode 0600 and only in a version's shape; ui/scripts/bug-report.test.mjs pins that the Download link opens the literal release page by name; make check-ui runs both, and the governs list above holds the files to existing)`
 
 ## Known costs
 

@@ -61,6 +61,8 @@ interface Props {
   agentsWorking: number
   onAgents: () => void
   build: string | null
+  /** The update notice, drawn above either list, or nothing (UPDATE-12). */
+  notice?: React.ReactNode
 }
 
 export const Sidebar = memo(function Sidebar({
@@ -86,6 +88,7 @@ export const Sidebar = memo(function Sidebar({
   agentsStarted,
   agentsWorking,
   onAgents,
+  notice,
 }: Props): React.JSX.Element {
   const [tab, setTab] = useState<Tab>('sessions')
   const [grouped, setGrouped] = useState(false)
@@ -144,6 +147,8 @@ export const Sidebar = memo(function Sidebar({
           <ControlItem value="bots">Bots</ControlItem>
         </SegmentedControl>
       </div>
+
+      {notice}
 
       <div className="sidebar-body" hidden={tab !== 'sessions'}>
         <Sessions

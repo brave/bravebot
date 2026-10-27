@@ -57,6 +57,14 @@
 }
 .sidebar-body[hidden] { display: none !important; }
 
+/* A newer release is recorded (UPDATE-12): under the titlebar, above either list, and never over
+   it, so it moves the list down once rather than covering a row. */
+.update-banner {
+  flex: none;
+  margin: 0 var(--leo-spacing-m) var(--leo-spacing-m);
+  font: var(--type-meta);
+}
+
 .sidebar-head {
   flex: none;
   display: flex;

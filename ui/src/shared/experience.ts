@@ -1,3 +1,5 @@
+import { isVersion } from './update'
+
 export interface ConversationPreferences {
   botSlug: string | null
   draft: string
@@ -9,6 +11,8 @@ export interface ConversationPreferences {
 export interface Experience {
   conversations: Record<string, ConversationPreferences>
   recentModels: string[]
+  /** The running version the update banner was dismissed on (UPDATE-12), or nothing. */
+  dismissedUpdate: string | null
 }
 
 export const EMPTY_CONVERSATION: ConversationPreferences = {
@@ -39,5 +43,6 @@ export function parseExperience(value: unknown): Experience {
     }
   }
   return { conversations,
-    recentModels: Array.isArray(v.recentModels) ? [...new Set(v.recentModels.filter((m): m is string => typeof m === 'string' && m.length < 1000))].slice(0, 8) : [] }
+    recentModels: Array.isArray(v.recentModels) ? [...new Set(v.recentModels.filter((m): m is string => typeof m === 'string' && m.length < 1000))].slice(0, 8) : [],
+    dismissedUpdate: isVersion(v.dismissedUpdate) ? v.dismissedUpdate : null }
 }

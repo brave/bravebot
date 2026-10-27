@@ -47,6 +47,7 @@
     "drive:session-list": "pnpm run bridge && electron-vite build && node scripts/drive-session-list.mjs",
     "drive:project-actions": "pnpm run bridge && electron-vite build && node scripts/drive-project-actions.mjs",
     "drive:about": "pnpm run build && node scripts/drive-about.mjs",
+    "drive:update-bug-report": "pnpm run build && node scripts/drive-update-bug-report.mjs",
     "drive:export": "pnpm run bridge && electron-vite build && node scripts/drive-export.mjs",
     "drive:fork": "pnpm run bridge && electron-vite build && node scripts/drive-fork.mjs",
     "drive:tree": "pnpm run bridge && electron-vite build && node scripts/drive-tree.mjs",
