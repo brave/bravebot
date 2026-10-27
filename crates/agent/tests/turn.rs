@@ -27289,11 +27289,13 @@ fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
     assert!(result.reach_elsewhere.is_empty());
 }
 
-/// SANDBOX-26: the request is refused, and the program does not start, where the mode accepts
-/// none: `off` has no profile to add to. The planner is told, in the same words, that nothing was
-/// added; no prompt is raised.
+/// SANDBOX-26: the request is accepted and dropped where the mode is `off`, which has no profile
+/// to add to. The line is put to the person as an ordinary line is and runs once they approve; the
+/// credential the planner named is not added, so the program has only what the person's own
+/// access gives it. The control is the same call under `strict`, which asks about the line with
+/// the names shown, so the difference is the mode's.
 #[test]
-fn scopes_are_refused_under_off() {
+fn scopes_are_accepted_and_dropped_under_off() {
     if cannot_confine_here() {
         return;
     }
@@ -27301,7 +27303,7 @@ fn scopes_are_refused_under_off() {
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
     let seen = confirmer.seen.clone();
     let result = scoped_run(
-        "scopes-refused-off",
+        "scopes-dropped-off",
         serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
         mode,
         bravebot_agent::PermissionMode::default(),
@@ -27310,14 +27312,20 @@ fn scopes_are_refused_under_off() {
         &mut confirmer,
     );
     assert!(
-        message_from(&result.second, "Result of run").contains("does not accept a request"),
+        !message_from(&result.second, "Result of run").contains("does not accept a request"),
         "{mode}: {}",
         result.second
     );
-    assert!(!result.ran, "{mode}: the line ran");
     assert!(
-        seen.lock().unwrap().is_empty(),
-        "{mode}: a prompt was raised"
+        result.ran,
+        "{mode}: the line did not run: {}",
+        result.second
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{mode}: the person was not asked once");
+    assert!(
+        seen[0].confined.is_none() && !seen[0].unconfined,
+        "{mode}: the prompt described a profile or an unconfined request for a line that has none"
     );
 }
 
@@ -28424,11 +28432,11 @@ fn the_mode_that_asks_nothing_does_not_approve_an_unconfined_line() {
     );
 }
 
-/// SANDBOX-29: the request is refused, nothing is asked and the line does not run in `strict`, under
-/// `off`, in a workspace the person has not trusted, and when it is combined with `scopes`. The
-/// refusal is the same sentence for the first three, so it does not say which setting withheld it,
-/// and it does not name the argument, which the planner learns from the `run` description. The
-/// control is the same call in `workspace-write` of a trusted workspace, which runs.
+/// SANDBOX-29: the request is refused, nothing is asked and the line does not run in `strict`, in a
+/// workspace the person has not trusted, and when it is combined with `scopes`. The refusal is the
+/// same sentence for the first two, so it does not say which setting withheld it, and it does not
+/// name the argument, which the planner learns from the `run` description. The control is the same
+/// call in `workspace-write` of a trusted workspace, which runs.
 #[test]
 fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     if cannot_confine_here() {
@@ -28441,9 +28449,8 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
         bool,
         Option<serde_json::Value>,
     );
-    let cases: [Case; 4] = [
+    let cases: [Case; 3] = [
         ("strict", bravebot_sandbox::SandboxMode::Strict, true, None),
-        ("off", bravebot_sandbox::SandboxMode::Off, true, None),
         (
             "untrusted",
             bravebot_sandbox::SandboxMode::WorkspaceWrite,
@@ -28523,13 +28530,14 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     assert!(wrote, "the control did not run");
 }
 
-/// TRACE-1, SANDBOX-26, SANDBOX-29: in a session whose sandbox mode is `off`, a `run` call that asks
-/// for no sandbox and the next one that asks for a credential scope are each refused with the
-/// sentence the planner always got, which names no setting, and the trail holds a refusal under
-/// `sandbox` for each that names the argument and the mode. The control is the same turn under
-/// `workspace-write` with a person approving, which leaves no such refusal. The regression it
-/// rejects is a refusal the planner is told of and the trail omits, which leaves nobody able to say
-/// whether the mode, the trust, a managed network or a delegate withheld it.
+/// TRACE-1, SANDBOX-26, SANDBOX-29: in a session whose workspace the person has not trusted, a
+/// `run` call that asks for no sandbox and the next one that asks for a credential scope are each
+/// refused with the sentence the planner always got, which names no setting, and the trail holds a
+/// refusal under `sandbox` for each that names the argument and the cause. The control is the same
+/// turn under `workspace-write` with a trusted workspace and a person approving, which leaves no
+/// such refusal. The regression it rejects is a refusal the planner is told of and the trail omits,
+/// which leaves nobody able to say whether the mode, the trust, a managed network or a delegate
+/// withheld it.
 #[test]
 fn a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause() {
     let name = "refused-request-recorded";
@@ -28537,17 +28545,17 @@ fn a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause() {
         name,
         serde_json::json!({ "command": "true", "unconfined": true }),
         serde_json::json!({ "command": "true", "scopes": ["remote"] }),
-        bravebot_sandbox::SandboxMode::Off,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
-        trusting_the_workspace(),
+        bravebot_core::trust::TrustStore::new("/work"),
         no_programs,
         &mut bravebot_agent::confirm::Unattended,
     );
     for entry in [
-        "run.unconfined: the request was refused and the line did not run: the off sandbox mode \
-         does not take it",
-        "run.scopes: the request was refused and the line did not run: the off sandbox mode does \
-         not take it",
+        "run.unconfined: the request was refused and the line did not run: the workspace is not \
+         trusted",
+        "run.scopes: the request was refused and the line did not run: the workspace is not \
+         trusted",
     ] {
         assert!(
             refused.trail.contains(entry),

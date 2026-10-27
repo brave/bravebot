@@ -7970,6 +7970,13 @@ fn requested_from(arguments: &Value) -> Result<Vec<bravebot_sandbox::scope::Requ
     Ok(requested)
 }
 
+/// Whether the stages of a line start with no profile whatever the planner asks: the mode is `off`,
+/// or the turn does not confine its runs. A `scopes` or `unconfined` argument has nothing to add
+/// or remove there, so it is accepted and ignored (SANDBOX-26, SANDBOX-29).
+fn starts_without_a_profile(confine_runs: bool, mode: bravebot_sandbox::SandboxMode) -> bool {
+    !confine_runs || mode == bravebot_sandbox::SandboxMode::Off
+}
+
 /// Whether this turn may be asked for a credential scope at all.
 ///
 /// In `strict`, `read-only` and `workspace-write`, where a name from the menu is the one way to widen what a program
@@ -8390,16 +8397,10 @@ fn run_call<S: Sink>(
         Ok(requested) => requested,
         Err(diagnostic) => return Err(Box::new(Produced::problem(diagnostic))),
     };
-    if !requested.is_empty()
-        && let Err(causes) = requests_accepted(policy, tools)
-    {
-        policy.refuse_run_request("scopes", &causes);
-        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
-    }
 
     // Whether the planner asks for this one line to start with no profile. Refused rather than
-    // dropped where it cannot be honoured, and where it is mistyped, as `read` is: a planner that
-    // believed it had asked would be handed the profile's failure to chase as a fault.
+    // dropped where it is mistyped, as `read` is: a planner that believed it had asked would be
+    // handed the profile's failure to chase as a fault.
     let unconfined = match arguments.get("unconfined") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(asked)) => *asked,
@@ -8414,6 +8415,35 @@ fn run_call<S: Sink>(
             "error: give 'unconfined' or 'scopes', not both. A line with no sandbox has no \
              profile for a scope to be added to.",
         )));
+    }
+
+    // A line whose stages start with no profile, under the mode `off` or in a turn that does not
+    // confine, in a workspace the person trusts, already runs with the person's own access. A scope has nothing to lend and
+    // `unconfined` nothing to remove, so both are accepted and dropped: the line is asked about and
+    // its output quarantined as an ordinary line's is, and nothing is refused, recorded as
+    // requested or spent (SANDBOX-26, SANDBOX-29). The shape checks above still apply, so a
+    // mistyped argument is an error in every mode. An untrusted workspace falls through to the
+    // refusals below, as it did before (SANDBOX-16).
+    if starts_without_a_profile(tools.confine_runs, tools.sandbox)
+        && workspace_is_trusted(policy, tools.workspace)
+    {
+        return Ok(RunCall {
+            limit,
+            in_the_background,
+            named_stdin,
+            read_asked,
+            requested: Vec::new(),
+            unconfined: false,
+        });
+    }
+
+    // Refused rather than dropped where the session cannot honour it, so a planner that believed
+    // it had a credential is told it has none and not handed a failure it would chase as a fault.
+    if !requested.is_empty()
+        && let Err(causes) = requests_accepted(policy, tools)
+    {
+        policy.refuse_run_request("scopes", &causes);
+        return Err(Box::new(Produced::problem(NOT_ACCEPTING_REQUESTS)));
     }
     if unconfined && let Err(causes) = unconfined_accepted(policy, tools) {
         policy.refuse_run_request("unconfined", &causes);
@@ -20344,7 +20374,7 @@ mod tests {
         /// that began to say which setting withheld the request.
         #[test]
         fn a_refused_unconfined_request_is_recorded_with_each_cause_that_held() {
-            use bravebot_sandbox::SandboxMode::{Off, ReadOnly, Strict, WorkspaceWrite};
+            use bravebot_sandbox::SandboxMode::{ReadOnly, Strict, WorkspaceWrite};
             let prefix = "run.unconfined: the request was refused and the line did not run: ";
             for (session, cause) in [
                 (
@@ -20355,7 +20385,6 @@ mod tests {
                     session_under(ReadOnly),
                     "the read-only sandbox mode does not take it",
                 ),
-                (session_under(Off), "the off sandbox mode does not take it"),
                 (
                     Session {
                         trusted: false,
@@ -20369,13 +20398,6 @@ mod tests {
                         ..session_under(WorkspaceWrite)
                     },
                     "a delegate may not ask",
-                ),
-                (
-                    Session {
-                        confined: false,
-                        ..session_under(WorkspaceWrite)
-                    },
-                    "this turn confines none of its runs",
                 ),
                 (
                     Session {
@@ -20412,32 +20434,15 @@ mod tests {
         /// directory to record the request under. The sentence is unchanged.
         #[test]
         fn a_refused_scope_request_is_recorded_with_each_cause_that_held() {
-            use bravebot_sandbox::SandboxMode::{Off, Strict};
+            use bravebot_sandbox::SandboxMode::Strict;
             let prefix = "run.scopes: the request was refused and the line did not run: ";
-            let mut rows = vec![
-                (session_under(Off), "the off sandbox mode does not take it"),
-                (
-                    Session {
-                        trusted: false,
-                        ..session_under(Strict)
-                    },
-                    "the workspace is not trusted",
-                ),
-                (
-                    Session {
-                        confined: false,
-                        ..session_under(Strict)
-                    },
-                    "this turn confines none of its runs",
-                ),
-                (
-                    Session {
-                        trusted: false,
-                        ..session_under(Off)
-                    },
-                    "the off sandbox mode does not take it; the workspace is not trusted",
-                ),
-            ];
+            let mut rows = vec![(
+                Session {
+                    trusted: false,
+                    ..session_under(Strict)
+                },
+                "the workspace is not trusted",
+            )];
             // The request gets past the first place it is refused, so the second decides it: a
             // platform with no sandbox refuses it for that, and one with a sandbox for want of a
             // profile directory to record the request under.
@@ -20470,6 +20475,87 @@ mod tests {
                     !clean,
                     "{cause}: a turn whose run was refused ended as clean"
                 );
+            }
+        }
+
+        /// SANDBOX-26, SANDBOX-29: where a line starts with no profile whatever the planner asks, in
+        /// the `off` mode or in a turn that confines none of its runs, a `scopes` or `unconfined`
+        /// argument is accepted and dropped. The call reaches the confirmer as an ordinary line does,
+        /// the trail holds no refusal, and a malformed argument or the two together are still errors
+        /// in those sessions. An untrusted workspace is still refused. The regressions it rejects are the old refusal of a request that has
+        /// nothing to add, and a check that skips the shape of the arguments once the session is
+        /// known to ignore them.
+        #[test]
+        fn a_request_where_no_profile_applies_is_accepted_and_dropped() {
+            use bravebot_sandbox::SandboxMode::{Off, Strict};
+            let sessions = [
+                ("off", session_under(Off)),
+                (
+                    "no confinement",
+                    Session {
+                        confined: false,
+                        ..session_under(Strict)
+                    },
+                ),
+            ];
+            for (why, session) in sessions {
+                for arguments in [
+                    json!({"command": "echo hi", "scopes": ["remote"]}),
+                    json!({"command": "echo hi", "unconfined": true}),
+                    json!({"command": "echo hi", "unconfined": false, "scopes": ["remote", "aws"]}),
+                ] {
+                    let (said, refused, _) = run_in("run-request-dropped", &arguments, session);
+                    assert!(
+                        said.starts_with("refused: the user did not approve running this"),
+                        "{why}: {arguments}: the call did not reach the confirmer: {said}"
+                    );
+                    assert_eq!(
+                        sandbox_refusals(&refused),
+                        Vec::<&str>::new(),
+                        "{why}: {arguments}: {refused:?}"
+                    );
+                }
+                // An untrusted workspace is refused as it was, with the line not run and the
+                // refusal on the trail, so the early return is not a way round SANDBOX-16.
+                let untrusted = Session {
+                    trusted: false,
+                    ..session
+                };
+                for arguments in [
+                    json!({"command": "echo hi", "scopes": ["remote"]}),
+                    json!({"command": "echo hi", "unconfined": true}),
+                ] {
+                    let (said, refused, _) = run_in("run-request-untrusted", &arguments, untrusted);
+                    assert!(
+                        said.starts_with("refused: this session does not accept a request"),
+                        "{why}: {arguments}: an untrusted workspace was not refused: {said}"
+                    );
+                    assert_eq!(
+                        sandbox_refusals(&refused).len(),
+                        1,
+                        "{why}: {arguments}: {refused:?}"
+                    );
+                }
+                for (arguments, expected) in [
+                    (
+                        json!({"command": "echo hi", "unconfined": true, "scopes": ["remote"]}),
+                        "give 'unconfined' or 'scopes', not both",
+                    ),
+                    (
+                        json!({"command": "echo hi", "unconfined": "yes"}),
+                        "must be true or false",
+                    ),
+                    (
+                        json!({"command": "echo hi", "scopes": ["root"]}),
+                        "holds a name that is not on this list",
+                    ),
+                ] {
+                    let (said, _, _) = run_in("run-request-malformed", &arguments, session);
+                    assert!(
+                        said.contains(expected),
+                        "{why}: {arguments}: a malformed argument was not an error: {said}"
+                    );
+                }
             }
         }
 
