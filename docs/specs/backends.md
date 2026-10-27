@@ -886,8 +886,9 @@ still reached by naming it.
     content or output modality contain audio.", for `gpt-audio`, `gpt-audio-1.5`, `gpt-audio-2025-08-28`,
     `gpt-audio-mini` and `gpt-audio-mini-2025-12-15`.
   - 403 `invalid_request_error`, a null code, "You are not allowed to sample from this model", for
-    `text-embedding-3-large` and `text-embedding-3-small`. The sweep went on after the first with the same key, and of
-    the 19 requests that followed one more answered 403 and 18 answered 404.
+    `text-embedding-3-large` and `text-embedding-3-small`. The 19 requests that followed the first with the same key,
+    one for each id, answered 403 for `text-embedding-3-small` and 404 for the other 18, so in these samples a 403 for
+    one id did not refuse the key for the ids after it.
   - 503 `invalid_request_error`, "No available capacity was found for the model", for `gpt-image-2.5-flare`,
     `gpt-image-2.5-sunburst`, their two dated snapshots, `sora-2` and `sora-2-pro`, and 500 `server_error` for
     `chatgpt-image-latest`, `gpt-image-1.5`, `gpt-image-2` and `gpt-image-2-2026-04-21`.
