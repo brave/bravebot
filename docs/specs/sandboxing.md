@@ -1300,15 +1300,15 @@ and under the default `ask` a person at a terminal is asked again on every push.
 `verified-by: bravebot_agent::confine::an_entry_for_one_owner_gives_its_key_to_that_owners_address_and_no_other`
 `verified-by: bravebot_agent::confine::no_entry_leaves_a_remote_stage_as_it_was`
 `verified-by: bravebot_agent::confine::a_key_the_plan_could_have_written_or_that_is_not_a_public_key_is_not_offered`
-`verified-by: bravebot_tui::confirm::a_run_prompt_says_what_a_confined_run_is_held_to`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_says_what_a_confined_run_is_held_to`
 `verified-by: bravebot_agent::confine::a_key_chosen_at_a_prompt_is_offered_for_its_owner_and_an_entry_in_the_settings_wins`
 `verified-by: bravebot_agent::confine::the_prompt_offers_a_key_choice_only_for_one_owner_left_to_ssh_with_two_keys_or_more`
 `verified-by: bravebot_agent::reach::a_chosen_key_is_read_back_by_host_and_owner_and_the_latest_choice_wins`
 `verified-by: bravebot_agent::reach::grant_lines_and_key_lines_are_each_read_by_their_own_reader_only`
 `verified-by: bravebot_agent::reach::reach_keys_lists_the_chosen_keys_and_remove_forgets_one`
-`verified-by: bravebot_tui::confirm::the_key_digits_choose_only_the_keys_the_prompt_numbered`
-`verified-by: bravebot_tui::confirm::the_key_digits_wait_for_the_rows_naming_the_keys`
-`verified-by: bravebot_tui::confirm::a_prompt_offering_a_key_choice_names_each_key_and_where_the_choice_is_written`
+`verified-by: bravebot_tui::confirm::run::the_key_digits_choose_only_the_keys_the_prompt_numbered`
+`verified-by: bravebot_tui::confirm::run::the_key_digits_wait_for_the_rows_naming_the_keys`
+`verified-by: bravebot_tui::confirm::run::a_prompt_offering_a_key_choice_names_each_key_and_where_the_choice_is_written`
 `verified-by: bravebot_agent::turn::a_key_chosen_at_the_run_prompt_is_offered_and_remembered_and_one_not_numbered_is_not`
 `verified-by: bravebot_cli::running::a_key_chosen_at_a_run_prompt_reaches_the_matching_run_stage`
 
@@ -1858,7 +1858,7 @@ reach, but can ask for less of it.
 `verified-by: bravebot_cli::main::the_run_network_flag_is_taken_out_with_its_word_and_refuses_any_other`
 `verified-by: bravebot_ui_bridge::run_network::a_closed_network_in_the_settings_reaches_a_windows_turns`
 `verified-by: bravebot_ui_bridge::run_network::a_closed_network_in_the_settings_reaches_an_editors_turns`
-`verified-by: bravebot_tui::confirm::a_run_prompt_says_the_network_is_closed_and_which_stage_keeps_it`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_says_the_network_is_closed_and_which_stage_keeps_it`
 `verified-by: bravebot_tui::logo::a_closed_network_is_named_on_the_opening_screen_and_an_open_one_is_not`
 `verified-by: bravebot_tui::status::a_closed_network_is_reported_with_who_closed_it_and_an_open_one_is_not`
 
@@ -2572,8 +2572,8 @@ says nothing about them.
 `verified-by: bravebot_agent::tools::a_refused_host_is_put_to_the_person_under_ask_and_not_for_a_delegate_or_under_refuse`
 `verified-by: bravebot_agent::permission_mode::a_host_question_is_asked_in_every_mode_but_bypass_which_refuses`
 `verified-by: bravebot_core::policy::a_host_answer_leaves_a_trail_that_tells_a_yes_from_a_no`
-`verified-by: bravebot_tui::confirm::a_host_prompt_shows_each_host_and_what_a_yes_does`
-`verified-by: bravebot_tui::confirm::a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::confirm::grants::a_host_prompt_shows_each_host_and_what_a_yes_does`
+`verified-by: bravebot_tui::confirm::grants::a_host_list_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
 `verified-by: bravebot_tui::remote_confirm::hosts_cross_with_every_name_and_only_their_own_yes_comes_back`
 `verified-by: bravebot_cli::plain::hosts_are_asked_in_lines_and_only_a_yes_lets_programs_reach_them`
 `verified-by: bravebot_ui_bridge::refusal::a_host_request_is_put_to_the_window_and_takes_no_answer_but_its_own`
@@ -2892,10 +2892,10 @@ more than the person read.
 `verified-by: bravebot_agent::turn::keeping_a_request_leaves_a_toolchain_out`
 `verified-by: bravebot_agent::turn::a_request_for_signing_is_asked_about_and_never_remembered`
 `verified-by: bravebot_agent::turn::keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused`
-`verified-by: bravebot_tui::confirm::the_keep_keys_approve_and_remember_the_reach_only`
-`verified-by: bravebot_tui::confirm::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
-`verified-by: bravebot_tui::confirm::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
-`verified-by: bravebot_tui::confirm::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
+`verified-by: bravebot_tui::confirm::run::the_keep_keys_approve_and_remember_the_reach_only`
+`verified-by: bravebot_tui::confirm::run::the_keep_keys_are_unbound_where_the_prompt_does_not_offer_them`
+`verified-by: bravebot_tui::confirm::run::the_keep_keys_wait_for_the_rows_saying_what_they_remember`
+`verified-by: bravebot_tui::confirm::run::a_prompt_offering_to_keep_a_request_names_what_would_be_kept`
 
 <a id="SANDBOX-28"></a>
 ### SANDBOX-28: a planner may ask for reach to one path, and the person is asked every time it is new
@@ -3038,8 +3038,8 @@ the whole of what is held back.
 `verified-by: bravebot_agent::turn::a_path_is_not_asked_for_under_off_or_in_an_untrusted_workspace`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
 `verified-by: bravebot_agent::turn::the_tool_is_offered_where_runs_are_confined`
-`verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
-`verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::confirm::grants::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::grants::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
 `verified-by: bravebot_tui::status::the_report_lists_the_paths_programs_were_let_reach`
 `verified-by: bravebot_cli::plain::a_path_is_asked_in_lines_and_only_a_yes_lets_programs_reach_it`
 `verified-by: bravebot_ui_bridge::refusal::a_request_for_a_path_is_refused_with_no_card_whatever_the_window_would_say`
@@ -3152,7 +3152,7 @@ refuse the path.
 `verified-by: bravebot_agent::turn::the_mode_that_asks_nothing_does_not_approve_an_unconfined_line`
 `verified-by: bravebot_agent::turn::an_unconfined_line_is_refused_where_the_session_does_not_accept_it`
 `verified-by: bravebot_agent::turn::an_unconfined_value_that_is_not_a_boolean_is_an_error`
-`verified-by: bravebot_tui::confirm::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
+`verified-by: bravebot_tui::confirm::run::a_run_asking_to_be_unconfined_says_so_and_binds_no_lasting_key`
 `verified-by: bravebot_ui_bridge::refusal::the_window_refuses_an_unconfined_run_without_asking`
 
 <a id="SANDBOX-32"></a>

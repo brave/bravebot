@@ -843,7 +843,7 @@ Not built: removing a file, and a file written through a reference. A file over 
 not text, is named and left.
 
 `verified-by: bravebot_agent::turn::the_question_says_the_working_directory_was_written_since_the_checkout`
-`verified-by: bravebot_tui::confirm::a_write_since_the_checkout_is_said_in_the_question`
+`verified-by: bravebot_tui::confirm::write::a_write_since_the_checkout_is_said_in_the_question`
 
 `verified-by: bravebot_agent::turn::a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`
 `verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
@@ -950,8 +950,8 @@ stays until a person deletes it and runs `git worktree prune`.
 `verified-by: bravebot_tui::app::a_checkout_worked_in_is_removed_only_when_the_person_says_so`
 `verified-by: bravebot_tui::app::a_checkout_nothing_was_done_in_is_removed_without_asking`
 `verified-by: bravebot_tui::app::a_checkout_not_kept_or_not_removable_is_said_so`
-`verified-by: bravebot_tui::confirm::the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes`
-`verified-by: bravebot_tui::confirm::a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes`
+`verified-by: bravebot_tui::confirm::grants::the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes`
+`verified-by: bravebot_tui::confirm::grants::a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes`
 
 <a id="CHECKOUT-16"></a>
 ### CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists

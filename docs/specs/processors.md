@@ -243,7 +243,7 @@ holds the fuller preview.
 `verified-by: bravebot_agent::manifest::a_planned_write_carries_what_the_processor_said_about_it`
 `verified-by: bravebot_core::policy::what_was_said_about_a_document_is_released_for_the_screen_it_is_approved_on`
 `verified-by: bravebot_core::policy::a_document_nobody_said_anything_about_has_nothing_to_show`
-`verified-by: bravebot_tui::confirm::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
+`verified-by: bravebot_tui::confirm::write::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
 
 <a id="PROC-13"></a>
 ### PROC-13: the `processorModel` setting names the model a processor runs on

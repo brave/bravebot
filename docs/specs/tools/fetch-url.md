@@ -97,11 +97,11 @@ asked for, so a rule matching one would be answering a different question on eve
 `verified-by: bravebot_core::url::userinfo_is_not_mistaken_for_the_host`
 `verified-by: bravebot_agent::turn::a_domain_rule_lets_a_fetch_through_without_asking`
 `verified-by: bravebot_agent::turn::a_refused_fetch_sends_no_request`
-`verified-by: bravebot_tui::confirm::a_url_longer_than_the_fetch_box_keeps_the_host_above_it_and_says_how_much_is_below`
-`verified-by: bravebot_tui::confirm::a_userinfo_that_fills_the_fetch_box_leaves_the_host_and_what_it_is_on_screen`
-`verified-by: bravebot_tui::confirm::the_end_of_a_long_url_can_be_scrolled_to_with_the_host_still_shown`
-`verified-by: bravebot_tui::confirm::a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
-`verified-by: bravebot_tui::confirm::a_fetch_scroll_moves_from_where_the_url_was_drawn`
+`verified-by: bravebot_tui::confirm::grants::a_url_longer_than_the_fetch_box_keeps_the_host_above_it_and_says_how_much_is_below`
+`verified-by: bravebot_tui::confirm::grants::a_userinfo_that_fills_the_fetch_box_leaves_the_host_and_what_it_is_on_screen`
+`verified-by: bravebot_tui::confirm::grants::the_end_of_a_long_url_can_be_scrolled_to_with_the_host_still_shown`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_scroll_moves_from_where_the_url_was_drawn`
 `verified-by: bravebot_agent::turn::a_fetch_prompt_carries_the_host_the_url_reaches_as_its_own_field`
 
 <a id="FETCH-3"></a>
@@ -168,7 +168,7 @@ knows because it set it, and which no reply can influence.
 `verified-by: bravebot_agent::turn::a_redirect_to_a_denied_host_is_refused_without_asking`
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_a_fetch_but_not_a_redirect`
 `verified-by: bravebot_approval::lib::the_fetch_lines_say_where_a_redirect_was_approved_for`
-`verified-by: bravebot_tui::confirm::a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_for_a_redirect_says_where_it_was_approved_for`
 `verified-by: bravebot_ui_bridge::wire::a_fetch_a_redirect_led_to_names_the_host_that_was_approved`
 
 <a id="FETCH-5"></a>
