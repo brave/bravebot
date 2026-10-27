@@ -1288,6 +1288,10 @@ impl Bridge {
         // whole reach, wider than the bot's own, and the fire of a watch has no request to carry
         // one at all.
         let named = crate::wire::definition(request.params.get("definition"))?;
+        // The definition of a bot a person summoned for this turn alone (MEMORY-14). Named by the
+        // main process from the bot picked in the composer, and never kept on the session, so the
+        // next turn is addressed as the session's own are.
+        let summoned = crate::wire::address(request.params.get("address"))?;
         // Whether this prompt is one a person will want back when they press up.
         //
         // `~/.bravebot/history` is recall, shared with the terminal front-end, and what belongs in
@@ -1312,7 +1316,8 @@ impl Bridge {
         open.ready_for_work()?;
         // The name the session was given, kept so a turn with no request behind it is addressed
         // too.
-        let addressing = named.or_else(|| open.definition.clone());
+        let standing = named.or_else(|| open.definition.clone());
+        let addressing = summoned.or_else(|| standing.clone());
 
         // The layers the configuration below comes from, read here rather than in the worker so
         // what they say is what stood when the turn was asked for. Three answers come off them:
@@ -1401,7 +1406,7 @@ impl Bridge {
         if let Some(open) = self.open.get_mut(&handle) {
             open.running = Some(running);
             open.model = model;
-            open.definition = addressing.clone();
+            open.definition = standing;
         }
         self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {

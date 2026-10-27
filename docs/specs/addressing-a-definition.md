@@ -78,9 +78,12 @@ set before the first turn, and each turn then carries it as a `/agent` line's tu
 `agent` key in the person's own settings does the same where the flag is absent
 ([ADDRESS-13](#ADDRESS-13)).
 
-The desktop front end addresses a definition only in a bot's conversation.
-[MEMORY-10](definition-memory.md#MEMORY-10) specifies that every turn in a desktop bot's
-conversation addresses the bot's definition, and the desktop does so for a bot that has one.
+The desktop front end addresses a definition in a bot's conversation and for a turn a person
+summons a bot for. [MEMORY-10](definition-memory.md#MEMORY-10) specifies that every turn in a
+desktop bot's conversation addresses the bot's definition, and the desktop does so for a bot that
+has one. [MEMORY-14](definition-memory.md#MEMORY-14) specifies that a turn a person summons a bot
+for, in a project's chat or in another bot's conversation, addresses that bot's definition for that
+turn alone.
 
 ## The comparison, and what it is worth
 
@@ -148,6 +151,12 @@ would make one prefix mean two things at the moment a person is typing fastest. 
 is the shape every other command here already has, and the whole word is the command, so
 `/agents are useful` stays a prompt.
 
+The desktop lists bots in the `@` list as rows of their own, above the files, and a bot picked
+there is staged beside the draft under a `[@Name]` marker rather than written as an `@` name
+([MEMORY-14](definition-memory.md#MEMORY-14)). In the text of a prompt `@` still names only a
+file, so the prefix has one meaning in what is sent. The row a person picks says which kind of
+thing it is, which is what the cost above is about.
+
 A turn stopped before it did anything puts the whole line back in the box, name and all, as a
 stopped prompt is put back. The task alone would be a prompt for the session's own planner, and
 Enter on it would run the work under everything the definition was there to take away. In a session
@@ -198,6 +207,9 @@ there stops recording the name.
 turn in a desktop bot's conversation addresses that bot's definition. The name comes from the
 conversation a person opened rather than from a line, and nothing a turn produced chooses it, so
 what stands in for the keystroke is making the bot and opening its conversation.
+[MEMORY-14](definition-memory.md#MEMORY-14) adds a third: a bot a person picked in the desktop's
+`@` list for one message. The pick stands in for the keystroke, and the name lasts that turn, as a
+`/agent` line's does.
 
 `verified-by: bravebot_tui::app::a_line_addressing_a_definition_queued_while_a_turn_ran_addresses_it_when_the_turn_ends`
 `verified-by: bravebot_cli::main::the_agent_flag_is_taken_out_with_the_name_it_gave`

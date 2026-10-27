@@ -931,6 +931,18 @@ mod tests {
         );
     }
 
+    /// The desktop writes a summoned bot into the draft as `[@Name]` (MEMORY-14). The bot travels
+    /// beside the prompt, so the marker must not also be read as a file the send then refuses.
+    #[test]
+    fn a_bot_marker_is_not_collected_as_a_reference() {
+        assert!(referenced("[@Ada] what changed?").is_empty());
+        assert!(referenced("ask [@Code Reviewer] about it").is_empty());
+        assert_eq!(
+            referenced("[@Ada] read @notes.md"),
+            vec!["notes.md".to_string()]
+        );
+    }
+
     /// A finished name is decided from the workspace, so the cap that bounds what is displayed
     /// cannot change the answer, and a directory is still somewhere to type through.
     #[test]

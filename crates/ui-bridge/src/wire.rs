@@ -437,14 +437,31 @@ pub fn composed(value: Option<&Value>) -> Result<Option<Composed>, Failure> {
 /// kept under for a memory is taken. Anything else is refused and not ignored, because a turn that
 /// quietly went out unaddressed would hold the session's whole reach.
 pub fn definition(value: Option<&Value>) -> Result<Option<String>, Failure> {
+    slug_named(
+        value,
+        "`definition` may only be the name of a bot's definition",
+    )
+}
+
+/// The definition a `turn.send` addresses for that turn alone, if it names one
+/// ([MEMORY-14](../../../docs/specs/definition-memory.md#MEMORY-14)).
+///
+/// The desktop's main process sets it from the bot a person picked in the composer and strips it
+/// from anything a window sends. It is checked as `definition` is, for the same reasons.
+pub fn address(value: Option<&Value>) -> Result<Option<String>, Failure> {
+    slug_named(
+        value,
+        "`address` may only be the name of a bot's definition",
+    )
+}
+
+fn slug_named(value: Option<&Value>, refusal: &str) -> Result<Option<String>, Failure> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(name)) if bravebot_agent::memory::is_a_slug(name) => {
             Ok(Some(name.clone()))
         }
-        Some(_) => Err(Failure::bad_request(
-            "`definition` may only be the name of a bot's definition",
-        )),
+        Some(_) => Err(Failure::bad_request(refusal)),
     }
 }
 

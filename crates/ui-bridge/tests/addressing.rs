@@ -51,10 +51,15 @@ impl Scratch {
 
     /// The definition a bot's conversation is addressed to: a reader, so it holds no write.
     fn define(&self, name: &str) {
+        self.define_for(name, PURPOSE);
+    }
+
+    /// A reader whose body is `purpose`, so a request says which of two definitions it ran under.
+    fn define_for(&self, name: &str, purpose: &str) {
         std::fs::write(
             self.home().join(format!(".bravebot/agents/{name}.md")),
             format!(
-                "---\nname: {name}\ndescription: Keeps the lights.\nkind: reader\n---\n\n{PURPOSE}\n"
+                "---\nname: {name}\ndescription: Keeps the lights.\nkind: reader\n---\n\n{purpose}\n"
             ),
         )
         .expect("a definition");
@@ -399,6 +404,107 @@ fn a_definition_that_is_no_slug_is_refused_before_a_turn_starts() {
         requests(&received)
             .iter()
             .all(|body| !body.contains("SLUG-TURN")),
+        "a refused name still started a turn"
+    );
+}
+
+/// What a second definition's body says, so a request can be told apart from one under the first.
+const OTHER_PURPOSE: &str = "SWEEP-THE-LANTERN-ROOM";
+
+/// The request whose prompt is `prompt`.
+fn asked_with<'a>(asked: &'a [String], prompt: &str) -> &'a str {
+    asked
+        .iter()
+        .find(|body| body.contains(prompt))
+        .unwrap_or_else(|| panic!("{prompt} never reached the service"))
+}
+
+/// MEMORY-14: a bot summoned in a project's chat answers that turn under its definition, and the
+/// turn after it, which names nothing, runs as the session's own planner again. A bridge that kept
+/// the summoned name on the session would address the second turn too.
+#[test]
+fn a_summoned_turn_runs_under_the_summoned_definition_and_the_next_does_not() {
+    let scratch = Scratch::new("bridge-addressing-summoned");
+    scratch.define("harbour");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let summoned = window.turn(json!({"prompt": "SUMMONED-TURN", "address": "harbour"}));
+    assert_eq!(summoned["event"], "turn.done", "{summoned}");
+    let after = window.turn(json!({"prompt": "AFTER-TURN"}));
+    assert_eq!(after["event"], "turn.done", "{after}");
+
+    let asked = requests(&received);
+    let summoned = asked_with(&asked, "SUMMONED-TURN");
+    assert!(
+        summoned.contains(PURPOSE) && summoned.contains("addressed this turn to harbour"),
+        "the summoned turn did not run under its definition: {summoned}"
+    );
+    assert!(
+        !offers(summoned, "write_file"),
+        "the summoned turn held more than a reader does: {summoned}"
+    );
+    let after = asked_with(&asked, "AFTER-TURN");
+    assert!(
+        !after.contains(PURPOSE) && offers(after, "write_file"),
+        "the turn after a summon was still addressed: {after}"
+    );
+}
+
+/// MEMORY-14: summoning another bot in a bot's conversation addresses that turn to the summoned
+/// bot, and leaves the conversation's own definition standing for the turn after. Distinct bodies
+/// tell the two definitions apart in each request.
+#[test]
+fn a_summon_in_a_bots_conversation_leaves_the_bots_own_definition_standing() {
+    let scratch = Scratch::new("bridge-addressing-summon-in-bot");
+    scratch.define("harbour");
+    scratch.define_for("lantern", OTHER_PURPOSE);
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    window.turn(json!({"prompt": "OWN-TURN", "definition": "harbour"}));
+    window.turn(json!({"prompt": "GUEST-TURN", "definition": "harbour", "address": "lantern"}));
+    let back = window.turn(json!({"prompt": "BACK-TURN"}));
+    assert_eq!(back["event"], "turn.done", "{back}");
+
+    let asked = requests(&received);
+    let guest = asked_with(&asked, "GUEST-TURN");
+    assert!(
+        guest.contains(OTHER_PURPOSE)
+            && guest.contains("addressed this turn to lantern")
+            && !guest.contains(PURPOSE),
+        "the summoned bot did not answer the turn: {guest}"
+    );
+    let back = asked_with(&asked, "BACK-TURN");
+    assert!(
+        back.contains("addressed this turn to harbour") && !back.contains(OTHER_PURPOSE),
+        "the conversation's own definition did not come back after the summon: {back}"
+    );
+}
+
+/// MEMORY-14: a summoned name is held to the terms the conversation's own name is. A path, or
+/// anything that is not a slug, is refused before a turn starts rather than sent unaddressed.
+#[test]
+fn an_address_that_is_no_slug_is_refused_before_a_turn_starts() {
+    let scratch = Scratch::new("bridge-addressing-summon-no-slug");
+    let (endpoint, received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    for named in [json!("../harbour"), json!("Harbour"), json!(""), json!(7)] {
+        let session = window.session.clone();
+        let refused = window.call(
+            "turn.send",
+            json!({"session": session, "prompt": "ADDRESS-SLUG-TURN", "address": named}),
+        );
+        assert!(
+            refused.get("error").is_some(),
+            "{named} was accepted: {refused}"
+        );
+    }
+    assert!(
+        requests(&received)
+            .iter()
+            .all(|body| !body.contains("ADDRESS-SLUG-TURN")),
         "a refused name still started a turn"
     );
 }

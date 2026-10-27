@@ -28,6 +28,9 @@ governs:
   - ui/src/main/bots.ts
   - ui/src/main/memory.ts
   - ui/src/shared/bot-history.ts
+  - ui/src/shared/summons.ts
+  - ui/src/main/summons.ts
+  - ui/scripts/summons.test.mjs
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/bot-grounding.test.mjs
   - ui/scripts/bot-model.test.mjs
@@ -53,8 +56,8 @@ The memory and the checkout are built, [MEMORY-2](#MEMORY-2) to [MEMORY-7](#MEMO
 writing a bot's definition, [MEMORY-8](#MEMORY-8), rewriting it on an edit,
 [MEMORY-9](#MEMORY-9), addressing it in a bot's turns, [MEMORY-10](#MEMORY-10), for a bot that has
 one, and [MEMORY-11](#MEMORY-11), which migrates an existing bot and asks it to carry its old notes
-over. [MEMORY-1](#MEMORY-1), the split between the file and the desktop's store, is what those
-build. Not built are the briefing and quiet-turn counter a bot made before definitions still uses
+over. Summoning a bot for one turn, [MEMORY-14](#MEMORY-14), is built.
+[MEMORY-1](#MEMORY-1), the split between the file and the desktop's store, is what those build. Not built are the briefing and quiet-turn counter a bot made before definitions still uses
 until it is opened, and the sentences in [MEMORY-4](#MEMORY-4) about the desktop's panel, which are a
 design, written to be agreed before that work starts.
 
@@ -71,8 +74,10 @@ whose `isolation:` asks for a checkout works in a checkout of it
 The desktop front end's bots are a format of their own. A bot is a row in the desktop's store: a
 name, a purpose, a model, a home folder the desktop makes for it under its own data directory, the
 name of the definition written for it ([MEMORY-8](#MEMORY-8)), and a history of conversations, each
-with the folder it ran in. A conversation runs in the home folder or in a project folder a person
-picked for it ([MEMORY-7](#MEMORY-7)). A bot that has a definition has every turn addressed to it
+with the folder it ran in. Opening a bot opens its newest conversation in the home folder, and a
+person sends it into a project by summoning it for one turn in that project's chat
+([MEMORY-14](#MEMORY-14)). Conversations it had in project folders before that are still listed
+([MEMORY-7](#MEMORY-7)). A bot that has a definition has every turn addressed to it
 ([MEMORY-10](#MEMORY-10)): the purpose reaches the run as the definition's body, and its memory is
 `.bravebot/memory/<definition>.md` in the folder the conversation runs in, which the run is told
 about and reads with its ordinary tools. A bot made before definitions existed has none. Its purpose
@@ -400,7 +405,9 @@ bot's slug under its own data directory; a folder the native picker handed over 
 folder the bot's store records a conversation in. The store records a folder only when a turn sent
 there under this rule ends, so a window cannot add one by opening a session somewhere
 ([TRUST-20](trust-map.md#TRUST-20)). The home folder is beside the directory that holds the
-briefing and never inside it, so a run in the home folder cannot rewrite its own purpose.
+briefing and never inside it, so a run in the home folder cannot rewrite its own purpose. A turn a
+person summons a bot for ([MEMORY-14](#MEMORY-14)) is not one of the bot's own turns: it runs in the
+folder of the conversation it was summoned into, and the store records no folder for it.
 
 **Why no file names one.** Each of three reasons is enough:
 
@@ -506,8 +513,9 @@ that name as it does one typed after `/agent`
 ([addressing-a-definition.md](addressing-a-definition.md)). That includes the turns the desktop
 composes itself, such as the one it sends after a compaction, and the turn a watch the person armed
 there fires. The name comes from the row the person opened, never from the line they typed and never
-from a reply. A row whose definition no longer resolves, because the file was removed or no longer
-loads, runs nothing and says so, naming the definition.
+from a reply. A turn a person summons another bot for is the one exception, and lasts that turn
+([MEMORY-14](#MEMORY-14)). A row whose definition no longer resolves, because the file was removed
+or no longer loads, runs nothing and says so, naming the definition.
 
 A reply is drawn in the bot's window under the name the bot is shown under, which comes from that
 row, as the definition's name does.
@@ -689,6 +697,72 @@ window cannot call.
 `verified-by: bravebot_ui_bridge::definitions::the_servers_written_for_a_bot_are_read_back`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_server_write_leaves_the_file_untouched`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-servers.test.mjs pins its half: a write is sent only with null or an array of strings, whose names the agent judges; an answer is taken only whole, with the agent's own reading of the line; make check-ui runs it)`
+
+<a id="MEMORY-14"></a>
+### MEMORY-14: a person may summon a bot for one turn, in a project's chat or in another bot's
+
+In the desktop, typing `@` in a chat's composer lists the person's bots above the project's files.
+The list leaves out bots that are archived and the bot whose conversation is open. Picking one writes
+a marker, `[@Name]`, into the draft and stages the bot beside it, as a dropped file is staged
+([DROP-6](dropping.md#DROP-6)). Deleting the marker takes the bot off. A message summons at most one
+bot, and picking a second replaces the first. A message that summons a bot is queued while a turn
+runs and is never sent into that turn.
+
+That message's turn is addressed to the summoned bot's definition, and to it alone. The next turn is
+addressed as the conversation's turns were before the summon: to the bot's own definition in a
+bot's conversation ([MEMORY-10](#MEMORY-10)), and to none in a project's chat. The turn runs in the
+conversation's folder, under the conversation's history, and the summoned bot's memory is the one
+[MEMORY-2](#MEMORY-2) names in that folder.
+
+The reply is drawn under a label with the summoned bot's face and the name it is shown under. The
+summoned bot's own conversation shows a card for each reply it gave elsewhere. The card says
+"Replied to" and names the bot whose conversation it was, or the project, and shows the reply's
+text. Pressing it opens that conversation at the summoned prompt. The card is drawn beside the
+summoned bot's conversation and is not part of it: nothing on the card reaches that bot's turns.
+
+**Where the name comes from.** The person's pick in the list. The window sends the bot's slug, and
+the main process sends that bot's definition name, judged a slug when it was stored, as the
+`address` parameter of `turn.send`. It strips `address` from anything a window sends, as it strips
+`definition`. The bridge takes only a name that is a slug, refusing anything else when the turn is
+asked for, addresses that turn to it, and does not keep it on the session. Nothing a turn produced
+and no word of the prompt chooses the name. The marker is not an `@` name, so the bridge does not
+read it as a file ([NAME-9](naming-files.md#NAME-9)).
+
+**What stands in for the keystroke.** [ADDRESS-3](addressing-a-definition.md#ADDRESS-3) rests an
+addressed run on a person's act. Here it is picking the bot for the message. It lasts one turn for
+the reason `/agent` does: the conversation is not the summoned bot's, so the four questions
+[ADDRESS-10](addressing-a-definition.md#ADDRESS-10) asks about a mode all arise.
+
+**Why the conversation's folder.** [MEMORY-7](#MEMORY-7) limits where a bot's own turns run. A
+summoned turn runs where the conversation already runs, which is a folder the agent confirmed the
+session works in, and it holds only what the session holds narrowed by the definition
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)). Summoning grants nothing a turn of that
+conversation did not already hold.
+
+**Why the card is not part of the summoned bot's conversation.** The reply was written under
+another conversation's history, which may hold content the summoned bot's conversation never met.
+Putting it into that bot's turns would carry it to a planner that has not seen it, under a label
+the main process cannot know.
+
+**What the main process records.** When the summoned turn ends, the main process writes down the
+conversation's id and folder, the prompt's ordinal the agent reported, the summoned bot's slug,
+whose conversation it was, the text the `reply` field of `turn.done` carried for display, and where
+the summoned bot's own conversation stood. It writes all of it from what the agent answered and from
+the pick, never from anything a window says afterwards. A later turn ending at the same ordinal
+without a summon removes the record, and deleting the conversation removes its records. The labels
+and the cards are drawn from these records and from the bot rows, and decide nothing from the
+reply's text.
+
+The desktop opens a bot as one conversation in its home folder: its newest one there, or a new one
+when it has none. A bot is sent into a project by summoning it there rather than by choosing a
+project for its conversation. The bot's earlier conversations, in its home and in projects, are
+listed on a page of their own, reached from the conversation's header.
+
+`verified-by: bravebot_ui_bridge::addressing::a_summoned_turn_runs_under_the_summoned_definition_and_the_next_does_not`
+`verified-by: bravebot_ui_bridge::addressing::a_summon_in_a_bots_conversation_leaves_the_bots_own_definition_standing`
+`verified-by: bravebot_ui_bridge::addressing::an_address_that_is_no_slug_is_refused_before_a_turn_starts`
+`verified-by: bravebot_mentions::lib::a_bot_marker_is_not_collected_as_a_reference`
+`verified-by: by-construction (the desktop's main process and window are not crates this workspace compiles, so ui/scripts/sanitise.test.mjs pins that a window's address is stripped, ui/scripts/summons.test.mjs pins the record's shape, that a record is replaced at its ordinal and removed with its conversation, the marker and the one-summon rule of the staging, where a card is placed, and that only the main process's summoned send sets address, and ui/scripts/drive-bot-summon.mjs drives the real app and bridge against a stub model: a bot summoned in a project and in another bot's conversation answers under its label, the next turn is not summoned, and the summoned bot's conversation shows the card, which opens the reply; make check-ui runs the tests)`
 
 ## Seeing it
 
