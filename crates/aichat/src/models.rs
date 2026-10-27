@@ -544,10 +544,11 @@ pub fn named_by_entry(
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 ///
 /// Names only, so a row takes the window and the label a model the listing did not describe has.
-/// They are the seven rows the service's listing offered a signed-in account, each of which answered
-/// a request. A release changes this list; no reply, model or settings file does. The `-fast` names
-/// opencode offers are not here, since the service refuses them as models. It accepts the
-/// `service_tier` `priority`, which this program does not send.
+/// They are the eight rows the service's listing offered a signed-in account on 2026-10-25 and
+/// 2026-10-26, each of which answered a request. A release changes this list; no reply, model or
+/// settings file does. The `-fast` names opencode offers are not here: the service refused eight of
+/// the nine as models and `gpt-6.1-terra-fast` was not asked for. It accepts the `service_tier`
+/// `priority`, which this program does not send.
 const COMPILED_ACCOUNT_MODELS: &[&str] = &[
     "gpt-5.6-luna",
     "gpt-5.6-sol",
@@ -556,6 +557,7 @@ const COMPILED_ACCOUNT_MODELS: &[&str] = &[
     "gpt-6-luna",
     "gpt-6-sol",
     "gpt-6.1-sol",
+    "gpt-6.1-terra",
 ];
 
 /// The picker rows of the compiled list, under the account's identifier for the reason
@@ -1477,15 +1479,21 @@ mod tests {
     }
 
     /// BACKEND-19: OpenAI's listing states no capability, so a chat completions route is not
-    /// offered the models OpenAI's published description gives to the Responses request alone, and
-    /// is offered every other row. A name that only looks like one of them (`-pro` on a model the
-    /// description does not list) is offered, because the description does not name it. The same
-    /// listing is offered whole where the route is the Responses one or the host is not OpenAI's.
+    /// offered the models that OpenAI's published API description and its model pages give to the
+    /// Responses request alone, and is offered every other row. A name that only looks like one of
+    /// them (`-pro` or `-codex` on a model neither document lists) is offered, because the list is
+    /// of ids, and so is a model another endpoint also serves (`gpt-image-1`) and one that takes
+    /// chat completions beside the Responses request (`gpt-5.4`). The same listing is offered whole
+    /// where the route is the Responses one or the host is not OpenAI's.
     #[test]
     fn an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes() {
         let listing = r#"{"data": [
             {"id": "gpt-4o-mini"}, {"id": "o3-pro"}, {"id": "gpt-5-codex"},
-            {"id": "text-embedding-3-small"}, {"id": "gpt-5.4-pro"}, {"id": "gpt-5-pro-2025-10-06"}
+            {"id": "text-embedding-3-small"}, {"id": "gpt-5.4-pro"}, {"id": "gpt-5-pro-2025-10-06"},
+            {"id": "gpt-5.1-codex"}, {"id": "gpt-5.1-codex-mini"}, {"id": "gpt-5.2-codex"},
+            {"id": "gpt-5.2-pro"}, {"id": "gpt-5.2-pro-2025-12-11"}, {"id": "gpt-5.3-codex"},
+            {"id": "gpt-5.4-pro-2026-03-05"}, {"id": "gpt-5.4"}, {"id": "gpt-image-1"},
+            {"id": "o9-pro"}, {"id": "gpt-9-codex"}
         ]}"#;
         let keys = |block: &str| -> Vec<String> {
             from_gateway(&entry(block), listing)
@@ -1499,12 +1507,15 @@ mod tests {
             [
                 "openai/gpt-4o-mini",
                 "openai/text-embedding-3-small",
-                "openai/gpt-5.4-pro"
+                "openai/gpt-5.4",
+                "openai/gpt-image-1",
+                "openai/o9-pro",
+                "openai/gpt-9-codex"
             ]
         );
         assert_eq!(
             keys(r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"]}}"#).len(),
-            6,
+            17,
             "the Responses route reaches those models"
         );
         assert_eq!(
@@ -1513,7 +1524,7 @@ mod tests {
                     "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#
             )
             .len(),
-            6,
+            17,
             "a proxy keyed openai was left out of models it may serve"
         );
     }
@@ -1785,13 +1796,13 @@ mod tests {
         }
     }
 
-    /// CHATGPT-9: the compiled list is the seven models the service listed for a signed-in account
+    /// CHATGPT-9: the compiled list is the eight models the service listed for a signed-in account
     /// and accepted. The list opencode offers has sixteen names, and the service refuses nine of
     /// them as models (`gpt-5.5` and every `-fast` name), so a picker built on it offers rows that
-    /// fail at the first request. An exact list fails for a restored name and for a `-fast` name
-    /// added again.
+    /// fail at the first request. An exact list fails for a restored name, for a `-fast` name added
+    /// again and for `gpt-6.1-terra`, which the listing of 2026-10-26 added, left out.
     #[test]
-    fn the_compiled_list_is_the_seven_models_the_service_offered() {
+    fn the_compiled_list_is_the_eight_models_the_service_offered() {
         let rows = compiled_for_account(&bravebot_config::provider::Provider::chatgpt_account());
 
         let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
@@ -1805,6 +1816,7 @@ mod tests {
                 "chatgpt/gpt-6-luna",
                 "chatgpt/gpt-6-sol",
                 "chatgpt/gpt-6.1-sol",
+                "chatgpt/gpt-6.1-terra",
             ]
         );
     }

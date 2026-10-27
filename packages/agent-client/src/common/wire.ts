@@ -30,6 +30,7 @@ export type RowKind = (typeof ROW_KINDS)[number]
 
 /** Approval kinds the runtime marks supported. Mirrors `Pending::supported` in Rust. */
 export const SUPPORTED_APPROVALS = ['confirm', 'run', 'fetch', 'ask'] as const
+/** Kept for `mobile/src/__tests__/support/builders.ts`, which types an approval row's kind with it. */
 export type SupportedApproval = (typeof SUPPORTED_APPROVALS)[number]
 
 /** One transcript row. `data` is the bridge's payload for the event, labels included, untouched. */

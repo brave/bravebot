@@ -151,7 +151,7 @@ question in view where the box has room for it beside the keys. Where the box ha
 approves a question that was never on the screen.
 
 `verified-by: bravebot_tui::trust_prompt::a_tiny_terminal_still_renders`
-`verified-by: bravebot_tui::confirm::a_tiny_terminal_draws_the_write_keys_and_takes_no_yes`
+`verified-by: bravebot_tui::confirm::write::a_tiny_terminal_draws_the_write_keys_and_takes_no_yes`
 `verified-by: bravebot_tui::render::a_tiny_terminal_renders`
 
 <a id="VIEW-6"></a>
@@ -924,7 +924,7 @@ it was there, and the count gives the person the same for colour codes.
 `verified-by: bravebot_tui::render::a_glimpse_line_is_measured_without_its_colour_codes`
 `verified-by: bravebot_tui::render::a_glimpse_from_the_end_counts_its_colour_codes_last`
 `verified-by: bravebot_tui::render::a_glimpse_without_colour_codes_says_nothing_about_them`
-`verified-by: bravebot_tui::confirm::the_output_prompt_draws_a_colour_code_in_full`
+`verified-by: bravebot_tui::confirm::vet::the_output_prompt_draws_a_colour_code_in_full`
 `verified-by: bravebot_approval::lib::a_colour_code_in_output_awaiting_a_yes_is_written_in_full`
 `verified-by: bravebot_cli::progress::colour_codes_in_a_block_are_counted_and_not_drawn`
 `verified-by: bravebot_cli::progress::only_colour_codes_are_left_out_of_a_block`

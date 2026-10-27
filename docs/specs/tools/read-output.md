@@ -121,7 +121,7 @@ was asked for. Without the screening asked for the output is released unshown an
 `verified-by: bravebot_agent::turn::with_auto_vetting_the_row_says_a_check_released_the_output_unasked`
 `verified-by: bravebot_agent::turn::the_row_for_output_a_person_read_names_no_check`
 `verified-by: bravebot_agent::turn::an_unscreened_unattended_run_says_on_the_row_that_nothing_checked_the_output`
-`verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_safe_verdict_releases_command_output_unasked`
 `verified-by: bravebot_agent::turn::with_auto_vetting_an_unsafe_verdict_still_asks_about_command_output`
 `verified-by: bravebot_agent::turn::with_auto_vetting_a_broken_check_still_asks_about_command_output`

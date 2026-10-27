@@ -23,7 +23,7 @@ import type { StoredView } from '../shared/view'
 import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../shared/commands'
 import type { ExportOutcome, ExportRequest } from '../shared/export'
 import type { Fork } from '../shared/forks'
-import type { Bot } from '../shared/bots'
+import type { Bot, BotServers } from '../shared/bots'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
@@ -238,6 +238,15 @@ const api = {
    */
   writeBotModel(slug: string, model: string): Promise<Bot | null> {
     return ipcRenderer.invoke('bravebot:bots:model', slug, model) as Promise<Bot | null>
+  },
+
+  readBotServers(slug: string): Promise<BotServers | null> {
+    return ipcRenderer.invoke('bravebot:bots:servers:read', slug) as Promise<BotServers | null>
+  },
+
+  /** `null` removes the bot's `mcpServers:` line; a list (even empty) replaces it. */
+  writeBotServers(slug: string, servers: string[] | null): Promise<BotServers | null> {
+    return ipcRenderer.invoke('bravebot:bots:servers:write', slug, servers) as Promise<BotServers | null>
   },
 
   writeBot(bot: {

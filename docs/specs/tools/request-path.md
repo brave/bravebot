@@ -45,8 +45,8 @@ project file or permission rule grants one in advance.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
-`verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
-`verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::confirm::grants::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::grants::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
 
 <a id="PATHREQ-3"></a>
 ### PATHREQ-3: a path an `allowWrite` row refuses is refused, and not asked about

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { SettingsGroup } from './SettingsGroup'
+import { call } from '../request'
 import { Alert, Button, ControlItem, Icon, Input, Label, ProgressRing, SegmentedControl, type IconName } from '../nala'
 import {
   CATALOG,
@@ -23,12 +24,6 @@ const fieldText = (event: { value?: unknown; target?: EventTarget | null }): str
   const target = event.target
   if (target && typeof target === 'object' && 'value' in target && typeof target.value === 'string') return target.value
   return null
-}
-
-async function call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  const answer = await window.bravebot.request<T>(method, params)
-  if (answer.error) throw new Error(answer.error.message)
-  return answer.ok as T
 }
 
 /** Where the page is. A review is a page of its own, reached from a form and returning to it. */

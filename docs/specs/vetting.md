@@ -210,15 +210,15 @@ the decision is which sentence a person reads before answering for themselves.
 
 `verified-by: bravebot_core::policy::a_safe_verdict_promotes_nothing_by_itself`
 `verified-by: bravebot_core::policy::an_unsafe_verdict_does_not_overrule_the_person`
-`verified-by: bravebot_tui::confirm::the_vet_prompt_says_which_of_the_two_failures_it_was`
-`verified-by: bravebot_tui::confirm::a_safe_verdict_is_drawn_as_what_the_check_found`
-`verified-by: bravebot_tui::confirm::a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers`
-`verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking`
-`verified-by: bravebot_tui::confirm::the_output_prompt_says_what_a_check_found`
-`verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
-`verified-by: bravebot_tui::confirm::a_vouch_prompt_says_when_no_check_was_made`
-`verified-by: bravebot_tui::confirm::a_tool_list_says_what_a_check_found`
-`verified-by: bravebot_tui::confirm::a_picture_is_put_to_the_person_as_a_copy_to_open`
+`verified-by: bravebot_tui::confirm::vet::the_vet_prompt_says_which_of_the_two_failures_it_was`
+`verified-by: bravebot_tui::confirm::vet::a_safe_verdict_is_drawn_as_what_the_check_found`
+`verified-by: bravebot_tui::confirm::vet::a_safe_verdict_does_not_change_which_keys_the_vet_prompt_offers`
+`verified-by: bravebot_tui::confirm::vet::only_a_safe_verdict_offers_to_stop_asking`
+`verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::vet::the_vouch_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::vet::a_vouch_prompt_says_when_no_check_was_made`
+`verified-by: bravebot_tui::confirm::mcp::a_tool_list_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::vet::a_picture_is_put_to_the_person_as_a_copy_to_open`
 
 <a id="CHECK-6"></a>
 ### CHECK-6: promoting is an assertion about one slot's bytes, and writes no rule
@@ -307,7 +307,7 @@ somebody who was never asked either question.
 `verified-by: bravebot_agent::turn::content_a_person_refuses_after_a_check_stays_out_of_the_planner`
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
 `verified-by: bravebot_agent::turn::an_output_offer_carries_what_a_check_said`
-`verified-by: bravebot_tui::confirm::what_the_check_said_is_drawn_inside_the_margin_too`
+`verified-by: bravebot_tui::confirm::vet::what_the_check_said_is_drawn_inside_the_margin_too`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_yes_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::the_planner_reads_the_same_after_a_refusal_whoever_gave_it_and_whatever_the_check_said`
 `verified-by: bravebot_agent::turn::a_second_check_is_sent_nothing_the_first_one_said`
@@ -430,7 +430,7 @@ does not know, and a value that is not a boolean, are no answer at all rather th
 `verified-by: bravebot_tui::state::a_session_asks_until_something_says_otherwise`
 `verified-by: bravebot_tui::state::the_flag_and_the_settings_key_each_reach_the_session`
 `verified-by: bravebot_tui::state::pressing_the_standing_key_turns_vetting_on_for_the_session`
-`verified-by: bravebot_tui::confirm::only_a_safe_verdict_offers_to_stop_asking`
+`verified-by: bravebot_tui::confirm::vet::only_a_safe_verdict_offers_to_stop_asking`
 `verified-by: bravebot_tui::status::a_session_that_stopped_asking_about_a_check_says_so`
 `verified-by: bravebot_tui::status::an_ordinary_session_says_nothing_about_a_check`
 `verified-by: bravebot_config::settings::a_layer_that_named_only_vetting_is_not_a_layer_that_said_nothing`

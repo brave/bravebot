@@ -2,15 +2,17 @@
 //!
 //! ```text
 //! I ∈ {T, U}          integrity:       T = trusted, U = untrusted
-//! C ∈ {pub, priv}     confidentiality: pub ⊑ priv
+//! C ∈ {pub, priv}     confidentiality: pub = public, priv = private
 //!
-//! (U,pub) ⊑ (U,priv) ⊑ (T,priv)
-//! (U,pub) ⊑ (T,pub)  ⊑ (T,priv)
+//! (T,pub) → (T,priv) → (U,priv)
+//! (T,pub) → (U,pub)  → (U,priv)
 //! ```
 //!
-//! `(U,priv)` and `(T,pub)` are **incomparable**: neither flows into the other. That
-//! is what makes this a lattice rather than a pair of booleans, and it is why
-//! [`Label`] implements [`PartialOrd`] by hand instead of deriving [`Ord`].
+//! An arrow is a degradation ([`Label::degrades_to`]): integrity may go from T to U and
+//! confidentiality from pub to priv. `(T,priv)` and `(U,pub)` are **incomparable**:
+//! neither degrades to the other. That is what makes this a lattice rather than a pair
+//! of booleans, and it is why [`Label`] implements neither [`PartialOrd`] nor [`Ord`]:
+//! either would rank the two.
 //!
 //! Taint moves in opposite directions on the two axes: integrity **meets** (one
 //! untrusted input taints the result) while confidentiality **joins** (one private
@@ -36,11 +38,6 @@ impl Integrity {
             Self::Trusted
         }
     }
-
-    /// `self ⊑ other`.
-    pub fn flows_to(self, other: Self) -> bool {
-        self == Self::Untrusted || other == Self::Trusted
-    }
 }
 
 /// Confidentiality axis. `priv` is top: private values cannot become public
@@ -62,14 +59,17 @@ impl Confidentiality {
             Self::Public
         }
     }
-
-    /// `self ⊑ other`.
-    pub fn flows_to(self, other: Self) -> bool {
-        self == Self::Public || other == Self::Private
-    }
 }
 
 /// A provenance label: one point in the lattice.
+///
+/// A label has no `PartialOrd` or `Ord`, because the two labels that neither degrades
+/// into the other have no rank. Comparing two with `<` does not compile:
+///
+/// ```compile_fail
+/// use bravebot_core::Label;
+/// let _ = Label::trusted_public() < Label::untrusted_private();
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label {
     pub integrity: Integrity,
@@ -101,20 +101,12 @@ impl Label {
         Self::new(Integrity::Untrusted, Confidentiality::Private)
     }
 
-    /// `self ⊑ other`: whether a value labelled `self` may flow into a slot or
-    /// agent whose ceiling is `other`.
-    pub fn flows_to(self, other: Self) -> bool {
-        self.integrity.flows_to(other.integrity)
-            && self.confidentiality.flows_to(other.confidentiality)
-    }
-
     /// Whether `self` may be *degraded* into `other`.
     ///
-    /// Distinct from [`Label::flows_to`], which is the lattice ordering `⊑` used for
-    /// ceiling checks and in which `U ⊑ T`. Degradation is the direction taint
-    /// travels: integrity may go trusted → untrusted, confidentiality may go public
-    /// → private, never the reverse. Conflating the two would let a relabel launder
-    /// untrusted content into trusted.
+    /// Degradation is the direction taint travels: integrity may go trusted →
+    /// untrusted, confidentiality may go public → private, never the reverse. A check
+    /// that let integrity move toward trusted would let a relabel launder untrusted
+    /// content into trusted.
     pub fn degrades_to(self, other: Self) -> bool {
         other.integrity == self.integrity.meet(other.integrity)
             && other.confidentiality == self.confidentiality.join(other.confidentiality)
@@ -155,20 +147,6 @@ impl fmt::Display for Label {
             Confidentiality::Private => "priv",
         };
         write!(f, "({i},{c})")
-    }
-}
-
-/// Partial order on labels. Deliberately partial: `(U,priv)` and `(T,pub)` return
-/// `None` because neither may flow into the other.
-impl PartialOrd for Label {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        use std::cmp::Ordering;
-        match (self.flows_to(*other), other.flows_to(*self)) {
-            (true, true) => Some(Ordering::Equal),
-            (true, false) => Some(Ordering::Less),
-            (false, true) => Some(Ordering::Greater),
-            (false, false) => None,
-        }
     }
 }
 
@@ -236,53 +214,68 @@ mod tests {
         assert_eq!(Private.join(Private), Private);
     }
 
+    /// `(T,pub)` degrades into every label and `(U,priv)` only into itself, so the
+    /// order has one source and one sink.
     #[test]
-    fn bottom_flows_everywhere_and_top_flows_nowhere() {
+    fn degradation_has_one_source_and_one_sink() {
         for l in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
-            assert!(U_PUB.flows_to(l), "(U,pub) is bottom, must flow into {l}");
-            assert!(l.flows_to(T_PRIV), "(T,priv) is top, {l} must flow into it");
+            assert!(T_PUB.degrades_to(l), "(T,pub) must degrade to {l}");
+            assert_eq!(U_PRIV.degrades_to(l), l == U_PRIV, "(U,priv) to {l}");
         }
     }
 
-    /// The property that makes this a lattice: the middle elements are incomparable.
+    /// The property that makes this a lattice: the middle elements are incomparable,
+    /// so neither degrades to the other.
     #[test]
     fn middle_elements_are_incomparable() {
-        assert!(!U_PRIV.flows_to(T_PUB));
-        assert!(!T_PUB.flows_to(U_PRIV));
-        assert_eq!(U_PRIV.partial_cmp(&T_PUB), None);
-        assert_eq!(T_PUB.partial_cmp(&U_PRIV), None);
+        assert!(!T_PRIV.degrades_to(U_PUB));
+        assert!(!U_PUB.degrades_to(T_PRIV));
     }
 
     #[test]
-    fn ordering_is_reflexive_and_antisymmetric() {
-        use std::cmp::Ordering;
-        for l in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
-            assert!(l.flows_to(l));
-            assert_eq!(l.partial_cmp(&l), Some(Ordering::Equal));
+    fn degradation_is_antisymmetric() {
+        for a in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
+            for b in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
+                if a.degrades_to(b) && b.degrades_to(a) {
+                    assert_eq!(a, b);
+                }
+            }
         }
-        assert_eq!(U_PUB.partial_cmp(&T_PRIV), Some(Ordering::Less));
-        assert_eq!(T_PRIV.partial_cmp(&U_PUB), Some(Ordering::Greater));
     }
 
     #[test]
-    fn ordering_is_transitive() {
+    fn degradation_is_transitive() {
         let all = [T_PUB, T_PRIV, U_PUB, U_PRIV];
         for a in all {
             for b in all {
                 for c in all {
-                    if a.flows_to(b) && b.flows_to(c) {
-                        assert!(a.flows_to(c), "{a} ⊑ {b} ⊑ {c} but not {a} ⊑ {c}");
+                    if a.degrades_to(b) && b.degrades_to(c) {
+                        assert!(a.degrades_to(c), "{a} → {b} → {c} but not {a} → {c}");
                     }
                 }
             }
         }
     }
 
-    /// Degradation is not the lattice ordering. `(U,pub) ⊑ (T,pub)` holds, but a
-    /// value may never be *upgraded* from untrusted to trusted.
+    /// A degradation never raises integrity and never lowers confidentiality, so a
+    /// value may not be *upgraded* from untrusted to trusted or declassified from
+    /// private to public by relabelling.
     #[test]
-    fn degradation_is_not_the_lattice_ordering() {
-        assert!(U_PUB.flows_to(T_PUB));
+    fn degradation_never_raises_integrity_or_lowers_confidentiality() {
+        for a in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
+            for b in [T_PUB, T_PRIV, U_PUB, U_PRIV] {
+                if a.degrades_to(b) {
+                    assert!(
+                        a.is_trusted() || !b.is_trusted(),
+                        "{a} → {b} raises integrity"
+                    );
+                    assert!(
+                        a.is_public() || !b.is_public(),
+                        "{a} → {b} lowers confidentiality"
+                    );
+                }
+            }
+        }
         assert!(!U_PUB.degrades_to(T_PUB));
         assert!(T_PUB.degrades_to(U_PUB));
     }
@@ -344,9 +337,9 @@ mod tests {
         assert_eq!(taint_all([T_PRIV, U_PUB]), taint_all([U_PUB, T_PRIV]));
     }
 
-    /// Taint is not monotone in ⊑: it descends the integrity axis while ascending
-    /// the confidentiality axis, so the guarantee is stated per axis: the result is
-    /// never more trusted, and never less private, than any input.
+    /// Taint moves down the integrity axis while moving up the confidentiality axis,
+    /// so the guarantee is stated per axis: the result is never more trusted, and
+    /// never less private, than any input.
     #[test]
     fn taint_only_degrades_on_each_axis() {
         let all = [T_PUB, T_PRIV, U_PUB, U_PRIV];
@@ -355,11 +348,11 @@ mod tests {
                 let out = taint_all([a, b]);
                 for input in [a, b] {
                     assert!(
-                        out.integrity.flows_to(input.integrity),
+                        input.is_trusted() || !out.is_trusted(),
                         "taint of {a} and {b} is {out}, more trusted than input {input}"
                     );
                     assert!(
-                        input.confidentiality.flows_to(out.confidentiality),
+                        input.is_public() || !out.is_public(),
                         "taint of {a} and {b} is {out}, less private than input {input}"
                     );
                 }

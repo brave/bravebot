@@ -328,6 +328,8 @@ impl Bridge {
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
+            "bot.servers.read" => crate::definitions::servers_read(request),
+            "bot.servers.write" => crate::definitions::servers_write(request),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),

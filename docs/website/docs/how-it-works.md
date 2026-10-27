@@ -32,7 +32,7 @@ L = I × C      I ∈ {T, U}       trusted / untrusted
                C ∈ {pub, priv}  public  / private
 ```
 
-Untrusted input degrades integrity. Private input raises confidentiality. `(U,priv)` and `(T,pub)`
+Untrusted input degrades integrity. Private input raises confidentiality. `(T,priv)` and `(U,pub)`
 are incomparable, so this is a lattice rather than a pair of booleans.
 
 A derived value is labelled by taint over its inputs: one untrusted input taints the result, one

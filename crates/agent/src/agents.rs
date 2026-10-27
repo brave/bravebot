@@ -275,6 +275,12 @@ pub enum Refused {
     Model,
     /// What was written would not read back as the description, model and body given.
     WouldNotReadBack,
+    /// A server name is not an alias a server can be declared under.
+    ServerName,
+    /// The `mcpServers:` line declares a server inline, which a list of names would drop.
+    InlineServers,
+    /// The definition's kind holds no server whatever its `mcpServers:` line says.
+    KindHoldsNoServers,
 }
 
 /// Rewrite the description, the model and the body of a definition's text, and leave every other
@@ -389,6 +395,102 @@ pub fn rewrite_definition(
     let reads_back = declared.get("description").map(String::as_str) == Some(description)
         && declared.get("model").map(|m| m.trim()) == model
         && crate::skills::body_after_frontmatter(&out) == expected_body;
+    if reads_back {
+        Ok(out)
+    } else {
+        Err(Refused::WouldNotReadBack)
+    }
+}
+
+/// Rewrite the `mcpServers:` line of a definition's text and leave every other line, and the
+/// body, as it is.
+///
+/// `None` removes the line, so the definition holds every server again; `Some` of a list, empty or
+/// not, writes `mcpServers:` naming those alone. Each name must be an alias a server can be
+/// declared under, and is written bare. A line that declares a server inline is refused rather
+/// than replaced, since replacing it would drop what the person wrote.
+pub fn rewrite_servers(text: &str, servers: Option<&[String]>) -> Result<String, Refused> {
+    if let Some(servers) = servers
+        && !servers
+            .iter()
+            .all(|name| bravebot_config::mcp::is_alias(name))
+    {
+        return Err(Refused::ServerName);
+    }
+    let declared = crate::skills::declarations(text).ok_or(Refused::NotADefinition)?;
+    if !declared.contains_key("description") {
+        return Err(Refused::NotADefinition);
+    }
+    if declared
+        .get("mcpServers")
+        .is_some_and(|value| names_in(value).iter().any(|name| name.contains(':')))
+    {
+        return Err(Refused::InlineServers);
+    }
+
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    if lines.first().map(|l| l.trim_end()) != Some("---") {
+        return Err(Refused::NotADefinition);
+    }
+    let close = lines[1..]
+        .iter()
+        .position(|l| l.trim_end() == "---")
+        .map(|at| at + 1)
+        .ok_or(Refused::NotADefinition)?;
+    let block = &lines[1..close];
+
+    let line_for = |servers: &[String]| {
+        if servers.is_empty() {
+            "mcpServers:\n".to_string()
+        } else {
+            format!("mcpServers: {}\n", servers.join(", "))
+        }
+    };
+    let mut out = String::from(lines[0]);
+    let mut wrote = false;
+
+    let mut at = 0;
+    while at < block.len() {
+        let line = block[at];
+        at += 1;
+        let opened_at = crate::skills::indent_of(line);
+        let mut end = at;
+        while let Some(next) = block.get(end) {
+            if !next.trim().is_empty() && crate::skills::indent_of(next) <= opened_at {
+                break;
+            }
+            end += 1;
+        }
+        if line.split_once(':').map(|(key, _)| key.trim()) != Some("mcpServers") {
+            out.push_str(line);
+            for kept in &block[at..end] {
+                out.push_str(kept);
+            }
+            at = end;
+            continue;
+        }
+        if let (false, Some(servers)) = (wrote, servers) {
+            out.push_str(&line_for(servers));
+        }
+        wrote = true;
+        let mut claimed = end;
+        while claimed > at && block[claimed - 1].trim().is_empty() {
+            claimed -= 1;
+        }
+        at = claimed;
+    }
+    if let (false, Some(servers)) = (wrote, servers) {
+        out.push_str(&line_for(servers));
+    }
+    for rest in &lines[close..] {
+        out.push_str(rest);
+    }
+
+    let declared = crate::skills::declarations(&out).ok_or(Refused::WouldNotReadBack)?;
+    let reads_back = declared.get("mcpServers").map(|value| names_in(value))
+        == servers.map(<[String]>::to_vec)
+        && crate::skills::body_after_frontmatter(&out)
+            == crate::skills::body_after_frontmatter(text);
     if reads_back {
         Ok(out)
     } else {
@@ -1280,6 +1382,86 @@ pub fn redefine(
         return Ok(());
     }
     crate::home::write_file(&file, rewritten.as_bytes()).map_err(RedefineRefused::Io)
+}
+
+/// Rewrite the `mcpServers:` line of the definition written for a desktop bot, by
+/// [`rewrite_servers`], leaving the rest of `agents/<name>.md` as it is.
+pub fn set_servers(
+    home: &Path,
+    name: &str,
+    servers: Option<&[String]>,
+) -> Result<(), RedefineRefused> {
+    if !crate::memory::is_a_slug(name) {
+        return Err(RedefineRefused::Name);
+    }
+    let file = home.join(AGENTS).join(format!("{name}.md"));
+    let text = std::fs::read_to_string(&file).map_err(|_| RedefineRefused::Missing)?;
+    let Read::Definition { definition, .. } = read_definition(&text, name) else {
+        return Err(RedefineRefused::Missing);
+    };
+    if definition.kind() != Kind::Worker {
+        return Err(RedefineRefused::Refused(Refused::KindHoldsNoServers));
+    }
+    let rewritten = rewrite_servers(&text, servers).map_err(|refused| match refused {
+        Refused::NotADefinition => RedefineRefused::Missing,
+        other => RedefineRefused::Refused(other),
+    })?;
+    if rewritten == text {
+        return Ok(());
+    }
+    crate::home::write_file(&file, rewritten.as_bytes()).map_err(RedefineRefused::Io)
+}
+
+/// What a desktop bot's definition says about the servers it may use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is a separate answer the bridge hands the window as it stands"
+)]
+pub struct ServerChoice {
+    /// The servers `mcpServers:` lists, or `None` where there is no such line.
+    pub servers: Option<Vec<String>>,
+    /// Whether the definition has a `tools:` line, under which no `mcpServers:` line means none.
+    pub tools: bool,
+    /// Whether the `mcpServers:` line declares a server inline, which [`set_servers`] refuses.
+    pub inline: bool,
+    /// The definition's kind, as it is written.
+    pub kind: String,
+    /// Whether [`set_servers`] would rewrite the line: the kind is a worker and no server is
+    /// declared inline.
+    pub editable: bool,
+    /// Whether the bot holds every server the session reached, as it does with neither line.
+    pub every: bool,
+    /// Whether removing the line would give it every server, which a `tools:` line rules out.
+    pub every_possible: bool,
+}
+
+/// Read what the definition written for a desktop bot says about the servers it may use.
+pub fn servers_of(home: &Path, name: &str) -> Result<ServerChoice, RedefineRefused> {
+    if !crate::memory::is_a_slug(name) {
+        return Err(RedefineRefused::Name);
+    }
+    let file = home.join(AGENTS).join(format!("{name}.md"));
+    let text = std::fs::read_to_string(&file).map_err(|_| RedefineRefused::Missing)?;
+    let Read::Definition {
+        definition,
+        declares_servers,
+        ..
+    } = read_definition(&text, name)
+    else {
+        return Err(RedefineRefused::Missing);
+    };
+    let servers = definition.servers().map(<[String]>::to_vec);
+    let tools = definition.tools().is_some();
+    Ok(ServerChoice {
+        every: servers.is_none() && !tools,
+        every_possible: !tools,
+        editable: definition.kind() == Kind::Worker && !declares_servers,
+        servers,
+        tools,
+        inline: declares_servers,
+        kind: definition.kind().as_str().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -2664,5 +2846,191 @@ mod tests {
             Err(RedefineRefused::Refused(Refused::Model))
         ));
         assert_eq!(std::fs::read_to_string(home.file("kept")).unwrap(), before);
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|name| name.to_string()).collect()
+    }
+
+    const PLAIN: &str = "---\nname: helper\ndescription: Helps.\nkind: worker\n---\n\nThe body.\n";
+
+    #[test]
+    fn setting_servers_writes_one_line_naming_them_and_keeps_the_body() {
+        let text = rewrite_servers(PLAIN, Some(&names(&["github", "local-files"]))).unwrap();
+        assert_eq!(
+            text,
+            "---\nname: helper\ndescription: Helps.\nkind: worker\nmcpServers: github, local-files\n---\n\nThe body.\n"
+        );
+        assert_eq!(
+            definition_of(&text).servers(),
+            Some(&names(&["github", "local-files"])[..])
+        );
+    }
+
+    #[test]
+    fn setting_no_servers_writes_a_bare_line_that_selects_none() {
+        let text = rewrite_servers(PLAIN, Some(&[])).unwrap();
+        assert!(text.contains("\nmcpServers:\n---\n"), "{text}");
+        assert_eq!(definition_of(&text).servers(), Some(&[][..]));
+    }
+
+    #[test]
+    fn clearing_servers_removes_the_line_and_every_repeat_of_it() {
+        let text = "---\nname: helper\nmcpServers: github\ndescription: Helps.\nmcpServers:\n  - slack\nkind: worker\n---\nBody.\n";
+        let cleared = rewrite_servers(text, None).unwrap();
+        assert_eq!(
+            cleared,
+            "---\nname: helper\ndescription: Helps.\nkind: worker\n---\nBody.\n"
+        );
+        assert_eq!(definition_of(&cleared).servers(), None);
+    }
+
+    #[test]
+    fn a_yaml_list_of_servers_is_replaced_in_place() {
+        let text = "---\nname: helper\nmcpServers:\n  - github\n  - slack\n\ndescription: Helps.\n---\nBody.\n";
+        let rewritten = rewrite_servers(text, Some(&names(&["slack"]))).unwrap();
+        assert_eq!(
+            rewritten,
+            "---\nname: helper\nmcpServers: slack\n\ndescription: Helps.\n---\nBody.\n"
+        );
+    }
+
+    #[test]
+    fn setting_servers_keeps_a_tools_line_and_keys_this_module_does_not_read() {
+        let text =
+            "---\nname: helper\ndescription: Helps.\ntools: read_file\ncolor: blue\n---\nBody.\n";
+        let rewritten = rewrite_servers(text, Some(&names(&["github"]))).unwrap();
+        assert!(rewritten.contains("\ntools: read_file\n"), "{rewritten}");
+        assert!(rewritten.contains("\ncolor: blue\n"), "{rewritten}");
+        assert!(rewritten.contains("\nmcpServers: github\n"), "{rewritten}");
+    }
+
+    #[test]
+    fn a_line_that_declares_a_server_inline_is_not_rewritten() {
+        let text = "---\nname: helper\ndescription: Helps.\nmcpServers:\n  - github:\n      command: gh\n---\nBody.\n";
+        assert_eq!(rewrite_servers(text, None), Err(Refused::InlineServers));
+        assert_eq!(
+            rewrite_servers(text, Some(&names(&["github"]))),
+            Err(Refused::InlineServers)
+        );
+    }
+
+    #[test]
+    fn a_server_name_that_is_not_an_alias_is_refused() {
+        for bad in ["", "git hub", "-github", "github:\n  command: x", "a,b"] {
+            assert_eq!(
+                rewrite_servers(PLAIN, Some(&names(&[bad]))),
+                Err(Refused::ServerName),
+                "{bad:?}"
+            );
+        }
+        assert_eq!(
+            rewrite_servers("no front matter\n", None),
+            Err(Refused::NotADefinition)
+        );
+    }
+
+    #[test]
+    fn setting_the_servers_a_bot_already_has_writes_nothing() {
+        let home = Home::new("set-servers-unchanged");
+        make_definition(&home.0, "helper", "Helps.", None).expect("made");
+        let file = home.file("helper");
+        set_servers(&home.0, "helper", Some(&names(&["github"]))).expect("set");
+        let set = std::fs::read_to_string(&file).unwrap();
+        assert!(set.contains("\nmcpServers: github\n"), "{set}");
+
+        let written = std::fs::metadata(&file).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        set_servers(&home.0, "helper", Some(&names(&["github"]))).expect("set again");
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().modified().unwrap(),
+            written
+        );
+
+        assert!(matches!(
+            set_servers(&home.0, "helper", Some(&names(&["no good"]))),
+            Err(RedefineRefused::Refused(Refused::ServerName))
+        ));
+        assert!(matches!(
+            set_servers(&home.0, "gone", None),
+            Err(RedefineRefused::Missing)
+        ));
+        assert!(matches!(
+            set_servers(&home.0, "../helper", None),
+            Err(RedefineRefused::Name)
+        ));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), set);
+    }
+
+    #[test]
+    fn the_servers_a_bot_may_use_are_read_with_its_tools_line_and_any_inline_declaration() {
+        let home = Home::new("servers-of");
+        make_definition(&home.0, "helper", "Helps.", None).expect("made");
+        let choice = servers_of(&home.0, "helper").expect("read");
+        assert_eq!(choice.servers, None);
+        assert!(!choice.tools);
+        assert!(!choice.inline);
+        assert!(choice.editable && choice.every && choice.every_possible);
+        assert_eq!(
+            choice.kind,
+            definition_of(&std::fs::read_to_string(home.file("helper")).unwrap())
+                .kind()
+                .as_str()
+        );
+
+        let file = home.file("helper");
+        let made = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(
+            &file,
+            made.replacen("\n---", "\ntools: read_file\nmcpServers: github\n---", 1),
+        )
+        .unwrap();
+        let choice = servers_of(&home.0, "helper").expect("read");
+        assert_eq!(choice.servers, Some(names(&["github"])));
+        assert!(choice.tools);
+        assert!(!choice.inline);
+        assert!(choice.editable && !choice.every && !choice.every_possible);
+
+        std::fs::write(&file, made.replacen("\n---", "\ntools: read_file\n---", 1)).unwrap();
+        let choice = servers_of(&home.0, "helper").expect("read");
+        assert_eq!(choice.servers, None);
+        assert!(
+            !choice.every && !choice.every_possible,
+            "a tools line alone holds no server"
+        );
+
+        std::fs::write(
+            &file,
+            made.replacen(
+                "\n---",
+                "\nmcpServers:\n  - github:\n      command: gh\n---",
+                1,
+            ),
+        )
+        .unwrap();
+        let choice = servers_of(&home.0, "helper").expect("read");
+        assert!(choice.inline && !choice.editable);
+        assert!(matches!(
+            servers_of(&home.0, "gone"),
+            Err(RedefineRefused::Missing)
+        ));
+    }
+
+    #[test]
+    fn the_servers_of_a_kind_that_holds_none_are_not_set() {
+        let home = Home::new("servers-kind");
+        make_definition(&home.0, "helper", "Helps.", None).expect("made");
+        let file = home.file("helper");
+        let made = std::fs::read_to_string(&file).unwrap();
+        assert!(made.contains("kind: worker"), "{made}");
+        let reader = made.replacen("kind: worker", "kind: reader", 1);
+        std::fs::write(&file, &reader).unwrap();
+
+        assert!(!servers_of(&home.0, "helper").expect("read").editable);
+        assert!(matches!(
+            set_servers(&home.0, "helper", Some(&names(&["github"]))),
+            Err(RedefineRefused::Refused(Refused::KindHoldsNoServers))
+        ));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), reader);
     }
 }

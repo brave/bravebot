@@ -5,6 +5,7 @@ import { useFitTextArea } from '../hooks'
 import { Dropdown, Input, TextArea } from '../nala'
 import { AvatarEditor } from './AvatarEditor'
 import { BotMemory } from './BotMemory'
+import { BotServers } from './BotServers'
 import type { BotFormValue } from './Bots'
 import { ConfirmArchive } from './ConfirmArchive'
 import { IconMenu } from './IconMenu'
@@ -72,6 +73,7 @@ export function BotDetails({ bot, onSave, onArchive }: {
             Purpose
           </TextArea>
         </div>
+        <BotServers key={bot.slug} slug={bot.slug} />
         {folders.length > 1 && (
           <Dropdown value={folder} size="small" data-test="memory-folder"
             onChange={(detail) => { if (typeof detail.value === 'string' && folders.includes(detail.value)) setFolder(detail.value) }}>

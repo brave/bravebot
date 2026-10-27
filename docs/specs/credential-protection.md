@@ -342,8 +342,8 @@ one thing available before confinement is that nobody grants it thinking they gr
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_the_metadata_address_is_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_numeric_spelling_of_another_address_is_not_the_metadata_service`
 `verified-by: bravebot_core::ambient::a_signed_part_is_not_a_spelling_of_the_metadata_address`
-`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_ambient_authority_a_line_reaches`
-`verified-by: bravebot_tui::confirm::a_fetch_prompt_says_what_the_metadata_service_is`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_ambient_authority_a_line_reaches`
+`verified-by: bravebot_tui::confirm::grants::a_fetch_prompt_says_what_the_metadata_service_is`
 `verified-by: bravebot_agent::turn::spending_an_ambient_authority_is_recorded_in_the_trail_and_an_ordinary_line_is_not`
 `verified-by: bravebot_agent::turn::an_ambient_authority_is_recorded_for_a_line_the_credential_scan_refuses`
 
@@ -559,10 +559,10 @@ whatever a front end sends back. The terminal draws both; the desktop front end 
 `verified-by: bravebot_agent::remembered::a_file_no_rendering_can_show_is_read_back_as_itself`
 `verified-by: bravebot_agent::remembered::a_file_entry_this_build_does_not_fully_understand_covers_nothing`
 `verified-by: bravebot_core::remembered::a_file_entry_covers_that_file_only`
-`verified-by: bravebot_tui::confirm::the_write_keys_bind_only_the_standing_answers_the_prompt_offers`
-`verified-by: bravebot_tui::confirm::the_write_keys_separate_this_session_from_every_session`
-`verified-by: bravebot_tui::confirm::a_write_prompt_draws_the_standing_answers_it_offers_and_no_other`
-`verified-by: bravebot_tui::confirm::a_write_prompt_offering_both_standing_answers_draws_every_key_whole`
+`verified-by: bravebot_tui::confirm::write::the_write_keys_bind_only_the_standing_answers_the_prompt_offers`
+`verified-by: bravebot_tui::confirm::write::the_write_keys_separate_this_session_from_every_session`
+`verified-by: bravebot_tui::confirm::write::a_write_prompt_draws_the_standing_answers_it_offers_and_no_other`
+`verified-by: bravebot_tui::confirm::write::a_write_prompt_offering_both_standing_answers_draws_every_key_whole`
 `verified-by: bravebot_ui_bridge::refusal::an_answered_write_gets_the_answer_that_was_sent`
 `verified-by: bravebot_tui::credential_mode_tests::bypassing_writes_a_credential_without_asking`
 `verified-by: bravebot_tui::credential_mode_tests::always_for_a_credential_covers_a_later_write_to_the_same_file`
