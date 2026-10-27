@@ -1107,6 +1107,12 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
+`verified-by: bravebot_bedrock::lib::a_model_that_refused_the_level_once_is_remembered_as_refusing_it`
+`verified-by: bravebot_agent::backend::before_any_refusal_every_service_reads_the_level`
+`verified-by: bravebot_agent::backend::a_level_one_gateway_refused_is_not_refused_at_another_service_with_the_slug`
+`verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_level_the_chatgpt_account_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_model_a_bedrock_account_answers_for_is_not_asked_of_the_default_endpoint`
 `verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug`
 `verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
 `verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
