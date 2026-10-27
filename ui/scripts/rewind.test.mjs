@@ -9,7 +9,7 @@ function load(path) {
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   return module.exports
 }
-const { planRewind, gapWarning, pointForPrompt, undoRow, RequestFailed, rewindFailure } = load('src/renderer/rewind.ts')
+const { planRewind, gapWarning, pointForPrompt, undoRow, RequestFailed, rewindFailure, rewoundLive } = load('src/renderer/rewind.ts')
 const t = load('src/renderer/transcript.ts')
 const { CONTEXT, NOTHING_OPEN, isEnabled, parseWindowState, command } = load('src/shared/commands.ts')
 
@@ -119,4 +119,23 @@ test('a session message is drawn from its fields, and a withheld one has no word
   assert.equal(shown[1].text, null)
   assert.equal(t.searchableText(shown[0]), 'planner run the suite')
   assert.equal(t.searchableText(shown[1]), 'worker ')
+})
+
+test('a rewind puts back what the conversation has met, either way, and holds a queue it found', () => {
+  const rewound = (context) => ({
+    turn: 2, text: 'second', refused: [], gaps: [], said: [], context, contextTokens: 40, archived: 0,
+    todos: {}, trust: { rules: null }, rewind: [],
+  })
+  const old = {
+    handle: 's1', entries: [], turns: { 1: {}, 2: {}, 3: {} }, todos: [], running: false, context: 'untrusted',
+    awaitingOrdinal: 4, focus: 'x', queued: [{ text: 'next' }], queuePaused: false, bot: { grounded: true },
+  }
+  const back = rewoundLive(old, rewound('trusted'))
+  assert.equal(back.context, 'trusted', 'the untrusted turns were undone')
+  assert.equal(rewoundLive({ ...old, context: 'trusted' }, rewound('untrusted')).context, 'untrusted', 'what it met before stays met')
+  assert.deepEqual(Object.keys(back.turns), ['1'])
+  assert.equal(back.queuePaused, true)
+  assert.equal(back.bot.grounded, false)
+  assert.equal(back.awaitingOrdinal, null)
+  assert.equal(back.contextTokens, 40)
 })

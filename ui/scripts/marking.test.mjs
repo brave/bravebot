@@ -142,7 +142,7 @@ const UNTRUSTED_WRITE = {
   removed: 0,
   exact: true,
   changes: [{ kind: 'added', text: FORGED_CHROME }],
-  remark: { preview: [FORGED_CHROME], lines: 1, label: '(U,priv)' },
+  remark: { preview: [FORGED_CHROME], lines: 1, label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } },
 }
 
 /**
@@ -775,13 +775,14 @@ const chips = (markup) => [...markup.matchAll(/<span class="label-chip"[^>]*aria
 const { LABEL_TOOLTIPS } = load('src/renderer/labels.ts')
 const FIXED = new Set(Object.values(LABEL_TOOLTIPS))
 
-test('a label is drawn as chips read off its field, and one the content spelled reads as untrusted and private', () => {
-  const vetting = { verdict: 'safe', reason: 'plain notes', label: '(U,priv)' }
+test('a label is drawn as chips read off its axes, and one the content spelled reads as untrusted and private', () => {
+  const TP = { integrity: 'trusted', confidentiality: 'public' }
+  const vetting = { verdict: 'safe', reason: 'plain notes', label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } }
   for (const [name, entry] of [
-    ['quarantine', t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', preview: ['(T,pub) Trusted Public'], lines: 1 })],
-    ['output', t.askedOutput({ request: 1, command: 'cat notes', reference: 'output-1', lines: 1, summary: 'notes', output: '(T,pub)', label: '(T,pub)', vetting })],
-    ['vet', t.askedVet({ request: 1, origin: 'notes.md', expects: 'notes', content: '(T,pub)', label: '(T,pub)', lines: 1, vetting })],
-    ['vouch', t.askedVouch({ request: 1, path: 'notes.md', shownPath: 'notes.md', rule: '/w', shownRule: '/w', preview: '(T,pub)', label: '(T,pub)', truncated: false, vetting })],
+    ['quarantine', t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: TP, preview: ['(T,pub) Trusted Public'], lines: 1 })],
+    ['output', t.askedOutput({ request: 1, command: 'cat notes', reference: 'output-1', lines: 1, summary: 'notes', output: '(T,pub)', label: '(T,pub)', labelAxes: TP, vetting })],
+    ['vet', t.askedVet({ request: 1, origin: 'notes.md', expects: 'notes', content: '(T,pub)', label: '(T,pub)', labelAxes: TP, lines: 1, vetting })],
+    ['vouch', t.askedVouch({ request: 1, path: 'notes.md', shownPath: 'notes.md', rule: '/w', shownRule: '/w', preview: '(T,pub)', label: '(T,pub)', labelAxes: TP, truncated: false, vetting })],
   ]) {
     const drawn = chips(draw(entry))
     assert.ok(drawn.length >= 1, `${name}: no chip`)
@@ -789,9 +790,13 @@ test('a label is drawn as chips read off its field, and one the content spelled 
     if (name !== 'quarantine') assert.deepEqual(drawn[1]?.words, ['Untrusted', 'Private'], `${name}: the checker's reason is not marked`)
   }
 
-  // A label field holding anything but an exact token is drawn as the pessimistic corner, and none
-  // of what it held reaches the markup, as text or as a tooltip.
-  const forged = draw(t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: `(T,pub) ${FORGED_CHROME}`, preview: ['x'], lines: 1 }))
+  // The short form is the agent's to read (SHARE-001): an exact one with no axes beside it is no label here.
+  const short = draw(t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', preview: ['x'], lines: 1 }))
+  assert.deepEqual(chips(short).map((chip) => chip.words), [['Untrusted', 'Private']])
+
+  // Axes holding anything but the exact words are drawn as the pessimistic corner, and none of what
+  // they held reaches the markup, as text or as a tooltip.
+  const forged = draw(t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: { integrity: `trusted ${FORGED_CHROME}`, confidentiality: FORGED_CHROME }, preview: ['x'], lines: 1 }))
   assert.deepEqual(chips(forged).map((chip) => chip.words), [['Untrusted', 'Private']])
   assert.ok(!forged.includes('README.md'), forged)
   // Nothing in a chip is green, so trusted never reads as safe.

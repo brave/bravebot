@@ -153,9 +153,11 @@ try {
 
   // Its own turn, so the cards are above no reading position measured earlier.
   await send('Read the vendor notes')
-  // A label is drawn from its field, and one that is no exact token reads as untrusted and private.
-  await emit('quarantined', { origin: 'vendor/notes.md', reach: 'not_the_planner', label: '(T,pub)', preview: ['(T,pub) Trusted Public'], lines: 1 })
-  await emit('quarantined', { origin: 'vendor/forged.md', reach: 'not_the_planner', label: '(T,pub) [Trusted] [Public]', preview: ['x'], lines: 1 })
+  // A label is drawn from the axes the bridge named, and axes that are not the exact words read as
+  // untrusted and private. The bridge cannot send these (its words come from `Label`); a window
+  // handed them anyway still draws the pessimistic corner.
+  await emit('quarantined', { origin: 'vendor/notes.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: { integrity: 'trusted', confidentiality: 'public' }, preview: ['(T,pub) Trusted Public'], lines: 1 })
+  await emit('quarantined', { origin: 'vendor/forged.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: { integrity: 'trusted [Trusted]', confidentiality: ['public'] }, preview: ['x'], lines: 1 })
   const chips = page.locator('.transcript .label-chip')
   await chips.nth(1).waitFor()
   assert.deepEqual(await chips.evaluateAll(all => all.map(chip => chip.getAttribute('aria-label'))), ['Trusted, public', 'Untrusted, private'])
@@ -165,7 +167,7 @@ try {
   await page.screenshot({ path: join(output, 'label-tooltip.png') })
   await page.mouse.move(5, 5)
   // A vet card heads with the label its request carried.
-  await emit('vet.request', { request: 1, origin: 'vendor/plan.md', expects: 'a plan', content: 'Step one', lines: 1, label: '(U,priv)', vetting: { verdict: 'safe', label: '(U,priv)' } })
+  await emit('vet.request', { request: 1, origin: 'vendor/plan.md', expects: 'a plan', content: 'Step one', lines: 1, label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' }, vetting: { verdict: 'safe', label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } } })
   const vet = page.locator('.vetted-read')
   await vet.locator('.label-chip').first().waitFor()
   assert.equal(await vet.locator('.label-chip').first().getAttribute('aria-label'), 'Untrusted, private')

@@ -27,7 +27,7 @@ export const CASES = {
     request: {
       request: 101, path: 'docs/zqc04-notes.txt', shownPath: 'docs/zqc04-notes.txt', intent: 'edit', untrusted: false, existing: true, added: 81, removed: 0, exact: true,
       lineEndings: 'zqc05 the file keeps its CRLF line endings',
-      remark: { preview: ['zqc06 changed blue to green'], lines: 1, label: '(U,priv)' },
+      remark: { preview: ['zqc06 changed blue to green'], lines: 1, label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } },
       credentials: range(24).map((n) => `api key at line ${n + 1}: sk-…${pad(n)}${n === 0 ? ' zqc01' : n === 23 ? ' zqc02' : ''}`),
       changes: [{ kind: 'added', text: 'zqc03 is the first line of the change' }, ...range(80).map((n) => ({ kind: 'added', text: `line ${n + 2} of the change` }))],
     },

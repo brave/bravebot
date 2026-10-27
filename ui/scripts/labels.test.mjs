@@ -9,17 +9,16 @@ const { parseLabel, labelWords, LABEL_TOOLTIPS } = module.exports
 
 const UP = { trusted: false, public: false }
 
-test('the four short forms and the audit words read as the label they name', () => {
-  assert.deepEqual(parseLabel('(T,pub)'), { trusted: true, public: true })
-  assert.deepEqual(parseLabel('(T,priv)'), { trusted: true, public: false })
-  assert.deepEqual(parseLabel('(U,pub)'), { trusted: false, public: true })
-  assert.deepEqual(parseLabel('(U,priv)'), UP)
+test('the bridge words read as the label they name', () => {
   assert.deepEqual(parseLabel({ integrity: 'trusted', confidentiality: 'public' }), { trusted: true, public: true })
-  assert.deepEqual(parseLabel({ integrity: 'untrusted', confidentiality: 'public' }), { trusted: false, public: true })
   assert.deepEqual(parseLabel({ integrity: 'trusted', confidentiality: 'private' }), { trusted: true, public: false })
+  assert.deepEqual(parseLabel({ integrity: 'untrusted', confidentiality: 'public' }), { trusted: false, public: true })
+  assert.deepEqual(parseLabel({ integrity: 'untrusted', confidentiality: 'private' }), UP)
 })
 
 test('anything else reads as untrusted and private, axis by axis', () => {
+  // The trail's short form is the agent's to read (SHARE-001), so even an exact one is no label here.
+  for (const label of ['(T,pub)', '(T,priv)', '(U,pub)', '(U,priv)']) assert.deepEqual(parseLabel(label), UP, label)
   for (const label of [
     undefined, null, '', 'trusted', '(t,pub)', '(T, pub)', ' (T,pub)', '(T,pub) ', '(T,pub)(T,pub)', 'T,pub',
     '(T,public)', 'constructor', '__proto__', 'toString', 42, true, [], ['(T,pub)'], {}, { integrity: 'Trusted', confidentiality: 'Public' },

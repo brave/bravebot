@@ -1,8 +1,9 @@
 /**
- * A label as a screen draws it, read only from the structured fields the agent sends: the trail's
- * short form (`(T,pub)`) or an audit record's `{integrity, confidentiality}` words.
+ * A label as a screen draws it, read only from the `{integrity, confidentiality}` words the bridge
+ * names it by (`labelAxes`, and an audit record's `label`). The trail's short form is not read here:
+ * the agent's `Label::named` is its one reader (SHARE-001).
  *
- * Exact tokens only. Anything else reads as untrusted and private, the pessimistic corner of the
+ * Exact words only. Anything else reads as untrusted and private, the pessimistic corner of the
  * lattice (protocol.ts rule 2), so a label nobody can read is never drawn as better than it was.
  */
 export interface ShownLabel {
@@ -10,18 +11,8 @@ export interface ShownLabel {
   public: boolean
 }
 
-const SHORT: Record<string, ShownLabel> = {
-  '(T,pub)': { trusted: true, public: true },
-  '(T,priv)': { trusted: true, public: false },
-  '(U,pub)': { trusted: false, public: true },
-  '(U,priv)': { trusted: false, public: false },
-}
-
-const PESSIMISTIC: ShownLabel = { trusted: false, public: false }
-
 export function parseLabel(label: unknown): ShownLabel {
-  if (typeof label === 'string') return Object.hasOwn(SHORT, label) ? SHORT[label]! : PESSIMISTIC
-  if (!label || typeof label !== 'object' || Array.isArray(label)) return PESSIMISTIC
+  if (!label || typeof label !== 'object' || Array.isArray(label)) return { trusted: false, public: false }
   const { integrity, confidentiality } = label as { integrity?: unknown; confidentiality?: unknown }
   return { trusted: integrity === 'trusted', public: confidentiality === 'public' }
 }

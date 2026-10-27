@@ -217,7 +217,7 @@ export const Context = memo(function Context({ live, audit, details }: {
                 <Icon name="shield-done" className="row-icon" />
                 <span className="confined-text">
                   <code className="origin" data-tooltip={shown.origin}>{middleTruncate(shown.origin, PATH_WIDTH)}</code>
-                  <span className="detail">{shown.lines} line{shown.lines === 1 ? '' : 's'}<LabelChip label={shown.label} /></span>
+                  <span className="detail">{shown.lines} line{shown.lines === 1 ? '' : 's'}<LabelChip label={shown.labelAxes} /></span>
                 </span>
               </li>
             ))}

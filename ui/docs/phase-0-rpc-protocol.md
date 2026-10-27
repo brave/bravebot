@@ -1043,8 +1043,16 @@ goes back to saying once the check is over.
 
 ```json
 { "origin": "https://example.com/page", "reach": "not_the_planner",
-  "label": "(U,priv)", "preview": ["…"], "lines": 240 }
+  "label": "(U,priv)", "labelAxes": { "integrity": "untrusted", "confidentiality": "private" },
+  "preview": ["…"], "lines": 240 }
 ```
+
+`labelAxes` is `label` with both axes named, read by the agent's `Label::named` and written by the
+same function as an audit record's label, so a client draws a label without reading the short form
+(SHARE-001). A word that names no label is sent as untrusted and private. `output.request`,
+`vouch.request` and `vet.request` carry it beside `label`, as do a `confirm.request`'s `remark` and
+each request's `vetting` (null where `vetting.label` is). `label` stays for search and for clients
+that print it; draw from `labelAxes`.
 
 `preview` is already trimmed by the kernel to 12 lines of at most 160 characters
 (`turn.rs` `PREVIEW_LINES` / `PREVIEW_WIDTH`) and released for display and nothing else.

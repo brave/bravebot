@@ -171,9 +171,11 @@ Command-output content is released for display so the person deciding can read i
 Only the agent's approved path admits it to the planner. Confined material is labelled
 in the UI; showing it is not evidence that the planner read it.
 
-A label chip is read only from a structured label field (the short form `(T,pub)` and its
-siblings, or the audit's `{integrity, confidentiality}` words), never from content, an origin
-or a preview. Anything but an exact value reads as untrusted and private, axis by axis. The
+A label chip is read only from a label's `{integrity, confidentiality}` words: `labelAxes` on a
+quarantine, a request, a write's remark and a checker's reason, and `label` on an audit record.
+It is never read from content, an origin or a preview, nor from the trail's short form
+(`(T,pub)`), which only the agent's `Label::named` reads (SHARE-001); the bridge reads it there and
+sends the words. Anything but an exact word reads as untrusted and private, axis by axis. The
 chip's words and tooltips are fixed strings, it carries none of the field's text, and it is
 neutral in every state so that trusted never reads as safe.
 
