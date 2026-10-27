@@ -66,6 +66,7 @@ import {
 } from '../shared/export'
 import { printToPdf } from './export'
 import { applyNativeAppearance } from './theme'
+import { relaunchUnlessRunning } from './relaunch'
 import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
@@ -593,7 +594,11 @@ app.whenReady().then(() => {
       const session = (params as { session?: unknown } | null)?.session
       const ok = method === 'models.list'
         ? await listModels(rootForSession(typeof session === 'string' ? session : ''))
-        : await bridge.request(method, sanitised(method, params))
+        : method === 'language.get'
+          // The system's languages answer only where nothing else names one (LOCALE-8), and are
+          // read here, since the window cannot ask the system and the bridge has no other way to.
+          ? await bridge.request(method, { system: app.getPreferredSystemLanguages() })
+          : await bridge.request(method, sanitised(method, params))
       // The directories the agent reports are folders somebody opened, and the window draws them
       // as group headings it can open a new session under.
       if (method === 'session.list') {
@@ -898,10 +903,7 @@ app.whenReady().then(() => {
   })
 
   // The window's language is chosen once, before its first paint, so a new one takes a new start.
-  ipcMain.handle('bravebot:app:relaunch', () => {
-    app.relaunch()
-    app.quit()
-  })
+  ipcMain.handle('bravebot:app:relaunch', () => relaunchUnlessRunning(runningHandles, app))
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and
   // should not be handed a path it invented.

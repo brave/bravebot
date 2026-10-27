@@ -208,9 +208,26 @@ pub fn choose(said: Said<'_>) -> Locale {
 }
 
 fn chosen(variable: impl Fn(&str) -> Option<String>, said: Said<'_>) -> Locale {
+    window_chosen(variable, said, &[])
+}
+
+/// [`choose`] for a desktop window, which where no source names a language takes the first of the
+/// system's preferred languages a catalog answers.
+///
+/// A program started from a launcher has no shell, so the POSIX variables are usually absent there
+/// and the operating system's own list is the only word on the person's language.
+pub fn choose_for_window(said: Said<'_>, system: &[String]) -> Locale {
+    window_chosen(|name| std::env::var(name).ok(), said, system)
+}
+
+fn window_chosen(
+    variable: impl Fn(&str) -> Option<String>,
+    said: Said<'_>,
+    system: &[String],
+) -> Locale {
     match requested(variable, said) {
         Some(requested) => resolve(&requested),
-        None => DEFAULT,
+        None => system.iter().find_map(|tag| find(tag)).unwrap_or(DEFAULT),
     }
 }
 
@@ -446,6 +463,42 @@ mod tests {
         };
         assert_eq!(chosen(environment(&[("LANG", "zz_ZZ")]), said), DEFAULT);
         assert_eq!(chosen(environment(&[("LANG", "C")]), said), DEFAULT);
+    }
+
+    /// A window started with no shell reads the system's languages in their order, after everything
+    /// the terminal reads, and still only chooses among the catalogs that shipped.
+    #[test]
+    fn a_window_with_nothing_named_takes_the_first_system_language_a_catalog_answers() {
+        let system = |tags: &[&str]| tags.iter().map(|tag| tag.to_string()).collect::<Vec<_>>();
+        let none = Said::default();
+        assert_eq!(
+            window_chosen(environment(&[]), none, &system(&["fr-CA"])).tag(),
+            "fr"
+        );
+        let preferred = system(&["de-DE", "fr-FR", "en-US"]);
+        assert_eq!(
+            window_chosen(environment(&[]), none, &preferred).tag(),
+            "fr"
+        );
+        assert_eq!(
+            window_chosen(environment(&[]), none, &system(&["de", "ja"])),
+            DEFAULT
+        );
+        assert_eq!(window_chosen(environment(&[]), none, &[]), DEFAULT);
+        let shell = [("LANG", "en_US.UTF-8")];
+        assert_eq!(
+            window_chosen(environment(&shell), none, &system(&["fr"])),
+            DEFAULT
+        );
+        let said = Said {
+            picked: Some("auto"),
+            written: Some("en"),
+        };
+        assert_eq!(
+            window_chosen(environment(&[]), said, &system(&["fr"])),
+            DEFAULT
+        );
+        assert_eq!(chosen(environment(&[]), none), DEFAULT);
     }
 
     /// The picker labels each catalog by what it calls itself, which only that catalog says.

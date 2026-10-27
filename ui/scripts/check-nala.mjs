@@ -15,6 +15,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { messageProblems } from './check-messages.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const renderer = join(root, 'src/renderer')
@@ -125,12 +126,8 @@ for (const file of tsxFiles) {
     for (const m of code.matchAll(tokenFamily)) {
       if (!leoTokens.has(m[1])) fail(file, i + 1, `unknown Leo token ${m[1]}`)
     }
-    // A message is named in the source, never computed (LOCALE-2), and only i18n/ holds the catalogs.
-    if (!name.startsWith('i18n/')) {
-      if (/\bt\s*\[/.test(code) && /from '(?:\.\.?\/)+i18n'/.test(text)) fail(file, i + 1, `message looked up by a computed key; write t.<name>(): ${trimmed.slice(0, 80)}`)
-      if (/messages\.gen/.test(code)) fail(file, i + 1, 'the catalogs are reached through i18n, by t.<name>()')
-    }
   })
+  for (const { line, message } of messageProblems(name, text)) fail(file, line, message)
 }
 
 if (pxSpacing > PX_SPACING_MAX) problems.push(`raw px spacing: ${pxSpacing}, over the ratchet of ${PX_SPACING_MAX}; use --leo-spacing-*`)

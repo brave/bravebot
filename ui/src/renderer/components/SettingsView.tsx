@@ -21,12 +21,14 @@ const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; subtitl
  * Unsaved hook edits are asked about before the page is left, the question the dialog used to ask
  * when it was closed.
  */
-export function SettingsView({ page, onPage, onBack, session, chosen, onAppearance, onChanged }: {
+export function SettingsView({ page, onPage, onBack, session, chosen, running, onAppearance, onChanged }: {
   page: SettingsPage
   onPage: (page: SettingsPage) => void
   onBack: () => void
   session?: string
   chosen: Appearance
+  /** A turn is running in the session shown, which a restart would end. */
+  running: boolean
   onAppearance: (appearance: Appearance) => void
   onChanged: () => void
 }): React.JSX.Element {
@@ -105,7 +107,7 @@ export function SettingsView({ page, onPage, onBack, session, chosen, onAppearan
               ? <AgentSettings session={session} onChanged={onChanged} onDirty={onDirty} />
               : shown === 'connectors'
                 ? <Connectors onBack={onInner} />
-                : <GeneralSettings chosen={chosen} onAppearance={onAppearance} />}
+                : <GeneralSettings chosen={chosen} running={running} onAppearance={onAppearance} />}
           </div>
         </div>
       </main>

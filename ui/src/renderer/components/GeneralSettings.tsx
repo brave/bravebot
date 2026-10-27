@@ -14,8 +14,9 @@ const LABELS: Record<Appearance, () => string> = {
 const AUTOMATIC = 'auto'
 
 /** How this window looks and reads. Each choice is kept as soon as it is made. */
-export function GeneralSettings({ chosen, onAppearance }: {
+export function GeneralSettings({ chosen, running, onAppearance }: {
   chosen: Appearance
+  running: boolean
   onAppearance: (appearance: Appearance) => void
 }): React.JSX.Element {
   return (
@@ -42,18 +43,20 @@ export function GeneralSettings({ chosen, onAppearance }: {
           </div>
         </div>
       </SettingsGroup>
-      <LanguageGroup />
+      <LanguageGroup running={running} />
     </div>
   )
 }
 
 /** The catalog the window is read in, kept where `/language` keeps it, applied from the next start. */
-function LanguageGroup(): React.JSX.Element {
+function LanguageGroup({ running }: { running: boolean }): React.JSX.Element {
   const [report, setReport] = useState<LanguageReport | null>(null)
   const [unread, setUnread] = useState(false)
   const [selected, setSelected] = useState(AUTOMATIC)
   const [busy, setBusy] = useState(false)
   const [unsaved, setUnsaved] = useState(false)
+  // The main process refused: a turn runs somewhere, perhaps in a session this page does not show.
+  const [refused, setRefused] = useState(false)
 
   useEffect(() => {
     void window.bravebot.request<LanguageReport>('language.get').then((answer) => {
@@ -92,6 +95,7 @@ function LanguageGroup(): React.JSX.Element {
           <p data-test="language-note">
             {report?.overridden ? t.uiSettingsLanguageOverridden() : t.uiSettingsLanguageNextStart()}
           </p>
+          {(running || refused) && <p data-test="language-restart-running">{t.uiSettingsRestartRunning()}</p>}
         </div>
         <div className="settings-row-control">
           <Dropdown value={selected} size="small" data-test="language-control" disabled={!report || busy}
@@ -104,8 +108,10 @@ function LanguageGroup(): React.JSX.Element {
               <leo-option key={tag} value={tag}>{name}</leo-option>
             ))}
           </Dropdown>
-          <Button size="small" kind="outline" data-test="language-restart" isDisabled={!report}
-            onClick={() => window.bravebot.relaunch()}>{t.uiSettingsRestart()}</Button>
+          <Button size="small" kind="outline" data-test="language-restart" isDisabled={!report || running}
+            onClick={() => {
+              void window.bravebot.relaunch().then((restarting) => setRefused(!restarting), () => setRefused(true))
+            }}>{t.uiSettingsRestart()}</Button>
         </div>
       </div>
       {(unread || unsaved) && (

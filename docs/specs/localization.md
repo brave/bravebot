@@ -163,7 +163,10 @@ tried and a value no catalog answers. The value is matched against the catalogs 
 answers, naming the catalogs there are. The choice applies from the next start, since the catalog is
 chosen once ([LOCALE-7](#LOCALE-7)). `/language auto` removes the saved tag. A session that records
 nothing saves nothing, and says so. The desktop window's language picker saves and removes the same
-file by the same rules, and says when `BRAVEBOT_LOCALE` outranks it.
+file by the same rules, and says when `BRAVEBOT_LOCALE` outranks it. Where none of the sources above
+names anything, the window, and only the window, takes the first of the operating system's
+preferred languages a catalog answers, and the reference where none does: an app opened from a
+launcher usually has no `LANG`.
 
 **Why.** A person's language belongs to the person and has to be settable where a shell is not: a
 program started from a launcher has no shell profile to edit. A project's file is written by whoever
@@ -189,6 +192,9 @@ the file because it is the later act, as a saved model or effort level outranks 
 `verified-by: bravebot_ui_bridge::language::automatic_removes_the_saved_choice`
 `verified-by: bravebot_ui_bridge::language::a_word_no_catalog_answers_is_refused_and_nothing_is_saved`
 `verified-by: bravebot_ui_bridge::language::the_variable_made_for_this_program_is_reported_as_outranking_the_choice`
+`verified-by: bravebot_ui_bridge::language::a_choice_that_could_not_be_saved_says_so_and_changes_nothing`
+`verified-by: bravebot_ui_bridge::language::with_nothing_else_named_the_systems_languages_choose_the_window_s_catalog`
+`verified-by: bravebot_i18n::lib::a_window_with_nothing_named_takes_the_first_system_language_a_catalog_answers`
 `verified-by: bravebot_tui::app::a_language_a_catalog_answers_is_saved_under_the_catalogs_own_tag`
 `verified-by: bravebot_tui::app::a_language_no_catalog_answers_is_refused_and_not_saved`
 `verified-by: bravebot_tui::app::auto_gives_the_choice_back_and_leaves_no_file`

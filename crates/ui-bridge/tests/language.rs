@@ -148,3 +148,55 @@ fn the_variable_made_for_this_program_is_reported_as_outranking_the_choice() {
     assert_eq!(read["inUse"], "fr", "{read}");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// A choice the file could not take is answered as unsaved, and what was there stays as it was.
+#[test]
+fn a_choice_that_could_not_be_saved_says_so_and_changes_nothing() {
+    let home = home("unsaved");
+    // A directory where the file should be: nothing can be written over it or removed from it.
+    let file = home.join(".bravebot/language");
+    std::fs::create_dir_all(&file).expect("a directory in the file's place");
+    std::fs::write(file.join("kept"), "").expect("something in it");
+    let answers = ask(
+        &home,
+        &[("LANG", "en_US.UTF-8")],
+        &[
+            ("language.set", json!({"tag": "fr"})),
+            ("language.set", json!({"tag": "auto"})),
+            ("language.get", json!({})),
+        ],
+    );
+    assert_eq!(answers[0]["ok"], json!({"saved": false, "tag": "fr"}));
+    assert_eq!(answers[1]["ok"], json!({"saved": false, "tag": "auto"}));
+    assert!(file.join("kept").exists(), "what was there was disturbed");
+    let read = &answers[2]["ok"];
+    assert_eq!(read["saved"], Value::Null, "{read}");
+    assert_eq!(read["inUse"], "en-US", "{read}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// Started from a launcher, with no shell to say, the window is read in the first of the system's
+/// languages a catalog answers; the shell, where there is one, still outranks the system.
+#[test]
+fn with_nothing_else_named_the_systems_languages_choose_the_window_s_catalog() {
+    let home = home("system");
+    let answers = ask(
+        &home,
+        &[],
+        &[
+            ("language.get", json!({"system": ["fr-CA", "en-US"]})),
+            ("language.get", json!({"system": ["de-DE", "ja"]})),
+            ("language.get", json!({"system": "fr"})),
+        ],
+    );
+    assert_eq!(answers[0]["ok"]["inUse"], "fr", "{}", answers[0]);
+    assert_eq!(answers[1]["ok"]["inUse"], "en-US", "{}", answers[1]);
+    assert_eq!(answers[2]["ok"]["inUse"], "en-US", "{}", answers[2]);
+    let answers = ask(
+        &home,
+        &[("LANG", "en_US.UTF-8")],
+        &[("language.get", json!({"system": ["fr-CA"]}))],
+    );
+    assert_eq!(answers[0]["ok"]["inUse"], "en-US", "{}", answers[0]);
+    let _ = std::fs::remove_dir_all(&home);
+}

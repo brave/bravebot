@@ -1,7 +1,7 @@
 // LOCALE-8 in the window: a language picked in Settings ▸ General is saved where `/language` keeps
 // it, the window is read in it from the next start, and Automatic removes the saved choice. Real
 // Electron and bridge on a temporary home and profile.
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { checker } from './drive-support.mjs'
 import { launchWorld, makeWorld } from './drive-world.mjs'
@@ -49,6 +49,21 @@ try {
     check(await page.locator('[data-test="settings-view"] h3', { hasText: 'Thème' }).count() === 1, 'after a new start the Theme heading is in French')
     check(await page.evaluate(() => document.documentElement.lang) === 'fr', 'and the document says it is French')
     await page.screenshot({ path: join(shots, 'language-fr.png') })
+
+    // A directory where the file should be: the choice cannot be saved, and the page says so and
+    // keeps showing the one that is.
+    rmSync(saved)
+    mkdirSync(join(saved, 'kept'), { recursive: true })
+    await control.click()
+    await page.getByRole('option', { name: 'English (US)', exact: true }).click()
+    const alert = page.locator('[data-test="language-error"]')
+    await alert.waitFor({ timeout: 5000 }).catch(() => {})
+    check(await alert.count() === 1, 'a choice that could not be saved shows the alert')
+    check(await control.evaluate((element) => element.value) === 'fr', 'and the picker goes back to the choice in force')
+    check(existsSync(join(saved, 'kept')), 'and nothing was disturbed')
+    rmSync(saved, { recursive: true, force: true })
+    writeFileSync(saved, 'fr\n')
+
     await control.click()
     await page.getByRole('option', { name: 'Automatique', exact: true }).click()
     check(await until(page, () => !existsSync(saved)), 'choosing Automatic removes the saved choice')

@@ -1550,11 +1550,14 @@ Still open:
 - `language.get` reports `{ inUse, saved, available, overridden }`: the tag of the catalog a
   window started now reads (by [LOCALE-8](../../docs/specs/localization.md#LOCALE-8)), the tag
   `/language` saved or null, each shipped catalog as `{ tag, name }` with the name in its own
-  language, and whether `BRAVEBOT_LOCALE` outranks the choice. `language.set` takes `tag`, a word
+  language, and whether `BRAVEBOT_LOCALE` outranks the choice. The main process replaces its params
+  with `system`, the OS's preferred languages, which answer only where nothing else names one. `language.set` takes `tag`, a word
   a catalog answers or `auto`, saves the catalog's own tag in `~/.bravebot/language` (or removes it
-  for `auto`) and answers `{ saved, tag }`; a word no catalog answers is `bad_request`. The window
+  for `auto`) and answers `{ saved, tag }`, with `saved: false` and nothing changed where the file
+  could not be written or removed; a word no catalog answers is `bad_request`. The window
   chooses its catalog once, before its first paint, and `bravebot:app:relaunch` (main-process IPC)
-  restarts the app to apply a new choice.
+  restarts the app to apply a new choice. It answers false and does nothing while a turn runs in
+  any session, since quitting would refuse what the turn waits on.
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last

@@ -195,9 +195,12 @@ const api = {
     void ipcRenderer.invoke('bravebot:theme:write', name)
   },
 
-  /** Start the app again, which is when a language chosen in Settings applies. */
-  relaunch(): void {
-    void ipcRenderer.invoke('bravebot:app:relaunch')
+  /**
+   * Start the app again, which is when a language chosen in Settings applies. False where a turn
+   * is running, since quitting would refuse what it waits on and end it.
+   */
+  relaunch(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:app:relaunch') as Promise<boolean>
   },
 
   /** Listen for appearance changes written through the main process. */

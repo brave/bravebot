@@ -8,15 +8,33 @@ use bravebot_i18n::{AUTO, LOCALES, Said};
 use bravebot_session::store;
 use serde_json::{Value, json};
 
+/// More than any system lists; a longer list is read no further.
+const MAX_SYSTEM_LANGUAGES: usize = 32;
+
 /// The catalog in use, the one saved, every one there is, and whether `BRAVEBOT_LOCALE` outranks
-/// them all.
-pub fn get() -> Value {
+/// them all. `system` is the operating system's preferred languages, which the desktop's main
+/// process sends and which answer only where nothing else names a language.
+pub fn get(request: &Request) -> Value {
     let picked = store::load_language();
     let written = bravebot_config::Settings::written_language();
-    let in_use = bravebot_i18n::choose(Said {
-        picked: picked.as_deref(),
-        written: written.as_deref(),
-    });
+    let system: Vec<String> = request
+        .param("system")
+        .as_array()
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .take(MAX_SYSTEM_LANGUAGES)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let in_use = bravebot_i18n::choose_for_window(
+        Said {
+            picked: picked.as_deref(),
+            written: written.as_deref(),
+        },
+        &system,
+    );
     let saved = picked
         .as_deref()
         .and_then(bravebot_i18n::find)

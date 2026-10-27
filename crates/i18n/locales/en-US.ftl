@@ -5035,3 +5035,4 @@ ui-settings-language-overridden = BRAVEBOT_LOCALE is set, so it decides the lang
 ui-settings-language-unsaved = Couldn't save the language.
 ui-settings-language-unread = Couldn't read the language setting.
 ui-settings-restart = Restart
+ui-settings-restart-running = A turn is still running. Restart once it has finished or been stopped.

@@ -14,6 +14,7 @@ const catalogEnUs = {
   uiSettingsLanguageUnread: (): string => 'Couldn\'t read the language setting.',
   uiSettingsLanguageUnsaved: (): string => 'Couldn\'t save the language.',
   uiSettingsRestart: (): string => 'Restart',
+  uiSettingsRestartRunning: (): string => 'A turn is still running. Restart once it has finished or been stopped.',
   uiSettingsTheme: (): string => 'Theme',
   uiSettingsThemeExplained: (): string => 'System follows the OS. Light and Dark stay put regardless of it.',
 }
@@ -34,6 +35,7 @@ const catalogFr: Messages = {
   uiSettingsLanguageUnread: (): string => 'Impossible de lire le réglage de langue.',
   uiSettingsLanguageUnsaved: (): string => 'Impossible d\'enregistrer la langue.',
   uiSettingsRestart: (): string => 'Redémarrer',
+  uiSettingsRestartRunning: (): string => 'Un tour est encore en cours. Redémarrez une fois qu\'il est terminé ou arrêté.',
   uiSettingsTheme: (): string => 'Thème',
   uiSettingsThemeExplained: (): string => 'Système suit le système d\'exploitation. Clair et Sombre restent tels quels, quoi qu\'il indique.',
 }

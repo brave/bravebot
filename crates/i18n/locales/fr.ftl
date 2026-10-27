@@ -4342,3 +4342,4 @@ ui-settings-language-overridden = BRAVEBOT_LOCALE est définie : c'est elle qui 
 ui-settings-language-unsaved = Impossible d'enregistrer la langue.
 ui-settings-language-unread = Impossible de lire le réglage de langue.
 ui-settings-restart = Redémarrer
+ui-settings-restart-running = Un tour est encore en cours. Redémarrez une fois qu'il est terminé ou arrêté.
