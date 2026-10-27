@@ -38,6 +38,9 @@ pub(super) fn precommit_routing(task: &Task) -> Routing {
     if let Some(name) = &task.addressing {
         routing.insert_trusted(ADDRESSED, name.clone());
     }
+    if let Some(host) = &task.consulted_from {
+        routing.insert_trusted(bravebot_core::delegate::CONSULTED_FROM, host.clone());
+    }
     routing
 }
 
@@ -95,6 +98,10 @@ pub(super) fn arming_under(task: &Task, watch_file_allowed: bool) -> crate::watc
 /// A delegate in a checkout is offered no `lsp`, whatever its kind holds: the session's
 /// servers are rooted at the working directory, and a path in the checkout is outside it
 /// (CHECKOUT-20).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a separate fact about the turn that decides what it is offered, and the policy is an exclusive borrow"
+)]
 pub(super) fn offered_tools<S: Sink>(
     task: &Task,
     workspace: &Workspace,
@@ -102,6 +109,7 @@ pub(super) fn offered_tools<S: Sink>(
     advisor: Option<&str>,
     scheduling: tools::Scheduling,
     arming: crate::watch::Arming,
+    asks_a_person: bool,
     policy: &mut Policy<'_, S>,
 ) -> Result<(Option<Addressed>, Vec<Tool>), Denial> {
     let Some(spec) = &task.delegate else {
@@ -122,6 +130,9 @@ pub(super) fn offered_tools<S: Sink>(
         }
         if task.permission_mode.get() == crate::PermissionMode::Plan {
             tools::offer_propose_plan(&mut offered);
+        }
+        if consults_offered(task, delegates, asks_a_person) {
+            tools::offer_propose_consult(&mut offered);
         }
         offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
         let names: Vec<&str> = offered
@@ -159,6 +170,9 @@ pub(super) fn offered_tools<S: Sink>(
                 if task.permission_mode.get() == crate::PermissionMode::Plan {
                     tools::offer_propose_plan(&mut offered);
                 }
+                if consults_offered(task, policy.delegates(), asks_a_person) {
+                    tools::offer_propose_consult(&mut offered);
+                }
                 offered.retain(|tool| bravebot_core::tool_set::allows(&tool.function.name));
             }
             offered.retain(|tool| addressed.tools().contains(&tool.function.name));
@@ -175,6 +189,20 @@ pub(super) fn offered_tools<S: Sink>(
         offered.retain(|tool| tool.function.name != "lsp");
     }
     Ok((None, offered))
+}
+
+/// Whether the planner is offered `propose_consult` (CONSULT-12).
+///
+/// Only to the turn a person is watching and can be asked in, on a front end that draws the card,
+/// outside the mode that answers prompts unasked, where there is a bot to consult. A consult is
+/// never offered it (CONSULT-8).
+pub(super) fn consults_offered(task: &Task, delegates: &Definitions, asks_a_person: bool) -> bool {
+    task.delegate.is_none()
+        && !task.consulting
+        && task.draws_consult_cards
+        && asks_a_person
+        && task.permission_mode.get() != crate::PermissionMode::Bypass
+        && crate::agents::bots(delegates).next().is_some()
 }
 
 /// Whether a delegate is offered `spawn_agent` and told it may delegate: it sits above the bottom
@@ -510,4 +538,39 @@ pub(super) fn settle_servers<S: Sink, C: Confirmer, R: Reporter>(
         *offer = offer.clone().deferring_above(threshold);
     }
     mcp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// CONSULT-8, CONSULT-12: `propose_consult` is offered to the person's own turn on a front end
+    /// that draws the card, where there is a bot and a person to ask. A consult, a turn in bypass,
+    /// a turn nobody can be asked in, a front end that draws no card and a set with no bot are
+    /// each offered none. The first case is the control, so a gate that never offered it fails.
+    #[test]
+    fn a_consult_is_proposed_only_where_a_person_can_send_it_and_never_from_a_consult() {
+        let bots = crate::agents::admitted(&[("reviewer", "")]);
+        let opted_out = crate::agents::admitted(&[("reviewer", "consult: off\n")]);
+        let person = || Task::new("ask the reviewer").drawing_consult_cards(true);
+        let bypassing = person();
+        bypassing.permission_mode.set(crate::PermissionMode::Bypass);
+        for (task, delegates, asks, offered) in [
+            (person(), &bots, true, true),
+            (person().consulting(true), &bots, true, false),
+            (bypassing, &bots, true, false),
+            (person(), &bots, false, false),
+            (person().drawing_consult_cards(false), &bots, true, false),
+            (person(), &opted_out, true, false),
+        ] {
+            assert_eq!(
+                consults_offered(&task, delegates, asks),
+                offered,
+                "consulting {}, mode {:?}, asks {asks}, cards {}",
+                task.consulting,
+                task.permission_mode.get(),
+                task.draws_consult_cards
+            );
+        }
+    }
 }

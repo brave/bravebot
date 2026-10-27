@@ -31,8 +31,9 @@ export function markersOf(staged: Staged[]): { files: { marker: string; name: st
  * A file chosen with the paperclip is a grant the running turn cannot be handed, and the bot's
  * memory update reads nothing from the person: both wait for the turn to end.
  */
-export function route(live: Pick<Live, 'consolidating' | 'attachments'>): 'interject' | 'queue' {
-  return live.consolidating || live.attachments?.length ? 'queue' : 'interject'
+export function route(live: Pick<Live, 'consolidating' | 'attachments' | 'brief'>): 'interject' | 'queue' {
+  // A host drafting a brief reads no line typed meanwhile, so one waits for after.
+  return live.consolidating || live.attachments?.length || live.brief ? 'queue' : 'interject'
 }
 
 /** Draw `line` as sent into the turn, and take off the composer what it named. */
@@ -94,8 +95,9 @@ function asQueued(line: Interjection, release: boolean): Queued {
 }
 
 /** Whether the next queued message may go, given a queue that may be paused. */
-export function mayGo(live: Pick<Live, 'queued' | 'queuePaused'>): boolean {
+export function mayGo(live: Pick<Live, 'queued' | 'queuePaused' | 'brief'>): boolean {
   const next = live.queued?.[0]
-  if (!next) return false
+  // A brief waiting in the composer is the next thing sent, or put back, before anything queued.
+  if (!next || live.brief) return false
   return !live.queuePaused || next.fromInterjection === true
 }

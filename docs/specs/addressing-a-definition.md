@@ -148,6 +148,10 @@ would make one prefix mean two things at the moment a person is typing fastest. 
 is the shape every other command here already has, and the whole word is the command, so
 `/agents are useful` stays a prompt.
 
+[CONSULT-2](consulting-a-bot.md#CONSULT-2) proposes, not built, giving `@` that second meaning for a
+consult, which is not an addressed turn: a definition whose name is a slug wins over a file of that
+name at send, and `@./name` names the file. `/agent` is unchanged by it.
+
 A turn stopped before it did anything puts the whole line back in the box, name and all, as a
 stopped prompt is put back. The task alone would be a prompt for the session's own planner, and
 Enter on it would run the work under everything the definition was there to take away. In a session
@@ -277,6 +281,10 @@ and no key turns it back into a line. A completion row arrives unasked, is drawn
 program had written it, and Enter submits the highlighted one: a name composed to read like an
 instruction would then be one keystroke from dispatching itself. Discovery is what a completion
 list is for, and the bare word gives it on demand instead.
+
+[CONSULT-3](consulting-a-bot.md#CONSULT-3) proposes, not built, an exception for the `@` list: a row
+there writes one word of a sentence, which starts nothing until the line and its brief are sent, and
+the name it writes is a slug. Nothing is offered after `/agent` under it.
 
 A skill's name is offered in that list, and the difference is what taking the row writes. A skill
 row writes a prompt naming the skill, which the planner is asked about like any other sentence. A

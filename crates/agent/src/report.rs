@@ -1078,6 +1078,13 @@ pub trait Reporter {
         _reported: Option<Reported>,
     ) {
     }
+
+    /// A consult the person sent from a card has begun, and what is reported until it finishes is
+    /// the bot's, under the name the driver matched (CONSULT-11, CONSULT-12).
+    fn consult_started(&mut self, _bot: String) {}
+
+    /// The consult has ended, with its reply released for display where it gave one.
+    fn consult_finished(&mut self, _bot: String, _reply: Option<String>) {}
 }
 
 /// Discards every report.
@@ -1151,6 +1158,12 @@ pub struct RecordingReporter {
     pub delegates_reported: Vec<(DelegateId, Option<Reported>)>,
     /// Whose work the reports that follow belong to.
     pub attributed_to: Option<DelegateId>,
+    /// The bot a consult is running for, while one is.
+    pub consulting: Option<String>,
+    /// Each line of narration a consult reported, with the bot it was reported for.
+    pub consult_narration: Vec<(String, String)>,
+    /// How each consult ended: the bot, and the reply it gave where it gave one.
+    pub consults: Vec<(String, Option<String>)>,
     /// Every request view a turn published, in order.
     pub requests: Vec<crate::request_view::RequestView>,
 }
@@ -1185,7 +1198,19 @@ impl Reporter for RecordingReporter {
     }
 
     fn narration(&mut self, text: String) {
+        if let Some(bot) = &self.consulting {
+            self.consult_narration.push((bot.clone(), text.clone()));
+        }
         self.narration.push(text);
+    }
+
+    fn consult_started(&mut self, bot: String) {
+        self.consulting = Some(bot);
+    }
+
+    fn consult_finished(&mut self, bot: String, reply: Option<String>) {
+        self.consulting = None;
+        self.consults.push((bot, reply));
     }
 
     fn streaming(&mut self, text: String) {

@@ -30,8 +30,9 @@ pub fn make(request: &Request) -> Result<Value, Failure> {
 /// Rewrite the definition of a bot being edited, and answer with its name.
 ///
 /// `name`, `purpose` are required and `model` is a string or absent, which removes the `model:`
-/// line. Only the description, the model and the body change (MEMORY-9); a refusal leaves the file
-/// as it was, and the desktop then saves no edit.
+/// line. `consult` is a boolean or absent: false writes `consult: off`, true removes the line, and
+/// absent leaves it (CONSULT-16). Only those lines and the body change (MEMORY-9); a refusal leaves
+/// the file as it was, and the desktop then saves no edit.
 pub fn remake(request: &Request) -> Result<Value, Failure> {
     let home = bravebot_agent::home::directory().ok_or_else(|| {
         Failure::new(
@@ -46,8 +47,9 @@ fn remake_in(home: &Path, request: &Request) -> Result<Value, Failure> {
     let name = request.string("name")?;
     let purpose = request.string("purpose")?;
     let model = request.optional_string("model");
+    let consult = request.optional_flag("consult");
 
-    match agents::redefine(home, &name, &purpose, model.as_deref()) {
+    match agents::redefine(home, &name, &purpose, model.as_deref(), consult) {
         Ok(()) => Ok(json!({ "name": name })),
         Err(RedefineRefused::Name) => Err(Failure::bad_request(
             "the bot's definition is not named as a definition can be",
@@ -273,6 +275,30 @@ mod tests {
             !text.contains("model:"),
             "a model no longer chosen stays: {text}"
         );
+    }
+
+    /// CONSULT-16: the switch writes `consult: off` when turned off and removes it when turned on,
+    /// and an edit that does not send it leaves the line.
+    #[test]
+    fn the_consult_switch_writes_and_removes_the_line() {
+        let home = home("remake-consult");
+        make_in(
+            home.path(),
+            &request(json!({"slug": "ed", "purpose": "P."})),
+        )
+        .expect("made");
+        let path = home.path().join("agents/ed.md");
+
+        let edit = |params: Value| {
+            remake_in(home.path(), &request(params)).expect("rewritten");
+            std::fs::read_to_string(&path).expect("written")
+        };
+        let off = edit(json!({"name": "ed", "purpose": "P.", "consult": false}));
+        assert!(off.contains("consult: off\n"), "{off}");
+        let kept = edit(json!({"name": "ed", "purpose": "Q."}));
+        assert!(kept.contains("consult: off\n"), "{kept}");
+        let on = edit(json!({"name": "ed", "purpose": "Q.", "consult": true}));
+        assert!(!on.contains("consult:"), "{on}");
     }
 
     /// MEMORY-8: a model of several lines, or a purpose with nothing in it, makes no bot and no

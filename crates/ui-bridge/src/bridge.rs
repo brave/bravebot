@@ -28,6 +28,7 @@ use bravebot_aichat::AccountFailure;
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
+use bravebot_i18n::t;
 use bravebot_net::Egress;
 use bravebot_sandbox::SandboxMode;
 use bravebot_session::sessions::{Handle, Record, Standing};
@@ -90,7 +91,31 @@ struct Open {
     /// (SANDBOX-22), so a resume and a fork start with none. Read when a turn or a run is accepted
     /// and copied into it, so a choice applies from the next turn.
     sandbox: Option<SandboxMode>,
+    /// The line and the bots it named that are still to be consulted, once the consult running now
+    /// has replied (CONSULT-9). Set by the worker as the consult ends, and only where it replied.
+    consults_left: ConsultsLeft,
+    /// The brief the host drafted that the window has not sent or put back (CONSULT-5). Kept here
+    /// so the bot, the line and whether it is private are this crate's and not the window's.
+    brief: HeldBrief,
 }
+
+/// The line a consult was sent with, and the bots after it to consult with the same line.
+type ConsultsLeft = Arc<Mutex<Option<(String, Vec<String>)>>>;
+
+/// A brief the host drafted for a bot, as `turn.send` consults from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Brief {
+    /// The bot it is for.
+    bot: String,
+    /// The line the person sent, the only words the consult's files are read out of.
+    line: String,
+    /// Whether the draft was written from private content (CONSULT-6).
+    private: bool,
+    /// The bots the line named after this one (CONSULT-9).
+    then: Vec<String>,
+}
+
+type HeldBrief = Arc<Mutex<Option<Brief>>>;
 
 impl Open {
     /// A session as it opens, with no turn in flight. The trust answer and the record that would
@@ -114,6 +139,8 @@ impl Open {
             definition: None,
             permission_mode: LiveMode::default(),
             sandbox: None,
+            consults_left: Arc::default(),
+            brief: Arc::default(),
         }
     }
 
@@ -245,7 +272,13 @@ impl Bridge {
                     || {
                         let settings =
                             crate::settings::layers(Some(&open.project), self.settings.as_deref());
-                        Ok(session_workspace_unless_running(open, &settings)?.reference_sources())
+                        let workspace = session_workspace_unless_running(open, &settings)?;
+                        Ok(crate::mentions::Offerable {
+                            sources: workspace.reference_sources(),
+                            bots: session_definitions(open, &workspace, false)
+                                .map(|definitions| crate::mentions::bots_offered(&definitions))
+                                .unwrap_or_default(),
+                        })
                     },
                 )
             }
@@ -257,7 +290,10 @@ impl Bridge {
                 let settings =
                     crate::settings::layers(Some(&open.project), self.settings.as_deref());
                 let workspace = session_workspace_unless_running(open, &settings)?;
-                let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
+                let prompt = request.string("prompt")?;
+                let bots = session_bots(open, &workspace, &prompt, false);
+                let names: Vec<&str> = bots.iter().map(String::as_str).collect();
+                let files = crate::mentions::named(&workspace, &prompt, &names)?;
                 Ok(json!({ "files": files }))
             }
             "drops.classify" => crate::attached::classified(request),
@@ -284,6 +320,13 @@ impl Bridge {
             "manifest.reply" => self.reply_decision(request, Reply::Manifest),
             "exposure.reply" => self.reply_decision(request, Reply::Exposure),
             "host.reply" => self.reply_decision(request, Reply::Host),
+            "consult.reply" => self.reply_decision(request, Reply::Consult),
+            "consult.brief" => {
+                let handle = request.string("session")?;
+                let line = request.string("line")?;
+                let model = crate::models::selection(request.params.get("model"))?;
+                self.draft_brief(&handle, line, None, model)
+            }
             "mcp-server.reply" => self.deliver(
                 request,
                 Reply::McpServer(wire::start_answer(
@@ -1147,7 +1190,24 @@ impl Bridge {
         // back to recognising them by their wording; what it may not do is claim one of the
         // agent's, which is [`wire::composed`]'s whole job.
         let composed = crate::wire::composed(request.params.get("composed"))?;
-        self.start_turn(request, composed)
+        let handle = request.string("session")?;
+        let open = self
+            .open
+            .get(&handle)
+            .ok_or_else(Failure::no_such_session)?;
+        // The window says only that this is the brief it was offered. Which bot it is for, the line
+        // behind it and whether it is private are what the host's draft left here (CONSULT-5).
+        let brief = match request.flag("brief", false) {
+            false => None,
+            true => Some(
+                open.brief
+                    .lock()
+                    .ok()
+                    .and_then(|held| held.clone())
+                    .ok_or_else(|| Failure::bad_request("no brief is waiting to be sent"))?,
+            ),
+        };
+        self.start_turn(request, composed, brief)
     }
 
     /// The same, for a turn this crate asked for and knows what it composed.
@@ -1157,10 +1217,14 @@ impl Bridge {
     /// have a transcript draw a file's row, or a watch's, around a line a person typed, which is
     /// the thing the tag exists to stop anyone doing. The tag for a prompt the front end composed
     /// itself is a different claim, and [`wire::composed`] is where a request may make it.
+    ///
+    /// `brief` is the host's draft the turn sends, and the only thing that makes it a consult
+    /// (CONSULT-5). It is this crate's to give, for the same reason the tag is.
     fn start_turn(
         &mut self,
         request: &Request,
         composed: Option<bravebot_agent::conversation::Composed>,
+        brief: Option<Brief>,
     ) -> Result<Value, Failure> {
         let handle = request.string("session")?;
         let prompt = request.string("prompt")?;
@@ -1224,9 +1288,24 @@ impl Bridge {
         // taken from the front end, and each one surveyed by the read the turn will make, so a
         // name that would end the turn refuses the send before anything starts. A prompt nobody
         // typed names nothing, the same line the terminal draws.
+        //
+        // A word naming a bot names no file (CONSULT-2). A brief's files are the ones the person's
+        // own line named, since the rest of it is the host's words (CONSULT-5).
+        let line = brief.as_ref().map_or(prompt.as_str(), |brief| &brief.line);
+        let definitions = match composed {
+            None if !bravebot_mentions::referenced(line).is_empty() => {
+                session_definitions(open, &workspace, true)
+            }
+            _ => None,
+        };
+        let bots = definitions
+            .as_ref()
+            .map(crate::consult::bots)
+            .unwrap_or_default();
+        let names: Vec<&str> = bots.iter().map(String::as_str).collect();
         let mut files = files;
         if composed.is_none() {
-            for named in crate::mentions::named(&workspace, &prompt)? {
+            for named in crate::mentions::named(&workspace, line, &names)? {
                 if !files.contains(&named) {
                     files.push(named);
                 }
@@ -1235,6 +1314,38 @@ impl Bridge {
 
         let model = requested_model.or_else(|| open.model.clone());
         let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        // Only a brief its host drafted consults, in every session, so a line that reaches here
+        // without one goes to the host and consults nothing (CONSULT-5). The bots a line named
+        // after the brief's are left for once it replies (CONSULT-9).
+        let picked = match (&definitions, &brief) {
+            (Some(definitions), Some(brief)) => crate::consult::pick(
+                &config,
+                definitions,
+                &brief.line,
+                Some(std::slice::from_ref(&brief.bot)),
+            ),
+            _ => None,
+        };
+        let consulting = picked
+            .map(|picked| picked.now)
+            .transpose()
+            .map_err(Failure::bad_request)?;
+        // A brief whose bot is gone since it was drafted is not sent to the host instead.
+        if brief.is_some() && consulting.is_none() {
+            return Err(Failure::bad_request(
+                "the bot the brief is for can no longer be consulted",
+            ));
+        }
+        // The window tags only the bots this line named as it was sent, never the ones it knows of
+        // now (CONSULT-2).
+        let tags = consulting.as_ref().map(|_| {
+            let consulted = bravebot_mentions::consulted(line, &names);
+            let consulted: Vec<&str> = consulted.iter().map(String::as_str).collect();
+            wire::tags(&prompt, &consulted)
+        });
+        let (private, named, left) = brief.map_or((false, String::new(), Vec::new()), |brief| {
+            (brief.private, brief.line, brief.then)
+        });
         // A model the machine-level layer refuses is not requested, whichever service would have
         // answered for it and whoever asked. The roster this window draws leaves such a model out,
         // so reaching here means the name came from somewhere else (BACKEND-48).
@@ -1263,6 +1374,7 @@ impl Bridge {
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
+        let consults_left = Arc::clone(&open.consults_left);
         let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
         let crate::running::Started {
@@ -1279,7 +1391,11 @@ impl Bridge {
         let session = handle.clone();
         let answerers = self.answerers_of(&handle);
 
-        let worker_model = model.clone();
+        // A consult answers on its bot's model where the definition names one (CONSULT-10).
+        let worker_model = consulting
+            .as_ref()
+            .and_then(|consulting| consulting.model.clone())
+            .or_else(|| model.clone());
 
         self.emitter.view_started(
             &handle,
@@ -1294,6 +1410,10 @@ impl Bridge {
                 "turn": turn_number,
                 "mode": wire::permission_mode_name(permission_mode.get()),
                 "sandbox": wire::sandbox_mode_name(sandbox),
+                // The bot this turn consults, from the routing above and never from what a model
+                // wrote, so the window draws all the turn streams under the bot's name (CONSULT-11).
+                "consulted": consulting.as_ref().map(|consulting| consulting.bot.as_str()),
+                "tags": tags,
             }),
         ));
 
@@ -1301,12 +1421,26 @@ impl Bridge {
             open.running = Some(running);
             open.model = model;
             open.definition = addressing.clone();
+            // Sent or not, a brief is offered once: whatever the window sends next is a new line.
+            if let Ok(mut held) = open.brief.lock() {
+                *held = None;
+            }
+            // A line that started a turn drops the bots an earlier line left (CONSULT-9). One that
+            // was refused before starting leaves them, since nothing was sent.
+            if let Ok(mut left) = open.consults_left.lock() {
+                *left = None;
+            }
         }
         self.begun.insert(handle.clone());
         self.workers_of(&handle).spawn(move || {
             work(Work {
                 model: worker_model,
                 addressing,
+                consulting,
+                private,
+                named,
+                left,
+                consults_left,
                 watches,
                 emitter,
                 session,
@@ -1702,6 +1836,10 @@ impl Bridge {
         if let Ok(mut watches) = open.watches.lock() {
             watches.stop_firing();
         }
+        // A stopped consult ends the rest of the line's (CONSULT-9).
+        if let Ok(mut left) = open.consults_left.lock() {
+            *left = None;
+        }
         // Cancelling when nothing is running is not an error: the turn may have finished
         // between the user pressing the key and this arriving.
         Ok(if expected.is_some() {
@@ -1982,6 +2120,161 @@ impl Bridge {
         )
     }
 
+    /// Have the host draft the brief for the next of `bots`, with `line`, the line a person sent
+    /// that named them (CONSULT-9).
+    ///
+    /// A line where every bot left may not be consulted drafts nothing, and the window is told why.
+    fn consult_next(&mut self, handle: &str, line: String, bots: &[String]) {
+        // The line was the host's to answer once, before its first consult, and is not sent to it
+        // again because the bots it left are gone.
+        let message = match self.draft_brief(handle, line, Some(bots), None) {
+            Ok(drafting) if drafting["brief"].is_null() => {
+                "no bot the line named is left to consult".to_owned()
+            }
+            Ok(_) => return,
+            Err(error) => error.message,
+        };
+        self.emitter.send(Event::new(
+            "consult.ended",
+            handle,
+            json!({ "message": message }),
+        ));
+    }
+
+    /// Ask the host to draft the brief for the first bot `line` names that may be consulted, and
+    /// return before it is drafted (CONSULT-5).
+    ///
+    /// `{"brief": null}` where the line names no bot, and the window sends it to the host as it is.
+    /// Otherwise `consult.drafting` says which bot, and `consult.brief` brings the draft, which is
+    /// held here until a `turn.send` carrying `brief` sends it. A draft the host could not have
+    /// held is put to the person first, through the session's questions, and comes back only on a
+    /// yes (CONSULT-6). `only` narrows the bots to those an earlier consult of the line left.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one snapshot of the session handed whole to the worker that drafts"
+    )]
+    fn draft_brief(
+        &mut self,
+        handle: &str,
+        line: String,
+        only: Option<&[String]>,
+        model: Option<String>,
+    ) -> Result<Value, Failure> {
+        self.reap(handle);
+        let open = self.open.get(handle).ok_or_else(Failure::no_such_session)?;
+        open.ready_for_work()?;
+        // A new draft replaces any brief still held, so a `turn.send` cannot send an older one.
+        if let Ok(mut held) = open.brief.lock() {
+            *held = None;
+        }
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let workspace = with_session_checkouts(open, session_workspace(open, &settings)?);
+        let config = crate::settings::config(Some(&open.project), self.settings.as_deref())?;
+        let definitions = (!bravebot_mentions::referenced(&line).is_empty())
+            .then(|| session_definitions(open, &workspace, true))
+            .flatten();
+        let picked = definitions
+            .as_ref()
+            .and_then(|definitions| crate::consult::pick(&config, definitions, &line, only));
+        let Some(picked) = picked else {
+            return Ok(json!({ "brief": null }));
+        };
+        let bot = picked.now.map_err(Failure::bad_request)?.bot;
+        let row = definitions
+            .as_ref()
+            .and_then(|definitions| definitions.get(&bot))
+            .map(bravebot_agent::agents::bot_row)
+            .unwrap_or_default();
+        // The host drafts on the model the window's turns ask for, and before the first turn has
+        // asked, the session holds none and the configured default may not be one it can reach.
+        let model = model.or_else(|| open.model.clone());
+        if let Some(refused) = crate::models::refused(&config, model.as_deref()) {
+            return Err(Failure::bad_request(refused));
+        }
+        let Ok(state) = open.state.lock() else {
+            return Err(Failure::bad_request("the session cannot be read"));
+        };
+        // Taken here, before the worker starts, because that is what crosses to it: the request,
+        // not the conversation, which no part of drafting can add to.
+        let question = bravebot_agent::aside::Question::brief(&state.conversation, &bot, &line);
+        let trust = state.answers.trust.clone();
+        let question_ids = Arc::clone(&state.question_ids);
+        let question_answers = Arc::clone(&state.question_answers);
+        let turn = state.turns;
+        let account = state.account.clone();
+        drop(state);
+        let held = Arc::clone(&open.brief);
+        let session_state = Arc::clone(&open.state);
+
+        let crate::running::Started {
+            mut running,
+            cancel,
+            pending,
+            answers,
+            finished,
+            target,
+            interjections: _,
+        } = Running::start();
+        // Nothing reads a line typed while the host drafts.
+        running.interjections = None;
+        if let Some(open) = self.open.get_mut(handle) {
+            open.running = Some(running);
+        }
+        self.emitter.send(Event::new(
+            "consult.drafting",
+            handle,
+            json!({ "bot": bot, "row": row, "line": line, "skipped": picked.skipped }),
+        ));
+
+        let emitter = self.emitter.clone();
+        let session = handle.to_string();
+        let answerers = self.answerers_of(handle);
+        let then = picked.left;
+        self.workers_of(handle).spawn(move || {
+            let mut confirmer = BridgeConfirmer::new(
+                emitter.clone(),
+                &session,
+                pending,
+                answers,
+                question_ids,
+                cancel.clone(),
+            )
+            .answerable_by(answerers)
+            .remembering(question_answers);
+            let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+            let mut sink = BridgeSink::new(emitter.clone(), &session, turn);
+            let done = bravebot_agent::turn::brief(
+                &config,
+                &Egress::new(),
+                &account,
+                question,
+                &bot,
+                model.as_deref(),
+                &mut confirmer,
+                &mut reporter,
+                &mut sink,
+                trust,
+                &cancel,
+            );
+            let brief = Brief {
+                bot,
+                line,
+                private: false,
+                then,
+            };
+            let data = drafted(
+                done,
+                cancel.is_cancelled(),
+                brief,
+                row,
+                &held,
+                &session_state,
+            );
+            emitter.finish(Event::new("consult.brief", &session, data), &finished);
+        });
+        Ok(json!({ "drafting": true, "target": target }))
+    }
+
     /// Called by the desktop's clock, never a renderer-supplied generated prompt.
     fn poll_watches(&mut self) {
         self.poll_watches_at(std::time::Instant::now());
@@ -1995,6 +2288,17 @@ impl Bridge {
                 continue;
             };
             if open.running.is_some() || !open.answered_trust {
+                continue;
+            }
+            // The next bot a line named, once the consult before it replied, ahead of any watch
+            // (CONSULT-9).
+            let next = open
+                .consults_left
+                .lock()
+                .ok()
+                .and_then(|mut left| left.take());
+            if let Some((line, bots)) = next {
+                self.consult_next(&handle, line, &bots);
                 continue;
             }
             if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) {
@@ -2053,6 +2357,7 @@ impl Bridge {
                         number,
                         path: path.clone(),
                     }),
+                    None,
                 )
             {
                 if let Some(open) = self.open.get(&handle)
@@ -2268,6 +2573,36 @@ fn workspace_of(
     Ok(workspace)
 }
 
+/// The definitions `open`'s turns may address, read under the rules the session opened with.
+///
+/// `None` where the session's state is held by a running turn and `wait` is false, so a list being
+/// drawn while a turn waits on an approval does not wait with it.
+fn session_definitions(
+    open: &Open,
+    workspace: &Workspace,
+    wait: bool,
+) -> Option<bravebot_core::delegate::Definitions> {
+    let state = if wait {
+        open.state.lock().ok()?
+    } else {
+        open.state.try_lock().ok()?
+    };
+    let trust = state.answers.trust.clone();
+    let permissions = state.answers.rules.permissions.clone();
+    drop(state);
+    Some(crate::consult::resolved(workspace, trust, permissions))
+}
+
+/// The names of the bots `prompt` could consult, read only where it holds an `@`.
+fn session_bots(open: &Open, workspace: &Workspace, prompt: &str, wait: bool) -> Vec<String> {
+    if bravebot_mentions::referenced(prompt).is_empty() {
+        return Vec::new();
+    }
+    session_definitions(open, workspace, wait)
+        .map(|definitions| crate::consult::bots(&definitions))
+        .unwrap_or_default()
+}
+
 /// `workspace`, the one a turn is about to run in, given the checkouts the session keeps, or
 /// the session's record of them begun from it (CHECKOUT-16).
 fn with_session_checkouts(open: &Open, workspace: Workspace) -> Workspace {
@@ -2331,6 +2666,17 @@ struct Work {
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
     addressing: Option<String>,
+    /// The bot this turn consults, where a line a person sent named one (CONSULT-2).
+    consulting: Option<crate::consult::Consulting>,
+    /// Whether the brief the consult was sent was drafted from private content, so the consult's
+    /// conversation holds that too (CONSULT-6).
+    private: bool,
+    /// The line the person sent that named the bots, which each next brief is drafted from.
+    named: String,
+    /// The bots the line named after this one, consulted once this one replies (CONSULT-9).
+    left: Vec<String>,
+    /// Where they are left for the next poll to start.
+    consults_left: ConsultsLeft,
     workspace: Workspace,
     prompt: String,
     /// What this prompt was composed for, where nobody typed it.
@@ -2419,6 +2765,47 @@ fn shown_path(path: &Path, project: &Path) -> String {
         .to_string()
 }
 
+/// What `consult.brief` says of a drafted brief, holding it for `turn.send` where it is offered.
+///
+/// Only a brief the planner could have held, or one a person promoted, is offered, and the words
+/// offered are the kept ones (CONSULT-6). One that holds nothing private is sent as it is: the
+/// person sent the line that asked for it, and said yes to a promoted one whole (CONSULT-5).
+fn drafted(
+    done: Result<bravebot_agent::aside::Answered, bravebot_agent::aside::AsideError>,
+    cancelled: bool,
+    mut brief: Brief,
+    row: String,
+    held: &Mutex<Option<Brief>>,
+    state: &Mutex<State>,
+) -> Value {
+    let bot = brief.bot.clone();
+    let mut data = json!({ "bot": bot, "row": row, "line": brief.line, "brief": null });
+    let message = match done {
+        Ok(answered) => {
+            if let Ok(mut state) = state.lock() {
+                state.tokens += answered.usage.total();
+            }
+            match answered.kept {
+                Some(kept) => {
+                    data["brief"] = json!(bravebot_agent::aside::brief_prompt(&brief.line, &kept));
+                    data["private"] = json!(answered.private);
+                    data["send"] = json!(!answered.private);
+                    brief.private = answered.private;
+                    if let Ok(mut held) = held.lock() {
+                        *held = Some(brief);
+                    }
+                    t!(consult_brief_ready, bot = bot, bound = row)
+                }
+                None => t!(consult_brief_declined, bot = bot),
+            }
+        }
+        Err(_) if cancelled => t!(consult_brief_stopped, bot = bot),
+        Err(error) => t!(consult_brief_failed, bot = bot, problem = error.to_string()),
+    };
+    data["message"] = json!(message);
+    data
+}
+
 /// Run one turn to its end, whatever that end is.
 ///
 /// The worker owns the whole of it: the call, writing the record afterwards, and saying
@@ -2442,6 +2829,11 @@ fn work(work: Work) {
         watches,
         model,
         addressing,
+        consulting,
+        private,
+        named,
+        left,
+        consults_left,
         workspace,
         prompt,
         composed,
@@ -2458,6 +2850,12 @@ fn work(work: Work) {
         finished,
         interjections,
     } = work;
+    // A consult is a turn addressed to the bot, holding no more than its host (CONSULT-2, CONSULT-7).
+    let consulted_from = consulting.as_ref().and(addressing.clone());
+    let addressing = consulting
+        .as_ref()
+        .map(|consulting| consulting.bot.clone())
+        .or(addressing);
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
     crate::models::adopt_window(&mut config, model.as_deref());
@@ -2551,7 +2949,12 @@ fn work(work: Work) {
         // A turn in a bot's conversation is addressed to the bot's definition whatever composed
         // it (MEMORY-10). The name is the session's, set from the bot's row, so nothing the turn
         // produced chooses it; the kernel compares it against the set this session resolved.
-        .addressing(addressing);
+        .addressing(addressing)
+        .consulted_from(consulted_from)
+        // A consult is offered no way to propose another (CONSULT-8).
+        .consulting(consulting.is_some())
+        // The window draws the card a proposal is sent from (CONSULT-12).
+        .drawing_consult_cards(true);
     if let Some(composed) = composed {
         task = task.composed_rather_than_typed(composed);
     }
@@ -2572,7 +2975,10 @@ fn work(work: Work) {
         .lock()
         .map(|w| bravebot_agent::watch::MAX_LIVE.saturating_sub(w.live().len()))
         .unwrap_or(0);
-    task = task.arming(if free == 0 {
+    // A consult lasts one reply, and a watch is the host's (CONSULT-13).
+    task = task.arming(if consulting.is_some() {
+        bravebot_agent::watch::Arming::Unavailable
+    } else if free == 0 {
         bravebot_agent::watch::Arming::Full
     } else {
         bravebot_agent::watch::Arming::Allowed { free }
@@ -2604,12 +3010,21 @@ fn work(work: Work) {
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
     let began_at = std::time::Instant::now();
+    // A consult's context is its line and what it reads, never the host's conversation, which is
+    // given the reply when the consult ends (CONSULT-1, CONSULT-15).
+    let mut consulted = consulting
+        .as_ref()
+        .map(|_| bravebot_agent::consult::conversation(private));
+    let conversation = match consulted.as_mut() {
+        Some(fresh) => fresh,
+        None => &mut state.conversation,
+    };
     let completed = agent_turn::resume(
         &config,
         &egress,
         &workspace,
         &task,
-        &mut state.conversation,
+        conversation,
         &mut confining,
         &mut reporter,
         &mut sink,
@@ -2626,7 +3041,25 @@ fn work(work: Work) {
 
     // Cleanup has finished on every return, including cancellation and request errors.
     state.answers.adopt(completed.decisions);
-    let outcome = completed.outcome;
+    let mut outcome = completed.outcome;
+    if let Some(consulting) = &consulting {
+        bravebot_agent::consult::hand_back(
+            &named,
+            &consulting.bot,
+            &consulting.definition,
+            &mut outcome,
+            &mut state.conversation,
+            &mut sink,
+        );
+    }
+    // The next bot is asked only once this one replied. A consult that failed or was stopped ends
+    // the rest (CONSULT-9).
+    let next =
+        (consulting.is_some() && outcome.is_ok() && !cancel.is_cancelled() && !left.is_empty())
+            .then_some((named, left));
+    if let Ok(mut queued) = consults_left.lock() {
+        *queued = next;
+    }
 
     // The prompt joins the history the terminal also reads, so recall works across both
     // front-ends. Best-effort by design upstream, and nothing here depends on it.
@@ -2688,7 +3121,8 @@ fn work(work: Work) {
             state.timing.entry(turn).or_default().add(outcome.timing);
             // Left as it was when a turn never reached a server, so a record keeps the last model
             // that actually answered rather than forgetting it to a turn that failed early.
-            if !outcome.model.is_empty() {
+            // Not for a consult, whose model is its bot's and not the session's.
+            if !outcome.model.is_empty() && consulting.is_none() {
                 state.model = Some(outcome.model.clone());
             }
 
@@ -2712,6 +3146,9 @@ fn work(work: Work) {
                     // The released reply, authorised inside the turn while the policy was
                     // still open. Never `outcome.reply`, which is the labelled value.
                     "reply": outcome.reply_for_display(),
+                    // The bot that answered, where the line consulted one, so the reply is drawn
+                    // under its name (CONSULT-11).
+                    "consulted": consulting.as_ref().map(|consulting| consulting.bot.as_str()),
                     "model": outcome.model,
                     "steps": outcome.steps,
                     "clean": outcome.clean,
@@ -4072,6 +4509,89 @@ mod watch_tests {
         assert!(watches.lock().unwrap().is_empty());
         assert_eq!(events.lock().unwrap()[0].data["reason"], "expired");
     }
+
+    fn a_session_with_consults_left(
+        running: Option<Running>,
+    ) -> (
+        Bridge,
+        String,
+        ConsultsLeft,
+        Arc<Mutex<Vec<Event>>>,
+        tempfile::TempDir,
+    ) {
+        let directory = tempfile::Builder::new()
+            .prefix("bravebot-consults-left-")
+            .tempdir()
+            .unwrap();
+        let root = directory.path().to_path_buf();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::clone(&events);
+        let mut bridge = Bridge::new(Box::new(move |e| held.lock().unwrap().push(e)));
+        bridge.settings = Some(root.join("missing.json"));
+        let left: ConsultsLeft = Arc::new(Mutex::new(Some((
+            "ask @reviewer and @tester".to_string(),
+            vec!["tester".to_string()],
+        ))));
+        let handle = bridge.mint(Open {
+            running,
+            consults_left: Arc::clone(&left),
+            ..Open::opened(
+                root.clone(),
+                State::fresh(TrustStore::new(&root)),
+                true,
+                None,
+                false,
+            )
+        });
+        (bridge, handle, left, events, directory)
+    }
+
+    /// CONSULT-9: the bots a line left are taken by the next poll once nothing runs, and a line
+    /// whose next bot cannot be consulted runs no turn and is not sent to the host.
+    #[test]
+    fn the_bots_a_line_left_are_consulted_by_the_next_poll_and_never_given_to_the_host() {
+        let (mut bridge, _, left, events, _directory) = a_session_with_consults_left(None);
+        bridge.poll_watches_at(Instant::now());
+        assert!(
+            left.lock().unwrap().is_none(),
+            "the bots left were not taken"
+        );
+        let events = events.lock().unwrap();
+        assert!(
+            events.iter().all(|e| e.name != "turn.started"),
+            "{events:?}"
+        );
+        assert_eq!(
+            events.iter().filter(|e| e.name == "consult.ended").count(),
+            1
+        );
+    }
+
+    /// CONSULT-9: nothing is taken while a turn runs, and stopping one ends the rest.
+    #[test]
+    fn a_consult_still_running_keeps_the_rest_and_stopping_it_drops_them() {
+        let (answers, _receiver) = mpsc::channel();
+        let running = Running {
+            cancel: Cancel::new(),
+            answers,
+            pending: Arc::new(Mutex::new(None)),
+            target: 1,
+            finished: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            interjections: None,
+        };
+        let (mut bridge, handle, left, events, _directory) =
+            a_session_with_consults_left(Some(running));
+        bridge.poll_watches_at(Instant::now());
+        assert!(left.lock().unwrap().is_some());
+        assert!(events.lock().unwrap().is_empty());
+
+        let request = Request::parse(
+            &json!({"id": 1, "method": "turn.cancel", "params": {"session": handle}}).to_string(),
+        )
+        .unwrap();
+        bridge.dispatch(&request).unwrap();
+        assert!(left.lock().unwrap().is_none());
+    }
 }
 
 #[cfg(test)]
@@ -4113,6 +4633,10 @@ mod opening_tests;
 #[cfg(test)]
 #[path = "failure_tests.rs"]
 mod failure_tests;
+
+#[cfg(test)]
+#[path = "drafted_tests.rs"]
+mod drafted_tests;
 
 #[cfg(test)]
 #[path = "account_session_tests.rs"]

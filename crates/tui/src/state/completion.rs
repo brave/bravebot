@@ -84,6 +84,25 @@ impl Session {
         }
     }
 
+    /// Hold the bots an `@` could consult while the line ends in a reference, and let them go once
+    /// it does not.
+    pub fn settle_bots(&mut self, resolve: impl FnOnce() -> Vec<bravebot_mentions::Entry>) {
+        let typing = !self.shell
+            && self.status != Status::Working
+            && bravebot_mentions::typed_reference(&self.input).is_some();
+        match (typing, self.bots.is_some()) {
+            (true, false) => {
+                self.bots = Some(resolve());
+                self.offered_epoch += 1;
+            }
+            (false, true) => {
+                self.bots = None;
+                self.offered_epoch += 1;
+            }
+            _ => {}
+        }
+    }
+
     /// The skills held while a slash word is being typed, and none otherwise.
     ///
     /// None while work runs, even if the line that started it was holding some: the loop that
@@ -188,8 +207,17 @@ impl Session {
         }
         match bravebot_mentions::typed_reference(&self.input) {
             Some(typed) => {
-                let mut entries =
-                    bravebot_mentions::matching(&self.workspace, &typed, &self.reference_sources);
+                // Bots first, because a bot wins over a file of its name when the line is sent,
+                // and the list shows that before it is (CONSULT-3).
+                let mut entries = match &self.bots {
+                    Some(held) => bravebot_mentions::bots_matching(&typed, held),
+                    None => Vec::new(),
+                };
+                entries.extend(bravebot_mentions::matching(
+                    &self.workspace,
+                    &typed,
+                    &self.reference_sources,
+                ));
                 // After the files: a session is named by a title or an id rather than walked
                 // into, and a path being typed towards is what a person most often means.
                 entries.extend(self.sessions_matching(&typed));

@@ -123,6 +123,29 @@ piece of work is:";
 /// The most a handoff brief shows or keeps, in characters.
 pub const HANDOFF_LIMIT: usize = 4000;
 
+/// The most a consult's brief shows or keeps, in characters.
+pub const BRIEF_LIMIT: usize = 4000;
+
+/// What drafting a consult's brief asks, in the driver's own words (CONSULT-5).
+///
+/// `bot` is a name the driver matched, which is a slug, and `line` is what the person typed. The
+/// line goes ahead of the draft on the card, so the draft is asked not to repeat it.
+fn brief_question(bot: &str, line: &str) -> String {
+    format!(
+        "I have asked the agent {bot} about my next line, and it has not read any of this \
+         exchange. Write what it needs from this exchange to answer it, in plain text and as short \
+         as it can be while still being enough: what my line refers to, what has been decided and \
+         why, and the files and facts that matter to it. Do not answer the line yourself, do not \
+         repeat it, and do not address me or {bot}. Write that and nothing else. My line is:\n\n\
+         {line}"
+    )
+}
+
+/// The first prompt of a consult a drafted brief starts: the person's line, then the draft.
+pub fn brief_prompt(line: &str, draft: &str) -> String {
+    format!("{}\n\n{}", line.trim(), draft.trim())
+}
+
 /// What the new session is told about what did not cross, written by the driver after the brief.
 ///
 /// A brief cannot say this itself: the model that writes it knows what the old session held, and
@@ -333,6 +356,17 @@ impl Question {
         }
     }
 
+    /// The brief a consult of `bot` starts from, for the line the person sent (CONSULT-5).
+    ///
+    /// A question the driver writes, over the host's exchange as it stands. The answer is cut to
+    /// [`BRIEF_LIMIT`] whatever the model made of the instruction.
+    pub fn brief(conversation: &Conversation, bot: &str, line: &str) -> Self {
+        Self {
+            limit: Some(BRIEF_LIMIT),
+            ..Self::about(conversation, &brief_question(bot, line), Vec::new())
+        }
+    }
+
     /// Carry the files dropped onto the line, already read.
     ///
     /// Separate from [`Question::about`] because the two happen in different places. The exchange is
@@ -393,6 +427,9 @@ pub struct Answered {
     /// `None` where it could not, which is a conversation that has met something untrusted. The
     /// person still reads it; the record does not keep it, because a record is read back.
     pub kept: Option<String>,
+    /// Whether the answer was written from private content, so whatever is given it holds that
+    /// too (CONSULT-6).
+    pub private: bool,
     /// What the question cost, so the session can charge it.
     pub usage: Usage,
 }
@@ -446,8 +483,85 @@ pub fn ask<S: Sink>(
     policy: &mut Policy<'_, S>,
     chat: &mut Chat<'_>,
     question: Question,
-    mut watching: impl FnMut(&str),
+    watching: impl FnMut(&str),
 ) -> Result<Answered, AsideError> {
+    answer(policy, chat, question, watching).map(|(answered, _)| answered)
+}
+
+/// Ask for the brief a host drafts for `bot`, and where the host could not have held it, put it to
+/// a person with a check beside it (CONSULT-6).
+///
+/// A draft the planner could have held comes back as [`ask`] hands it back. Any other draft is
+/// checked whole, drawn on the prompt every promotion of one value is drawn on, and promoted once
+/// for this bot where the person says yes. `kept` is `None` where they said no.
+pub fn draft_brief<S: Sink, C: crate::confirm::Confirmer, R: crate::report::Reporter>(
+    policy: &mut Policy<'_, S>,
+    chat: &mut Chat<'_>,
+    question: Question,
+    bot: &str,
+    confirmer: &mut C,
+    reporter: &mut R,
+) -> Result<Answered, AsideError> {
+    let (mut answered, drawn) = answer(policy, chat, question, |_| {})?;
+    if answered.kept.is_some() {
+        return Ok(answered);
+    }
+
+    let spec = policy.before_vetting_a_brief(bot, drawn.clone());
+    let checked = crate::vet::run(policy, chat, reporter, &spec);
+    answered.usage.add(checked.usage);
+    let (reason, reason_label) = crate::tools::released_reason(policy, checked.reason);
+
+    // Counted and spelled in the reshape, as a vetted read's are: the person reads the brief with
+    // the characters that draw as nothing written out.
+    let measured = policy.render_in_place("consult_brief", &drawn, |text| {
+        let lines = text.lines().count();
+        let spelled = bravebot_core::invisible::spelled(text);
+        (spelled.text, lines, spelled.hidden)
+    });
+    let label = measured.label().to_string();
+    let proof = policy.authorise_display_release("a brief drafted for a consult");
+    let (content, lines, hidden) = measured.declassify(&proof);
+    let request = crate::confirm::VetRequest {
+        origin: format!("the brief drafted for {bot} from this conversation"),
+        expects: format!("a brief for {bot} about your line"),
+        content,
+        label: Some(label),
+        lines,
+        hidden,
+        verdict: checked.verdict,
+        reason,
+        reason_label,
+        picture: None,
+    };
+    if confirmer.confirm_vetted_read(&request) == crate::confirm::Decision::Reject {
+        return Ok(answered);
+    }
+
+    policy.endorse_brief(bot);
+    let promoted =
+        policy.promote_a_brief(bot, &drawn, bravebot_core::vetting::Endorsed::ByAPerson)?;
+    let mut brief_only = bravebot_core::slot::SlotStore::new();
+    answered.kept = match policy.present(
+        "consult_brief",
+        SlotId::new("brief"),
+        "the brief a person sent to a consult",
+        &promoted,
+        &mut brief_only,
+    )? {
+        Presentation::Visible(body) => Some(body),
+        Presentation::Quarantined(_) => None,
+    };
+    Ok(answered)
+}
+
+/// [`ask`], handing back as well the answer as it is drawn, still labelled.
+fn answer<S: Sink>(
+    policy: &mut Policy<'_, S>,
+    chat: &mut Chat<'_>,
+    question: Question,
+    mut watching: impl FnMut(&str),
+) -> Result<(Answered, bravebot_core::value::Labelled<String>), AsideError> {
     // No tools, deliberately and visibly: `ChatRequest::new` leaves the field empty and nothing
     // below adds to it. A question that could call a tool would be a turn, and a turn is the
     // thing this exists to avoid being.
@@ -509,12 +623,21 @@ pub fn ask<S: Sink>(
         ),
         None => (completion.content.declassify(&as_written), kept),
     };
+    let private = !written.label().is_public();
+    let drawn = match limit {
+        Some(limit) => policy.render_in_place("btw", &written, |text| capped(&text, limit)),
+        None => written,
+    };
 
-    Ok(Answered {
-        shown,
-        kept,
-        usage: completion.usage,
-    })
+    Ok((
+        Answered {
+            shown,
+            kept,
+            private,
+            usage: completion.usage,
+        },
+        drawn,
+    ))
 }
 
 #[cfg(test)]
@@ -545,6 +668,34 @@ mod tests {
         assert!(
             text.contains("why is the parser recursive?"),
             "the question itself did not reach the request: {text}"
+        );
+    }
+
+    /// CONSULT-5: the brief is asked over the host's exchange in the driver's words, naming the bot
+    /// and carrying the line, and the prompt the consult starts from opens with the line.
+    #[test]
+    fn a_brief_is_asked_over_the_hosts_exchange_and_opens_with_the_line() {
+        let asking = Question::brief(&an_exchange(), "rule-reviewer", "@rule-reviewer check it");
+        assert_eq!(asking.limit, Some(BRIEF_LIMIT));
+
+        let request = asking.into_request();
+        assert!(
+            request
+                .iter()
+                .any(|message| message.content.text() == "add the feature"),
+            "the host's exchange is not what the brief is drafted from"
+        );
+        let text = request
+            .last()
+            .expect("the question closes it")
+            .content
+            .text();
+        assert!(text.contains("the agent rule-reviewer"), "{text}");
+        assert!(text.ends_with("@rule-reviewer check it"), "{text}");
+
+        assert_eq!(
+            brief_prompt(" @rule-reviewer check it ", "\nthe parser was rewritten\n"),
+            "@rule-reviewer check it\n\nthe parser was rewritten"
         );
     }
 

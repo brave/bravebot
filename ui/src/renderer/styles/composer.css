@@ -218,6 +218,14 @@
   white-space: nowrap;
 }
 .mention-parent { color: var(--ink-tertiary); }
+.mention-note {
+  margin-inline-start: auto;
+  overflow: hidden;
+  font: var(--type-caption);
+  color: var(--ink-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mention-foot {
   display: flex;
   align-items: center;
@@ -375,6 +383,13 @@
 .composer-notice strong { font: var(--type-caption-strong); color: var(--ink-primary); }
 .composer-notice .notice-text { flex: 1 1 16em; min-width: 0; }
 .composer-notice .notice-actions { display: flex; gap: var(--leo-spacing-xs); margin-left: auto; }
+/* A brief waiting for the person is news, not a warning. */
+.composer-notice.consult-brief {
+  --leo-icon-color: var(--accent);
+  --leo-progressring-size: 12px;
+  --leo-progressring-stroke-width: 2px;
+  --leo-progressring-color: var(--accent);
+}
 
 /* ---- above the box: the alerts and pills that float over the end of the transcript.
    They stand on the box's top edge, take no height in the dock, and have the box's width. */

@@ -56,6 +56,8 @@ struct Totals {
     turn: crate::outcome::Spent,
     /// Each delegate's last report, from its first request until the turn reports again.
     delegates: BTreeMap<DelegateId, Delegated>,
+    /// A consulted bot's last report, until the turn reports again with it added (CONSULT-12).
+    consult: crate::outcome::Spent,
 }
 
 #[derive(Default)]
@@ -76,6 +78,7 @@ impl Totals {
         for delegate in self.delegates.values() {
             total.add_spent(&delegate.spent);
         }
+        total.add_spent(&self.consult);
         total
     }
 }
@@ -99,6 +102,7 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         Borrowed {
             lent: self,
             from: None,
+            consult: false,
             relayed: None,
             stop: None,
             spent: Default::default(),
@@ -106,15 +110,20 @@ impl<'a, T: ?Sized> Lent<'a, T> {
         }
     }
 
+    /// A handle for a consulted bot's turn, which is shown as the turn's but has a conversation of
+    /// its own: its prompt, request and to-do list are not the turn's.
+    pub fn consult(&self) -> Borrowed<'_, 'a, T> {
+        Borrowed {
+            consult: true,
+            ..self.turn()
+        }
+    }
+
     /// A handle for one delegate's work, which says whose every report through it is.
     pub fn delegate(&self, id: DelegateId) -> Borrowed<'_, 'a, T> {
         Borrowed {
-            lent: self,
             from: Some(id),
-            relayed: None,
-            stop: None,
-            spent: Default::default(),
-            inference: Vec::new(),
+            ..self.turn()
         }
     }
 
@@ -227,6 +236,8 @@ pub struct Borrowed<'m, 'a, T: ?Sized> {
     lent: &'m Lent<'a, T>,
     /// Whose work goes through this handle, where it is a delegate's.
     from: Option<DelegateId>,
+    /// Set where this is a consulted bot's turn.
+    consult: bool,
     /// A delegate beneath `from` whose work the next call forwards, as the handle that call came
     /// through said. Only ever one of `from`'s own descendants, and spent by the call it names.
     relayed: Option<DelegateId>,
@@ -285,26 +296,36 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
     }
 
     fn wants_request_view(&self) -> bool {
-        self.from.is_none() && self.lent.hold().wants_request_view()
+        self.turns_own() && self.lent.hold().wants_request_view()
     }
 
-    /// Only the turn's own request: a delegate's is a different conversation with a different
-    /// prompt.
+    /// Only the turn's own request: a delegate's or a consult's is a different conversation with
+    /// a different prompt.
     fn request_built(&mut self, view: crate::request_view::RequestView) {
-        if self.from.is_none() {
+        if self.turns_own() {
             self.lent.hold().request_built(view);
         }
     }
 
     fn prompt_recorded(&mut self, at: usize) {
-        // A delegate has its own conversation; its offsets do not describe the parent turn.
-        if self.from.is_none() {
+        // A delegate or a consult has its own conversation; its offsets do not describe the turn's.
+        if self.turns_own() {
             self.lent.hold().prompt_recorded(at);
         }
     }
 
+    /// A consult's list would replace the turn's on the screen, and the turn's would not come back.
+    fn todos(&mut self, rows: Vec<Row>) {
+        if self.consult {
+            return;
+        }
+        let whose = self.whose();
+        let mut held = self.lent.hold();
+        held.reporting_for(whose);
+        held.todos(rows);
+    }
+
     reports! {
-        fn todos(&mut self, rows: Vec<Row>);
         fn output_tokens(&mut self, written: u64);
         fn phase(&mut self, phase: Phase);
         fn narration(&mut self, text: String);
@@ -331,6 +352,8 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         fn message_sent(&mut self, sent: SentMessage);
         fn delegate_started(&mut self, delegation: Delegation);
         fn delegate_waiting(&mut self, delegate: DelegateId);
+        fn consult_started(&mut self, bot: String);
+        fn consult_finished(&mut self, bot: String, reply: Option<String>);
     }
 
     /// Report the turn's total as the turn's own figure plus what its delegates have spent so far.
@@ -344,8 +367,11 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         let mut totals = self.lent.totals();
         match self.from {
             Some(delegate) => totals.delegates.entry(delegate).or_default().spent = spent,
+            None if self.consult => totals.consult = spent,
+            // The turn adds a consult's usage to its own when the consult ends, before it reports.
             None => {
                 totals.turn = spent;
+                totals.consult = Default::default();
                 totals.delegates.retain(|_, delegate| !delegate.collected);
             }
         }
@@ -383,6 +409,10 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
 }
 
 impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
+    fn asks_a_person(&self) -> bool {
+        self.lent.hold().asks_a_person()
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.asked(
             |held| held.confirm_write(request),
@@ -476,6 +506,16 @@ impl<T: Confirmer + ?Sized> Confirmer for Borrowed<'_, '_, T> {
         )
     }
 
+    fn confirm_consult(
+        &mut self,
+        request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        self.asked(
+            |held| held.confirm_consult(request),
+            |refuse| refuse.confirm_consult(request),
+        )
+    }
+
     fn confirm_move(&mut self, request: &crate::confirm::MoveRequest) -> Decision {
         self.asked(
             |held| held.confirm_move(request),
@@ -564,6 +604,11 @@ impl<T: ?Sized> Borrowed<'_, '_, T> {
     /// Whose the call being forwarded is: the descendant it was relayed for, or this handle's own.
     fn whose(&mut self) -> Option<DelegateId> {
         self.relayed.take().or(self.from)
+    }
+
+    /// Whether this handle's conversation is the turn's own.
+    fn turns_own(&self) -> bool {
+        self.from.is_none() && !self.consult
     }
 
     /// Keep request intervals available on successful, failed and cancelled returns alike.
@@ -719,6 +764,13 @@ mod tests {
                 _request: &crate::confirm::MessageRequest,
             ) -> crate::confirm::MessageDecision {
                 crate::confirm::MessageDecision::Decline
+            }
+
+            fn confirm_consult(
+                &mut self,
+                _request: &crate::confirm::ConsultRequest,
+            ) -> crate::confirm::Decision {
+                crate::confirm::Decision::Reject
             }
 
             fn confirm_move(
@@ -992,6 +1044,30 @@ mod tests {
             nested.turn().prompt_recorded(2);
         }
         assert_eq!(recording.prompts, [7]);
+    }
+
+    /// A consult is shown as the turn's, but its conversation is the bot's: its prompt position is
+    /// not the turn's, and its spend is added to the turn's rather than put in its place
+    /// (CONSULT-12).
+    #[test]
+    fn a_consult_neither_moves_the_turns_prompt_nor_replaces_its_total() {
+        let mut recording = RecordingReporter::default();
+        {
+            let lent = Lent::new(&mut recording);
+            let mut turn = lent.turn();
+            let mut consult = lent.consult();
+            turn.prompt_recorded(7);
+            turn.spent(a_total(1_000));
+            consult.prompt_recorded(0);
+            consult.spent(a_total(30));
+            turn.spent(a_total(1_030));
+        }
+        assert_eq!(recording.prompts, [7], "a consult moved the turn's prompt");
+        assert_eq!(
+            recording.spent,
+            vec![a_total(1_000), a_total(1_030), a_total(1_030)],
+            "a consult's spend replaced the turn's total, or was counted twice once the turn took it"
+        );
     }
 
     fn a_gate(gate: &'static str) -> Event {

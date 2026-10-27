@@ -510,6 +510,90 @@ fn a_front_end_may_name_its_own_tag_and_none_of_the_agents() {
     }
 }
 
+/// CONSULT-11: a bot's reply crosses as its own kind with the bot that answered, so a resumed
+/// session draws it under the same name; the driver's note is not sent, and a reply the host was
+/// given a reference to sends no words.
+#[test]
+fn a_consulted_reply_crosses_under_the_bot_that_answered() {
+    let consulted = |text: Option<&str>| Said::Composed {
+        why: Composed::Consulted {
+            bot: "reviewer".into(),
+            definition: "~/.bravebot/agents".into(),
+            model: "haiku".into(),
+            label: "(T,pub)".into(),
+            text: text.map(str::to_string),
+        },
+        text: "That line was not sent to you. NOTE".into(),
+    };
+    let said = wire::recounted(&[consulted(Some("looks fine")), consulted(None)]);
+    assert_eq!(
+        said[0],
+        json!({
+            "kind": "consulted", "bot": "reviewer", "definition": "~/.bravebot/agents",
+            "model": "haiku", "label": "(T,pub)", "text": "looks fine", "kept": null
+        })
+    );
+    assert_eq!(said[1]["text"], json!(null));
+    assert_eq!(said[1]["kept"], json!(bravebot_agent::consult::kept()));
+    assert!(said.iter().all(|entry| !entry.to_string().contains("NOTE")));
+}
+
+/// CONSULT-2: a resumed line is tagged with the bots the record says it consulted, each copy of a
+/// line that consulted two in turn with both, in UTF-16 units. A line nothing answered, and a word
+/// naming a bot that did not answer it, carry no tag.
+#[test]
+fn a_resumed_line_is_tagged_with_the_bots_that_answered_it() {
+    let answered = |bot: &str| Said::Composed {
+        why: Composed::Consulted {
+            bot: bot.into(),
+            definition: "~/.bravebot/agents".into(),
+            model: "haiku".into(),
+            label: "(T,pub)".into(),
+            text: Some("fine".into()),
+        },
+        text: "That line was not sent to you.".into(),
+    };
+    let line = "é @reviewer, @tester and @later";
+    let said = wire::recounted(&[
+        Said::User(line.into()),
+        answered("reviewer"),
+        Said::User(line.into()),
+        answered("tester"),
+        Said::Assistant("ok".into()),
+        Said::User("@reviewer again".into()),
+    ]);
+    let both = json!([
+        {"start": 2, "end": 11, "bot": "reviewer"},
+        {"start": 13, "end": 20, "bot": "tester"},
+    ]);
+    assert_eq!(said[0]["tags"], both, "{}", said[0]);
+    assert_eq!(said[2]["tags"], both, "{}", said[2]);
+    assert_eq!(said[5].get("tags"), None, "{}", said[5]);
+}
+
+/// CONSULT-10 and CONSULT-12: the card for a proposed consult carries the bot, where it was
+/// defined, the model and the bound it runs under, the brief whole and the brief's label.
+#[test]
+fn a_proposed_consult_crosses_with_its_bot_model_bound_and_brief() {
+    let request = bravebot_agent::confirm::ConsultRequest {
+        bot: "reviewer".into(),
+        definition: "~/.bravebot/agents".into(),
+        model: "haiku".into(),
+        rounds: 8,
+        budget: Some(20_000),
+        brief: "Read src/lib.rs.\nSay what is wrong.".into(),
+        label: bravebot_core::label::Label::untrusted_public(),
+    };
+    assert_eq!(
+        wire::consult_request(3, &request),
+        json!({
+            "request": 3, "bot": "reviewer", "definition": "~/.bravebot/agents", "model": "haiku",
+            "rounds": 8, "budget": 20_000, "brief": "Read src/lib.rs.\nSay what is wrong.",
+            "label": "(U,pub)"
+        })
+    );
+}
+
 /// MSG-11: a message between sessions crosses as its own kind with the session, the name, the
 /// label and the words, so a window draws a marked block and never a prompt; the frame the planner
 /// was shown is not sent, and a message whose words the planner was not given sends none.

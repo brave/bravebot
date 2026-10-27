@@ -131,6 +131,10 @@ pub enum Action {
     /// Have a brief written for the goal typed, from this session's conversation, and put it in the
     /// box. Needs the conversation and the network, which the loop owns.
     Handoff(String),
+    /// Send the line in the box. A line naming a bot has the host draft a brief for it, and any
+    /// other line is sent as typed.
+    /// Needs the definitions, the conversation and the network, which the loop owns (CONSULT-5).
+    Brief,
     /// Have the line in the box rewritten to be more specific, from this session's conversation, and
     /// put the rewrite in the box. Carries the line as the box holds it, and the words it is
     /// asked as, which are that line with a folded paste put back. Needs the conversation and the
@@ -1214,6 +1218,15 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.restore_unenhanced();
             Action::Redraw
         }
+        // A brief in the box is declined rather than wiped: nothing is sent, and the line that asked
+        // for it comes back (CONSULT-5).
+        KeyCode::Esc
+            if session.editing() == crate::vim::Editing::Ordinary
+                && session.brief_pending().is_some() =>
+        {
+            session.decline_brief();
+            Action::Redraw
+        }
         KeyCode::Esc if session.editing() == crate::vim::Editing::Ordinary => {
             session.clear_input();
             Action::Redraw
@@ -1244,6 +1257,15 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::Enter if !session.shell && session.handoff_pending() => {
             match session.take_handoff() {
                 Some(brief) => Action::HandOver(brief),
+                None => Action::None,
+            }
+        }
+        // A consult's brief, as the person left it, for the reason the handoff's brief is before
+        // the command arm: it is the brief whatever it begins with. Sending it is the grant
+        // (CONSULT-5).
+        KeyCode::Enter if !session.shell && session.brief_pending().is_some() => {
+            match session.send_brief() {
+                Some(prompt) => Action::Submit(prompt),
                 None => Action::None,
             }
         }
@@ -1315,6 +1337,9 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
             session.accept_completion();
             Action::Redraw
         }
+        // The host drafts the brief a line naming a bot sends, so the line stays in the box until
+        // the loop, which holds the definitions, says whether it names one.
+        KeyCode::Enter if bravebot_mentions::could_consult(session.input()) => Action::Brief,
         KeyCode::Enter => match session.submit() {
             Some(prompt) => Action::Submit(prompt),
             None => Action::None,

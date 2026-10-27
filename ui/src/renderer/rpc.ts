@@ -38,6 +38,7 @@ export async function callBot(request: {
   attachments?: string[]
   drops?: string[]
   pastes?: string[]
+  brief?: boolean
 }): Promise<void> {
   unwrap(await window.bravebot.sendBotTurn(request))
 }

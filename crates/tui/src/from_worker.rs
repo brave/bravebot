@@ -69,6 +69,8 @@ pub(crate) fn show_in_a_turn(
             failed,
             reported,
         } => session.delegate_finished(id, note, failed, reported),
+        ToMain::ConsultStarted(bot) => session.consult_began(bot),
+        ToMain::ConsultFinished { bot, reply } => session.consult_ended(bot, reply),
         shown @ (ToMain::RequestBuilt(_)
         | ToMain::Written(_)
         | ToMain::Phase(_)
@@ -100,7 +102,8 @@ pub(crate) fn show_in_a_turn(
         | ToMain::Move(_)
         | ToMain::Path(_)
         | ToMain::Host(_)
-        | ToMain::Ask(_)) => return Some(question),
+        | ToMain::Ask(_)
+        | ToMain::Consult(_)) => return Some(question),
     }
     None
 }
@@ -172,6 +175,29 @@ mod tests {
                 .iter()
                 .any(|entry| entry.text == "said once"),
             "the notice was not taken into the transcript"
+        );
+    }
+
+    /// CONSULT-10, CONSULT-12: a proposed bot whose model cannot run here reaches the terminal as a
+    /// transcript line naming the model, and nothing is handed back to be drawn as a card. Were it
+    /// a question, the person would be left a card to dismiss for a consult that cannot run.
+    #[test]
+    fn a_consult_refused_for_its_model_is_a_transcript_line_and_no_card() {
+        let refused = "reviewer asked for haiku, which needs a sign-in first, so it did not run";
+        let said = bravebot_i18n::t!(consult_refused_notice, bot = "reviewer", refused = refused)
+            .to_string();
+        let mut session = Session::new("turn");
+        let taken = show_in_a_turn(&mut session, ToMain::Notice(said.clone()), 100_000, false);
+        assert!(taken.is_none(), "{taken:?}");
+        let line = session
+            .transcript
+            .iter()
+            .find(|entry| entry.text == said)
+            .map(|entry| entry.text.as_str());
+        assert!(
+            line.is_some_and(|text| text.contains("haiku") && text.contains("Nothing was sent")),
+            "{:?}",
+            session.transcript
         );
     }
 }

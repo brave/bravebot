@@ -23,19 +23,24 @@ use std::path::{Path, PathBuf};
 /// the terminal, so the window splices them rather than working out where the word begins or how a
 /// name is written (NAME-9).
 ///
-/// `sources` is asked for only once a name is being typed, because it opens the session's
-/// workspace and the window asks about every line, most of which name nothing.
+/// The bots the line could consult come first, each marked `bot` with a `note` naming its model and
+/// bound, as the terminal lists them (CONSULT-3).
+///
+/// `offerable` is asked for only once a name is being typed, because it opens the session's
+/// workspace and the window asks about every line, most of which name nothing. It answers with the
+/// reference directories and a row for each bot.
 pub fn offer(
     project: &Path,
     line: &str,
     cursor: usize,
-    sources: impl FnOnce() -> Result<Vec<(String, PathBuf)>, Failure>,
+    offerable: impl FnOnce() -> Result<Offerable, Failure>,
 ) -> Result<Value, Failure> {
     let Some(typed) = bravebot_mentions::typed_reference(line) else {
         return Ok(json!({ "typed": null, "word": null, "entries": [], "completes": false }));
     };
-    let sources = sources()?;
-    let entries = bravebot_mentions::matching(project, &typed, &sources);
+    let Offerable { sources, bots } = offerable()?;
+    let mut entries = bravebot_mentions::bots_matching(&typed, &bots);
+    entries.extend(bravebot_mentions::matching(project, &typed, &sources));
     let completes = bravebot_mentions::enter_completes(project, &typed, &entries, cursor, &sources);
     let entries: Vec<Value> = entries
         .into_iter()
@@ -44,6 +49,8 @@ pub fn offer(
                 "path": entry.path,
                 "written": bravebot_mentions::escape(&entry.path),
                 "directory": entry.is_directory,
+                "bot": entry.is_bot,
+                "note": entry.note,
             })
         })
         .collect();
@@ -51,14 +58,35 @@ pub fn offer(
     Ok(json!({ "typed": typed, "word": word, "entries": entries, "completes": completes }))
 }
 
-/// The files `prompt` names with `@`, in the order written, each surveyed by the read a turn
-/// makes of a named file: confined to the workspace, a file that is there, and text.
+/// What an `@` being typed could become besides a file in the project.
+pub struct Offerable {
+    pub sources: Vec<(String, PathBuf)>,
+    pub bots: Vec<bravebot_mentions::Entry>,
+}
+
+/// A row for each bot an `@` could consult among `definitions` (CONSULT-3).
+pub fn bots_offered(
+    definitions: &bravebot_core::delegate::Definitions,
+) -> Vec<bravebot_mentions::Entry> {
+    bravebot_agent::agents::bots(definitions)
+        .map(|definition| {
+            bravebot_mentions::bot_entry(
+                definition.name(),
+                bravebot_agent::agents::bot_row(definition),
+            )
+        })
+        .collect()
+}
+
+/// The files `prompt` names with `@`, in the order written, less the words that consult one of
+/// `bots`, each surveyed by the read a turn makes of a named file: confined to the workspace, a
+/// file that is there, and text.
 ///
 /// A name that fails is a refused request naming it, so nothing is sent. Refused rather than left
 /// out, because a file the person thinks went and did not would be worse than a send that says
 /// why it stopped.
-pub fn named(workspace: &Workspace, prompt: &str) -> Result<Vec<String>, Failure> {
-    bravebot_mentions::referenced(prompt)
+pub fn named(workspace: &Workspace, prompt: &str, bots: &[&str]) -> Result<Vec<String>, Failure> {
+    bravebot_mentions::files_named(prompt, bots)
         .into_iter()
         // A name under a reference's alias is the file in that directory (REFER-6).
         .map(|name| {
@@ -90,6 +118,59 @@ mod tests {
     use crate::protocol::ErrorCode;
     use std::cell::Cell;
 
+    fn nothing() -> Offerable {
+        Offerable {
+            sources: Vec::new(),
+            bots: Vec::new(),
+        }
+    }
+
+    /// CONSULT-3: a bot is offered above a file of its name, marked as a bot with its model and
+    /// bound, and is written as its bare name.
+    #[test]
+    fn a_bot_is_offered_first_and_marked_as_one() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-offer-bot-")
+            .tempdir()
+            .expect("a scratch project");
+        std::fs::write(root.path().join("reviewer.md"), "").expect("file");
+        let answer = offer(root.path(), "ask @rev", 0, || {
+            Ok(Offerable {
+                sources: Vec::new(),
+                bots: vec![bravebot_mentions::bot_entry(
+                    "reviewer",
+                    "bot · haiku · up to 60 rounds".to_string(),
+                )],
+            })
+        })
+        .expect("answers");
+        assert_eq!(answer["entries"][0]["path"], "reviewer");
+        assert_eq!(answer["entries"][0]["written"], "reviewer");
+        assert_eq!(answer["entries"][0]["bot"], true);
+        assert_eq!(
+            answer["entries"][0]["note"],
+            "bot · haiku · up to 60 rounds"
+        );
+        assert_eq!(answer["entries"][0]["directory"], false);
+        assert_eq!(answer["entries"][1]["path"], "reviewer.md");
+        assert_eq!(answer["entries"][1]["bot"], false);
+    }
+
+    /// CONSULT-2: a word that consults a bot is not a file the send has to find.
+    #[test]
+    fn a_word_naming_a_bot_is_not_refused_as_a_missing_file() {
+        let root = tempfile::Builder::new()
+            .prefix("bravebot-named-bot-")
+            .tempdir()
+            .expect("a scratch project");
+        let workspace = Workspace::new(root.path()).expect("a workspace");
+        assert_eq!(
+            named(&workspace, "ask @reviewer", &["reviewer"]).expect("named"),
+            Vec::<String>::new()
+        );
+        assert!(named(&workspace, "ask @reviewer", &[]).is_err());
+    }
+
     /// The window splices what the bridge hands it, so a name holding a space has to arrive
     /// escaped, and the word being replaced has to be the whole last word, escaped space and all.
     #[test]
@@ -99,7 +180,7 @@ mod tests {
             .tempdir()
             .expect("a scratch project");
         std::fs::create_dir_all(root.path().join("My Documents")).expect("directory");
-        let answer = offer(root.path(), "read @My\\ Doc", 0, || Ok(Vec::new())).expect("answers");
+        let answer = offer(root.path(), "read @My\\ Doc", 0, || Ok(nothing())).expect("answers");
         assert_eq!(answer["word"], "@My\\ Doc");
         assert_eq!(answer["entries"][0]["path"], "My Documents/");
         assert_eq!(answer["entries"][0]["written"], "My\\ Documents/");
@@ -116,7 +197,7 @@ mod tests {
             .expect("a scratch project");
         std::fs::create_dir_all(root.path().join("crates/cli/src")).expect("directory");
         std::fs::write(root.path().join("crates/cli/src/main.rs"), "").expect("file");
-        let answer = offer(root.path(), "read @mainrs", 0, || Ok(Vec::new())).expect("answers");
+        let answer = offer(root.path(), "read @mainrs", 0, || Ok(nothing())).expect("answers");
         assert_eq!(answer["entries"][0]["path"], "crates/cli/src/main.rs");
         assert_eq!(answer["entries"][0]["written"], "crates/cli/src/main.rs");
         assert_eq!(answer["entries"][0]["directory"], false);
@@ -130,7 +211,7 @@ mod tests {
         let asked = Cell::new(false);
         let answer = offer(Path::new("."), "no reference here", 0, || {
             asked.set(true);
-            Ok(Vec::new())
+            Ok(nothing())
         })
         .expect("answers");
         assert!(!asked.get(), "the workspace was opened for a plain line");

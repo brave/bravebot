@@ -169,8 +169,9 @@ export function bot(slug: unknown): Bot | null {
 export function botFromForm(value: unknown): Bot | null {
   if (typeof value !== 'object' || value === null) return null
   const sent = value as Record<string, unknown>
-  const { slug, avatar, model } = sent
+  const { slug, avatar, model, consult } = sent
   if (model !== undefined && !isBotModel(model)) return null
+  if (consult !== undefined && typeof consult !== 'boolean') return null
   const held = isSlug(slug) ? bot(slug) : null
   // An edit of a bot that is kept names only what it changes. A new bot needs both.
   const name = sent.name === undefined && held ? held.name : sent.name
@@ -182,13 +183,24 @@ export function botFromForm(value: unknown): Bot | null {
   }
 
   // A new face is kept only when the window asks for one; a rename leaves the face as it was.
-  if (held) return { ...held, name, purpose, model: model === undefined ? held.model : model, avatar: typeof avatar === 'string' ? avatar : held.avatar }
+  if (held) {
+    return {
+      ...held,
+      name,
+      purpose,
+      model: model === undefined ? held.model : model,
+      consult: consult === undefined ? held.consult : consult,
+      avatar: typeof avatar === 'string' ? avatar : held.avatar,
+    }
+  }
   const made = slugFor(name, new Set(bots().map((each) => each.slug)))
   return {
     slug: made,
     name,
     purpose,
     model: typeof model === 'string' ? model : null,
+    // A definition is written without `consult:`, which lets it be consulted.
+    consult: true,
     // Use the draft's preview seed so creation keeps the face already shown. Older callers may
     // omit it; either way it is stored and survives a rename.
     avatar: typeof avatar === 'string' ? avatar : newAvatarSeed(randomUUID()),
@@ -233,12 +245,12 @@ export async function saveFormBot(next: Bot, define: DefineRequest | null): Prom
     kept = { ...next, definition: made.name }
   } else if (stored.definition !== null) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(stored.definition, next, define)
+    await redefine(stored.definition, next, define, next.consult === stored.consult ? undefined : next.consult)
     // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
     // a session released. Only the fields the form carries are laid over it.
-    kept = { ...(bot(next.slug) ?? stored), name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
+    kept = { ...(bot(next.slug) ?? stored), name: next.name, purpose: next.purpose, model: next.model, consult: next.consult, avatar: next.avatar }
   } else {
-    kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, avatar: next.avatar }
+    kept = { ...stored, name: next.name, purpose: next.purpose, model: next.model, consult: next.consult, avatar: next.avatar }
   }
   saveBot(kept)
   return kept
@@ -327,11 +339,16 @@ export async function saveBotModel(held: Bot, model: string | null, define: Defi
   return next
 }
 
-async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {
+/**
+ * `consult` is sent only where the person moved the switch: a row stored before the switch existed
+ * reads as consultable, and sending that would undo a `consult: off` written by hand (CONSULT-16).
+ */
+async function redefine(name: string, bot: Bot, define: DefineRequest, consult?: boolean): Promise<void> {
   const answer = (await define('bot.redefine', {
     name,
     purpose: bot.purpose,
     ...(bot.model === null ? {} : { model: bot.model }),
+    ...(consult === undefined ? {} : { consult }),
   })) as { name?: unknown } | null
   if (answer?.name !== name) throw new Error('The agent did not rewrite the bot’s definition.')
 }

@@ -78,9 +78,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     // The files the prompt names with `@`, asked of the bridge before anything is drawn: a name
     // that cannot go stops the send here, with the message still where it was written. The bridge
     // reads the prompt again at `turn.send`, and that check is the one that decides what goes.
-    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
-    if (!mentioned.ok) {
-      const refused = mentioned.error?.message ?? 'The files this message names could not be checked.'
+    const refuse = (refused: string) => {
       const queued = selectedFiles !== undefined
       updateSession(handle, (old) => old ? {
         ...old,
@@ -92,7 +90,23 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         const key = liveKey(sending)
         if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: prompt })
       }
+    }
+    const mentioned = await window.bravebot.request<{ files: string[] }>('mentions.named', { session: handle, prompt })
+    if (!mentioned.ok) {
+      refuse(mentioned.error?.message ?? 'The files this message names could not be checked.')
       return
+    }
+    // A line naming a bot is not sent as it is: the host drafts a brief from the conversation, and
+    // that comes back into the composer to be read, edited and sent (CONSULT-5). A drafted brief
+    // waiting in the composer is what this sends, and the bridge knows which bot it is for.
+    const briefed = sending?.brief?.drafting === false
+    if (!briefed) {
+      const asked = await window.bravebot.request<{ brief?: null; drafting?: boolean }>('consult.brief', { session: handle, line: prompt, model })
+      if (!asked.ok) {
+        refuse(asked.error?.message ?? 'The bots this message names could not be checked.')
+        return
+      }
+      if (asked.ok.drafting) return
     }
     const mentionedFiles = Array.isArray(mentioned.ok.files) ? mentioned.ok.files : []
     const reads = [...new Set([...attachments.map((file) => file.path), ...mentionedFiles])]
@@ -106,6 +120,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
             summary: old.summary.title === NEW_CHAT ? { ...old.summary, title: prompt.slice(0, 70) } : old.summary,
             attachments: selectedFiles ? old.attachments : [],
             sendRefused: null,
+            brief: null,
             staging: queuedStaged ? old.staging : sent(old.staging),
             entries: [
               ...old.entries,
@@ -129,9 +144,9 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
         // would be a window that could have the planner read any file on the machine. So this
         // names the bot and says whether the briefing is due, and the paths are composed over
         // there from a definition this side cannot reach.
-        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants })
+        await callBot({ session: handle, slug: bot.slug, prompt, grounded: !bot.grounded, model, attachments: attachments.map((file) => file.id), ...grants, ...(briefed ? { brief: true } : {}) })
       } else {
-        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants })
+        await call('turn.send', { session: handle, prompt, model, attachments: attachments.map((file) => file.id), ...grants, ...(briefed ? { brief: true } : {}) })
       }
     } catch (error) {
       if (error instanceof Unconfigurable) {
@@ -153,6 +168,7 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
               // Put back. Nothing was sent, so nothing was said — a briefing marked delivered by a
               // turn that failed would be one the bot never received.
               bot: old.bot ? { ...old.bot, grounded: bot?.grounded ?? false } : null,
+              brief: sending?.brief ?? null,
             }
           : old,
       )
@@ -314,5 +330,5 @@ export function useTurn({ handleRef, openedLives, updateSession, setLive, setPro
     void interject(handle, line)
   }
 
-  return { answerTrust, submit, submitPlan, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
+  return { answerTrust, send, submit, submitPlan, queueDraft, interject, cancel, answer, answerQuestions, interjectDraft }
 }

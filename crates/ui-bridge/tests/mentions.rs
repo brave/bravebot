@@ -66,6 +66,14 @@ fn project(bridge: &mut Bridge) -> Project {
     }
 }
 
+/// The answer with only its file rows, since the bots offered are the machine's own (CONSULT-3).
+fn files(mut answer: Value) -> Value {
+    if let Some(entries) = answer["entries"].as_array_mut() {
+        entries.retain(|entry| entry["bot"] != json!(true));
+    }
+    answer
+}
+
 fn offered(answer: &Value) -> Vec<&str> {
     answer["entries"]
         .as_array()
@@ -81,12 +89,14 @@ fn the_window_is_offered_the_terminals_list_of_the_project() {
     let (mut bridge, _) = harness();
     let project = project(&mut bridge);
     let offer = |bridge: &mut Bridge, line: &str| {
-        call(
-            bridge,
-            "mentions.offer",
-            json!({ "session": &project.session, "line": line }),
+        files(
+            call(
+                bridge,
+                "mentions.offer",
+                json!({ "session": &project.session, "line": line }),
+            )
+            .expect("answered"),
         )
-        .expect("answered")
     };
 
     let root = offer(&mut bridge, "what is in @");
@@ -186,12 +196,14 @@ fn an_entry_holding_a_no_break_space_is_written_so_the_prompt_names_it() {
         std::fs::write(project.root.join(name), "text\n").expect("write");
     }
 
-    let offer = call(
-        &mut bridge,
-        "mentions.offer",
-        json!({ "session": &project.session, "line": "read @a" }),
-    )
-    .expect("answered");
+    let offer = files(
+        call(
+            &mut bridge,
+            "mentions.offer",
+            json!({ "session": &project.session, "line": "read @a" }),
+        )
+        .expect("answered"),
+    );
     // The rows for the prefix come first, and names a fragment finds below the root follow them.
     let listed: Vec<&str> = offered(&offer)
         .into_iter()
@@ -278,12 +290,14 @@ fn the_window_names_a_file_under_a_reference_alias() {
     .with_settings(Some(settings));
     let project = project(&mut bridge);
     let offer = |bridge: &mut Bridge, line: &str| {
-        call(
-            bridge,
-            "mentions.offer",
-            json!({ "session": &project.session, "line": line }),
+        files(
+            call(
+                bridge,
+                "mentions.offer",
+                json!({ "session": &project.session, "line": line }),
+            )
+            .expect("answered"),
         )
-        .expect("answered")
     };
 
     assert!(offered(&offer(&mut bridge, "@par")).contains(&"parser/"));

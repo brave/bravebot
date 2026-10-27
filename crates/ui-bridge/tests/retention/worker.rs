@@ -52,6 +52,11 @@ fn take_turn(
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
             model: None,
             addressing: None,
+            consulting: None,
+            private: false,
+            named: String::new(),
+            left: Vec::new(),
+            consults_left: Arc::default(),
             prompt: if first {
                 "copy and run"
             } else {

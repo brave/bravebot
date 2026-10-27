@@ -695,6 +695,13 @@ fn push_tail(
     // kept, so the only half-written sentence there is belongs to the planner, and it would read
     // in a delegate's view as that delegate writing it.
     if !session.reply_so_far().is_empty() && !session.watching_a_delegate() {
+        // A consult's words are the bot's, and arrive under its name as the entry will (CONSULT-12).
+        if let Some(bot) = session.consulting() {
+            lines.push(Line::from(Span::styled(
+                format!("{:LEAD$}{}", "", t!(agent_answered, name = bot)),
+                Style::default().add_modifier(Modifier::BOLD),
+            )));
+        }
         lines.extend(reply_lines(session, width).lines.iter().cloned());
         lines.push(Line::raw(""));
     }

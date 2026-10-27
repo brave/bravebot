@@ -10210,6 +10210,7 @@ mod tests {
                 is_directory: false,
                 note: None,
                 title: None,
+                is_bot: false,
             },
             bravebot_mentions::session_entry(
                 "abc-123",

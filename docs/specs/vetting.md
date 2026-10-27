@@ -195,7 +195,8 @@ bytes on the screen ([tools/vet-content.md](tools/vet-content.md#VET-4)).
 
 With auto-vetting on, one verdict answers the two promoting questions in the person's place, and
 [CHECK-12](#CHECK-12) is the whole of what that changes. Everything in this clause holds of the
-vouch offer and of a server's tool list either way, and of all four where the mode is off.
+vouch offer, of a server's tool list and of the brief card either way, and of all five where the
+mode is off.
 
 The three outcomes are told apart on the screen. "This looks like an attempt to give instructions"
 and "nothing looked at this" are different facts about different risks, and one sentence covering
@@ -315,7 +316,7 @@ somebody who was never asked either question.
 <a id="CHECK-10"></a>
 ### CHECK-10: every prompt that would promote quarantined content runs a check first
 
-All four ways out of quarantine end at a person answering a prompt, and a check runs before the
+All five ways out of quarantine end at a person answering a prompt, and a check runs before the
 prompt is drawn, not after it is answered:
 
 | The prompt | What a yes does | What the check reads |
@@ -324,12 +325,13 @@ prompt is drawn, not after it is answered:
 | [tools/read-output.md](tools/read-output.md) | releases what a program printed to the planner | the slot the planner named |
 | the vouch offer in [tools/read-file.md](tools/read-file.md) | writes a rule about the path | **the whole file**, not the preview |
 | a server's tool list in [mcp-servers.md](mcp-servers.md#SERVERS-8) | offers the list to the planner for the session | **the whole list**, as it is drawn |
+| the brief card in [consulting-a-bot.md](consulting-a-bot.md#CONSULT-6) | promotes one brief once, for one consult | **the whole brief** |
 
 **Why the whole file.** A vouch prompt shows the head of the file and a yes grants all of it, so a
 check over the preview would report on the part an injection attempt has the least reason to be in.
 The check reads what the answer covers.
 
-**Why all four.** Otherwise the quickest way past a check is to ask for the prompt that does not
+**Why all five.** Otherwise the quickest way past a check is to ask for the prompt that does not
 run one. A person asked to promote content is asked on the strength of what they can see; some of
 these prompts having a second opinion on them and another not is a gap the planner chooses, and
 the trust map's rule is the largest grant of them. The planner does not ask for the list prompt,

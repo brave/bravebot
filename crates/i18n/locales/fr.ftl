@@ -829,6 +829,8 @@ session-message-sent-heading = message à la session { $to } ({ $name }) · { $l
 
 session-message-kept = ses mots ont été gardés à l'écart du planificateur et ne sont pas dans cet enregistrement
 
+consult-reply-kept = sa réponse a été gardée à l'écart du planificateur et n'est pas dans cet enregistrement
+
 ceiling-stop-in-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel à { $tool }, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
 ceiling-stop-in-a-call = le modèle a atteint sa limite de sortie de { $tokens } jetons en écrivant un appel d'outil, qui n'a donc pas été fait ; il lui est demandé de faire le travail en plus petites parties
 ceiling-stop-thinking = le modèle a atteint sa limite de sortie de { $tokens } jetons en réfléchissant, avant d'avoir rien écrit ; il lui est redemandé
@@ -3564,6 +3566,13 @@ agent-no-such-definition = aucune définition ne s'appelle { $name } ; cette ses
 # Affiché au-dessus d'une réponse d'un tour désigné. Le nom est celui que le pilote a trouvé, jamais
 # ce que la réponse dit d'elle-même.
 agent-answered = { $name } a répondu
+consult-row = bot · { $model } · jusqu'à { $rounds } tours
+consult-row-with-budget = bot · { $model } · jusqu'à { $rounds } tours et { $tokens } jetons
+consult-row-session-model = le modèle de la session
+consult-brief-ready = le résumé pour { $bot } ({ $bound }) est dans la zone de saisie. Entrée l'envoie à { $bot }, ou Échap remet votre ligne
+consult-brief-declined = le résumé pour { $bot } n'a pas été envoyé, et votre ligne est de retour dans la zone de saisie
+consult-brief-failed = le résumé pour { $bot } n'a pas pu être écrit : { $problem }
+consult-brief-stopped = la rédaction du résumé pour { $bot } a été arrêtée
 session-working-under =
     chaque tour est adressé à { $definition } ; /agent <nom> <tâche> en désigne une autre pour un tour
 # Dit quand une session reprise avait été démarrée sous une définition qui ne peut plus servir. La

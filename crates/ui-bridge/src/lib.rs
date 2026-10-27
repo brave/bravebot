@@ -37,6 +37,7 @@ pub mod arguments;
 pub mod attached;
 pub mod bridge;
 pub mod connectors;
+pub mod consult;
 // Public so the integration tests and the persistent host can reach it, and hidden from the
 // documentation until a caller outside the tests settles what it offers.
 #[cfg(unix)]

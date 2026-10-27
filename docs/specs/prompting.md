@@ -39,6 +39,7 @@ kept_in:
   - Confirmer::confirm_path: paths reached
   - Confirmer::confirm_host: hosts answered
   - Confirmer::confirm_message: one effect; messages covered for the turn
+  - Confirmer::confirm_consult: one effect
   - Confirmer::ask_user: answers to the planner's questions
   - Confirmer::interjection: nothing
   - Confirmer::alert_when_asking: nothing

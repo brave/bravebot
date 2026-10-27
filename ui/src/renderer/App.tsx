@@ -18,7 +18,7 @@ import { nextPermissionMode } from '../shared/protocol'
 import { Sidebar } from './components/Sidebar'
 import { Agents } from './components/Agents'
 import { SessionInfo, firstChat } from './components/Sessions'
-import { FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
+import { BotFaces, FIND_EVENT, FOCUS_COMPOSER_EVENT, Transcript } from './components/Transcript'
 import { Context } from './components/Context'
 import { Gutter, useColumns } from './components/Gutter'
 import { shown } from './columns'
@@ -67,6 +67,7 @@ export function App(): React.JSX.Element {
   const liveRef = useRef<Live | null>(null)
   const handleRef = useRef<string | null>(null)
   const openedLives = useRef(new Map<string, Live>())
+  const sendRef = useRef<((prompt: string, target?: string) => Promise<void>) | null>(null)
   const [livesRevision, refreshLives] = useState(0)
   const preferences = useExperience()
   const setLive = useCallback((action: React.SetStateAction<Live | null>) => {
@@ -116,9 +117,10 @@ export function App(): React.JSX.Element {
   }, [live?.summary.id, live?.summary.directory, live?.model])
   const [forks, setForks] = useState<Fork[]>([])
   const { bots, botsRef, readBots, saveBot, removeBot } = useBots({ openedLives, updateSession, setLive, setProblem })
-  const { answerTrust, submit, submitPlan, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
+  const { answerTrust, send, submit, submitPlan, queueDraft, cancel, answer, answerQuestions, interjectDraft } = useTurn({
     liveRef, handleRef, openedLives, updateSession, setLive, setProblem, setUnconfigured, refreshLives, live, livesRevision, backendReady, draft, setDraft,
   })
+  sendRef.current = send
   const { chosen, writeAppearance } = useAppearance()
 
   // Read inside `showSession`, which is installed once for the same reason. The list lives in the
@@ -156,6 +158,20 @@ export function App(): React.JSX.Element {
     const stop = window.bravebot.onEvent((message: BridgeEvent) => {
       if (message.event === 'agent.ready') apply(message, setLive, setBuild, refresh)
       else if (message.session) apply(message, (action) => updateSession(message.session!, action), setBuild, refresh)
+      // A draft the host could have held anyway, holding nothing private, is sent at once, since
+      // the person sent the line that asked for it. Any other draft goes where the person can read
+      // and edit it before it is sent. With no draft, the line goes back, unless something has
+      // been typed since (CONSULT-5).
+      if (message.event === 'consult.brief' && message.session) {
+        const drafted = openedLives.current.get(message.session)
+        if (drafted) {
+          const key = liveKey(drafted)
+          const { brief, line, send } = message.data
+          if (brief !== null && send === true) void sendRef.current?.(brief, message.session)
+          else if (brief !== null) setConversation(key, { draft: brief })
+          else if (!conversationPreferences(key).draft.trim()) setConversation(key, { draft: line })
+        }
+      }
       // The list holds two things this window did not write — the session behind a bot and how
       // much compaction has taken from it — and a turn is when either can have changed. Read back
       // rather than assumed, since the main process is the one that saw the agent's answer.
@@ -342,6 +358,7 @@ export function App(): React.JSX.Element {
   // keystrokes and the column is not re-rendered for a clock that nobody can see move.
   const now = Math.floor(Date.now() / 60000) * 60
   const homes = useMemo(() => new Set(bots.map((bot) => bot.home)), [bots])
+  const botFaces = useMemo(() => new Map(bots.map((bot) => [bot.slug, bot])), [bots])
   const { ownSessions: unstableSessions, info: unstableInfo, attention } = listSessions({
     sessions,
     opened: [...openedLives.current.values()],
@@ -865,6 +882,7 @@ export function App(): React.JSX.Element {
           their columns are still the window's tracks and a fold or a drag moves them without this
           knowing. */}
       <div className="workspace">
+      <BotFaces.Provider value={botFaces}>
       <Transcript
         onAudit={openAudit}
         onTurnDisclosure={discloseTurn}
@@ -892,6 +910,11 @@ export function App(): React.JSX.Element {
         interjected={live?.interjected?.map((line) => line.prompt) ?? []}
         onRemoveQueued={(index) => setLive((old) => old ? { ...old, queued: old.queued?.filter((_, at) => at !== index) } : old)}
         onDismissRefusal={() => setLive((old) => old ? { ...old, sendRefused: null } : old)}
+        onDropBrief={() => {
+          const line = live?.brief?.line
+          setLive((old) => old ? { ...old, brief: null } : old)
+          if (line !== undefined) setDraft(line)
+        }}
         onNew={create}
         bot={openBotRecord}
         doing={openDoing}
@@ -902,7 +925,12 @@ export function App(): React.JSX.Element {
         onToggle={toggle}
         attention={attention}
         draft={draft}
-        onDraft={setDraft}
+        onDraft={(text) => {
+          setDraft(text)
+          // A brief goes with the words it was offered as, edited or not; once they are wiped out,
+          // what is typed next is a new line for the host (CONSULT-5).
+          if (!text.trim() && live?.brief?.drafting === false) setLive((old) => old ? { ...old, brief: null } : old)
+        }}
         onModel={(model) => void chooseModel(model)}
         onMode={(mode) => void chooseMode(mode)}
         onSandbox={(mode) => void chooseSandbox(mode)}
@@ -930,6 +958,7 @@ export function App(): React.JSX.Element {
         footer={footer}
         noProject={noProject}
       />
+      </BotFaces.Provider>
       <Gutter
         side="right"
         width={shown({ widths, collapsed }, 'right')}

@@ -1437,6 +1437,23 @@ pub struct MessageRequest {
     pub label: bravebot_core::label::Label,
 }
 
+/// A consult the host's planner proposes, drawn on the card a typed tag draws (CONSULT-12).
+///
+/// The bot, where it was defined, its model and its bound are the driver's, read off the set of
+/// bots this session resolved. The brief is the planner's own words, and the label is the one the
+/// consult is given it under, which the host's context decided. A person who answers yes is
+/// sending this brief to this bot, and nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsultRequest {
+    pub bot: String,
+    pub definition: String,
+    pub model: String,
+    pub rounds: usize,
+    pub budget: Option<u64>,
+    pub brief: String,
+    pub label: bravebot_core::label::Label,
+}
+
 /// What the person decided about a message (MSG-3, MSG-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageDecision {
@@ -2058,6 +2075,13 @@ pub trait Confirmer {
     /// that hosts none declines. No mode and no allow rule answers it.
     fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision;
 
+    /// Ask whether to send the brief the host's planner wrote to the bot it named (CONSULT-12).
+    /// Implementations must refuse when they cannot ask.
+    ///
+    /// Only a yes is the grant: nothing runs until a person sends the card. No mode answers it, so
+    /// bypassing every check refuses it too.
+    fn confirm_consult(&mut self, request: &ConsultRequest) -> Decision;
+
     /// Put a series of questions to the person, one answer per question in the order they were
     /// asked.
     ///
@@ -2120,6 +2144,13 @@ impl Confirmer for Unattended {
 
     fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
         MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
     }
 
     /// Refuses. Nobody is there to say a server is where its reply pointed.
@@ -2261,6 +2292,13 @@ impl Confirmer for ApproveWrites {
         MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2338,6 +2376,13 @@ impl Confirmer for ChoosesFirst {
 
     fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
         MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2435,6 +2480,13 @@ impl Confirmer for ApproveRuns {
         MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2514,6 +2566,13 @@ impl Confirmer for RemembersRuns {
         MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2591,6 +2650,13 @@ impl Confirmer for ReadsOutput {
 
     fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
         MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2675,6 +2741,13 @@ impl Confirmer for VetsContent {
 
     fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
         MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2764,6 +2837,13 @@ impl Confirmer for ExposesReads {
         MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2840,6 +2920,13 @@ impl Confirmer for ApproveFetches {
 
     fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
         MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
     }
 
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
@@ -2922,6 +3009,13 @@ impl Confirmer for ApprovePlans {
         MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        crate::confirm::Decision::Reject
+    }
+
     fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {
         Decision::Reject
     }
@@ -2974,6 +3068,10 @@ impl<'a, C: Confirmer + ?Sized> Timed<'a, C> {
 }
 
 impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
+    fn asks_a_person(&self) -> bool {
+        self.inner.asks_a_person()
+    }
+
     fn confirm_write(&mut self, request: &WriteRequest) -> WriteDecision {
         self.timing(|inner| inner.confirm_write(request))
     }
@@ -3020,6 +3118,13 @@ impl<C: Confirmer + ?Sized> Confirmer for Timed<'_, C> {
 
     fn confirm_message(&mut self, request: &MessageRequest) -> MessageDecision {
         self.timing(|inner| inner.confirm_message(request))
+    }
+
+    fn confirm_consult(
+        &mut self,
+        request: &crate::confirm::ConsultRequest,
+    ) -> crate::confirm::Decision {
+        self.timing(|inner| inner.confirm_consult(request))
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -3635,6 +3740,13 @@ mod tests {
 
         fn confirm_message(&mut self, _request: &MessageRequest) -> MessageDecision {
             MessageDecision::Decline
+        }
+
+        fn confirm_consult(
+            &mut self,
+            _request: &crate::confirm::ConsultRequest,
+        ) -> crate::confirm::Decision {
+            crate::confirm::Decision::Reject
         }
 
         fn confirm_move(&mut self, _request: &MoveRequest) -> Decision {

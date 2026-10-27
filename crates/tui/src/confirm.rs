@@ -30,11 +30,13 @@ mod write;
 pub(crate) use chrome::scroll_hint;
 #[cfg(test)]
 use chrome::{centred, indented};
-pub use grants::{ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout};
+pub use grants::{
+    ask_consult, ask_exposure, ask_fetch, ask_host, ask_manifest, ask_path, ask_remove_checkout,
+};
 #[cfg(test)]
 use grants::{
-    draw_exposure, draw_fetch, draw_host, draw_manifest, draw_path, draw_remove_checkout,
-    manifest_answer_for,
+    draw_consult, draw_exposure, draw_fetch, draw_host, draw_manifest, draw_path,
+    draw_remove_checkout, manifest_answer_for,
 };
 pub use mcp::{CallAnswer, ask_mcp_call, ask_move, ask_server, ask_to_start, ask_tool_list};
 #[cfg(test)]
@@ -129,6 +131,10 @@ impl<B: Backend> Confirmer for TerminalConfirmer<'_, B> {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(&mut self, request: &bravebot_agent::confirm::ConsultRequest) -> Decision {
+        ask_consult(self.terminal, request).decision()
     }
 
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
@@ -6004,7 +6010,7 @@ mod tests {
 
     kinds!(
         Write, Run, ReadOutput, Vet, Fetch, Vouch, Exposure, Server, Manifest, ToolList, McpCall,
-        Move, Path, Host, Ask,
+        Move, Path, Host, Consult, Ask,
     );
 
     /// What a question remembers between its draws: the rows of each kind that have been shown.
@@ -6408,6 +6414,28 @@ mod tests {
                     refusing: 'n',
                     grants: Vec::new(),
                     deciding: hosts,
+                })
+            }
+            Kind::Consult => {
+                let rows = numbered('c', 40);
+                let request = bravebot_agent::confirm::ConsultRequest {
+                    bot: "reviewer".into(),
+                    definition: ".bravebot/agents/reviewer.md".into(),
+                    model: "claude-sonnet-5".into(),
+                    rounds: 8,
+                    budget: Some(20_000),
+                    brief: rows.join("\n"),
+                    label: bravebot_core::label::Label::trusted_public(),
+                };
+                Some(Case {
+                    draw: pinned(move |frame, scroll, memory| {
+                        draw_consult(frame, &request, scroll, &mut memory.seen)
+                    }),
+                    answer: Box::new(|key, looked| approves(answer_for(key, looked.pinned()))),
+                    approving: vec!['y'],
+                    refusing: 'n',
+                    grants: Vec::new(),
+                    deciding: rows,
                 })
             }
             // Every answer goes to the planner as an answer, and none of them approves anything.

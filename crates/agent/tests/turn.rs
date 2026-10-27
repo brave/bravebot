@@ -3301,6 +3301,13 @@ fn time_spent_waiting_for_an_approval_is_not_charged_to_the_tool() {
             bravebot_agent::confirm::MessageDecision::Decline
         }
 
+        fn confirm_consult(
+            &mut self,
+            _request: &bravebot_agent::confirm::ConsultRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_move(
             &mut self,
             _request: &bravebot_agent::confirm::MoveRequest,
@@ -4334,6 +4341,13 @@ impl bravebot_agent::Confirmer for RecordingConfirmer {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -7493,6 +7507,13 @@ impl bravebot_agent::Confirmer for SaysOnce {
         bravebot_agent::confirm::MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -9407,6 +9428,13 @@ impl bravebot_agent::Confirmer for ChangesTheFileWhenAsked {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -12774,6 +12802,13 @@ fn a_cancelled_turn_stops_before_running_a_tool() {
             _request: &bravebot_agent::confirm::MessageRequest,
         ) -> bravebot_agent::confirm::MessageDecision {
             bravebot_agent::confirm::MessageDecision::Decline
+        }
+
+        fn confirm_consult(
+            &mut self,
+            _request: &bravebot_agent::confirm::ConsultRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
         }
 
         fn confirm_move(
@@ -22343,6 +22378,13 @@ impl bravebot_agent::Confirmer for AnswersWith {
         bravebot_agent::confirm::MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -22945,6 +22987,13 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     /// Refuses. A test double is not a person agreeing to a plan.
@@ -28964,6 +29013,13 @@ impl bravebot_agent::Confirmer for ShownAfterAVet {
         bravebot_agent::confirm::MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -33354,6 +33410,13 @@ impl bravebot_agent::Confirmer for ReadsWhatItRan {
         bravebot_agent::confirm::MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -33849,6 +33912,13 @@ impl bravebot_agent::Confirmer for VouchesForFiles {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -37104,6 +37174,67 @@ fn a_stop_pressed_during_a_question_reaches_the_request_and_nothing_is_answered(
     );
 }
 
+/// CONSULT-5, CONSULT-6. A brief drafted over an exchange that has met untrusted content, which a
+/// session addressing no definition drafts as one addressing a definition does, is checked and put
+/// to the person, and only their yes keeps it. Without the check the draft would reach the box as
+/// words the host could not have held.
+#[test]
+fn a_brief_drafted_over_an_untrusted_exchange_is_kept_only_on_a_persons_yes() {
+    fn draft<C: bravebot_agent::confirm::Confirmer>(
+        confirmer: &mut C,
+        untrusted: bool,
+    ) -> bravebot_agent::aside::Answered {
+        let (endpoint, _received) = serve_sequence_answering_checks_with(
+            vec![a_check_finding_nothing()],
+            vec![reply_with("the parser was rewritten")],
+        );
+        let mut conversation = an_exchange_to_ask_beside();
+        if untrusted {
+            conversation.observed(bravebot_core::label::Label::untrusted_public());
+        }
+        let asking = bravebot_agent::aside::Question::brief(
+            &conversation,
+            "rule-reviewer",
+            "@rule-reviewer is this safe?",
+        );
+        assert_eq!(
+            asking.context() == bravebot_core::label::Integrity::Untrusted,
+            untrusted
+        );
+        turn::brief(
+            &config_for(&endpoint),
+            &bravebot_net::Egress::new(),
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+            asking,
+            "rule-reviewer",
+            None,
+            confirmer,
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            bravebot_core::trust::TrustStore::new("/work"),
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .expect("drafting a brief must not be refused")
+    }
+
+    let promoted = draft(&mut bravebot_agent::confirm::VetsContent, true);
+    assert!(
+        promoted
+            .kept
+            .as_deref()
+            .is_some_and(|brief| brief.contains("the parser was rewritten")),
+        "{:?}",
+        promoted.kept
+    );
+    let declined = draft(&mut bravebot_agent::confirm::Unattended, true);
+    assert_eq!(declined.kept, None, "a brief nobody said yes to was kept");
+    let clean = draft(&mut bravebot_agent::confirm::Unattended, false);
+    assert!(
+        clean.kept.is_some(),
+        "a brief the host could hold was not kept"
+    );
+}
+
 /// What `/recap` runs. The request holds the driver's recap question and the exchange and offers no
 /// tools, the answer is cut to the limit however long the model made it, and the conversation is as
 /// long afterwards as it was.
@@ -39217,6 +39348,91 @@ fn addressed(prompt: &str, home: &Scratch, name: &str) -> Task {
         .with_home(Some(home.path.clone()))
         .with_model(Some("custom-parent-model".to_string()))
         .addressing(Some(name.to_string()))
+}
+
+/// CONSULT-1. A consult is the person's own run, so it may ask them a question, and its context
+/// is its line and what it reads: nothing the host was told reaches the bot's model. When it
+/// replies, the host is handed the line and the reply, and the file it read and the call that read
+/// it stay with the consult. Running it over the host's conversation would show the bot the host's
+/// context; handing back the consult's conversation would give the host every read it made.
+#[test]
+fn a_consult_works_from_its_line_and_hands_back_only_its_reply() {
+    let scratch = Scratch::new("consult-only-the-reply");
+    let home = Scratch::new("consult-only-the-reply-home");
+    define(
+        &home,
+        "rule-reviewer",
+        "kind: reader\n",
+        "REVIEW-BY-THE-RULES",
+    );
+    std::fs::write(scratch.path.join("notes.md"), "WHAT-THE-CONSULT-READ").expect("notes");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"notes.md"}"#),
+        reply_with("THE-CONSULTS-REPLY"),
+    ]);
+    let config = config_for(&endpoint);
+
+    let mut host = bravebot_agent::conversation::Conversation::new();
+    host.push(bravebot_aichat::protocol::Message::user(
+        "WHAT-THE-HOST-WAS-TOLD",
+    ));
+    let line = "@rule-reviewer is this safe?";
+    let mut consulted = bravebot_agent::conversation::Conversation::new();
+    let outcome = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &addressed(line, &home, "rule-reviewer"),
+        &mut consulted,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::report::IgnoreReports,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the consult replies");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let [first, second] = requests.as_slice() else {
+        panic!("two rounds expected: {requests:?}");
+    };
+    assert!(
+        requests
+            .iter()
+            .all(|body| !body.contains("WHAT-THE-HOST-WAS-TOLD")),
+        "the host's context reached the consult"
+    );
+    assert!(
+        first.contains(r#""ask_user""#),
+        "the consult cannot ask the person"
+    );
+    assert!(
+        second.contains("WHAT-THE-CONSULT-READ"),
+        "the read did not happen"
+    );
+
+    bravebot_agent::consult::record(
+        line,
+        &bravebot_agent::consult::Answered {
+            bot: "rule-reviewer",
+            definition: "~/.bravebot/agents",
+            model: &outcome.model,
+            answer: &outcome.answer,
+        },
+        &mut host,
+        &mut RecordingSink::new(),
+    )
+    .expect("the reply is handed over");
+    let said = format!("{:?}", host.recounted());
+    assert!(said.contains("WHAT-THE-HOST-WAS-TOLD"), "{said}");
+    assert!(said.contains(line), "{said}");
+    assert!(said.contains("THE-CONSULTS-REPLY"), "{said}");
+    assert!(!said.contains("WHAT-THE-CONSULT-READ"), "{said}");
+    assert!(!said.contains("read_file"), "{said}");
 }
 
 /// ADDRESS-1, ADDRESS-7 and ADDRESS-8 as one request shows them. The definition supplies the
@@ -49403,6 +49619,13 @@ impl bravebot_agent::Confirmer for ApprovesFetchesAndWrites {
         bravebot_agent::confirm::MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -58798,6 +59021,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersWrites {
         bravebot_agent::confirm::MessageDecision::Decline
     }
 
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(
         &mut self,
         _request: &bravebot_agent::confirm::MoveRequest,
@@ -59891,6 +60121,13 @@ impl bravebot_agent::confirm::Confirmer for RemembersExposures {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
     }
 
     fn confirm_move(
@@ -67149,6 +67386,13 @@ mod spend_limit {
             bravebot_agent::confirm::MessageDecision::Decline
         }
 
+        fn confirm_consult(
+            &mut self,
+            _request: &bravebot_agent::confirm::ConsultRequest,
+        ) -> bravebot_agent::confirm::Decision {
+            bravebot_agent::confirm::Decision::Reject
+        }
+
         fn confirm_move(&mut self, _: &MoveRequest) -> Decision {
             Decision::Reject
         }
@@ -71911,6 +72155,13 @@ impl bravebot_agent::confirm::Confirmer for AnswersAboutMessages {
             .pop_front()
             .unwrap_or(bravebot_agent::confirm::MessageDecision::Decline)
     }
+
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
     fn confirm_write(
         &mut self,
         request: &bravebot_agent::confirm::WriteRequest,
@@ -74529,6 +74780,252 @@ fn a_skill_the_person_names_is_supplied_under_a_definition_that_does_not_list_it
                 && notice.contains("stays on the model reviewer named")),
         "the skill's request for another model was not said: {:?}",
         reporter.notices
+    );
+}
+
+/// A person who sends every consult card they are shown, and answers every other question as
+/// [`bravebot_agent::confirm::ApproveWrites`] does.
+#[derive(Default)]
+struct SendsConsults {
+    shown: Vec<String>,
+}
+
+impl bravebot_agent::confirm::Confirmer for SendsConsults {
+    fn confirm_consult(
+        &mut self,
+        request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        self.shown.push(request.bot.clone());
+        bravebot_agent::confirm::Decision::Approve
+    }
+    fn confirm_write(
+        &mut self,
+        request: &bravebot_agent::confirm::WriteRequest,
+    ) -> bravebot_agent::confirm::WriteDecision {
+        bravebot_agent::confirm::ApproveWrites.confirm_write(request)
+    }
+    fn confirm_run(
+        &mut self,
+        request: &bravebot_agent::confirm::RunRequest,
+    ) -> bravebot_agent::confirm::RunDecision {
+        bravebot_agent::confirm::ApproveWrites.confirm_run(request)
+    }
+    fn confirm_read_output(
+        &mut self,
+        request: &bravebot_agent::confirm::OutputRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_read_output(request)
+    }
+    fn confirm_vetted_read(
+        &mut self,
+        request: &bravebot_agent::confirm::VetRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_vetted_read(request)
+    }
+    fn confirm_fetch(
+        &mut self,
+        request: &bravebot_agent::confirm::FetchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_fetch(request)
+    }
+    fn confirm_server(
+        &mut self,
+        request: &bravebot_agent::confirm::ServerRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_server(request)
+    }
+    fn confirm_manifest(
+        &mut self,
+        request: &bravebot_agent::confirm::ManifestRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_manifest(request)
+    }
+    fn confirm_vouch(
+        &mut self,
+        request: &bravebot_agent::confirm::VouchRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_vouch(request)
+    }
+    fn confirm_exposing_read(
+        &mut self,
+        request: &bravebot_agent::confirm::ExposureRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_exposing_read(request)
+    }
+    fn confirm_tool_list(
+        &mut self,
+        request: &bravebot_agent::confirm::ToolListRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_tool_list(request)
+    }
+    fn confirm_mcp_call(
+        &mut self,
+        request: &bravebot_agent::confirm::McpCallRequest,
+    ) -> bravebot_agent::confirm::CallDecision {
+        bravebot_agent::confirm::ApproveWrites.confirm_mcp_call(request)
+    }
+    fn confirm_move(
+        &mut self,
+        request: &bravebot_agent::confirm::MoveRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_move(request)
+    }
+    fn confirm_path(
+        &mut self,
+        request: &bravebot_agent::confirm::PathRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_path(request)
+    }
+    fn confirm_host(
+        &mut self,
+        request: &bravebot_agent::confirm::HostRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::ApproveWrites.confirm_host(request)
+    }
+    fn confirm_message(
+        &mut self,
+        request: &bravebot_agent::confirm::MessageRequest,
+    ) -> bravebot_agent::confirm::MessageDecision {
+        bravebot_agent::confirm::ApproveWrites.confirm_message(request)
+    }
+    fn ask_user(&mut self, asking: &bravebot_core::ask::Asking) -> Vec<bravebot_core::ask::Answer> {
+        bravebot_agent::confirm::ApproveWrites.ask_user(asking)
+    }
+    fn interjection(&mut self) -> Option<String> {
+        None
+    }
+}
+
+/// CONSULT-12: a consult a person sent from its card runs inside the host's turn. Its start and
+/// end are reported with the bot's name and reply, so a front end draws its words under the bot
+/// rather than the host, and what it spent is the host turn's. Without the events the bot's words
+/// read as the host's; without the accounting the turn's figures leave out a whole model run.
+#[test]
+fn a_proposed_consult_is_reported_under_its_bot_and_counted_to_the_host() {
+    use bravebot_agent::confirm::Confirmer as _;
+    let scratch = Scratch::new("consult-proposed");
+    let home = Scratch::new("consult-proposed-home");
+    define(&home, "reviewer", "kind: reader\n", "REVIEWER-PROMPT");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_by_marker(vec![
+        (
+            "HOST-ASKS",
+            vec![
+                tool_request_with_usage(
+                    "propose_consult",
+                    r#"{"bot":"reviewer","brief":"BRIEF-FOR-REVIEWER is the parser safe?"}"#,
+                    100,
+                    10,
+                ),
+                reply_with_usage("the reviewer says it is safe", 50, 5),
+            ],
+        ),
+        (
+            "BRIEF-FOR-REVIEWER",
+            vec![reply_with_usage("REVIEWED-SAFE", 1000, 7)],
+        ),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let mut person = SendsConsults::default();
+    assert!(person.asks_a_person());
+
+    let outcome = turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HOST-ASKS")
+            .with_home(Some(home.path.clone()))
+            .drawing_consult_cards(true),
+        &mut person,
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    assert_eq!(person.shown, vec!["reviewer".to_string()]);
+    assert_eq!(
+        reporter.consults,
+        vec![("reviewer".to_string(), Some("REVIEWED-SAFE".to_string()))],
+        "the consult was not reported under its bot"
+    );
+    assert!(
+        reporter
+            .consult_narration
+            .iter()
+            .all(|(bot, _)| bot == "reviewer"),
+        "{:?}",
+        reporter.consult_narration
+    );
+    assert_eq!(
+        outcome.output_tokens, 22,
+        "the consult's usage is not the host turn's"
+    );
+}
+
+/// CONSULT-10: a consult a planner proposed runs on the model its bot's definition names, even
+/// where the host's model came from a command line that outranked a definition's (CLI-9). The
+/// control is the host's own request, which stays on the host's model.
+#[test]
+fn a_proposed_consult_runs_on_its_bots_model_over_the_command_lines() {
+    let scratch = Scratch::new("consult-proposed-model");
+    let home = Scratch::new("consult-proposed-model-home");
+    define(
+        &home,
+        "reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEWER-PROMPT",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HOST-ASKS",
+            vec![
+                tool_request(
+                    "propose_consult",
+                    r#"{"bot":"reviewer","brief":"BRIEF-FOR-REVIEWER is the parser safe?"}"#,
+                ),
+                reply_with("the reviewer says it is safe"),
+            ],
+        ),
+        ("BRIEF-FOR-REVIEWER", vec![reply_with("REVIEWED-SAFE")]),
+    ]);
+    let config = config_for(&endpoint);
+    let (haiku, opus) = (config.model_named("haiku"), config.model_named("opus"));
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HOST-ASKS")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some(opus.clone()))
+            .model_outranks_a_definition(true)
+            .drawing_consult_cards(true),
+        &mut SendsConsults::default(),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let model = |of: &str| format!(r#""model":"{of}""#);
+    let consult = requests
+        .iter()
+        .find(|request| request.contains("BRIEF-FOR-REVIEWER") && !request.contains("HOST-ASKS"))
+        .expect("the consult asked a model");
+    assert!(
+        consult.contains(&model(&haiku)),
+        "the consult did not run on its bot's model: {consult}"
+    );
+    let host = requests.first().expect("the host asked a model");
+    assert!(
+        host.contains(&model(&opus)),
+        "the host left its own model: {host}"
     );
 }
 

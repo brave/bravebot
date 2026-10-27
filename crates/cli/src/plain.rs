@@ -1671,6 +1671,15 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         }
     }
 
+    /// Declined unasked: the plain prompt draws no consult card, so it never offers
+    /// `propose_consult` and a proposal that reached here anyway sends nothing (CONSULT-12).
+    fn confirm_consult(
+        &mut self,
+        _request: &bravebot_agent::confirm::ConsultRequest,
+    ) -> bravebot_agent::confirm::Decision {
+        bravebot_agent::confirm::Decision::Reject
+    }
+
     fn confirm_move(&mut self, request: &MoveRequest) -> Decision {
         let lines = bravebot_approval::move_lines(&bravebot_approval::Move {
             alias: &request.alias,

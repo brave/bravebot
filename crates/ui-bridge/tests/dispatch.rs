@@ -326,6 +326,29 @@ fn a_host_answer_for_no_waiting_question_is_refused_as_an_answer_to_nothing() {
     );
 }
 
+/// `consult.reply` is a method the bridge routes. With no proposal waiting it is refused as an
+/// answer to nothing, so a window cannot send a consult nobody proposed (CONSULT-12).
+#[test]
+fn a_consult_answer_for_no_waiting_proposal_is_refused_as_an_answer_to_nothing() {
+    let (mut bridge, _) = harness();
+    let opened = call(
+        &mut bridge,
+        "session.new",
+        json!({ "directory": std::env::temp_dir().display().to_string() }),
+    )
+    .expect("opens");
+    let handle = opened["session"].as_str().expect("a handle").to_string();
+
+    assert_eq!(
+        call(
+            &mut bridge,
+            "consult.reply",
+            json!({ "session": &handle, "request": 1, "decision": "approve" })
+        ),
+        Err(ErrorCode::NoSuchRequest)
+    );
+}
+
 /// Cancelling something that is not running is not an error: a turn can finish between
 /// the key being pressed and the request arriving.
 #[test]

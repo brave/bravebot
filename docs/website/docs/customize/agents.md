@@ -77,6 +77,7 @@ does not ask whether to trust the checkout, so it reads only the definitions in
 | `budget` | no | the most tokens this delegate may spend before it has to answer, as `500000`, `500k` or `2m`; absent or empty means none, and only its rounds bound it |
 | `memory` | no | `project` or `local` keeps [a memory](#memory), a file its runs read and write themselves; absent or empty means none |
 | `isolation` | no | `checkout` or `worktree` gives each of its delegates [a checkout of its own](#a-checkout-of-its-own) to work in; absent or empty means none |
+| `consult` | no | `off` keeps a definition out of the bots you can [consult with `@name`](../using/consulting-a-bot.md); any other value, or none, leaves a slug-named definition a bot |
 | body | no | the standing instruction |
 
 Keys other than these are ignored rather than refused, so a definition written for another agent

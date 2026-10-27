@@ -174,6 +174,24 @@ pub enum Composed {
         /// What the sender wrote, where the planner was shown it.
         text: Option<String>,
     },
+    /// A bot's reply to a line a person sent it, as the note the driver wrote around it
+    /// (CONSULT-11, CONSULT-15).
+    ///
+    /// The fields are the driver's: the bot's name as the set of bots holds it, where its
+    /// definition was read from, the model that answered and the label the reply carried. The
+    /// reply rides in `text`, `None` where the host was given a reference and not the words.
+    Consulted {
+        /// The bot's name.
+        bot: String,
+        /// Where its definition was read from.
+        definition: String,
+        /// The model that answered.
+        model: String,
+        /// The label the reply carried, in the policy layer's own form.
+        label: String,
+        /// The reply, where the host was shown it.
+        text: Option<String>,
+    },
     /// The result of a `message_session` call that put its message in the receiver's process
     /// (MSG-11).
     ///

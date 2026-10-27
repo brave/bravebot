@@ -46,6 +46,17 @@ fn session(scratch: &Scratch) -> Session {
     Session::new("none").in_workspace(&scratch.path)
 }
 
+/// Enter leaves `line` as typed for the loop to send. `@test` could be a bot's name, so the loop
+/// resolves it first (CONSULT-5), and where no bot has that name it sends the line as it is.
+fn sends_as_typed(session: &mut Session, line: &str) {
+    assert_eq!(handle_key(session, key(KeyCode::Enter)), Action::Brief);
+    assert_eq!(
+        session.input(),
+        line,
+        "Enter completed the finished name away"
+    );
+}
+
 /// An `@` offers what is in the workspace, so a user can see which files they may admit.
 #[test]
 fn an_at_sign_offers_the_workspace() {
@@ -178,10 +189,7 @@ fn enter_sends_a_finished_reference_a_directory_shares_a_prefix_with() {
     let mut session = session(&scratch);
     typing(&mut session, "explain @test");
 
-    assert_eq!(
-        handle_key(&mut session, key(KeyCode::Enter)),
-        Action::Submit("explain @test".to_string())
-    );
+    sends_as_typed(&mut session, "explain @test");
 }
 
 /// And the list being capped for display must not cost it either. The offered entries are cut to
@@ -208,10 +216,7 @@ fn enter_sends_a_finished_reference_the_offered_list_is_too_short_to_show() {
         !offered.iter().any(|entry| entry.path == "test"),
         "the file was still offered, so the cap was never reached"
     );
-    assert_eq!(
-        handle_key(&mut session, key(KeyCode::Enter)),
-        Action::Submit("explain @test".to_string())
-    );
+    sends_as_typed(&mut session, "explain @test");
 }
 
 /// Sharing that prefix must not cost the arrows their meaning: a row the user walked to is a row
@@ -249,10 +254,7 @@ fn a_paste_returns_the_cursor_to_the_top_so_enter_sends_a_finished_reference() {
     handle_key(&mut session, key(KeyCode::Down));
     handle_paste(&mut session, "test");
 
-    assert_eq!(
-        handle_key(&mut session, key(KeyCode::Enter)),
-        Action::Submit("explain @test".to_string())
-    );
+    sends_as_typed(&mut session, "explain @test");
 }
 
 /// The row it returns to is the top of the list the paste narrowed to, rather than whichever row

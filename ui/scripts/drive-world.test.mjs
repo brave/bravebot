@@ -74,6 +74,15 @@ test('the model service answers a tool reply with one call named for its round t
   })
 })
 
+test('a tool reply with content narrates beside its call', async () => {
+  await withService(() => ({ content: 'looking first', tool: { name: 'read_file', arguments: { path: '.env' } } }), async (service) => {
+    const chunk = await chunkOf(await post(service, { messages: [] }))
+    assert.equal(chunk.choices[0].delta.content, 'looking first')
+    assert.equal(chunk.choices[0].delta.tool_calls[0].function.name, 'read_file')
+    assert.equal(chunk.choices[0].finish_reason, 'tool_calls')
+  })
+})
+
 test('a tool call keeps the round that asked for it when a later request arrives while its reply is awaited', async () => {
   let release, arrived
   const held = new Promise((resolve) => { release = resolve })

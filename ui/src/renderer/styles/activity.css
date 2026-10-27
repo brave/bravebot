@@ -261,3 +261,54 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* A consulted bot's reply: its face and name above, and a rule down its side, so it never reads as the host's. */
+.bubble.assistant.consulted {
+  padding-inline-start: var(--leo-spacing-l);
+  border-inline-start: 3px solid var(--leo-color-primary-40);
+}
+
+.consulted-by {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-m);
+  margin-bottom: var(--leo-spacing-m);
+}
+
+/* Everything a consult streamed, under one header and one rule, from its first line to its reply. */
+.consult-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--part-gap);
+  padding-inline-start: var(--leo-spacing-l);
+  border-inline-start: 3px solid var(--leo-color-primary-40);
+}
+
+.consult-group > * { flex-shrink: 0; }
+.consult-group > .consulted-by { margin-bottom: 0; }
+
+.consult-group .bubble.assistant.consulted {
+  padding-inline-start: 0;
+  border-inline-start: none;
+}
+
+/* A bot tagged in a line, with its face before the name. */
+.bot-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--leo-spacing-xs);
+  vertical-align: bottom;
+  font-weight: 600;
+}
+
+.bot-tag .bot-face { display: block; }
+
+.consulted-name {
+  font: var(--type-body-strong);
+  color: var(--ink-primary);
+}
+
+.consulted-slug {
+  font: var(--type-caption);
+  color: var(--ink-secondary);
+}

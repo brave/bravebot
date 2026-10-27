@@ -118,6 +118,34 @@ test('making a bot saves nothing unless the agent names the definition it wrote'
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
 
+// CONSULT-16: a row stored before the switch existed reads as consultable whatever its file says,
+// so an edit that leaves the switch alone leaves a hand-written `consult: off` where it is.
+test('only moving the consult switch rewrites the definition’s consult line', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'bravebot-consult-'))
+  const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text
+  const module = { exports: {} }
+  const mockedRequire = (id) => id === 'electron' ? { app: { getPath: () => profile } } : require(id)
+  new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
+  const storage = module.exports
+  try {
+    const old = { ...parseBots({ bots: [{ ...definition, model: null, definition: 'web-dev' }] }).bots[0] }
+    assert.equal(old.consult, true, 'a row stored before the switch reads as consultable')
+    storage.saveBot(old)
+    const calls = []
+    const define = async (method, params) => { calls.push(params); return { name: 'web-dev' } }
+
+    await storage.saveForm({ slug: old.slug, name: 'Renamed' }, define)
+    await storage.saveBotModel(storage.bot(old.slug), 'provider/model-a', define)
+    assert.ok(calls.every((params) => !('consult' in params)), JSON.stringify(calls))
+
+    calls.length = 0
+    await storage.saveForm({ slug: old.slug, consult: false }, define)
+    await storage.saveForm({ slug: old.slug, consult: false, name: 'Again' }, define)
+    await storage.saveForm({ slug: old.slug, consult: true }, define)
+    assert.deepEqual(calls.map((params) => params.consult), [false, undefined, true])
+  } finally { rmSync(profile, { recursive: true, force: true }) }
+})
+
 test('saves from a window run one at a time and an edit changes only the fields it names', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'bravebot-saves-'))
   const source = buildSync({ entryPoints: ['src/main/bots.ts'], bundle: true, write: false, platform: 'node', format: 'cjs', external: ['electron'] }).outputFiles[0].text

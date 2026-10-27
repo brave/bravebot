@@ -189,6 +189,7 @@ impl Session {
     /// `u` after a send would put back the prompt that had just gone.
     pub(super) fn set_input(&mut self, line: impl Into<String>) {
         self.handoff = false;
+        self.brief = None;
         self.enhanced = None;
         // A line that arrived whole is not the one the link wrote, so its banner goes with it.
         self.link_prompt = None;

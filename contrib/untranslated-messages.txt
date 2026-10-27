@@ -12,6 +12,16 @@ fr:chatgpt-use-by-naming
 fr:command-lsp
 fr:command-outputs
 fr:configured-start-heading
+fr:consult-bound
+fr:consult-bound-with-budget
+fr:consult-brief-labelled
+fr:consult-drafting
+fr:consult-explained
+fr:consult-no
+fr:consult-proposed
+fr:consult-refused-notice
+fr:consult-title
+fr:consult-yes
 fr:editor-file-exited-badly
 fr:editor-file-was-stopped
 fr:lsp-none-started

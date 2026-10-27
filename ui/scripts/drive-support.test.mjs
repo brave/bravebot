@@ -148,7 +148,7 @@ test('the send, name, reply, bot and trust constants name what the renderer draw
   // `.composer .send`: the footer carries `composer` (pinned above) and the button carries `send`.
   assert.match(read('Composer.tsx'), /className=\{running \? 'send stop' : 'send'\}/)
   assert.match(read('Composer.tsx'), /aria-label="Message the agent"/)
-  assert.match(read('Transcript.tsx'), /<div className="bubble assistant">/)
+  assert.match(read('Transcript.tsx'), /<div className=\{?[`"]bubble assistant[$"`]/)
   assert.match(read('Bots.tsx'), /<button type="button" className="bot-open-button"/)
   assert.match(read('TrustPrompt.tsx'), /data-test="trust-approve"/)
   assert.equal(COMPOSER_SEND, '.composer .send')

@@ -12,6 +12,7 @@ guards:
     sites:
       - crates/agent/src/backend.rs: 2
       - crates/agent/src/commit_message.rs: 1
+      - crates/agent/src/consult.rs: 3
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
@@ -29,7 +30,7 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 121
+      - crates/core/src/policy.rs: 123
       - crates/core/src/slot.rs: 6
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
@@ -40,7 +41,7 @@ guards:
   - symbol: Labelled::declassify
     every-spelling: yes
     sites:
-      - crates/agent/src/aside.rs: 3
+      - crates/agent/src/aside.rs: 4
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/file_preview.rs: 1
       - crates/agent/src/manifest.rs: 5
@@ -55,7 +56,7 @@ guards:
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 63
+      - crates/core/src/policy.rs: 64
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 4
       - crates/mcp/tests/stdio.rs: 7
@@ -65,7 +66,10 @@ guards:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/commit_message.rs: 3
+      - crates/agent/src/consult.rs: 3
+      - crates/agent/src/tools/consult.rs: 1
       - crates/agent/src/tools/message.rs: 1
+      - crates/agent/src/turn/round_steps.rs: 1
       - crates/agent/src/manifest.rs: 11
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
@@ -87,7 +91,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 60
+      - crates/core/src/policy.rs: 61
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -134,15 +138,16 @@ guards:
       - crates/core/src/vetting.rs: 1
   - symbol: Policy::present
     sites:
-      - crates/agent/src/aside.rs: 1
+      - crates/agent/src/aside.rs: 2
       - crates/agent/src/attached.rs: 1
+      - crates/agent/src/consult.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
       - crates/agent/src/turn.rs: 16
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
-      - crates/agent/src/aside.rs: 1
+      - crates/agent/src/aside.rs: 3
       - crates/agent/src/commit_message.rs: 2
       - crates/agent/src/file_preview.rs: 1
       - crates/agent/src/manifest.rs: 8
@@ -173,12 +178,14 @@ guards:
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
       - crates/agent/src/tools.rs: 2
+      - crates/agent/src/tools/consult.rs: 1
       - crates/agent/src/turn.rs: 3
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 16
+      - crates/agent/src/tools/consult.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
   - symbol: Policy::decode_transport

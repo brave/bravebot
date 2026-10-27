@@ -24,7 +24,7 @@ export const inheritedEnv = () =>
 
 /**
  * A model service on an ephemeral port. `reply({ body, messages, round })` decides each POST and
- * returns `{ content }` or `{ tool: { name, arguments } }`, where `arguments` is an object and
+ * returns `{ content }` or `{ tool: { name, arguments } }`, with `content` as narration beside a tool if given, where `arguments` is an object and
  * `round` counts the POSTs so far, this one included. A GET lists one model.
  */
 export async function startModelService(reply) {
@@ -41,7 +41,7 @@ export async function startModelService(reply) {
     const round = rounds.length
     const { content, tool } = await reply({ body, messages: JSON.parse(body).messages ?? [], round })
     const delta = tool
-      ? { role: 'assistant', tool_calls: [{ index: 0, id: `call-${round}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }
+      ? { role: 'assistant', ...(content ? { content } : {}), tool_calls: [{ index: 0, id: `call-${round}`, type: 'function', function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] }
       : { role: 'assistant', content }
     const chunk = { id: 'c1', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: tool ? 'tool_calls' : 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 } }
     response.writeHead(200, { 'Content-Type': 'text/event-stream' })

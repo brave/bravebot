@@ -1,7 +1,7 @@
 //! The prompts that grant something to the agent: a fetch, a path, a host, a checkout, an exposure and a manifest.
 
 use bravebot_agent::confirm::{
-    ExposureRequest, FetchRequest, HostRequest, ManifestRequest, PathRequest,
+    ConsultRequest, ExposureRequest, FetchRequest, HostRequest, ManifestRequest, PathRequest,
 };
 use bravebot_i18n::t;
 use ratatui::Terminal;
@@ -211,6 +211,86 @@ pub(super) fn draw_host(
 
     let keys = |answerable| vec![answer_keys(t!(host_yes), t!(host_no), answerable)];
     let question = Question::scrolled(body, deciding, 0, &keys);
+    pinned::draw(frame, inside, question, scroll, seen)
+}
+
+/// Ask whether to send the consult the planner proposed, blocking until answered (CONSULT-12).
+pub fn ask_consult<B: Backend>(terminal: &mut Terminal<B>, request: &ConsultRequest) -> Answer {
+    ask_plain(
+        terminal,
+        |frame, scroll, seen| draw_consult(frame, request, scroll, seen),
+        answer_for,
+    )
+}
+
+/// Draw the card for a consult the planner proposed.
+///
+/// Which bot, the model it answers on and its bound are pinned above, where a long brief cannot
+/// push them off the screen (CONSULT-10). The brief is what a yes sends, so every row of it has to
+/// have been drawn before a yes is taken.
+pub(super) fn draw_consult(
+    frame: &mut ratatui::Frame,
+    request: &ConsultRequest,
+    scroll: u16,
+    seen: &mut Seen,
+) -> Drawn {
+    let area = centred(frame.area());
+    let inside = panel(
+        frame,
+        area,
+        theme::note(),
+        &t!(consult_title, bot = request.bot.as_str()),
+    );
+    let width = inside.width as usize;
+    let muted = Style::default().fg(theme::muted());
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+
+    let mut header = indented(
+        t!(
+            consult_proposed,
+            bot = request.bot.as_str(),
+            definition = request.definition.as_str()
+        ),
+        bold,
+        width,
+    );
+    let rounds = request.rounds.to_string();
+    header.extend(indented(
+        match request.budget {
+            Some(tokens) => t!(
+                consult_bound_with_budget,
+                model = request.model.as_str(),
+                rounds = rounds,
+                tokens = tokens.to_string()
+            ),
+            None => t!(
+                consult_bound,
+                model = request.model.as_str(),
+                rounds = rounds
+            ),
+        },
+        muted,
+        width,
+    ));
+    header.push(Line::raw(""));
+
+    let mut body = indented(
+        t!(consult_brief_labelled, label = request.label.to_string()),
+        muted,
+        width,
+    );
+    for line in request.brief.lines() {
+        body.extend(indented(line.to_string(), bold, width));
+    }
+    let deciding = body.len();
+    body.push(Line::raw(""));
+    body.extend(indented(t!(consult_explained), muted, width));
+
+    let keys = |answerable| vec![answer_keys(t!(consult_yes), t!(consult_no), answerable)];
+    let question = Question {
+        above: header,
+        ..Question::scrolled(body, deciding, 0, &keys)
+    };
     pinned::draw(frame, inside, question, scroll, seen)
 }
 

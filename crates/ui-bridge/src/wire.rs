@@ -297,15 +297,76 @@ pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
 /// Sent beside each thing said rather than composed from the list, so that a client drawing one
 /// kind of user message differently costs nobody a working fork.
 pub fn recounted(said: &[Said]) -> Vec<Value> {
+    let consulted = consulted_lines(said);
     let mut prompt = 0usize;
     said.iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(at, entry)| {
             let mut value = self::said(entry);
-            if matches!(entry, Said::User(_)) {
+            if let Said::User(text) = entry {
                 value["prompt"] = json!(prompt);
                 prompt += 1;
+                if let Some(bots) = consulted.get(&at) {
+                    value["tags"] = tags(text, bots);
+                }
             }
             value
+        })
+        .collect()
+}
+
+/// The bots each consulted line named, by the line's place, from the reply the record keeps beside
+/// it (CONSULT-2). A line that consulted several bots in turn is kept once before each reply, and
+/// each copy names them all.
+fn consulted_lines(said: &[Said]) -> std::collections::HashMap<usize, Vec<&str>> {
+    let mut lines = std::collections::HashMap::new();
+    // The places of one line's copies, the line, and the bots they named so far.
+    let mut run: Vec<usize> = Vec::new();
+    let mut held: Option<&str> = None;
+    let mut bots: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while at < said.len() {
+        let pair = match (&said[at], said.get(at + 1)) {
+            (
+                Said::User(line),
+                Some(Said::Composed {
+                    why: Composed::Consulted { bot, .. },
+                    ..
+                }),
+            ) => Some((line.as_str(), bot.as_str())),
+            _ => None,
+        };
+        if pair.map(|(line, _)| line) != held || pair.is_none() {
+            for place in run.drain(..) {
+                lines.insert(place, bots.clone());
+            }
+            bots.clear();
+            held = pair.map(|(line, _)| line);
+        }
+        let Some((_, bot)) = pair else {
+            at += 1;
+            continue;
+        };
+        run.push(at);
+        if !bots.contains(&bot) {
+            bots.push(bot);
+        }
+        at += 2;
+    }
+    for place in run {
+        lines.insert(place, bots.clone());
+    }
+    lines
+}
+
+/// Where each `@` tag of `bots` sits in `text`, in UTF-16 code units as the window indexes a
+/// string. The word rule is `bravebot-mentions`', so the window draws these and decides none.
+pub fn tags(text: &str, bots: &[&str]) -> Value {
+    bravebot_mentions::tags(text, bots)
+        .into_iter()
+        .filter_map(|(at, bot)| {
+            let start = text.get(..at)?.encode_utf16().count();
+            Some(json!({ "start": start, "end": start + 1 + bot.len(), "bot": bot }))
         })
         .collect()
 }
@@ -385,6 +446,27 @@ fn said(said: &Said) -> Value {
             "name": name,
             "label": label,
             "text": text,
+        }),
+        // A bot's reply, drawn under the bot's name from the fields the record keeps (CONSULT-11).
+        // `text` is null where the host was given a reference, and no content is held for it.
+        Said::Composed {
+            why:
+                Composed::Consulted {
+                    bot,
+                    definition,
+                    model,
+                    label,
+                    text,
+                },
+            ..
+        } => json!({
+            "kind": "consulted",
+            "bot": bot,
+            "definition": definition,
+            "model": model,
+            "label": label,
+            "text": text,
+            "kept": text.is_none().then(bravebot_agent::consult::kept),
         }),
         // Written for the planner and left out of a projection by `Conversation::recounted`, so
         // none reaches here. A tag added without a row is drawn as its words, never dropped.
@@ -911,6 +993,23 @@ pub fn host_request(id: u64, request: &HostRequest) -> Value {
     json!({
         "request": id,
         "hosts": request.hosts,
+    })
+}
+
+/// A consult the host proposed, as the card a person sends it from draws it (CONSULT-12).
+///
+/// `brief` is the host's own words and is everything a yes sends, so a front end draws it whole and
+/// as text. `label` is the brief's, said as the terminal says it.
+pub fn consult_request(id: u64, request: &bravebot_agent::confirm::ConsultRequest) -> Value {
+    json!({
+        "request": id,
+        "bot": request.bot,
+        "definition": request.definition,
+        "model": request.model,
+        "rounds": request.rounds,
+        "budget": request.budget,
+        "brief": request.brief,
+        "label": request.label.to_string(),
     })
 }
 

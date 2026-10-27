@@ -4,6 +4,7 @@ import { projectLabel } from '../../shared/recents'
 import { acceptMention, type MentionEntry, type MentionOffer } from '../../shared/mentions'
 import { useContextWindow } from '../context-window'
 import type { Staged } from '../staging'
+import type { Briefing } from '../live'
 import { Button, ButtonMenu, Icon, ProgressRing, TextArea } from '../nala'
 import { FileGlyph } from './FileGlyph'
 import { IconButton } from './IconButton'
@@ -73,6 +74,10 @@ export interface ComposerProps {
   /** Why the last message did not go, said on the box it was sent from. */
   refusal: string | null
   onDismissRefusal: () => void
+  /** A brief the host is drafting, or has drafted into the box, for a bot the line named. */
+  brief?: Briefing | null
+  /** Put the line back in place of the drafted brief. */
+  onDropBrief?: () => void
   backendReady: boolean | null
   onSetup: () => void
   onCheckBackend: () => void
@@ -166,7 +171,7 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
   const {
     input, session, model, running, askingTrust, compacting, contextTokens, archived, pending, scope,
     draft, onDraft, onCancel, onPlan, onModel, permissionMode, onMode, sandboxMode, onSandbox, attachments, onAttach, onRemoveAttachment, staged, onRemoveStaged, onPreview,
-    interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, backendReady, onSetup, onCheckBackend, onDiagnostics,
+    interjected, queued, queuePaused, onResumeQueued, onRemoveQueued, refusal, onDismissRefusal, brief = null, onDropBrief, backendReady, onSetup, onCheckBackend, onDiagnostics,
     canAttach = true, footer, starting = false,
   } = props
   // Read by the key handler, which Leo may keep from the first render.
@@ -188,7 +193,9 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
     let tries = 0
     const fit = () => {
       const field = input.current?.shadowRoot?.querySelector('textarea')
-      if (!field) { if (tries++ < 20) frame = requestAnimationFrame(fit); return }
+      // A draft put in from outside, such as a brief the host drafted, reaches Leo's own field a
+      // frame or so after this runs, and measured before then it is the old text's height.
+      if (!field || field.value !== draft) { if (tries++ < 20) frame = requestAnimationFrame(fit); return }
       // Leo starts the field at three rows and only changes that while somebody types, so an empty
       // box would measure three lines tall. One row makes the measurement below the content's own.
       if (field.rows !== 1) field.rows = 1
@@ -323,6 +330,19 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
             <IconButton icon="close" size="tiny" label="Dismiss" tooltip="Dismiss" onClick={onDismissRefusal} />
           </div>
         )}
+        {brief && (
+          <div className="composer-tray composer-notice consult-brief" role="status" data-test="consult-brief">
+            {brief.drafting ? <ProgressRing /> : <Icon name="message-bubble-text" />}
+            <span className="notice-text">
+              {brief.drafting
+                ? <>Drafting a brief for <strong>@{brief.bot}</strong> from this conversation{brief.row ? ` (${brief.row})` : ''}…</>
+                : brief.message}
+            </span>
+            {!brief.drafting && onDropBrief && (
+              <IconButton icon="close" size="tiny" label="Put my line back" tooltip="Put my line back (Esc)" onClick={onDropBrief} />
+            )}
+          </div>
+        )}
         <div className={`composer-shell${footer ? ' with-footer' : ''}`}>
         <div className="composer-box">
           {(attachments.length > 0 || staged.length > 0) && (
@@ -386,6 +406,11 @@ export const Composer = memo(function Composer(props: ComposerProps): React.JSX.
                   const entry = value.entries[Math.min(at, value.entries.length - 1)]
                   if (value.typed !== null && entry) mention.current.choose(entry, value.word)
                 })
+                return
+              }
+              if (event.key === 'Escape' && !now.running && now.brief && !now.brief.drafting && now.onDropBrief && !composing && !openElsewhere()) {
+                event.preventDefault()
+                now.onDropBrief()
                 return
               }
               if (event.key === 'Escape' && now.running && !composing && !openElsewhere()) {

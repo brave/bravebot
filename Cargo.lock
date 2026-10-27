@@ -145,6 +145,7 @@ dependencies = [
  "bravebot-i18n",
  "bravebot-lsp",
  "bravebot-mcp",
+ "bravebot-mentions",
  "bravebot-net",
  "bravebot-sandbox",
  "bravebot-skus",

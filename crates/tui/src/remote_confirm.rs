@@ -77,6 +77,8 @@ pub enum ToMain {
     /// Programs a line started asked for hosts the allowed-hosts list does not cover. The main
     /// thread must reply.
     Host(HostRequest),
+    /// The planner proposed consulting a bot with a brief it wrote. The main thread must reply.
+    Consult(bravebot_agent::confirm::ConsultRequest),
     /// The planner is asking the user something. The main thread must reply.
     Ask(Asking),
     /// The task list changed. No reply.
@@ -136,6 +138,11 @@ pub enum ToMain {
         failed: bool,
         reported: Option<Reported>,
     },
+    /// A consult the person sent from its card has begun, and what follows until it ends is this
+    /// bot's. No reply.
+    ConsultStarted(String),
+    /// The consult last begun is over, with the bot's reply, or none where it failed. No reply.
+    ConsultFinished { bot: String, reply: Option<String> },
     /// Whose work the reports that follow are: one delegate, or the turn itself. No reply.
     ///
     /// Sent before each report rather than worked out at the other end. Several runs report at
@@ -160,6 +167,7 @@ pub enum Reply {
     Move(Decision),
     Path(Decision),
     Host(Decision),
+    Consult(Decision),
     Ask(Vec<Answer>),
 }
 
@@ -305,6 +313,14 @@ impl Confirmer for RemoteConfirmer {
         _request: &bravebot_agent::confirm::MessageRequest,
     ) -> bravebot_agent::confirm::MessageDecision {
         bravebot_agent::confirm::MessageDecision::Decline
+    }
+
+    /// Only the card's own yes sends it: an answer to any other question is a no (CONSULT-12).
+    fn confirm_consult(&mut self, request: &bravebot_agent::confirm::ConsultRequest) -> Decision {
+        match self.exchange(ToMain::Consult(request.clone())) {
+            Some(Reply::Consult(decision)) => decision,
+            _ => Decision::Reject,
+        }
     }
 
     /// A yes to the call is not a yes to where its reply pointed.
@@ -473,6 +489,16 @@ impl Reporter for RemoteReporter {
             failed,
             reported,
         });
+    }
+
+    fn consult_started(&mut self, bot: String) {
+        self.outbound.send(ToMain::ConsultStarted(bot)).ok();
+    }
+
+    fn consult_finished(&mut self, bot: String, reply: Option<String>) {
+        self.outbound
+            .send(ToMain::ConsultFinished { bot, reply })
+            .ok();
     }
 }
 
@@ -1125,6 +1151,7 @@ mod tests {
                     ToMain::Move(_) => seen.push("move"),
                     ToMain::Path(_) => seen.push("path"),
                     ToMain::Host(_) => seen.push("host"),
+                    ToMain::Consult(_) => seen.push("consult"),
                     ToMain::Todos(_) => seen.push("todos"),
                     ToMain::Spent(_) => seen.push("spent"),
                     ToMain::PromptRecorded(_) => seen.push("prompt"),
@@ -1153,6 +1180,8 @@ mod tests {
                     ToMain::DelegateStarted(_) => seen.push("delegate started"),
                     ToMain::DelegateFinished { .. } => seen.push("delegate finished"),
                     ToMain::ReportingFor(_) => seen.push("reporting for"),
+                    ToMain::ConsultStarted(_) => seen.push("consult started"),
+                    ToMain::ConsultFinished { .. } => seen.push("consult finished"),
                     ToMain::Write(_) => {
                         seen.push("write");
                         answer_tx

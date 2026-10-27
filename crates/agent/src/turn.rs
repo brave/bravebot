@@ -556,6 +556,7 @@ pub fn apply_checkout_asked_for<S: Sink, C: Confirmer>(
             advising: None,
             messaging: None,
             delegated: false,
+            consulting: task.consulting,
             confined_to: None,
             servers: None,
             mcp: None,
@@ -630,6 +631,47 @@ pub fn aside<S: Sink, R: Reporter>(
         .stoppable_by(cancel);
 
     let done = crate::aside::ask(&mut policy, &mut chat, question, watching);
+    policy.finish();
+    done
+}
+
+/// Ask the host for the brief it drafts for `bot`, outside any turn (CONSULT-5, CONSULT-6).
+///
+/// [`aside`], with a confirmer: a draft the planner could not have held is put to a person with a
+/// check beside it before it is handed back, and only a yes hands it back held.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the confirmer, reporter and sink are the caller's exclusive borrows, as they are for `aside`"
+)]
+pub fn brief<S: Sink, C: Confirmer, R: Reporter>(
+    config: &Config,
+    egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
+    question: crate::aside::Question,
+    bot: &str,
+    model: Option<&str>,
+    confirmer: &mut C,
+    reporter: &mut R,
+    sink: &mut S,
+    trust: TrustStore,
+    cancel: &Cancel,
+) -> Result<crate::aside::Answered, crate::aside::AsideError> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("task", "draft a brief for a consult");
+
+    let capabilities = CapabilitySet::from_iter([Capability::WebFetch]);
+    let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)?
+        .with_trust(trust)
+        .resuming(question.context());
+
+    let mut subscription = discover_subscription(config, egress, model, reporter);
+    let mut chat = crate::processor::Chat::new(config, egress, session)
+        .spending(subscription.as_mut())
+        .on(model)
+        .stoppable_by(cancel);
+
+    let done =
+        crate::aside::draft_brief(&mut policy, &mut chat, question, bot, confirmer, reporter);
     policy.finish();
     done
 }
@@ -2401,7 +2443,14 @@ where
     let delegates = policy.delegates().clone();
 
     let resolved = setup::offered_tools(
-        task, workspace, &delegates, advisor, scheduling, arming, policy,
+        task,
+        workspace,
+        &delegates,
+        advisor,
+        scheduling,
+        arming,
+        confirmer.asks_a_person(),
+        policy,
     );
 
     // A run whose definition named skills is offered those of them this turn found, and is listed
@@ -3573,8 +3622,27 @@ where
                 ),
             };
             policy.call_ended(&call.function.name);
-            let took = ran_at.elapsed();
             let cancellation = output.cancelled;
+            // A consult runs inside the call, so its waits and its requests are inside `took`, and
+            // what it spent is this turn's (CONSULT-12).
+            let mut consulted = crate::outcome::Spent::default();
+            if let Some(proposed) = output.consult.take() {
+                consulted = round_steps::consult_proposed(
+                    &proposed,
+                    &mut output,
+                    policy,
+                    confirming,
+                    reporting,
+                    recording,
+                    config,
+                    egress,
+                    workspace,
+                    task,
+                    cancel,
+                    plan.wallet,
+                );
+            }
+            let took = ran_at.elapsed();
             round_steps::after_a_call(
                 scope,
                 inputs,
@@ -3589,6 +3657,7 @@ where
                 call,
                 took,
                 asking.waited(),
+                &consulted,
                 &mut output,
             );
             // As with a context file: what the turn has seen belongs to the conversation the
@@ -4385,6 +4454,25 @@ mod tests {
                     if detail.contains("named by the user")
             )),
             "the trail records a skill as supplied that never reached the planner"
+        );
+    }
+
+    /// CONSULT-7: the host a consult was sent from is precommitted beside the bot's name, and a
+    /// turn that is no consult carries none, so the kernel narrows by a host only where there is one.
+    #[test]
+    fn a_consult_precommits_the_host_it_was_sent_from() {
+        use bravebot_core::delegate::{ADDRESSED, CONSULTED_FROM};
+        let consult = Task::new("check it")
+            .addressing(Some("rule-reviewer".into()))
+            .consulted_from(Some("planner-bot".into()));
+        let routing = setup::precommit_routing(&consult);
+        assert_eq!(routing.get(ADDRESSED), Some("rule-reviewer"));
+        assert_eq!(routing.get(CONSULTED_FROM), Some("planner-bot"));
+
+        let addressed = Task::new("check it").addressing(Some("rule-reviewer".into()));
+        assert_eq!(
+            setup::precommit_routing(&addressed).get(CONSULTED_FROM),
+            None
         );
     }
 

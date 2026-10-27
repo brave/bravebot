@@ -343,6 +343,11 @@ pub struct Definition {
     /// take one away. Held to the kind where it is read rather than where it is set, so one met
     /// down to a `reader` has none.
     checkout: bool,
+    /// Whether a person may consult it by name with `@name` (CONSULT-14).
+    ///
+    /// Taken over with the body by a later definition of the same name, since it decides who may
+    /// start a run and never what the run may reach.
+    consultable: bool,
     /// The path patterns its `writes:` lines limited a delegate's file writes to, one list per
     /// line that limited it (DELEGATE-28).
     ///
@@ -378,6 +383,7 @@ impl Definition {
             budget: None,
             memory: false,
             checkout: false,
+            consultable: true,
             writes: Vec::new(),
             prompt: String::new(),
             origin: "built-in".to_string(),
@@ -407,6 +413,7 @@ impl Definition {
             budget: None,
             memory: false,
             checkout: false,
+            consultable: true,
             writes: Vec::new(),
             prompt: prompt.into(),
             origin: origin.into(),
@@ -547,6 +554,20 @@ impl Definition {
     /// Give a delegate of it a checkout of its own.
     pub fn with_checkout(mut self) -> Self {
         self.checkout = true;
+        self
+    }
+
+    /// Whether it may be consulted with `@name`, which its `consult: off` line turns off.
+    ///
+    /// The kinds' own names are never bots whatever this says (CONSULT-2), and the slug a bot's
+    /// name is held to is the loader's to ask.
+    pub fn may_be_consulted(&self) -> bool {
+        self.consultable
+    }
+
+    /// Leave it out of the bots a person may consult (CONSULT-14).
+    pub fn without_consults(mut self) -> Self {
+        self.consultable = false;
         self
     }
 
@@ -790,6 +811,9 @@ impl Definitions {
     ///
     /// The memory is taken over for the same reason as the body: it changes what a run knows and
     /// never what it may do, since keeping one adds no tool.
+    ///
+    /// Whether it may be consulted is taken over too: it decides who may start a run, and a consult
+    /// is only ever started by a person sending one (CONSULT-14).
     ///
     /// A checkout is met as the kind is: either asking gives one, so a later definition can add
     /// one and cannot take one away (CHECKOUT-2).
@@ -1514,6 +1538,12 @@ pub enum Finish {
 /// person submitted, and a keystroke is the only thing that may name a definition to address
 /// (ADDRESS-3). No tool and no reply writes to the routing table.
 pub const ADDRESSED: &str = "addressed";
+
+/// The routing field naming the definition a consult was sent from, where its host is one.
+///
+/// Written beside [`ADDRESSED`] from the brief card a person sent, so the consult holds what both
+/// definitions hold and never what only one of them does (CONSULT-7).
+pub const CONSULTED_FROM: &str = "consulted-from";
 
 /// What the kernel fixed about a turn a person addressed to a definition, before it ran.
 ///
