@@ -240,9 +240,10 @@ path outside the project and every directory you opened, the refusal tells the m
 open the directory the file is in with `/add-dir` or `--add-dir`. If the path names a directory, that
 directory is the one to open. A name nothing is at yet is offered through the directory it is in, as
 a file is. Only a read is also told the file can be dropped on the window, and a read of a directory
-is not, since a directory cannot be dropped. The refusal names [`request_path`](../reference/tools.md#request_path)
-only where the session would accept that request, so under the sandbox mode `off` and in a workspace
-you have not trusted it names `/add-dir` alone. An absolute path that lands inside the project is
+is not, since a directory cannot be dropped. The refusal names `/add-dir` alone: with
+permissions bypassed the file tools reach such a path with no request and the refusal is not given,
+outside the paths a granted request refuses ([`request_path`](../reference/tools.md#request_path)).
+An absolute path that lands inside the project is
 refused with "is inside the workspace, and a path there is named relative to the workspace root",
 and no directory is offered, since opening one would change nothing. A refused write is not pointed
 at an unconfined `run` line in that case.

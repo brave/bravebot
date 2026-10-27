@@ -3492,6 +3492,10 @@ where
                     for (place, read) in tools::read_ahead(
                         policy,
                         workspace,
+                        &tools::ReachFacts {
+                            permission_mode: task.permission_mode.clone(),
+                            profile: task.profile.as_deref(),
+                        },
                         &together,
                         tools::READS_AT_ONCE,
                         cancel,

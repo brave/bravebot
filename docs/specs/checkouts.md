@@ -513,7 +513,11 @@ A delegate in a checkout works in a workspace whose root is the checkout. The di
 parent had opened beside its working directory, and the session's own directory, stay reachable
 as they were, and so does the rule holding the file tools to the workspace
 ([PERM-16](permissions.md#PERM-16)). The working directory is not reachable from it, and the
-checkout is reachable from no run but that delegate and the delegates it starts.
+checkout is reachable from no run but that delegate and the delegates it starts. Where the
+permission mode reaches a path outside the workspace for the delegate
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)), the working directory and every checkout the session
+made are left out of that reach, and the delegate's programs are given no write row for either
+([SANDBOX-28](sandboxing.md#SANDBOX-28)).
 
 Where that cannot hold, a checkout is refused and no delegate starts: where a directory the parent
 opened ([TRUST-9](trust-map.md#TRUST-9)) holds the working directory or the checkout, or where the
@@ -580,6 +584,8 @@ does the description of `isolation`.
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
 `verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
+`verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout`
+`verified-by: bravebot_agent::confine::a_bypass_stage_of_a_delegate_in_a_checkout_is_given_no_row_for_the_working_directory`
 
 <a id="CHECKOUT-8"></a>
 ### CHECKOUT-8: a file in a checkout is labelled as the same path in the working directory is

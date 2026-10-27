@@ -757,6 +757,11 @@ joined to. Naming a directory includes nothing, since a directory is somewhere t
 [CHECKOUT-7](checkouts.md#CHECKOUT-7) gives a delegate a checkout of its
 own as its working directory, from which the session's working directory is not reachable.
 
+A path outside those is also reachable, with no directory opened and nothing recorded, while the
+permission mode that answers every question is in force, outside the refusals a granted request has
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)). That reach is not an opened directory: no rule is
+written for it, `/add-dir` does not list it, and it ends when the mode changes.
+
 Confinement is decided by where an operation lands and not by how its path is spelled, so it holds
 for a file that does not exist yet: a write creates what it names, and a symlink out of the tree is
 refused whether or not there is anything at the other end of it.

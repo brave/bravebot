@@ -509,6 +509,14 @@ pub(crate) mod scripted_hosts {
 }
 
 impl<'a> Tools<'a> {
+    /// The facts this turn's calls reach outside the workspace under (MODE-4).
+    pub(crate) fn reach_facts(&self) -> ReachFacts<'_> {
+        ReachFacts {
+            permission_mode: self.permission_mode.clone(),
+            profile: self.profile,
+        }
+    }
+
     /// Whether this call's programs are held to a profile at all: the turn confines them and the
     /// sandbox mode is not `off`.
     fn confines_programs(&self) -> bool {
@@ -521,6 +529,8 @@ impl<'a> Tools<'a> {
     /// the trust map is the policy's. It decides whether bypass gives the stages what a
     /// `request_path` for writing would be granted: only where a request is accepted
     /// ([`requests_are_accepted`]), so a session that refuses every request is given no row for one.
+    /// A delegate is given them as the lead session is, less the directories its checkout holds it
+    /// out of (SANDBOX-28).
     fn confinement(&self, workspace_trusted: bool) -> Option<crate::confine::Confinement> {
         if !self.confines_programs() {
             return None;
@@ -542,14 +552,14 @@ impl<'a> Tools<'a> {
                 .with_filesystem(&bravebot_config::sandbox_filesystem())
                 .with_path_reach(&self.workspace.path_reach())
                 .with_unasked_writes(
-                    !self.delegated
-                        && self.permission_mode.get() == crate::PermissionMode::Bypass
+                    self.permission_mode.get() == crate::PermissionMode::Bypass
                         && requests_are_accepted(
                             self.confine_runs,
                             self.sandbox,
                             workspace_trusted,
                         ),
                 )
+                .with_withheld_writes(self.workspace.checkout_exclusions())
                 .with_host_grants(&self.workspace.granted_hosts())
                 .with_identities(bravebot_config::git_identities::settled());
         // Read only where a person is there to see the row it adds: a session with nobody to put
@@ -2100,6 +2110,7 @@ impl Ahead {
 pub(crate) fn read_ahead<S: Sink>(
     policy: &Policy<'_, S>,
     workspace: &Workspace,
+    facts: &ReachFacts<'_>,
     calls: &[&ToolCall],
     at_once: usize,
     cancel: &bravebot_core::cancel::Cancel,
@@ -2117,7 +2128,8 @@ pub(crate) fn read_ahead<S: Sink>(
                 let reading = Reading::named(&call.function.name)?;
                 let arguments = call.arguments().ok()?;
                 readings[index] = Some(reading);
-                Some((index, reading, policy.branch(record), arguments))
+                let reach = facts.for_call(policy, workspace, &call.function.name);
+                Some((index, reading, policy.branch(record), arguments, reach))
             })
             .collect();
         let workers = at_once.min(jobs.len());
@@ -2131,10 +2143,14 @@ pub(crate) fn read_ahead<S: Sink>(
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .next();
-                        let Some((index, reading, mut branch, arguments)) = next else {
+                        let Some((index, reading, mut branch, arguments, reach)) = next else {
                             break;
                         };
-                        let produced = reading.run(&mut branch, workspace, &arguments);
+                        // A copy of its own, so the reach this read holds is not the one a read
+                        // beside it holds.
+                        let held = workspace.clone();
+                        held.hold_bypass_reach(reach);
+                        let produced = reading.run(&mut branch, &held, &arguments);
                         drop(branch);
                         done.lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)[index] =
@@ -2229,11 +2245,9 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
 
     // Read once, so a write refused below is recorded under the mode that refused it.
     let mode = tools.permission_mode.get();
-    // A delegate is not given the tool a refusal would send it to, and a session that refuses the
-    // call outright (PATHREQ-5) has no grant for the refusal to promise.
-    let path_requests_granted =
-        !tools.delegated && mode.answers_a_run_unasked() && path_requests_accepted(policy, tools);
-    policy.grant_path_requests_unasked(path_requests_granted);
+    tools
+        .workspace
+        .hold_bypass_reach(tools.reach_facts().for_call(policy, tools.workspace, &name));
     let mut produced = match name.as_str() {
         // A server's tool is not one of this program's, so no definition's `tools:` line names
         // it, and it was offered only where the run holds its server.
@@ -2397,6 +2411,16 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
             None => Produced::problem(format!("error: no such tool '{other}'")),
         },
     };
+    // Held for the call alone, so nothing that reads the workspace between calls finds a reach.
+    tools.workspace.hold_bypass_reach(None);
+    for reached in tools.workspace.take_new_reaches() {
+        policy.record_bypass_reach(
+            &reached.directory.display().to_string(),
+            reached.mode,
+            &reached.tool,
+            reached.field,
+        );
+    }
 
     // The words the person typed beside their answer, where this call asked one. Taken whether the
     // call went on to succeed or fail, since either way they were said about this call.
@@ -3824,44 +3848,7 @@ fn record_confinement_refusal<S: Sink>(
     }
 }
 
-/// [`workspace_failure`] for a file tool, which adds what the planner can do itself where a
-/// `request_path` for the directory is granted without a question (PATHREQ-7).
-fn file_tool_failure<S: Sink>(
-    policy: &mut Policy<'_, S>,
-    tool: &str,
-    field: &str,
-    e: &crate::workspace::WorkspaceError,
-    named: &str,
-) -> String {
-    use crate::workspace::{Remedy, WorkspaceError};
-    let opens = matches!(
-        e,
-        WorkspaceError::Escapes {
-            remedy: Remedy::Open
-                | Remedy::OpenOrDrop
-                | Remedy::OpenEndsCheckouts
-                | Remedy::DropOrOpenEndsCheckouts
-                | Remedy::OpenItself
-                | Remedy::OpenItselfEndsCheckouts,
-            ..
-        }
-    );
-    // Worded to follow [`WorkspaceError::describe`], which ends without a full stop, and to end
-    // without one so a caller can go on.
-    let grant = if opens && policy.path_requests_are_granted_unasked() {
-        ". In this session a request_path for that directory is granted without asking the \
-         person and opens it to the file tools too, so call it instead of asking the person to \
-         run /add-dir"
-    } else {
-        ""
-    };
-    format!(
-        "{}{grant}",
-        workspace_failure(policy, tool, field, e, named)
-    )
-}
-
-/// [`file_tool_failure`] as the `error:` result a file tool returns, so each tool's refusal of a
+/// [`workspace_failure`] as the `error:` result a file tool returns, so each tool's refusal of a
 /// path the workspace turned away is worded and recorded in one place.
 fn file_tool_problem<S: Sink>(
     policy: &mut Policy<'_, S>,
@@ -3872,7 +3859,7 @@ fn file_tool_problem<S: Sink>(
 ) -> Produced {
     Produced::problem(format!(
         "error: {}",
-        file_tool_failure(policy, tool, field, e, named)
+        workspace_failure(policy, tool, field, e, named)
     ))
 }
 
@@ -3885,7 +3872,7 @@ fn path_field(destination: Destination) -> &'static str {
 }
 
 /// The result of a write the workspace turned away, worded about `shown_path` and recorded as
-/// [`file_tool_failure`] records it.
+/// [`workspace_failure`] records it.
 ///
 /// A write that leaves the workspace can still be made by a line the person approves with no
 /// sandbox, which the planner has no other way to learn of (SANDBOX-29). A path inside the
@@ -3909,7 +3896,7 @@ fn write_refused<S: Sink>(
     };
     Produced::problem(format!(
         "error: {}{way_out}",
-        file_tool_failure(policy, tool, path_field(destination), e, shown_path)
+        workspace_failure(policy, tool, path_field(destination), e, shown_path)
     ))
 }
 
@@ -6283,7 +6270,7 @@ fn watch_file<S: Sink>(
     if let Err(e) = workspace.resolve(&path) {
         return Produced::problem(format!(
             "refused: {}",
-            file_tool_failure(policy, "watch_file", "path", &e, &found.shown)
+            workspace_failure(policy, "watch_file", "path", &e, &found.shown)
         ));
     }
 
@@ -7465,15 +7452,99 @@ const LONGEST_PATH_REASON: usize = 300;
 /// is not, and in a workspace the person has trusted. A project file or a settings layer has no way
 /// to say yes to this, since the only road to a grant is the confirmer, and a turn nobody is at to
 /// ask is refused by the one it is given.
-///
-/// A file tool's refusal reads this too, so that it names `request_path` only where the call is
-/// not refused outright (PATHREQ-7).
 fn path_requests_accepted<S: Sink>(policy: &Policy<'_, S>, tools: &Tools<'_>) -> bool {
     requests_are_accepted(
         tools.confine_runs,
         tools.sandbox,
         workspace_is_trusted(policy, tools.workspace),
     )
+}
+
+/// The tools that name a path the workspace resolves, the argument each names it in and whether the
+/// call writes it (MODE-4, PATHREQ-7). The one list the reach outside the workspace is read from, so
+/// a tool that names a path is covered by it or named in
+/// [`TOOLS_NAMING_A_PATH_WITHOUT_REACH`], and a test fails for one that is neither.
+pub(crate) const TOOLS_NAMING_A_PATH: &[(&str, &str, bool)] = &[
+    ("read_file", "path", false),
+    ("write_file", "path", true),
+    ("edit_file", "path", true),
+    ("download_url", "path", true),
+    ("list_files", "directory", false),
+    ("repo_map", "directory", false),
+    ("search", "directory", false),
+    ("read_git", "repository", false),
+    ("run", "directory", false),
+];
+
+/// The tools that take a path, or a directory, and are given no reach by the mode, each with why.
+#[cfg(test)]
+pub(crate) const TOOLS_NAMING_A_PATH_WITHOUT_REACH: &[(&str, &str)] = &[
+    (
+        "request_path",
+        "it asks for reach for programs and opens a directory itself (PATHREQ-7)",
+    ),
+    (
+        "lsp",
+        "the server indexes the workspace root and the path is not resolved through the workspace (LSP-1)",
+    ),
+    (
+        "watch_file",
+        "a watch is looked at later with no call in progress, where a reach held for one call is \
+         gone, so a watch armed outside the workspace would end at its first look",
+    ),
+    (
+        "apply_checkout",
+        "its paths are names inside a kept checkout, which come back through the write gate \
+         (CHECKOUT-14)",
+    ),
+];
+
+/// The facts a call's reach outside the workspace is decided from while the permission mode is
+/// bypass (MODE-4, PATHREQ-7), read where a call is dispatched and where the reads of a round are
+/// run ahead of it.
+pub(crate) struct ReachFacts<'a> {
+    pub(crate) permission_mode: crate::LiveMode,
+    pub(crate) profile: Option<&'a std::path::Path>,
+}
+
+impl ReachFacts<'_> {
+    /// What a call of `tool` reaches outside the workspace, or `None` where it reaches nothing.
+    ///
+    /// Read from the live mode at each call, so the reach ends when the key leaves bypass (MODE-8).
+    /// Nothing here is a path or a file's content: the path the call names is judged where the
+    /// workspace resolves it, against the refusals [`BypassReach`] carries. A workspace the person
+    /// has not trusted reaches nothing (PATHREQ-5). The facts are the person's, and the tool's name
+    /// and the field it names a path in are the driver's own. A write the sandbox mode `read-only`
+    /// keeps is refused before a tool is reached (SANDBOX-22), so the reach does not hold it back.
+    pub(crate) fn for_call<S: Sink>(
+        &self,
+        policy: &Policy<'_, S>,
+        workspace: &Workspace,
+        tool: &str,
+    ) -> Option<crate::workspace::BypassReach> {
+        let mode = self.permission_mode.get();
+        if mode != crate::PermissionMode::Bypass || !workspace_is_trusted(policy, workspace) {
+            return None;
+        }
+        let tool = strip_namespace(tool);
+        let &(_, field, write) = TOOLS_NAMING_A_PATH
+            .iter()
+            .find(|(named, _, _)| *named == tool)?;
+        let person = bravebot_sandbox::rules::resolve(
+            &bravebot_config::sandbox_filesystem(),
+            self.profile,
+            workspace.root(),
+        );
+        Some(crate::workspace::BypassReach {
+            tool: tool.to_string(),
+            field,
+            mode: mode.name(),
+            profile: self.profile.map(std::path::Path::to_path_buf),
+            person,
+            excluded: workspace.checkout_exclusions(),
+            write,
+        })
+    }
 }
 
 /// Whether the person has trusted the working directory, which is what a request for a credential
@@ -7932,7 +8003,7 @@ fn check_the_plan_before_asking<S: Sink>(
     // the person is shown the file before the line runs (CMDLINE-5).
     let reaches_anywhere = redirections_may_leave_the_workspace(unconfined, tools);
     for path in &plan.writes {
-        if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
+        if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
             let target = path.display().to_string();
             let way_out = match escape {
                 crate::workspace::WorkspaceError::Escapes { .. } => {
@@ -8056,7 +8127,7 @@ fn settle_the_confinement<S: Sink>(
         let leaves_the_workspace = plan
             .writes
             .iter()
-            .any(|path| tools.workspace.confines(path).is_err());
+            .any(|path| tools.workspace.confines_writing(path).is_err());
         if !leaves_the_workspace && !tools.confined_failures.has_one() {
             policy.refuse_run_request("unconfined", &[RunRequestCause::NoConfinedAttempt]);
             return Err(Box::new(Produced::problem(UNCONFINED_BEFORE_A_FAILURE)));
@@ -8979,7 +9050,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
                 // open and not only the first, because a part run between two opens of one
                 // destination can have replaced it with a link (CMDLINE-5). Not for a line whose
                 // programs have no profile, for the reason the check above is not.
-                if !reaches_anywhere && let Err(escape) = tools.workspace.confines(path) {
+                if !reaches_anywhere && let Err(escape) = tools.workspace.confines_writing(path) {
                     let target = path.display().to_string();
                     let detail = workspace_failure(policy, "run", "command", &escape, &target);
                     return Err(crate::exec::ExecError::Redirection {
@@ -12093,7 +12164,7 @@ fn read_git<S: Sink, C: Confirmer>(
     let answer = match workspace.read_git(policy, &question) {
         Ok(answer) => answer,
         Err(e) => {
-            let said = file_tool_failure(policy, "read_git", "repository", &e, &shown);
+            let said = workspace_failure(policy, "read_git", "repository", &e, &shown);
             return Produced::problem(format!("error: {}", git_failure(said, &e, running)));
         }
     };
@@ -13099,6 +13170,55 @@ mod tests {
         assert!(!required.contains(&"write"));
     }
 
+    /// MODE-4, PATHREQ-7: the tools that name a path are one list. A tool offered with an argument
+    /// that names a path, a directory or a repository is in [`TOOLS_NAMING_A_PATH`], which the
+    /// reach outside the workspace is read from, or is named in
+    /// [`TOOLS_NAMING_A_PATH_WITHOUT_REACH`] with the reason. The regression it rejects is a tool
+    /// added later that resolves a path through the workspace and is refused outside it under
+    /// bypass, or is reached without the refusals, because nobody put it in the list.
+    #[test]
+    fn every_tool_that_names_a_path_is_given_the_reach_or_says_why_not() {
+        let offered = available(
+            Scheduling::ArrangingALook,
+            Arming::Allowed { free: 1 },
+            Deadlines::BUILT_IN,
+            Running::Offered,
+        );
+        let mut unlisted = Vec::new();
+        for tool in &offered {
+            let name = tool.function.name.as_str();
+            let names_a_path = tool
+                .function
+                .parameters
+                .get("properties")
+                .and_then(|properties| properties.as_object())
+                .is_some_and(|properties| {
+                    properties.keys().any(|key| {
+                        matches!(key.as_str(), "path" | "paths" | "directory" | "repository")
+                    })
+                });
+            let covered = TOOLS_NAMING_A_PATH
+                .iter()
+                .any(|(named, _, _)| *named == name)
+                || TOOLS_NAMING_A_PATH_WITHOUT_REACH
+                    .iter()
+                    .any(|(named, _)| *named == name);
+            if names_a_path && !covered {
+                unlisted.push(name.to_string());
+            }
+        }
+        assert!(
+            unlisted.is_empty(),
+            "tools that name a path and are in neither list: {unlisted:?}"
+        );
+        for (name, _, _) in TOOLS_NAMING_A_PATH {
+            assert!(
+                offered.iter().any(|tool| tool.function.name == *name) || *name == "download_url",
+                "{name} is listed and not offered"
+            );
+        }
+    }
+
     /// PATHREQ-7: the planner cannot see the permission mode, so the description is where it learns
     /// that a granted request opens the directory to the file tools only where prompts are off. A
     /// description that denied it flatly never has the planner make the call where it would
@@ -13131,7 +13251,8 @@ mod tests {
             "the default case no longer says /add-dir is what opens a directory to them: {described}"
         );
         assert!(
-            exception.contains("without a question")
+            exception.contains("with no request")
+                && exception.contains("without a question")
                 && exception.contains("opens the directory")
                 && exception.contains("trusts it"),
             "the exception does not say what a request does there: {described}"
@@ -21022,14 +21143,14 @@ mod tests {
             }
         }
 
-        /// SANDBOX-22, SANDBOX-28: a stage writes what a request would be granted only on the lead
-        /// session, in bypass, in a workspace where a request is accepted. The regressions it
-        /// rejects are a delegate given it because the permission mode it was lent is bypass, a
-        /// session outside bypass given it, and a bypass session given it in a workspace that is
-        /// not trusted, where every request is refused.
+        /// SANDBOX-22, SANDBOX-28: a stage writes what a request would be granted in bypass, in a
+        /// workspace where a request is accepted, whether it is the lead session's or a delegate's.
+        /// The regressions it rejects are a delegate given nothing because it is offered no
+        /// `request_path`, a session outside bypass given it, and a bypass session given it in a
+        /// workspace that is not trusted, where every request is refused.
         #[cfg(unix)]
         #[test]
-        fn only_the_lead_session_in_bypass_is_given_what_a_request_would_be() {
+        fn a_session_in_bypass_is_given_what_a_request_would_be_and_so_is_its_delegate() {
             use crate::PermissionMode::{AcceptEdits, Ask, Bypass};
             let scratch = Scratch::new("unasked-lead");
             let workspace = Workspace::new(&scratch.path).expect("workspace");
@@ -21039,7 +21160,8 @@ mod tests {
             for (mode, delegated, trusted, given) in [
                 (Bypass, false, true, true),
                 (Bypass, false, false, false),
-                (Bypass, true, true, false),
+                (Bypass, true, true, true),
+                (Bypass, true, false, false),
                 (Ask, false, true, false),
                 (AcceptEdits, false, true, false),
             ] {
@@ -22740,6 +22862,15 @@ mod tests {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::{Duration, Instant};
 
+        /// The facts of a turn in the default permission mode, which reaches nothing outside the
+        /// workspace.
+        fn asking() -> ReachFacts<'static> {
+            ReachFacts {
+                permission_mode: crate::LiveMode::new(crate::PermissionMode::Ask),
+                profile: None,
+            }
+        }
+
         /// Trusted files under `a`, `b`, `c` and the top, and one under `mystery`, which the map
         /// distrusts, so a result naming it is quarantined.
         fn fixture(name: &str) -> (Scratch, Workspace) {
@@ -22834,7 +22965,14 @@ mod tests {
                 let mut policy = policy(&mut sink);
                 let mut reads: Vec<Option<Ahead>> = if beforehand {
                     let named: Vec<&ToolCall> = calls.iter().collect();
-                    read_ahead(&policy, workspace, &named, READS_AT_ONCE, &Cancel::new())
+                    read_ahead(
+                        &policy,
+                        workspace,
+                        &asking(),
+                        &named,
+                        READS_AT_ONCE,
+                        &Cancel::new(),
+                    )
                 } else {
                     calls.iter().map(|_| None).collect()
                 };
@@ -22911,6 +23049,62 @@ mod tests {
             );
         }
 
+        /// MODE-4, PATHREQ-7: the reads of a round that run beside each other each hold the reach the
+        /// live mode gives them, so a listing and a search of a sibling directory are answered as
+        /// they would be one after another, and the directory is recorded once. The control is the
+        /// same round under the mode that asks, which is refused both. The regression it rejects is a
+        /// read taken beforehand without the reach, which answers the round with a refusal the
+        /// sequential run would not give.
+        #[test]
+        fn reads_taken_beforehand_hold_the_reach_the_mode_gives_them() {
+            for (mode, reached) in [
+                (crate::PermissionMode::Bypass, true),
+                (crate::PermissionMode::Ask, false),
+            ] {
+                let (_scratch, workspace) = fixture(&format!("ahead-reach-{mode:?}"));
+                let beside = Scratch::new(&format!("ahead-reach-beside-{mode:?}"));
+                std::fs::write(beside.path.join("n.txt"), "needle outside\n").unwrap();
+                let home = Scratch::new(&format!("ahead-reach-home-{mode:?}"));
+                let facts = ReachFacts {
+                    permission_mode: crate::LiveMode::new(mode),
+                    profile: Some(&home.path),
+                };
+                let directory = beside.path.display().to_string();
+                let calls = [
+                    call("list_files", json!({"directory": directory})),
+                    call(
+                        "search",
+                        json!({"pattern": "needle", "directory": directory}),
+                    ),
+                ];
+                let named: Vec<&ToolCall> = calls.iter().collect();
+                let mut sink = RecordingSink::new();
+                let mut policy = policy(&mut sink);
+                let reads = read_ahead(
+                    &policy,
+                    &workspace,
+                    &facts,
+                    &named,
+                    READS_AT_ONCE,
+                    &Cancel::new(),
+                );
+                for read in reads {
+                    let produced = read.expect("a read taken beforehand").rejoin(&mut policy);
+                    let said = told(&mut policy, &produced.text);
+                    assert_eq!(
+                        !said.contains("outside the workspace"),
+                        reached,
+                        "{mode:?}: {said}"
+                    );
+                }
+                assert_eq!(
+                    workspace.reached_directories().len(),
+                    usize::from(reached),
+                    "{mode:?}"
+                );
+            }
+        }
+
         /// The regression it rejects: reads that take turns. Each read holds in its capture until
         /// three are inside together, so a run one after another never gets there and gives up.
         #[test]
@@ -22932,7 +23126,14 @@ mod tests {
             ];
             let named: Vec<&ToolCall> = calls.iter().collect();
 
-            let read = read_ahead(&policy, &workspace, &named, READS_AT_ONCE, &Cancel::new());
+            let read = read_ahead(
+                &policy,
+                &workspace,
+                &asking(),
+                &named,
+                READS_AT_ONCE,
+                &Cancel::new(),
+            );
 
             assert_eq!(read.iter().flatten().count(), 3);
             assert_eq!(arrived.load(Ordering::SeqCst), 3);
@@ -22966,7 +23167,7 @@ mod tests {
             let calls = searches(&["a", "b", "c", "a", "b", "c", "a", "b"]);
             let named: Vec<&ToolCall> = calls.iter().collect();
 
-            let read = read_ahead(&policy, &workspace, &named, 4, &Cancel::new());
+            let read = read_ahead(&policy, &workspace, &asking(), &named, 4, &Cancel::new());
 
             assert_eq!(read.iter().flatten().count(), 8);
             assert_eq!(gave_up.load(Ordering::SeqCst), 0, "four never ran together");
@@ -22990,7 +23191,7 @@ mod tests {
             let calls = searches(&["a", "b", "c"]);
             let named: Vec<&ToolCall> = calls.iter().collect();
 
-            let read = read_ahead(&policy, &workspace, &named, 1, &cancel);
+            let read = read_ahead(&policy, &workspace, &asking(), &named, 1, &cancel);
 
             assert_eq!(started.load(Ordering::SeqCst), 1);
             assert!(read[0].is_some());
@@ -23012,8 +23213,14 @@ mod tests {
             let entering = authority.capture();
             std::thread::scope(|scope| {
                 scope.spawn(|| {
-                    let taken =
-                        read_ahead(&policy, &workspace, &named, READS_AT_ONCE, &Cancel::new());
+                    let taken = read_ahead(
+                        &policy,
+                        &workspace,
+                        &asking(),
+                        &named,
+                        READS_AT_ONCE,
+                        &Cancel::new(),
+                    );
                     done.send(taken.iter().flatten().count()).unwrap();
                 });
                 assert!(
@@ -23034,7 +23241,14 @@ mod tests {
             let policy = policy(&mut sink);
             let calls = searches(&["a", "b"]);
             let named: Vec<&ToolCall> = calls.iter().collect();
-            let mut read = read_ahead(&policy, &workspace, &named, READS_AT_ONCE, &Cancel::new());
+            let mut read = read_ahead(
+                &policy,
+                &workspace,
+                &asking(),
+                &named,
+                READS_AT_ONCE,
+                &Cancel::new(),
+            );
 
             let mut later_sink = RecordingSink::new();
             let later = self::policy(&mut later_sink).resuming(Integrity::Untrusted);

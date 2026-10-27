@@ -1507,6 +1507,7 @@ path-not-trusted =
 path-yes = Oui, pour cette session
 path-no = Non
 path-listed = { $number }. chaque commande { $access } aussi { $path }, pour cette session
+reached-listed = { $path }, atteint d'abord par { $tool } ({ $field })
 path-none = aucun chemin n'a été demandé dans cette session
 path-removed = retiré : aucune commande ne { $access } plus { $path }
 path-refused-number = aucun chemin demandé n'est numéroté { $number }
@@ -2132,6 +2133,10 @@ count-requested-paths = { $count ->
     [one] { $count } chemin
    *[other] { $count } chemins
     }
+count-reached-directories = { $count ->
+    [one] { $count } répertoire
+   *[other] { $count } répertoires
+    }
 count-reach-grants = { $count ->
     [one] { $count } autorisation
    *[other] { $count } autorisations
@@ -2302,6 +2307,8 @@ status-remembered-this-session = mémorisée dans cette session
 status-remembered-earlier = mémorisée dans une session antérieure
 status-remembered-where = supprimez une ligne de { $path } pour qu'elle soit redemandée
 status-reach = Accès retenus
+status-reached-directories = Répertoires atteints
+status-reached-directories-note = le mode bypass laisse les outils de fichiers les atteindre sans les ouvrir ; ils ne sont pas fiables, et quitter bypass y met fin
 status-requested-paths = Chemins demandés
 status-requested-paths-note =
     les programmes que lance cette session peuvent les atteindre ; les répertoires ne sont pas

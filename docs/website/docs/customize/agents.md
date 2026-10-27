@@ -246,7 +246,9 @@ A `checker` or `worker` definition with `isolation: checkout` has each of its de
 checkout bravebot makes for it under `~/.bravebot/checkouts`, holding the last commit of the
 repository the session is in. Its writes land there and not in your working tree, and changes you
 have not committed are not in it. `worktree`, the value Claude Code reads, asks for the same thing.
-The planner cannot start the delegate without one.
+The planner cannot start the delegate without one. Where the session is in bypass, a delegate in a checkout
+is given the reach the session has outside the workspace, except the working directory and every other
+checkout, which no path of its reaches and its programs are given no write in.
 
 ```markdown
 ---

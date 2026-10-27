@@ -766,6 +766,23 @@ pub fn requested_paths_listed(held: &[crate::workspace::PathReach]) -> Vec<Strin
         .collect()
 }
 
+/// The rows `/status` lists for the directories bypass mode took the file tools into, each with the
+/// call that first reached it (PATHREQ-7). Nothing here is a path the person typed or a file's
+/// content: the directory is where the workspace resolved a name and the tool and field are the
+/// driver's own.
+pub fn reached_directories_listed(held: &[crate::workspace::Reached]) -> Vec<String> {
+    held.iter()
+        .map(|row| {
+            t!(
+                reached_listed,
+                path = row.directory.display().to_string(),
+                tool = row.tool.clone(),
+                field = row.field
+            )
+        })
+        .collect()
+}
+
 /// `/reach paths` and `/reach paths remove <number>`, or `None` for an argument that is neither
 /// (SANDBOX-28). Nothing here reads or writes a file: the paths are the workspace's, for the
 /// session.
