@@ -205,7 +205,10 @@ pub(crate) fn releases_in(text: &str) -> Vec<Release<'_>> {
             let end = heads.get(n + 1).map_or(text.len(), |next| next.0);
             Release {
                 version,
-                notes: text[notes_from..end].trim_matches(['\n', '\r']),
+                notes: text
+                    .get(notes_from..end)
+                    .unwrap_or_default()
+                    .trim_matches(['\n', '\r']),
             }
         })
         .collect()
@@ -253,23 +256,23 @@ fn plain_line(line: &str) -> String {
     let mut rest = line;
     let mut in_code = false;
     while let Some(at) = rest.find(['[', '`']) {
-        out.push_str(&rest[..at]);
-        let here = &rest[at..];
+        let (before, here) = rest.split_at(at);
+        out.push_str(before);
         if let Some(after) = here.strip_prefix('`') {
             in_code = !in_code;
             out.push('`');
             rest = after;
             continue;
         }
-        let image = rest[..at].ends_with('!');
+        let image = before.ends_with('!');
         match link_at(here) {
             Some((label, length)) if !in_code && !image => {
                 out.push_str(label);
-                rest = &here[length..];
+                rest = here.split_at(length).1;
             }
             _ => {
                 out.push('[');
-                rest = &here[1..];
+                rest = here.split_at('['.len_utf8()).1;
             }
         }
     }
