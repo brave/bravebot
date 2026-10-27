@@ -28,7 +28,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "npm", "deps", "fuzz")
+AREAS = ("rust", "ui", "mobile", "build", "installers", "docs", "help", "npm", "deps", "fuzz")
 EVERYTHING = frozenset(AREAS)
 NOTHING = frozenset()
 
@@ -136,23 +136,23 @@ HOST = {
     "ui": ("check-ui", "check-agent-client"),
     "mobile": ("check-mobile",),
     "docs": ("check-docs",),
+    "help": ("check-help",),
     "npm": ("check-npm",),
     "deps": ("check-deps",),
 }
 CONTAINERS = {"rust": ("check-msrv", "check-windows", "check-linux")}
 
 
-def classify(path, desktop, fuzz, status="M"):
+def classify(path, desktop, fuzz):
     """The areas a change to `path` could affect, where `desktop` is desktop_crates() and `fuzz`
-    is fuzz_crates(), and `status` is the git status the change happened with (A, M, D, ...),
-    defaulting to a content edit for callers that do not track it."""
-    found = classify_by_area(path, desktop, fuzz, status)
+    is fuzz_crates()."""
+    found = classify_by_area(path, desktop, fuzz)
     if path in READ_BY_THE_SEAM_GUARD:
         found = found | {"rust"}
     return found
 
 
-def classify_by_area(path, desktop, fuzz, status):
+def classify_by_area(path, desktop, fuzz):
     """The areas `path` belongs to by what it is, before a test that reads it is counted."""
     if path in DECIDES or path.startswith(DECIDES_UNDER):
         return EVERYTHING
@@ -212,12 +212,12 @@ def classify_by_area(path, desktop, fuzz, status):
         if path.startswith(under):
             lockfile = path[len(under):] in PACKAGE_FILES
             found = {area, "npm"} if lockfile else {area}
-            # The agent crate compiles each page of docs/website/docs into a fixed table, and a
-            # test holds the table to the files on disk. A page added, removed or renamed (a
-            # rename is a delete and an add once renames are disabled) changes that table; a
-            # page whose content merely changed cannot fail the test that checks it.
-            if area == "docs" and status in ("A", "D") and path.startswith("docs/website/docs/"):
-                found |= {"rust"}
+            # help.rs compiles each page under docs/website/docs into a fixed table, builds an
+            # index naming every page's title from its front matter, and loads a page by the
+            # name that index gives. An add, an edit that breaks a page's front matter, or a
+            # remove can each fail a test that reads one of those, whatever the path's status.
+            if area == "docs" and path.startswith("docs/website/docs/"):
+                found |= {"help"}
             return frozenset(found)
     if path in PACKAGE_FILES or path.startswith("npm/"):
         return frozenset({"npm"})
@@ -299,16 +299,14 @@ def listed(output):
 
 
 def changed(root, base, head=None, env=None):
-    """Every path that differs, paired with the status (A, M, D, ...) it changed with, and a
-    rename counted at both ends so a move out of crates/ is still a change to crates/."""
-    fields = listed(git(root, "diff", "--no-renames", "--name-status", "-z", base,
-                        *([head] if head else []), env=env))
-    return list(zip(fields[0::2], fields[1::2]))
+    """Every path that differs, with a rename counted at both ends so a move out of crates/ is
+    still a change to crates/."""
+    return listed(git(root, "diff", "--no-renames", "--name-only", "-z", base,
+                      *([head] if head else []), env=env))
 
 
 def pull_request_paths(root, env=None):
-    """What the pull request changes, each with its status, or None where this checkout cannot
-    say.
+    """What the pull request changes, or None where this checkout cannot say.
 
     A pull request is checked out as the commit merging it into its base, so its first parent is
     the base as it now is and the diff against that is the change as it would land.
@@ -322,19 +320,18 @@ def pull_request_paths(root, env=None):
 
 
 def branch_paths(root, base, env=None):
-    """What this branch changes against `base`, each with its status: its commits, its
-    uncommitted edits, and files git has not been told about yet, which are additions by
-    definition."""
+    """What this branch changes against `base`: its commits, its uncommitted edits, and files
+    git has not been told about yet."""
     fork = git(root, "merge-base", base, "HEAD", env=env).strip()
     untracked = listed(git(root, "ls-files", "--others", "--exclude-standard", "-z", env=env))
-    return sorted(set(changed(root, fork, env=env)) | {("A", path) for path in untracked})
+    return sorted(set(changed(root, fork, env=env)) | set(untracked))
 
 
 def needed(paths, desktop, fuzz):
     """Each area some path needs, with the first path that needs it."""
     because = {}
-    for status, path in paths:
-        for area in classify(path, desktop, fuzz, status):
+    for path in paths:
+        for area in classify(path, desktop, fuzz):
             because.setdefault(area, path)
     return because
 
@@ -427,7 +424,8 @@ CASES = (
     ("CHANGELOG.md", {"rust"}),
     ("docs/specs/routing.md", {"rust"}),
     ("docs/specs/tools/read-file.md", {"rust"}),
-    ("docs/website/docs/intro.md", {"docs"}),
+    ("docs/website/docs/intro.md", {"docs", "help"}),
+    ("docs/website/docs/using/watches.md", {"docs", "help"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
     ("docs/website/pnpm-lock.yaml", {"docs", "npm"}),
     ("docs/website/pnpm-workspace.yaml", {"docs", "npm"}),
@@ -464,17 +462,6 @@ CASES = (
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
     ("SECURITY.md", NOTHING),
-)
-
-# A page added, removed or renamed under docs/website/docs changes the fixed table help.rs
-# compiles pages into, and the test holding that table to the files on disk; a page whose
-# content merely changed cannot fail it. A lockfile under docs/website/ but outside docs/ is
-# unaffected whatever its status, since it is no page of that table.
-STATUS_CASES = (
-    ("docs/website/docs/using/new.md", "A", {"docs", "rust"}),
-    ("docs/website/docs/using/removed.md", "D", {"docs", "rust"}),
-    ("docs/website/docs/using/watches.md", "M", {"docs"}),
-    ("docs/website/package-lock.json", "A", {"docs", "npm"}),
 )
 
 # One crate reached each way a manifest can name another, one reached only through another, and
@@ -547,11 +534,6 @@ def selftest():
         got = classify(path, FIXTURE_DESKTOP, FIXTURE_FUZZ)
         checks.append((f"{path} needs {sorted(wanted)}", got == frozenset(wanted), sorted(got)))
 
-    for path, status, wanted in STATUS_CASES:
-        got = classify(path, FIXTURE_DESKTOP, FIXTURE_FUZZ, status)
-        checks.append((f"{path} as {status} needs {sorted(wanted)}",
-                       got == frozenset(wanted), sorted(got)))
-
     real = desktop_crates(ROOT)
     real_fuzz = fuzz_crates(ROOT)
     for crate in (*DESKTOP, "core"):
@@ -618,12 +600,13 @@ def selftest():
 
         pull_request = dict(env, GITHUB_EVENT_NAME="pull_request")
         # A page added, edited or removed under docs/website/docs between docs-add/-edit/-remove
-        # here, with "move" kept last so the assertions below it still read the merge they name.
+        # here needs help whatever its status, with "move" kept last so the assertions below it
+        # still read the merge they name.
         for branch, wanted in (
             ("prose", NOTHING),
-            ("docs-add", {"docs", "rust"}),
-            ("docs-edit", {"docs"}),
-            ("docs-remove", {"docs", "rust"}),
+            ("docs-add", {"docs", "help"}),
+            ("docs-edit", {"docs", "help"}),
+            ("docs-remove", {"docs", "help"}),
             ("move", {"rust"}),
         ):
             run("checkout", "-q", "--detach", "main")
@@ -656,9 +639,9 @@ def selftest():
         write("docs/development/checks.md", "edited, not committed\n")
         write("ui/new.ts", "untracked\n")
         got = branch_paths(root, "main", env=env)
-        wanted = [("A", "ui/new.ts"), ("M", "docs/development/checks.md")]
-        checks.append(("a branch is its commits, its edits and its new files, not the base's, "
-                       "each with its status", got == wanted, got))
+        wanted = ["docs/development/checks.md", "ui/new.ts"]
+        checks.append(("a branch is its commits, its edits and its new files, not the base's",
+                       got == wanted, got))
 
     for area in set(AREAS) - {"build", "installers", "fuzz"}:
         runs = targets({area}, HOST) + targets({area}, CONTAINERS)
