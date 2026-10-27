@@ -95,7 +95,9 @@ that matches a bot is a consult of that bot. A word that does not is a file or a
 
 A bot wins over a file of the same name. `@./name` always names the file, because a slug holds no
 `/`. Which one a word named is decided once, at send, and written into the session's record beside
-the line, so a bot made later does not change what an earlier line meant.
+the line, so a bot made later does not change what an earlier line meant. The desktop draws a bot's
+face beside each word the bridge says consulted it, when the line is sent and when the session is
+resumed, and draws no other word as a tag.
 
 A slug is lowercase letters and digits in runs joined by single hyphens, at most 64 characters, the
 class a definition that keeps a memory is already held to. So `@README.md`, `@src/lib.rs` and any
@@ -130,6 +132,9 @@ send by a fixed order, and the list draws the difference before the line is sent
 `verified-by: bravebot_ui_bridge::consult::a_line_naming_a_bot_consults_it`
 `verified-by: bravebot_ui_bridge::consult::a_bot_that_opted_out_is_not_consulted`
 `verified-by: bravebot_ui_bridge::mentions::a_word_naming_a_bot_is_not_refused_as_a_missing_file`
+`verified-by: bravebot_mentions::lib::a_tag_is_each_word_that_consults_a_bot`
+`verified-by: bravebot_ui_bridge::wire::a_resumed_line_is_tagged_with_the_bots_that_answered_it`
+`verified-by: bravebot_ui_bridge::consulting::a_consult_turn_tags_only_the_bots_its_line_consulted`
 
 <a id="CONSULT-3"></a>
 ### CONSULT-3: typing `@` offers bots first, and taking a row writes a word and runs nothing
@@ -490,7 +495,8 @@ list a person reads, and the person who knows that is whoever wrote the definiti
 ### CONSULT-16: the desktop's form for a bot shows `consult:` as a switch and writes it
 
 The form for editing a bot shows whether it may be consulted as a switch. Turning it off writes
-`consult: off`, and turning it on removes the line. Every other line is kept as
+`consult: off`, and turning it on removes the line. An edit that leaves the switch where it was
+leaves the `consult:` line as the file has it. Every other line is kept as
 [MEMORY-9](definition-memory.md#MEMORY-9) keeps it.
 
 This amends [MEMORY-9](definition-memory.md#MEMORY-9), adding `consult:` to the lines an edit

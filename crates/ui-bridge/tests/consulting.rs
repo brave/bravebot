@@ -337,6 +337,37 @@ fn the_hosts_brief_is_offered_and_only_sending_it_consults_the_bot() {
     );
 }
 
+/// CONSULT-2, CONSULT-14: the turn a brief starts says where the line's bot tags are, and a word
+/// naming a definition that opted out is a file and no tag.
+#[test]
+fn a_consult_turn_tags_only_the_bots_its_line_consulted() {
+    let scratch = Scratch::new("bridge-consult-tags");
+    std::fs::write(
+        scratch.home().join(".bravebot/agents/pilot.md"),
+        "---\nname: pilot\ndescription: Steers in.\nkind: reader\nconsult: off\n---\n\nSTEER\n",
+    )
+    .expect("an opted-out definition");
+    std::fs::write(scratch.project().join("pilot"), "a file named pilot\n").expect("a file");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let line = "ask @harbour, and @pilot about TAGS";
+    window.call("consult.brief", json!({"line": line}));
+    let offered = window.event("consult.brief");
+    let brief = offered["data"]["brief"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no brief was offered: {offered}"))
+        .to_string();
+    let ended = window.turn(json!({"prompt": brief, "brief": true}));
+    assert_eq!(ended["event"], "turn.done", "{ended}");
+    let started = window.event("turn.started");
+    assert_eq!(
+        started["data"]["tags"],
+        json!([{"start": 4, "end": 12, "bot": "harbour"}]),
+        "{started}"
+    );
+}
+
 /// CONSULT-5: the host drafts on the model the window asks for, which is the one its turns are
 /// sent to, and not the configured default, before any turn has been sent.
 #[test]

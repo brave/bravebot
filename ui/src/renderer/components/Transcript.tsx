@@ -6,7 +6,7 @@ import { useEvent } from '../hooks'
 import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 import { CopyButton } from './CopyButton'
-import { isConfined, type Ambient, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
+import { isConfined, type Ambient, type BotTag, type ManifestError, type RunRecord as SavedRun, type PermissionMode, type SandboxMode, type SettingsRules, type AskAnswer, type AskPrompt, type Checking, type Hook, type KeptTrust, type RewindPoint, type Waiting, type Shown, type TodoRow } from '../../shared/protocol'
 import * as t from '../transcript'
 import * as asking from '../asking'
 import { drawCommand } from '../../shared/connectors'
@@ -1855,27 +1855,24 @@ function ConsultedBy({ slug }: { slug: string }): React.JSX.Element {
   )
 }
 
-// An `@` word that can name a bot, as `bravebot-mentions` reads one: a slug at the start of a word,
-// with only closing punctuation after it, so `@notes.md` is a file and `@dev-bot,` is a bot.
-const BOT_TAG = /(^|\s)@([a-z0-9]+(?:-[a-z0-9]+)*)(?=[,.;:!?)]*(?:\s|$))/g
-
-/** A line with each `@` tag of a known bot drawn with its face. The words are the line's, as typed. */
-function Tagged({ text }: { text: string }): React.JSX.Element {
+/**
+ * A line with each tag the bridge found in it drawn with its bot's face. Which words are tags was
+ * decided when the line was sent (CONSULT-2), so a bot made or opted out since changes nothing.
+ */
+export function Tagged({ text, tags }: { text: string; tags?: readonly BotTag[] }): React.JSX.Element {
   const faces = useContext(BotFaces)
   const parts: React.ReactNode[] = []
   let from = 0
-  for (const found of text.matchAll(BOT_TAG)) {
-    const slug = found[2]!
-    const face = faces.get(slug)
-    if (!face) continue
-    const at = found.index + found[1]!.length
-    parts.push(text.slice(from, at))
+  for (const tag of tags ?? []) {
+    if (tag.start < from || text.slice(tag.start, tag.end) !== `@${tag.bot}`) continue
+    const face = faces.get(tag.bot)
+    parts.push(text.slice(from, tag.start))
     parts.push(
-      <span key={at} className="bot-tag" data-bot={slug} title={face.name}>
-        <BotFace seed={face.avatar} size={18} />@{slug}
+      <span key={tag.start} className="bot-tag" data-bot={tag.bot} title={face?.name ?? tag.bot}>
+        <BotFace seed={face?.avatar ?? tag.bot} size={18} />@{tag.bot}
       </span>,
     )
-    from = at + 1 + slug.length
+    from = tag.end
   }
   parts.push(text.slice(from))
   return <>{parts}</>
@@ -1948,7 +1945,7 @@ function Card({
     case 'user':
       return (
         <div className="bubble user">
-          <div className="bubble-text"><Tagged text={entry.text} /></div>
+          <div className="bubble-text"><Tagged text={entry.text} tags={entry.tags} /></div>
           {/* Inside the row rather than beside it. The wrapper this row sits in is
               `display: contents` and has no box to hang anything off, and the bubble is the
               only thing here that knows where the row actually is on screen. */}

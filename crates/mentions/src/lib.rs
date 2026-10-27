@@ -692,6 +692,19 @@ pub fn consulted(line: &str, bots: &[&str]) -> Vec<String> {
     named
 }
 
+/// Each `@word` in a line that consults one of `bots`, as the byte offset of its `@` and the bot,
+/// in the order written (CONSULT-2). `line[at..]` starts with `@` and the bot's name.
+pub fn tags<'a>(line: &str, bots: &[&'a str]) -> Vec<(usize, &'a str)> {
+    word_spans(line)
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let word = line[start..end].strip_prefix('@')?;
+            let bot = bot_in(word, bots)?;
+            word.starts_with(bot).then_some((start, bot))
+        })
+        .collect()
+}
+
 /// Every file named with `@` in a line, as [`referenced`] reads them, less the words that consult
 /// one of `bots` (CONSULT-2).
 pub fn files_named(line: &str, bots: &[&str]) -> Vec<String> {
@@ -2049,6 +2062,20 @@ mod tests {
         assert_eq!(files_named("@src/lib.rs", &bots), ["src/lib.rs"]);
         assert!(consulted("@session:abc,", &bots).is_empty());
         assert_eq!(referenced_sessions("@session:abc"), ["abc"]);
+    }
+
+    /// CONSULT-2: a tag is where a word consulting a bot begins, its punctuation left out, and a
+    /// word naming a file, or a bot the set does not hold, is no tag.
+    #[test]
+    fn a_tag_is_each_word_that_consults_a_bot() {
+        let bots = ["rule-reviewer", "tester"];
+        let line = "é @rule-reviewer, then @tester\u{201d} and @notes.md @other";
+        assert_eq!(
+            tags(line, &bots),
+            [(3, "rule-reviewer"), (24, "tester")],
+            "{line}"
+        );
+        assert!(tags("@rule-reviewer.md @./tester", &bots).is_empty());
     }
 
     /// CONSULT-2, CONSULT-5: a line could consult only where an `@word` is a slug, so a line

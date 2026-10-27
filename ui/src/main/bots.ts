@@ -245,7 +245,7 @@ export async function saveFormBot(next: Bot, define: DefineRequest | null): Prom
     kept = { ...next, definition: made.name }
   } else if (stored.definition !== null) {
     if (!define) throw new Error('The agent is not running, so a bot cannot be edited.')
-    await redefine(stored.definition, next, define)
+    await redefine(stored.definition, next, define, next.consult === stored.consult ? undefined : next.consult)
     // The agent call took time, and the row may have moved on meanwhile: a conversation recorded,
     // a session released. Only the fields the form carries are laid over it.
     kept = { ...(bot(next.slug) ?? stored), name: next.name, purpose: next.purpose, model: next.model, consult: next.consult, avatar: next.avatar }
@@ -339,12 +339,16 @@ export async function saveBotModel(held: Bot, model: string | null, define: Defi
   return next
 }
 
-async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {
+/**
+ * `consult` is sent only where the person moved the switch: a row stored before the switch existed
+ * reads as consultable, and sending that would undo a `consult: off` written by hand (CONSULT-16).
+ */
+async function redefine(name: string, bot: Bot, define: DefineRequest, consult?: boolean): Promise<void> {
   const answer = (await define('bot.redefine', {
     name,
     purpose: bot.purpose,
     ...(bot.model === null ? {} : { model: bot.model }),
-    consult: bot.consult,
+    ...(consult === undefined ? {} : { consult }),
   })) as { name?: unknown } | null
   if (answer?.name !== name) throw new Error('The agent did not rewrite the bot’s definition.')
 }

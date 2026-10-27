@@ -27,6 +27,7 @@ import type {
   McpToolsRequest,
   FetchRequest,
   Landing,
+  BotTag,
   ManifestError,
   ManifestRequest,
   OutputRequest,
@@ -50,7 +51,7 @@ export type Entry = (
    * for a prompt this window has added and not yet heard back about: such a prompt is in the
    * conversation but the window does not know where, and a fork is refused rather than guessed.
    */
-  | { kind: 'user'; id: string; text: string; prompt?: number }
+  | { kind: 'user'; id: string; text: string; prompt?: number; tags?: BotTag[] }
   /** `bot` is the bot a line consulted, where this is its reply rather than the session's. */
   | { kind: 'assistant'; id: string; text: string; bot?: string }
   /** `command` is the words of `text` that are a command to run, where a notice names one. */
@@ -219,7 +220,7 @@ export function fromSaid(said: Said[]): Entry[] {
       // one of the rows below is still drawn with its words and its ordinal: the ordinal is what
       // a fork cuts on, and a prompt drawn as one of the interface's own rows loses both.
       case 'user':
-        return { kind: 'user', id: nextId(), text: entry.text, prompt: entry.prompt } as const
+        return { kind: 'user', id: nextId(), text: entry.text, prompt: entry.prompt, ...(entry.tags?.length ? { tags: entry.tags } : {}) } as const
       case 'assistant':
         return { kind: 'assistant', id: nextId(), text: entry.text } as const
       case 'tool':
@@ -269,6 +270,12 @@ export function fromSaid(said: Said[]): Entry[] {
 }
 
 export const userSaid = (text: string): Entry => ({ kind: 'user', id: nextId(), text })
+
+/** The line `id` with the bot tags the bridge read in it when it was sent (CONSULT-2). */
+export function tagged(entries: Entry[], id: string | null | undefined, tags: BotTag[] | null | undefined): Entry[] {
+  if (!id || !tags?.length) return entries
+  return entries.map((entry) => entry.id === id && entry.kind === 'user' ? { ...entry, tags } : entry)
+}
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
 export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })

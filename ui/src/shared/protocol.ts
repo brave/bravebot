@@ -75,6 +75,12 @@ export interface Shown {
  * whoever wrote the file pick which row it appears as. Rule 1 above, applied to the messages whose
  * prose is nobody's to read back. A `user` is therefore what somebody typed, whatever it says.
  */
+/**
+ * A word in a line that consulted a bot: `text.slice(start, end)` is `@` and the bot's name. The
+ * bridge reads the words, so a window draws these and decides none.
+ */
+export type BotTag = { start: number; end: number; bot: string }
+
 export type Said =
   | {
       kind: 'user'
@@ -89,6 +95,8 @@ export type Said =
        * anything after it is refused.
        */
       prompt?: number
+      /** Where the line's bot tags are, as decided when it was sent (CONSULT-2). */
+      tags?: BotTag[]
     }
   | { kind: 'assistant'; text: string }
   | { kind: 'tool'; text: string; why: string }
@@ -982,7 +990,7 @@ export interface EventMap {
   /** `shownDirectory` and `shownKeeping` are `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is. Draw those. */
   'trust.request': { directory: string; shownDirectory: string; keeping?: string | null; shownKeeping?: string | null; confinedLines?: string | null }
   /** `consulted` is the bot the turn consults, whose every row is drawn under its name (CONSULT-11). */
-  'turn.started': { turn: number; sandbox?: SandboxMode; consulted?: string | null }
+  'turn.started': { turn: number; sandbox?: SandboxMode; consulted?: string | null; tags?: BotTag[] | null }
   /** The planner has read the oldest line sent with `turn.interject`. `prompt` is the words it was given. */
   'turn.interjected': { prompt: string }
   'watch.fired': { number: number; path: string }

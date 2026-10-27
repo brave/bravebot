@@ -297,15 +297,76 @@ pub fn submitted(text: &str, composed: Option<&Composed>) -> Value {
 /// Sent beside each thing said rather than composed from the list, so that a client drawing one
 /// kind of user message differently costs nobody a working fork.
 pub fn recounted(said: &[Said]) -> Vec<Value> {
+    let consulted = consulted_lines(said);
     let mut prompt = 0usize;
     said.iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(at, entry)| {
             let mut value = self::said(entry);
-            if matches!(entry, Said::User(_)) {
+            if let Said::User(text) = entry {
                 value["prompt"] = json!(prompt);
                 prompt += 1;
+                if let Some(bots) = consulted.get(&at) {
+                    value["tags"] = tags(text, bots);
+                }
             }
             value
+        })
+        .collect()
+}
+
+/// The bots each consulted line named, by the line's place, from the reply the record keeps beside
+/// it (CONSULT-2). A line that consulted several bots in turn is kept once before each reply, and
+/// each copy names them all.
+fn consulted_lines(said: &[Said]) -> std::collections::HashMap<usize, Vec<&str>> {
+    let mut lines = std::collections::HashMap::new();
+    // The places of one line's copies, the line, and the bots they named so far.
+    let mut run: Vec<usize> = Vec::new();
+    let mut held: Option<&str> = None;
+    let mut bots: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while at < said.len() {
+        let pair = match (&said[at], said.get(at + 1)) {
+            (
+                Said::User(line),
+                Some(Said::Composed {
+                    why: Composed::Consulted { bot, .. },
+                    ..
+                }),
+            ) => Some((line.as_str(), bot.as_str())),
+            _ => None,
+        };
+        if pair.map(|(line, _)| line) != held || pair.is_none() {
+            for place in run.drain(..) {
+                lines.insert(place, bots.clone());
+            }
+            bots.clear();
+            held = pair.map(|(line, _)| line);
+        }
+        let Some((_, bot)) = pair else {
+            at += 1;
+            continue;
+        };
+        run.push(at);
+        if !bots.contains(&bot) {
+            bots.push(bot);
+        }
+        at += 2;
+    }
+    for place in run {
+        lines.insert(place, bots.clone());
+    }
+    lines
+}
+
+/// Where each `@` tag of `bots` sits in `text`, in UTF-16 code units as the window indexes a
+/// string. The word rule is `bravebot-mentions`', so the window draws these and decides none.
+pub fn tags(text: &str, bots: &[&str]) -> Value {
+    bravebot_mentions::tags(text, bots)
+        .into_iter()
+        .map(|(at, bot)| {
+            let start = text[..at].encode_utf16().count();
+            json!({ "start": start, "end": start + 1 + bot.len(), "bot": bot })
         })
         .collect()
 }

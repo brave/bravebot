@@ -1331,6 +1331,13 @@ impl Bridge {
                 "the bot the brief is for can no longer be consulted",
             ));
         }
+        // The window tags only the bots this line named as it was sent, never the ones it knows of
+        // now (CONSULT-2).
+        let tags = consulting.as_ref().map(|_| {
+            let consulted = bravebot_mentions::consulted(line, &names);
+            let consulted: Vec<&str> = consulted.iter().map(String::as_str).collect();
+            wire::tags(&prompt, &consulted)
+        });
         let (private, named, left) = brief.map_or((false, String::new(), Vec::new()), |brief| {
             (brief.private, brief.line, brief.then)
         });
@@ -1401,6 +1408,7 @@ impl Bridge {
                 // The bot this turn consults, from the routing above and never from what a model
                 // wrote, so the window draws all the turn streams under the bot's name (CONSULT-11).
                 "consulted": consulting.as_ref().map(|consulting| consulting.bot.as_str()),
+                "tags": tags,
             }),
         ));
 

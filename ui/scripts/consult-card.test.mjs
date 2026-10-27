@@ -140,27 +140,59 @@ test('the host’s own reply carries no bot header', () => {
   assert.ok(!markup.includes('bot-avatar'), markup)
 })
 
-const line = (faces, text) =>
+const line = (faces, text, lineTags) =>
   renderToStaticMarkup(
     React.createElement(BotFaces.Provider, { value: faces },
-      React.createElement(Row, { entry: { id: 'u1', kind: 'user', text }, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })),
+      React.createElement(Row, { entry: { id: 'u1', kind: 'user', text, ...(lineTags ? { tags: lineTags } : {}) }, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false })),
   )
 
 const tags = (markup) => [...markup.matchAll(/class="bot-tag" data-bot="([^"]*)"/g)].map((found) => found[1])
 
-test('a line tagging a known bot draws its face beside the tag, and keeps every word', () => {
+test('a line tagging a bot draws its face beside the tag, and keeps every word', () => {
   const faces = new Map([['dev-bot', { name: 'Dev Bot', avatar: 'v2:seed-a' }]])
-  const markup = line(faces, 'Ask @dev-bot, what he thinks of this')
+  const markup = line(faces, 'Ask @dev-bot, what he thinks of this', [{ start: 4, end: 12, bot: 'dev-bot' }])
 
   assert.deepEqual(tags(markup), ['dev-bot'])
   assert.ok(markup.includes('class="bot-face"'), markup)
   assert.equal(markup.replace(/<[^>]*>/g, ''), 'Ask @dev-bot, what he thinks of this')
 })
 
-test('a tag that is a file, mid-word or no bot this window knows is drawn as typed', () => {
-  const faces = new Map([['notes', { name: 'Notes', avatar: 'a' }], ['dev-bot', { name: 'Dev Bot', avatar: 'b' }]])
+// CONSULT-2, CONSULT-14: which words are tags was decided when the line was sent, so a bot this
+// window knows now, one that opted out or one made since, is not drawn as a tag in an earlier line.
+test('a line is tagged only where the bridge said, whatever bots the window knows now', () => {
+  const faces = new Map([['notes', { name: 'Notes', avatar: 'a' }], ['dev-bot', { name: 'Dev Bot', avatar: 'b' }], ['later', { name: 'Later', avatar: 'c' }]])
 
-  assert.deepEqual(tags(line(faces, 'read @notes.md and mail@dev-bot and @stranger')), [])
+  assert.deepEqual(tags(line(faces, 'ask @dev-bot and @later')), [])
+  assert.deepEqual(tags(line(faces, 'ask @dev-bot and @later', [{ start: 4, end: 12, bot: 'dev-bot' }])), ['dev-bot'])
+})
+
+test('a tag that does not sit on its bot’s name in the line is not drawn', () => {
+  const faces = new Map([['dev-bot', { name: 'Dev Bot', avatar: 'b' }]])
+  const text = 'ask @dev-bot'
+
+  assert.deepEqual(tags(line(faces, text, [{ start: 0, end: 8, bot: 'dev-bot' }])), [])
+  assert.equal(line(faces, text, [{ start: 0, end: 8, bot: 'dev-bot' }]).replace(/<[^>]*>/g, ''), text)
+})
+
+test('a bot the window has no face for is tagged with one drawn from its slug', () => {
+  const markup = line(new Map(), 'ask @outside', [{ start: 4, end: 12, bot: 'outside' }])
+
+  assert.deepEqual(tags(markup), ['outside'])
+})
+
+test('the turn a brief starts tags the line it was sent as, from the bridge', () => {
+  const session = drafting()
+  session.live = { ...session.live, entries: [t.userSaid('ask @dev-bot')] }
+  session.live = { ...session.live, awaitingOrdinal: session.live.entries[0].id }
+  session.send('turn.started', { turn: 1, consulted: 'dev-bot', tags: [{ start: 4, end: 12, bot: 'dev-bot' }] })
+
+  assert.deepEqual(session.live.entries[0].tags, [{ start: 4, end: 12, bot: 'dev-bot' }])
+})
+
+test('a resumed line keeps the tags the bridge sent with it', () => {
+  const [said] = t.fromSaid([{ kind: 'user', text: 'ask @dev-bot', prompt: 0, tags: [{ start: 4, end: 12, bot: 'dev-bot' }] }])
+
+  assert.deepEqual(said.tags, [{ start: 4, end: 12, bot: 'dev-bot' }])
 })
 
 test('the brief is drawn as text and never as markup', () => {
