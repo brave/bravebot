@@ -250,7 +250,6 @@ fn questions_of(kind: Kind) -> Vec<Row> {
                 budget: None,
                 brief: "look at the parser\n".repeat(20),
                 label: bravebot_core::label::Label::trusted_public(),
-                refused: None,
             };
             format!("{:?}", ask_consult(terminal, &request))
         })],

@@ -2930,45 +2930,22 @@ function Card({
             <pre className="consult-brief">{request.brief}</pre>
           </div>
 
-          {request.refused !== null ? (
-            <>
-              {/* CONSULT-10: a bot that cannot be consulted here is named as refused, and no yes is offered. */}
-              <p className="permission-scope consult-refused" data-deciding="all">
-                This bot cannot be consulted: {request.refused}. Nothing will be sent, and no other
-                model is asked in its place.
-              </p>
-              {!answerable ? (
-                <Unanswered />
-              ) : decision !== null ? (
-                <div className="decided reject">You closed this consult</div>
-              ) : (
-                <Answers>
-                  <button className="reject" onClick={() => onDecide('consult', request.request, false)}>
-                    Close
-                  </button>
-                </Answers>
-              )}
-            </>
-          ) : (
-            <>
-              <p className="permission-scope" data-deciding="all">
-                Nothing is sent unless you say yes. The bot’s reply comes back to the planner as the
-                result of its proposal, shown or kept as a reference by what the bot read while answering.
-              </p>
+          <p className="permission-scope" data-deciding="all">
+            Nothing is sent unless you say yes. The bot’s reply comes back to the planner as the
+            result of its proposal, shown or kept as a reference by what the bot read while answering.
+          </p>
 
-              <YesOrNo
-                kind="consult"
-                request={request.request}
-                answerable={answerable}
-                decision={decision}
-                onDecide={onDecide}
-                reject="Don’t send it"
-                approve="Yes, send it"
-                approved="You sent this consult"
-                rejected="You did not send this consult"
-              />
-            </>
-          )}
+          <YesOrNo
+            kind="consult"
+            request={request.request}
+            answerable={answerable}
+            decision={decision}
+            onDecide={onDecide}
+            reject="Don’t send it"
+            approve="Yes, send it"
+            approved="You sent this consult"
+            rejected="You did not send this consult"
+          />
         </div>
       )
     }

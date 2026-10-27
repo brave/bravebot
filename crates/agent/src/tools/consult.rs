@@ -8,10 +8,12 @@
 
 use super::{Produced, Tools, named_argument};
 use crate::confirm::{Confirmer, ConsultRequest, Decision};
+use crate::report::Reporter;
 use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
+use bravebot_i18n::t;
 use serde_json::Value;
 
 /// A consult a person sent from the card, for the turn to run.
@@ -29,12 +31,13 @@ pub struct Proposed {
 ///
 /// Every refusal before the card is drawn is the driver's own words. A name that is no bot, a bot
 /// that opted out among them, is answered with the names that are, so a near miss is corrected
-/// rather than guessed at. A bot whose model this machine cannot use is put on the card as refused,
-/// and nothing is sent whatever the answer (CONSULT-10).
-pub(super) fn propose_consult<S: Sink, C: Confirmer>(
+/// rather than guessed at. A bot whose model this machine cannot use is refused with no card, the
+/// person told in a notice and the planner in the result (CONSULT-10).
+pub(super) fn propose_consult<S: Sink, C: Confirmer, R: Reporter>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
+    reporter: &mut R,
     arguments: &Value,
 ) -> Produced {
     let (Some(bot), Some(brief)) = (
@@ -74,13 +77,26 @@ pub(super) fn propose_consult<S: Sink, C: Confirmer>(
     };
 
     let config = tools.chat.config;
+    // Refused as a typed tag is, and the host's model is never put in the bot's place (CONSULT-10).
+    if let Some(refused) = crate::consult::model_refused(config, definition) {
+        let bot = definition.name();
+        reporter.notice(
+            t!(
+                consult_refused_notice,
+                bot = bot,
+                refused = refused.as_str()
+            )
+            .to_string(),
+        );
+        return Produced::problem(format!(
+            "refused: {refused}. Nothing was sent to {bot}, and no other model was asked in its place."
+        ));
+    }
     let model = definition
         .model()
         .map(str::to_string)
         .or_else(|| tools.chat.model.map(str::to_string))
         .unwrap_or_else(|| config.default_model.clone());
-    // Refused as a typed tag is, and the host's model is never put in the bot's place (CONSULT-10).
-    let refused = crate::consult::model_refused(config, definition);
     let request = ConsultRequest {
         bot: definition.name().to_string(),
         definition: definition.origin().to_string(),
@@ -89,15 +105,8 @@ pub(super) fn propose_consult<S: Sink, C: Confirmer>(
         budget: definition.budget(),
         brief: text.clone(),
         label,
-        refused,
     };
     let decision = confirmer.confirm_consult(&request);
-    if let Some(refused) = &request.refused {
-        return Produced::problem(format!(
-            "refused: {refused}. Nothing was sent to {}, and no other model was asked in its place.",
-            request.bot
-        ));
-    }
     if decision == Decision::Reject {
         // The planner is not told why, for the reason a declined message says nothing more: a
         // refusal it could read a reason into is one it could argue with.

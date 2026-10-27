@@ -32,6 +32,7 @@ function load(path) {
 
 const { Row, BotFaces } = load('src/renderer/components/Transcript.tsx')
 const t = load('src/renderer/transcript.ts')
+const { TurnNotices } = load('src/renderer/components/TurnDetails.tsx')
 
 const draw = (entry) =>
   renderToStaticMarkup(
@@ -48,7 +49,6 @@ const asked = (overrides = {}) =>
     budget: 20000,
     brief: 'Review the retry loop in fetch.rs.',
     label: '(U,pub)',
-    refused: null,
     ...overrides,
   })
 
@@ -92,16 +92,20 @@ test('a proposal that was answered says which way, and offers nothing further', 
   assert.deepEqual(buttons(declined), [])
 })
 
-test('a bot this machine cannot run is named as refused, and the card offers only to close it', () => {
-  const markup = draw(asked({ refused: 'reviewer needs a sign-in for claude-opus' }))
+// CONSULT-10, CONSULT-12: a proposed bot this machine cannot run comes with no card, only the
+// turn's notice naming the model, drawn under the turn with nothing to dismiss.
+test('a bot this machine cannot run is a notice under the turn, and no card', () => {
+  const notice = 'The planner proposed consulting reviewer, which cannot be consulted here: reviewer asked for claude-opus, which needs a sign-in first, so it did not run. Nothing was sent, and no other model was asked in its place.'
+  const session = drafting()
+  session.send('turn.started', { turn: 1 })
+  session.send('turn.done', { turn: 1, notices: [notice] })
 
-  assert.ok(markup.includes('This bot cannot be consulted: reviewer needs a sign-in for claude-opus'), markup)
-  assert.ok(!markup.includes('Nothing is sent unless you say yes'), markup)
-  assert.deepEqual(buttons(markup), ['Close'])
-
-  const closed = draw({ ...asked({ refused: 'no' }), decision: 'reject' })
-  assert.ok(closed.includes('You closed this consult'), closed)
-  assert.deepEqual(buttons(closed), [])
+  assert.ok(!session.live.entries.some((entry) => entry.kind === 'consult'), 'a card was drawn')
+  const details = session.live.turns[1]
+  assert.deepEqual(details.notices, [notice])
+  const markup = renderToStaticMarkup(React.createElement(TurnNotices, { details, onDisclosure() {} }))
+  assert.ok(markup.includes('claude-opus, which needs a sign-in first'), markup)
+  assert.deepEqual(buttons(markup).filter((label) => /close|dismiss/i.test(label)), [])
 })
 
 const reply = (faces, bot) =>

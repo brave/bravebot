@@ -215,27 +215,12 @@ pub(super) fn draw_host(
 }
 
 /// Ask whether to send the consult the planner proposed, blocking until answered (CONSULT-12).
-///
-/// A card carrying a refusal takes no yes: the bot's model cannot run here, so the only answers
-/// are to close it or stop the turn (CONSULT-10).
 pub fn ask_consult<B: Backend>(terminal: &mut Terminal<B>, request: &ConsultRequest) -> Answer {
     ask_plain(
         terminal,
         |frame, scroll, seen| draw_consult(frame, request, scroll, seen),
-        |key, drawn| consult_answer(request, key, drawn),
+        answer_for,
     )
-}
-
-/// What a key means at a consult's card, where a refused card turns a yes into nothing.
-pub(super) fn consult_answer(
-    request: &ConsultRequest,
-    key: KeyEvent,
-    drawn: &Drawn,
-) -> Option<Response<Answer>> {
-    match answer_for(key, drawn) {
-        Some(Response::Answer(Answer::Approve)) if request.refused.is_some() => None,
-        other => other,
-    }
 }
 
 /// Draw the card for a consult the planner proposed.
@@ -287,12 +272,6 @@ pub(super) fn draw_consult(
         muted,
         width,
     ));
-    if let Some(refused) = &request.refused {
-        let failing = Style::default()
-            .fg(theme::fail())
-            .add_modifier(Modifier::BOLD);
-        header.extend(indented(refused.clone(), failing, width));
-    }
     header.push(Line::raw(""));
 
     let mut body = indented(
@@ -305,25 +284,9 @@ pub(super) fn draw_consult(
     }
     let deciding = body.len();
     body.push(Line::raw(""));
-    let explained = match request.refused {
-        Some(_) => t!(consult_refused_explained, bot = request.bot.as_str()),
-        None => t!(consult_explained).to_string(),
-    };
-    body.extend(indented(explained, muted, width));
+    body.extend(indented(t!(consult_explained), muted, width));
 
-    let refused = request.refused.is_some();
-    let keys = |answerable| {
-        if refused {
-            let mut spans = vec![
-                Span::styled("  n", super::chrome::refusing()),
-                Span::raw(format!(" {}    ", t!(consult_close))),
-            ];
-            spans.extend(super::chrome::stopping());
-            vec![Line::from(spans)]
-        } else {
-            vec![answer_keys(t!(consult_yes), t!(consult_no), answerable)]
-        }
-    };
+    let keys = |answerable| vec![answer_keys(t!(consult_yes), t!(consult_no), answerable)];
     let question = Question {
         above: header,
         ..Question::scrolled(body, deciding, 0, &keys)

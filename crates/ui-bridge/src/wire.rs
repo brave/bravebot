@@ -996,12 +996,10 @@ pub fn host_request(id: u64, request: &HostRequest) -> Value {
     })
 }
 
-/// A consult the host proposed, as the card a person sends it from draws it (CONSULT-10,
-/// CONSULT-12).
+/// A consult the host proposed, as the card a person sends it from draws it (CONSULT-12).
 ///
 /// `brief` is the host's own words and is everything a yes sends, so a front end draws it whole and
-/// as text. `label` is the brief's, said as the terminal says it. `refused` is why the bot cannot be
-/// consulted on this machine, where it cannot, and a card carrying it offers no yes.
+/// as text. `label` is the brief's, said as the terminal says it.
 pub fn consult_request(id: u64, request: &bravebot_agent::confirm::ConsultRequest) -> Value {
     json!({
         "request": id,
@@ -1012,7 +1010,6 @@ pub fn consult_request(id: u64, request: &bravebot_agent::confirm::ConsultReques
         "budget": request.budget,
         "brief": request.brief,
         "label": request.label.to_string(),
-        "refused": request.refused,
     })
 }
 

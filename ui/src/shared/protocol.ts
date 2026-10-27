@@ -813,8 +813,6 @@ export interface ConsultRequest {
   budget: number | null
   brief: string
   label: string
-  /** Why the bot cannot be consulted on this machine, or `null` (CONSULT-10). Nothing is sent. */
-  refused: string | null
 }
 
 /** What starting a session's MCP servers came to: the ones started, and why each other was not. */

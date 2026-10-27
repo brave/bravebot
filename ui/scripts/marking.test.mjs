@@ -249,7 +249,7 @@ const CARDS = {
     why: 'host names and addresses a program asked for, each checked to be one before it was put to a person',
   },
   consult: {
-    entry: () => t.askedConsult({ request: 1, bot: FORGED_CHROME, definition: FORGED_CHROME, model: FORGED_CHROME, rounds: 8, budget: null, brief: FORGED_CHROME, label: '(U,pub)', refused: null }),
+    entry: () => t.askedConsult({ request: 1, bot: FORGED_CHROME, definition: FORGED_CHROME, model: FORGED_CHROME, rounds: 8, budget: null, brief: FORGED_CHROME, label: '(U,pub)' }),
     marks: null,
     // docs/specs/consulting-a-bot.md CONSULT-12: the brief is the planner's own words, drawn with
     // the label it carries, and the rest is the bot's definition as this session resolved it.

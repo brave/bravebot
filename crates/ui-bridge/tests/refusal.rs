@@ -1493,7 +1493,6 @@ fn a_proposal() -> bravebot_agent::confirm::ConsultRequest {
         budget: None,
         brief: "Read src/lib.rs.".into(),
         label: bravebot_core::label::Label::trusted_public(),
-        refused: None,
     }
 }
 

@@ -350,8 +350,8 @@ The model a bot runs on and the bound it runs under, its rounds and its token li
 one, are named on its row in the `@` list, in the note shown while its brief is drafted, and in the
 note under a brief that waits in the box. A bot runs on the model its definition names, and on the
 session's model where it names none. A bot whose model needs a sign-in this machine has not made is
-noted as refused, with the model it asked for, and is not consulted. The host's model is never
-substituted.
+not consulted, and the person is told so in a notice naming the model it asked for. The host's model
+is never substituted.
 
 **Why.** Consulting a bot on a costly model from a conversation on a cheap one spends past a boundary
 the person may not know is there. The draft is the last moment they can stop it with the cost in
@@ -360,8 +360,8 @@ view, where the brief is sent at once.
 `verified-by: bravebot_tui::app::the_drafting_note_names_the_bots_model_and_bound`
 `verified-by: bravebot_tui::app::a_private_brief_is_offered_under_a_note_naming_its_bound`
 `verified-by: bravebot_tui::app::a_bot_whose_model_needs_a_sign_in_is_refused_and_not_consulted`
-`verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_on_the_card`
-`verified-by: bravebot_tui::confirm::a_refused_consult_card_names_the_model_and_takes_no_yes`
+`verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_with_a_notice_and_no_card`
+`verified-by: bravebot_tui::from_worker::a_consult_refused_for_its_model_is_a_transcript_line_and_no_card`
 `verified-by: bravebot_agent::consult::a_bot_whose_model_the_machine_refuses_is_not_consulted`
 `verified-by: bravebot_agent::consult::a_bot_whose_model_needs_a_sign_in_is_not_consulted`
 `verified-by: bravebot_agent::turn::a_proposed_consult_runs_on_its_bots_model_over_the_command_lines`
@@ -428,9 +428,9 @@ and the reply is the tool's result, labelled as [CONSULT-11](#CONSULT-11) says. 
 says it was declined, and the host's turn goes on. A name that matches no bot, a bot that opted out
 among them, is refused with the names that do match.
 
-A bot whose model is refused on this machine, or needs a sign-in it has not made, is put on the card
-as refused, naming the model it asked for. The card takes no yes, nothing is sent, and the result
-says so.
+A bot whose model is refused on this machine, or needs a sign-in it has not made, is put to nobody:
+there is no card. Nothing is sent, the result tells the host so, naming the bot and the model it
+asked for, and the person is shown the same as a notice in the transcript, with nothing to dismiss.
 
 The proposed brief is trusted by construction, so it never needs the promotion
 [CONSULT-6](#CONSULT-6) describes. The driver reads the tool's arguments as the planner's own words
@@ -457,15 +457,15 @@ person should not have to retype the brief it already wrote. Only sending the ca
 `verified-by: bravebot_ui_bridge::refusal::a_proposed_consult_is_put_to_the_window_and_sent_only_on_its_own_yes`
 `verified-by: bravebot_ui_bridge::dispatch::a_consult_answer_for_no_waiting_proposal_is_refused_as_an_answer_to_nothing`
 `verified-by: bravebot_agent::permission_mode::bypassing_refuses_a_consult_and_every_other_mode_asks`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the card is pinned by ui/scripts/consult-card.test.mjs, which asserts that it names the bot, its definition, model and bound, draws the brief and its label as text, offers to send it or not, takes only a consult answer, and that the main process lets consult.reply through; ui/scripts/shown.test.mjs asserts that a yes waits on the card being on screen; ui/scripts/drive-consult.mjs drives the real app and bridge against a stub model and asserts nothing reaches the bot before the yes and the brief does after it)`
-`verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_on_the_card`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so the card is pinned by ui/scripts/consult-card.test.mjs, which asserts that it names the bot, its definition, model and bound, draws the brief and its label as text, offers to send it or not, takes only a consult answer, that the main process lets consult.reply through, and that a bot this machine cannot run is a notice under the turn and no card; ui/scripts/shown.test.mjs asserts that a yes waits on the card being on screen; ui/scripts/drive-consult.mjs drives the real app and bridge against a stub model and asserts nothing reaches the bot before the yes and the brief does after it)`
+`verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_with_a_notice_and_no_card`
 `verified-by: bravebot_agent::tools::a_brief_from_an_untrusted_context_is_refused_before_any_card`
 `verified-by: bravebot_agent::tools::a_brief_from_a_private_context_is_trusted_and_private`
 `verified-by: bravebot_agent::turn::a_proposed_consult_is_reported_under_its_bot_and_counted_to_the_host`
 `verified-by: bravebot_agent::shared::a_consult_neither_moves_the_turns_prompt_nor_replaces_its_total`
 `verified-by: bravebot_core::policy::what_a_person_decided_inside_a_proposed_consult_is_kept`
 `verified-by: bravebot_tui::state::a_proposed_consults_words_are_drawn_under_the_bot`
-`verified-by: bravebot_tui::confirm::a_refused_consult_card_names_the_model_and_takes_no_yes`
+`verified-by: bravebot_tui::from_worker::a_consult_refused_for_its_model_is_a_transcript_line_and_no_card`
 
 ## How long it lasts
 

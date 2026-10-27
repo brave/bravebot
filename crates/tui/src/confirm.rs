@@ -920,55 +920,6 @@ mod tests {
         );
     }
 
-    fn a_consult(refused: Option<&str>) -> bravebot_agent::confirm::ConsultRequest {
-        bravebot_agent::confirm::ConsultRequest {
-            bot: "reviewer".into(),
-            definition: ".bravebot/agents/reviewer.md".into(),
-            model: "haiku".into(),
-            rounds: 8,
-            budget: None,
-            brief: "Is the parser safe?".into(),
-            label: bravebot_core::label::Label::trusted_public(),
-            refused: refused.map(str::to_string),
-        }
-    }
-
-    /// CONSULT-10, CONSULT-12: a proposed consult whose bot's model cannot run here is put on the
-    /// card with the refusal, naming the model, and the card takes no yes, so nothing is sent.
-    /// Without the refusal drawn the person would approve a consult that then never runs, and
-    /// without the key guard a yes would read as sent.
-    #[test]
-    fn a_refused_consult_card_names_the_model_and_takes_no_yes() {
-        let refusal = "reviewer asked for haiku, which needs a sign-in first, so it did not run";
-        let request = a_consult(Some(refusal));
-        let (rows, _) = pinned_screen((160, 24), |frame| {
-            draw_consult(frame, &request, 0, &mut Seen::default())
-        });
-        let screen = box_rows(&rows).concat();
-        assert!(screen.contains(refusal), "{}", rows.join("\n"));
-        assert!(
-            screen.contains("Nothing is sent to reviewer"),
-            "{}",
-            rows.join("\n")
-        );
-        assert!(!screen.contains(t!(consult_yes)), "{}", rows.join("\n"));
-
-        let yes = press(KeyCode::Char('y'));
-        let no = press(KeyCode::Char('n'));
-        assert_eq!(
-            grants::consult_answer(&request, yes, &Drawn::taking_yes()),
-            None
-        );
-        assert_eq!(
-            grants::consult_answer(&request, no, &Drawn::taking_yes()),
-            Some(Response::Answer(Answer::Reject))
-        );
-        assert_eq!(
-            grants::consult_answer(&a_consult(None), yes, &Drawn::taking_yes()),
-            Some(Response::Answer(Answer::Approve))
-        );
-    }
-
     fn host_screen(hosts: &[&str], size: (u16, u16), scroll: u16) -> (Vec<String>, Drawn) {
         let request = HostRequest {
             hosts: hosts.iter().map(|host| host.to_string()).collect(),
@@ -6475,7 +6426,6 @@ mod tests {
                     budget: Some(20_000),
                     brief: rows.join("\n"),
                     label: bravebot_core::label::Label::trusted_public(),
-                    refused: None,
                 };
                 Some(Case {
                     draw: pinned(move |frame, scroll, memory| {

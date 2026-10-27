@@ -2426,7 +2426,7 @@ pub(crate) fn dispatch_with<S: Sink, C: Confirmer, R: Reporter>(
                 && mode != crate::PermissionMode::Bypass
                 && confirmer.asks_a_person() =>
         {
-            consult::propose_consult(policy, tools, confirmer, &arguments)
+            consult::propose_consult(policy, tools, confirmer, reporter, &arguments)
         }
         other => match &server_tool {
             Some((offer, alias, tool)) => {
@@ -24077,6 +24077,18 @@ mod tests {
             adjust: impl FnOnce(&mut Tools<'_>),
             proposed: &ToolCall,
         ) -> Output {
+            propose_noting(person, files, begun, adjust, proposed, &mut Vec::new())
+        }
+
+        /// As [`propose_among`], keeping the notices the person was shown in `notices`.
+        fn propose_noting<C: Confirmer>(
+            person: &mut C,
+            files: &[(&str, &str)],
+            begun: for<'a> fn(Policy<'a, RecordingSink>) -> Policy<'a, RecordingSink>,
+            adjust: impl FnOnce(&mut Tools<'_>),
+            proposed: &ToolCall,
+            notices: &mut Vec<String>,
+        ) -> Output {
             static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let scratch = Scratch::new(&format!(
                 "consults-{}",
@@ -24096,10 +24108,12 @@ mod tests {
             let mut policy = begun(policy);
             policy.install_delegates(crate::agents::admitted(files));
             let mut reporter = crate::report::RecordingReporter::default();
-            with_tools(&workspace, |tools| {
+            let output = with_tools(&workspace, |tools| {
                 adjust(tools);
                 dispatch(&mut policy, tools, person, &mut reporter, proposed)
-            })
+            });
+            notices.append(&mut reporter.notices);
+            output
         }
 
         fn said(output: Output) -> String {
@@ -24194,27 +24208,36 @@ mod tests {
             Box::leak(Box::new(config))
         }
 
-        /// CONSULT-10, CONSULT-12: a proposed bot whose model needs a sign-in is put on the card as
-        /// refused, naming the model it asked for, and nothing is consulted even on a yes. Without
-        /// the check, the yes would hand the turn a consult that fails at its first request.
+        /// CONSULT-10, CONSULT-12: a proposed bot whose model needs a sign-in is refused with no
+        /// card. The planner's result and the person's notice both name the model it asked for.
+        /// A card here would be one the person could only dismiss, and a yes without the check
+        /// would hand the turn a consult that fails at its first request.
         #[test]
-        fn a_proposed_bot_whose_model_needs_a_sign_in_is_refused_on_the_card() {
+        fn a_proposed_bot_whose_model_needs_a_sign_in_is_refused_with_a_notice_and_no_card() {
             let mut person = Person::saying(Decision::Approve);
-            let output = propose_among(
+            let mut notices = Vec::new();
+            let output = propose_noting(
                 &mut person,
                 &[("reviewer", "model: haiku\n")],
                 |policy| policy,
                 |tools| tools.chat.config = needing_a_sign_in_for_haiku(),
                 &call("reviewer", "is this safe?"),
+                &mut notices,
             );
             assert!(output.consult.is_none(), "a refused bot was consulted");
+            assert!(person.asked.is_empty(), "a card was drawn");
             let refusal =
                 "reviewer asked for haiku, which needs a sign-in first, so it did not run";
-            assert_eq!(person.asked.len(), 1, "the card was not drawn");
-            assert_eq!(person.asked[0].refused.as_deref(), Some(refusal));
             let text = said(output);
             assert!(text.contains(refusal), "{text}");
             assert!(text.contains("no other model was asked"), "{text}");
+            assert_eq!(
+                notices,
+                [
+                    bravebot_i18n::t!(consult_refused_notice, bot = "reviewer", refused = refusal)
+                        .to_string()
+                ]
+            );
         }
 
         /// CONSULT-6, CONSULT-12: a proposed brief is never a promotion, because no planner whose

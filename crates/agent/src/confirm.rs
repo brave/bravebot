@@ -1452,10 +1452,6 @@ pub struct ConsultRequest {
     pub budget: Option<u64>,
     pub brief: String,
     pub label: bravebot_core::label::Label,
-    /// Why the bot cannot be consulted on this machine, in the driver's words, where it cannot: its
-    /// model needs a sign-in not made, or is one the machine does not request (CONSULT-10). A card
-    /// carrying one sends nothing, whatever the answer.
-    pub refused: Option<String>,
 }
 
 /// What the person decided about a message (MSG-3, MSG-4).

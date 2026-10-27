@@ -1871,11 +1871,10 @@ consult-explained =
     its proposal, shown or kept as a reference by what the bot read while answering.
 consult-yes = Yes, send it
 consult-no = No
-# A proposed consult whose bot's model cannot run on this machine. The card is drawn so the person
-# sees what was asked for, and takes no yes.
-consult-refused-explained =
-    Nothing is sent to { $bot }, whatever you answer, and no other model is asked in its place.
-consult-close = Close
+# A proposed consult whose bot's model cannot run on this machine, said in place of a card.
+consult-refused-notice =
+    The planner proposed consulting { $bot }, which cannot be consulted here: { $refused }. Nothing
+    was sent, and no other model was asked in its place.
 
 ## A message to another background session, asked before it is sent
 

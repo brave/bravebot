@@ -583,34 +583,14 @@ fn a_proposed_consult_crosses_with_its_bot_model_bound_and_brief() {
         budget: Some(20_000),
         brief: "Read src/lib.rs.\nSay what is wrong.".into(),
         label: bravebot_core::label::Label::untrusted_public(),
-        refused: None,
     };
     assert_eq!(
         wire::consult_request(3, &request),
         json!({
             "request": 3, "bot": "reviewer", "definition": "~/.bravebot/agents", "model": "haiku",
             "rounds": 8, "budget": 20_000, "brief": "Read src/lib.rs.\nSay what is wrong.",
-            "label": "(U,pub)", "refused": null
+            "label": "(U,pub)"
         })
-    );
-}
-
-/// CONSULT-10: a bot this machine cannot run crosses with the reason, so the card offers no yes.
-#[test]
-fn a_refused_consult_crosses_with_why() {
-    let request = bravebot_agent::confirm::ConsultRequest {
-        bot: "reviewer".into(),
-        definition: "~/.bravebot/agents".into(),
-        model: "opus".into(),
-        rounds: 8,
-        budget: None,
-        brief: "Read src/lib.rs.".into(),
-        label: bravebot_core::label::Label::trusted_public(),
-        refused: Some("the model needs a sign-in".into()),
-    };
-    assert_eq!(
-        wire::consult_request(4, &request)["refused"],
-        json!("the model needs a sign-in")
     );
 }
 

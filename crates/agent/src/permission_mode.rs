@@ -1661,7 +1661,6 @@ mod tests {
             budget: None,
             brief: "is the label change safe?".into(),
             label: bravebot_core::label::Label::trusted_public(),
-            refused: None,
         };
         let mut asked = SaysItMoved::default();
         let mut confining = Confining::new(&mut asked, PermissionMode::Bypass, false);
