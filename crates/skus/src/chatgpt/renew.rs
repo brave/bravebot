@@ -156,6 +156,42 @@ mod tests {
         );
     }
 
+    /// A refresh reply's `earliest_refresh_at` is not read: the renewal replaces a token within a
+    /// minute of its expiry and stores the expiry the reply's `expires_in` gives, whether the field
+    /// is absent, an instant far in the future or one far in the past. A renewal that took its
+    /// lifetime from the field would store an expiry in 2100 or one that has passed.
+    #[test]
+    fn a_refresh_reply_gives_the_same_expiry_whatever_its_earliest_refresh_at_says() {
+        let forms = [
+            ("absent", String::new()),
+            ("future", ",\"earliest_refresh_at\":4102444800".to_string()),
+            ("past", ",\"earliest_refresh_at\":946684800".to_string()),
+        ];
+        for (name, field) in forms {
+            let (outcome, asked, path) = run(
+                &format!("earliest-{name}"),
+                Some(&stored("old", "r0", -5)),
+                vec![Reply::json(
+                    200,
+                    &format!(
+                        "{{\"access_token\":\"new\",\"refresh_token\":\"r1\",\
+                         \"expires_in\":1800{field}}}"
+                    ),
+                )],
+                Renewer::access_token,
+            );
+
+            assert_eq!(outcome.expect("a token").token.expose(), "new", "{name}");
+            assert_eq!(asked.len(), 1, "{name}");
+            let wanted = now() + 1800;
+            let stored_at = on_disk(&path).expires_at;
+            assert!(
+                (wanted - 10..=wanted + 10).contains(&stored_at),
+                "{name}: {stored_at} against {wanted}"
+            );
+        }
+    }
+
     /// The known cost of CHATGPT-7: under a clock set before 1970 every expiry looks far off, a
     /// token the service refuses is replaced, and the renewal stores an `expires_at` of the reply's
     /// lifetime past 1970. The next start under a correct clock finds that expired and renews it
@@ -246,6 +282,38 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// A refresh the server refuses in any of the five other codes OpenAI's documentation lists for a
+    /// refresh token that cannot be used, at a 400 or a 401, ends the sign-in as `invalid_grant` does:
+    /// the file is removed and the token endpoint is asked once. A renewer that read `invalid_grant`
+    /// alone would leave the file of a refresh token past its age, and every later turn would present
+    /// it again and be told the refresh failed.
+    #[test]
+    fn a_refresh_refused_in_another_documented_code_removes_the_sign_in() {
+        for code in [
+            "invalid_refresh_token",
+            "token_expired",
+            "refresh_token_expired",
+            "refresh_token_invalidated",
+            "refresh_token_reused",
+        ] {
+            for status in [400, 401] {
+                let (outcome, asked, path) = run(
+                    &format!("ended-{code}-{status}"),
+                    Some(&stored("old", "r0", -5)),
+                    vec![Reply::json(status, &format!("{{\"error\":\"{code}\"}}"))],
+                    Renewer::access_token,
+                );
+
+                assert!(
+                    matches!(outcome, Err(TokenError::Ended)),
+                    "{code} at {status}: {outcome:?}"
+                );
+                assert_eq!(asked.len(), 1, "{code} at {status}");
+                assert!(!path.exists(), "{code} at {status}: the file was kept");
+            }
+        }
+    }
+
     /// A renewer that found the sign-in end says so to every later ask, whichever kind, and asks the
     /// token endpoint nothing more. The file is gone by then, and an implementation that read a
     /// missing file as a sign-in nobody made would say so to the turn that asks after a picker's
@@ -301,21 +369,38 @@ mod tests {
         assert_eq!(server.finish().len(), 1);
     }
 
-    /// Any other failure leaves the file as it was. A busy server, a refusal with another code and
-    /// a connection that failed must not delete a sign-in that still works.
+    /// Any other failure leaves the file as it was. A busy server, a refusal with another code, one
+    /// that names a code of the six in a shape or at a status that does not end the sign-in, and a
+    /// connection that failed must not delete a sign-in that still works.
     #[test]
     fn a_refresh_that_fails_otherwise_leaves_the_file_and_says_why() {
-        for (reply, class) in [
+        for (number, (reply, class)) in [
             (Reply::json(503, "{}"), Class::Unavailable),
+            (
+                Reply::json(503, "{\"error\":\"refresh_token_expired\"}"),
+                Class::Unavailable,
+            ),
             (Reply::json(429, "{}"), Class::RateLimited),
             (
                 Reply::json(400, "{\"error\":\"invalid_request\"}"),
                 Class::Refused,
             ),
+            (
+                Reply::json(403, "{\"error\":\"token_expired\"}"),
+                Class::Refused,
+            ),
+            (
+                Reply::json(400, "{\"error\":{\"code\":\"refresh_token_reused\"}}"),
+                Class::Refused,
+            ),
+            (Reply::hang_up(), Class::Transport),
             (Reply::json(200, "{\"nothing\":1}"), Class::Incomplete),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let (outcome, _, path) = run(
-                &format!("failed-{class}"),
+                &format!("failed-{number}-{class}"),
                 Some(&stored("old", "r0", -5)),
                 vec![reply],
                 Renewer::access_token,

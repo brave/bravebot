@@ -215,9 +215,9 @@ makes possible, is two endorsements.
 that is the plan. Binding to the text would let a change in the working tree change what a prior
 approval covers without the text changing at all.
 
-`verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_plan_it_would_endorse`
-`verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_line_the_model_wrote_as_context`
-`verified-by: bravebot_tui::confirm::a_run_prompt_lists_every_file_the_line_would_write`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_plan_it_would_endorse`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_line_the_model_wrote_as_context`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_lists_every_file_the_line_would_write`
 `verified-by: bravebot_ui_bridge::wire::a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_to`
 `verified-by: bravebot_ui_bridge::wire::a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field_out`
 `verified-by: bravebot_core::command::a_plan_shows_its_resolved_binaries_and_argument_boundaries`

@@ -139,6 +139,8 @@ pub const DENIED: &[&str] = &[
     "bot.define",
     "bot.migrate",
     "bot.redefine",
+    "bot.servers.read",
+    "bot.servers.write",
     "doctor",
     // Read files or attach them to a turn.
     "mentions.offer",

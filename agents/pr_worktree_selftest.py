@@ -545,26 +545,65 @@ def test_a_step_in_a_locked_worktree_is_refused_with_the_choice_the_person_has()
         feature_in(clone, root / "elsewhere", lock="build running")
         pr = the_pull_request_in(clone)
         for step in ("start", "continue", "check", "push"):
-            code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", [step, "9"], False)
+            code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", [step, "9"], False)
             assert code == 1, (step, out)
-            assert "(build running)" in out and f"`python3 script.py {step} 9 --use-locked`" in out, out
+            assert "(build running)" in out and f"`python3 script.py {step} 9 --use-existing`" in out, out
             assert f"unlock and remove it themselves: git worktree unlock {root / 'elsewhere'}; " in out, out
             assert f"git worktree remove {root / 'elsewhere'}" in out, out
             assert f"use {clone / '.worktrees' / 'pr-9'} instead" in out, out
             assert "no worktree was touched" in out and out.count("build running") == 1, out
-        code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", ["start", "9"], True)
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start", "9"], True)
         assert code is None and out == "", "the person's yes is the only thing that lets it through"
-        code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", ["check", "9", "check spec"], False)
-        assert "`python3 script.py check 9 'check spec' --use-locked`" in out, "the retry is the step that was refused"
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["check", "9", "check spec"], False)
+        assert "`python3 script.py check 9 'check spec' --use-existing`" in out, "the retry is the step that was refused"
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         clone = a_plain_clone(root)
-        code, out = quietly(pr_worktree.refuse_locked, the_pull_request_in(clone), "python3 script.py", ["start"], False)
+        code, out = quietly(pr_worktree.refuse_held_worktree, the_pull_request_in(clone), "python3 script.py", ["start"], False)
         assert code is None and out == "", "a branch nobody has checked out has no lock"
+        feature_in(clone, clone / ".worktrees" / "other")
+        code, out = quietly(pr_worktree.refuse_held_worktree, the_pull_request_in(clone), "python3 script.py", ["start"], False)
+        assert code is None and out == "", "an unlocked worktree in the worktrees directory is used without asking"
+
+
+def test_a_step_in_an_unlocked_worktree_outside_the_worktrees_directory_is_refused_before_anything_changes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
         feature_in(clone, root / "elsewhere")
-        code, out = quietly(pr_worktree.refuse_locked, the_pull_request_in(clone), "python3 script.py", ["start"], False)
-        assert code is None and out == "", "an unlocked worktree is used without asking"
+        pr = the_pull_request_in(clone)
+        for step in ("start", "continue", "check", "push"):
+            code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", [step, "9"], False)
+            assert code == 1, (step, out)
+            assert f"feature is already checked out at {root / 'elsewhere'}, which is outside {clone / '.worktrees'}, " in out, out
+            assert "locked" not in out and "unlock" not in out, "an unlocked tree has no lock to speak of"
+            assert f"`python3 script.py {step} 9 --use-existing`" in out, out
+            assert f"`/add-dir {root / 'elsewhere'}`" in out, "the file tools refuse a tree outside the clone"
+            assert f"git worktree remove {root / 'elsewhere'}" in out and "no worktree was touched" in out, out
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start", "9"], True)
+        assert code is None and out == "", "the person's yes lets it through"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        feature_in(clone, root / "trees" / "clone-9")
+        with mock.patch.dict(os.environ, {pr_worktree.WORKTREES_ENV: "../trees"}):
+            pr = the_pull_request_in(clone)
+            code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start"], False)
+            assert code is None and out == "", "the directory the environment names is where worktrees go"
+
+
+def test_the_main_clone_is_not_worked_in_unless_the_person_agrees_and_cannot_be_removed():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        git("switch", "-q", "-c", "feature", cwd=clone)
+        pr = the_pull_request_in(clone)
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start"], False)
+        assert code == 1 and f"checked out at {clone}, which is the main clone, " in out, out
+        assert "git worktree remove" not in out and "unlock" not in out, "git refuses both for the main tree"
+        assert "`/add-dir" not in out, "the main clone is in the workspace"
 
 
 def test_a_session_started_in_a_locked_worktree_is_not_stopped_by_its_lock():
@@ -574,7 +613,7 @@ def test_a_session_started_in_a_locked_worktree_is_not_stopped_by_its_lock():
         clone = a_plain_clone(root)
         feature_in(clone, root / "elsewhere", lock="build running")
         pr = the_pull_request_in(clone, here=root / "elsewhere")
-        code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", ["start"], False)
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start"], False)
         assert code is None and out == "", out
         note = pr_worktree.reuse_note(pr)
         assert "(the checkout this was run from; locked: build running)" in note, note

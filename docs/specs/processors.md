@@ -80,12 +80,13 @@ be private.
 What the planner writes is private once its context holds private content, which
 [LABEL-8](labels.md#LABEL-8) lists the ways of reaching: a slot `vet_content` let through, output
 `read_output` read to it, a delegate's report, or a resumed conversation that already held some.
-From then on every call is refused. The refusal does not ask for a rewording, since none helps, and
+From then on every `spawn_processor` call is refused. The refusal does not ask for a rewording, since none helps, and
 names what still reaches a quarantined reference: a filter such as `grep` or `tail` run with
 `stdin_ref` set to it, whose printed result `read_output` shows, and `vet_content` for a reference
-that holds no text. A reference made in such a context is described without the move that names a
-processor, and the tool's description says the call is refused once the context holds private
-content.
+that holds no text. `run`, `read_output` and the file tools keep working. A reference made in such a
+context is described without the move that names a processor, and the tool's description says that
+`spawn_processor` is refused once the context holds private content and that those tools keep
+working.
 
 **Why.** A planner told to give a reference to a processor, and refused for the rest of the
 conversation when it does, reads the whole of a long output with `read_output` instead, which is
@@ -243,7 +244,7 @@ holds the fuller preview.
 `verified-by: bravebot_agent::manifest::a_planned_write_carries_what_the_processor_said_about_it`
 `verified-by: bravebot_core::policy::what_was_said_about_a_document_is_released_for_the_screen_it_is_approved_on`
 `verified-by: bravebot_core::policy::a_document_nobody_said_anything_about_has_nothing_to_show`
-`verified-by: bravebot_tui::confirm::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
+`verified-by: bravebot_tui::confirm::write::what_a_processor_said_is_drawn_beside_the_diff_it_describes`
 
 <a id="PROC-13"></a>
 ### PROC-13: the `processorModel` setting names the model a processor runs on

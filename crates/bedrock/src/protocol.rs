@@ -779,6 +779,29 @@ mod tests {
         assert_eq!(request.messages[0].role, "user");
     }
 
+    /// The note the agent writes after the first prompt of a session begins with a count. Converse
+    /// lays the blocks of a turn end to end, so a prompt ending in a number and a note beginning
+    /// with one would read as a single number unless the note's block starts on a new paragraph.
+    #[test]
+    fn a_note_after_the_line_a_person_typed_is_a_block_on_a_new_paragraph() {
+        let request = request_from(
+            &[
+                Message::system("be helpful"),
+                Message::user("see issues/1106"),
+                Message::user(
+                    "16 skills, of your own or the project's, are not listed above: a, b.",
+                ),
+            ],
+            None,
+        );
+        let json = body_of(&request);
+        assert_eq!(request.messages.len(), 1);
+        let blocks = json["messages"][0]["content"].as_array().expect("blocks");
+        assert_eq!(blocks[0]["text"], "see issues/1106");
+        let note = blocks[1]["text"].as_str().expect("a text block");
+        assert!(note.starts_with("\n\n16 skills"), "{note:?}");
+    }
+
     /// Converse refuses a text block with no word in it and takes nothing but an object as a call's
     /// arguments, and the walk that builds these requests is shared with another service that refuses
     /// the same. Blank lines another model wrote before a call are no block, and a call recorded with

@@ -761,10 +761,10 @@ the content out ends it. A workspace file the planner reads does not reach it.
 `verified-by: bravebot_cli::mcp::forget_takes_a_path_that_no_longer_resolves_as_typed`
 `verified-by: bravebot_cli::mcp::forget_leaves_a_record_it_cannot_read_as_it_is`
 `verified-by: bravebot_cli::mcp::forget_takes_one_path_at_most_and_writes_nothing_incognito`
-`verified-by: bravebot_tui::confirm::a_call_prompt_draws_the_tool_its_arguments_and_three_answers`
-`verified-by: bravebot_tui::confirm::a_call_prompt_cuts_a_long_description_until_it_is_expanded`
-`verified-by: bravebot_tui::confirm::a_call_prompt_answers_by_its_rows_and_never_by_enter`
-`verified-by: bravebot_tui::confirm::a_call_answer_says_what_the_turn_is_told`
+`verified-by: bravebot_tui::confirm::mcp::a_call_prompt_draws_the_tool_its_arguments_and_three_answers`
+`verified-by: bravebot_tui::confirm::mcp::a_call_prompt_cuts_a_long_description_until_it_is_expanded`
+`verified-by: bravebot_tui::confirm::mcp::a_call_prompt_answers_by_its_rows_and_never_by_enter`
+`verified-by: bravebot_tui::confirm::mcp::a_call_answer_says_what_the_turn_is_told`
 `verified-by: bravebot_tui::remote_confirm::a_call_answer_travels_back_with_its_stand`
 `verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
 `verified-by: bravebot_ui_bridge::refusal::a_call_answer_that_cannot_stand_is_a_yes_to_the_one_call`
@@ -866,8 +866,8 @@ servers it holds a grant for, and another server's list waits for a turn that ho
 `verified-by: bravebot_tui::app::resuming_carries_the_answer_to_an_mcp_servers_list_for_the_process`
 `verified-by: bravebot_agent::mcp::a_workers_call_to_a_servers_tool_is_put_to_the_person`
 `verified-by: bravebot_agent::mcp::a_reader_or_a_checker_delegate_holds_no_server_and_reaches_none`
-`verified-by: bravebot_tui::confirm::a_tool_list_draws_every_description_row_behind_the_margin`
-`verified-by: bravebot_tui::confirm::a_tool_list_answers_by_its_rows`
+`verified-by: bravebot_tui::confirm::mcp::a_tool_list_draws_every_description_row_behind_the_margin`
+`verified-by: bravebot_tui::confirm::mcp::a_tool_list_answers_by_its_rows`
 `verified-by: bravebot_tui::remote_confirm::a_yes_to_a_list_and_a_yes_to_a_call_do_not_stand_in_for_each_other`
 `verified-by: bravebot_ui_bridge::servers::a_server_the_window_approves_is_started_offered_and_called`
 `verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
@@ -1230,10 +1230,10 @@ session with nobody at the terminal and the mode that skips prompts refuse it un
 `verified-by: bravebot_agent::servers::a_move_in_a_session_that_writes_nothing_is_for_the_session`
 `verified-by: bravebot_agent::servers::a_project_that_answers_for_its_servers_does_not_answer_a_move`
 `verified-by: bravebot_cli::plain::a_move_is_asked_in_lines_and_only_a_yes_moves_the_server`
-`verified-by: bravebot_tui::confirm::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
-`verified-by: bravebot_tui::confirm::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
-`verified-by: bravebot_tui::confirm::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
-`verified-by: bravebot_tui::confirm::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
+`verified-by: bravebot_tui::confirm::mcp::a_move_prompt_shows_the_declaration_the_destination_and_what_it_reaches`
+`verified-by: bravebot_tui::confirm::mcp::a_destination_longer_than_the_move_box_leaves_the_host_and_what_a_yes_does_on_screen`
+`verified-by: bravebot_tui::confirm::mcp::the_end_of_a_long_destination_can_be_scrolled_to_with_the_host_still_shown`
+`verified-by: bravebot_tui::confirm::mcp::a_move_question_takes_a_yes_only_from_a_draw_showing_the_host_and_the_keys`
 `verified-by: bravebot_ui_bridge::wire::the_mcp_questions_carry_what_a_card_draws`
 `verified-by: bravebot_ui_bridge::refusal::refusing_an_mcp_question_is_a_no_in_its_own_shape`
 

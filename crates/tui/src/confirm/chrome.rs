@@ -171,3 +171,47 @@ pub(super) fn centred(area: Rect) -> Rect {
         ])
         .split(vertical[1])[1]
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::confirm::tests::*;
+    use crate::confirm::*;
+
+    /// The sentences these panels put above the body are indented by two columns, and a
+    /// translation is not the length the English is, so they have to wrap without losing the
+    /// indent. Broken by hand into lines that fit, as they were, the second row of a longer
+    /// translation would start hard against the border and read as part of the body.
+    #[test]
+    fn explanatory_prose_keeps_its_indent_on_every_row_it_wraps_to() {
+        let request = a_vouch("notes.md", "some contents", false);
+        // Narrow enough that the sentence cannot fit on one row.
+        let drawn = rows_of(52, 24, |frame| {
+            draw_vouch(frame, &request, 0, &mut Seen::default());
+        });
+
+        let wrapped: Vec<&String> = drawn
+            .iter()
+            .filter(|row| {
+                row.contains("working blind")
+                    || row.contains("rest of this session")
+                    || row.contains("later read")
+            })
+            .collect();
+        assert!(
+            wrapped.len() > 1,
+            "the sentence did not wrap, so this proves nothing: {drawn:#?}"
+        );
+        // The panel is centred, so the box's own left border is where the indent is measured
+        // from rather than the start of the terminal row.
+        for row in wrapped {
+            let inside = row
+                .split_once('\u{2502}')
+                .map(|(_, rest)| rest)
+                .expect("the panel draws a border");
+            assert!(
+                inside.starts_with("  ") && !inside.starts_with("   "),
+                "a wrapped row lost the indent: {row:?}"
+            );
+        }
+    }
+}

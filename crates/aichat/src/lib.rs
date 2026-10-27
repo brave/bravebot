@@ -1315,7 +1315,7 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &ChatError) -> bool 
         return false;
     }
     match error {
-        ChatError::Egress(e) => e.is_transient() && asked_wait(e) <= LONGEST_WAIT,
+        ChatError::Egress(e) => retryable_within_ceiling(e),
         // A reply that stopped early is a request that did not complete, whatever the socket
         // thought. Sending it again is the same remedy, and the partial is thrown away for the
         // same reason: half a reply cannot be continued by a second stream.
@@ -1350,6 +1350,16 @@ pub fn asked_wait(error: &EgressError) -> Duration {
         } => *asked,
         _ => Duration::ZERO,
     }
+}
+
+/// Whether a failure of the transport is sent again: it is transient, and the service did not ask
+/// for a wait longer than [`LONGEST_WAIT`].
+///
+/// One rule for the ceiling, so this client and the Bedrock client cannot disagree about when a
+/// rate limit is waited out and when it ends the call at once. A wait of exactly the ceiling is
+/// taken.
+pub fn retryable_within_ceiling(error: &EgressError) -> bool {
+    error.is_transient() && asked_wait(error) <= LONGEST_WAIT
 }
 
 /// The pause before sending again after `failures` failures of the transport: what the service
@@ -2141,5 +2151,35 @@ mod tests {
             [(true, true), (false, true), (false, false)],
             "{seen:?}"
         );
+    }
+
+    /// BACKEND-54: a transient failure is sent again unless a 429 asked for a wait past the
+    /// ceiling. A wait of exactly the ceiling is taken, one second more is not, a `Retry-After` on
+    /// another status is not read as a wait, and a failure that is not transient is never sent
+    /// again however short the wait it carries.
+    #[test]
+    fn a_transient_failure_is_retried_unless_a_429_asked_for_more_than_the_ceiling() {
+        let status = |status: u16, retry_after: Option<Duration>| EgressError::Status {
+            url: "https://example.invalid/v1".to_string(),
+            status,
+            retry_after,
+            body: None,
+        };
+        let second = Duration::from_secs(1);
+
+        assert!(retryable_within_ceiling(&status(429, Some(LONGEST_WAIT))));
+        assert!(!retryable_within_ceiling(&status(
+            429,
+            Some(LONGEST_WAIT + second)
+        )));
+        assert!(retryable_within_ceiling(&status(429, None)));
+        assert!(retryable_within_ceiling(&status(
+            503,
+            Some(LONGEST_WAIT + second)
+        )));
+        assert!(!retryable_within_ceiling(&status(404, Some(second))));
+        assert!(!retryable_within_ceiling(&EgressError::OutOfTime {
+            url: "https://example.invalid/v1".to_string(),
+        }));
     }
 }

@@ -337,6 +337,53 @@ mod tests {
         );
     }
 
+    /// The separator is for text that follows text. A message after one ending in an attachment has
+    /// nothing to run into, a message with no word in it is no block and leaves the turn ending
+    /// where it did, and a message after an assistant turn starts a turn of its own.
+    #[test]
+    fn the_paragraph_separator_follows_the_text_a_turn_ends_in_and_nothing_else() {
+        let after_attachment = walked(
+            &[
+                Message::user_parts(vec![
+                    Part::Text {
+                        text: "look".to_string(),
+                    },
+                    picture("data:image/png;base64,QUJD"),
+                ]),
+                Message::user("12 skills"),
+            ],
+            true,
+        );
+        assert_eq!(
+            after_attachment.turns[0].blocks,
+            ["text:look", "image#1:QUJD", "text:12 skills"]
+        );
+
+        let after_blank = walked(
+            &[
+                Message::user("see issues/1106"),
+                Message::user("   "),
+                Message::user("16 skills"),
+            ],
+            true,
+        );
+        assert_eq!(
+            after_blank.turns[0].blocks,
+            ["text:see issues/1106", "text:\n\n16 skills"]
+        );
+
+        let after_assistant = walked(
+            &[
+                Message::user("hello"),
+                Message::assistant("hi 3"),
+                Message::user("16 skills"),
+            ],
+            true,
+        );
+        assert_eq!(after_assistant.turns.len(), 3);
+        assert_eq!(after_assistant.turns[2].blocks, ["text:16 skills"]);
+    }
+
     /// Both services refuse two turns of one role in a row, and the conversion is what makes them:
     /// a result is a user turn, so the two results of two parallel calls are one turn of two
     /// blocks, and so is a result followed by the next thing the user typed.

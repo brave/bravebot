@@ -43,6 +43,9 @@ behind it: a sentence a tool produces is trusted text the planner reads as the d
 ([LABEL-3](../labels.md#LABEL-3)), so a filename formatted into one is the disclosure this clause
 withholds, arriving in the strongest position the design has.
 
+A symbolic link is not named either. The walk counts the links it meets and does not enter, and the
+result carries that count ([LIST-6](#LIST-6)).
+
 **Why.** One reference for the whole listing would leave the planner holding an address it cannot
 use. What came of that in practice was a planner guessing globs to see which came back empty.
 
@@ -66,7 +69,8 @@ expanded into the plain patterns it stands for before the walk rather than match
 An expansion past the cap on how many patterns it may produce in all falls back to matching the
 pattern literally, which finds nothing and is reported as finding nothing. Version-control and
 build directories are skipped, and the tool description names every skipped directory, since the
-result does not and a skipped `vendor` or `build` would otherwise read as absent.
+result does not and a skipped `vendor` or `build` would otherwise read as absent. The description
+also says that a symbolic link is not entered ([LIST-6](#LIST-6)).
 
 A pattern with no `/` is matched against the file name alone. One with a `/` is matched against
 the path from the directory the call named and against the path from the workspace root, and a
@@ -150,3 +154,33 @@ endorse a file over a directory they own.
 `verified-by: bravebot_agent::turn::a_bounded_quarantined_listing_hands_over_the_directories_it_stopped_at`
 `verified-by: bravebot_core::policy::an_entry_that_is_a_directory_is_not_offered_as_a_file`
 `verified-by: bravebot_core::policy::a_directory_reference_is_refused_where_a_path_is_expected`
+
+<a id="LIST-6"></a>
+### LIST-6: a listing says how many symbolic links it did not enter, as a number
+
+A walk does not enter a symbolic link, to a file or to a directory, at any depth, and does not list
+it ([permissions.md](../permissions.md)). It counts the links it meets, and the result says how many
+were not entered. The count is a number and never a name, because a link's name is a filename
+([LIST-2](#LIST-2)) and where it points is not read. A listing that holds no files and met links
+says so and does not say the directory is empty. A listing that met none words its empty result as
+before.
+
+The count is taken from the file type of each directory entry, which is metadata and not file
+bytes, so nothing the planner may not read decides it. It is released the way the cap and the
+unreadable-directory flag of [LIST-4](#LIST-4) are, and it travels beside the references when the
+listing is quarantined, since a sentence inside that body reaches nobody. The tool description tells
+the planner that a link is not entered and that the directory a link points to is listed by its own
+name to see what is behind it.
+
+**Why.** A project's `.bravebot/skills` holds links to skills kept elsewhere, and a listing of it
+read `(no files)`. The planner took that for an empty directory and looked elsewhere for files that
+were one listing away. Following the link instead would put a walk's reach in the hands of whoever
+placed the link, and this clause adds no reach. `repo_map` has the same walk and does not report the
+count: [repo-map.md](repo-map.md).
+
+`verified-by: bravebot_agent::workspace::a_listing_counts_every_symbolic_link_it_did_not_enter`
+`verified-by: bravebot_agent::tools::a_listing_counts_the_links_it_did_not_enter_and_does_not_name_them`
+`verified-by: bravebot_agent::tools::a_quarantined_listing_carries_the_link_count_beside_its_references`
+`verified-by: bravebot_agent::turn::a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter`
+`verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
+`verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`

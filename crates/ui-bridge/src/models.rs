@@ -1199,6 +1199,114 @@ mod tests {
         assert!(ids.contains(&"opus-arn"), "{ids:?}");
     }
 
+    /// BACKEND-19 in the window: an entry keyed `openai` is asked as the shared listing asks any
+    /// gateway, with the account route first and the key as a bearer token on both requests, and
+    /// every row it lists is offered under `openai/` and the entry's name, embedding and speech
+    /// models beside the chat ones.
+    ///
+    /// The stand-in is on a loopback address, so it is not `api.openai.com` and the models only
+    /// OpenAI's Responses API takes are offered here, as they are by any proxy keyed `openai`. The
+    /// filter that leaves them out follows the host and is pinned by the shared listing's own tests.
+    ///
+    /// The regressions it rejects are a window that sends the key on neither request or only on
+    /// one, one that never asks the account route, and one that offers a row unqualified or drops
+    /// the rows that are not chat models.
+    #[test]
+    fn the_window_lists_an_openai_entry_with_its_key_and_offers_every_row_under_openai() {
+        use std::io::{BufRead, Write};
+
+        const KEY: &str = "placeholder-openai-key-5d27a9";
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let port = listener.local_addr().expect("an address").port();
+        let (seen, asked) = std::sync::mpsc::channel::<(String, Option<String>)>();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut lines = std::io::BufReader::new(&stream)
+                    .lines()
+                    .map_while(Result::ok);
+                let request = lines.next().unwrap_or_default();
+                let path = request.split(' ').nth(1).unwrap_or_default().to_string();
+                let authorization = lines.take_while(|line| !line.is_empty()).find_map(|line| {
+                    line.strip_prefix("authorization: ")
+                        .or_else(|| line.strip_prefix("Authorization: "))
+                        .map(str::to_string)
+                });
+                let _ = seen.send((path.clone(), authorization));
+                let (status, body) = if path.ends_with("/models/user") {
+                    (
+                        "404 Not Found",
+                        r#"{"error":{"message":"no such route","type":"invalid_request_error","code":"model_not_found"}}"#,
+                    )
+                } else {
+                    (
+                        "200 OK",
+                        r#"{"object":"list","data":[
+                            {"id":"gpt-4o-mini","object":"model","created":1,"owned_by":"system"},
+                            {"id":"text-embedding-3-small","object":"model","created":1,"owned_by":"system"},
+                            {"id":"tts-1","object":"model","created":1,"owned_by":"openai-internal"},
+                            {"id":"o3-pro","object":"model","created":1,"owned_by":"system"}]}"#,
+                    )
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = (&stream).write_all(response.as_bytes());
+                let _ = (&stream).flush();
+            }
+        });
+
+        let mut config = an_aws_account_and(|_| None);
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{"openai": {{"options": {{
+                "baseURL": "http://127.0.0.1:{port}/v1", "apiKey": "{KEY}"}}}}}}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 1, "the block configured no service");
+
+        let listed = list(&config);
+
+        // The stand-in records a request before it answers, so every request the listing made is in
+        // the channel by the time it returns.
+        let bearer = Some(format!("Bearer {KEY}"));
+        assert_eq!(
+            asked.try_iter().collect::<Vec<_>>(),
+            [
+                ("/v1/models/user".to_string(), bearer.clone()),
+                ("/v1/models".to_string(), bearer)
+            ]
+        );
+
+        let rows: Vec<(&str, &str)> = listed["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .filter(|row| row["provider"] == "openai")
+            .map(|row| {
+                (
+                    row["id"].as_str().expect("an id"),
+                    row["name"].as_str().expect("a name"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("openai/gpt-4o-mini", "gpt-4o-mini"),
+                ("openai/o3-pro", "o3-pro"),
+                ("openai/text-embedding-3-small", "text-embedding-3-small"),
+                ("openai/tts-1", "tts-1"),
+            ]
+        );
+        assert_eq!(listed["warnings"], json!([]));
+        assert!(
+            !listed.to_string().contains(KEY),
+            "the key is in the answer"
+        );
+    }
+
     #[test]
     fn model_ids_are_validated_without_losing_provider_qualification() {
         assert_eq!(selection(None).unwrap(), None);

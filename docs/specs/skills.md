@@ -466,6 +466,10 @@ have remembered either by. Put in the conversation once, the count and the names
 forward in every later request the ordinary way any earlier exchange is, and the turn that put
 them there does not put them there again.
 
+The message is a user message after the prompt, and a wire that merges consecutive user messages
+into one turn starts its text on a new paragraph ([BACKEND-57](backends.md#BACKEND-57)), so the
+count it begins with is never read as the end of a prompt that finishes in a number.
+
 Names only, never a description: a description is what `search_skills` is for, and giving every
 one away up front would pay back the cost [SKILL-18](#SKILL-18) removed it to avoid. Nothing is
 put there where there is nothing to report, so a curated catalogue ([DELEGATE-23](delegation.md#DELEGATE-23))
@@ -482,6 +486,7 @@ full listing would cost on every turn of it.
 `verified-by: bravebot_agent::turn::an_addressed_turn_is_offered_only_the_skills_its_definition_names`
 `verified-by: bravebot_agent::turn::a_skill_written_in_after_an_empty_first_turn_is_still_named_on_the_next`
 `verified-by: bravebot_agent::turn::the_skills_overview_survives_a_prompt_handed_back_to_the_box`
+`verified-by: bravebot_agent::turn::the_skills_overview_is_a_separate_paragraph_from_the_prompt_on_block_based_wires`
 
 <a id="SKILL-20"></a>
 ### SKILL-20: `disable-model-invocation: true` keeps a skill from the planner, and a person's `/name` loads it

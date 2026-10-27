@@ -26,8 +26,8 @@ pub mod protocol;
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, LONGEST_WAIT, OpenCall, Progress, asked_wait, pause_after_failure,
-    read_in_background, reply_bound,
+    Completion, CutOff, OpenCall, Progress, pause_after_failure, read_in_background, reply_bound,
+    retryable_within_ceiling,
 };
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
@@ -1162,7 +1162,7 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
     }
     match error {
         // A wait past the ceiling is not sat through, as for every other backend.
-        BedrockError::Egress(e) => e.is_transient() && asked_wait(e) <= LONGEST_WAIT,
+        BedrockError::Egress(e) => retryable_within_ceiling(e),
         // The service's own name for what went wrong. A fault or a busy service is worth asking
         // again; a request it refuses on its contents is refused the same way every time.
         BedrockError::Reported { kind } => TRANSIENT_REPORTS.contains(&kind.as_str()),
@@ -1744,6 +1744,37 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(sent.len(), 3, "a concession was offered twice");
         assert_eq!(refusals(model), Refusals::default());
+    }
+
+    /// The record an interface reads to say a level is not in force: a model that refused the level
+    /// once and answered without it is remembered as refusing the level and nothing else, and the
+    /// refusal is no other model's.
+    ///
+    /// The fault this rejects: giving the level up for the request and not remembering it, which
+    /// leaves the interface reporting a level as in force that no later request carries.
+    #[test]
+    fn a_model_that_refused_the_level_once_is_remembered_as_refusing_it() {
+        let model = "a-model-remembered-as-refusing-the-level";
+        let request =
+            ChatRequest::new(model, vec![Message::user("hello")]).with_effort(Some(Effort::High));
+        assert!(!refusals(model).effort, "nothing refused it yet");
+
+        let (result, sent) = complete_against(
+            &config_for(model),
+            &request,
+            vec![refused_with(400), whole_reply()],
+        );
+
+        result.expect("the request without the level answers");
+        assert_eq!(sent.len(), 2);
+        assert_eq!(
+            refusals(model),
+            Refusals {
+                effort: true,
+                ..Refusals::default()
+            }
+        );
+        assert!(!refusals("a-model-never-asked-about-the-level").effort);
     }
 
     /// The two are told apart by status alone, so neither concession is spent on the other's
