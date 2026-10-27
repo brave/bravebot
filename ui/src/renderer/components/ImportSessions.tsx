@@ -7,7 +7,7 @@ import { showToast } from '../toasts'
 import { Modal } from './Modal'
 
 /** One of Claude Code's sessions for the project, as `session.import` lists it. */
-interface Found {
+export interface Found {
   sourceId: string
   id: string
   /** The first thing the person asked there: another program's text, drawn as plain text. */
@@ -91,20 +91,30 @@ export function ImportSessions({ directory, onImported, onClose }: {
         <p role="status" className="dialog-busy" data-delayed={!showLoading || undefined}><ProgressRing mode="indeterminate" /> Reading Claude Code’s sessions…</p>
       )}
       {found?.length === 0 && <p data-test="import-empty">No Claude Code sessions for this folder.</p>}
-      {found && found.length > 0 && (
-        <ul className="import-sessions" data-test="import-sessions">
-          {found.map((one) => (
-            <li key={one.sourceId} className="import-session">
-              <Checkbox checked={one.imported || chosen.has(one.sourceId)} isDisabled={one.imported || copying} size="small"
-                onChange={({ checked }) => pick(one.sourceId, checked)}>
-                <span className="import-session-title" data-tooltip={one.title}>{one.title}</span>
-              </Checkbox>
-              {one.imported && <Label mode="outline" color="neutral">Imported</Label>}
-              <time className="import-session-time" dateTime={new Date(one.updated * 1000).toISOString()}>{shortAgo(one.updated)}</time>
-            </li>
-          ))}
-        </ul>
-      )}
+      {found && found.length > 0 && <ImportList found={found} chosen={chosen} copying={copying} onPick={pick} />}
     </Modal>
+  )
+}
+
+/** The sessions on offer, one checkbox each. A title is drawn as text, whatever it holds. */
+export function ImportList({ found, chosen, copying, onPick }: {
+  found: Found[]
+  chosen: ReadonlySet<string>
+  copying: boolean
+  onPick: (sourceId: string, on: boolean) => void
+}): React.JSX.Element {
+  return (
+    <ul className="import-sessions" data-test="import-sessions">
+      {found.map((one) => (
+        <li key={one.sourceId} className="import-session" data-imported={one.imported || undefined}>
+          <Checkbox checked={one.imported || chosen.has(one.sourceId)} isDisabled={one.imported || copying} size="small"
+            onChange={({ checked }) => onPick(one.sourceId, checked)}>
+            <span className="import-session-title" data-tooltip={one.title}>{one.title}</span>
+          </Checkbox>
+          {one.imported && <Label mode="outline" color="neutral">Imported</Label>}
+          <time className="import-session-time" dateTime={new Date(one.updated * 1000).toISOString()}>{shortAgo(one.updated)}</time>
+        </li>
+      ))}
+    </ul>
   )
 }

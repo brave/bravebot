@@ -50,6 +50,7 @@ import { call } from './rpc'
 import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
+import { type Purged, purgeReport } from './purge'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -492,11 +493,11 @@ export function App(): React.JSX.Element {
           openedLives.current.delete(item.handle)
         }
       }
-      const answer = await call<{ deleted: string[]; failed: string[]; held: string[] }>('session.purge', { directory, ids })
+      const answer = await call<Purged>('session.purge', { directory, ids })
       for (const id of answer.deleted) dropConversation(conversationKey(directory, id))
-      const left = answer.failed.length + answer.held.length
-      if (left > 0) setProblem(`${answer.deleted.length} deleted; ${left} could not be deleted and ${left === 1 ? 'was' : 'were'} kept.`)
-      else showToast(`Deleted ${answer.deleted.length} chat${answer.deleted.length === 1 ? '' : 's'}`, projectLabel(directory))
+      const report = purgeReport(answer)
+      if ('problem' in report) setProblem(report.problem)
+      else showToast(report.done, projectLabel(directory))
       await Promise.all([refresh(), readForks(), readBots()])
     } catch (error) { setProblem(String(error)) }
   }, [closeSession, refresh, readForks, readBots])

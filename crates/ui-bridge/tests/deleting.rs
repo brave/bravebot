@@ -629,3 +629,92 @@ fn a_purge_waits_for_a_running_turn() {
     assert_eq!(refused["error"]["code"], "turn_in_flight", "{refused}");
     assert_eq!(stored(&home), before, "a stored session was deleted");
 }
+
+/// Enter `id` in the home's roster of background sessions, as a running one: an entry naming
+/// `project`, and its lock taken. The session reads as running for as long as the file returned is
+/// kept, as it does while a background process lives.
+fn running_in_background(home: &Path, project: &Path, id: &str) -> std::fs::File {
+    let entry = home.join(".bravebot/jobs").join(id);
+    std::fs::create_dir_all(&entry).unwrap();
+    let job = json!({"id": id, "directory": project.display().to_string(), "checkout": null,
+        "name": "a background question", "prompt": "a background question", "state": "idle",
+        "held": null, "pid": std::process::id(), "started": 1, "last_turn": null, "mode": "ask"});
+    std::fs::write(entry.join("state.json"), job.to_string()).unwrap();
+    let live = std::fs::File::create(entry.join("live")).unwrap();
+    live.try_lock().unwrap();
+    live
+}
+
+/// A session a background process is running is held, and kept even when the window names it.
+///
+/// The fault this rejects: a purge that trusts the ids it is sent, and so deletes a record a
+/// running process will write back, or is reading.
+#[test]
+fn a_purge_holds_a_session_running_in_the_background() {
+    let scratch = Scratch::new("bridge-purge-background");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let home = scratch.home();
+    let project = scratch.project();
+    let idle = take_turn(&home, &project, &endpoint, None, "an idle question");
+    let busy = take_turn(&home, &project, &endpoint, None, "a background question");
+    let _lease = running_in_background(&home, &project, &busy);
+    let mut window = Window::open(&home, &project, &endpoint, None);
+
+    let planned = purge(&mut window, &project, json!({"dryRun": true}));
+    assert_eq!(
+        ids(&planned["ok"]["delete"]),
+        vec![idle.clone()],
+        "{planned}"
+    );
+    assert_eq!(planned["ok"]["held"], json!([busy]), "{planned}");
+
+    let purged = purge(
+        &mut window,
+        &project,
+        json!({"ids": [idle.clone(), busy.clone()]}),
+    );
+    assert_eq!(purged["ok"]["deleted"], json!([idle]), "{purged}");
+    assert_eq!(purged["ok"]["held"], json!([busy]), "{purged}");
+    let left = stored(&home);
+    assert!(
+        left.contains(&format!("{busy}.json")),
+        "a running session was deleted: {left:?}"
+    );
+    assert!(!left.iter().any(|name| name.starts_with(&idle)), "{left:?}");
+}
+
+/// A record that cannot be removed is reported as failed, and the others still go.
+///
+/// The faults this rejects: a purge that stops at the first failure, and one that reports a
+/// record as deleted when it is still there.
+#[test]
+fn a_purge_reports_the_records_it_could_not_remove() {
+    let scratch = Scratch::new("bridge-purge-partial");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let home = scratch.home();
+    let project = scratch.project();
+    let stuck = take_turn(&home, &project, &endpoint, None, "a stuck question");
+    let gone = take_turn(&home, &project, &endpoint, None, "a removable question");
+    // A directory with something in it where the trail should be, which removing a file refuses.
+    let store = std::fs::read_dir(home.join(".bravebot/sessions"))
+        .unwrap()
+        .flatten()
+        .next()
+        .unwrap()
+        .path();
+    let trail = store.join(format!("{stuck}.audit.jsonl"));
+    std::fs::remove_file(&trail).unwrap();
+    std::fs::create_dir_all(trail.join("inside")).unwrap();
+    let mut window = Window::open(&home, &project, &endpoint, None);
+
+    let purged = purge(
+        &mut window,
+        &project,
+        json!({"ids": [stuck.clone(), gone.clone()]}),
+    );
+    assert_eq!(purged["ok"]["deleted"], json!([gone]), "{purged}");
+    assert_eq!(purged["ok"]["failed"], json!([stuck]), "{purged}");
+    let left = stored(&home);
+    assert!(left.contains(&format!("{stuck}.json")), "{left:?}");
+    assert!(!left.iter().any(|name| name.starts_with(&gone)), "{left:?}");
+}

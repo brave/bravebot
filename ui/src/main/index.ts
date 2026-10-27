@@ -54,6 +54,7 @@ import { SendRefused, forgetDrops, stageDrops, withDrops } from './drops'
 import { clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
+import { deletedConversations } from './deleted'
 import {
   parseExportRequest,
   suggestedFilename,
@@ -613,28 +614,12 @@ app.whenReady().then(() => {
       // always, the directory for an opened or forked session — so a root the tree can browse is
       // one the agent confirmed rather than one the renderer asserted. See `files.ts`.
       noteOpenedRoot(method, params, ok)
-      // The agent has removed the record, so what this app kept about it goes too. The coordinate
-      // is the one the agent confirmed deleting, which is the one the window named.
-      if (method === 'session.delete' && (ok as { deleted?: unknown } | null)?.deleted === true) {
-        const { directory, id } = (params ?? {}) as { directory?: unknown; id?: unknown }
-        if (typeof directory === 'string' && isSessionId(id)) {
-          removeConversation(conversationKey(directory, id))
-          forgetFork({ directory, id })
-          forgetBotConversation(directory, id)
-        }
-      }
-      // The same for each record a purge removed, among the ones the window named.
-      if (method === 'session.purge') {
-        const { directory, ids } = (params ?? {}) as { directory?: unknown; ids?: unknown }
-        const deleted = (ok as { deleted?: unknown } | null)?.deleted
-        if (typeof directory === 'string' && Array.isArray(ids) && Array.isArray(deleted)) {
-          for (const id of deleted) {
-            if (!isSessionId(id) || !ids.includes(id)) continue
-            removeConversation(conversationKey(directory, id))
-            forgetFork({ directory, id })
-            forgetBotConversation(directory, id)
-          }
-        }
+      // The agent has removed these records, so what this app kept about them goes too. The
+      // coordinates are the ones the agent confirmed deleting, among the ones the window named.
+      for (const { directory, id } of deletedConversations(method, params, ok)) {
+        removeConversation(conversationKey(directory, id))
+        forgetFork({ directory, id })
+        forgetBotConversation(directory, id)
       }
       if (method === 'session.close') {
         const closing = (params as { session?: unknown } | null)?.session
