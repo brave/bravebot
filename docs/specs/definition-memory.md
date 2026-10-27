@@ -31,6 +31,7 @@ governs:
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/bot-grounding.test.mjs
   - ui/scripts/bot-model.test.mjs
+  - ui/scripts/bot-servers.test.mjs
   - ui/scripts/memory-note.test.mjs
 documented-by:
   - docs/website/docs/customize/agents.md

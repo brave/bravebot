@@ -372,11 +372,14 @@
 .bot-details-face .bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
 .bot-details .bot-memory-panel { gap: var(--leo-spacing-m); }
 .bot-field-label { font: var(--type-meta-strong); color: var(--ink-primary); }
-.bot-servers { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
+.bot-servers { display: flex; flex-direction: column; gap: var(--leo-spacing-m); --leo-segmented-control-width: 100%; }
+/* Leo will not shrink a segment below its label, and at its own padding both labels overflow the panel. */
+.bot-servers leo-segmentedcontrolitem { flex: 1 1 auto; --leo-segmented-control-item-padding: var(--leo-spacing-s); }
 .bot-servers-list { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
 .bot-server { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
 .bot-servers-note { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
-.bot-servers-loading { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }/* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
+.bot-servers-loading { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+/* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
 .bot-details .bot-memory {
   margin: 0;
   padding: var(--leo-spacing-m) var(--leo-spacing-l);
