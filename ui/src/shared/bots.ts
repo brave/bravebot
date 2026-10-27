@@ -128,6 +128,43 @@ export interface Bot {
   updated: number
 }
 
+/**
+ * The MCP servers a bot's definition lets it use (DELEGATE-24), as the agent reads its `mcpServers:` line.
+ *
+ * `servers` is `null` where the file has no such line, which gives the bot every server the session
+ * reached unless `tools` says a hand-written `tools:` line is there, in which case it gets none.
+ * `inline` is a line that declares a server rather than naming one, which the picker does not rewrite.
+ */
+export interface BotServers {
+  servers: string[] | null
+  tools: boolean
+  inline: boolean
+  kind: string
+}
+
+/** The shape `bravebot_config::mcp::is_alias` accepts, so a name the window sends can only be an alias. */
+const ALIAS = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+
+export function isServerAlias(value: unknown): value is string {
+  return typeof value === 'string' && ALIAS.test(value)
+}
+
+/** A selection a window may ask for: every server (`null`), or a list of distinct aliases. */
+export function isServerSelection(value: unknown): value is string[] | null {
+  return value === null || (
+    Array.isArray(value) && value.length <= 256 && value.every(isServerAlias) && new Set(value).size === value.length
+  )
+}
+
+/** What the agent answered for a bot's servers, or `null` where it is not that shape. */
+export function parseBotServers(value: unknown): BotServers | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { servers, tools, inline, kind } = value as Record<string, unknown>
+  if (servers !== null && !(Array.isArray(servers) && servers.every((name) => typeof name === 'string'))) return null
+  if (typeof tools !== 'boolean' || typeof inline !== 'boolean' || typeof kind !== 'string') return null
+  return { servers: servers === null ? null : [...(servers as string[])], tools, inline, kind }
+}
+
 /** Model IDs are opaque provider identifiers, never paths or commands. */
 export function isBotModel(value: unknown): value is string | null {
   return value === null || (

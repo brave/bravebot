@@ -30,6 +30,7 @@ export const NavigationItem = withShadowAttrs(LeoNavigationItem, 'button, a')
 export const TextArea = withShadowAttrs(LeoTextArea, 'textarea', { flattenTabindex: true })
 
 export { default as Alert } from '@brave/leo/react/alert'
+export { default as Checkbox } from '@brave/leo/react/checkbox'
 export { default as Collapse } from '@brave/leo/react/collapse'
 export { default as Dialog } from '@brave/leo/react/dialog'
 export { default as Dropdown } from '@brave/leo/react/dropdown'
