@@ -37,7 +37,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
 | [instructions.md](instructions.md) | `INSTR` | 16 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 38 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
-| [manifest.md](manifest.md) | `MANIFEST` | 12 | plan the whole run first, then execute it with no model in the control path |
+| [manifest.md](manifest.md) | `MANIFEST` | 14 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 49 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 39 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
@@ -52,7 +52,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 32 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 12 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 20 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
-| [connectors.md](connectors.md) | `CONNECTOR` | 9 | the client that hands a credential authority one request for a connector call and reads its one reply |
+| [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 17 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
