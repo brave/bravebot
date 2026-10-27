@@ -156,6 +156,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:models` | Model defaults, composer placement, search and keyboard selection, turn payload, per-conversation persistence, and discovery error recovery. A warning of the model list, drawn with the command it names as code in the code type role, at the window's size and at its minimum. Also bot creation, Avatar refresh and layout, saved bot models, composer changes, and persistence after reload. Uses deterministic replies without paid inference. |
 | `pnpm run drive:run` | Approving a command from the window, end to end through a live turn |
 | `pnpm run drive:fetch` | Approving and refusing a fetch, and a redirect to another host, from the window, end to end, against a local model service and website |
+| `pnpm run drive:language` | Choosing the window's language in Settings ▸ General: saved where `/language` keeps it, read from the next start, Automatic removing it, a choice that cannot be saved, `BRAVEBOT_LOCALE` outranking it, and Restart held back while a turn runs. Every row's layout in English and French, light and dark; screenshots in `$TMPDIR/bravebot-language` |
 | `pnpm run drive:language-server` | Starting a language server from the window, that it is kept for the conversation, and that it ends with the app |
 | `pnpm run drive:plan` | Starting a manifest run from the composer, approving and declining its plan, that the run stays out of the conversation, and that its record is read and cannot be typed into |
 | `pnpm run drive:exposure` | Answering a read that would expose a credential, and that the value is never drawn |
@@ -239,7 +240,7 @@ at a time, and a driver replaces only its own rows inside a shared key such as `
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
 `drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,
-`drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
+`drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
 `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
