@@ -52,12 +52,12 @@ fn main() {
             format!(
                 " If bravebot's run tool started this build, it removed {} from the environment \
                  of every program it starts, so they are not set here whatever the shell holds, \
-                 and copying .envrc.example cannot change that.",
+                 and copying contrib/envrc.example cannot change that.",
                 withheld.join(", ")
             )
         };
         panic!(
-            "missing configuration: {}. Copy .envrc.example to .envrc and run `direnv allow`, \
+            "missing configuration: {}. Copy contrib/envrc.example to .envrc and run `direnv allow`, \
              or set {ALLOW_UNCONFIGURED_BUILD}=1 to build a binary that must be configured \
              at run time.{withheld}",
             missing.join(", ")

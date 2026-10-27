@@ -56,7 +56,7 @@ on.
 A rule is refused at this step when any of these holds. Say which one and stop.
 
 - **A tool enforces it or could.** Formatting, lints, clause numbering, lockfiles, dashes,
-  attribution markers, `declassify` outside the gates, `deny.toml` exceptions without a reason and
+  attribution markers, `declassify` outside the gates, `.config/deny.toml` exceptions without a reason and
   first-person narration are checks (`make check`, `make check-spec`, `make check-npm`,
   `make check-deps`, `make check-narration`, the security scan). A rule that can be written as a
   check is a bug against this directory. Offer to write the check instead.

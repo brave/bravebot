@@ -329,7 +329,7 @@ check-npm:
 	pnpm --dir mobile install --frozen-lockfile --lockfile-only
 	python3 contrib/check-pnpm-lockfiles.py
 
-# The dependency policy in deny.toml. CI runs this target rather than cargo-deny's action,
+# The dependency policy in .config/deny.toml. CI runs this target rather than cargo-deny's action,
 # so the version below is the only one anywhere and a pass here means what it means there.
 #
 # Installed under the cache rather than into ~/.cargo/bin, so running this never changes what
@@ -358,8 +358,8 @@ check-deps:
 		echo "building cargo-deny $(CARGO_DENY_VERSION) into $(CARGO_DENY_ROOT), which takes a few minutes"; \
 		cargo install --quiet --locked cargo-deny@$(CARGO_DENY_VERSION) --root "$(CARGO_DENY_ROOT)"; \
 	}
-	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --locked check --deny unmatched-skip --allow license-exception-not-encountered
-	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --manifest-path fuzz/Cargo.toml --config deny.toml --locked check \
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --config .config/deny.toml --locked check --deny unmatched-skip --allow license-exception-not-encountered
+	"$(CARGO_DENY_ROOT)/bin/cargo-deny" --manifest-path fuzz/Cargo.toml --config .config/deny.toml --locked check \
 		--allow unmatched-skip --allow unnecessary-skip --deny license-exception-not-encountered
 
 # The fuzz targets in fuzz/, which is a package of its own with its own workspace and lockfile, so
@@ -1379,7 +1379,7 @@ define cross-build
 		eval "value=\$$$$name"; \
 		if [ -n "$$value" ]; then printf 'export %s=%s\n' "$$name" "$$value" >> "$$env_file"; fi; \
 	done; \
-	DOCKER_BUILDKIT=1 docker build -f Dockerfile.cross -t $(BINARY)-$(1) \
+	DOCKER_BUILDKIT=1 docker build -f contrib/Dockerfile.cross -t $(BINARY)-$(1) \
 		--build-arg TARGET=$(2) \
 		--secret id=bravebot_env,src="$$env_file" .
 	$(call extract,$(BINARY)-$(1),$(1))

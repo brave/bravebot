@@ -564,7 +564,7 @@ jobs:
           trap 'rm -f "$env_file"' EXIT
           printf 'export BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=%s\n' \
             "$BRAVEBOT_ALLOW_UNCONFIGURED_BUILD" > "$env_file"
-          DOCKER_BUILDKIT=1 docker build -f Dockerfile.cross \
+          DOCKER_BUILDKIT=1 docker build -f contrib/Dockerfile.cross \
             -t bravebot-${{ matrix.name }} \
             --build-arg TARGET=${{ matrix.target }} \
             --secret id=bravebot_env,src="$env_file" .

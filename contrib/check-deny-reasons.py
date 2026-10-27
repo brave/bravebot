@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Holds every exception in deny.toml to a written reason.
+"""Holds every exception in .config/deny.toml to a written reason.
 
 cargo-deny treats `reason` as optional on an advisory to ignore, a duplicate to skip and a crate to
 ban, and accepts a bare string in place of the table. An exception with no reason gives a reviewer
@@ -206,8 +206,8 @@ def selftest():
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Hold every exception in deny.toml to a reason.")
-    ap.add_argument("--file", type=Path, default=ROOT / "deny.toml", help="the policy to read")
+    ap = argparse.ArgumentParser(description="Hold every exception in .config/deny.toml to a reason.")
+    ap.add_argument("--file", type=Path, default=ROOT / ".config" / "deny.toml", help="the policy to read")
     ap.add_argument("--selftest", action="store_true", help="check the verdict on known inputs")
     args = ap.parse_args()
     if args.selftest:
@@ -221,7 +221,7 @@ def main():
         print(f"{args.file}: {line}", file=sys.stderr)
     if found:
         print(
-            "deny.toml: write what ships anyway, or why the duplicate cannot be unified, in `reason`, "
+            ".config/deny.toml: write what ships anyway, or why the duplicate cannot be unified, in `reason`, "
             "and why a licence exception is allowed in a comment on its line or above it",
             file=sys.stderr,
         )

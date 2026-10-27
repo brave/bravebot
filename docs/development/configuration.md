@@ -4,7 +4,7 @@ Development uses [direnv](https://direnv.net/) (on macOS, `brew install direnv`)
 Copy the template and fill it in:
 
 ```sh
-cp .envrc.example .envrc
+cp contrib/envrc.example .envrc
 direnv allow
 ```
 

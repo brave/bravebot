@@ -8,7 +8,7 @@ The guarantee this repository makes says nothing about a build step that was rep
 dependency that starts reading the environment, or a workflow step whose owner moves a tag, defeats
 every gate in `crates/core` without touching one, because it runs before or beside them.
 
-Most of this is already enforced. `make check-deps` runs the dependency policy in `deny.toml` over
+Most of this is already enforced. `make check-deps` runs the dependency policy in `.config/deny.toml` over
 advisories, licences, sources and duplicate versions. `make check-security` holds every workflow step
 to a commit and every container image this tree runs to a digest, and faults a job that installs or
 runs a dependency named in `pnpm-lock.yaml` (through npm, pnpm or yarn) while holding `id-token: write` or a secret. Do not report what those already
@@ -41,7 +41,7 @@ resolves a version at run time is not, however it is spelled.
 every step in that job, including one from a third party. Ask whether each secret could be scoped to
 the step that uses it, and whether anything a step prints could carry one into a log.
 
-**A dependency that is not what the lock file says.** `Cargo.lock` and `deny.toml` are the record.
+**A dependency that is not what the lock file says.** `Cargo.lock` and `.config/deny.toml` are the record.
 Ask what is unused, what is unmaintained, and what pulls in a second copy of something already in the
 tree. Where a dependency is fetched from anywhere other than the registry the policy names, that is a
 finding regardless of what it contains.

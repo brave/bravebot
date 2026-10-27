@@ -1418,7 +1418,7 @@ def test_a_commit_that_touches_a_manifest_or_a_lockfile_at_any_depth_is_a_depend
         with patched:
             quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
         tree = clone / ".worktrees" / "issue-5"
-        named = ["Cargo.toml", "crates/x/Cargo.toml", "Cargo.lock", "ui/package.json", "ui/pnpm-lock.yaml", "deny.toml"]
+        named = ["Cargo.toml", "crates/x/Cargo.toml", "Cargo.lock", "ui/package.json", "ui/pnpm-lock.yaml", ".config/deny.toml"]
         others = ["b.txt", "docs/cargo-notes.md", "crates/x/src/lib.rs"]
         dependency = [commit_file(tree, name) for name in named]
         for name in others:
