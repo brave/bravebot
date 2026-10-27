@@ -791,8 +791,12 @@ mod tests {
             captured_trust: Integrity::Trusted,
             kept: true,
         };
-        assert!(put_back_kept(&home, &backup("FACTS"), false).is_err());
-        assert!(!home.join("FACTS").exists());
+        // Only where this volume does tell them apart. On one that does not, as macOS's usually
+        // does not, `FACTS` is the store and putting it back is right.
+        if !home.join("FACTS").exists() {
+            assert!(put_back_kept(&home, &backup("FACTS"), false).is_err());
+            assert!(!home.join("FACTS").exists());
+        }
         assert!(put_back_kept(&home, &backup("facts"), false).is_ok());
         assert_eq!(std::fs::read(home.join("facts/x.md")).unwrap(), b"forged");
         assert!(put_back_kept(&home, &backup("Facts"), true).is_ok());
