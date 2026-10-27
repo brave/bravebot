@@ -138,7 +138,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 16
+      - crates/agent/src/turn.rs: 15
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
@@ -173,7 +173,7 @@ guards:
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
       - crates/agent/src/tools.rs: 2
-      - crates/agent/src/turn.rs: 3
+      - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
     sites:
@@ -514,7 +514,12 @@ reads as holding private content. The trail says which of these made the context
 resumed run is not recorded as letting anything out of quarantine. The user's own message is not labelled at all, which is why the
 two carriers that join it take no label either.
 
+The reply that ends a turn and an answer given between calls enter the conversation by the same
+step. In a context that has met something untrusted the reply is labelled untrusted, so the planner
+is told that it answered and given a reference to the reply, and the reply is in no later request.
+
 `verified-by: bravebot_core::policy::adopting_model_output_from_a_fallen_context_stays_untrusted`
+`verified-by: bravebot_agent::turn::the_final_reply_of_a_turn_is_held_under_a_reference_once_something_untrusted_was_met`
 `verified-by: bravebot_core::policy::only_a_value_a_transport_labelled_can_be_adopted_as_model_output`
 `verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
 `verified-by: bravebot_core::policy::the_trail_says_how_the_context_came_to_hold_private_content`

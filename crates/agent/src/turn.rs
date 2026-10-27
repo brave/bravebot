@@ -3109,36 +3109,8 @@ where
     let proof = policy.authorise_display_release("assistant reply");
     let display = completion.content.clone().declassify(&proof);
 
-    // The answer joins the conversation the same way a round's account of itself does, and by
-    // the same reasoning: it is what this model said, labelled from the context it said it in.
-    // A session that has met nothing untrusted can be asked "shorter, please" and know what to
-    // shorten; one that has met something untrusted is told that it answered and no more.
-    let answer = policy
-        .adopt_model_output("chat", completion.content.clone())
-        .map_err(|d| TurnError::Precommit(d.to_string()))?;
-    let slot = conversation.next_reference();
-    let presented = policy
-        .present(
-            "reply",
-            slot,
-            "your previous answer",
-            &answer,
-            conversation.quarantine(),
-        )
-        .map_err(|d| TurnError::Precommit(d.to_string()))?;
-    conversation.push_from(
-        Message::assistant(match &presented {
-            Presentation::Visible(text) => text.clone(),
-            Presentation::Quarantined(reference) => {
-                format!("(you answered. {})", reference.describe())
-            }
-        }),
-        match &presented {
-            Presentation::Visible(_) => Provenance::Planner,
-            Presentation::Quarantined(_) => provenance_of(&presented, "answer"),
-        },
-    );
-    conversation.observed(policy.context_label());
+    // The answer joins the conversation the way an answer given between calls does.
+    let answer = record_answer(policy, conversation, &completion.content)?;
     // Here and nowhere earlier: a turn that was stopped or failed has not answered, and the next
     // prompt is usually the same task carried on rather than a new one.
     conversation.turn_answered();

@@ -13236,6 +13236,134 @@ fn a_turn_that_failed_is_still_part_of_the_conversation() {
     );
 }
 
+/// What the conversation holds for the final reply of a turn: the last message, and where it
+/// came from.
+fn last_message_of(
+    conversation: &bravebot_agent::Conversation,
+) -> (
+    bravebot_aichat::protocol::Role,
+    String,
+    bravebot_agent::request_view::Provenance,
+) {
+    let stored = conversation.messages().last().expect("a message");
+    (
+        stored.message.role,
+        stored.message.content.text(),
+        stored.provenance(),
+    )
+}
+
+/// TURN-12: the reply that ends a turn and an answer given between calls are put into the
+/// conversation by the same step. In a session that has met nothing untrusted each is the
+/// planner's own words, and the next request can show it what it said.
+#[test]
+fn every_answer_of_a_turn_is_recorded_as_the_planners_own_when_nothing_untrusted_was_met() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("answers-recorded-visible");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for you"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("do the first part, then ask me about the rest"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert_eq!(outcome.reply_for_display(), "the rest waits for you");
+    let (role, text, provenance) = last_message_of(&conversation);
+    assert_eq!(role, bravebot_aichat::protocol::Role::Assistant);
+    assert_eq!(text, "the rest waits for you");
+    assert_eq!(provenance, Provenance::Planner);
+
+    let between: Vec<_> = conversation
+        .messages()
+        .iter()
+        .filter(|stored| stored.message.content.text() == "the first part is done")
+        .collect();
+    assert_eq!(
+        between.len(),
+        1,
+        "the answer between calls is not recorded once"
+    );
+    assert_eq!(between[0].provenance(), Provenance::Planner);
+}
+
+/// LABEL-8: once a session has met something untrusted, the planner is told that it answered and
+/// given a reference, and the reply is held under that reference. The reply is in no message the
+/// next request carries.
+#[test]
+fn the_final_reply_of_a_turn_is_held_under_a_reference_once_something_untrusted_was_met() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("answers-recorded-quarantined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("SENTINEL-REPLY-BODY"),
+        reply_with("second"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("say something"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert_eq!(outcome.reply_for_display(), "SENTINEL-REPLY-BODY");
+    let (role, text, provenance) = last_message_of(&conversation);
+    assert_eq!(role, bravebot_aichat::protocol::Role::Assistant);
+    assert!(
+        text.starts_with("(you answered. "),
+        "the planner was not told only that it answered: {text}"
+    );
+    assert!(!text.contains("SENTINEL-REPLY-BODY"), "{text}");
+    let Provenance::Reference(token) = provenance else {
+        panic!("the message is not labelled by a reference: {provenance:?}");
+    };
+    assert!(text.contains(&token), "{text} does not name {token}");
+    assert!(
+        conversation
+            .quarantine()
+            .label_of(&bravebot_core::SlotId::new(token))
+            .is_some(),
+        "the reply is not held under the reference the planner was given"
+    );
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("and again"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the second turn finishes");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        !bodies[1].contains("SENTINEL-REPLY-BODY"),
+        "the reply reached the next request: {}",
+        bodies[1]
+    );
+}
+
 /// Integrity carries across turns, but only for what the planner was actually shown. A session
 /// whose first turn was handed a reference has met nothing untrusted, so its second turn writes
 /// trusted output.
