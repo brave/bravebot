@@ -51,8 +51,10 @@ rather than refused. opencode's `cost`, `modality` and `package` fields do nothi
 **A gateway bravebot already knows an endpoint for needs no `baseURL`.** [`openrouter`](openrouter.md)
 and [`openai`](openai.md) are the names it knows today. Any other id needs one written down, and an entry with neither a known name
 nor a stated endpoint configures no service. A stated `baseURL` always wins, so a known name stays
-usable against a proxy or a private deployment. A known name supplies the endpoint and nothing else:
-the block still says where its credential lives, as [below](#the-credential).
+usable against a proxy or a private deployment. A known name supplies the endpoint and no credential:
+the block still says where its credential lives, as [below](#the-credential). What is different at
+`api.openai.com` follows the host a request goes to, whatever the entry is called, and is on the
+[OpenAI page](openai.md).
 
 The names it knows are compiled in, and nothing is fetched to resolve one. This value is where a
 bearer credential gets sent, so a service that could decide it could redirect your token by answering

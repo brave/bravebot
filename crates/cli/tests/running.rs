@@ -9967,6 +9967,107 @@ fn a_run_sends_the_key_stored_for_its_gateway() {
     }
 }
 
+/// CRED-14: the bearer key of an `openai` entry is in no file a run writes and in nothing it
+/// prints. The files are the record of the session and its trail (SESSION-1) and whatever else the
+/// run leaves under the state directory. One service answers and the other refuses with a body
+/// that repeats the key, which is what a service that echoes a credential does, so a body copied
+/// into a record or a message would carry it.
+#[test]
+fn an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints() {
+    const KEY: &str = "placeholder-openai-key-8e41b7";
+    fn text_under(directory: &Path, found: &mut Vec<(PathBuf, String)>) {
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                text_under(&path, found);
+            } else {
+                let text =
+                    String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()).into_owned();
+                found.push((path, text));
+            }
+        }
+    }
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("OPENAI_API_KEY", KEY),
+    ];
+    let settings = |port: u16| {
+        format!(
+            r#"{{"provider": {{"openai": {{"env": ["OPENAI_API_KEY"],
+                "options": {{"baseURL": "http://127.0.0.1:{port}/v1"}}}}}},
+                "model": "openai/reasons-only"}}"#
+        )
+    };
+    let (answering, seen) = a_gateway_seeing_bearers();
+    let refusing = a_gateway(r#"["tools"]"#, |_| {
+        http(
+            401,
+            &format!(r#"{{"error": {{"message": "Incorrect API key provided: {KEY}"}}}}"#),
+        )
+    });
+
+    for (case, port) in [("answered", answering), ("refused", refusing.port)] {
+        let scratch =
+            Scratch::new(&format!("cli-running-openai-key-{case}")).with_settings(&settings(port));
+        let output = bravebot(
+            &scratch.path,
+            &environment,
+            &["--json", "-p", "say something"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.success(),
+            case == "answered",
+            "{case}: {stderr}"
+        );
+
+        let mut files = Vec::new();
+        text_under(&scratch.path.join(".bravebot"), &mut files);
+        if case == "answered" {
+            let bearer = seen
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("the run did not reach the gateway: {stderr}"));
+            assert_eq!(bearer, format!("Bearer {KEY}"), "{stderr}");
+            // The files scanned below include the ones this clause is about.
+            let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+            for ending in [format!("{id}.json"), format!("{id}.audit.jsonl")] {
+                assert!(
+                    files
+                        .iter()
+                        .any(|(path, _)| path.to_string_lossy().ends_with(&ending)),
+                    "no file named {ending}: {:?}",
+                    files.iter().map(|(path, _)| path).collect::<Vec<_>>()
+                );
+            }
+        } else {
+            // The echoing body was served and the run reported the refusal, so a run that failed
+            // before the request was sent does not pass for this half.
+            assert!(
+                refusing.asked.try_recv().is_ok(),
+                "the refused run never asked the gateway: {stderr}"
+            );
+            assert!(
+                stderr.contains("returned HTTP 401"),
+                "the refused run did not report the refusal: {stderr}"
+            );
+        }
+        for (what, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+            assert!(
+                !text.contains(KEY),
+                "the key is in the {what} of the {case} run"
+            );
+        }
+        for (path, text) in &files {
+            assert!(
+                !text.contains(KEY),
+                "the key is in {path:?} after the {case} run"
+            );
+        }
+    }
+}
+
 /// What `ollama list` shows on a machine with one model that can call tools and one that cannot,
 /// as `/api/tags` answers it.
 const OLLAMA_LISTING: &str = r#"{"models": [

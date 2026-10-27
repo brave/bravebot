@@ -1254,8 +1254,22 @@ impl Driven for AichatClient<'_> {
         &mut self.refusals
     }
 
+    /// What the model is remembered to refuse, with the breakpoints given up from the start where
+    /// the service is one that takes none ([`bravebot_config::provider::Provider::takes_cache_markers`]).
+    ///
+    /// They are recorded as given up as well as left out of the body, so a refusal of a request
+    /// that carried no breakpoints is not read as a refusal of them: [`call::drive`] would send the
+    /// same body again before it blamed the level.
     fn recall(&self, key: &str) -> Refusals {
-        remembered(key)
+        let found = remembered(key);
+        Refusals {
+            caching: found.caching
+                || self
+                    .gateway
+                    .as_ref()
+                    .is_some_and(|gateway| !gateway.provider.takes_cache_markers()),
+            ..found
+        }
     }
 
     fn remember(&self, key: &str, found: Refusals) {
@@ -2016,6 +2030,116 @@ mod tests {
             cache_controls(&refused),
             [plain(), plain()],
             "a refused lifetime was sent again"
+        );
+    }
+
+    /// BACKEND-32: a request to OpenAI's own API carries no breakpoints, because that service
+    /// caches without being asked and its request schema has no such mark on a content part, and a
+    /// request to any other host under the same id still does. The breakpoints are given up before
+    /// the first request, so a refusal that follows is about something else, and the body is not
+    /// sent again for it as it would be for the breakpoints.
+    #[test]
+    fn a_request_to_openais_own_api_is_sent_no_breakpoints_and_one_to_a_proxy_is() {
+        let egress = Egress::new();
+        let config = config();
+        let asked = ChatRequest::new(
+            "gpt-4o-mini",
+            vec![Message::system("be brief"), Message::user("hello")],
+        );
+        let own = provider_block(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let proxy = provider_block(
+            r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#,
+        );
+
+        let sent_to = |provider: &bravebot_config::provider::Provider| {
+            let mut client =
+                AichatClient::new(&config, &egress).for_gateway(provider, "gpt-4o-mini", None);
+            let key = client.refusal_key(&asked);
+            let recalled = client.recall(&key);
+            client.refusals = recalled;
+            let body = client.body(&asked).expect("a body").to_string();
+            (recalled.caching, body.contains("cache_control"))
+        };
+        assert_eq!(sent_to(&own), (true, false), "OpenAI was sent breakpoints");
+        assert_eq!(
+            sent_to(&proxy),
+            (false, true),
+            "a proxy keyed openai was taken for OpenAI"
+        );
+    }
+
+    /// BACKEND-22: at OpenAI's own API the level is the one concession, since the breakpoints were
+    /// given up before the first request. A request refused on its contents is sent again once,
+    /// without the level, and then the refusal is reported. A gateway that is sent the breakpoints
+    /// is sent the body three times before it is.
+    #[test]
+    fn a_refusal_at_openais_own_api_gives_up_the_level_and_nothing_else() {
+        use protocol::Effort;
+
+        let egress = Egress::new();
+        let config = config();
+        let own = provider_block(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let proxy = provider_block(
+            r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#,
+        );
+
+        // Each request a service that refuses every one is sent, as whether it carried a
+        // breakpoint and whether it carried a level.
+        let sent_to = |provider: &bravebot_config::provider::Provider, model: &str| {
+            let asked = ChatRequest::new(
+                model,
+                vec![Message::system("be brief"), Message::user("hello")],
+            )
+            .with_effort(Some(Effort::High));
+            let mut client = AichatClient::new(&config, &egress).for_gateway(provider, model, None);
+            let key = client.refusal_key(&asked);
+            let plan = Plan {
+                key: &key,
+                order: &AichatClient::CONCESSIONS,
+            };
+            let mut seen = Vec::new();
+            let result = drive(
+                &mut client,
+                &asked,
+                plan,
+                &mut (),
+                |client, (), _| {
+                    let body = client.body(&asked).expect("a body").to_string();
+                    seen.push((
+                        body.contains("cache_control"),
+                        body.contains("reasoning_effort"),
+                    ));
+                    Err(ChatError::Egress(EgressError::Status {
+                        url: "https://api.openai.com/v1/chat/completions".to_string(),
+                        status: 400,
+                        retry_after: None,
+                        body: None,
+                    }))
+                },
+                |(), _| {},
+            );
+            assert!(
+                result.is_err(),
+                "a service that refused everything answered"
+            );
+            seen
+        };
+
+        let seen = sent_to(&own, "backend-22-own");
+        assert_eq!(seen, [(false, true), (false, false)], "{seen:?}");
+
+        // A proxy keyed openai is sent the breakpoints, and gives them up before the level.
+        let seen = sent_to(&proxy, "backend-22-proxy");
+        assert_eq!(
+            seen,
+            [(true, true), (false, true), (false, false)],
+            "{seen:?}"
         );
     }
 }

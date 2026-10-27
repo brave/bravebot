@@ -717,8 +717,12 @@ impl Cached {
 /// Read the cache figure out of the object this protocol nests it in.
 ///
 /// The nesting stops here, so the rest of the agent reads one shape however a service stated it.
-/// Nothing is read for what a request wrote: this protocol states no field for it, and a service
-/// that charges for a cache write reports it in a shape of its own.
+/// Nothing is read for what a request wrote. OpenAI's published description of the usage block
+/// names `prompt_tokens_details.cache_write_tokens` for it, and no reply carrying that field has
+/// been seen ([BACKEND-31]), so the figure is read as zero. A service that charges for a cache write
+/// may report it in a shape of its own.
+///
+/// [BACKEND-31]: ../../../docs/specs/backends.md#BACKEND-31
 ///
 /// Both levels are optional because a server may state the field and put `null` in it, which
 /// `serde(default)` does not cover: that only answers for a field nobody sent. Refusing such a
@@ -2095,6 +2099,29 @@ mod tests {
         assert_eq!(parsed.usage().cached.read_tokens, 1100);
         // Inside the prompt rather than beside it, so nothing about the total moved.
         assert_eq!(parsed.usage().prompt_tokens, 1200);
+    }
+
+    /// OpenAI's published description of the usage block names a `cache_write_tokens` beside
+    /// `cached_tokens` ([BACKEND-31]). The write figure is not read, so a reply that states it is
+    /// parsed for the cached part and for everything else, and the write is counted as zero. Reading
+    /// it would change what a turn reports as written for a service no reply has been seen from.
+    ///
+    /// [BACKEND-31]: ../../../docs/specs/backends.md#BACKEND-31
+    #[test]
+    fn a_cache_write_figure_beside_the_cached_one_is_not_read_and_does_not_fail_the_reply() {
+        let raw = r#"{"model":"m","usage":{"prompt_tokens":1200,"completion_tokens":34,
+            "prompt_tokens_details":{"cached_tokens":1100,"cache_write_tokens":90,"audio_tokens":0}},
+            "choices":[{"message":{"content":"hi"}}]}"#;
+        let parsed: ChatResponse = serde_json::from_str(raw).expect("a reply with the extra field");
+        assert_eq!(
+            parsed.usage().cached,
+            Cached {
+                read_tokens: 1100,
+                written_tokens: 0
+            }
+        );
+        assert_eq!(parsed.usage().prompt_tokens, 1200);
+        assert_eq!(parsed.usage().completion_tokens, 34);
     }
 
     /// The field is the newer half of this protocol and plenty of servers state neither it nor the

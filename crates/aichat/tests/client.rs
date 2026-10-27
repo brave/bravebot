@@ -2787,6 +2787,202 @@ fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refu
     }
 }
 
+/// The bearer key of an `openai` entry is a credential, so it is in no text a refusal produces, in
+/// no event the run recorded, in no line of the diagnostic log and in nothing a completed reply
+/// holds, on the roster path and on both chat paths. The service here repeats the key in the body
+/// of its refusal, which is what a service that echoes a credential does, so a body copied into an
+/// error or a log line would carry it.
+#[test]
+fn an_openai_key_is_in_no_error_event_log_or_reply_on_the_roster_and_chat_paths() {
+    const KEY: &str = "placeholder-openai-key-3c91d4";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Debug, Some(dir.path().to_path_buf()));
+    // Points the log nowhere again when an assertion below panics.
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let unconfigure = Unconfigure;
+    let echoing = |status| {
+        Attempt::Refused(
+            status,
+            format!(r#"{{"error":{{"message":"Incorrect API key provided: {KEY}"}}}}"#),
+        )
+    };
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    let mut sent_with_the_key = 0;
+    let mut note = |what: String, text: String| said.push((what, text));
+    for status in [401, 403, 404] {
+        let (endpoint, received) = serve_attempts(vec![echoing(status), echoing(status)]);
+        let provider = openai_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let error = {
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy");
+            bravebot_aichat::models::list_from_gateway(
+                &mut policy,
+                &provider,
+                Some(KEY),
+                &[],
+                &egress,
+            )
+            .expect_err("the listing was refused")
+        };
+        for sent in received.try_iter() {
+            assert_eq!(
+                sent.header("authorization"),
+                Some(format!("Bearer {KEY}").as_str())
+            );
+            sent_with_the_key += 1;
+        }
+        note(format!("roster, status {status}"), error.to_string());
+        note(format!("roster, status {status}"), format!("{error:?}"));
+        note(
+            format!("roster, status {status}"),
+            format!("{:?}", sink.events()),
+        );
+
+        for streaming in [false, true] {
+            let (endpoint, received) = serve_attempts(vec![echoing(status)]);
+            let config = config_for(&endpoint);
+            let provider = openai_at(&endpoint);
+            let mut sink = RecordingSink::new();
+            let error = {
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut client = AichatClient::new(&config, &egress).for_gateway(
+                    &provider,
+                    "gpt-4o-mini",
+                    Some(bravebot_config::Secret::new(KEY)),
+                );
+                let request = ChatRequest::new("openai/gpt-4o-mini", vec![Message::user("hello")]);
+                if streaming {
+                    client.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    client.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused")
+            };
+            let sent = received.recv().expect("the request arrived");
+            assert_eq!(
+                sent.header("authorization"),
+                Some(format!("Bearer {KEY}").as_str())
+            );
+            sent_with_the_key += 1;
+            let what = format!("chat, status {status}, streaming {streaming}");
+            note(what.clone(), error.to_string());
+            note(what.clone(), format!("{error:?}"));
+            note(what, format!("{:?}", sink.events()));
+        }
+    }
+
+    // A listing and a reply that are accepted, so what a completed exchange holds is read as well.
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::Status(404),
+        Attempt::Json(OPENAI_LISTING.into()),
+    ]);
+    let provider = openai_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    {
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let models = bravebot_aichat::models::list_from_gateway(
+            &mut policy,
+            &provider,
+            Some(KEY),
+            &[],
+            &egress,
+        )
+        .expect("the roster was fetched");
+        note("roster, accepted".into(), format!("{models:?}"));
+    }
+    for streaming in [false, true] {
+        let reply = if streaming {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        } else {
+            Attempt::Json(REPLY.into())
+        };
+        let (endpoint, _received) = serve_attempts(vec![reply]);
+        let config = config_for(&endpoint);
+        let provider = openai_at(&endpoint);
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let mut client = AichatClient::new(&config, &egress).for_gateway(
+            &provider,
+            "gpt-4o-mini",
+            Some(bravebot_config::Secret::new(KEY)),
+        );
+        let request = ChatRequest::new("openai/gpt-4o-mini", vec![Message::user("hello")]);
+        let completion = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect("the reply was read");
+        note(
+            format!("reply, streaming {streaming}"),
+            format!("{completion:?}"),
+        );
+        note(
+            format!("request, streaming {streaming}"),
+            format!("{request:?}"),
+        );
+    }
+    note(
+        "events of the accepted exchanges".into(),
+        format!("{:?}", sink.events()),
+    );
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("a request makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    drop(unconfigure);
+    assert!(
+        !log.is_empty(),
+        "nothing was logged, so the log was not read"
+    );
+    note("the diagnostic log".into(), log);
+
+    assert_eq!(
+        sent_with_the_key, 12,
+        "the key was not on the wire of every request"
+    );
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
 /// A gateway in front of a service routes on headers of its own, and a request that arrives
 /// without them is refused or sent to the wrong tenant. The configured header has to arrive
 /// beside the credential the client sets. A request carrying only the configured header is

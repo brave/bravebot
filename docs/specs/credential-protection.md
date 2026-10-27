@@ -597,6 +597,12 @@ about the profile this agent resolved for itself, which it knows, rather than ab
 that resolves them is a program this agent started all the same, so it is handed what the person's
 own environment holds and none of what this agent authenticates with.
 
+**A gateway's bearer key.** The key an `openai` entry sends in `authorization` is in no error text, no event
+of the run, no line of the diagnostic log and nothing a completed reply holds, on the roster path and on both
+chat paths, including where the service repeats the key in the body of its refusal. A one-shot run through the
+entry, answered or refused, leaves it in no file under the state directory, the record of the session and its trail
+included, and in nothing the run prints.
+
 **The stored ChatGPT sign-in.** `~/.bravebot/chatgpt-account.json` holds an access token and a refresh
 token ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)), and this clause holds them as it holds the gateway
 keys. They are in the secret type, so a print of one is a redaction. The file is one of the locations a
@@ -648,6 +654,8 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
 `verified-by: bravebot_skus::xai::account::the_tokens_are_redacted_wherever_the_account_is_printed`
 `verified-by: bravebot_cli::xai_sign_in::a_sign_in_runs_end_to_end_and_no_value_it_handled_is_shown_or_kept_but_in_the_file`
+`verified-by: bravebot_aichat::client::an_openai_key_is_in_no_error_event_log_or_reply_on_the_roster_and_chat_paths`
+`verified-by: bravebot_cli::running::an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints`
 
 <a id="CRED-15"></a>
 ### CRED-15: what a turn reads is scanned before the planner receives it
@@ -748,6 +756,17 @@ a scan they turn off. The prompt names the finding, so the question can be answe
 accepting edits both raise it, bypassing answers it, and no rule, vouch or plan clears it
 ([CRED-13](#CRED-13) says who may answer and for how long).
 
+**The providers whose keys declare themselves** are AWS, GitHub, Slack, Google, Stripe, Anthropic and OpenAI. OpenAI
+states no key format in its documentation, so the shapes come from the `openai-api-key` rule of the gitleaks
+scanner, which matches `sk-proj-`, `sk-svcacct-` or `sk-admin-` followed by the text `T3BlbkFJ` between two runs of
+58 or 74 characters, and `sk-` followed by that text between two runs of 20 letters and digits. A key is reported
+for one of the first three prefixes followed by at least 124 letters, digits, `-` and `_`, and for `sk-` followed by
+at least 48 letters and digits that hold `T3BlbkFJ` at any position, so a key a little off the published shape is
+still found. The marker is required for the `sk-` form only, because 48 letters and digits after `sk-` are also
+what other services' keys look like. On 2026-10-26 a project key was 164 characters: `sk-proj-` and 156 characters
+holding the marker. An Anthropic key is tried first, and the `sk-` form ends at a `-` or an `_`, so an Anthropic key
+is never reported as OpenAI's.
+
 A body that arrived as quarantined content is not scanned, so it raises no finding, and a mode that
 answers writes answers that one as it would any other. The driver reading those bytes to decide
 whether to ask would be a decision taken from untrusted content, and the Known costs record it.
@@ -779,6 +798,10 @@ requires of a finding however it is answered.
 `verified-by: bravebot_core::credentials::a_provider_key_is_recognised_when_it_is_assigned_to_a_name`
 `verified-by: bravebot_core::credentials::a_password_in_a_connection_string_is_a_finding`
 `verified-by: bravebot_core::credentials::each_shape_matches_at_its_minimum_and_not_below_it`
+`verified-by: bravebot_core::credentials::an_openai_key_is_recognised_in_each_of_its_forms`
+`verified-by: bravebot_core::credentials::an_anthropic_key_is_not_read_as_an_openai_one`
+`verified-by: bravebot_core::credentials::the_bare_sk_form_ends_at_a_hyphen_or_an_underscore`
+`verified-by: bravebot_core::credentials::a_short_sk_word_and_an_unmarked_run_are_not_an_openai_key`
 `verified-by: bravebot_core::credentials::one_key_in_a_json_field_is_one_finding`
 `verified-by: bravebot_core::credentials::a_provider_key_standing_alone_is_one_finding_and_not_two`
 `verified-by: bravebot_core::credentials::a_rare_token_with_a_document_around_it_is_not_a_whole_file`

@@ -418,6 +418,8 @@ enum WrittenKind {
     StripeKey,
     #[serde(rename = "anthropic-key")]
     AnthropicKey,
+    #[serde(rename = "openai-key")]
+    OpenAiKey,
     #[serde(rename = "private-key")]
     PrivateKey,
     #[serde(rename = "url-password")]
@@ -437,6 +439,7 @@ impl WrittenKind {
             Kind::GoogleApiKey => Self::GoogleApiKey,
             Kind::StripeKey => Self::StripeKey,
             Kind::AnthropicKey => Self::AnthropicKey,
+            Kind::OpenAiKey => Self::OpenAiKey,
             Kind::PrivateKey => Self::PrivateKey,
             Kind::UrlPassword => Self::UrlPassword,
             Kind::Assigned => Self::Assigned,
@@ -452,6 +455,7 @@ impl WrittenKind {
             Self::GoogleApiKey => Kind::GoogleApiKey,
             Self::StripeKey => Kind::StripeKey,
             Self::AnthropicKey => Kind::AnthropicKey,
+            Self::OpenAiKey => Kind::OpenAiKey,
             Self::PrivateKey => Kind::PrivateKey,
             Self::UrlPassword => Kind::UrlPassword,
             Self::Assigned => Kind::Assigned,
