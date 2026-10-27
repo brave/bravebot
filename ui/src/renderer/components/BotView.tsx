@@ -7,7 +7,7 @@ import { projectLabel } from '../../shared/recents'
 import { shortAgo } from '../time'
 import { Icon, Input } from '../nala'
 import { BotAvatar } from './BotAvatar'
-import { PullRequestMark } from './PullRequestMark'
+import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
 import { pullRequestLink } from '../../shared/pull-request'
 import { Composer, type ComposerFooterProps, type ProjectChoice } from './Composer'
 
@@ -68,7 +68,7 @@ const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }:
                 <time className="session-time num" dateTime={new Date(session.updated * 1000).toISOString()}>{shortAgo(session.updated)}</time>
               </span>
               <span className="session-title"><span className="session-name">{session.title}</span></span>
-              {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}</span>}
+              {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}{pr && <PullRequestRoom url={session.pullRequest} />}</span>}
             </button>
             {pr && <PullRequestMark url={session.pullRequest} />}
           </div>

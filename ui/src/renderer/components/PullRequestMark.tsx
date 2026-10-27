@@ -13,3 +13,16 @@ export function PullRequestMark({ url }: { url: string | null | undefined }): Re
   if (!link) return null
   return <a className="session-pr num" href={link.href} target="_blank" rel="noopener noreferrer nofollow" data-tooltip={link.href}>{link.text}</a>
 }
+
+/**
+ * Room for the link inside the branch line, so the branch ends in its ellipsis before the link.
+ *
+ * The link is laid over the row, outside the line it must not cover, so the line holds an unseen
+ * copy of the link's own text in the link's own type: its width is the link's, however many digits
+ * the number has.
+ */
+export function PullRequestRoom({ url }: { url: string | null | undefined }): React.JSX.Element | null {
+  const link = pullRequestLink(url)
+  if (!link) return null
+  return <span className="session-pr-room num" aria-hidden="true">{link.text}</span>
+}

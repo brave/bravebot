@@ -258,7 +258,9 @@
 .session-pr:hover { color: var(--ink-primary); }
 .session-pr:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; border-radius: var(--radius-control); }
 .bot-history-item .session-pr { right: var(--leo-spacing-xl); }
-.session-where.has-pr { min-height: 1lh; padding-right: 7ch; }
+.session-where.has-pr { display: flex; min-height: 1lh; }
+.session-where.has-pr .branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.session-pr-room { flex: none; margin-left: auto; padding-left: var(--leo-spacing-m); visibility: hidden; font: var(--type-caption-strong); }
 
 /* The foot of a list drawn a page at a time: quieter than a session, since it is not one. */
 .session-show-more {

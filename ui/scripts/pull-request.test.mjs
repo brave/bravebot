@@ -20,7 +20,7 @@ function load(path) {
 }
 
 const { pullRequestLink } = load('src/shared/pull-request.ts')
-const { PullRequestMark } = load('src/renderer/components/PullRequestMark.tsx')
+const { PullRequestMark, PullRequestRoom } = load('src/renderer/components/PullRequestMark.tsx')
 const { matching } = load('src/renderer/components/Sessions.tsx')
 
 test('a pull request address reads as its number and links to the address recorded', () => {
@@ -62,4 +62,13 @@ test('the search filter matches the pull request text a row shows and not the UR
   assert.deepEqual(matching([withPr, without], 'PR #4309'), [withPr])
   assert.deepEqual(matching([withPr, without], '4309'), [withPr])
   assert.deepEqual(matching([withPr, without], 'github'), [])
+})
+
+test('the room kept in the branch line is as wide as the link: the same text, unseen', () => {
+  const url = 'https://github.com/brave/bravebot/pull/4309123'
+  const mark = renderToStaticMarkup(React.createElement(PullRequestMark, { url }))
+  const room = renderToStaticMarkup(React.createElement(PullRequestRoom, { url }))
+  assert.match(mark, />PR #4309123<\/a>/)
+  assert.match(room, /aria-hidden="true"[^>]*>PR #4309123<\/span>/)
+  assert.equal(renderToStaticMarkup(React.createElement(PullRequestRoom, { url: 'https://example.com/x' })), '')
 })

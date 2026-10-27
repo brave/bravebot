@@ -15,7 +15,7 @@ import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
 import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
 import { Icon, Menu, ProgressRing } from '../nala'
-import { PullRequestMark } from './PullRequestMark'
+import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
 import { pullRequestLink } from '../../shared/pull-request'
 
 /** What a row says about a session that is open somewhere: only what asks something of the reader. */
@@ -474,7 +474,7 @@ const Session = memo(function Session({
         {forked && <span className="fork-mark"><ForkIcon /></span>}
         <span className="session-name">{session.title}</span>
       </span>
-      {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}</span>}
+      {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}{pr && <PullRequestRoom url={session.pullRequest} />}</span>}
       {info?.bot && <span className="offscreen">, with {info.bot.name}</span>}
       {forked && <span className="offscreen">Forked.</span>}
       {status && <span className="offscreen">, {STATUS_WORDS[status]}</span>}
