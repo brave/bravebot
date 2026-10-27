@@ -571,6 +571,9 @@ pub(super) fn run_turn_animated(
         // reading the same `.env` on turn after turn is asked about it once.
         .already_exposed(exposed.clone())
         .working_towards(working_towards)
+        // The kept facts already put in front of the planner on this session, so one is injected
+        // once (RECALL-9).
+        .with_injected_facts(stored.injected_facts().clone())
         // The servers the session started, with a grant naming each. Their tools are offered once
         // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
         .with_mcp(session.servers.session.clone());
@@ -1051,6 +1054,10 @@ pub(super) fn run_turn_animated(
         }
     });
 
+    // Held by the record, which is written after the turn, so a resume does not inject again.
+    if let Some(decisions) = &finished.decisions {
+        stored.set_injected_facts(decisions.injected_facts.clone());
+    }
     Ok(finish_turn(
         session,
         config,
@@ -1091,6 +1098,7 @@ pub(super) fn finish_turn(
             programs,
             asked_about,
             exposed,
+            injected_facts: _,
         }) => Carried {
             trust,
             programs,

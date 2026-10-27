@@ -21,7 +21,7 @@ use gix_hash::{Kind as HashKind, ObjectId};
 use gix_object::Kind;
 
 pub mod checkout;
-mod config;
+pub(crate) mod config;
 mod dates;
 mod declined;
 mod diff;

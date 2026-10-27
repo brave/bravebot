@@ -141,6 +141,15 @@ fn restore_with(
             refused.push(backup.path);
             continue;
         }
+        if backup.kept {
+            // A write into the person's fact or rule stores (RECALL-5): trusted, never a
+            // definition's memory, so nothing is distrusted or recorded for it.
+            match home.map(|home| put_back_kept(home, &backup, folds)) {
+                Some(Ok(())) => {}
+                _ => refused.push(backup.path),
+            }
+            continue;
+        }
         // The key the file's rules are held under, which on a drive letter is not the name the
         // host resolved it to.
         let path = crate::workspace::key_of(&backup.path);
@@ -170,6 +179,68 @@ fn restore_with(
     refused
 }
 
+/// Put back a file of the person's fact or rule stores, which the workspace refuses to touch.
+///
+/// Confined to `<home>/facts` and `<home>/projects`, and to the one file `<home>/AGENTS.md` that
+/// `propose_rule` appends to, resolved as a write there is, so a path that now leads out of them
+/// through a link is refused. A differently cased store name counts
+/// only where the volume folds case. What is written or removed is the resolved path that was
+/// checked, not the one the backup named. Nothing is distrusted and no memory
+/// record is made: a fact is trusted. A file that was not there is removed, one already gone
+/// counts as removed, and a directory since removed is made again.
+fn put_back_kept(home: &Path, backup: &Backup, folds: bool) -> std::io::Result<()> {
+    let refused = || {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "outside the fact and rule stores",
+        )
+    };
+    let removal = matches!(backup.was, Before::Nothing);
+    let reached = if removal {
+        backup.path.parent()
+    } else {
+        Some(backup.path.as_path())
+    };
+    let lands = reached
+        .and_then(crate::workspace::destination)
+        .ok_or_else(refused)?;
+    let stores = Workspace::stores_in(home);
+    let inside = match folds {
+        true => crate::workspace::within_stores(&stores, &lands),
+        false => stores.iter().any(|store| lands.starts_with(store)),
+    };
+    let target = match removal {
+        true => lands.join(backup.path.file_name().ok_or_else(refused)?),
+        false => lands,
+    };
+    // The one file outside the stores a rule is appended to (RECALL-3). Exactly that name in the
+    // state directory as it now resolves, or, where that name is a link, the file the backup was
+    // taken of, while the link still lands on it. A link moved since, or any other file beside the
+    // name, is refused.
+    let agents = home.join(crate::preamble::AGENTS_FILE);
+    let is_the_home_rules = crate::workspace::destination(home)
+        .is_some_and(|state| target == state.join(crate::preamble::AGENTS_FILE))
+        || (backup.path == target
+            && std::fs::symlink_metadata(&agents).is_ok_and(|meta| meta.file_type().is_symlink())
+            && crate::workspace::destination(&agents).is_some_and(|lands| lands == target));
+    if !inside && !is_the_home_rules {
+        return Err(refused());
+    }
+    match &backup.was {
+        Before::Bytes(bytes) => {
+            if let Some(parent) = target.parent() {
+                crate::home::create_directory(parent)?;
+            }
+            crate::home::replace(&target, bytes)
+        }
+        Before::Nothing => match std::fs::remove_file(&target) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        },
+        Before::NotKept => Err(std::io::Error::other("what it held was not kept")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +252,7 @@ mod tests {
         current.trust("vendor/ours");
         let refused = restore_with(
             vec![Backup {
+                kept: false,
                 path: "/work/vendor/ours".into(),
                 was: Before::Bytes(vec![]),
                 captured_trust: Integrity::Trusted,
@@ -219,6 +291,7 @@ mod tests {
             "unavailable",
         ]
         .map(|name| Backup {
+            kept: false,
             path: root.join(name),
             captured_trust: if name == "untrusted-backup" {
                 Integrity::Untrusted
@@ -285,6 +358,7 @@ mod tests {
             let mut written = 0;
             let refused = restore_with(
                 vec![Backup {
+                    kept: false,
                     path: memory.into(),
                     was: Before::Bytes(b"old notes".to_vec()),
                     captured_trust,
@@ -324,6 +398,7 @@ mod tests {
         let mut current = trusting.clone();
         let refused = restore_with(
             vec![Backup {
+                kept: false,
                 path: memory.into(),
                 was: Before::Bytes(b"old notes".to_vec()),
                 captured_trust: Integrity::Trusted,
@@ -364,6 +439,7 @@ mod tests {
         let mut current = trusting.clone();
         let refused = restore_with(
             vec![Backup {
+                kept: false,
                 path: "/work/.Bravebot/memory/NOTES.md".into(),
                 was: Before::Bytes(b"old notes".to_vec()),
                 captured_trust: Integrity::Untrusted,
@@ -390,6 +466,7 @@ mod tests {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             restore_with(
                 vec![Backup {
+                    kept: false,
                     path: "/work/file".into(),
                     captured_trust: Integrity::Trusted,
                     was: Before::Bytes(vec![]),
@@ -424,5 +501,301 @@ mod tests {
             newer.gaps(),
             [CoverageGap::Command, CoverageGap::LanguageServer].into()
         );
+    }
+
+    /// RECALL-5. A fact a turn made is removed by undo, though the workspace refuses the stores.
+    #[test]
+    fn undo_removes_a_fact_a_turn_made() {
+        let root = crate::testutil::scratch_dir("undo-fact-made-root");
+        let home = crate::testutil::scratch_dir("undo-fact-made-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join("facts")).unwrap();
+        let workspace = Workspace::new(&root).unwrap().with_state(&home);
+        let fact = home.join("facts").join("a.md");
+        workspace.record_home_backup(&fact);
+        std::fs::write(&fact, "new").unwrap();
+        let mut current = TrustStore::new(&root);
+        let refused = restore(
+            &workspace,
+            workspace.take_backups(),
+            &mut current,
+            &TrustStore::new(&root),
+            &mut None,
+            Some(&home),
+        );
+        assert!(refused.is_empty());
+        assert!(!fact.exists());
+        assert!(current.integrity_of(fact.to_str().unwrap()).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-5. A fact a turn replaced goes back, in a rule store whose directory is gone too.
+    #[test]
+    fn undo_puts_back_a_fact_a_turn_replaced() {
+        let root = crate::testutil::scratch_dir("undo-fact-replaced-root");
+        let home = crate::testutil::scratch_dir("undo-fact-replaced-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join("facts")).unwrap();
+        std::fs::create_dir_all(home.join("projects/p")).unwrap();
+        let workspace = Workspace::new(&root).unwrap().with_state(&home);
+        let fact = home.join("facts").join("a.md");
+        let rules = home.join("projects/p/rules.md");
+        std::fs::write(&fact, "old fact").unwrap();
+        std::fs::write(&rules, "old rules").unwrap();
+        workspace.record_home_backup(&fact);
+        workspace.record_home_backup(&fact);
+        workspace.record_home_backup(&rules);
+        std::fs::write(&fact, "new").unwrap();
+        std::fs::remove_dir_all(home.join("projects/p")).unwrap();
+        let backups = workspace.take_backups();
+        assert_eq!(backups.len(), 2, "a path already backed up is skipped");
+        assert!(
+            backups
+                .iter()
+                .all(|b| b.kept && b.captured_trust == Integrity::Trusted)
+        );
+        let mut current = TrustStore::new(&root);
+        let refused = restore(
+            &workspace,
+            backups,
+            &mut current,
+            &TrustStore::new(&root),
+            &mut None,
+            Some(&home),
+        );
+        assert!(refused.is_empty());
+        assert_eq!(std::fs::read(&fact).unwrap(), b"old fact");
+        assert_eq!(std::fs::read(&rules).unwrap(), b"old rules");
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// A kept backup is confined to the two stores, and a workspace backup into them is refused.
+    #[test]
+    fn a_kept_backup_outside_the_two_stores_is_not_put_back() {
+        let root = crate::testutil::scratch_dir("undo-fact-forged-root");
+        let home = crate::testutil::scratch_dir("undo-fact-forged-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(home.join("sessions")).unwrap();
+        std::fs::create_dir_all(home.join("facts")).unwrap();
+        let workspace = Workspace::new(&root).unwrap().with_state(&home);
+        let session = home.join("sessions/x");
+        std::fs::write(&session, "keep").unwrap();
+        let fact = home.join("facts/a.md");
+        std::fs::write(&fact, "current").unwrap();
+        let forged = |path: &Path, kept| Backup {
+            path: path.to_path_buf(),
+            was: Before::Bytes(b"forged".to_vec()),
+            captured_trust: Integrity::Trusted,
+            kept,
+        };
+        let outside = home.join("elsewhere");
+        for backup in [
+            forged(&session, true),
+            forged(&home.join("facts/../sessions/x"), true),
+            forged(&outside, true),
+            forged(&fact, false),
+        ] {
+            let mut current = TrustStore::new(&root);
+            let refused = restore(
+                &workspace,
+                vec![backup],
+                &mut current,
+                &TrustStore::new(&root),
+                &mut None,
+                Some(&home),
+            );
+            assert_eq!(refused.len(), 1);
+        }
+        assert_eq!(std::fs::read(&session).unwrap(), b"keep");
+        assert_eq!(std::fs::read(&fact).unwrap(), b"current");
+        assert!(!outside.exists());
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-3. A rule appended to `AGENTS.md` is taken back, and the file goes with it where the
+    /// rule made it.
+    #[test]
+    fn undo_takes_back_a_rule_appended_to_the_home_agents_file() {
+        let root = crate::testutil::scratch_dir("undo-rule-root");
+        let home = crate::testutil::scratch_dir("undo-rule-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let workspace = Workspace::new(&root).unwrap().with_state(&home);
+        let agents = home.join("AGENTS.md");
+        let undo = |workspace: &Workspace| {
+            let mut current = TrustStore::new(&root);
+            restore(
+                workspace,
+                workspace.take_backups(),
+                &mut current,
+                &TrustStore::new(&root),
+                &mut None,
+                Some(&home),
+            )
+        };
+        workspace.record_home_backup(&agents);
+        std::fs::write(&agents, "- made by the rule\n").unwrap();
+        assert!(undo(&workspace).is_empty());
+        assert!(!agents.exists(), "undo left the file the rule made");
+
+        std::fs::write(&agents, "- the person's own\n").unwrap();
+        workspace.record_home_backup(&agents);
+        std::fs::write(&agents, "- the person's own\n- appended\n").unwrap();
+        assert!(undo(&workspace).is_empty());
+        assert_eq!(std::fs::read(&agents).unwrap(), b"- the person's own\n");
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// Only `AGENTS.md` is added to the two stores: any other file directly under the state
+    /// directory, and `AGENTS.md` once it is a link out, are still refused.
+    #[test]
+    fn no_other_file_under_the_state_directory_is_put_back_beside_the_home_agents_file() {
+        let root = crate::testutil::scratch_dir("undo-rule-other-root");
+        let home = crate::testutil::scratch_dir("undo-rule-other-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let workspace = Workspace::new(&root).unwrap().with_state(&home);
+        let outside = home.join("elsewhere");
+        std::fs::write(&outside, "keep").unwrap();
+        let forged = |path: PathBuf, was: Before| Backup {
+            path,
+            was,
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        for backup in [
+            forged(
+                home.join("settings.json"),
+                Before::Bytes(b"forged".to_vec()),
+            ),
+            forged(home.join("settings.json"), Before::Nothing),
+            forged(
+                home.join("AGENTS.md.bak"),
+                Before::Bytes(b"forged".to_vec()),
+            ),
+            forged(home.join("agents.md"), Before::Bytes(b"forged".to_vec())),
+            forged(
+                home.join("sub/AGENTS.md"),
+                Before::Bytes(b"forged".to_vec()),
+            ),
+        ] {
+            let mut current = TrustStore::new(&root);
+            let refused = restore(
+                &workspace,
+                vec![backup],
+                &mut current,
+                &TrustStore::new(&root),
+                &mut None,
+                Some(&home),
+            );
+            assert_eq!(refused.len(), 1);
+        }
+        assert!(!home.join("settings.json").exists());
+        assert!(!home.join("AGENTS.md.bak").exists());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, home.join("AGENTS.md")).unwrap();
+            let mut current = TrustStore::new(&root);
+            let refused = restore(
+                &workspace,
+                vec![forged(
+                    home.join("AGENTS.md"),
+                    Before::Bytes(b"forged".to_vec()),
+                )],
+                &mut current,
+                &TrustStore::new(&root),
+                &mut None,
+                Some(&home),
+            );
+            assert_eq!(refused.len(), 1);
+            assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// RECALL-5: a home rules file that is a link, as a dotfiles checkout keeps one, is backed up
+    /// where it lands and a rule appended through it is taken back there. Once the link is moved
+    /// to another file the backup is refused, so a link swapped in after the rule cannot steer the
+    /// restore onto a file the rule never touched.
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_through_a_linked_home_rules_file_is_undone_only_while_the_link_lands_there() {
+        let root = crate::testutil::scratch_dir("undo-rule-linked-root");
+        let home = crate::testutil::scratch_dir("undo-rule-linked-home");
+        let dotfiles = crate::testutil::scratch_dir("undo-rule-linked-dotfiles");
+        for dir in [&home, &dotfiles] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        for dir in [&root, &home, &dotfiles] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        let workspace = Workspace::new(&root).unwrap().with_state(&home);
+        let agents = home.join("AGENTS.md");
+        let mine = dotfiles.join("AGENTS.md");
+        let other = dotfiles.join("other.md");
+        std::fs::write(&mine, "- the person's own\n").unwrap();
+        std::fs::write(&other, "- untouched\n").unwrap();
+        std::os::unix::fs::symlink(&mine, &agents).unwrap();
+        let landed = crate::workspace::destination(&agents).unwrap();
+        let undo = |workspace: &Workspace| {
+            let mut current = TrustStore::new(&root);
+            restore(
+                workspace,
+                workspace.take_backups(),
+                &mut current,
+                &TrustStore::new(&root),
+                &mut None,
+                Some(&home),
+            )
+        };
+
+        workspace.record_home_backup(&landed);
+        std::fs::write(&agents, "- the person's own\n- appended\n").unwrap();
+        assert!(undo(&workspace).is_empty());
+        assert_eq!(std::fs::read(&mine).unwrap(), b"- the person's own\n");
+
+        workspace.record_home_backup(&landed);
+        std::fs::write(&agents, "- the person's own\n- appended\n").unwrap();
+        std::fs::remove_file(&agents).unwrap();
+        std::os::unix::fs::symlink(&other, &agents).unwrap();
+        assert_eq!(undo(&workspace).len(), 1);
+        assert_eq!(std::fs::read(&other).unwrap(), b"- untouched\n");
+        assert_eq!(
+            std::fs::read(&mine).unwrap(),
+            b"- the person's own\n- appended\n"
+        );
+        for dir in [root, home, dotfiles] {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    /// A store name in another case is not the store on a volume that tells the two apart.
+    #[test]
+    fn a_differently_cased_store_name_is_not_put_back_on_a_case_sensitive_volume() {
+        let home = crate::testutil::scratch_dir("undo-fact-cased-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join("facts")).unwrap();
+        let backup = |name: &str| Backup {
+            path: home.join(name).join("x.md"),
+            was: Before::Bytes(b"forged".to_vec()),
+            captured_trust: Integrity::Trusted,
+            kept: true,
+        };
+        assert!(put_back_kept(&home, &backup("FACTS"), false).is_err());
+        assert!(!home.join("FACTS").exists());
+        assert!(put_back_kept(&home, &backup("facts"), false).is_ok());
+        assert_eq!(std::fs::read(home.join("facts/x.md")).unwrap(), b"forged");
+        assert!(put_back_kept(&home, &backup("Facts"), true).is_ok());
+        std::fs::remove_dir_all(home).unwrap();
     }
 }

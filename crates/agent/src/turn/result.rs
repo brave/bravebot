@@ -370,6 +370,10 @@ pub struct Decisions {
     pub programs: TrustedPrograms,
     pub asked_about: bravebot_core::programs::AskedAbout,
     pub exposed: bravebot_core::credentials::Exposed,
+    /// The keys of the kept facts injected on this session so far, this turn's among them
+    /// (RECALL-9). Written however the turn ended, so a fact the planner was shown on a turn that
+    /// failed is not shown again.
+    pub injected_facts: std::collections::BTreeSet<String>,
 }
 
 impl Decisions {
@@ -383,6 +387,7 @@ impl Decisions {
             programs,
             asked_about: task.asked_about.clone(),
             exposed: task.exposed.clone(),
+            injected_facts: task.injected_facts.clone(),
         }
     }
 }

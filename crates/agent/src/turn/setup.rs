@@ -117,6 +117,9 @@ pub(super) fn offered_tools<S: Sink>(
         if advisor.is_some() {
             tools::offer_advisor(&mut offered);
         }
+        tools::offer_remember(&mut offered);
+        tools::offer_propose_rule(&mut offered);
+        tools::offer_recall(&mut offered);
         if task.courier.is_some() {
             tools::offer_message_session(&mut offered);
         }
@@ -153,6 +156,9 @@ pub(super) fn offered_tools<S: Sink>(
                 if advisor.is_some() {
                     tools::offer_advisor(&mut offered);
                 }
+                tools::offer_remember(&mut offered);
+                tools::offer_propose_rule(&mut offered);
+                tools::offer_recall(&mut offered);
                 if task.courier.is_some() {
                     tools::offer_message_session(&mut offered);
                 }
@@ -357,6 +363,7 @@ pub(super) fn system_prompt(
     skill_mode: Option<(&str, &str)>,
     preamble: &crate::preamble::Preamble,
     started_in: crate::permission_mode::PermissionMode,
+    kept_facts: &str,
     memory: impl Fn(bool, &str) -> String,
 ) -> Prompt {
     let mode = started_in.instruction().unwrap_or_default();
@@ -431,6 +438,9 @@ pub(super) fn system_prompt(
                 );
             }
             system.extend(preamble.prompt.clone());
+            // Background the person's earlier sessions kept, marked as such. Trusted because it
+            // is in their own memory directory, and never instructions: the heading says so.
+            system.push(Provenance::Trusted("kept facts"), kept_facts);
         }
     }
     system.push(Provenance::Driver, mode);

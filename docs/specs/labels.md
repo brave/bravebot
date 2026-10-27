@@ -29,7 +29,7 @@ guards:
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
-      - crates/core/src/policy.rs: 121
+      - crates/core/src/policy.rs: 124
       - crates/core/src/slot.rs: 6
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
@@ -48,14 +48,15 @@ guards:
       - crates/agent/src/processor.rs: 1
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/tools.rs: 38
+      - crates/agent/src/tools/recall.rs: 1
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
-      - crates/agent/src/workspace.rs: 1
+      - crates/agent/src/workspace.rs: 4
       - crates/agent/tests/workspace.rs: 61
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 64
+      - crates/core/src/policy.rs: 65
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 4
       - crates/mcp/tests/stdio.rs: 7
@@ -73,7 +74,7 @@ guards:
       - crates/agent/src/styles.rs: 1
       - crates/agent/src/tools.rs: 24
       - crates/agent/src/turn.rs: 7
-      - crates/agent/src/workspace.rs: 9
+      - crates/agent/src/workspace.rs: 16
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
@@ -88,7 +89,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 61
+      - crates/core/src/policy.rs: 62
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -151,6 +152,7 @@ guards:
       - crates/agent/src/servers.rs: 1
       - crates/agent/src/skills.rs: 2
       - crates/agent/src/tools.rs: 41
+      - crates/agent/src/tools/recall.rs: 4
       - crates/agent/src/turn.rs: 1
       - crates/agent/src/workspace.rs: 1
       - crates/core/src/policy.rs: 7
@@ -165,7 +167,8 @@ guards:
     sites:
       - crates/agent/src/mcp.rs: 1
       - crates/agent/src/tools.rs: 6
-      - crates/core/src/policy.rs: 24
+      - crates/agent/src/tools/recall.rs: 3
+      - crates/core/src/policy.rs: 25
   - symbol: Policy::adopt_model_output
     sites:
       - crates/agent/src/advisor.rs: 1
@@ -490,6 +493,7 @@ and the content has no say in it.
 | a line the user ran themselves | trusted and private, because nobody steers a keystroke | `verified-by: bravebot_core::policy::what_a_command_the_user_typed_printed_is_trusted_and_private` |
 | input piped into the process | untrusted and private, because a pipe has no path anyone could vouch for | `verified-by: bravebot_core::policy::piped_input_is_labelled_untrusted_and_private` |
 | the user's own configuration, and a skill kept beside it | trusted and public, because putting a file there is the grant | `verified-by: bravebot_core::policy::configuration_the_user_placed_is_trusted_from_where_it_came_from` |
+| a fact kept by `remember` or the person | trusted, with the confidentiality its `label` field states, private when missing, because a kept fact is in the user's own memory and is written only by the person or by a save they were shown; a private one makes what the planner writes private once it is read | `verified-by: bravebot_core::policy::a_kept_fact_is_trusted_with_the_confidentiality_it_states` `verified-by: bravebot_core::policy::labelling_a_kept_fact_is_recorded_in_the_audit_trail` `verified-by: bravebot_core::policy::reading_a_private_fact_makes_the_context_private` `verified-by: bravebot_core::policy::reading_a_public_fact_leaves_the_context_as_it_was` |
 | what the planner wrote | the integrity of the context it was written in, and private once private content was let out of quarantine for the planner: a slot `vet_content` let through, output `read_output` read to it, a delegate's report it was given, or a context it resumed that already held one. A workspace file it was shown does not count, because that is the project's own data and counting it would make every call after the first read ask | `verified-by: bravebot_core::policy::model_output_from_a_clean_context_is_trusted` `verified-by: bravebot_core::policy::a_vetted_private_slot_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_vetted_public_slot_leaves_what_the_planner_writes_public` `verified-by: bravebot_core::policy::a_vetted_private_picture_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::output_read_aloud_makes_what_the_planner_writes_private` `verified-by: bravebot_core::policy::a_private_report_from_a_delegate_is_held` `verified-by: bravebot_core::policy::a_resumed_context_keeps_what_it_held_and_cannot_be_made_public` |
 | a reply taken out of a transport's envelope | the context's, never the network's | `verified-by: bravebot_core::policy::adopting_model_output_takes_the_context_s_label_not_the_transport_s` |
 | an answer a person typed to a question | trusted, because a person wrote it, and as private as the questions it answers, since the reply repeats them | `verified-by: bravebot_core::policy::a_typed_answer_is_trusted_because_a_person_wrote_it` `verified-by: bravebot_core::policy::private_questions_are_asked_and_the_reply_stays_private` |

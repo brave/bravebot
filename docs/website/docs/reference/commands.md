@@ -946,6 +946,10 @@ The command shows paths and standings and never the file's bytes, so it reads no
 and has nothing to show of one that is withheld. Open the file yourself to read it. The word takes
 no argument: `/memory` followed by words is a prompt.
 
+It also lists the rule files you keep, each with its path and line count, and each fact in scope with
+its key, whether it is for this project or every project, who asked for it, its label, the date it
+was last verified, and whether another fact replaced it. A fact's text is not shown.
+
 ## `/init`
 
 Has the planner draft an `AGENTS.md` for the project you are in, the file bravebot reads before every

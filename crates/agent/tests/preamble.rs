@@ -8,6 +8,7 @@
 )]
 
 use bravebot_agent::preamble;
+use bravebot_agent::recall::project::{ProjectId, project_id};
 use bravebot_agent::skills::Catalogue;
 use bravebot_agent::workspace::Workspace;
 use bravebot_config::Attribution;
@@ -1667,6 +1668,328 @@ fn words_from_the_command_line_follow_the_projects_file_in_what_a_delegate_reads
         "the words were said twice, once in the block only a person reads: {}",
         with.for_a_person
     );
+}
+
+/// A repository at `root` whose `origin` is `url`, so a trusted workspace there is named by it.
+fn repository_with_origin(root: &std::path::Path, url: &str) {
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+    std::fs::write(
+        root.join(".git/config"),
+        format!("[remote \"origin\"]\n\turl = {url}\n"),
+    )
+    .unwrap();
+}
+
+/// Writes `text` as the person's rules for `project` under the state directory `home`.
+fn keep_rules(home: &std::path::Path, project: &ProjectId, text: &str) {
+    let dir = home.join("projects").join(&project.dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("rules.md"), text).unwrap();
+}
+
+fn compose_with_home(
+    sources: &Workspace,
+    workspace: &Workspace,
+    home: &std::path::Path,
+    trusted: &[&str],
+) -> preamble::Preamble {
+    let mut sink = RecordingSink::new();
+    let mut policy = policy(&mut sink, trusted);
+    preamble::compose_in(
+        &mut policy,
+        sources,
+        workspace,
+        Some(home),
+        &Catalogue::default(),
+        None,
+        None,
+        &Attribution::default(),
+        None,
+    )
+}
+
+/// RECALL-2. The person's rules for the project sit between the home file and the project's own.
+#[test]
+fn the_persons_rules_for_a_project_come_between_home_and_project() {
+    let scratch = Scratch::new("rules-order");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    std::fs::write(home.join("AGENTS.md"), "GLOBAL-CONVENTION").unwrap();
+    std::fs::write(project.join("AGENTS.md"), "PROJECT-CONVENTION").unwrap();
+    keep_rules(&home, &project_id(&project, false), "PERSONS-RULES");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let text = compose_with_home(&workspace, &workspace, &home, &["."]).text;
+
+    let at = |needle: &str| {
+        text.find(needle)
+            .unwrap_or_else(|| panic!("{needle}: {text}"))
+    };
+    assert!(
+        at("GLOBAL-CONVENTION") < at("PERSONS-RULES")
+            && at("PERSONS-RULES") < at("PROJECT-CONVENTION"),
+        "{text}"
+    );
+}
+
+/// RECALL-2. The system prompt says which file wins, once, above the rules, and only where there
+/// are rules to disagree with.
+#[test]
+fn the_header_says_the_projects_file_wins_over_the_persons_rules() {
+    let scratch = Scratch::new("rules-header");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let without = compose_with_home(&workspace, &workspace, &home, &["."]).text;
+    assert!(
+        !without.contains("the project's own file wins"),
+        "{without}"
+    );
+
+    keep_rules(&home, &project_id(&project, false), "PERSONS-RULES");
+    let text = compose_with_home(&workspace, &workspace, &home, &["."]).text;
+    let said = text
+        .find("the project's own file wins")
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(said < text.find("PERSONS-RULES").unwrap(), "{text}");
+    assert_eq!(text.matches("the project's own file wins").count(), 1);
+}
+
+/// RECALL-1, RECALL-2. Until the person trusts the workspace, `origin` is not read, so the rules
+/// kept for the origin are not put in front of the planner and the ones kept for the path are.
+#[test]
+fn an_untrusted_workspace_reads_the_rules_kept_for_its_path() {
+    let scratch = Scratch::new("rules-untrusted");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    repository_with_origin(&project, "https://example.com/some/repo.git");
+    keep_rules(&home, &project_id(&project, true), "RULES-FOR-THE-ORIGIN");
+    keep_rules(&home, &project_id(&project, false), "RULES-FOR-THE-PATH");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let untrusted = compose_with_home(&workspace, &workspace, &home, &[]).text;
+    assert!(
+        !untrusted.contains("RULES-FOR-THE-ORIGIN") && untrusted.contains("RULES-FOR-THE-PATH"),
+        "{untrusted}"
+    );
+
+    let trusted = compose_with_home(&workspace, &workspace, &home, &["."]).text;
+    assert!(
+        trusted.contains("RULES-FOR-THE-ORIGIN") && !trusted.contains("RULES-FOR-THE-PATH"),
+        "{trusted}"
+    );
+}
+
+/// RECALL-2, INSTR-10. The text is what a delegate reads, and it holds the person's rules.
+#[test]
+fn a_delegate_reads_the_persons_rules() {
+    let scratch = Scratch::new("rules-delegate");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    keep_rules(&home, &project_id(&project, false), "PERSONS-RULES");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+
+    assert!(composed.text.contains("PERSONS-RULES"), "{}", composed.text);
+}
+
+/// RECALL-1, RECALL-2. Reading is not a reason to make `projects/`.
+#[test]
+fn reading_rules_makes_no_projects_directory() {
+    let scratch = Scratch::new("rules-no-directory");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    compose_with_home(&workspace, &workspace, &home, &["."]);
+
+    assert!(!home.join("projects").exists());
+}
+
+/// RECALL-1, CHECKOUT-9. A turn in a delegate's checkout takes its instructions from the parent
+/// workspace, and the project is the parent's too.
+#[test]
+fn a_delegates_checkout_reads_its_parents_rules() {
+    let scratch = Scratch::new("rules-checkout");
+    let home = scratch.directory("home");
+    let parent = scratch.directory("parent");
+    let checkout = scratch.directory("checkout");
+    keep_rules(&home, &project_id(&parent, false), "PARENTS-RULES");
+    keep_rules(&home, &project_id(&checkout, false), "CHECKOUTS-RULES");
+    let parent = Workspace::new(&parent).expect("workspace");
+    let checkout = Workspace::new(&checkout).expect("workspace");
+
+    let text = compose_with_home(&parent, &checkout, &home, &["."]).text;
+
+    assert!(
+        text.contains("PARENTS-RULES") && !text.contains("CHECKOUTS-RULES"),
+        "{text}"
+    );
+}
+
+/// RECALL-1, RECALL-2. The project is resolved again every turn, so it follows a `/cd`.
+#[test]
+fn a_cd_to_another_project_reads_that_projects_rules() {
+    let scratch = Scratch::new("rules-cd");
+    let home = scratch.directory("home");
+    let first = scratch.directory("first");
+    let second = scratch.directory("second");
+    keep_rules(&home, &project_id(&first, false), "FIRST-RULES");
+    keep_rules(&home, &project_id(&second, false), "SECOND-RULES");
+
+    let in_first = Workspace::new(&first).expect("workspace");
+    let before = compose_with_home(&in_first, &in_first, &home, &["."]).text;
+    let in_second = Workspace::new(&second).expect("workspace");
+    let after = compose_with_home(&in_second, &in_second, &home, &["."]).text;
+
+    assert!(before.contains("FIRST-RULES") && !before.contains("SECOND-RULES"));
+    assert!(after.contains("SECOND-RULES") && !after.contains("FIRST-RULES"));
+}
+
+/// RECALL-2, SKILL-3. Rules under a state directory the workspace can write are not the person's
+/// own, so they are not read and the person is told.
+#[test]
+fn rules_inside_the_working_directory_are_not_read_as_the_persons_own() {
+    let scratch = Scratch::new("rules-inside");
+    let project = scratch.directory("project");
+    let state = project.join("people").join(".bravebot");
+    std::fs::create_dir_all(&state).unwrap();
+    keep_rules(&state, &project_id(&project, false), "PLANTED-RULES");
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let composed = compose_with_home(&workspace, &workspace, &state, &["."]);
+
+    assert!(
+        !composed.text.contains("PLANTED-RULES"),
+        "{}",
+        composed.text
+    );
+    assert!(
+        composed
+            .notices
+            .iter()
+            .any(|n| n.message.contains("rules kept in ~/.bravebot")),
+        "{:?}",
+        composed.notices
+    );
+}
+
+/// RECALL-2. A rules file that is there and cannot be read is said not to have been read, and a
+/// file with nothing in it is no rules at all.
+#[test]
+fn rules_that_cannot_be_read_are_said_not_to_have_been_read() {
+    let scratch = Scratch::new("rules-unreadable");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    let id = project_id(&project, false);
+    let workspace = Workspace::new(&project).expect("workspace");
+    let told = |composed: &preamble::Preamble| {
+        composed
+            .notices
+            .iter()
+            .any(|n| n.message.contains("could not be read"))
+    };
+
+    let dir = home.join("projects").join(&id.dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("rules.md"), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+    assert!(told(&composed), "{:?}", composed.notices);
+    assert!(!composed.text.contains("the project's own file wins"));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(dir.join("rules.md"), "SHUT-AWAY-RULES").unwrap();
+        std::fs::set_permissions(dir.join("rules.md"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+        // Root reads a mode-000 file, so the half that needs it to fail is skipped there.
+        if std::fs::read_to_string(dir.join("rules.md")).is_err() {
+            let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+            assert!(told(&composed), "{:?}", composed.notices);
+            assert!(!composed.text.contains("SHUT-AWAY-RULES"));
+        }
+    }
+
+    // A link that leads nowhere is there and cannot be read, not absent.
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(dir.join("rules.md")).ok();
+        std::os::unix::fs::symlink(home.join("gone.md"), dir.join("rules.md")).unwrap();
+        let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+        assert!(told(&composed), "{:?}", composed.notices);
+    }
+
+    std::fs::remove_file(dir.join("rules.md")).ok();
+    keep_rules(&home, &id, " \n\t\n");
+    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+    assert!(!told(&composed), "{:?}", composed.notices);
+    assert!(
+        !composed.text.contains("rules.md")
+            && !composed.text.contains("the project's own file wins"),
+        "{}",
+        composed.text
+    );
+}
+
+/// RECALL-2. Rules behind a folder that cannot be searched are said not to have been read, while a
+/// project with no rules file at all is told nothing.
+#[test]
+fn rules_in_a_folder_that_cannot_be_searched_are_said_not_to_have_been_read() {
+    let scratch = Scratch::new("rules-folder");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    let id = project_id(&project, false);
+    let workspace = Workspace::new(&project).expect("workspace");
+    let told = |composed: &preamble::Preamble| {
+        composed
+            .notices
+            .iter()
+            .any(|n| n.message.contains("could not be read"))
+    };
+
+    let missing = compose_with_home(&workspace, &workspace, &home, &["."]);
+    assert!(!told(&missing), "{:?}", missing.notices);
+
+    keep_rules(&home, &id, "SHUT-AWAY-RULES");
+    let dir = home.join("projects").join(&id.dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::metadata(dir.join("rules.md")).is_err() {
+            let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(told(&composed), "{:?}", composed.notices);
+            assert!(!composed.text.contains("SHUT-AWAY-RULES"));
+        } else {
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    std::fs::remove_file(dir.join("rules.md")).unwrap();
+    std::fs::create_dir(dir.join("rules.md")).unwrap();
+    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
+    assert!(told(&composed), "{:?}", composed.notices);
+}
+
+/// INSTR-7, RECALL-2. The file is not cached: an edit between turns is what the next turn reads.
+#[test]
+fn a_rules_file_is_read_again_by_the_next_turn() {
+    let scratch = Scratch::new("rules-reread");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    let id = project_id(&project, false);
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    keep_rules(&home, &id, "RULES-BEFORE");
+    let before = compose_with_home(&workspace, &workspace, &home, &["."]).text;
+    keep_rules(&home, &id, "RULES-AFTER");
+    let after = compose_with_home(&workspace, &workspace, &home, &["."]).text;
+
+    assert!(before.contains("RULES-BEFORE") && !before.contains("RULES-AFTER"));
+    assert!(after.contains("RULES-AFTER") && !after.contains("RULES-BEFORE"));
 }
 
 fn reference(

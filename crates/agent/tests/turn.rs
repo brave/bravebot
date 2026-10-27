@@ -22184,6 +22184,125 @@ fn the_preamble_is_not_stored_in_the_conversation() {
     );
 }
 
+/// A state directory holding one public fact, and a workspace beside it.
+fn a_home_with_a_deploy_fact(scratch: &Scratch, body: &str) -> (std::path::PathBuf, Workspace) {
+    let home = scratch.path.join("home");
+    std::fs::create_dir_all(home.join("facts")).unwrap();
+    std::fs::write(
+        home.join("facts/deploy.md"),
+        format!("---\nsource: person\nlabel: public\nverified: 2026-10-01\n---\n{body}\n"),
+    )
+    .unwrap();
+    let work = scratch.path.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    (home, Workspace::new(&work).expect("workspace"))
+}
+
+/// RECALL-9: a kept fact that matches the prompt reaches the planner in the system prompt, marked
+/// as background, and is not stored in the conversation. The turn reports the key so the session
+/// can hold it, and handed that key back the next turn injects nothing.
+#[test]
+fn injected_facts_go_in_the_system_prompt_not_the_conversation() {
+    let scratch = Scratch::new("injected-facts");
+    let (home, workspace) =
+        a_home_with_a_deploy_fact(&scratch, "deploy the staging forge with the blue key");
+
+    let (endpoint, received) = serve_sequence(vec![reply_with("one"), reply_with("two")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let mut already = std::collections::BTreeSet::new();
+    for _ in 0..2 {
+        let completed = turn::resume(
+            &config,
+            &egress,
+            &workspace,
+            &Task::new("deploy the staging forge")
+                .with_home(Some(home.clone()))
+                .with_injected_facts(already.clone()),
+            &mut conversation,
+            &mut bravebot_agent::confirm::ApproveWrites,
+            &mut bravebot_agent::IgnoreReports,
+            &mut sink,
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        );
+        completed.outcome.expect("turn runs");
+        already = completed.decisions.injected_facts;
+    }
+
+    let first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        first.contains("Background that the person's earlier sessions kept")
+            && first.contains("- deploy (verified 2026-10-01): deploy the staging forge")
+            && first.contains("End of kept background."),
+        "the fact was not put in front of the planner: {first}"
+    );
+    assert!(
+        !second.contains("Background that the person's earlier sessions kept"),
+        "a fact already injected on this session was injected again: {second}"
+    );
+    assert_eq!(already.iter().collect::<Vec<_>>(), ["deploy"]);
+    for stored in conversation.messages() {
+        assert!(
+            !stored
+                .message
+                .content
+                .text()
+                .contains("Background that the person's earlier sessions kept"),
+            "the block was written into the conversation"
+        );
+    }
+}
+
+/// RECALL-9: a turn that injects a fact and then fails has still shown it, so the key is
+/// reported and the next turn does not show it again.
+#[test]
+fn a_failed_turn_still_reports_what_it_injected() {
+    let scratch = Scratch::new("injected-then-failed");
+    let (home, workspace) =
+        a_home_with_a_deploy_fact(&scratch, "deploy the staging forge with the blue key");
+    let (endpoint, received) = serve_script(vec![Served::Status(401)]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("deploy the staging forge").with_home(Some(home)),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+
+    assert!(completed.outcome.is_err(), "the turn was meant to fail");
+    assert!(
+        every_request(&received)
+            .iter()
+            .any(|body| body.contains("Background that the person's earlier sessions kept")),
+        "the failed turn never sent the fact"
+    );
+    assert_eq!(
+        completed
+            .decisions
+            .injected_facts
+            .iter()
+            .collect::<Vec<_>>(),
+        ["deploy"]
+    );
+}
+
 /// An untrusted working directory is an ordinary condition, not an anomaly, and a turn in one
 /// reports no refusal. Marking every such turn as one where a gate refused something is how a
 /// warning stops being read by the time it means something.
@@ -75135,4 +75254,88 @@ fn a_delegate_is_not_given_the_skill_mode_of_the_session_that_started_it() {
             reporter.notices
         );
     }
+}
+
+/// RECALL-5: a fact the planner kept is a step the session's undo takes apart, though the
+/// workspace refuses the fact store to every other tool.
+#[test]
+fn a_save_is_undone_by_undo() {
+    let scratch = Scratch::new("remember-undo");
+    let project = scratch.path.join("project");
+    let home = scratch.path.join("state");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let workspace = Workspace::new(&project).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request(
+            "remember",
+            r#"{"key":"release/forge-poll","scope":"everywhere","text":"The forge is polled every minute."}"#,
+        ),
+        reply_with("kept"),
+    ]);
+    let config = config_for(&endpoint);
+    let task = Task::new("remember how the forge is polled").with_home(Some(home.clone()));
+    let mut conversation = bravebot_agent::Conversation::new();
+    take_a_turn(
+        &config,
+        &workspace,
+        &mut conversation,
+        trusting_the_workspace(),
+        task,
+    )
+    .expect("turn runs");
+
+    let fact = home.join("facts/release/forge-poll.md");
+    let text = std::fs::read_to_string(&fact).expect("the fact was saved");
+    assert!(text.contains("source: agent"), "{text}");
+    assert!(text.contains("The forge is polled every minute."), "{text}");
+
+    let mut current = bravebot_agent::workspace::trust_store(workspace.root());
+    let target = current.clone();
+    let refused = bravebot_agent::rewind::restore(
+        &workspace,
+        workspace.take_backups(),
+        &mut current,
+        &target,
+        &mut None,
+        Some(&home),
+    );
+    assert!(refused.is_empty(), "{refused:?}");
+    assert!(!fact.exists(), "undo left the fact it made");
+}
+
+/// RECALL-1: a turn in a project whose only rules are the home `AGENTS.md` makes no
+/// `projects/` directory, so the state directory keeps no record of where the person worked.
+#[test]
+fn a_turn_with_only_home_rules_makes_no_projects_directory() {
+    let scratch = Scratch::new("rules-home-only");
+    let home = scratch.path.join("state");
+    let work = scratch.path.join("work");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(
+        home.join("AGENTS.md"),
+        "- Use tabs for indentation in every file\n",
+    )
+    .unwrap();
+    let workspace = Workspace::new(&work).expect("workspace");
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("one")]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("say something").with_home(Some(home.clone())),
+        &mut reporter,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    assert!(
+        !home.join("projects").exists(),
+        "the turn made a projects directory"
+    );
 }

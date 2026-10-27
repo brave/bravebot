@@ -647,6 +647,35 @@ impl Notice {
         Self::new(t!(home_agents_file_reached_through_the_workspace))
     }
 
+    /// That the person's rules for the project were not read, for the same reason (RECALL-2).
+    pub(crate) fn project_rules_reached_through_the_workspace() -> Self {
+        Self::new(t!(project_rules_reached_through_the_workspace))
+    }
+
+    /// That the person's rules for the project exist and could not be read (RECALL-2). `reason` is
+    /// the operating system's or the gate's, never anything the file holds.
+    pub(crate) fn project_rules_unreadable(path: &str, reason: &str) -> Self {
+        Self::new(t!(project_rules_unreadable, path = path, reason = reason))
+    }
+
+    /// The same, where the file is a link that leads to nothing (RECALL-2).
+    pub(crate) fn project_rules_dangling(path: &str) -> Self {
+        Self::new(t!(
+            project_rules_unreadable,
+            path = path,
+            reason = t!(project_rules_dangling_link)
+        ))
+    }
+
+    /// The same, where the trust gate refused the text rather than the disk failing (RECALL-2).
+    pub(crate) fn project_rules_refused_by_policy(path: &str) -> Self {
+        Self::new(t!(
+            project_rules_unreadable,
+            path = path,
+            reason = t!(project_rules_policy_refused)
+        ))
+    }
+
     fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),

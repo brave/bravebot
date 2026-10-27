@@ -52,6 +52,7 @@ fn running<'a>(config: &'a Config, workspace: &'a Workspace, trust: TrustStore) 
         courier: None,
         auto_vetting: false,
         kept: None,
+        injected_facts: Default::default(),
     }
 }
 

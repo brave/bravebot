@@ -21,11 +21,12 @@ happens, rather than to ask the planner for it, see [Hooks](hooks.md). For a who
 planner loads only when the task calls for it, see [Skills](skills.md). For a kind of delegate the
 planner can hand a sub-task to, see [Delegate definitions](agents.md).
 
-## The twelve sources
+## The thirteen sources
 
 | File | Applies to |
 |---|---|
 | `~/.bravebot/AGENTS.md` | every project |
+| `~/.bravebot/projects/<id>/rules.md` | the project you are working in |
 | `~/.bravebot/skills/<name>/SKILL.md` | every project |
 | `~/.bravebot/agents/<name>.md` | every project |
 | `~/.bravebot/rules/<name>.md` | every project, every turn or once a file its `paths` match is touched |

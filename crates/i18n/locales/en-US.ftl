@@ -4068,6 +4068,27 @@ memory-not-read = { $name }: { $path }, not read, since it is a link, is reached
 memory-empty = { $name }: { $path }, nothing kept there yet
 memory-kept = { $name }: { $path }, a file is kept there
 
+## The rules and facts kept (RECALL-11)
+
+memory-no-rules = no rules are kept
+memory-rules-file =
+    { $lines ->
+        [one] rules: { $path }, 1 line
+       *[other] rules: { $path }, { $lines } lines
+    }
+memory-rules-file-more = rules: { $path }, more than { $lines } lines
+memory-verified-never = never
+memory-no-facts = no facts are kept
+memory-fact = fact { $key }: { $scope }, from { $source }, { $label }, verified { $verified }, { $standing }
+memory-scope-project = this project
+memory-scope-everywhere = every project
+memory-source-person = the person
+memory-source-agent = the agent
+memory-label-public = public
+memory-label-private = private
+memory-standing-live = live
+memory-standing-superseded = superseded by { $by }
+
 remove-checkout-title = remove this checkout?
 remove-checkout-which = checkout { $id }, made for delegate { $delegate }, is at
 remove-checkout-explained =
@@ -4341,6 +4362,9 @@ verb-watch-file = Watch
 verb-advisor = Advise
 verb-propose-plan = Plan
 verb-message-session = Message
+verb-remember = Remember
+verb-propose-rule = Propose
+verb-recall = Recall
 verb-mcp-call = MCP
 verb-unknown = Tool
 
@@ -4531,6 +4555,13 @@ home-skills-reached-through-the-workspace =
 # The person's own ~/.bravebot/AGENTS.md when it was not read, because the way to the file goes
 # through the working directory or a directory opened beside it, where a turn can write.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md was not read: the way to it goes through a directory this session can write to
+# The person's rules for this project when they were not read, for the same reason.
+project-rules-reached-through-the-workspace = The rules kept in ~/.bravebot for this project were not read: the way to them goes through a directory this session can write to
+# The person's rules for this project when the file exists and could not be read.
+project-rules-unreadable = The rules kept for this project at { $path } could not be read: { $reason }
+# The reason given when the trust gate, not the disk, kept the rules out.
+project-rules-policy-refused = the trust policy refused it
+project-rules-dangling-link = it is a link that leads to nothing
 # Definitions in the person's own ~/.bravebot/agents that were not loaded, for the same reason.
 home-definitions-reached-through-the-workspace =
     { $count ->
@@ -4914,3 +4945,16 @@ menu-copy = copy
 menu-copy-text = copy as text
 menu-branch = branch this session
 menu-open-delegate = open this delegate
+
+## The prompt that offers a rule for the person's rule files (RECALL-3)
+agent-rule-approval-header = Rule
+agent-rule-approval-file = File
+agent-rule-approval-why = Why
+agent-rule-approval-private = These words came from private material, so they cannot be kept as a rule as written. Type the rule in your own words to keep it, or refuse.
+agent-rule-approval-keep = Keep this rule
+agent-rule-approval-keep-detail = Add it to the file named above. You can edit that file by hand, or type your own wording of the rule instead.
+agent-rule-approval-refuse = Don't keep it
+# Typed replies to the rule question that mean its first choice, and its second, in a session in lines
+# that lists the choices and reads a line (RECALL-3). Comma-separated, matched ignoring case.
+agent-rule-approval-yes-words = y, yes, keep, keep it
+agent-rule-approval-no-words = n, no, refuse, don't, do not keep it

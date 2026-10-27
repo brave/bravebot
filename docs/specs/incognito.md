@@ -83,6 +83,8 @@ there.
 [MEMORY-5](definition-memory.md#MEMORY-5) leaves one trace: a definition's memory the session left untrusted is recorded by its path, which says the project was
 worked in.
 
+RECALL ([recall.md](recall.md)) adds nothing to that: an incognito session saves no fact, proposes no rule, and makes no `~/.bravebot/projects/<id>/` directory. It still reads rules and facts, so the session is the one the person configured.
+
 **Why.** An empty directory is a record. It says a session ran, in this project, at this time, which
 is most of what the record was for. The directory is therefore asked about before it is created
 rather than after.

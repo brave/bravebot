@@ -327,11 +327,13 @@ fn complete_and_failed_restores_keep_files_trust_programs_and_history_aligned() 
                 let first = if index == 1 { "original" } else { "middle" };
                 session.rewind.keep_backups(vec![
                     Backup {
+                        kept: false,
                         path: root.join("blocked"),
                         was: Before::Bytes(first.as_bytes().to_vec()),
                         captured_trust: Integrity::Trusted,
                     },
                     Backup {
+                        kept: false,
                         path: root.join("restorable"),
                         was: Before::Bytes(first.as_bytes().to_vec()),
                         captured_trust: Integrity::Trusted,
@@ -554,16 +556,19 @@ fn undo_refuses_the_paths_a_directory_since_linked_out_of_the_workspace_would_ca
         session.record_turn(start, &conversation);
         session.rewind.keep_backups(vec![
             Backup {
+                kept: false,
                 path: root.join("redirect/controlled.txt"),
                 was: Before::Bytes(b"what the checkout held".to_vec()),
                 captured_trust: Integrity::Trusted,
             },
             Backup {
+                kept: false,
                 path: root.join("redirect/fresh.txt"),
                 was: Before::Nothing,
                 captured_trust: Integrity::Trusted,
             },
             Backup {
+                kept: false,
                 path: root.join("restorable"),
                 was: Before::Bytes(b"original".to_vec()),
                 captured_trust: Integrity::Trusted,
@@ -1661,6 +1666,7 @@ fn a_point_over(name: &str, before: &str, after: &str) -> Wrote {
     session
         .rewind
         .keep_backups(vec![bravebot_agent::workspace::Backup {
+            kept: false,
             path,
             was: bravebot_agent::workspace::Before::Bytes(before.as_bytes().to_vec()),
             captured_trust: Integrity::Trusted,

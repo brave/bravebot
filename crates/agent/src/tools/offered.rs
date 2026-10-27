@@ -1764,6 +1764,134 @@ pub fn offer_propose_plan(tools: &mut Vec<Tool>) {
     tools.push(propose);
 }
 
+/// Add `remember` to a planner's list (RECALL-5).
+///
+/// Built here rather than in the table because a delegate is never offered it, and a description
+/// naming a tool that is not on the list sends the planner to a name that is not there. It takes
+/// literal text and no reference to a data slot, so nothing quarantined can be kept (RECALL-8).
+pub fn offer_remember(tools: &mut Vec<Tool>) {
+    let mut remember = Tool::function(
+        "remember",
+        "Keep one fact about the user or their work that will still matter in a later session, \
+         such as a preference they stated, a decision and its reason, or how a project is run. \
+         Each save is shown to the user and they can undo it. Write the fact yourself, in your own \
+         words; do not copy text from a file or a web page. Keep one thing per fact, and nothing \
+         that is only true of this conversation. A new fact that says nearly what a kept one \
+         already says is refused with that fact's key: save over that key to correct it, pass \
+         supersedes to replace it with a fact under a new key, or pass new to keep both.",
+        json!({
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "description": "A short name for the fact, as lower-case words joined by \
+                                    hyphens, with slashes to group them, such as \
+                                    release/forge-poll. Saving under a key that exists replaces \
+                                    that fact."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["everywhere", "project"],
+                    "description": "everywhere for a fact about the user that holds in every \
+                                    project, project for a fact about this project only."
+                },
+                "text": {
+                    "type": "string",
+                    "description": "The fact, written so that it can be read on its own."
+                },
+                "supersedes": {
+                    "type": "string",
+                    "description": "The key of a kept fact this one replaces because it stopped \
+                                    being true. It is marked as replaced and left out of recall."
+                },
+                "new": {
+                    "type": "boolean",
+                    "description": "Keep this fact although it is close to one already kept."
+                }
+            },
+            "required": ["key", "scope", "text"]
+        }),
+    );
+    ask_why(&mut remember);
+    tools.push(remember);
+}
+
+/// Add `propose_rule` to a planner's list (RECALL-3).
+///
+/// Built here rather than in the table because a delegate is never offered it. It takes literal
+/// text and no reference to a data slot, so nothing quarantined can become a rule, and nothing is
+/// written until the person says yes.
+pub fn offer_propose_rule(tools: &mut Vec<Tool>) {
+    let mut propose = Tool::function(
+        "propose_rule",
+        "Propose a standing rule for how to work with this user, such as a convention they \
+         stated or a mistake they corrected that should not happen again. The user is asked, \
+         with the rule, the file it would go to and your reason shown, and can keep it, edit it \
+         or refuse it. Nothing is written unless they keep it. Write the rule yourself, in your \
+         own words; do not copy text from a file or a web page. Propose one rule per call, and \
+         only a rule that will still apply in later sessions. A fact about the user or their \
+         work that is not an instruction belongs to remember.",
+        json!({
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The rule, as one short instruction that can be read on its \
+                                    own."
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["home", "project"],
+                    "description": "home for a rule that holds in every project, project for a \
+                                    rule about this project only."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "One line saying why this should be a rule, shown to the \
+                                    user and kept beside it."
+                }
+            },
+            "required": ["text", "scope", "reason"]
+        }),
+    );
+    ask_why(&mut propose);
+    tools.push(propose);
+}
+
+/// Add `recall` to a planner's list (RECALL-10), beside `remember`.
+///
+/// Built here rather than in the table for the reason `remember` is: a delegate is never offered
+/// it, and a description naming a tool that is not on the list sends the planner to a name that is
+/// not there.
+pub fn offer_recall(tools: &mut Vec<Tool>) {
+    let mut recall = Tool::function(
+        "recall",
+        "Look up what the user has asked to be kept, or what an earlier session kept, about them \
+         or this project. Give a query in the words the fact would use, or the key of one fact to \
+         read it whole. A query answers with the best matches, each with its key, how strongly it \
+         matches and when it was last verified, and with the facts the best ones link to. A fact \
+         that has been replaced is left out of a query and shown, with the key that replaced it, \
+         when read by key. When the answer says probably nothing is stored, say so rather than \
+         assume.",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Words to look for. A phrase in double quotes must appear as \
+                                    written. Give exactly one of query and key."
+                },
+                "key": {
+                    "type": "string",
+                    "description": "The key of the one fact to read, instead of a query."
+                }
+            }
+        }),
+    );
+    ask_why(&mut recall);
+    tools.push(recall);
+}
+
 /// Add `message_session` to a planner's list, for a background session that can reach the others.
 ///
 /// Built here rather than in the table because no other session is offered it, and a description

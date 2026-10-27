@@ -2769,6 +2769,13 @@ home-skills-reached-through-the-workspace =
 # Le ~/.bravebot/AGENTS.md de la personne quand il n'a pas été lu, parce que le chemin vers le fichier passe
 # par le répertoire de travail ou un répertoire ouvert à côté, où un tour peut écrire.
 home-agents-file-reached-through-the-workspace = ~/.bravebot/AGENTS.md n'a pas été lu : le chemin vers ce fichier passe par un répertoire où cette session peut écrire
+# Les règles de la personne pour ce projet quand elles n'ont pas été lues, pour la même raison.
+project-rules-reached-through-the-workspace = Les règles conservées dans ~/.bravebot pour ce projet n'ont pas été lues : le chemin vers elles passe par un répertoire où cette session peut écrire
+# Les règles de la personne pour ce projet quand le fichier existe et n'a pas pu être lu.
+project-rules-unreadable = Les règles conservées pour ce projet dans { $path } n'ont pas pu être lues : { $reason }
+# La raison donnée quand la politique de confiance, et non le disque, a écarté les règles.
+project-rules-policy-refused = la politique de confiance l'a refusé
+project-rules-dangling-link = c'est un lien qui ne mène nulle part
 # Les définitions de ~/.bravebot/agents qui n'ont pas été chargées, pour la même raison.
 home-definitions-reached-through-the-workspace =
     { $count ->
@@ -3633,6 +3640,9 @@ verb-watch-file = Surveiller
 verb-advisor = Conseiller
 verb-propose-plan = Planifier
 verb-message-session = Message
+verb-remember = Retenir
+verb-propose-rule = Proposer
+verb-recall = Retrouver
 verb-mcp-call = MCP
 verb-unknown = Outil
 
@@ -4304,3 +4314,5 @@ menu-copy = copier
 menu-copy-text = copier comme texte
 menu-branch = créer une branche de cette session
 menu-open-delegate = ouvrir ce délégué
+
+agent-rule-approval-private = Ces mots viennent de contenu privé : ils ne peuvent pas devenir une règle tels quels. Tapez la règle avec vos propres mots pour la garder, ou refusez.

@@ -1324,6 +1324,9 @@ pub(crate) fn verb_for(tool: &str) -> &'static str {
         "advisor" => t!(verb_advisor),
         "propose_plan" => t!(verb_propose_plan),
         "message_session" => t!(verb_message_session),
+        "remember" => t!(verb_remember),
+        "propose_rule" => t!(verb_propose_rule),
+        "recall" => t!(verb_recall),
         // Every server's tool is offered under a wire name of this shape, and no built-in is.
         server if server.starts_with("mcp__") => t!(verb_mcp_call),
         _ => t!(verb_unknown),
@@ -1736,6 +1739,9 @@ mod tests {
             let mut added = Vec::new();
             crate::tools::offer_advisor(&mut added);
             crate::tools::offer_message_session(&mut added);
+            crate::tools::offer_remember(&mut added);
+            crate::tools::offer_propose_rule(&mut added);
+            crate::tools::offer_recall(&mut added);
             added
         }) {
             let name = &tool.function.name;

@@ -36,7 +36,7 @@ the update question, the answer to `/caffeinate`'s explanation, session records,
 instructions, an imported subscription, the command lines somebody asked to be remembered past a
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
-session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)).
+session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)). The rules and facts a person's sessions remember live here too, as `projects/<id>/` and `facts/` ([recall.md](recall.md)), written readable by their owner alone and refused to programs like the rest of the directory.
 The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)). `bravebot bug-report` writes into the working directory and adds nothing here.
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
