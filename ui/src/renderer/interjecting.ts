@@ -71,7 +71,7 @@ export function declined(live: Live, id: string): Live {
 export function taken(live: Live): Live {
   const [line, ...rest] = live.interjected ?? []
   if (!line) return live
-  return { ...live, interjected: rest, entries: [...live.entries, t.userSaid(line.prompt)] }
+  return { ...live, interjected: rest, entries: [...live.entries, t.userSaid(line.prompt, undefined, true)] }
 }
 
 /**

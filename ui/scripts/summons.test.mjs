@@ -24,8 +24,8 @@ const load = (contents, profile = '/nonexistent') => {
 }
 
 const summons = load(`export * from './src/shared/summons'`)
-const staging = load(`export * from './src/renderer/staging'; export { route } from './src/renderer/interjecting'`)
-const transcript = load(`export { summonedReplies, summonedAt } from './src/renderer/transcript'`)
+const staging = load(`export * from './src/renderer/staging'; export { route, taken } from './src/renderer/interjecting'`)
+const transcript = load(`export { summonedReplies, summonedAt, summonedFor } from './src/renderer/transcript'`)
 const bots = load(`export { parseBots } from './src/shared/bots'`)
 
 const A = '11111111-1111-4111-8111-111111111111'
@@ -166,6 +166,52 @@ test('the label is drawn over the first reply to a summoned prompt and over no r
     { kind: 'assistant', id: 'a3', text: 'own' },
   ]
   assert.deepEqual([...transcript.summonedReplies(entries)], [['a1', 'ada']])
+})
+
+test('a line read into a summoned turn keeps the reply and the working face with the summoned bot', () => {
+  const entries = [
+    { kind: 'user', id: 'p1', text: '[@Ada] hi', prompt: 0, summoned: 'ada' },
+    { kind: 'turn-start', id: 't1', number: 1 },
+    { kind: 'user', id: 'p2', text: 'and this too', interjected: true },
+    { kind: 'assistant', id: 'a1', text: 'first' },
+  ]
+  assert.deepEqual([...transcript.summonedReplies(entries)], [['a1', 'ada']])
+  assert.equal(transcript.summonedFor(entries.slice(0, 3)), 'ada')
+  assert.equal(transcript.summonedFor(entries), 'ada')
+})
+
+test('a line read into an ordinary turn does not make it a summoned one, and a line typed after one does not inherit it', () => {
+  const ordinary = [
+    { kind: 'user', id: 'p1', text: 'hi', prompt: 0 },
+    { kind: 'user', id: 'p2', text: 'more', interjected: true },
+    { kind: 'assistant', id: 'a1', text: 'own' },
+  ]
+  assert.deepEqual([...transcript.summonedReplies(ordinary)], [])
+  assert.equal(transcript.summonedFor(ordinary), undefined)
+  const after = [
+    { kind: 'user', id: 'p1', text: '[@Ada] hi', prompt: 0, summoned: 'ada' },
+    { kind: 'assistant', id: 'a1', text: 'first' },
+    { kind: 'user', id: 'p2', text: 'next', prompt: 1 },
+  ]
+  assert.equal(transcript.summonedFor(after), undefined)
+})
+
+test('a watch or a consolidation after a summoned prompt that got no reply is a turn of its own', () => {
+  const entries = [
+    { kind: 'user', id: 'p1', text: '[@Ada] hi', prompt: 0, summoned: 'ada' },
+    { kind: 'watch', id: 'w1', text: 'File watch 1: a.txt' },
+    { kind: 'assistant', id: 'a1', text: 'own' },
+  ]
+  assert.deepEqual([...transcript.summonedReplies(entries)], [])
+  assert.equal(transcript.summonedFor(entries.slice(0, 2)), undefined)
+  assert.equal(transcript.summonedFor([entries[0], { kind: 'consolidation', id: 'c1' }]), undefined)
+})
+
+test('the line the planner reads into a running turn is drawn as one that started no turn', () => {
+  const live = { entries: [], interjected: [{ id: 'i1', prompt: 'and this' }] }
+  const [said] = staging.taken(live).entries
+  assert.equal(said.interjected, true)
+  assert.equal(said.summoned, undefined)
 })
 
 test('a reopened conversation marks its prompts from the record, by ordinal', () => {

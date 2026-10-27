@@ -531,8 +531,7 @@ export function Transcript({
   // The face over the working row is the bot answering the turn that runs: the one summoned for
   // its prompt where there is one.
   const answering = useMemo(() => {
-    const prompt = live?.running ? [...entries].reverse().find((entry) => entry.kind === 'user') : undefined
-    const slug = prompt?.kind === 'user' ? prompt.summoned : undefined
+    const slug = live?.running ? t.summonedFor(entries) : undefined
     return slug ? faces.get(slug) ?? null : bot
   }, [live?.running, entries, faces, bot])
   // Entered and left once per element crossed, so counted rather than toggled.
