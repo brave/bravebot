@@ -41,6 +41,9 @@
 .modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); }
 .modal h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-primary); }
 .modal code { font: var(--type-code); }
+/* A message naming a long path has no break in it, and an alert that will not wrap widens the body
+   past the dialog, which clips the footer and its Close button off the right-hand edge. */
+.modal leo-alert { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .modal .dialog-busy { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
 
 /* ---------------------------------------------------------------- import

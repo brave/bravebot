@@ -130,6 +130,21 @@ try {
   const list = page.locator('.session-list').first()
   const names = async () => (await list.locator('.session-name').allTextContents()).sort()
   const groupOf = (project) => list.locator(':scope > .session-group-section').filter({ has: page.getByRole('button', { name: `New chat in ${project}`, exact: true }) })
+  // Everything the dialog shows sits inside its box: a long unbroken path in a message must wrap
+  // rather than widen the body and push the footer's buttons past the dialog's edge.
+  const fitsInside = async (dialog, what) => {
+    const boxes = await dialog.evaluate((host) => {
+      const frame = host.shadowRoot.querySelector('dialog').getBoundingClientRect()
+      const box = (e) => { const b = e.getBoundingClientRect(); return { left: b.left, right: b.right, width: b.width } }
+      const parts = [...host.querySelectorAll('[role="alert"], .modal-actions leo-button, .modal-actions button')]
+      return { frame: box({ getBoundingClientRect: () => frame }), parts: parts.map((e) => ({ name: e.textContent.trim().slice(0, 40), ...box(e) })) }
+    })
+    assert.ok(boxes.parts.length > 0, `${what}: nothing to measure`)
+    for (const part of boxes.parts) {
+      assert.ok(part.width > 0 && part.left >= boxes.frame.left - 1 && part.right <= boxes.frame.right + 1,
+        `${what}: "${part.name}" (${Math.round(part.left)}-${Math.round(part.right)}) is outside the dialog (${Math.round(boxes.frame.left)}-${Math.round(boxes.frame.right)})`)
+    }
+  }
   const menuOf = async (project, item) => {
     await groupOf(project).locator('.session-group-head').hover()
     await page.getByRole('button', { name: `Actions for ${project}`, exact: true }).click()
@@ -196,6 +211,7 @@ try {
   await menuOf('alpha', 'Delete all chats in alpha…')
   await detail.waitFor()
   assert.equal(await detail.textContent(), '4 conversations will be deleted. 1 conversation in use by a background session will be kept.')
+  await fitsInside(deleting, 'delete all')
   await snap('04-delete-all')
   await deleting.locator('[data-test="delete-cancel"]').click()
   await deleting.waitFor({ state: 'hidden' })
@@ -220,11 +236,14 @@ try {
   rmSync(beta, { recursive: true, force: true })
   await menuOf('beta', 'Delete all chats in beta…')
   await deleting.getByRole('alert').waitFor()
+  await fitsInside(deleting, 'delete error')
   await snap('06-delete-error')
   await deleting.getByRole('button', { name: 'Close', exact: true }).click()
   await deleting.waitFor({ state: 'hidden' })
   await menuOf('beta', 'Import from Claude Code…')
-  await importing.getByRole('alert').waitFor()
+  await importing.getByRole('alert').filter({ hasText: 'is not a directory' }).waitFor()
+  await fitsInside(importing, 'import error')
+  await snap('07-import-error')
   await importing.getByRole('button', { name: 'Close', exact: true }).click()
   await importing.waitFor({ state: 'hidden' })
   assert.ok(recordOf(theirs))
