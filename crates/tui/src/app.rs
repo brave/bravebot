@@ -11805,7 +11805,10 @@ mod tests {
             (render::context_reading(session), "/context"),
             ("notes-server".to_string(), "/mcp"),
             ("rust-analyzer".to_string(), "/lsp"),
-            (t!(panel_files).to_string(), "/diff"),
+            (
+                t!(panel_files_total, count = session.written_totals().0).to_string(),
+                "/diff",
+            ),
         ]
     }
 

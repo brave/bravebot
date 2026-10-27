@@ -783,7 +783,7 @@ Draws the info panel in its files state, opening the panel if it is closed: a li
 session wrote, with the lines added and removed, and every edit to the highlighted one under it. `q`,
 Escape or Ctrl-C leave the state and put the panel back as it was. Typing `/diff` does not, since no
 character reaches the box while the state is open; a second `/diff` queued earlier, while a compaction
-or an aside ran, does leave it. Clicking the Files section of
+or an aside ran, does leave it. Clicking the count in the Files section of
 the panel draws it too. It needs a terminal at
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
 nothing. It shows what the session's own write calls changed. A change another program made is not

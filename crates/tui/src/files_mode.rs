@@ -1531,34 +1531,44 @@ mod tests {
         session
     }
 
-    /// MOUSE-20: a click that sweeps nothing on the Files heading or the row under it does what
-    /// `/diff` does, and `q` puts the ordinary panel back.
+    /// MOUSE-20: a click that sweeps nothing on the totals row of the Files section does what
+    /// `/diff` does, and `q` puts the ordinary panel back. A click on the heading above it opens
+    /// nothing.
     #[test]
-    fn a_click_on_the_files_heading_or_the_row_under_it_opens_the_state() {
+    fn a_click_on_the_files_totals_row_opens_the_state_and_one_on_the_heading_does_not() {
         let mut by_command = ordinary_panel_with_two_files();
         by_command.toggle_files();
         let expected = by_command.files_state().cloned();
         assert!(expected.is_some(), "the command did not open the state");
-        for needle in ["Files", "2 files"] {
-            let mut session = ordinary_panel_with_two_files();
-            let (row, column) = cell_of(&mut session, 120, 30, needle);
-            assert_eq!(click(&mut session, row, column), Action::Redraw);
-            assert!(
-                session.files_open(),
-                "a click on {needle:?} did not open the state"
-            );
-            assert_eq!(session.files_state().cloned(), expected, "{needle:?}");
-            press(&mut session, KeyCode::Char('q'));
-            assert!(!session.files_open() && session.panel_open());
-        }
+
+        let mut session = ordinary_panel_with_two_files();
+        let (row, column) = cell_of(&mut session, 120, 30, "2 files");
+        assert_eq!(click(&mut session, row, column), Action::Redraw);
+        assert!(
+            session.files_open(),
+            "a click on the totals row did not open the state"
+        );
+        assert_eq!(session.files_state().cloned(), expected);
+        press(&mut session, KeyCode::Char('q'));
+        assert!(!session.files_open() && session.panel_open());
+
+        let mut session = ordinary_panel_with_two_files();
+        let (row, column) = cell_of(&mut session, 120, 30, "Files");
+        click(&mut session, row, column);
+        assert!(
+            !session.files_open(),
+            "a click on the heading opened the state"
+        );
+        assert!(session.panel_open());
     }
 
-    /// MOUSE-20: a drag, a press from elsewhere and the second press of a double click on the Files
-    /// section are selections, and a click over the scroller or a history search asks for nothing.
+    /// MOUSE-20: a drag, a press from elsewhere and the second press of a double click on the totals
+    /// row of the Files section are selections, and a click over the scroller or a history search
+    /// asks for nothing.
     #[test]
     fn a_drag_a_double_click_or_a_click_over_the_scroller_or_a_search_opens_no_state() {
         let mut session = ordinary_panel_with_two_files();
-        let (row, column) = cell_of(&mut session, 120, 30, "Files");
+        let (row, column) = cell_of(&mut session, 120, 30, "2 files");
 
         mouse(
             &mut session,
@@ -1569,19 +1579,19 @@ mod tests {
         mouse(
             &mut session,
             MouseEventKind::Drag(MouseButton::Left),
-            row + 1,
-            column,
+            row,
+            column + 2,
         );
         let up = mouse(
             &mut session,
             MouseEventKind::Up(MouseButton::Left),
-            row + 1,
-            column,
+            row,
+            column + 2,
         );
         assert_eq!(up, Action::Copy);
         assert!(
             !session.files_open(),
-            "a drag down the section opened the state"
+            "a drag along the totals row opened the state"
         );
 
         mouse(&mut session, MouseEventKind::Down(MouseButton::Left), 0, 0);
@@ -1605,7 +1615,7 @@ mod tests {
         assert!(!session.files_open(), "a double click opened the state");
 
         let mut scrolling = ordinary_panel_with_two_files();
-        let (row, column) = cell_of(&mut scrolling, 120, 30, "Files");
+        let (row, column) = cell_of(&mut scrolling, 120, 30, "2 files");
         scrolling.open_scroller();
         click(&mut scrolling, row, column);
         assert!(
@@ -1614,7 +1624,7 @@ mod tests {
         );
 
         let mut searching = ordinary_panel_with_two_files();
-        let (row, column) = cell_of(&mut searching, 120, 30, "Files");
+        let (row, column) = cell_of(&mut searching, 120, 30, "2 files");
         searching.history =
             crate::history::History::from_entries(vec![bravebot_session::store::Entry::sent(
                 "old one", None,
