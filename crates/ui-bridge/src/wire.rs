@@ -364,9 +364,9 @@ fn consulted_lines(said: &[Said]) -> std::collections::HashMap<usize, Vec<&str>>
 pub fn tags(text: &str, bots: &[&str]) -> Value {
     bravebot_mentions::tags(text, bots)
         .into_iter()
-        .map(|(at, bot)| {
-            let start = text[..at].encode_utf16().count();
-            json!({ "start": start, "end": start + 1 + bot.len(), "bot": bot })
+        .filter_map(|(at, bot)| {
+            let start = text.get(..at)?.encode_utf16().count();
+            Some(json!({ "start": start, "end": start + 1 + bot.len(), "bot": bot }))
         })
         .collect()
 }

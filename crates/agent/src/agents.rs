@@ -307,15 +307,7 @@ pub fn rewrite_definition(
         .map(str::trim)
         .find(|line| !line.is_empty())
         .ok_or(Refused::NoDescription)?;
-    let model = match model.map(str::trim) {
-        None => None,
-        Some(m)
-            if m.is_empty() || m.contains(['\n', '\r']) || m.eq_ignore_ascii_case("inherit") =>
-        {
-            return Err(Refused::Model);
-        }
-        Some(m) => Some(m),
-    };
+    let model = model.map(written_model).transpose()?;
 
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
     if lines.first().map(|l| l.trim_end()) != Some("---") {
@@ -415,6 +407,16 @@ pub fn rewrite_definition(
         Ok(out)
     } else {
         Err(Refused::WouldNotReadBack)
+    }
+}
+
+/// A model name as a definition writes it, or refused where it would name none.
+fn written_model(model: &str) -> Result<&str, Refused> {
+    let model = model.trim();
+    if model.is_empty() || model.contains(['\n', '\r']) || model.eq_ignore_ascii_case("inherit") {
+        Err(Refused::Model)
+    } else {
+        Ok(model)
     }
 }
 
@@ -597,7 +599,7 @@ pub fn bots(definitions: &Definitions) -> impl Iterator<Item = &Definition> {
 pub fn bot_row(definition: &Definition) -> String {
     let model = definition
         .model()
-        .map_or_else(|| t!(consult_row_session_model).to_string(), str::to_string);
+        .map_or_else(|| t!(consult_row_session_model).to_string(), str::to_owned);
     let rounds = definition.rounds().to_string();
     match definition.budget() {
         Some(tokens) => t!(
@@ -608,7 +610,6 @@ pub fn bot_row(definition: &Definition) -> String {
         ),
         None => t!(consult_row, model = model, rounds = rounds),
     }
-    .to_string()
 }
 
 /// Where each definition that keeps a memory keeps it, and what the map says of it ([MEMORY-12]).

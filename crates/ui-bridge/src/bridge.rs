@@ -2124,14 +2124,21 @@ impl Bridge {
     /// that named them (CONSULT-9).
     ///
     /// A line where every bot left may not be consulted drafts nothing, and the window is told why.
-    fn consult_next(&mut self, handle: &str, line: String, bots: Vec<String>) {
-        if let Err(error) = self.draft_brief(handle, line, Some(bots), None) {
-            self.emitter.send(Event::new(
-                "consult.ended",
-                handle,
-                json!({"message": error.message}),
-            ));
-        }
+    fn consult_next(&mut self, handle: &str, line: String, bots: &[String]) {
+        // The line was the host's to answer once, before its first consult, and is not sent to it
+        // again because the bots it left are gone.
+        let message = match self.draft_brief(handle, line, Some(bots), None) {
+            Ok(drafting) if drafting["brief"].is_null() => {
+                "no bot the line named is left to consult".to_owned()
+            }
+            Ok(_) => return,
+            Err(error) => error.message,
+        };
+        self.emitter.send(Event::new(
+            "consult.ended",
+            handle,
+            json!({ "message": message }),
+        ));
     }
 
     /// Ask the host to draft the brief for the first bot `line` names that may be consulted, and
@@ -2142,11 +2149,15 @@ impl Bridge {
     /// held here until a `turn.send` carrying `brief` sends it. A draft the host could not have
     /// held is put to the person first, through the session's questions, and comes back only on a
     /// yes (CONSULT-6). `only` narrows the bots to those an earlier consult of the line left.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one snapshot of the session handed whole to the worker that drafts"
+    )]
     fn draft_brief(
         &mut self,
         handle: &str,
         line: String,
-        only: Option<Vec<String>>,
+        only: Option<&[String]>,
         model: Option<String>,
     ) -> Result<Value, Failure> {
         self.reap(handle);
@@ -2162,17 +2173,10 @@ impl Bridge {
         let definitions = (!bravebot_mentions::referenced(&line).is_empty())
             .then(|| session_definitions(open, &workspace, true))
             .flatten();
-        let picked = definitions.as_ref().and_then(|definitions| {
-            crate::consult::pick(&config, definitions, &line, only.as_deref())
-        });
+        let picked = definitions
+            .as_ref()
+            .and_then(|definitions| crate::consult::pick(&config, definitions, &line, only));
         let Some(picked) = picked else {
-            // The line was the host's to answer once, before its first consult, and is not sent
-            // to it again because the bots it left are gone.
-            if only.is_some() {
-                return Err(Failure::bad_request(
-                    "no bot the line named is left to consult",
-                ));
-            }
             return Ok(json!({ "brief": null }));
         };
         let bot = picked.now.map_err(Failure::bad_request)?.bot;
@@ -2252,50 +2256,20 @@ impl Bridge {
                 trust,
                 &cancel,
             );
-            let mut data = json!({ "bot": bot, "row": row, "line": line, "brief": null });
-            match done {
-                Ok(answered) => {
-                    if let Ok(mut state) = session_state.lock() {
-                        state.tokens += answered.usage.total();
-                    }
-                    match answered.kept {
-                        // Only a brief the planner could have held, or one a person promoted, is
-                        // offered, and the words offered are the kept ones (CONSULT-6).
-                        Some(kept) => {
-                            data["brief"] =
-                                json!(bravebot_agent::aside::brief_prompt(&line, &kept));
-                            data["private"] = json!(answered.private);
-                            // One the host could have held anyway, and that holds nothing
-                            // private, is sent as it is; the person sent the line that asked for it.
-                            data["send"] = json!(!answered.promoted && !answered.private);
-                            data["message"] = json!(
-                                t!(consult_brief_ready, bot = bot.clone(), bound = row).to_string()
-                            );
-                            if let Ok(mut held) = held.lock() {
-                                *held = Some(Brief {
-                                    bot,
-                                    line,
-                                    private: answered.private,
-                                    then,
-                                });
-                            }
-                        }
-                        None => {
-                            data["message"] =
-                                json!(t!(consult_brief_declined, bot = bot).to_string());
-                        }
-                    }
-                }
-                Err(_) if cancel.is_cancelled() => {
-                    data["message"] = json!(t!(consult_brief_stopped, bot = bot).to_string());
-                }
-                Err(error) => {
-                    data["message"] = json!(
-                        t!(consult_brief_failed, bot = bot, problem = error.to_string())
-                            .to_string()
-                    );
-                }
-            }
+            let brief = Brief {
+                bot,
+                line,
+                private: false,
+                then,
+            };
+            let data = drafted(
+                done,
+                cancel.is_cancelled(),
+                brief,
+                row,
+                &held,
+                &session_state,
+            );
             emitter.finish(Event::new("consult.brief", &session, data), &finished);
         });
         Ok(json!({ "drafting": true, "target": target }))
@@ -2324,7 +2298,7 @@ impl Bridge {
                 .ok()
                 .and_then(|mut left| left.take());
             if let Some((line, bots)) = next {
-                self.consult_next(&handle, line, bots);
+                self.consult_next(&handle, line, &bots);
                 continue;
             }
             if open.watches.lock().map(|w| w.is_empty()).unwrap_or(true) {
@@ -2791,6 +2765,47 @@ fn shown_path(path: &Path, project: &Path) -> String {
         .to_string()
 }
 
+/// What `consult.brief` says of a drafted brief, holding it for `turn.send` where it is offered.
+///
+/// Only a brief the planner could have held, or one a person promoted, is offered, and the words
+/// offered are the kept ones (CONSULT-6). One the host could have held anyway, and that holds
+/// nothing private, is sent as it is: the person sent the line that asked for it (CONSULT-5).
+fn drafted(
+    done: Result<bravebot_agent::aside::Answered, bravebot_agent::aside::AsideError>,
+    cancelled: bool,
+    mut brief: Brief,
+    row: String,
+    held: &Mutex<Option<Brief>>,
+    state: &Mutex<State>,
+) -> Value {
+    let bot = brief.bot.clone();
+    let mut data = json!({ "bot": bot, "row": row, "line": brief.line, "brief": null });
+    let message = match done {
+        Ok(answered) => {
+            if let Ok(mut state) = state.lock() {
+                state.tokens += answered.usage.total();
+            }
+            match answered.kept {
+                Some(kept) => {
+                    data["brief"] = json!(bravebot_agent::aside::brief_prompt(&brief.line, &kept));
+                    data["private"] = json!(answered.private);
+                    data["send"] = json!(!answered.promoted && !answered.private);
+                    brief.private = answered.private;
+                    if let Ok(mut held) = held.lock() {
+                        *held = Some(brief);
+                    }
+                    t!(consult_brief_ready, bot = bot, bound = row)
+                }
+                None => t!(consult_brief_declined, bot = bot),
+            }
+        }
+        Err(_) if cancelled => t!(consult_brief_stopped, bot = bot),
+        Err(error) => t!(consult_brief_failed, bot = bot, problem = error.to_string()),
+    };
+    data["message"] = json!(message);
+    data
+}
+
 /// Run one turn to its end, whatever that end is.
 ///
 /// The worker owns the whole of it: the call, writing the record afterwards, and saying
@@ -3041,7 +3056,7 @@ fn work(work: Work) {
             answer: &replied.answer,
         };
         if let Err(denied) =
-            bravebot_agent::consult::record(&named,&answered, &mut state.conversation, &mut sink)
+            bravebot_agent::consult::record(&named, &answered, &mut state.conversation, &mut sink)
         {
             outcome = Err(TurnError::Precommit(denied.to_string()));
         }

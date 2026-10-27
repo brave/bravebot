@@ -698,7 +698,7 @@ pub fn tags<'a>(line: &str, bots: &[&'a str]) -> Vec<(usize, &'a str)> {
     word_spans(line)
         .into_iter()
         .filter_map(|(start, end)| {
-            let word = line[start..end].strip_prefix('@')?;
+            let word = line.get(start..end)?.strip_prefix('@')?;
             let bot = bot_in(word, bots)?;
             word.starts_with(bot).then_some((start, bot))
         })
