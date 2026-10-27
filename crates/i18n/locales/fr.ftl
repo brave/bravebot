@@ -4329,12 +4329,16 @@ locale-name = Français
 ## La fenêtre de bureau
 
 ui-settings-appearance = Apparence
+ui-settings = Réglages
+ui-settings-general = Général
+ui-settings-general-explained = L'apparence de cette fenêtre et la langue qu'elle utilise
 ui-settings-theme = Thème
 ui-settings-theme-explained = Système suit le système d'exploitation. Clair et Sombre restent tels quels, quoi qu'il indique.
 ui-appearance-system = Système
 ui-appearance-light = Clair
 ui-appearance-dark = Sombre
 ui-settings-language = Langue
+ui-settings-display-language = Langue d'affichage
 ui-settings-language-explained = Automatique suit la langue de votre fichier de réglages, puis celle du système.
 ui-settings-language-automatic = Automatique
 ui-settings-language-next-start = S'applique au prochain démarrage de bravebot.

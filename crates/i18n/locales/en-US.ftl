@@ -5022,12 +5022,16 @@ locale-name = English (US)
 ## The desktop window. A message here is written into the window's own code rather than the terminal's
 
 ui-settings-appearance = Appearance
+ui-settings = Settings
+ui-settings-general = General
+ui-settings-general-explained = How this window looks and which language it uses
 ui-settings-theme = Theme
 ui-settings-theme-explained = System follows the OS. Light and Dark stay put regardless of it.
 ui-appearance-system = System
 ui-appearance-light = Light
 ui-appearance-dark = Dark
 ui-settings-language = Language
+ui-settings-display-language = Display language
 ui-settings-language-explained = Automatic follows the language in your settings file, then the system's.
 ui-settings-language-automatic = Automatic
 ui-settings-language-next-start = Applies the next time bravebot starts.

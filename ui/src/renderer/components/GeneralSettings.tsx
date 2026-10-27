@@ -90,7 +90,7 @@ function LanguageGroup({ running }: { running: boolean }): React.JSX.Element {
     <SettingsGroup title={t.uiSettingsLanguage()}>
       <div className="settings-row" data-test="language-row">
         <div className="settings-row-text">
-          <h3>{t.uiSettingsLanguage()}</h3>
+          <h3>{t.uiSettingsDisplayLanguage()}</h3>
           <p>{t.uiSettingsLanguageExplained()}</p>
           <p data-test="language-note">
             {report?.overridden ? t.uiSettingsLanguageOverridden() : t.uiSettingsLanguageNextStart()}
@@ -102,7 +102,7 @@ function LanguageGroup({ running }: { running: boolean }): React.JSX.Element {
             onChange={(detail) => {
               if (typeof detail.value === 'string' && detail.value !== selected) void choose(detail.value)
             }}>
-            <span slot="label" className="visually-hidden">{t.uiSettingsLanguage()}</span>
+            <span slot="label" className="visually-hidden">{t.uiSettingsDisplayLanguage()}</span>
             <leo-option value={AUTOMATIC}>{t.uiSettingsLanguageAutomatic()}</leo-option>
             {report?.available.map(({ tag, name }) => (
               <leo-option key={tag} value={tag}>{name}</leo-option>

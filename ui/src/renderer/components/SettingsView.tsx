@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Appearance } from '../../shared/theme'
+import { t } from '../i18n'
 import { Navigation, NavigationItem, type IconName } from '../nala'
 import { AgentSettings } from './AgentSettings'
 import { Connectors } from './Connectors'
@@ -8,10 +9,12 @@ import { IconButton } from './IconButton'
 
 export type SettingsPage = 'general' | 'connectors' | 'agent'
 
-const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; subtitle: string }[] = [
-  { id: 'general', label: 'General', icon: 'settings', subtitle: 'How this window looks' },
-  { id: 'connectors', label: 'Connectors', icon: 'plug', subtitle: 'MCP servers that give the model tools for your accounts and services' },
-  { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', subtitle: 'Configuration and automation for this app' },
+// `label` names the page in the list; `title` and `subtitle` head the page and are read in the
+// window's language where a page has been moved to the catalog.
+const PAGES: readonly { id: SettingsPage; label: string; icon: IconName; title: () => string; subtitle: () => string }[] = [
+  { id: 'general', label: 'General', icon: 'settings', title: () => t.uiSettingsGeneral(), subtitle: () => t.uiSettingsGeneralExplained() },
+  { id: 'connectors', label: 'Connectors', icon: 'plug', title: () => 'Connectors', subtitle: () => 'MCP servers that give the model tools for your accounts and services' },
+  { id: 'agent', label: 'Agent settings', icon: 'product-brave-leo', title: () => 'Agent settings', subtitle: () => 'Configuration and automation for this app' },
 ]
 
 /**
@@ -94,15 +97,15 @@ export function SettingsView({ page, onPage, onBack, session, chosen, running, o
           <div className="drag" />
           <div className="settings-crumbs">
             {inner && <IconButton icon="arrow-left" label="Back" tooltip="Back" shortcut="⎋" size="tiny" onClick={inner} data-test="settings-inner-back" />}
-            <span className="settings-crumb">Settings</span>
+            <span className="settings-crumb">{t.uiSettings()}</span>
             <span className="settings-crumb-sep" aria-hidden="true">/</span>
-            <span className="settings-crumb current">{current.label}</span>
+            <span className="settings-crumb current" data-test="settings-crumb-current">{current.title()}</span>
           </div>
         </header>
         <div className="settings-scroll">
           <div className="settings-page">
-            <h1 id="settings-title">{current.label}</h1>
-            <p className="settings-subtitle">{current.subtitle}</p>
+            <h1 id="settings-title">{current.title()}</h1>
+            <p className="settings-subtitle" data-test="settings-subtitle">{current.subtitle()}</p>
             {shown === 'agent'
               ? <AgentSettings session={session} onChanged={onChanged} onDirty={onDirty} />
               : shown === 'connectors'
