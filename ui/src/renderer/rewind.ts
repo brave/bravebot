@@ -1,5 +1,6 @@
-import type { RewindGap, RewindPoint } from '../shared/protocol'
-import type { Entry } from './transcript'
+import type { RewindGap, RewindPoint, RewoundSession } from '../shared/protocol'
+import type { Live } from './live'
+import { fromSaid, type Entry } from './transcript'
 
 /** What a rewind of `steps` turns would do, worked out before anybody is asked to confirm it. */
 export interface RewindPlan {
@@ -89,4 +90,27 @@ export function rewindFailure(error: unknown): string {
   return error instanceof RequestFailed && error.code === 'turn_in_flight'
     ? 'A turn started, so nothing was undone. Try again once it finishes.'
     : String(error)
+}
+
+/**
+ * The session as the agent says it stands after a rewind, redrawn rather than patched, as opening a
+ * saved session is: what is on screen afterwards is what the next turn will be working from.
+ */
+export function rewoundLive(old: Live, rewound: RewoundSession): Live {
+  return {
+    ...old,
+    entries: fromSaid(rewound.said),
+    turns: Object.fromEntries(Object.entries(old.turns).filter(([turn]) => Number(turn) < rewound.turn)),
+    todos: Object.values(rewound.todos).flat(),
+    contextTokens: rewound.contextTokens,
+    archived: rewound.archived,
+    context: rewound.context,
+    rewind: rewound.rewind,
+    awaitingOrdinal: null,
+    focus: null,
+    // Held, so the prompt going back in the composer is not overtaken by one queued before it.
+    queuePaused: old.queued?.length ? true : old.queuePaused,
+    // The turn that carried the briefing may be one of those undone.
+    bot: old.bot ? { ...old.bot, grounded: false } : null,
+  }
 }

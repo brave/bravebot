@@ -268,6 +268,7 @@ export function App(): React.JSX.Element {
         // extra reading of a short file is cheaper than a bot that has quietly forgotten itself.
         bot: bot ? { slug: bot.slug, grounded: false } : null,
         archived: opened.archived,
+        context: opened.context,
         rewind: opened.rewind ?? [],
       }))
       const notes = [opened.branchNote, opened.buildNote, opened.frontNote].filter(Boolean) as string[]

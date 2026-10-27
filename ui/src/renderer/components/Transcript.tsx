@@ -32,6 +32,7 @@ import { FailureSentence } from './FailureSentence'
 import { FilePreview } from './FilePreview'
 import { ThinkingTail } from './ThinkingTail'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
+import { LabelChip } from './LabelChip'
 import type { Turns, TurnDisclosure } from '../turn-details'
 import { Alert, Button, Collapse, Icon, Input, Label, ProgressRing, type IconName } from '../nala'
 import { middleTruncate } from '../truncate'
@@ -1986,7 +1987,7 @@ function Card({
               {shown.origin}
             </span>
             {shown.reach === 'no_model' && <span className="reach">in no model’s context</span>}
-            <span className="label">{shown.label}</span>
+            <LabelChip label={shown.labelAxes} />
           </div>
           <pre className="preview">{shown.preview.join('\n')}</pre>
           <div className="quarantine-foot">
@@ -2055,7 +2056,7 @@ function Card({
           {/* Outside the fold and above the diff, as the terminal draws it: the answer waits on it. */}
           {request.remark && <div className="processor-remark" data-deciding="all"><strong>Processor’s remark · untrusted</strong>
             <pre>{request.remark.preview.join('\n')}</pre>
-            <small>{request.remark.label}{request.remark.lines > request.remark.preview.length ? ` · ${request.remark.lines - request.remark.preview.length} more lines not shown` : ''}. Review the diff before approving.</small>
+            <small><LabelChip label={request.remark.labelAxes} />{request.remark.lines > request.remark.preview.length ? `${request.remark.lines - request.remark.preview.length} more lines not shown. ` : ''}Review the diff before approving.</small>
           </div>}
           <Diff changes={request.changes} path={request.path} shownPath={request.shownPath} untrusted={request.untrusted} deciding />
           <Collapse className="card-details" title="Details" isOpen={undefined}>
@@ -2179,7 +2180,7 @@ function Card({
           head={<CardHead icon="eye-on" intent="Read output" deciding
             subject={<code className="path" data-tooltip={request.command}>{request.command}</code>}
             counts={<span className="counts">{request.lines} line{request.lines === 1 ? '' : 's'}</span>}
-            trust={<VettingVerdict vetting={request.vetting} />} />}
+            trust={<><LabelChip label={request.labelAxes} /><VettingVerdict vetting={request.vetting} /></>} />}
           actions={<>
             <Button
               kind="plain-faint" size="small" className="reject"
@@ -2219,7 +2220,7 @@ function Card({
         return <DecisionCard className="confirm vetted-read" answerable={answerable} subject={request.origin}
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this file once' : 'You kept this file out' }}
           head={<CardHead icon="eye-on" intent="See once" deciding subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
-            counts={<span className="counts">{picture.media}, {picture.bytes} bytes</span>} trust={<VettingVerdict vetting={request.vetting} />} />}
+            counts={<span className="counts">{picture.media}, {picture.bytes} bytes</span>} trust={<><LabelChip label={request.labelAxes} /><VettingVerdict vetting={request.vetting} /></>} />}
           actions={<>
             <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
             <Approve onClick={() => onDecide('vet', request.request, true)}>Let the planner see it once</Approve>
@@ -2239,7 +2240,7 @@ function Card({
       return <DecisionCard className="confirm vetted-read" answerable={answerable} subject={request.origin}
         decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You allowed this content once' : 'You kept this content out' }}
         head={<CardHead icon="eye-on" intent="Read once" deciding subject={<code className="path" data-tooltip={request.origin}>{request.origin}</code>}
-          counts={<span className="counts">{request.lines} lines</span>} trust={<VettingVerdict vetting={request.vetting} />} />}
+          counts={<span className="counts">{request.lines} lines</span>} trust={<><LabelChip label={request.labelAxes} /><VettingVerdict vetting={request.vetting} /></>} />}
         actions={<>
           <Button kind="plain-faint" size="small" className="reject" onClick={() => onDecide('vet', request.request, false)}>Keep it out</Button>
           <Approve onClick={() => onDecide('vet', request.request, true)}>Let the planner read once</Approve>
@@ -2885,7 +2886,7 @@ function Card({
           decided={decision === null ? null : { tone: decision, text: decision === 'approve' ? 'You vouched for this path' : 'You left it confined' }}
           head={<CardHead icon="shield-done" intent="Vouch for" deciding
             subject={<code className="path">{request.shownPath}</code>}
-            trust={<VettingVerdict vetting={request.vetting} />} />}
+            trust={<><LabelChip label={request.labelAxes} /><VettingVerdict vetting={request.vetting} /></>} />}
           actions={<>
             <Button
               kind="plain-faint" size="small" className="reject"
@@ -3062,7 +3063,7 @@ function HiddenCharacters({ note }: { note?: string | null }): React.JSX.Element
 
 /** The checker's one-sentence reason, beside the content it is about: it is the evidence for the verdict. */
 function VettingReason({ vetting }: { vetting?: import('../../shared/protocol').Vetting }): React.JSX.Element | null {
-  return vetting?.reason ? <p className="vetting-reason" data-deciding="all"><span className="vetting-by">Checker</span>{vetting.reason}</p> : null
+  return vetting?.reason ? <p className="vetting-reason" data-deciding="all"><span className="vetting-by">Checker</span><LabelChip label={vetting.labelAxes} />{vetting.reason}</p> : null
 }
 
 /** How far to lean on the checker, under a card's Details. */

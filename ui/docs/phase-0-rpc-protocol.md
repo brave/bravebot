@@ -1043,8 +1043,16 @@ goes back to saying once the check is over.
 
 ```json
 { "origin": "https://example.com/page", "reach": "not_the_planner",
-  "label": "(U,priv)", "preview": ["…"], "lines": 240 }
+  "label": "(U,priv)", "labelAxes": { "integrity": "untrusted", "confidentiality": "private" },
+  "preview": ["…"], "lines": 240 }
 ```
+
+`labelAxes` is `label` with both axes named, read by the agent's `Label::named` and written by the
+same function as an audit record's label, so a client draws a label without reading the short form
+(SHARE-001). A word that names no label is sent as untrusted and private. `output.request`,
+`vouch.request` and `vet.request` carry it beside `label`, as do a `confirm.request`'s `remark` and
+each request's `vetting` (null where `vetting.label` is). `label` stays for search and for clients
+that print it; draw from `labelAxes`.
 
 `preview` is already trimmed by the kernel to 12 lines of at most 160 characters
 (`turn.rs` `PREVIEW_LINES` / `PREVIEW_WIDTH`) and released for display and nothing else.
@@ -1097,8 +1105,8 @@ whose events all share one second cannot say which came first.
 { "event": "turn.done", "session": "s1", "data": {
   "turn": 5,
   "reply": "The parser drops them in `skip_separators`…",
-  "model": "claude-…", "steps": 3, "clean": true,
-  "tokens": 51234, "outputTokens": 812,
+  "model": "claude-…", "service": "Brave", "sessionModel": true,
+  "steps": 3, "clean": true, "tokens": 51234, "outputTokens": 812,
   "notices": ["loaded AGENTS.md"],
   "trust": { "rules": [ { "path": "…", "integrity": "untrusted" } ] },
   "id": "0f1c…", "archived": 0, "prompt": 4,
@@ -1106,6 +1114,12 @@ whose events all share one second cannot say which came first.
                 "paths": ["src/parse.rs"], "gaps": [] } ]
 } }
 ```
+
+`sessionModel` is `Outcome::ran_on_the_sessions_model()`: false where an addressed definition's
+model, a skill's model or the fallback model answered. `service` names the service the session's
+model is sent to (`Brave`, `AWS Bedrock`, `ChatGPT`, `xAI`, or a gateway's display name), chosen
+in the order the agent's backend picks one, and is `null` whenever `sessionModel` is false, since
+the model that answered may be sent somewhere else.
 
 `rewind` is every point the session can be put back to with `session.rewind`, newest first,
 at most five. `steps` is the value that reaches it, `turn` is the turn it undoes, `prompt` is

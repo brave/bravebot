@@ -99,3 +99,33 @@ test('the verdict decides a refusal, and an unreadable one is drawn as a refusal
   assert.equal(isRefusal({ kind: 'action_field', allowed: false, refusal: 'false' }), true)
   assert.equal(isRefusal({ kind: 'gate_passed', detail: 'ok', refusal: null }), true)
 })
+
+test('the service is kept only from a turn that ran on the session model', () => {
+  assert.equal(receiveTurn({}, done(1, { service: 'Brave', sessionModel: true }))[1].service, 'Brave')
+  for (const data of [{ service: 'Brave', sessionModel: false }, { service: 'Brave' }, { service: null, sessionModel: true },
+    { service: '', sessionModel: true }, { service: 7, sessionModel: true }, { sessionModel: 'true', service: 'Brave' }]) {
+    assert.equal(receiveTurn({}, done(1, data))[1].service, undefined, JSON.stringify(data))
+  }
+})
+
+test('routing and content groups each run of one tool’s fields and keeps releases in order', () => {
+  const { routingAndContent } = module.exports
+  const field = (tool, name, role, allowed = true) => ({ kind: 'action_field', tool, field: name, role, allowed, refusal: !allowed,
+    label: { integrity: 'trusted', confidentiality: 'public' } })
+  let turns = {}
+  for (const recorded of [
+    field('write_file', 'path', 'routing'), { kind: 'gate_passed', gate: 'g', refusal: false }, field('write_file', 'content', 'content'),
+    field('fetch_url', 'url', 'routing', false),
+    { kind: 'declassified', slot: 's2', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, refusal: false },
+    field('write_file', 'path', 'routing'),
+  ]) turns = receiveTurn(turns, event('audit', 1, { event: recorded }))
+  const rows = routingAndContent(turns[1].audit)
+  assert.deepEqual(rows.map((row) => 'tool' in row ? [row.tool, row.records.map((r) => r.event.field)] : ['released', row.event.slot]), [
+    ['write_file', ['path', 'content']],
+    ['fetch_url', ['url']],
+    ['released', 's2'],
+    ['write_file', ['path']],
+  ])
+  assert.deepEqual(rows[0].records.map((r) => r.sequence), [1, 3])
+  assert.deepEqual(routingAndContent([]), [])
+})

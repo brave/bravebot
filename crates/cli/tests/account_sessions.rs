@@ -76,7 +76,8 @@ enum Does {
     BeginsOwn,
     /// Names none of a backend, which a request through it carries an identifier of its own for.
     CarriesOwn,
-    /// Builds a backend to ask what it is, as `spends_a_subscription` does, and sends nothing.
+    /// Builds a backend to ask what it is, as `spends_a_subscription` and `service_name` do, and
+    /// sends nothing.
     Asks,
 }
 
@@ -189,7 +190,12 @@ fn sites_in(code: &str) -> Vec<(usize, &'static str, Does)> {
                 (true, text) if text.contains(".in_account_session(") => Does::Says,
                 (true, _) => Does::BeginsOwn,
                 (false, text) if text.contains(".in_session(") => Does::Says,
-                (false, text) if text.contains(".spends_a_subscription(") => Does::Asks,
+                (false, text)
+                    if text.contains(".spends_a_subscription(")
+                        || text.contains(".service_name(") =>
+                {
+                    Does::Asks
+                }
                 (false, _) => Does::CarriesOwn,
             };
             found.push((offset, builds, does));
@@ -245,8 +251,10 @@ fn every_task_and_every_backend_the_code_builds_is_in_a_session_or_listed_as_not
         ("crates/ui-bridge/src/bridge.rs", "Task::new", Says, 1),
         ("crates/ui-bridge/src/manifest.rs", "Task::new", Says, 1),
         // Every request the agent makes names the session of the task or the chat it is made for,
-        // and the two places that only ask what a model is send nothing.
+        // and the places that only ask what a model is, or which service it is sent to, send
+        // nothing.
         ("crates/agent/src/backend.rs", "Backend::select", Asks, 1),
+        ("crates/ui-bridge/src/bridge.rs", "Backend::select", Asks, 1),
         ("crates/agent/src/manifest.rs", "Backend::select", Says, 1),
         ("crates/agent/src/processor.rs", "Backend::select", Says, 1),
         ("crates/agent/src/turn.rs", "Backend::select", Says, 1),

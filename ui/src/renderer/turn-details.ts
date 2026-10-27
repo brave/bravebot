@@ -14,6 +14,8 @@ export interface TurnDetails {
   noticesOpen: boolean
   statsOpen: boolean
   model?: string
+  /** The service the session's model is served by, as the bridge named it from configuration. */
+  service?: string
   tokens?: number
   outputTokens?: number
   steps?: number
@@ -63,6 +65,8 @@ export function receiveTurn(turns: Turns, message: BridgeEvent): Turns {
     next = { ...next, status: 'complete', notices,
       noticesOpen: previous.status === 'complete' ? previous.noticesOpen : JSON.stringify(notices) !== JSON.stringify(prior?.notices),
       model: typeof data.model === 'string' && data.model ? data.model : undefined,
+      // Only where the turn ran on the session's own model: another model's service is not known.
+      service: data.sessionModel === true && typeof data.service === 'string' && data.service ? data.service : undefined,
       tokens: count(data.tokens), outputTokens: count(data.outputTokens), steps: count(data.steps),
       clean: typeof data.clean === 'boolean' ? data.clean : undefined }
   } else if (message.event === 'turn.error') {
@@ -133,4 +137,31 @@ export function auditDescription(event: Record<string, unknown>): { title: strin
     case 'declassified': return { title: 'Data authorized for release', detail: text(event.reason) }
     default: return { title: 'Audit event', detail: text(event.kind) }
   }
+}
+
+/** The action fields a tool's call was checked on, in the order recorded. */
+export interface FieldGroup {
+  tool: string
+  records: AuditRecord[]
+}
+
+/**
+ * The records that say where an effect went and what it carried: each run of `action_field`
+ * records for one tool, and each release, in the order recorded.
+ *
+ * A run rather than every record for the tool: the trail carries no call id, so two calls of one
+ * tool with another in between are drawn as two groups rather than merged into one.
+ */
+export function routingAndContent(audit: AuditRecord[]): (FieldGroup | AuditRecord)[] {
+  const rows: (FieldGroup | AuditRecord)[] = []
+  for (const record of audit) {
+    if (record.event.kind === 'declassified') rows.push(record)
+    else if (record.event.kind === 'action_field') {
+      const tool = text(record.event.tool)
+      const last = rows.at(-1)
+      if (last && 'tool' in last && last.tool === tool) last.records.push(record)
+      else rows.push({ tool, records: [record] })
+    }
+  }
+  return rows
 }

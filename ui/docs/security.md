@@ -171,6 +171,14 @@ Command-output content is released for display so the person deciding can read i
 Only the agent's approved path admits it to the planner. Confined material is labelled
 in the UI; showing it is not evidence that the planner read it.
 
+A label chip is read only from a label's `{integrity, confidentiality}` words: `labelAxes` on a
+quarantine, a request, a write's remark and a checker's reason, and `label` on an audit record.
+It is never read from content, an origin or a preview, nor from the trail's short form
+(`(T,pub)`), which only the agent's `Label::named` reads (SHARE-001); the bridge reads it there and
+sends the words. Anything but an exact word reads as untrusted and private, axis by axis. The
+chip's words and tooltips are fixed strings, it carries none of the field's text, and it is
+neutral in every state so that trusted never reads as safe.
+
 How it is labelled is this window's answer to
 [LAYER-5](../../docs/specs/layering.md#LAYER-5), the rule that any surface showing released
 content marks it. The mark here is structural rather than a margin: a quarantined preview sits in
