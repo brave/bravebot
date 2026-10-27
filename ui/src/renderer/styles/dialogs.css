@@ -33,6 +33,7 @@
 .modal-header-action { display: inline-flex; margin-left: auto; font: var(--type-body); }
 .modal-subtitle { display: block; margin-top: var(--leo-spacing-s); font: var(--type-body); color: var(--ink-secondary); }
 .confirm-archive p { margin: 0; }
+.confirm-archive p + p { margin-top: var(--leo-spacing-m); }
 .confirm-delete { --leo-button-color: var(--status-error-ink); }
 .confirm-archive-name { color: var(--ink-primary); font: var(--type-body-strong); overflow-wrap: anywhere; }
 
@@ -40,6 +41,17 @@
 .modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); }
 .modal h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-primary); }
 .modal code { font: var(--type-code); }
+.modal .dialog-busy { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+
+/* ---------------------------------------------------------------- import
+
+   Another program's sessions, one checkbox each. The titles are that program's text, so a row is
+   one line cut with an ellipsis and the whole title is its tooltip. */
+.import-sessions { display: flex; flex-direction: column; gap: var(--leo-spacing-s); max-height: 50vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.import-session { display: flex; align-items: center; gap: var(--leo-spacing-m); min-height: var(--hit); }
+.import-session leo-checkbox { flex: 1; min-width: 0; }
+.import-session-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); color: var(--ink-primary); }
+.import-session-time { flex: none; font: var(--type-meta); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
 
 /* The primary action at the right-hand end; a secondary one that should stand apart from it
    carries `modal-leading` and goes to the other end. */

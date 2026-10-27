@@ -474,6 +474,8 @@ const ALLOWED = new Set([
   'session.new',
   'session.fork',
   'session.delete',
+  'session.purge',
+  'session.import',
   'session.close',
   'session.mode',
   'session.sandbox',
@@ -560,9 +562,9 @@ app.whenReady().then(() => {
     }
     // A session's directory becomes the root the file helper is pinned to, so the renderer may
     // open one only in a folder it was given (TRUST-20), whatever shape the string it sends has.
-    // A delete names a directory too, and is the one method here that cannot be undone, so it is
-    // held to the same folders.
-    if (method === 'session.new' || method === 'session.open' || method === 'session.delete') {
+    // A delete, a purge and an import name a directory too, and change what is kept for it, so they
+    // are held to the same folders.
+    if (method === 'session.new' || method === 'session.open' || method === 'session.delete' || method === 'session.purge' || method === 'session.import') {
       if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }
@@ -619,6 +621,19 @@ app.whenReady().then(() => {
           removeConversation(conversationKey(directory, id))
           forgetFork({ directory, id })
           forgetBotConversation(directory, id)
+        }
+      }
+      // The same for each record a purge removed, among the ones the window named.
+      if (method === 'session.purge') {
+        const { directory, ids } = (params ?? {}) as { directory?: unknown; ids?: unknown }
+        const deleted = (ok as { deleted?: unknown } | null)?.deleted
+        if (typeof directory === 'string' && Array.isArray(ids) && Array.isArray(deleted)) {
+          for (const id of deleted) {
+            if (!isSessionId(id) || !ids.includes(id)) continue
+            removeConversation(conversationKey(directory, id))
+            forgetFork({ directory, id })
+            forgetBotConversation(directory, id)
+          }
         }
       }
       if (method === 'session.close') {

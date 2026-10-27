@@ -227,6 +227,8 @@ impl Bridge {
             "session.view.start" => self.start_view(request),
             "session.fork" => self.fork_session(request),
             "session.delete" => self.delete_session(request),
+            "session.purge" => self.purge_sessions(request),
+            "session.import" => import_sessions(request),
             "session.close" => self.close_session(request),
             "session.mode" => self.set_permission_mode(request),
             "session.sandbox" => self.set_sandbox_mode(request),
@@ -873,31 +875,9 @@ impl Bridge {
         let directory = PathBuf::from(request.string("directory")?);
         let id = request.string("id")?;
 
-        let handles: Vec<String> = self.open.keys().cloned().collect();
-        for handle in &handles {
-            self.reap(handle);
-        }
-        let key = bravebot_session::sessions::key_for(&directory);
-        // A worker keeps a session's lock for the whole of its turn, so the id of a session with a
-        // turn running cannot be read. It is set apart from a session known to hold `id`.
-        let mut holder = None;
-        let mut busy = None;
-        for open in self
-            .open
-            .values()
-            .filter(|open| bravebot_session::sessions::key_for(&open.project) == key)
-        {
-            match open.state.try_lock() {
-                Ok(state) if state.handle.as_ref().is_some_and(|held| held.id() == id) => {
-                    holder = Some(open);
-                    break;
-                }
-                Ok(_) => {}
-                Err(_) => busy = busy.or(Some(open)),
-            }
-        }
-        if let Some(open) = holder {
-            return Err(if open.running.is_some() {
+        let using = self.in_use(&directory);
+        if let Some(&(_, running)) = using.held.iter().find(|(held, _)| *held == id) {
+            return Err(if running {
                 Failure::new(
                     ErrorCode::TurnInFlight,
                     "a turn is running in the session being deleted",
@@ -908,8 +888,8 @@ impl Bridge {
                 )
             });
         }
-        if let Some(open) = busy {
-            return Err(if open.running.is_some() {
+        if let Some(running) = using.busy {
+            return Err(if running {
                 Failure::new(
                     ErrorCode::TurnInFlight,
                     "a turn is running in a session of this project, so the session being deleted cannot be told apart from it; wait for the turn to end",
@@ -935,6 +915,101 @@ impl Bridge {
             ),
         })?;
         Ok(json!({ "deleted": true }))
+    }
+
+    /// The ids the sessions this bridge has open in `directory`'s store hold, and whether one of
+    /// them is in use.
+    ///
+    /// A worker keeps a session's lock for the whole of its turn, so the id of a session with a
+    /// turn running cannot be read. Such a session is `busy` rather than a holder of any id.
+    fn in_use(&mut self, directory: &Path) -> InUse {
+        let handles: Vec<String> = self.open.keys().cloned().collect();
+        for handle in &handles {
+            self.reap(handle);
+        }
+        let key = bravebot_session::sessions::key_for(directory);
+        let mut using = InUse::default();
+        for open in self
+            .open
+            .values()
+            .filter(|open| bravebot_session::sessions::key_for(&open.project) == key)
+        {
+            match open.state.try_lock() {
+                Ok(state) => {
+                    if let Some(held) = state.handle.as_ref() {
+                        using
+                            .held
+                            .push((held.id().to_string(), open.running.is_some()));
+                    }
+                }
+                Err(_) => using.busy = using.busy.or(Some(open.running.is_some())),
+            }
+        }
+        using
+    }
+
+    /// Remove every stored session a project wrote (CLI-33), or say which a purge would remove.
+    ///
+    /// A purge removes only the ids the request names that a plan made now would remove, so a
+    /// session saved after the window asked is not swept with the rest. An id a background session
+    /// holds, or that a session open here holds, is left.
+    fn purge_sessions(&mut self, request: &Request) -> Result<Value, Failure> {
+        use bravebot_session::sessions;
+        let directory = existing_directory(request)?;
+        let using = self.in_use(&directory);
+        let plan = sessions::purge_plan(&directory, |id| {
+            using.held.iter().any(|(held, _)| held == id) || bravebot_session::jobs::is_running(id)
+        });
+
+        if request.flag("dryRun", false) {
+            let listed = sessions::list(&directory);
+            let delete: Vec<Value> = plan
+                .delete
+                .iter()
+                .filter_map(|id| listed.iter().find(|session| &session.id == id))
+                .map(|session| {
+                    json!({
+                        "id": session.id,
+                        "title": bravebot_session::search::clean(&session.title, LONGEST_TITLE),
+                        "updated": session.updated,
+                    })
+                })
+                .collect();
+            return Ok(json!({ "delete": delete, "held": plan.held }));
+        }
+
+        if let Some(running) = using.busy {
+            return Err(if running {
+                Failure::new(
+                    ErrorCode::TurnInFlight,
+                    "a turn is running in a session of this project; wait for it to end before deleting the project's sessions",
+                )
+            } else {
+                Failure::bad_request(
+                    "a session of this project is in use, so the sessions being deleted cannot be told apart from it; try again",
+                )
+            });
+        }
+        let named = strings(request, "ids")?;
+        let chosen = sessions::Purge {
+            delete: plan
+                .delete
+                .into_iter()
+                .filter(|id| named.contains(id))
+                .collect(),
+            held: plan
+                .held
+                .into_iter()
+                .filter(|id| named.contains(id))
+                .collect(),
+        };
+        let failed = sessions::purge(&directory, &chosen);
+        let deleted: Vec<&String> = chosen
+            .delete
+            .iter()
+            .filter(|id| !failed.contains(id))
+            .collect();
+        Ok(json!({ "deleted": deleted, "failed": failed, "held": chosen.held }))
     }
 
     fn close_session(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -2190,6 +2265,117 @@ fn dropped_paths(request: &Request) -> Result<Vec<String>, Failure> {
         paths.push(named.to_string());
     }
     Ok(paths)
+}
+
+/// How many characters of a stored or imported title a purge or an import lists, as the terminal's
+/// `sessions purge --dry-run` does.
+const LONGEST_TITLE: usize = 80;
+
+/// What [`Bridge::in_use`] found in one project's store.
+#[derive(Default)]
+struct InUse {
+    /// Each id an open session holds, and whether a turn is running in it.
+    held: Vec<(String, bool)>,
+    /// Whether a turn is running in the first session whose lock could not be taken, if any was.
+    busy: Option<bool>,
+}
+
+/// The `directory` a request names, resolved, which has to be a directory.
+fn existing_directory(request: &Request) -> Result<PathBuf, Failure> {
+    let named = request.string("directory")?;
+    std::fs::canonicalize(&named)
+        .ok()
+        .filter(|resolved| resolved.is_dir())
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::NotADirectory,
+                format!("{named} is not a directory"),
+            )
+        })
+}
+
+/// A required list of strings.
+fn strings(request: &Request, name: &str) -> Result<Vec<String>, Failure> {
+    request
+        .param(name)
+        .as_array()
+        .and_then(|entries| {
+            entries
+                .iter()
+                .map(|entry| entry.as_str().map(str::to_string))
+                .collect()
+        })
+        .ok_or_else(|| Failure::bad_request(format!("`{name}` must be a list of strings")))
+}
+
+/// List Claude Code's sessions for a project, or copy the ones named (SESSION-32).
+///
+/// The names are matched exactly, never as the beginning of one, since a window sends back a name
+/// it was given. Every name has to be one listed now before anything is copied.
+fn import_sessions(request: &Request) -> Result<Value, Failure> {
+    use bravebot_session::import::{self, Copied, Failed};
+    let directory = existing_directory(request)?;
+    let claude_dir = bravebot_config::import::Places::from_env()
+        .claude_code
+        .and_then(|settings| settings.parent().map(Path::to_path_buf))
+        .ok_or_else(|| {
+            Failure::new(
+                ErrorCode::NoHome,
+                "there is no home directory to read Claude Code's sessions from",
+            )
+        })?;
+    let found = import::claude_code(&claude_dir, &directory);
+
+    if request.param("ids").is_null() {
+        let listed: Vec<Value> = found
+            .iter()
+            .map(|one| {
+                json!({
+                    "sourceId": one.source_id,
+                    "id": one.id,
+                    "title": bravebot_session::search::clean(&one.title, LONGEST_TITLE),
+                    "updated": one.updated,
+                    "imported": one.imported,
+                })
+            })
+            .collect();
+        return Ok(json!({ "found": listed }));
+    }
+
+    let chosen = strings(request, "ids")?
+        .iter()
+        .map(|name| {
+            found
+                .iter()
+                .find(|one| one.source_id == *name)
+                .ok_or_else(|| {
+                    Failure::bad_request(format!(
+                        "no Claude Code session `{name}` for {}",
+                        directory.display()
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut copied = Vec::new();
+    let mut already = Vec::new();
+    let mut failed = Vec::new();
+    for one in chosen {
+        match import::copy(&directory, one) {
+            Ok(Copied::Written) => copied.push(one.id.as_str()),
+            Ok(Copied::Already) => already.push(one.id.as_str()),
+            Err(Failed::NoStateDirectory) => {
+                return Err(Failure::new(
+                    ErrorCode::NoHome,
+                    "there is no state directory to copy sessions into",
+                ));
+            }
+            Err(Failed::Write(error)) => failed.push(json!({
+                "sourceId": one.source_id,
+                "message": error.to_string(),
+            })),
+        }
+    }
+    Ok(json!({ "copied": copied, "already": already, "failed": failed }))
 }
 
 /// The workspace one turn runs on, under the caps the settings in force put a search under.

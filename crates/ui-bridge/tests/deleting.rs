@@ -492,3 +492,140 @@ fn a_turn_in_another_session_is_named_as_such_and_deletes_nothing() {
     );
     assert_eq!(stored(&home), before, "a stored session was deleted");
 }
+
+fn purge(window: &mut Window, project: &Path, params: Value) -> Value {
+    let mut params = params;
+    params["directory"] = json!(project.display().to_string());
+    window.call("session.purge", params)
+}
+
+/// The ids a purge's answer lists, sorted, whether as rows or as bare ids.
+fn ids(listed: &Value) -> Vec<String> {
+    let mut ids: Vec<String> = listed
+        .as_array()
+        .unwrap_or_else(|| panic!("not a list: {listed}"))
+        .iter()
+        .map(|entry| {
+            entry["id"]
+                .as_str()
+                .or(entry.as_str())
+                .expect("an id")
+                .to_string()
+        })
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// A purge lists and removes the project's own records, and only the ones the window named.
+///
+/// The faults this rejects: a listing that deletes, removing a record of a directory that shares
+/// the project's store, and removing a record of the project the window did not name, which is
+/// what a purge that swept the store again at the moment of deleting would do to a session saved
+/// after the window asked.
+#[test]
+fn a_purge_removes_only_the_named_records_of_its_own_directory() {
+    let scratch = Scratch::new("bridge-purge-own");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let home = scratch.home();
+    // `w-x` and `w/x` are kept in one store.
+    let project = scratch.path.join("w-x");
+    let neighbour = scratch.path.join("w/x");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&neighbour).unwrap();
+    let first = take_turn(&home, &project, &endpoint, None, "first question");
+    let second = take_turn(&home, &project, &endpoint, None, "second question");
+    let theirs = take_turn(&home, &neighbour, &endpoint, None, "their question");
+    let before = stored(&home);
+
+    let mut window = Window::open(&home, &project, &endpoint, None);
+    let planned = purge(&mut window, &project, json!({"dryRun": true}));
+    let mut ours = vec![first.clone(), second.clone()];
+    ours.sort();
+    assert_eq!(ids(&planned["ok"]["delete"]), ours, "{planned}");
+    assert_eq!(planned["ok"]["held"], json!([]), "{planned}");
+    assert_eq!(
+        planned["ok"]["delete"][0]["title"]
+            .as_str()
+            .map(str::is_empty),
+        Some(false),
+        "{planned}"
+    );
+    assert_eq!(stored(&home), before, "a listing deleted something");
+
+    let purged = purge(
+        &mut window,
+        &project,
+        json!({"ids": [first.clone(), theirs.clone()]}),
+    );
+    assert_eq!(purged["ok"]["deleted"], json!([first]), "{purged}");
+    assert_eq!(purged["ok"]["failed"], json!([]), "{purged}");
+    let left = stored(&home);
+    assert!(
+        !left.iter().any(|name| name.starts_with(&first)),
+        "{left:?}"
+    );
+    for kept in [&second, &theirs] {
+        assert!(
+            left.contains(&format!("{kept}.json")),
+            "{kept} was removed: {left:?}"
+        );
+    }
+
+    let unnamed = purge(&mut window, &project, json!({}));
+    assert_eq!(unnamed["error"]["code"], "bad_request", "{unnamed}");
+}
+
+/// A session a window has open is held by a purge, as a background session's is, and kept.
+#[test]
+fn a_purge_holds_a_session_a_window_has_open() {
+    let scratch = Scratch::new("bridge-purge-open");
+    let (endpoint, _) = stub_service(Chat::Answers);
+    let home = scratch.home();
+    let project = scratch.project();
+    let closed = take_turn(&home, &project, &endpoint, None, "an earlier question");
+    let mut window = Window::open(&home, &project, &endpoint, None);
+    let ended = window.turn("a question");
+    let open = ended["data"]["id"].as_str().expect("its id").to_string();
+
+    let planned = purge(&mut window, &project, json!({"dryRun": true}));
+    assert_eq!(
+        ids(&planned["ok"]["delete"]),
+        vec![closed.clone()],
+        "{planned}"
+    );
+    assert_eq!(planned["ok"]["held"], json!([open]), "{planned}");
+
+    let purged = purge(
+        &mut window,
+        &project,
+        json!({"ids": [closed.clone(), open.clone()]}),
+    );
+    assert_eq!(purged["ok"]["deleted"], json!([closed]), "{purged}");
+    assert_eq!(purged["ok"]["held"], json!([open]), "{purged}");
+    assert!(
+        stored(&home).contains(&format!("{open}.json")),
+        "an open session was deleted"
+    );
+}
+
+/// A purge is refused while a turn runs in the project, and deletes nothing.
+#[test]
+fn a_purge_waits_for_a_running_turn() {
+    let scratch = Scratch::new("bridge-purge-running");
+    let (endpoint, holding) = stub_service(Chat::Holds);
+    let home = scratch.home();
+    let project = scratch.project();
+    let stored_id = take_turn(&home, &project, &endpoint, None, "an earlier question");
+    let before = stored(&home);
+    let mut window = Window::open(&home, &project, &endpoint, None);
+
+    window.start(HELD);
+    holding
+        .recv_timeout(PATIENCE)
+        .expect("the service never received the held request");
+    let refused = purge(&mut window, &project, json!({"ids": [stored_id]}));
+
+    assert_eq!(refused["error"]["code"], "turn_in_flight", "{refused}");
+    assert_eq!(stored(&home), before, "a stored session was deleted");
+}
