@@ -27,7 +27,7 @@ signing and refused `run` arguments apply here unchanged. Below, `...` stands fo
 
 `make implement-issues ISSUES="<argument>"` starts this skill in the terminal client with the argument
 unchanged. First, with no model, [implement-issues.py](implement-issues.py) stops when an item is
-assigned to anybody but the user git is configured as, assigns that user to each open issue, and adds
+assigned to anybody but the account `gh` writes as, assigns that account to each open issue, and adds
 `bot/in-progress` to each, which it removes when the session ends. Where an item already has both,
 the script did that, so leave the assignee and the label as they are.
 

@@ -11,8 +11,8 @@ Before the session opens, from the same reading of <argument> as step 1 of the s
 model:
 
 1. every open issue is read, and the run stops with nothing changed when one is assigned to anybody
-   but the person git is configured as (`git config user.name`);
-2. that person is assigned to each of them;
+   but the account `gh` writes as (`gh api user`);
+2. that account is assigned to each of them;
 3. each of them gets the label bot/in-progress.
 
 When the session ends, however it ends, the label is removed from the issues this run added it to.
@@ -74,12 +74,12 @@ def shown(login):
     return login if NAME.fullmatch(login) else "unknown"
 
 
-def configured_user():
-    login = run("git", "config", "user.name", check=False).stdout.strip()
-    if not login:
-        die("git has no user.name, so there is nobody to assign the issues to")
-    if not NAME.fullmatch(login):
-        die(f"git user.name {login!r} is not a GitHub login, so the issues cannot be assigned to it")
+def current_user():
+    """The login `gh` writes as: the account that makes the claim, and the one `pr-fix.py open` assigns."""
+    done = run("gh", "api", "user", "--jq", ".login", check=False)
+    login = done.stdout.strip()
+    if done.returncode or not NAME.fullmatch(login):
+        die(f"could not read the login gh writes as: {pr_worktree.printed(done) or 'no login returned'}")
     return login
 
 
@@ -285,7 +285,7 @@ def main(argv=None):
     client = shutil.which(args.bravebot)
     if client is None:
         die(f"{args.bravebot} is not on PATH. Nothing was changed.")
-    me = configured_user()
+    me = current_user()
 
     numbers, notes = resolve(args.argument)
     issues, more = open_issues(numbers)

@@ -24,6 +24,7 @@ HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / "implement-issues.py"
 LABEL = "bot/in-progress"
 ISSUES = "repos/brave/bravebot/issues"
+LOGIN_LOOKUP = ["api", "user", "--jq", ".login"]
 
 FAKE_GH = """#!{python}
 import json, os, sys
@@ -59,6 +60,11 @@ for arg in rest:
         route = arg
 if f"{{method}} {{route}}" in world.get("fail", []):
     refuse()
+if route == "user":
+    if world["login"] is None:
+        refuse("Bad credentials")
+    print(world["login"])
+    sys.exit(0)
 if route == "search/issues":
     print("\\n".join(str(number) for number in world["search"].get(fields["q"][0], [])))
     sys.exit(0)
@@ -110,9 +116,10 @@ class ImplementIssues(unittest.TestCase):
         for name, text in (("gh", FAKE_GH), ("bravebot", FAKE_BRAVEBOT)):
             (bin_dir / name).write_text(text.format(python=sys.executable))
             (bin_dir / name).chmod(0o755)
-        (self.root / "gitconfig").write_text("[user]\n\tname = netzenbot\n")
+        (self.root / "gitconfig").write_text("[user]\n\tname = Jane Doe\n")
         self.world_path, self.log_path, self.session_path = (self.root / n for n in ("world", "log", "session"))
         self.world = {
+            "login": "netzenbot",
             "labels": [LABEL, "bug"],
             "assignable": ["netzenbot"],
             "search": {},
@@ -199,7 +206,7 @@ class ImplementIssues(unittest.TestCase):
         self.assertIsNone(self.session())
         self.assertEqual(self.state()["10"], issue())
 
-    def test_an_issue_assigned_to_the_configured_user_and_somebody_else_is_refused(self):
+    def test_an_issue_assigned_to_the_current_user_and_somebody_else_is_refused(self):
         self.world["issues"]["10"] = issue(assignees=["NetzenBot", "alice"])
         result = self.run_script("10")
         self.assertNotEqual(result.code, 0)
@@ -307,6 +314,28 @@ class ImplementIssues(unittest.TestCase):
         self.assertEqual(self.state()["12"], issue())
         self.assertIsNone(self.session())
 
+    def test_the_login_is_the_account_gh_writes_as_and_not_the_git_display_name(self):
+        """`git config user.name` is `Jane Doe` here, as it is for most people, and the claim is made as gh's account."""
+        self.world["login"] = "octocat"
+        self.world["assignable"] = ["octocat"]
+        self.world["issues"]["12"] = issue(assignees=["netzenbot"])
+        result = self.run_script("10, 12")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("#12 is assigned to netzenbot", result.err)
+        self.assertEqual(self.writes(), [])
+        del self.world["issues"]["12"]
+        result = self.run_script("10")
+        self.assertEqual(result.code, 0, result.err)
+        self.assertEqual(self.state()["10"]["assignees"], ["octocat"])
+
+    def test_a_login_gh_cannot_read_stops_the_run_before_anything_changes(self):
+        self.world["login"] = None
+        result = self.run_script("10")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("could not read the login gh writes as", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
+
     def test_a_label_the_repository_lacks_is_refused_rather_than_created(self):
         self.world["labels"] = ["bug"]
         result = self.run_script("10")
@@ -334,7 +363,7 @@ class ImplementIssues(unittest.TestCase):
         result = self.run_script("fix-i18n-gaps")
         self.assertNotEqual(result.code, 0)
         self.assertIn("fix-i18n-gaps resumes an earlier run", result.err)
-        self.assertEqual(self.calls(), [])
+        self.assertEqual([call for call in self.calls() if call != LOGIN_LOOKUP], [])
 
     def test_the_make_target_passes_the_issues_and_the_client_through(self):
         """The recipe takes ISSUES from the environment, so a quote or a `$` in it is not the shell's."""

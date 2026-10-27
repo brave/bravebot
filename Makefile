@@ -533,7 +533,7 @@ review-ready:
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
 # written: issue numbers, links and search queries separated by commas. Before the session opens, with
 # no model, agents/skills/implement-issues/implement-issues.py stops when an issue is assigned to
-# anybody but the user git is configured as, assigns that user, and adds the label bot/in-progress,
+# anybody but the account gh writes as, assigns that account, and adds the label bot/in-progress,
 # which it removes when the session ends. ISSUES reaches the script through the environment, so no
 # quote in it needs escaping. BRAVEBOT names the client when it is not the one on PATH.
 .PHONY: implement-issues
