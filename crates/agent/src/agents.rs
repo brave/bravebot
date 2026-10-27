@@ -279,6 +279,8 @@ pub enum Refused {
     ServerName,
     /// The `mcpServers:` line declares a server inline, which a list of names would drop.
     InlineServers,
+    /// The definition's kind holds no server whatever its `mcpServers:` line says.
+    KindHoldsNoServers,
 }
 
 /// Rewrite the description, the model and the body of a definition's text, and leave every other
@@ -1394,6 +1396,12 @@ pub fn set_servers(
     }
     let file = home.join(AGENTS).join(format!("{name}.md"));
     let text = std::fs::read_to_string(&file).map_err(|_| RedefineRefused::Missing)?;
+    let Read::Definition { definition, .. } = read_definition(&text, name) else {
+        return Err(RedefineRefused::Missing);
+    };
+    if definition.kind() != Kind::Worker {
+        return Err(RedefineRefused::Refused(Refused::KindHoldsNoServers));
+    }
     let rewritten = rewrite_servers(&text, servers).map_err(|refused| match refused {
         Refused::NotADefinition => RedefineRefused::Missing,
         other => RedefineRefused::Refused(other),
@@ -1415,6 +1423,13 @@ pub struct ServerChoice {
     pub inline: bool,
     /// The definition's kind, as it is written.
     pub kind: String,
+    /// Whether [`set_servers`] would rewrite the line: the kind is a worker and no server is
+    /// declared inline.
+    pub editable: bool,
+    /// Whether the bot holds every server the session reached, as it does with neither line.
+    pub every: bool,
+    /// Whether removing the line would give it every server, which a `tools:` line rules out.
+    pub every_possible: bool,
 }
 
 /// Read what the definition written for a desktop bot says about the servers it may use.
@@ -1432,9 +1447,14 @@ pub fn servers_of(home: &Path, name: &str) -> Result<ServerChoice, RedefineRefus
     else {
         return Err(RedefineRefused::Missing);
     };
+    let servers = definition.servers().map(<[String]>::to_vec);
+    let tools = definition.tools().is_some();
     Ok(ServerChoice {
-        servers: definition.servers().map(<[String]>::to_vec),
-        tools: definition.tools().is_some(),
+        every: servers.is_none() && !tools,
+        every_possible: !tools,
+        editable: definition.kind() == Kind::Worker && !declares_servers,
+        servers,
+        tools,
         inline: declares_servers,
         kind: definition.kind().as_str().to_string(),
     })
@@ -2946,6 +2966,7 @@ mod tests {
         assert_eq!(choice.servers, None);
         assert!(!choice.tools);
         assert!(!choice.inline);
+        assert!(choice.editable && choice.every && choice.every_possible);
         assert_eq!(
             choice.kind,
             definition_of(&std::fs::read_to_string(home.file("helper")).unwrap())
@@ -2964,6 +2985,15 @@ mod tests {
         assert_eq!(choice.servers, Some(names(&["github"])));
         assert!(choice.tools);
         assert!(!choice.inline);
+        assert!(choice.editable && !choice.every && !choice.every_possible);
+
+        std::fs::write(&file, made.replacen("\n---", "\ntools: read_file\n---", 1)).unwrap();
+        let choice = servers_of(&home.0, "helper").expect("read");
+        assert_eq!(choice.servers, None);
+        assert!(
+            !choice.every && !choice.every_possible,
+            "a tools line alone holds no server"
+        );
 
         std::fs::write(
             &file,
@@ -2974,10 +3004,29 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(servers_of(&home.0, "helper").expect("read").inline);
+        let choice = servers_of(&home.0, "helper").expect("read");
+        assert!(choice.inline && !choice.editable);
         assert!(matches!(
             servers_of(&home.0, "gone"),
             Err(RedefineRefused::Missing)
         ));
+    }
+
+    #[test]
+    fn the_servers_of_a_kind_that_holds_none_are_not_set() {
+        let home = Home::new("servers-kind");
+        make_definition(&home.0, "helper", "Helps.", None).expect("made");
+        let file = home.file("helper");
+        let made = std::fs::read_to_string(&file).unwrap();
+        assert!(made.contains("kind: worker"), "{made}");
+        let reader = made.replacen("kind: worker", "kind: reader", 1);
+        std::fs::write(&file, &reader).unwrap();
+
+        assert!(!servers_of(&home.0, "helper").expect("read").editable);
+        assert!(matches!(
+            set_servers(&home.0, "helper", Some(&names(&["github"]))),
+            Err(RedefineRefused::Refused(Refused::KindHoldsNoServers))
+        ));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), reader);
     }
 }

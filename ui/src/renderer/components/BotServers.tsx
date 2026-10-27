@@ -9,11 +9,12 @@ import { call, invokeMessage } from '../request'
  * Which connected servers a bot may use, as the `mcpServers:` line of its definition says.
  *
  * "Every connected server" removes the line; "Only these" writes the ticked aliases, which may be
- * none. A name the file lists that no connector declares stays ticked, so saving keeps it.
+ * none. A name the file lists that no connector declares stays ticked, so saving keeps it. What the
+ * line means and whether it may be rewritten are the agent's answers, never worked out here.
  */
 export function BotServers({ slug }: { slug: string }): React.JSX.Element {
   const [answer, setAnswer] = useState<Answer | null>(null)
-  const [connectors, setConnectors] = useState<Connector[]>([])
+  const [connectors, setConnectors] = useState<Connector[] | null>(null)
   const [problem, setProblem] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -23,7 +24,7 @@ export function BotServers({ slug }: { slug: string }): React.JSX.Element {
     let gone = false
     void Promise.all([
       window.bravebot.readBotServers(slug),
-      call<ConnectorList>('connectors.list').then((list) => list.connectors, () => [] as Connector[]),
+      call<ConnectorList>('connectors.list').then((list) => list.connectors, () => null),
     ]).then(([read, declared]) => {
       if (gone) return
       setAnswer(read)
@@ -37,7 +38,7 @@ export function BotServers({ slug }: { slug: string }): React.JSX.Element {
   const save = async (servers: string[] | null) => {
     if (!answer) return
     const before = answer
-    setAnswer({ ...answer, servers })
+    setAnswer({ ...answer, servers, every: servers === null && answer.everyPossible })
     setProblem('')
     setSaving(true)
     try {
@@ -59,10 +60,11 @@ export function BotServers({ slug }: { slug: string }): React.JSX.Element {
     </section>
   }
 
-  const readOnly = answer.inline || answer.kind !== 'worker'
-  const every = answer.servers === null && !answer.tools
+  // Without the list, "Only these" would offer nothing to tick and save a line that selects none.
+  const unlisted = connectors === null
+  const editable = answer.editable && !unlisted
   const chosen = answer.servers ?? []
-  const declared = connectors.map((each) => each.alias)
+  const declared = (connectors ?? []).map((each) => each.alias)
   const names = [...declared, ...chosen.filter((name) => !declared.includes(name))]
   const pick = (alias: string, on: boolean) => {
     // Leo reports a `checked` the window set as well as a click, so only a change is saved.
@@ -74,38 +76,44 @@ export function BotServers({ slug }: { slug: string }): React.JSX.Element {
   return <section className="bot-servers" data-test="bot-servers" aria-labelledby={`servers-${slug}`}>
     {heading}
     {problem && <Alert type="error" size="small" role="alert">{problem}</Alert>}
-    {readOnly ? (
+    {!answer.editable && (
       <p className="bot-servers-note" data-test="bot-servers-readonly">
         {answer.inline
           ? 'This bot’s definition declares its own servers, so they are changed in the file rather than here.'
           : 'This definition is not one the picker rewrites, so its servers are changed in the file.'}
       </p>
-    ) : (
-      <SegmentedControl value={every ? 'every' : 'only'} size="small" aria-label="Which servers this bot may use" data-test="bot-servers-mode"
+    )}
+    {answer.editable && unlisted && (
+      <Alert type="warning" size="small" data-test="bot-servers-unlisted">
+        The connected servers could not be listed, so this bot’s servers cannot be changed right now.
+      </Alert>
+    )}
+    {editable && answer.everyPossible && (
+      <SegmentedControl value={answer.every ? 'every' : 'only'} size="small" aria-label="Which servers this bot may use" data-test="bot-servers-mode"
         onChange={(detail) => {
           if (saving) return
-          if (detail.value === 'every' && !every && !answer.tools) void save(null)
-          if (detail.value === 'only' && every) void save(declared)
+          if (detail.value === 'every' && !answer.every) void save(null)
+          if (detail.value === 'only' && answer.every) void save(declared)
         }}>
         <ControlItem value="every">Every connected server</ControlItem>
         <ControlItem value="only">Only these</ControlItem>
       </SegmentedControl>
     )}
-    {answer.tools && answer.servers === null && (
+    {editable && !answer.everyPossible && (
       <p className="bot-servers-note" data-test="bot-servers-tools">
         This bot’s definition lists the tools it may use, so it gets only the servers ticked here.
       </p>
     )}
-    {!every && !answer.inline && (
+    {!answer.every && !answer.inline && !unlisted && (
       names.length === 0 ? (
         <p className="bot-servers-note" data-test="bot-servers-none">No servers are set up yet. Add one in Settings, under Connectors.</p>
       ) : (
         <ul className="bot-servers-list">
           {names.map((name) => {
-            const connector = connectors.find((each) => each.alias === name)
+            const connector = connectors?.find((each) => each.alias === name)
             const stands = standing(connector)
             return <li key={name} className="bot-server" data-test="bot-server" data-alias={name}>
-              <Checkbox checked={chosen.includes(name)} isDisabled={readOnly || saving} size="small"
+              <Checkbox checked={chosen.includes(name)} isDisabled={!editable || saving} size="small"
                 onChange={({ checked }) => pick(name, checked)}>
                 {name}
               </Checkbox>

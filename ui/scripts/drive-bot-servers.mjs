@@ -27,22 +27,26 @@ try {
   await app.evaluate(({ ipcMain }) => {
     const fixture = ipcMain._invokeHandlers?.get('bravebot:request')
     if (!fixture) throw new Error('the fixture bridge is not installed')
-    globalThis.servers = { line: { servers: null, tools: false, inline: false, kind: 'worker' }, writes: [], refuse: null, thrown: [] }
+    globalThis.servers = {
+      line: { servers: null, tools: false, inline: false, kind: 'worker', editable: true, every: true, everyPossible: true },
+      writes: [], refuse: null, unlisted: false, thrown: [],
+    }
     // Electron's own handler puts a modal box up, which stops the main process and this driver with it.
     process.on('uncaughtException', (error) => globalThis.servers.thrown.push(String(error?.stack ?? error)))
     const replace = (name, fn) => { ipcMain.removeHandler(name); ipcMain.handle(name, fn) }
-    replace('bravebot:request', (event, method, params) => method === 'connectors.list'
-      ? { ok: { home: null, state: null, writable: true, unavailable: null, connectors: [
+    replace('bravebot:request', (event, method, params) => method !== 'connectors.list'
+      ? fixture(event, method, params)
+      : globalThis.servers.unlisted ? { error: { code: 'internal', message: 'mcp.json could not be read' } }
+      : { ok: { home: null, state: null, writable: true, unavailable: null, connectors: [
         { alias: 'github', connected: true, problem: null, refused: null, changed: false },
         { alias: 'linear', connected: false, problem: null, refused: null, changed: false },
-      ] } }
-      : fixture(event, method, params))
+      ] } })
     replace('bravebot:bots:servers:read', () => globalThis.servers.line)
     replace('bravebot:bots:servers:write', async (_event, _slug, servers) => {
       const state = globalThis.servers
       state.writes.push(servers)
       if (state.refuse) throw new Error(state.refuse)
-      state.line = { ...state.line, servers }
+      state.line = { ...state.line, servers, every: servers === null && state.line.everyPossible }
       return state.line
     })
   })
@@ -100,6 +104,34 @@ try {
   assert.equal(await wrote(4), null, 'every server removes the line')
   await page.waitForFunction(() => !document.querySelector('[data-test="bot-server"]'), null, { polling: 100, timeout: 5000 })
   await snap('03-every-again')
+
+  // A list that cannot be read offers no switch, since "Only these" would save a line selecting none.
+  await app.evaluate(() => { globalThis.servers.unlisted = true })
+  const reopen = async () => {
+    await page.getByRole('button', { name: 'Chats', exact: true }).click()
+    await picker.waitFor({ state: 'detached' })
+    await page.getByRole('button', { name: 'Bots', exact: true }).click()
+    await page.getByText('Review Bot', { exact: true }).first().click()
+    await page.locator('[data-test="bot-details"]').waitFor()
+  }
+  await reopen()
+  await picker.locator('[data-test="bot-servers-unlisted"]').waitFor()
+  assert.equal(await picker.locator('[data-test="bot-servers-mode"]').count(), 0, 'no switch without the list')
+  await snap('04-unlisted')
+
+  // Under a tools line, removing the line would leave none, so the switch is not offered.
+  await app.evaluate(() => {
+    globalThis.servers.unlisted = false
+    globalThis.servers.line = { ...globalThis.servers.line, servers: null, tools: true, every: false, everyPossible: false }
+  })
+  await reopen()
+  await picker.locator('[data-test="bot-servers-tools"]').waitFor()
+  assert.equal(await picker.locator('[data-test="bot-servers-mode"]').count(), 0, 'no switch under a tools line')
+  await ticked('github', false)
+  await row('github').click()
+  assert.deepEqual(await wrote(5), ['github'])
+  await ticked('github', true)
+  await snap('05-tools-line')
 
   assert.deepEqual(errors, [])
   // A checkout without `pnpm run bridge` throws from the watch poll; that is not the picker's.

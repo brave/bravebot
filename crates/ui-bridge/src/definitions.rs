@@ -69,7 +69,9 @@ fn remake_in(home: &Path, request: &Request) -> Result<Value, Failure> {
 ///
 /// `name` is required. The answer is `servers`, the names `mcpServers:` lists or null where there
 /// is no such line, `tools`, whether a `tools:` line limits it to no servers unless listed,
-/// `inline`, whether the line declares a server itself, and the definition's `kind`.
+/// `inline`, whether the line declares a server itself, the definition's `kind`, and the agent's
+/// reading of them: `editable`, whether the servers may be set, `every`, whether the bot holds
+/// every server, and `everyPossible`, whether removing the line would give it every server.
 pub fn servers_read(request: &Request) -> Result<Value, Failure> {
     let home = bravebot_agent::home::directory().ok_or_else(|| {
         Failure::new(
@@ -88,6 +90,9 @@ fn servers_read_in(home: &Path, request: &Request) -> Result<Value, Failure> {
             "tools": choice.tools,
             "inline": choice.inline,
             "kind": choice.kind,
+            "editable": choice.editable,
+            "every": choice.every,
+            "everyPossible": choice.every_possible,
         })),
         Err(refused) => Err(servers_refusal(&name, refused)),
     }
@@ -144,6 +149,9 @@ fn servers_refusal(name: &str, refused: RedefineRefused) -> Failure {
         ),
         RedefineRefused::Refused(Refused::InlineServers) => Failure::bad_request(format!(
             "the definition {name} declares a server inline, so its servers are edited in the file"
+        )),
+        RedefineRefused::Refused(Refused::KindHoldsNoServers) => Failure::bad_request(format!(
+            "the definition {name} is of a kind that holds no server, so it has none to choose"
         )),
         RedefineRefused::Refused(_) => Failure::bad_request(format!(
             "the servers could not be written so that the definition {name} reads them back"
@@ -397,6 +405,9 @@ mod tests {
         assert_eq!(read["tools"], json!(false));
         assert_eq!(read["inline"], json!(false));
         assert_eq!(read["kind"], json!("worker"));
+        assert_eq!(read["editable"], json!(true));
+        assert_eq!(read["every"], json!(true));
+        assert_eq!(read["everyPossible"], json!(true));
 
         let answer = servers_write_in(
             home.path(),
@@ -406,6 +417,7 @@ mod tests {
         assert_eq!(answer["name"], json!("ed"));
         let read = servers_read_in(home.path(), &request(json!({"name": "ed"}))).expect("read");
         assert_eq!(read["servers"], json!(["github", "slack"]));
+        assert_eq!(read["every"], json!(false));
 
         servers_write_in(home.path(), &request(json!({"name": "ed", "servers": []})))
             .expect("written");

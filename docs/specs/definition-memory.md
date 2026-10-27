@@ -649,9 +649,14 @@ written when the line already says what was chosen. The text is read back before
 one that would not read back as the servers chosen is refused.
 
 The details cannot set the servers of a definition whose kind is not `worker`, since those kinds
-hold none whatever the line says, or of one that declares a server inline. They show why. Where a
-`tools:` line stands and no `mcpServers:` line does, the bot holds no server
+hold none whatever the line says, or of one that declares a server inline. They show why, and the
+agent refuses to set the servers of such a kind. Where a `tools:` line stands, removing the
+`mcpServers:` line would leave the bot no server
 ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), so every connected server is not offered.
+Whether the servers may be set, whether the line selects every server, and whether removing it
+could, are the agent's answers to the read, so the window works none of them out. Where the
+person's servers cannot be listed, nothing is offered, since only these would then save a line
+selecting none.
 
 The window names no definition. It names the row's slug, and the desktop's main process sends the
 definition the row holds, as it does for a turn ([MEMORY-10](#MEMORY-10)). A change applies from
@@ -680,9 +685,10 @@ window cannot call.
 `verified-by: bravebot_agent::agents::a_server_name_that_is_not_an_alias_is_refused`
 `verified-by: bravebot_agent::agents::setting_the_servers_a_bot_already_has_writes_nothing`
 `verified-by: bravebot_agent::agents::the_servers_a_bot_may_use_are_read_with_its_tools_line_and_any_inline_declaration`
+`verified-by: bravebot_agent::agents::the_servers_of_a_kind_that_holds_none_are_not_set`
 `verified-by: bravebot_ui_bridge::definitions::the_servers_written_for_a_bot_are_read_back`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_server_write_leaves_the_file_untouched`
-`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-servers.test.mjs pins its half: a write is sent only with null or an array of alias-shaped names, and anything else is refused before the bridge is asked; make check-ui runs it)`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-servers.test.mjs pins its half: a write is sent only with null or an array of strings, whose names the agent judges; an answer is taken only whole, with the agent's own reading of the line; make check-ui runs it)`
 
 ## Seeing it
 

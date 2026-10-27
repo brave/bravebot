@@ -14,27 +14,24 @@ const load = (entry, profile) => {
   new Function('require', 'module', 'exports', source)(mockedRequire, module, module.exports)
   return module.exports
 }
-const { isServerAlias, isServerSelection, parseBotServers, parseBots } = load('src/shared/bots.ts')
+const { isServerSelection, parseBotServers, parseBots } = load('src/shared/bots.ts')
 const definition = { slug: 'web-dev', name: 'Web dev', purpose: 'Build websites', home: '/tmp/bot-homes/web-dev', avatar: 'v2:preview', session: null }
 
-test('a server alias has the shape the agent accepts', () => {
-  for (const value of ['github', 'a', 'A9', 'my_server-2', 'x'.repeat(64)]) assert.equal(isServerAlias(value), true)
-  for (const value of ['', '-lead', '_lead', 'has space', 'a/b', '..', 'x'.repeat(65), 42, null, undefined]) assert.equal(isServerAlias(value), false)
+const FLAGS = { editable: true, every: true, everyPossible: true }
+const ANSWER = { servers: null, tools: false, inline: false, kind: 'worker', ...FLAGS }
+
+test('a selection is every server or a list of names, and the agent judges the names', () => {
+  for (const value of [null, [], ['github'], ['github', 'linear'], ['bad name'], ['github', 'github']]) assert.equal(isServerSelection(value), true)
+  for (const value of [undefined, 'github', {}, [42], [null]]) assert.equal(isServerSelection(value), false)
 })
 
-test('a selection is every server, or a list of distinct aliases', () => {
-  for (const value of [null, [], ['github'], ['github', 'linear']]) assert.equal(isServerSelection(value), true)
-  for (const value of [undefined, 'github', {}, ['github', 'github'], ['bad name'], [42], Array.from({ length: 257 }, (_, n) => `s${n}`)]) {
-    assert.equal(isServerSelection(value), false)
-  }
-})
-
-test('only a whole answer from the agent is taken as a bot’s servers', () => {
-  assert.deepEqual(parseBotServers({ servers: null, tools: false, inline: false, kind: 'worker' }), { servers: null, tools: false, inline: false, kind: 'worker' })
-  assert.deepEqual(parseBotServers({ servers: ['github'], tools: true, inline: false, kind: 'worker', extra: 1 }), { servers: ['github'], tools: true, inline: false, kind: 'worker' })
-  for (const value of [null, 'x', {}, { servers: 'github', tools: false, inline: false, kind: 'worker' },
-    { servers: [1], tools: false, inline: false, kind: 'worker' }, { servers: null, tools: 'no', inline: false, kind: 'worker' },
-    { servers: null, tools: false, kind: 'worker' }, { servers: null, tools: false, inline: false }]) {
+test('only a whole answer from the agent is taken as a bot’s servers, with its own reading of the line', () => {
+  assert.deepEqual(parseBotServers(ANSWER), ANSWER)
+  const narrowed = { ...ANSWER, servers: ['github'], tools: true, every: false, everyPossible: false }
+  assert.deepEqual(parseBotServers({ ...narrowed, extra: 1 }), narrowed)
+  for (const value of [null, 'x', {}, { ...ANSWER, servers: 'github' }, { ...ANSWER, servers: [1] }, { ...ANSWER, tools: 'no' },
+    { ...ANSWER, inline: undefined }, { ...ANSWER, kind: undefined }, { ...ANSWER, editable: undefined },
+    { ...ANSWER, every: 1 }, { ...ANSWER, everyPossible: null }]) {
     assert.equal(parseBotServers(value), null)
   }
 })
@@ -50,7 +47,7 @@ test('servers are read and written under the stored definition name, never anoth
     const request = async (method, params) => {
       calls.push([method, params])
       if (method === 'bot.servers.write') { line = params.servers; return { name: params.name } }
-      return { servers: line, tools: false, inline: false, kind: 'worker' }
+      return { ...ANSWER, servers: line, every: line === null }
     }
     const saved = await storage.saveBotServers({ ...stored, definition: 'someone-else' }, ['github'], request)
     assert.deepEqual(saved.servers, ['github'])
@@ -76,7 +73,7 @@ test('a refused or unanswered write is an error, and the next one still runs', a
     await assert.rejects(storage.readBotServers(stored, async () => ({ servers: 'all' })), /did not say/)
     await assert.rejects(storage.readBotServers({ ...stored, definition: null }, async () => ({})), /no definition/)
     const ok = await storage.saveBotServers(stored, [], async (method, params) =>
-      method === 'bot.servers.write' ? { name: params.name } : { servers: [], tools: false, inline: false, kind: 'worker' })
+      method === 'bot.servers.write' ? { name: params.name } : { ...ANSWER, servers: [], every: false })
     assert.deepEqual(ok.servers, [])
   } finally { rmSync(profile, { recursive: true, force: true }) }
 })
