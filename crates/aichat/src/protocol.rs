@@ -1227,6 +1227,10 @@ impl SseDecoder {
 pub const STREAM_DONE: &str = "[DONE]";
 
 #[cfg(test)]
+#[path = "../test-support/openai_chat.rs"]
+mod openai_chat;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use bravebot_config::DEFAULT_MODEL;
@@ -1433,6 +1437,58 @@ mod tests {
                     written_tokens: 90
                 }
             );
+        }
+
+        /// BACKEND-31: a stream from `api.openai.com` asked for with `stream_options.include_usage`
+        /// ends in a chunk of its own, after the one that carries the finish reason and before
+        /// `[DONE]`, whose `choices` is empty and whose `usage` is the figures of the round. The
+        /// chunks before it carry `usage: null`. The figures are the cache figures a whole reply
+        /// reports, so an accumulator that took a chunk with no choices for nothing would report a
+        /// round that cost nothing, and one that did not take the finish reason for the end of the
+        /// reply would leave a stream that never sends `[DONE]` incomplete. A reader that stops at
+        /// the finish reason is the transport's to reject, in `tests/client.rs`.
+        #[test]
+        fn the_usage_chunk_with_no_choices_after_the_finish_reason_is_the_usage_the_stream_reports()
+        {
+            for shape in openai_chat::USAGE_SHAPES {
+                let payloads = openai_chat::stream_chunks(shape.model, shape.json);
+
+                let mut decoder = SseDecoder::new();
+                let mut accumulated = StreamAccumulator::new();
+                let mut wire = String::new();
+                for payload in &payloads {
+                    wire.push_str(&format!("data: {payload}\n\n"));
+                }
+                // No `[DONE]` is fed: the finish reason alone says the reply is over.
+                for payload in decode(&mut decoder, &wire) {
+                    assert_ne!(payload, STREAM_DONE, "{}", shape.what);
+                    accumulated.push(chunk(&payload));
+                }
+
+                assert!(
+                    accumulated.ended(),
+                    "the finish reason did not end the reply: {}",
+                    shape.what
+                );
+                let (content, model, _, usage) = accumulated.finish();
+                assert_eq!(content, openai_chat::WORD, "{}", shape.what);
+                assert_eq!(model.as_deref(), Some(shape.model), "{}", shape.what);
+                assert_eq!(usage.prompt_tokens, shape.prompt_tokens, "{}", shape.what);
+                assert_eq!(
+                    usage.completion_tokens, shape.completion_tokens,
+                    "{}",
+                    shape.what
+                );
+                assert_eq!(
+                    usage.cached,
+                    Cached {
+                        read_tokens: shape.read_tokens,
+                        written_tokens: shape.written_tokens
+                    },
+                    "{}",
+                    shape.what
+                );
+            }
         }
 
         /// A streamed request must ask for usage too, or the turn would trade the cost figure for
@@ -2158,6 +2214,49 @@ mod tests {
         assert_eq!(parsed.usage().prompt_tokens, 1200);
         assert_eq!(parsed.usage().completion_tokens, 34);
         assert_eq!(parsed.usage().total(), 1234);
+    }
+
+    /// BACKEND-31: a whole reply from `api.openai.com`, in the keys it writes. The details object
+    /// holds `audio_tokens` beside the cache figures, a model that states a write has it there, and
+    /// both figures are counted inside the prompt, so the total is the prompt and the completion
+    /// and the write is not added to it. A model that states no write is one a turn reports a
+    /// write of zero for, even on a first request that a repeat then read from the cache: a write
+    /// inferred from the prompt and the read would be a figure no reply stated.
+    #[test]
+    fn a_whole_reply_as_openai_sends_it_reports_the_cache_figures_it_states() {
+        for shape in openai_chat::USAGE_SHAPES {
+            let raw = openai_chat::whole_reply(shape.model, shape.json);
+            let parsed: ChatResponse =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{}: {e}", shape.what));
+            let stated: serde_json::Value = serde_json::from_str(shape.json).expect("usage");
+            assert_eq!(
+                parsed.usage().cached,
+                Cached {
+                    read_tokens: shape.read_tokens,
+                    written_tokens: shape.written_tokens
+                },
+                "{}",
+                shape.what
+            );
+            assert_eq!(
+                parsed.usage().prompt_tokens,
+                shape.prompt_tokens,
+                "{}",
+                shape.what
+            );
+            assert_eq!(
+                parsed.usage().completion_tokens,
+                shape.completion_tokens,
+                "{}",
+                shape.what
+            );
+            assert_eq!(
+                parsed.usage().total(),
+                stated["total_tokens"],
+                "the total moved with the cache figures: {}",
+                shape.what
+            );
+        }
     }
 
     /// A round that established a prefix and read nothing back states a write beside a read of

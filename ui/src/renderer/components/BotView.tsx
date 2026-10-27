@@ -7,6 +7,8 @@ import { projectLabel } from '../../shared/recents'
 import { shortAgo } from '../time'
 import { Icon, Input } from '../nala'
 import { BotAvatar } from './BotAvatar'
+import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
+import { pullRequestLink } from '../../shared/pull-request'
 import { Composer, type ComposerFooterProps, type ProjectChoice } from './Composer'
 
 const noop = () => {}
@@ -40,7 +42,7 @@ const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }:
   const list = useRef<HTMLDivElement>(null)
   const more = (): void => {
     flushSync(() => setLimit((old) => old + PAGE))
-    list.current?.querySelectorAll<HTMLElement>(':scope > .bot-history-row')[drawn.length]?.focus()
+    list.current?.querySelectorAll<HTMLElement>(':scope > .bot-history-item')[drawn.length]?.querySelector<HTMLElement>('.bot-history-row')?.focus()
   }
   return (
     <div ref={list} className="bot-conversations" aria-label={`${name}’s conversations`} data-test="bot-conversations">
@@ -48,22 +50,28 @@ const BotHistory = memo(function BotHistory({ rows, home, name, query, onOpen }:
         const where = directory === home ? 'No project' : projectLabel(directory)
         // A conversation the bot recorded that the chat list no longer holds: said, not hidden.
         if (!session) return (
-          <div key={`${directory}/${id}`} className="bot-history-row unavailable">
-            <span className="session-meta"><span className="session-project">{where}</span></span>
-            <span className="session-title"><span className="session-name">Unavailable conversation</span></span>
-            <span className="session-where">Not in the chat list now · <code>{id}</code></span>
+          <div key={`${directory}/${id}`} className="bot-history-item">
+            <div className="bot-history-row unavailable">
+              <span className="session-meta"><span className="session-project">{where}</span></span>
+              <span className="session-title"><span className="session-name">Unavailable conversation</span></span>
+              <span className="session-where">Not in the chat list now · <code>{id}</code></span>
+            </div>
           </div>
         )
+        const pr = pullRequestLink(session.pullRequest)
         return (
-          <button type="button" key={`${directory}/${id}`} className="bot-history-row" onClick={() => onOpen(session)}>
-            <span className="session-meta">
-              <span className="session-project">{where}</span>
-              {archived && <span className="bot-history-archived">Archived</span>}
-              <time className="session-time num" dateTime={new Date(session.updated * 1000).toISOString()}>{shortAgo(session.updated)}</time>
-            </span>
-            <span className="session-title"><span className="session-name">{session.title}</span></span>
-            {session.branch && <span className="session-where"><span className="branch">{session.branch}</span></span>}
-          </button>
+          <div key={`${directory}/${id}`} className="bot-history-item">
+            <button type="button" className="bot-history-row" onClick={() => onOpen(session)}>
+              <span className="session-meta">
+                <span className="session-project">{where}</span>
+                {archived && <span className="bot-history-archived">Archived</span>}
+                <time className="session-time num" dateTime={new Date(session.updated * 1000).toISOString()}>{shortAgo(session.updated)}</time>
+              </span>
+              <span className="session-title"><span className="session-name">{session.title}</span></span>
+              {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}{pr && <PullRequestRoom url={session.pullRequest} />}</span>}
+            </button>
+            {pr && <PullRequestMark url={session.pullRequest} />}
+          </div>
         )
       })}
       {hidden > 0 && (
@@ -117,7 +125,7 @@ export function BotView({ notices, bot, history, filtering, backendReady, onOpen
   const shown = useMemo(() => {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
     return history.filter((row) => terms.every((term) =>
-      `${row.session?.title ?? row.id} ${row.directory === bot.home ? 'No project' : projectLabel(row.directory)}`.toLowerCase().includes(term)))
+      `${row.session?.title ?? row.id} ${row.directory === bot.home ? 'No project' : projectLabel(row.directory)} ${row.session?.branch ?? ''} ${pullRequestLink(row.session?.pullRequest)?.text ?? ''}`.toLowerCase().includes(term)))
   }, [history, query, bot.home])
 
   // Set on the first send and read by the next, which can come before a render shows `starting`.
