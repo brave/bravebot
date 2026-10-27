@@ -109,7 +109,7 @@ pub use confirm::{
 pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use mode::Mode;
-pub use outcome::{Category, Diagnosis, Ending, Spent};
+pub use outcome::{Category, Diagnosis, Ending, Spent, Work};
 pub use permission_mode::{Confining, LiveMode, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};

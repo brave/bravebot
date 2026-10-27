@@ -189,6 +189,24 @@ pub(super) fn checkout_account(
     }
 }
 
+/// What the delegate did, for the person's note and the planner's message: how many calls ran a
+/// program and how many changed a file, and where (GROUND-2, GROUND-3).
+///
+/// Fixed words and two counts the driver holds. No path, no command and no word of a report, so
+/// a delegate cannot speak to the planner through them (GROUND-6).
+pub(super) fn work_sentences(work: crate::outcome::Work, in_checkout: bool) -> (String, String) {
+    let did = format!(
+        "ran {} and made {}{}",
+        tools::tally(work.commands, "command", "commands"),
+        tools::tally(work.writes, "write", "writes"),
+        match in_checkout {
+            true => " in its own checkout",
+            false => "",
+        }
+    );
+    (format!("it {did}"), format!(" It {did}."))
+}
+
 /// What is said of a checkout nothing was done in that could not be removed: where it is and the
 /// commit it holds, for the planner, and the fact alone for the person.
 fn stuck_checkout(id: &str, commit: &str, path: &std::path::Path) -> (String, String) {
@@ -227,6 +245,8 @@ pub(super) struct Joined {
     pub finish: Finish,
     /// What its own backend reported it spent.
     pub tokens: u64,
+    /// What it did, and whether it did it in a checkout of its own, where it came back at all.
+    pub work: Option<(crate::outcome::Work, bool)>,
     /// The checkout it worked in, and what retiring it did.
     pub retired: Option<(
         crate::workspace::Retired,
@@ -263,7 +283,7 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
         // A closed receiver means the test observer has already exited.
         let _ = started.send(());
     }
-    let (delegated, ran, partial, requests) = match working.handle.join() {
+    let (delegated, ran, partial, requests, work) = match working.handle.join() {
         Ok((ended, partial, requests)) => {
             // Before anything else, and on both of the ways a run can end. A person who
             // vouched for the build inside this delegate is not asked again by a delegate
@@ -295,7 +315,8 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
                 Some(_) => {}
             }
             let ran = Some((ended.took, ended.rounds));
-            (ended.delegated, ran, partial, requests)
+            let work = Some((ended.worked.work, working.checkout.is_some()));
+            (ended.delegated, ran, partial, requests, work)
         }
         // A thread that panicked is a delegate that stopped, which is all anybody can be
         // told about it: what it was doing died with it, and the turn is still running.
@@ -309,6 +330,7 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
             None,
             Default::default(),
             Vec::new(),
+            None,
         ),
     };
 
@@ -353,13 +375,14 @@ pub(super) fn join_delegate<S: Sink, R: Reporter>(
         partial,
         finish,
         tokens,
+        work,
         retired,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{stuck_checkout, unfinished_account};
+    use super::{stuck_checkout, unfinished_account, work_sentences};
     use bravebot_core::delegate::{DelegateId, Finish};
     use std::path::Path;
     use std::time::Duration;
@@ -403,6 +426,28 @@ mod tests {
                 9
             ),
             "the delegate could not finish (transport), having spent its limit of 9 rounds"
+        );
+    }
+
+    /// GROUND-2, GROUND-3. A delegate that worked in a checkout of its own is said to have, since
+    /// its writes there are not in the working directory.
+    #[test]
+    fn a_delegate_in_a_checkout_is_said_to_have_worked_there() {
+        let work = crate::outcome::Work {
+            writes: 3,
+            commands: 1,
+            ran_after_last_write: false,
+        };
+        assert_eq!(
+            work_sentences(work, true),
+            (
+                "it ran 1 command and made 3 writes in its own checkout".to_string(),
+                " It ran 1 command and made 3 writes in its own checkout.".to_string()
+            )
+        );
+        assert_eq!(
+            work_sentences(work, false).1,
+            " It ran 1 command and made 3 writes."
         );
     }
 

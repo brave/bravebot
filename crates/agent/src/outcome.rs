@@ -176,6 +176,43 @@ impl Ending {
     }
 }
 
+/// How many calls changed a file and how many ran a program, and whether a program ran after the
+/// last change, which is bravebot's own record of its work and never what a model said of it
+/// (GROUND-1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Work {
+    /// Calls that changed a file.
+    pub writes: usize,
+    /// Calls that ran a program. A line is one call however many programs it starts.
+    pub commands: usize,
+    /// Whether the last call that ran a program came after the last call that changed a file.
+    pub ran_after_last_write: bool,
+}
+
+impl Work {
+    /// Count one call. A call that both ran a program and changed a file is counted as the change
+    /// coming last, since nothing ran after what it wrote.
+    pub fn count(&mut self, changed_a_file: bool, ran_a_program: bool) {
+        self.then(Work {
+            writes: usize::from(changed_a_file),
+            commands: usize::from(ran_a_program),
+            ran_after_last_write: ran_a_program && !changed_a_file,
+        });
+    }
+
+    /// Add work that came after this, such as a delegate taken back or the next turn: a write in it
+    /// is the last write, and a program it ran after its own last write ran after this one's too.
+    pub fn then(&mut self, later: Work) {
+        self.writes += later.writes;
+        self.commands += later.commands;
+        if later.writes > 0 {
+            self.ran_after_last_write = later.ran_after_last_write;
+        } else if later.commands > 0 {
+            self.ran_after_last_write = true;
+        }
+    }
+}
+
 /// Cumulative usage from completed requests, retained even if the turn later fails.
 ///
 /// Reports replace the previous total rather than adding to it. Failed requests contribute only
@@ -328,5 +365,74 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    use super::Work;
+
+    /// GROUND-1. Each call that changed a file is a write and each that ran a program is a
+    /// command, so a refused write, which changed nothing, is not counted.
+    #[test]
+    fn each_write_that_changed_a_file_is_counted() {
+        let mut work = Work::default();
+        work.count(true, false);
+        work.count(true, false);
+        work.count(false, false);
+        work.count(false, true);
+        assert_eq!((work.writes, work.commands), (2, 1));
+    }
+
+    /// GROUND-1. A command after the last write is recorded as after it, a write after that
+    /// command is not, and a line that ran a program and changed a file left nothing run after
+    /// what it wrote.
+    #[test]
+    fn a_command_after_the_last_write_is_recorded_as_after_it() {
+        let mut work = Work::default();
+        work.count(true, false);
+        work.count(false, true);
+        assert!(work.ran_after_last_write);
+        work.count(true, false);
+        assert!(!work.ran_after_last_write);
+        work.count(true, true);
+        assert!(!work.ran_after_last_write);
+    }
+
+    /// GROUND-1, GROUND-4. A later record is after an earlier one: a command in a later turn ran
+    /// after a write in an earlier one, a later write is the last write, and a later record with
+    /// a write of its own settles the order by its own.
+    #[test]
+    fn a_command_in_a_later_turn_is_after_a_write_in_an_earlier_one() {
+        let wrote = Work {
+            writes: 1,
+            commands: 0,
+            ran_after_last_write: false,
+        };
+        let ran = Work {
+            writes: 0,
+            commands: 1,
+            ran_after_last_write: true,
+        };
+        let mut record = wrote;
+        record.then(ran);
+        assert!(record.ran_after_last_write);
+        record.then(wrote);
+        assert!(!record.ran_after_last_write);
+        record.then(Work::default());
+        assert!(!record.ran_after_last_write);
+        record.then(Work {
+            writes: 2,
+            commands: 3,
+            ran_after_last_write: true,
+        });
+        assert_eq!(
+            record,
+            Work {
+                writes: 4,
+                commands: 4,
+                ran_after_last_write: true,
+            }
+        );
     }
 }

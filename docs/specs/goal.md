@@ -85,6 +85,9 @@ are the only evidence there is, and a reply saying the work is done is a claim a
 **Why no tools.** A judge that could run a command would be a turn, and it would be a turn whose
 job is deciding whether turns stop. The one round is what leaves nothing for a reply to steer.
 
+The request also carries the count of commands and writes since the goal was set
+([GROUND-4](grounding.md#GROUND-4)).
+
 `verified-by: bravebot_agent::turn::a_goal_check_reaches_the_model_and_comes_back_as_a_verdict`
 `verified-by: bravebot_agent::goal::the_exchange_goes_out_with_the_condition`
 `verified-by: bravebot_agent::goal::checking_leaves_the_exchange_the_length_it_was`

@@ -295,6 +295,7 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     cancel: &Cancel,
 ) -> CompletedTurn {
     let mut decisions = Decisions::initial(task, trust.clone(), programs.clone());
+    let mut worked = Worked::default();
     let given = conversation.given();
     let outcome = run_inner(
         config,
@@ -310,7 +311,10 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
         servers,
         cancel,
         Some(&mut decisions),
-        Handback::default(),
+        Handback {
+            worked: Some(&mut worked),
+            ..Handback::default()
+        },
     );
     // A turn that answered, and one the person stopped, leave the conversation as the turn made
     // it. One that failed leaves its tool results and nothing that says why they stop, so the
@@ -322,7 +326,11 @@ pub fn resume<S: Sink + Send, C: Confirmer + Send, R: Reporter + Send>(
     {
         conversation.note_failed_turn(diagnosis);
     }
-    CompletedTurn { outcome, decisions }
+    CompletedTurn {
+        outcome,
+        decisions,
+        work: worked.work,
+    }
 }
 
 /// Run one delegate's turn.
@@ -1134,6 +1142,8 @@ pub(crate) struct Worked {
     changed_at: Option<usize>,
     /// Whether a program has been run there since the run began.
     ran_a_program: bool,
+    /// The calls counted, for the planner, the person and a goal's judge (GROUND-1).
+    pub(crate) work: crate::outcome::Work,
 }
 
 impl Worked {
@@ -1143,18 +1153,27 @@ impl Worked {
             self.changed_at.get_or_insert(round);
         }
         self.ran_a_program |= ran_a_program;
+        self.work.count(changed_a_file, ran_a_program);
     }
 
     /// Count what a delegate did in this run's workspace as this run's own, from the round it was
     /// taken back in, since that is when this run learns a file changed.
     fn adopt(&mut self, round: usize, delegate: Worked) {
-        self.count(round, delegate.changed_at.is_some(), delegate.ran_a_program);
+        if delegate.changed_at.is_some() {
+            self.changed_at.get_or_insert(round);
+        }
+        self.ran_a_program |= delegate.ran_a_program;
+        self.work.then(delegate.work);
     }
 
     /// Count a program a delegate ran in a checkout holding this run's changes as this run's own,
     /// and nothing it changed there.
     fn adopt_run(&mut self, delegate: Worked) {
         self.ran_a_program |= delegate.ran_a_program;
+        self.work.then(crate::outcome::Work {
+            commands: delegate.work.commands,
+            ..Default::default()
+        });
     }
 }
 
@@ -1440,6 +1459,7 @@ fn collect_delegates<S: Sink, R: Reporter>(
             partial,
             finish,
             tokens,
+            work,
             retired,
         } = delegate_end::join_delegate(
             working, policy, reporter, waits, spent, notices, worked, round,
@@ -1469,6 +1489,15 @@ fn collect_delegates<S: Sink, R: Reporter>(
                         };
                         (note, format!("{bound}{told}"))
                     }
+                };
+                // After what limited or stopped it and before the report, so the planner reads it
+                // whether it is given the words or a reference to them (GROUND-2).
+                let (note, bound) = match work {
+                    Some((work, in_checkout)) => {
+                        let (said, told) = delegate_end::work_sentences(work, in_checkout);
+                        (format!("{note}; {said}"), format!("{bound}{told}"))
+                    }
+                    None => (note, bound),
                 };
                 let slot = conversation.next_reference();
                 let presented = match policy.present(
@@ -1532,9 +1561,18 @@ fn collect_delegates<S: Sink, R: Reporter>(
                     true => note,
                     false => format!("{note}, {said}"),
                 };
+                // A delegate that stopped or failed did what it did all the same. One whose thread
+                // died handed back nothing, so nothing is said (GROUND-2).
+                let (note, done) = match work {
+                    Some((work, in_checkout)) => {
+                        let (said, told) = delegate_end::work_sentences(work, in_checkout);
+                        (format!("{note}; {said}"), told)
+                    }
+                    None => (note, String::new()),
+                };
                 (
                     note,
-                    format!("{body}{told}"),
+                    format!("{body}{told}{done}"),
                     true,
                     None,
                     Provenance::Driver,
@@ -1835,8 +1873,8 @@ struct Handback<'a> {
     /// How many rounds of tool calls the turn made, written however it ended. Only a delegate's
     /// caller passes one, for the record of how the delegate ended (TRACE-8).
     rounds_taken: Option<&'a mut usize>,
-    /// What the turn did to its workspace, written however it ended. Only a delegate's caller
-    /// passes one, for the turn that spawned it (TURN-4).
+    /// What the turn did to its workspace, written however it ended. A delegate's caller passes
+    /// one for the turn that spawned it (TURN-4), and [`resume`] for a goal's record (GROUND-4).
     worked: Option<&'a mut Worked>,
     /// The credential store the run that started this one is spending from. Only a delegate's
     /// caller passes one, and a delegate spends nothing else: there is one subscription per
@@ -4759,6 +4797,223 @@ mod tests {
         );
     }
 
+    /// How a delegate collected by [`collect_delegates`] comes back: answered, from a clean or an
+    /// untrusted context, failed, or with its thread gone.
+    #[derive(Clone, Copy)]
+    enum Came {
+        Clean,
+        Untrusted,
+        Failed,
+        Lost,
+    }
+
+    /// Collect one delegate that came back `came` having done `work`, and return what the planner
+    /// was told and the person's note.
+    fn collected_with(came: Came, work: crate::outcome::Work) -> (String, String) {
+        type Joined = (
+            crate::delegate::Ended,
+            crate::outcome::Spent,
+            Vec<crate::timing::Interval>,
+        );
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut routing = Routing::new();
+        routing.insert_trusted("task", "collect a delegate");
+        let mut policy = Policy::begin(
+            routing,
+            ReleasePlan::new(),
+            CapabilitySet::default(),
+            &mut sink,
+        )
+        .unwrap();
+        let seeded = policy.vouched();
+        let mut conversation = Conversation::new();
+        let mut reporter = crate::report::RecordingReporter::default();
+        let report = match came {
+            Came::Untrusted => policy.label_piped_input("THE-REPORT-WORDS".to_string()),
+            _ => Labelled::trusted("THE-REPORT-WORDS".to_string()),
+        };
+        std::thread::scope(|scope| {
+            let handed = seeded.clone();
+            let answered = scope.spawn(move || -> Joined {
+                let delegated = match came {
+                    Came::Failed => Err(TurnError::Precommit("THE-ERROR-WORDS".to_string())),
+                    Came::Lost => panic!("the delegate's thread died"),
+                    _ => Ok(crate::delegate::Delegated {
+                        report,
+                        kind: "one-round".to_string(),
+                        usage: Default::default(),
+                    }),
+                };
+                (
+                    crate::delegate::Ended {
+                        delegated,
+                        vouched: handed,
+                        notices: Vec::new(),
+                        rounds: 1,
+                        took: Duration::from_millis(900),
+                        worked: Worked {
+                            work,
+                            ..Worked::default()
+                        },
+                    },
+                    Default::default(),
+                    Vec::new(),
+                )
+            });
+            let mut delegates = vec![Working {
+                join_started: None,
+                id: DelegateId::nth(1),
+                seeded: seeded.clone(),
+                checkout: None,
+                rounds: 5,
+                budget: None,
+                stop: Default::default(),
+                handle: answered,
+            }];
+            collect_delegates(
+                &mut delegates,
+                &mut policy,
+                &mut conversation,
+                &mut reporter,
+                &mut crate::outcome::Spent::default(),
+                true,
+                &mut crate::timing::DelegateWait::default(),
+                &mut Elapsed::default(),
+                &mut Vec::new(),
+                &mut Worked::default(),
+                0,
+            )
+            .unwrap();
+        });
+        let told = conversation
+            .messages()
+            .iter()
+            .map(|stored| stored.message.content.text())
+            .find(|text| text.contains("delegate d1"))
+            .expect("the planner was never told about the delegate");
+        let note = reporter.delegates_finished[0].1.clone();
+        (told, note)
+    }
+
+    /// Two commands and one write, as a delegate that edited a file and then built it reports.
+    const BUILT: crate::outcome::Work = crate::outcome::Work {
+        writes: 1,
+        commands: 2,
+        ran_after_last_write: true,
+    };
+
+    /// GROUND-2. A delegate's report reaches the planner beside the driver's count of what the
+    /// delegate ran and wrote, after the account of how it finished and before its words, so a
+    /// report that says the tests pass can be read against whether anything ran.
+    #[test]
+    fn a_delegates_report_is_put_beside_how_many_commands_it_ran_and_writes_it_made() {
+        let (told, _) = collected_with(Came::Clean, BUILT);
+        assert!(
+            told.contains(
+                "The one-round delegate d1 has finished. It ran 2 commands and made 1 write. \
+                 It reported:\n\nTHE-REPORT-WORDS"
+            ),
+            "{told}"
+        );
+    }
+
+    /// GROUND-2. Nothing run is said as nothing, which is the case the sentence is for.
+    #[test]
+    fn a_delegate_that_ran_nothing_is_said_to_have_run_no_command() {
+        let (told, _) = collected_with(Came::Clean, crate::outcome::Work::default());
+        assert!(
+            told.contains("It ran 0 commands and made 0 writes."),
+            "{told}"
+        );
+    }
+
+    /// GROUND-2. The sentence sits beside the report rather than inside it, so a planner handed
+    /// a reference to an untrusted report reads it too.
+    #[test]
+    fn a_quarantined_report_carries_the_same_sentence_about_the_work() {
+        let (told, _) = collected_with(Came::Untrusted, BUILT);
+        assert!(
+            !told.contains("THE-REPORT-WORDS"),
+            "nothing was tested: {told}"
+        );
+        assert!(
+            told.contains("It ran 2 commands and made 1 write."),
+            "{told}"
+        );
+    }
+
+    /// GROUND-2. A delegate that failed has still run and written what it did, and the planner is
+    /// told. One whose thread died handed nothing back, so nothing is said of its work.
+    #[test]
+    fn a_delegate_that_failed_is_still_said_to_have_done_what_it_did() {
+        let (told, note) = collected_with(Came::Failed, BUILT);
+        assert!(
+            told.contains("It ran 2 commands and made 1 write."),
+            "{told}"
+        );
+        assert!(
+            note.contains("it ran 2 commands and made 1 write"),
+            "{note}"
+        );
+        let (told, note) = collected_with(Came::Lost, BUILT);
+        assert!(!told.contains(" ran "), "{told}");
+        assert!(!note.contains(" ran "), "{note}");
+    }
+
+    /// GROUND-3, GROUND-6. The person's note carries the same two counts, and neither it nor the
+    /// planner's sentence holds a word of the report or of an error.
+    #[test]
+    fn the_note_for_a_finished_delegate_counts_its_commands_and_writes() {
+        let (_, note) = collected_with(Came::Clean, BUILT);
+        assert!(
+            note.contains("it ran 2 commands and made 1 write"),
+            "{note}"
+        );
+        assert!(!note.contains("THE-REPORT-WORDS"), "{note}");
+        let (told, note) = collected_with(Came::Failed, BUILT);
+        assert!(!told.contains("THE-ERROR-WORDS") && !note.contains("THE-ERROR-WORDS"));
+    }
+
+    /// GROUND-1. A delegate in this turn's workspace adds its counts and its own order to the
+    /// turn's. One in a checkout given this turn's changes adds its commands and none of its
+    /// writes, which were not to this turn's files.
+    #[test]
+    fn a_delegates_counts_are_added_to_the_turns_where_it_worked_on_the_turns_files() {
+        let delegate = Worked {
+            work: crate::outcome::Work {
+                writes: 1,
+                commands: 0,
+                ran_after_last_write: false,
+            },
+            ..Worked::default()
+        };
+        let mut turn = Worked::default();
+        turn.count(0, false, true);
+        turn.adopt(1, delegate);
+        assert_eq!(
+            turn.work,
+            crate::outcome::Work {
+                writes: 1,
+                commands: 1,
+                ran_after_last_write: false,
+            }
+        );
+        let mut turn = Worked::default();
+        turn.count(0, true, false);
+        turn.adopt_run(Worked {
+            work: BUILT,
+            ..Worked::default()
+        });
+        assert_eq!(
+            turn.work,
+            crate::outcome::Work {
+                writes: 1,
+                commands: 2,
+                ran_after_last_write: true,
+            }
+        );
+    }
+
     /// DELEGATE-26 where the report is quarantined. The sentence about the bound is the driver's
     /// own and sits beside the report, so the planner reads the same words whether it is shown the
     /// text or handed a reference to it. An untrusted report is given here directly, since a
@@ -5799,7 +6054,11 @@ mod tests {
                 &config,
                 &egress,
                 &session,
-                crate::goal::Check::of(&conversation, "a.txt exists"),
+                crate::goal::Check::of(
+                    &conversation,
+                    "a.txt exists",
+                    crate::outcome::Work::default(),
+                ),
                 Some(ACCOUNT_MODEL),
                 &mut reporter,
                 &mut sink,

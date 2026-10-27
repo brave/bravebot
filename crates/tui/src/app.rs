@@ -22964,6 +22964,7 @@ mod tests {
             },
             FinishedTurn {
                 decisions: None,
+                work: bravebot_agent::Work::default(),
                 outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
                 conversation: Conversation::new(),
                 sink: Trail::new(),
@@ -27662,6 +27663,7 @@ mod tests {
             },
             FinishedTurn {
                 decisions: None,
+                work: bravebot_agent::Work::default(),
                 outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
                 conversation: Conversation::new(),
                 sink: Trail::new(),
@@ -29562,6 +29564,7 @@ mod tests {
             },
             FinishedTurn {
                 decisions: None,
+                work: bravebot_agent::Work::default(),
                 outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
                 conversation: Conversation::new(),
                 sink: Trail::new(),
@@ -39240,6 +39243,7 @@ mod tests {
             },
             FinishedTurn {
                 decisions: None,
+                work: bravebot_agent::Work::default(),
                 outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
                 conversation,
                 sink: Trail::new(),
@@ -39279,6 +39283,7 @@ mod tests {
             },
             FinishedTurn {
                 decisions: None,
+                work: bravebot_agent::Work::default(),
                 outcome: Err(turn::TurnError::Cancelled { attempts: None }),
                 conversation: Conversation::new(),
                 sink: Trail::new(),
@@ -40141,7 +40146,11 @@ mod tests {
         let mut conversation = Conversation::new();
         conversation.push(bravebot_aichat::protocol::Message::user("run the tests"));
         conversation.push(bravebot_aichat::protocol::Message::assistant("they pass"));
-        let check = bravebot_agent::goal::Check::of(&conversation, "cargo test exits 0");
+        let check = bravebot_agent::goal::Check::of(
+            &conversation,
+            "cargo test exits 0",
+            bravebot_agent::Work::default(),
+        );
         let (to_main, _from_worker) = mpsc::channel();
 
         let (done, _trail) = check_the_goal_on_a_worker(

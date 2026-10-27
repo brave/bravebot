@@ -207,7 +207,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
     reporter: &mut Progress<std::io::Stderr>,
     sink: &mut json::Streaming,
 ) -> Ended {
-    let mut running = Running::begin(towards.condition.to_string(), 0);
+    let mut running = Running::begin(towards.condition.to_string(), 0, false);
     let bare = without_the_prompts_extras(towards.task);
     let mut earlier = Earlier::default();
     let mut completed = first;
@@ -220,6 +220,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
             unmet,
             earlier,
         };
+        running.worked(completed.work);
         // A round that failed has no answer to judge, and ends the run as it would end a turn.
         if completed.outcome.is_err() {
             return stop(completed, None, earlier);
@@ -228,7 +229,7 @@ pub(crate) fn work_towards<C: Confirmer + Send>(
 
         // The check goes out under the trust the round ended with, as it does in a session, and
         // reports to nobody: what a turn says about its subscription it has said.
-        let check = goal::Check::of(conversation, towards.condition);
+        let check = goal::Check::of(conversation, towards.condition, running.record());
         let judged = turn::goal(
             towards.config,
             towards.egress,

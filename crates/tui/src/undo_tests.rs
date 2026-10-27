@@ -135,6 +135,7 @@ fn oversized_undo(ending: &str, resumed: bool) {
         },
         FinishedTurn {
             decisions: Some(completed.decisions),
+            work: completed.work,
             outcome: result,
             conversation,
             sink,
@@ -1463,6 +1464,7 @@ fn ordinary_tui_endings_keep_exact_approvals_advice_and_exposure() {
                         assert_eq!(confirmer.runs.len(), 1);
                         FinishedTurn {
                             decisions: Some(completed.decisions),
+                            work: completed.work,
                             outcome: completed.outcome,
                             conversation,
                             sink,
@@ -2271,6 +2273,7 @@ fn sent_and_stopped(
         },
         FinishedTurn {
             decisions: Some(completed.decisions),
+            work: completed.work,
             outcome: completed.outcome,
             conversation,
             sink,

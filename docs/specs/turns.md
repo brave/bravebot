@@ -179,6 +179,9 @@ turn's changes as they were when it was made, so a program the delegate ran ther
 not every changed path was carried, and what it wrote does not. One that was given none holds the
 commit, as a checkout made without changes does, and nothing the delegate does there counts.
 
+The record also counts writes and commands, and whether a command came after the last write
+([GROUND-1](grounding.md#GROUND-1)). The question is unchanged.
+
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`
