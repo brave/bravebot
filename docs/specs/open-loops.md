@@ -13,7 +13,7 @@ documented-by:
 
 ## Scope
 
-bravebot finishes a turn and says nothing about what is left undone. Today a session can end with code changed and never built, a test run that failed and was never run again, todos still open, a job still running, a kept checkout never applied, and files not committed. Each of these is in bravebot's own records. Nobody puts them together.
+bravebot finishes a turn and says nothing about what is left undone. A session can end with code changed and never built, a test run that failed and was never run again, todos still open, a job still running, a kept checkout never applied, and files not committed. Each of these is in bravebot's own records. Nobody puts them together.
 
 This spec has bravebot list them. You see one line when the list changes. The planner is told at the start of the next turn. `/unfinished` shows the whole list.
 
@@ -166,9 +166,9 @@ What a resume can know:
 - unbuilt changes and a failed command, from the record
 - kept checkouts, from the record ([CHECKOUT-15](checkouts.md#CHECKOUT-15))
 - uncommitted files, from git
-- open todos, running jobs and a stopped goal are not kept across a resume today, so they are not shown
+- open todos, running jobs and a stopped goal are not kept across a resume, so they are not shown
 
-A record written before this spec reads as having no work record and no failed command.
+A record with no work record or last-command status reads as nothing open.
 
 Tests to write:
 
