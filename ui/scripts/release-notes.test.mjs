@@ -3,40 +3,15 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { build } from 'esbuild'
+import { loadComponents } from './render-support.mjs'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const React = require('react')
 const { renderToStaticMarkup } = require('react-dom/server')
 
-const inPlaceModal = {
-  name: 'in-place-modal',
-  setup(built) {
-    built.onResolve({ filter: /^\.\/Modal$/ }, () => ({ path: 'modal', namespace: 'in-place-modal' }))
-    built.onLoad({ filter: /.*/, namespace: 'in-place-modal' }, () => ({
-      loader: 'js',
-      resolveDir: process.cwd(),
-      contents: `import { createElement } from 'react'
-        export function Modal({ title, subtitle, children }) { return createElement('div', { className: 'modal', 'data-title': title, 'data-subtitle': subtitle }, children) }`,
-    }))
-  },
-}
-
 let bundle
-async function notice() {
-  bundle ??= build({
-    entryPoints: ['src/renderer/components/Notice.tsx'],
-    bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic',
-    external: ['react', 'react-dom', 'react/jsx-runtime'],
-    plugins: [inPlaceModal],
-  }).then((built) => {
-    const module = { exports: {} }
-    new Function('require', 'module', 'exports', built.outputFiles[0].text)(require, module, module.exports)
-    return module.exports
-  })
-  return bundle
-}
+const notice = () => (bundle ??= loadComponents('src/renderer/components/Notice.tsx'))
 
 const draw = (Notice, shown) => renderToStaticMarkup(React.createElement(Notice, { ...shown, onClose() {} }))
 

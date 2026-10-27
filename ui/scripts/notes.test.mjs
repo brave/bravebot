@@ -4,7 +4,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { build } from 'esbuild'
+import { inPlaceModal, loadComponents } from './render-support.mjs'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
@@ -27,34 +27,13 @@ const inPlace = {
     }))
     built.onResolve({ filter: /^\.\/FileTree$/ }, () => ({ path: 'tree', namespace: 'no-tree' }))
     built.onLoad({ filter: /.*/, namespace: 'no-tree' }, () => ({ loader: 'js', contents: 'export const FileTree = () => null' }))
-    built.onResolve({ filter: /^\.\/Modal$/ }, () => ({ path: 'modal', namespace: 'in-place-modal' }))
-    built.onLoad({ filter: /.*/, namespace: 'in-place-modal' }, () => ({
-      loader: 'js',
-      resolveDir: process.cwd(),
-      contents: `import { createElement } from 'react'
-        export function Modal({ title, subtitle, children, actions }) { return createElement('div', { className: 'modal', 'data-title': title, 'data-subtitle': subtitle }, children, actions) }`,
-    }))
   },
 }
 
 let bundle
-async function components() {
-  bundle ??= build({
-    stdin: {
-      contents: "export { Context } from './src/renderer/components/Context.tsx'\nexport { NoteDialog } from './src/renderer/components/NoteDialog.tsx'",
-      resolveDir: process.cwd(),
-      loader: 'ts',
-    },
-    bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic',
-    external: ['react', 'react-dom', 'react/jsx-runtime'],
-    plugins: [inPlace],
-  }).then((built) => {
-    const module = { exports: {} }
-    new Function('require', 'module', 'exports', built.outputFiles[0].text)(require, module, module.exports)
-    return module.exports
-  })
-  return bundle
-}
+const components = () => (bundle ??= loadComponents({
+  contents: "export { Context } from './src/renderer/components/Context.tsx'\nexport { NoteDialog } from './src/renderer/components/NoteDialog.tsx'",
+}, [inPlace, inPlaceModal]))
 
 const live = (overrides = {}) => ({
   handle: 's-1', summary: { directory: '/project' }, entries: [], todos: [], quarantine: [], phase: null, tokens: 0, running: false,
@@ -116,5 +95,7 @@ test('the note dialog says where the note goes, and cannot add while a turn runs
   assert.ok(idle.includes('data-subtitle="Kept on this chat record. Never sent to the model."'))
   assert.equal(disabled(tagged(idle, 'note-add')), true, 'nothing typed yet')
   assert.equal(disabled(tagged(idle, 'note-cancel')), false)
+  assert.ok(idle.indexOf('data-test="note-cancel"') < idle.indexOf('data-test="note-add"'), 'Cancel just before Add')
+  assert.ok(!tagged(idle, 'note-cancel').includes('modal-leading'), 'both at the right-hand end, as Nala’s dialog lays them out')
   assert.equal(disabled(tagged(draw(true), 'note-add')), true)
 })
