@@ -133,6 +133,8 @@ pub const DENIED: &[&str] = &[
     "permissions.list",
     "permissions.revoke",
     "hooks.inspect",
+    "language.get",
+    "language.set",
     "connectors.list",
     "connectors.preview",
     "connectors.connect",

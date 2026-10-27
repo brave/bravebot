@@ -195,6 +195,11 @@ const api = {
     void ipcRenderer.invoke('bravebot:theme:write', name)
   },
 
+  /** Start the app again, which is when a language chosen in Settings applies. */
+  relaunch(): void {
+    void ipcRenderer.invoke('bravebot:app:relaunch')
+  },
+
   /** Listen for appearance changes written through the main process. */
   onThemeChanged(listener: (state: ThemeState) => void): () => void {
     const handler = (_event: IpcRendererEvent, state: ThemeState) => listener(state)

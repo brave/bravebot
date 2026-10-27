@@ -516,6 +516,8 @@ const ALLOWED = new Set([
   'permissions.revoke',
   'doctor',
   'hooks.inspect',
+  'language.get',
+  'language.set',
   'connectors.list',
   'connectors.preview',
   'connectors.connect',
@@ -893,6 +895,12 @@ app.whenReady().then(() => {
     putTheme(appearance)
     applyNativeAppearance(appearance)
     tell('bravebot:theme:changed', { chosen: appearance })
+  })
+
+  // The window's language is chosen once, before its first paint, so a new one takes a new start.
+  ipcMain.handle('bravebot:app:relaunch', () => {
+    app.relaunch()
+    app.quit()
   })
 
   // Choosing a project is a native affair: the renderer cannot see the filesystem and

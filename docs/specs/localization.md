@@ -7,6 +7,7 @@ governs:
   - crates/i18n/src/*.rs
   - crates/i18n/locales/*.ftl
   - crates/agent/tests/audience.rs
+  - crates/ui-bridge/src/language.rs
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/customize/language.md
@@ -122,9 +123,11 @@ only ever noticed afterwards.
 
 Nothing about the environment reaches a message until a binary says so, and it says so once,
 before anything is drawn. Anything that did not ask reads the reference. The terminal chooses from
-the environment and from what the person said ([LOCALE-8](#LOCALE-8)). `bravebot-rpc` chooses `en-US`
-whatever the environment says, because the desktop
-window it serves is in English only and shows the notes the bridge builds as they stand.
+the environment and from what the person said ([LOCALE-8](#LOCALE-8)), and so does the desktop
+window, which asks the bridge once before its first paint and reads the `ui-` messages of that
+catalog, generated from the same files, until it is started again. `bravebot-rpc` chooses `en-US`
+for its own notes whatever the environment says, because the window shows the notes the bridge
+builds as they stand and most of its chrome is not yet read from a catalog.
 
 **Why.** A library that consulted the environment the first time something needed a word would
 make the output of every test depend on the machine it ran on, and a test that pins what a person
@@ -134,6 +137,12 @@ sees is worth nothing if two people running it see different things.
 `verified-by: bravebot_i18n::lib::a_process_whose_environment_names_a_language_still_reads_the_reference_until_asked`
 `verified-by: bravebot_i18n::sizes_in_french::the_size_notes_are_said_in_the_chosen_catalog`
 `verified-by: bravebot_ui_bridge::english_notes::a_note_for_the_window_is_in_english_whatever_the_machine_says`
+`verified-by: bravebot_i18n::lib::the_catalog_chosen_for_a_window_follows_the_order_the_terminal_starts_by`
+`verified-by: bravebot_i18n::typescript::the_window_s_messages_are_what_the_catalogs_say`
+`verified-by: bravebot_i18n::typescript::only_messages_named_for_the_window_are_written`
+`verified-by: bravebot_i18n::typescript::a_message_a_translation_omits_is_the_reference_s`
+`verified-by: bravebot_i18n::typescript::a_plural_is_formed_by_the_rules_of_the_catalog_it_is_written_in`
+`verified-by: bravebot_i18n::typescript::a_quote_or_backslash_in_a_message_stays_text`
 `verified-by: bravebot_ui_bridge::history::a_failed_turn_on_the_account_is_sent_in_english_on_a_machine_set_to_french`
 `verified-by: bravebot_ui_bridge::history::the_narrations_for_a_summary_the_account_could_not_make_are_in_english_on_a_machine_set_to_french`
 
@@ -153,7 +162,8 @@ tried and a value no catalog answers. The value is matched against the catalogs 
 `/language <tag>` saves the tag of the catalog that answered the word and refuses a word no catalog
 answers, naming the catalogs there are. The choice applies from the next start, since the catalog is
 chosen once ([LOCALE-7](#LOCALE-7)). `/language auto` removes the saved tag. A session that records
-nothing saves nothing, and says so.
+nothing saves nothing, and says so. The desktop window's language picker saves and removes the same
+file by the same rules, and says when `BRAVEBOT_LOCALE` outranks it.
 
 **Why.** A person's language belongs to the person and has to be settable where a shell is not: a
 program started from a launcher has no shell profile to edit. A project's file is written by whoever
@@ -175,6 +185,10 @@ the file because it is the later act, as a saved model or effort level outranks 
 `verified-by: bravebot_session::store::a_pipe_where_the_language_file_should_be_is_no_choice_and_holds_nothing_up`
 `verified-by: bravebot_session::store::a_language_file_grown_large_still_answers_with_its_first_line`
 `verified-by: bravebot_tui::app::the_language_command_carries_its_word`
+`verified-by: bravebot_ui_bridge::language::a_language_chosen_in_the_window_is_saved_where_the_terminal_reads_it_and_read_back`
+`verified-by: bravebot_ui_bridge::language::automatic_removes_the_saved_choice`
+`verified-by: bravebot_ui_bridge::language::a_word_no_catalog_answers_is_refused_and_nothing_is_saved`
+`verified-by: bravebot_ui_bridge::language::the_variable_made_for_this_program_is_reported_as_outranking_the_choice`
 `verified-by: bravebot_tui::app::a_language_a_catalog_answers_is_saved_under_the_catalogs_own_tag`
 `verified-by: bravebot_tui::app::a_language_no_catalog_answers_is_refused_and_not_saved`
 `verified-by: bravebot_tui::app::auto_gives_the_choice_back_and_leaves_no_file`

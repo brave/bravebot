@@ -1547,6 +1547,14 @@ Still open:
   The native `bravebot:settings:select` picker grants the path; renderer requests cannot set it.
   Model discovery uses the same override and the session's registered project directory.
   `bravebot-rpc --settings <path>` restores the override on process restart.
+- `language.get` reports `{ inUse, saved, available, overridden }`: the tag of the catalog a
+  window started now reads (by [LOCALE-8](../../docs/specs/localization.md#LOCALE-8)), the tag
+  `/language` saved or null, each shipped catalog as `{ tag, name }` with the name in its own
+  language, and whether `BRAVEBOT_LOCALE` outranks the choice. `language.set` takes `tag`, a word
+  a catalog answers or `auto`, saves the catalog's own tag in `~/.bravebot/language` (or removes it
+  for `auto`) and answers `{ saved, tag }`; a word no catalog answers is `bad_request`. The window
+  chooses its catalog once, before its first paint, and `bravebot:app:relaunch` (main-process IPC)
+  restarts the app to apply a new choice.
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last

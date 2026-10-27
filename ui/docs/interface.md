@@ -793,6 +793,16 @@ System follows the OS (`prefers-color-scheme`). Light and Dark set `data-theme` 
 Legacy palette names (`brave`, `nord`, and the rest) stored from earlier builds all
 resolve to System.
 
+### Language
+
+**Settings ▸ General** also holds the language: Automatic, then each shipped catalog by its own
+name. A choice is saved where `/language` saves it, `~/.bravebot/language`, and applies from the
+next start ([LOCALE-8](../../docs/specs/localization.md#LOCALE-8)); **Restart** beside it relaunches
+the app. Automatic removes the saved choice. Where `BRAVEBOT_LOCALE` is set the note says it
+outranks the choice. The window asks the bridge once, before its first paint, and reads its
+`ui-` messages from that catalog (the General page so far); the rest of the chrome, and the notes
+the bridge builds, stay in English.
+
 
 ## Agent 0.9 controls
 

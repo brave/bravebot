@@ -57,6 +57,59 @@ impl Catalog {
     }
 }
 
+/// Every catalog in `locales/`, reference first so generated indices are stable.
+pub fn load(dir: &std::path::Path, reference: &str) -> Vec<Catalog> {
+    let mut found: Vec<Catalog> = Vec::new();
+
+    let entries = std::fs::read_dir(dir).expect("locales/ exists");
+    let mut paths: Vec<_> = entries
+        .map(|e| e.expect("read locales/").path())
+        .filter(|p| p.extension().is_some_and(|e| e == "ftl"))
+        .collect();
+    paths.sort();
+
+    for path in paths {
+        let tag = path
+            .file_stem()
+            .expect("a .ftl file has a stem")
+            .to_str()
+            .expect("locale filenames are ASCII")
+            .to_string();
+        let (language, region) = match tag.split_once('-') {
+            Some((language, region)) => (language, Some(region)),
+            None => (tag.as_str(), None),
+        };
+        let well_formed = language.len() >= 2
+            && language.len() <= 3
+            && language.chars().all(|c| c.is_ascii_lowercase())
+            && region.is_none_or(|r| r.len() == 2 && r.chars().all(|c| c.is_ascii_uppercase()));
+        assert!(
+            well_formed,
+            "locales/{tag}.ftl is not named for a locale: use `fr.ftl` or `fr-CA.ftl`"
+        );
+
+        let source = std::fs::read_to_string(&path).expect("read a catalog");
+        let parsed = parse(&source).unwrap_or_else(|e| panic!("locales/{tag}.ftl: {e}"));
+
+        let mut messages = std::collections::BTreeMap::new();
+        for message in parsed {
+            messages.insert(message.id.clone(), message);
+        }
+
+        found.push(Catalog {
+            tag: tag.clone(),
+            language: language.to_string(),
+            variant: camel_case(&tag.to_lowercase()),
+            messages,
+        });
+    }
+
+    // The reference leads so `Locale as usize` indexes the per-message tables with the fallback
+    // at a known position.
+    found.sort_by_key(|l| (l.tag != reference, l.tag.clone()));
+    found
+}
+
 pub fn messages(catalogs: &[Catalog], reference: &Catalog) -> String {
     let mut out = String::new();
     for (id, source) in &reference.messages {

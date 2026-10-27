@@ -9,7 +9,8 @@
  * - more raw px spacing, or more size-only `--leo-typography-*-font-size` reads, than the
  *   ratchets below allow (they may only go down);
  * - a raw `<svg` in the renderer outside the bot avatar illustration;
- * - a unicode glyph used as an icon, in JSX text or CSS `content:`.
+ * - a unicode glyph used as an icon, in JSX text or CSS `content:`;
+ * - a message looked up by a computed key (`t[`), or the generated catalogs reached outside `i18n/`.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
@@ -123,6 +124,11 @@ for (const file of tsxFiles) {
     })) fail(file, i + 1, `glyph used as an icon: ${trimmed.slice(0, 80)}`)
     for (const m of code.matchAll(tokenFamily)) {
       if (!leoTokens.has(m[1])) fail(file, i + 1, `unknown Leo token ${m[1]}`)
+    }
+    // A message is named in the source, never computed (LOCALE-2), and only i18n/ holds the catalogs.
+    if (!name.startsWith('i18n/')) {
+      if (/\bt\s*\[/.test(code) && /from '(?:\.\.?\/)+i18n'/.test(text)) fail(file, i + 1, `message looked up by a computed key; write t.<name>(): ${trimmed.slice(0, 80)}`)
+      if (/messages\.gen/.test(code)) fail(file, i + 1, 'the catalogs are reached through i18n, by t.<name>()')
     }
   })
 }

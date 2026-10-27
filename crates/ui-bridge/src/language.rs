@@ -1,0 +1,58 @@
+//! Which catalog the window's chrome is read in, and the choice `/language` keeps.
+//!
+//! The window chooses as the terminal does (LOCALE-8), from the same file, so a choice made in one
+//! is the choice in the other. This process's own notes stay in the reference (LOCALE-7).
+
+use crate::protocol::{Failure, Request};
+use bravebot_i18n::{AUTO, LOCALES, Said};
+use bravebot_session::store;
+use serde_json::{Value, json};
+
+/// The catalog in use, the one saved, every one there is, and whether `BRAVEBOT_LOCALE` outranks
+/// them all.
+pub fn get() -> Value {
+    let picked = store::load_language();
+    let written = bravebot_config::Settings::written_language();
+    let in_use = bravebot_i18n::choose(Said {
+        picked: picked.as_deref(),
+        written: written.as_deref(),
+    });
+    let saved = picked
+        .as_deref()
+        .and_then(bravebot_i18n::find)
+        .map(|locale| locale.tag());
+    json!({
+        "inUse": in_use.tag(),
+        "saved": saved,
+        "available": available(),
+        "overridden": bravebot_i18n::overridden(),
+    })
+}
+
+/// Save a catalog's tag, or forget the choice for `auto`. A word no catalog answers is refused.
+pub fn set(request: &Request) -> Result<Value, Failure> {
+    let word = request.string("tag")?;
+    let word = word.trim();
+    let tag = if word.eq_ignore_ascii_case(AUTO) {
+        None
+    } else {
+        let Some(locale) = bravebot_i18n::find(word) else {
+            return Err(Failure::bad_request(format!(
+                "no catalog answers `{word}`; there are {}",
+                bravebot_i18n::tags().join(", ")
+            )));
+        };
+        Some(locale.tag())
+    };
+    Ok(json!({
+        "saved": store::save_language(tag),
+        "tag": tag.unwrap_or(AUTO),
+    }))
+}
+
+fn available() -> Vec<Value> {
+    LOCALES
+        .iter()
+        .map(|locale| json!({ "tag": locale.tag(), "name": locale.name() }))
+        .collect()
+}

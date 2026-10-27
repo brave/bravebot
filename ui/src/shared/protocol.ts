@@ -364,6 +364,22 @@ export interface ModelCatalogue {
   warningCommands?: (string | null)[]
 }
 
+/** `language.get`: the catalog the window is read in, and the choice `/language` keeps. */
+export interface LanguageReport {
+  inUse: string
+  /** The tag saved in `~/.bravebot/language`, or `null` for Automatic. */
+  saved: string | null
+  available: { tag: string; name: string }[]
+  /** `BRAVEBOT_LOCALE` is set, so it outranks the saved choice. */
+  overridden: boolean
+}
+
+/** `language.set`: whether the choice was kept, and the tag saved (`auto` for none). */
+export interface LanguageSaved {
+  saved: boolean
+  tag: string
+}
+
 /**
  * A session begun from part of another one.
  *

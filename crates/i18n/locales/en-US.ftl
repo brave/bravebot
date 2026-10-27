@@ -5013,3 +5013,25 @@ agent-rule-approval-refuse = Don't keep it
 # that lists the choices and reads a line (RECALL-3). Comma-separated, matched ignoring case.
 agent-rule-approval-yes-words = y, yes, keep, keep it
 agent-rule-approval-no-words = n, no, refuse, don't, do not keep it
+
+## What each catalog calls itself, in a list to choose it from
+
+locale-name = English (US)
+
+
+## The desktop window. A message here is written into the window's own code rather than the terminal's
+
+ui-settings-appearance = Appearance
+ui-settings-theme = Theme
+ui-settings-theme-explained = System follows the OS. Light and Dark stay put regardless of it.
+ui-appearance-system = System
+ui-appearance-light = Light
+ui-appearance-dark = Dark
+ui-settings-language = Language
+ui-settings-language-explained = Automatic follows the language in your settings file, then the system's.
+ui-settings-language-automatic = Automatic
+ui-settings-language-next-start = Applies the next time bravebot starts.
+ui-settings-language-overridden = BRAVEBOT_LOCALE is set, so it decides the language whatever is chosen here.
+ui-settings-language-unsaved = Couldn't save the language.
+ui-settings-language-unread = Couldn't read the language setting.
+ui-settings-restart = Restart
