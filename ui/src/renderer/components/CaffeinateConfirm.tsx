@@ -23,9 +23,9 @@ export function CaffeinateConfirm({ onCancel, onEnable }: {
   onEnable: () => void
 }): React.JSX.Element {
   return (
-    <Modal title="Keep computer awake during turns?" size="sm" compact className="caffeinate-confirm"
+    <Modal title="Keep computer awake during turns?" size="sm" className="caffeinate-confirm"
       onClose={onCancel} actions={<>
-        <Button kind="plain-faint" size="small" className="modal-leading" onClick={onCancel} data-test="caffeinate-cancel">
+        <Button kind="plain-faint" size="small" onClick={onCancel} data-test="caffeinate-cancel">
           Cancel
         </Button>
         <Button kind="filled" size="small" onClick={onEnable} data-test="caffeinate-enable">

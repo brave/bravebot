@@ -25,7 +25,7 @@ export function NoteDialog({ running, onCancel, onAdd }: {
     <Modal title="Add note" size="md" className="note-dialog"
       subtitle="Kept on this chat record. Never sent to the model."
       onClose={busy ? undefined : onCancel} actions={<>
-        <Button kind="plain-faint" size="small" className="modal-leading" isDisabled={busy} onClick={onCancel} data-test="note-cancel">
+        <Button kind="plain-faint" size="small" isDisabled={busy} onClick={onCancel} data-test="note-cancel">
           Cancel
         </Button>
         <Button kind="filled" size="small" isDisabled={busy || running || !text.trim()} onClick={() => void add()} data-test="note-add">
