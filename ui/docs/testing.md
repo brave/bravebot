@@ -168,6 +168,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:export` | Exporting a conversation to text, Markdown and PDF, with and without the tool calls, and what the file leaves out either way |
 | `pnpm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
 | `pnpm run drive:rewind` | Undo and rewind from each entry point against the real bridge: the file back on disk, the turn gone from the transcript, its prompt in the composer, the coverage warning for a command, and every entry point greyed while a turn runs |
+| `pnpm run drive:diagnostics` | More ▸ Diagnostics… against the real bridge, a local model service and website, and rules written into a temporary home: the permission check for a deny, ask, allow and unmatched call with its badge, rule and settings file; the last request's model, tools and labelled parts, markup drawn as text and a fetched page present only as its reference; the request empty before the first turn and after an undo; nothing outside the dialog box and nothing scrolling sideways, light and dark. Screenshots go to `$DIAGNOSTICS_SHOTS`, by default `$TMPDIR/bravebot-diagnostics` |
 | `pnpm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
 | `pnpm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `pnpm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename, asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
@@ -239,13 +240,13 @@ at a time, and a driver replaces only its own rows inside a shared key such as `
 These pass `--user-data-dir` with a temporary profile, so the app's own state is isolated:
 
 `drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-connectors`,
-`drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
+`drive-conversation-workflow`, `drive-diagnostics`, `drive-exposure`, `drive-fetch`, `drive-language-server`,
 `drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
 `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
-`drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
+`drive-at-mentions`, `drive-connectors`, `drive-diagnostics`, `drive-drop`, `drive-exposure`, `drive-fetch`,
 `drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-paste`,
 `drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
