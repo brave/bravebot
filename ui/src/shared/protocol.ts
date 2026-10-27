@@ -454,6 +454,10 @@ export interface TurnDone {
   turn: number
   reply: string
   model: string
+  /** The service configuration routes the session's model to, by its display name; `null` where the turn ran on another model. */
+  service?: string | null
+  /** Whether the turn's last round was asked of the session's own model. */
+  sessionModel?: boolean
   steps: number
   clean: boolean
   tokens: number

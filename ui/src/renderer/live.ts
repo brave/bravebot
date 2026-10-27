@@ -135,6 +135,11 @@ export interface Live {
    * exactly once per compaction that actually happened.
    */
   archived: number
+  /**
+   * The conversation's integrity word from `session.open` or `session.rewind`. Cleared from
+   * `trusted` when a turn starts, since no event says whether that turn met untrusted content.
+   */
+  context?: string | null
   /** Whether the session opened with auto-vetting on, as the agent settled it then. */
   autoVetting: boolean
   /** What the session's next turn asks before it acts, as the bridge last reported it. */

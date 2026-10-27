@@ -60,6 +60,7 @@ export function useRewind({ liveRef, updateSession, refresh, draft, setDraft, se
         todos: Object.values(rewound.todos).flat(),
         contextTokens: rewound.contextTokens,
         archived: rewound.archived,
+        context: rewound.context,
         rewind: rewound.rewind,
         awaitingOrdinal: null,
         focus: null,

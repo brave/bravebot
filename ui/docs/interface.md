@@ -203,12 +203,23 @@ The footer beneath a completed reply shows the model actually used and total tok
 Expand it for exact total and output tokens and the number of tool-calling rounds.
 Total usage includes every request in the turn; it is not context-window occupancy.
 Cancelled turns have no final usage report. The live tokens-written counter remains
-available while work is running.
+available while work is running. **Answered by** names the service (Brave, AWS Bedrock,
+ChatGPT, xAI or a gateway) only when the turn ran on the session's model; a bot's, a skill's
+or the fallback model leaves it out.
+
+Confined content, the vet, output and vouch cards and a write's remark carry a **label
+chip**: two neutral words, Trusted or Untrusted and Public or Private, each with a fixed
+tooltip. The Context overview says whether the **Conversation** is trusted or has met
+untrusted content, as the session reported it when opened or rewound. Starting a turn
+clears a trusted reading, since no event reports it again, and the row is absent when
+unknown.
 
 **Audit** opens that turn's policy decisions in the context column (or the drawer in
 a narrow window). **Policy blocked an action** indicates that a gate refused something;
 it does not mean the whole task failed. Refusals appear first, with expandable recorded
-evidence. **All captured events** reveals the ordered stream, including unfamiliar event
+evidence. **Routing & content** lists each tool call's fields with their role (routing
+decides where the effect lands, content is carried there), label and verdict, and each
+release of a slot from one label to another. **All captured events** reveals the ordered stream, including unfamiliar event
 types. This inspector cannot grant permissions; approval cards remain in the transcript.
 Close or press Escape inside the inspector to restore the previous context view and focus.
 

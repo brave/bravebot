@@ -171,6 +171,12 @@ Command-output content is released for display so the person deciding can read i
 Only the agent's approved path admits it to the planner. Confined material is labelled
 in the UI; showing it is not evidence that the planner read it.
 
+A label chip is read only from a structured label field (the short form `(T,pub)` and its
+siblings, or the audit's `{integrity, confidentiality}` words), never from content, an origin
+or a preview. Anything but an exact value reads as untrusted and private, axis by axis. The
+chip's words and tooltips are fixed strings, it carries none of the field's text, and it is
+neutral in every state so that trusted never reads as safe.
+
 How it is labelled is this window's answer to
 [LAYER-5](../../docs/specs/layering.md#LAYER-5), the rule that any surface showing released
 content marks it. The mark here is structural rather than a margin: a quarantined preview sits in

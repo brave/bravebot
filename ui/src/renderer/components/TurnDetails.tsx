@@ -49,6 +49,7 @@ export function TurnFooter({ details, onDisclosure, onAudit, copy, undo }: {
       data-test="turn-statistics">
       <div className="turn-statistics-body"><strong>Turn {details.turn}</strong><dl>
         <dt>Model used</dt><dd>{details.model ?? 'Unavailable'}</dd>
+        {details.service && <><dt>Answered by</dt><dd>{details.service}</dd></>}
         <dt>Total tokens</dt><dd>{exact(details.tokens)}</dd>
         <dt>Output tokens</dt><dd>{exact(details.outputTokens)}</dd>
         <dt>Tool-calling rounds</dt><dd>{exact(details.steps)}</dd>

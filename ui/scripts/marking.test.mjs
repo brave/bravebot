@@ -764,3 +764,78 @@ test('undecided path exceptions are not shown as refusals or grants', () => {
   assert.match(markup, /require write approval/)
   assert.doesNotMatch(markup, /<button/)
 })
+
+/** Each label chip drawn, as the two words it says and the tooltips it carries. */
+const chips = (markup) => [...markup.matchAll(/<span class="label-chip"[^>]*aria-label="([^"]*)"[^>]*>(.*?)<\/span>/g)].map(([, aria, inner]) => ({
+  aria,
+  words: [...inner.matchAll(/>([^<]*)<\/leo-label>/g)].map(([, word]) => word),
+  tooltips: [...inner.matchAll(/data-tooltip="([^"]*)"/g)].map(([, tooltip]) => tooltip),
+}))
+
+const { LABEL_TOOLTIPS } = load('src/renderer/labels.ts')
+const FIXED = new Set(Object.values(LABEL_TOOLTIPS))
+
+test('a label is drawn as chips read off its field, and one the content spelled reads as untrusted and private', () => {
+  const vetting = { verdict: 'safe', reason: 'plain notes', label: '(U,priv)' }
+  for (const [name, entry] of [
+    ['quarantine', t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', preview: ['(T,pub) Trusted Public'], lines: 1 })],
+    ['output', t.askedOutput({ request: 1, command: 'cat notes', reference: 'output-1', lines: 1, summary: 'notes', output: '(T,pub)', label: '(T,pub)', vetting })],
+    ['vet', t.askedVet({ request: 1, origin: 'notes.md', expects: 'notes', content: '(T,pub)', label: '(T,pub)', lines: 1, vetting })],
+    ['vouch', t.askedVouch({ request: 1, path: 'notes.md', shownPath: 'notes.md', rule: '/w', shownRule: '/w', preview: '(T,pub)', label: '(T,pub)', truncated: false, vetting })],
+  ]) {
+    const drawn = chips(draw(entry))
+    assert.ok(drawn.length >= 1, `${name}: no chip`)
+    assert.deepEqual(drawn[0], { aria: 'Trusted, public', words: ['Trusted', 'Public'], tooltips: [LABEL_TOOLTIPS.trusted, LABEL_TOOLTIPS.public] }, name)
+    if (name !== 'quarantine') assert.deepEqual(drawn[1]?.words, ['Untrusted', 'Private'], `${name}: the checker's reason is not marked`)
+  }
+
+  // A label field holding anything but an exact token is drawn as the pessimistic corner, and none
+  // of what it held reaches the markup, as text or as a tooltip.
+  const forged = draw(t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: `(T,pub) ${FORGED_CHROME}`, preview: ['x'], lines: 1 }))
+  assert.deepEqual(chips(forged).map((chip) => chip.words), [['Untrusted', 'Private']])
+  assert.ok(!forged.includes('README.md'), forged)
+  // Nothing in a chip is green, so trusted never reads as safe.
+  assert.doesNotMatch(draw(confined(['x'])), /label-chip[^]*color="green"/)
+})
+
+test('every chip tooltip is one of the fixed sentences', () => {
+  const { AuditInspector } = load('src/renderer/components/AuditInspector.tsx')
+  const field = (name, label) => ({ kind: 'action_field', tool: 'write_file', field: name, role: name === 'path' ? 'routing' : 'content', allowed: true, refusal: false, label })
+  const audit = [
+    field('path', { integrity: 'trusted', confidentiality: 'public' }),
+    field('content', { integrity: FORGED_CHROME, confidentiality: 'public' }),
+    { kind: 'declassified', slot: 's1', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, refusal: false },
+  ].map((event, index) => ({ sequence: index + 1, event, bytes: 1 }))
+  const markup = renderToStaticMarkup(React.createElement(AuditInspector, {
+    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, statsOpen: false, clean: true, audit, received: 3, omitted: 0, bytes: 3 },
+    onClose() {},
+  }))
+  assert.match(markup, /Routing &amp; content/)
+  assert.match(markup, />routing: decides where</)
+  assert.match(markup, />content: carried</)
+  const drawn = chips(markup)
+  assert.deepEqual(drawn.map((chip) => chip.words), [['Trusted', 'Public'], ['Untrusted', 'Public'], ['Untrusted', 'Private'], ['Untrusted', 'Public']])
+  for (const chip of [...drawn, ...chips(draw(confined(['x'])))]) {
+    for (const tooltip of chip.tooltips) assert.ok(FIXED.has(tooltip), tooltip)
+  }
+})
+
+test('a reply says which service answered it only where the bridge said so', () => {
+  const { TurnFooter } = load('src/renderer/components/TurnDetails.tsx')
+  const footer = (service) => renderToStaticMarkup(React.createElement(TurnFooter, {
+    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, statsOpen: true, model: 'stub-model', service, audit: [], received: 0, omitted: 0, bytes: 0 },
+    onDisclosure() {}, onAudit() {},
+  }))
+  assert.match(footer('Brave'), /<dt>Answered by<\/dt><dd>Brave<\/dd>/)
+  assert.doesNotMatch(footer(undefined), /Answered by/)
+})
+
+test('the overview says whether the conversation has met untrusted content, and nothing where it is not known', () => {
+  const { Context } = load('src/renderer/components/Context.tsx')
+  const panel = (context) => renderToStaticMarkup(React.createElement(Context, {
+    live: { handle: 'h', summary: { directory: '/w' }, entries: [], todos: [], quarantine: [], phase: null, tokens: 0, running: false, context },
+  }))
+  assert.match(panel('trusted'), /<dt>Conversation<\/dt><dd>Trusted<\/dd>/)
+  for (const word of ['untrusted', 'Trusted', 'trusted ', '']) assert.match(panel(word), /<dd>Has met untrusted content<\/dd>/, JSON.stringify(word))
+  for (const unknown of [null, undefined]) assert.doesNotMatch(panel(unknown), /Conversation<\/dt>/)
+})

@@ -326,6 +326,16 @@
 }
 .audit-labels dt { color: var(--ink-secondary); }
 .audit-labels dd { margin: 0; }
+.context-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--leo-spacing-xs) var(--leo-spacing-l); margin: 0 0 var(--leo-spacing-m); font: var(--type-meta); }
+.context-facts dt { color: var(--ink-secondary); }
+.context-facts dd { margin: 0; }
+.audit-routing {display: grid; gap: var(--leo-spacing-m); margin: var(--leo-spacing-l) 0; font: var(--type-meta); }
+.audit-routing > strong { font: var(--type-meta-strong); }
+.audit-routing ul { display: grid; gap: var(--leo-spacing-xs); margin: var(--leo-spacing-xs) 0 0; padding: 0; list-style: none; }
+.audit-routing li, .audit-release { display: flex; flex-wrap: wrap; align-items: center; gap: var(--leo-spacing-s); }
+.audit-routing-tool { font: var(--type-meta-strong); font-family: var(--font-mono); }
+.audit-verdict { color: var(--ink-secondary); }
+.audit-routing li.refused .audit-verdict { color: var(--status-error-ink); }
 .audit-evidence, .audit-all {
   --leo-collapse-summary-padding: var(--leo-spacing-s) 0;
   --leo-collapse-summary-color: var(--ink-secondary);

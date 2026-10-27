@@ -31,6 +31,22 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
     });
 }
 
+/// The name of the service a turn on `model` is sent to, in the order the agent's backend picks one,
+/// and in the words the picker gives its rows.
+pub fn service_of(config: &Config, model: &str) -> String {
+    if config.bedrock_for(model).is_some() {
+        "AWS Bedrock".into()
+    } else if let Some((provider, _)) = config.provider_for(model) {
+        provider.display_name().to_string()
+    } else if config.chatgpt_model(model).is_some() {
+        "ChatGPT".into()
+    } else if config.xai_model(model).is_some() {
+        "xAI".into()
+    } else {
+        "Brave".into()
+    }
+}
+
 /// The rows every service this window reaches offers, and what could not be asked of the ones that
 /// failed.
 ///
@@ -954,6 +970,15 @@ mod tests {
         adopt_window(&mut config, Some("ollama/tiny"));
         assert_eq!(config.context_budget, 65_536);
         assert!(!config.budget_is_guessed());
+    }
+
+    /// The service named for a turn is the one the agent's backend would send it to.
+    #[test]
+    fn a_turn_names_the_service_its_backend_sends_it_to() {
+        let config = a_config_with_a_gateway_stating_a_window(8_192);
+        let gateway = config.providers[0].display_name().to_string();
+        assert_eq!(service_of(&config, "ollama/tiny"), gateway);
+        assert_eq!(service_of(&config, "opus-arn"), "AWS Bedrock");
     }
 
     /// A model no roster describes states no window, so the default stands rather than the window

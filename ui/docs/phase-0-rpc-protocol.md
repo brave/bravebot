@@ -1097,8 +1097,8 @@ whose events all share one second cannot say which came first.
 { "event": "turn.done", "session": "s1", "data": {
   "turn": 5,
   "reply": "The parser drops them in `skip_separators`…",
-  "model": "claude-…", "steps": 3, "clean": true,
-  "tokens": 51234, "outputTokens": 812,
+  "model": "claude-…", "service": "Brave", "sessionModel": true,
+  "steps": 3, "clean": true, "tokens": 51234, "outputTokens": 812,
   "notices": ["loaded AGENTS.md"],
   "trust": { "rules": [ { "path": "…", "integrity": "untrusted" } ] },
   "id": "0f1c…", "archived": 0, "prompt": 4,
@@ -1106,6 +1106,12 @@ whose events all share one second cannot say which came first.
                 "paths": ["src/parse.rs"], "gaps": [] } ]
 } }
 ```
+
+`sessionModel` is `Outcome::ran_on_the_sessions_model()`: false where an addressed definition's
+model, a skill's model or the fallback model answered. `service` names the service the session's
+model is sent to (`Brave`, `AWS Bedrock`, `ChatGPT`, `xAI`, or a gateway's display name), chosen
+in the order the agent's backend picks one, and is `null` whenever `sessionModel` is false, since
+the model that answered may be sent somewhere else.
 
 `rewind` is every point the session can be put back to with `session.rewind`, newest first,
 at most five. `steps` is the value that reaches it, `turn` is the turn it undoes, `prompt` is

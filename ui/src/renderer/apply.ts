@@ -28,6 +28,9 @@ export function apply(
       case 'turn.started':
         return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0,
           sandboxMode: message.data.sandbox ?? old.sandboxMode,
+          // A turn may meet untrusted content and nothing reports when it does, so a trusted
+          // word read before it is no longer known. One that had met it stays met.
+          context: old.context === 'trusted' ? null : old.context,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'turn.interjected':
         return taken(old)
