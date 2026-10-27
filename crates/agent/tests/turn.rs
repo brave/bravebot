@@ -16506,6 +16506,46 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
     );
 }
 
+/// GROUND-1, GROUND-4. A turn hands back what it did however it ended: each call that changed a
+/// file is a write, each that ran a program is a command, and a command after the last write is
+/// recorded as after it. A goal's record is built from this and nothing a reply said.
+#[test]
+fn a_turns_outcome_carries_the_summary_of_its_work() {
+    let scratch = Scratch::new("work-summary");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("write_file", r#"{"path":"a.txt","contents":"one"}"#),
+        tool_request("write_file", r#"{"path":"a.txt","contents":"two"}"#),
+        tool_request("run", r#"{"command":"echo built | cat"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 2,
+            commands: 1,
+            ran_after_last_write: true,
+        },
+        "two writes to one file are two writes, and a pipeline is one command"
+    );
+}
+
 /// An authority nothing here holds is recorded where it is spent, and nowhere else.
 ///
 /// The trail is the one record of a session that outlives the process, so a person accounting
@@ -36973,7 +37013,11 @@ fn a_check_runs_on_the_summary_model_the_settings_name() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37005,7 +37049,11 @@ fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37050,7 +37098,11 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37097,7 +37149,11 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37129,7 +37185,11 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37157,7 +37217,11 @@ fn a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_b
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37198,7 +37262,11 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37255,7 +37323,11 @@ fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined(
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37672,7 +37744,11 @@ fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&an_exchange_to_ask_beside(), "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &an_exchange_to_ask_beside(),
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -41206,7 +41282,10 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
         *failed,
         "the failed delegate was drawn as an answer: {note}"
     );
-    assert_eq!(note, "the delegate could not finish (refused)");
+    assert_eq!(
+        note,
+        "the delegate could not finish (refused); it ran 0 commands and made 0 writes"
+    );
 
     let told = received
         .try_iter()
@@ -41299,7 +41378,7 @@ fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
     assert_eq!(
         note,
         "a one-round delegate reached its limit of 1 round and answered with what it had, so it \
-         may not be finished"
+         may not be finished; it ran 0 commands and made 0 writes"
     );
 }
 

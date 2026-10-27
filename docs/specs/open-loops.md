@@ -19,7 +19,7 @@ This spec has bravebot list them. You see one line when the list changes. The pl
 
 Nothing is built yet. Each clause lists the tests to write and says `verified-by: none`.
 
-This builds on GROUND (brave/bravebot#3412), which keeps the count of writes and commands and whether a command ran after the last write. It cannot be built before GROUND merges.
+It builds on [GROUND-1](grounding.md#GROUND-1), which counts writes and commands and records whether a command ran after the last write.
 
 ## Why it exists
 
@@ -38,7 +38,7 @@ An open loop is one of these, and nothing else:
 
 | Kind | Open while |
 |---|---|
-| unbuilt changes | a file has been written since the last command ran, by the work record of [TURN-4](turns.md#TURN-4) with the order GROUND-1 adds |
+| unbuilt changes | a file has been written since the last command ran, by the work record ([GROUND-1](grounding.md#GROUND-1)) |
 | a failed command | the last command line that ran ended with a non-zero status, or was stopped |
 | open todos | the task list has items that are not done and not cancelled ([TODO-2](tools/todo-write.md#TODO-2), [TODO-3](tools/todo-write.md#TODO-3)) |
 | running jobs | a background job is still running ([RUN-15](tools/run.md#RUN-15)) |

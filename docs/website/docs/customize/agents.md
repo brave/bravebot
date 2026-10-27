@@ -163,6 +163,8 @@ for. A name no skill goes by picks nothing, and the turn says so:
 ~/.bravebot/agents/rule-reviewer.md names a skill this session did not find, so its delegate is offered without it: rule-reveiw
 ```
 
+**A report comes with what the delegate actually did.** When a delegate finishes, stops or fails, the planner and you are told how many commands it ran and how many writes it made, counted by this program and not taken from the report. So a report that says the tests pass, from a delegate that ran nothing, reads as "it ran 0 commands". The count names no file, and says "in its own checkout" where the delegate worked in one.
+
 **`rounds` sets how long the delegate may work.** Nobody is watching a delegate, so each kind stops
 one after a set number of rounds and makes it answer with what it has: 60 for a `reader`, 80 for a
 `checker` and 120 for a `worker`. When a delegate reaches its bound, the planner and you are told in

@@ -388,9 +388,11 @@ impl Decisions {
 }
 
 /// A continuing caller adopts `decisions` before handling `outcome` or saving the session.
-/// Both fields are returned after child cleanup, including on early context-loading errors.
+/// Every field is returned after child cleanup, including on early context-loading errors.
 #[must_use = "adopt the decisions before handling the outcome"]
 pub struct CompletedTurn {
     pub outcome: Result<Outcome, TurnError>,
     pub decisions: Decisions,
+    /// What the turn and the delegates it took back did, however it ended (GROUND-4).
+    pub work: crate::outcome::Work,
 }

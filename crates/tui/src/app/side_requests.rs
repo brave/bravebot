@@ -779,11 +779,10 @@ pub(super) fn goal_check_animated(
     }
     // An invariant of the branch above, not a runtime condition.
     // nosemgrep: trailofbits.rs.panic-in-function-returning-result.panic-in-function-returning-result
-    let condition = session
+    let goal = session
         .goal_in_force()
-        .expect("the goal was there a moment ago")
-        .condition()
-        .to_string();
+        .expect("the goal was there a moment ago");
+    let (condition, record) = (goal.condition().to_string(), goal.record());
 
     // For the reason a turn and an aside both do it: this is one request to the same backend, and
     // a sign-in is not something a worker thread can ask for.
@@ -797,7 +796,7 @@ pub(super) fn goal_check_animated(
     let account = session.account_session().clone();
     // Taken here, before the worker starts, because that is what crosses to it: the request, not
     // the conversation. The conversation stays on this thread and is not touched again.
-    let check = bravebot_agent::goal::Check::of(conversation, &condition);
+    let check = bravebot_agent::goal::Check::of(conversation, &condition, record);
     let cancel = Cancel::new();
     let worker_cancel = cancel.clone();
 

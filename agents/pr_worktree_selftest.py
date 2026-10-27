@@ -357,6 +357,25 @@ def a_signing_key(root):
     return key
 
 
+def a_pick_git_refuses_to_continue(tree, rescheduled):
+    """Leave a rebase stopped at a pick that could not be signed as git before 2.56 leaves it.
+
+    The pick is staged and `rebase --continue` refuses until it is committed. The todo list starts with the pick
+    when `rescheduled`, and at the next pick otherwise. git 2.56 adds `message`, `patch` and `stopped-sha` to the
+    rebase directory, commits the staged pick itself on `--continue` when `message` is there, and does not put
+    the pick back in the list. This removes those files and sets the list, so the code that commits the pick runs
+    under whichever git is installed.
+    """
+    state = pr_worktree.rebase_dir(tree)
+    for name in ("message", "patch", "stopped-sha"):
+        (state / name).unlink(missing_ok=True)
+    sha = git("rev-parse", "REBASE_HEAD", cwd=tree)
+    todo = state / "git-rebase-todo"
+    later = [one for one in todo.read_text().splitlines(keepends=True) if one.split()[1:2] != [sha]]
+    back = [f"pick {sha} # {git('log', '-1', '--format=%s', 'REBASE_HEAD', cwd=tree)}\n"] if rescheduled else []
+    todo.write_text("".join(back + later))
+
+
 def test_a_pick_that_failed_to_sign_is_committed_with_its_message_and_author_and_picked_once():
     """git leaves the pick staged and rescheduled, and `rebase --continue` refuses until the changes are committed."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -376,10 +395,12 @@ def test_a_pick_that_failed_to_sign_is_committed_with_its_message_and_author_and
             stopped = subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True, text=True)
             assert stopped.returncode and pr_worktree.rebase_dir(tree), "the pick could not be signed, which is the fixture's point"
             assert git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "git leaves the pick staged"
+            a_pick_git_refuses_to_continue(tree, rescheduled=True)
+            before = (pr_worktree.rebase_dir(tree) / "git-rebase-todo").read_text()
             code, out = quietly(pr_worktree.resolve_or_stop, tree)
         assert code is not None and pr_worktree.rebase_dir(tree), "a failure to sign stops the rebase and says what git said"
         todo = (pr_worktree.rebase_dir(tree) / "git-rebase-todo").read_text()
-        assert todo.count("pick") == 2 and git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "the failed commit left the todo and the index alone"
+        assert before.count("pick") == 2 and todo == before and git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "the failed commit left the todo and the index alone"
 
         with mock.patch.dict(os.environ, signing(True, key)):
             assert pr_worktree.commit_unsigned_pick(tree).returncode == 0
@@ -411,8 +432,7 @@ def test_a_pick_git_did_not_reschedule_is_committed_and_the_next_pick_still_runs
         git("commit", "-q", "-m", "main moves", cwd=clone)
         with mock.patch.dict(os.environ, signing(False, key)):
             subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True)
-        todo = pr_worktree.rebase_dir(tree) / "git-rebase-todo"
-        todo.write_text("".join(todo.read_text().splitlines(keepends=True)[1:]))
+        a_pick_git_refuses_to_continue(tree, rescheduled=False)
         with mock.patch.dict(os.environ, signing(True, key)):
             quietly(pr_worktree.resolve_or_stop, tree)
         assert pr_worktree.rebase_dir(tree) is None

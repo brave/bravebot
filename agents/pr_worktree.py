@@ -649,11 +649,11 @@ def pick_target(tree, line):
 def commit_unsigned_pick(tree):
     """Commit a pick that git left staged because it could not write the commit.
 
-    git refuses `rebase --continue` while changes are staged. Most failures also put the same pick back at
-    the head of the todo list, and that copy is dropped so the pick is not applied twice. The commit keeps
-    the pick's message and author, and is signed as the person's configuration says. Returns None when the
-    rebase is not stopped that way, else the `git commit` result, which is a failure when signing failed
-    again; the todo list is then left as it was.
+    git refuses `rebase --continue` while changes are staged. Some failures also put the same pick back at
+    the head of the todo list, as git before 2.56 does for a failure to sign, and that copy is dropped so the
+    pick is not applied twice. The commit keeps the pick's message and author, and is signed as the person's
+    configuration says. Returns None when the rebase is not stopped that way, else the `git commit` result,
+    which is a failure when signing failed again; the todo list is then left as it was.
     """
     state = rebase_dir(tree)
     stopped = run("git", "rev-parse", "--verify", "--quiet", "REBASE_HEAD^{commit}", cwd=tree, check=False)

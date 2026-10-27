@@ -3416,7 +3416,15 @@ impl Session {
         self.goal = Some(crate::goals::Running::begin(
             condition,
             self.tokens + self.progress.tokens,
+            self.turn_in_flight,
         ));
+    }
+
+    /// Add what a turn did to the goal's record, where a goal is set (GROUND-4).
+    pub fn goal_worked(&mut self, work: bravebot_agent::Work) {
+        if let Some(goal) = self.goal.as_mut() {
+            goal.worked(work);
+        }
     }
 
     /// Take the goal off without saying anything, and say whether there was one.
@@ -7322,6 +7330,28 @@ mod tests {
 
     fn session() -> Session {
         Session::new("kernel-enforced")
+    }
+
+    /// GROUND-4. A new goal starts a new record, and one set while a turn runs leaves that turn
+    /// out.
+    #[test]
+    fn a_new_goal_starts_a_new_record() {
+        let built = bravebot_agent::Work {
+            writes: 1,
+            commands: 1,
+            ran_after_last_write: true,
+        };
+        let mut s = session();
+        s.start_goal("cargo test exits 0".to_string());
+        s.goal_worked(built);
+        assert_eq!(s.goal().map(crate::goals::Running::record), Some(built));
+        s.turn_in_flight = true;
+        s.start_goal("cargo clippy is clean".to_string());
+        s.goal_worked(built);
+        assert_eq!(
+            s.goal().map(crate::goals::Running::record),
+            Some(bravebot_agent::Work::default())
+        );
     }
 
     fn a_config() -> bravebot_config::Config {
