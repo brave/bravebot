@@ -12,7 +12,7 @@ guards:
     sites:
       - crates/agent/src/backend.rs: 2
       - crates/agent/src/commit_message.rs: 1
-      - crates/agent/src/consult.rs: 2
+      - crates/agent/src/consult.rs: 3
       - crates/agent/src/hunks.rs: 2
       - crates/agent/src/lsp.rs: 6
       - crates/agent/src/manifest.rs: 3
@@ -66,7 +66,7 @@ guards:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/commit_message.rs: 3
-      - crates/agent/src/consult.rs: 2
+      - crates/agent/src/consult.rs: 3
       - crates/agent/src/tools/consult.rs: 1
       - crates/agent/src/tools/message.rs: 1
       - crates/agent/src/turn/round_steps.rs: 1
