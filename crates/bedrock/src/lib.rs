@@ -26,8 +26,8 @@ pub mod protocol;
 use bravebot_aichat::call::{Concession, Driven, Pace, Plan, Spent, drive};
 use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::{
-    Completion, CutOff, LONGEST_WAIT, OpenCall, Progress, asked_wait, pause_after_failure,
-    read_in_background, reply_bound,
+    Completion, CutOff, OpenCall, Progress, pause_after_failure, read_in_background, reply_bound,
+    retryable_within_ceiling,
 };
 use bravebot_config::bedrock::Bedrock;
 use bravebot_core::cancel::Cancel;
@@ -1162,7 +1162,7 @@ fn worth_another_attempt(allowed: u32, attempt: u32, error: &BedrockError) -> bo
     }
     match error {
         // A wait past the ceiling is not sat through, as for every other backend.
-        BedrockError::Egress(e) => e.is_transient() && asked_wait(e) <= LONGEST_WAIT,
+        BedrockError::Egress(e) => retryable_within_ceiling(e),
         // The service's own name for what went wrong. A fault or a busy service is worth asking
         // again; a request it refuses on its contents is refused the same way every time.
         BedrockError::Reported { kind } => TRANSIENT_REPORTS.contains(&kind.as_str()),
