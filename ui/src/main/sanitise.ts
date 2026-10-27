@@ -70,13 +70,16 @@ export function sanitised(method: string, params: unknown): Record<string, unkno
   // whether a prompt is one a person can find again, and `definition` decides which definition a
   // turn is addressed to (MEMORY-10). Both are claims about who asked and what the turn is for,
   // which this process makes from a bot's row and a window does not get to. A window that could
-  // name a definition could address a turn to any definition on the machine.
+  // name a definition could address a turn to any definition on the machine. `address` is the
+  // same claim for one turn (MEMORY-13), made from the bot a person summoned, and goes for the
+  // same reason.
   const {
     files: _files,
     dropped: _dropped,
     images: _images,
     recall: _recall,
     definition: _definition,
+    address: _address,
     attachments,
     drops,
     pastes,

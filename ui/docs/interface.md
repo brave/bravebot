@@ -301,15 +301,27 @@ people who have them. A bot's row shows its face, its name and its purpose; **+*
 
 A bot has a name, purpose, model choice, avatar, a home folder and persistent memory. The home
 folder is made by the app under its own data directory, beside the briefing and never inside it.
-Opening a bot shows its page. A bot nobody has talked to yet shows its face, that it is ready, and
-a message box; one with conversations lists its recent ones above the box. Sending from the box
-starts a new conversation.
-The box's footer picks where the conversation runs: **No project** runs it in the home folder, and
-a project runs it in that folder. Only the projects the bot has already worked in, and one picked
-with **Select project…**, are offered, because those are the only folders the main process lets a
-bot's turn run in. A conversation with no project has no context panel.
+Opening a bot opens its conversation, one that carries on, in its home folder
+([MEMORY-13](../../docs/specs/definition-memory.md#MEMORY-13)). A bot nobody has talked to yet
+shows its face and **Talk to** its name above the message box. The conversation has no project
+picker and no context panel. The history button in its header opens **Earlier conversations**,
+the bot's other conversations and its details, and the arrow on that page goes back to the
+conversation.
 
-The right column of a bot's page holds its details: the face, with a button for a new one, the
+A bot works in a project by being summoned there. Typing `@` in any chat lists the bots first,
+under **Bots**, and the files after them. Picking a bot writes its name into the message as `[@Name]`, and that one message is
+answered by the bot, in that chat's folder. Once sent, the message shows the bot as a label with
+its face and name where the marker was, and its reply carries the same label; the next message is
+answered as before. A message can summon one bot, and a bot is not offered in its own
+conversation. A summoning message sent while a turn runs waits in the queue.
+
+The summoned bot's own conversation shows a **Replied to** card for each reply it gave elsewhere,
+naming the project or the bot whose conversation it was, with the time and the start of the reply.
+Each card sits after the message the bot's conversation had reached when it was summoned, and
+pressing it opens the chat it names at that message. The cards are drawn by the window and are not
+part of what the bot is sent.
+
+The right column of **Earlier conversations** holds the bot's details: the face, with a button for a new one, the
 name and the purpose, which are saved when a field is left, and the memory. A bot keeps one memory per folder it works in, so a
 **Memory for** menu picks which folder's memory is shown once there is more than one. The column shows
 the first lines of the memory as the bot wrote it. **Edit memory** opens a dialog with the whole text
@@ -590,10 +602,8 @@ goes as a file the agent reads as trusted context and draws a **Read** row above
 as a picked file does; a name ending in `/` names nothing. A name that is not a text file
 inside the project, a directory written without its slash included, stops the send, says which
 name it was above the box, and leaves the message there to fix. The folder is the one the chat runs in: its project, or for
-a bot's conversation with no project, the bot's home folder. A bot's page before its first
-conversation has no folder yet, so it offers no list; a name typed there is still read and
-checked against the folder the conversation opens in, and a refused one waits in that
-conversation's queue with the reason.
+a bot's own conversation, the bot's home folder. The bots are listed above the files, and picking
+one summons it rather than naming a file.
 
 `Esc` is the one that is not in a menu. As an accelerator it would fire with no session open
 and would fight every other use of the key, so it stays where it was: a convenience local to

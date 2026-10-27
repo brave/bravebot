@@ -36,3 +36,11 @@ export function botHistory(bot: Bot, sessions: SessionSummary[], experience: Exp
     archived: experience.conversations[key]?.archived ?? false,
   })).sort((a, b) => (b.session?.updated ?? -1) - (a.session?.updated ?? -1))
 }
+
+/**
+ * The conversation opening `bot` goes back to: the newest one in its home folder that is not
+ * archived (MEMORY-13). The page of earlier conversations lists every other row.
+ */
+export function homeConversation(bot: Bot, rows: BotConversation[]): BotConversation | null {
+  return rows.find((row) => row.directory === bot.home && row.session !== null && !row.archived) ?? null
+}

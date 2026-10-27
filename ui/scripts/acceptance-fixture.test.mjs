@@ -109,6 +109,21 @@ test('a sent turn is recorded and announced to the session it was sent to, from 
   ])
 })
 
+test('a summoned turn is recorded as summoned and announced to the session it was sent to', async () => {
+  const { handlers, events, ux } = bridge()
+  const params = { session: 's-new', slug: 'review-bot', prompt: '[@Review Bot] look' }
+  assert.deepEqual(plain(await handlers.get('bravebot:bots:summon')({}, params)), { ok: { turn: 1 } })
+  assert.deepEqual(ux('.sent'), [{ ...params, summoned: true }])
+  assert.deepEqual(events, [['bravebot:event', { event: 'turn.started', data: { turn: 1 }, session: 's-new' }]])
+})
+
+test('a new session in the project is s-new and one in any other folder is s-home', async () => {
+  const { request } = bridge()
+  assert.deepEqual((await request('session.new', { directory: '/work/project' })).ok, { session: 's-new', directory: '/work/project', branch: 'main', model: 'sample/fast' })
+  assert.equal((await request('session.new', {})).ok.session, 's-new')
+  assert.deepEqual((await request('session.new', { directory: '/profile/bot-homes/review-bot' })).ok, { session: 's-home', directory: '/profile/bot-homes/review-bot', branch: 'main', model: 'sample/fast' })
+})
+
 test('cancelling names the session that was cancelled, and a new conversation gets its fixed id', async () => {
   const { events, request } = bridge()
   await request('turn.cancel', { session: 's-aaaa' })

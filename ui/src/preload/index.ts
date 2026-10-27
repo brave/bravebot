@@ -24,6 +24,7 @@ import type { CommandId, ContextCommandId, ContextRef, WindowState } from '../sh
 import type { ExportOutcome, ExportRequest } from '../shared/export'
 import type { Fork } from '../shared/forks'
 import type { Bot, BotServers } from '../shared/bots'
+import type { Summon } from '../shared/summons'
 import type { Listing, OpenOutcome, FilePreview, FileSearch, FileAttachment } from '../shared/files'
 import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
@@ -341,6 +342,32 @@ const api = {
     pastes?: string[]
   }): Promise<Answer<{ turn: number }>> {
     return ipcRenderer.invoke('bravebot:bots:send', request) as Promise<Answer<{ turn: number }>>
+  },
+
+  /**
+   * Send one turn addressed to a bot a person picked in the composer (MEMORY-13).
+   *
+   * Names the bot and the session. The main process names the bot's definition, and the turn runs
+   * where the session runs.
+   */
+  summonBot(request: {
+    session: string
+    slug: string
+    prompt: string
+    model?: string | null
+    attachments?: string[]
+    drops?: string[]
+    pastes?: string[]
+  }): Promise<Answer<{ turn: number }>> {
+    return ipcRenderer.invoke('bravebot:bots:summon', request) as Promise<Answer<{ turn: number }>>
+  },
+
+  /**
+   * Which bot answered which summoned turn, newest first. No write half: the main process writes
+   * a line when a summoned turn ends, from the pick and from what the agent answered.
+   */
+  readSummons(): Promise<Summon[]> {
+    return ipcRenderer.invoke('bravebot:summons:read') as Promise<Summon[]>
   },
 
   /**

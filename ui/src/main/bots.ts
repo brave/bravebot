@@ -197,6 +197,7 @@ export function botFromForm(value: unknown): Bot | null {
     definition: null,
     session: null,
     conversations: [],
+    lastHome: null,
     archived: 0,
     // Nothing has been remembered and nothing has gone unremembered, so a new bot starts owing no
     // nudge. See `noteBotMemory`, which takes its first reading when its first turn ends.
@@ -401,15 +402,22 @@ export function worksIn(held: Bot, directory: string | undefined): directory is 
   return botFolders(held).includes(directory) || isOpenedDirectory(directory)
 }
 
-/** Record a durable conversation and the folder it ran in, without discarding any earlier ones. */
-export function noteBotSession(slug: string, id: string, directory: string): void {
+/**
+ * Record a durable conversation and the folder it ran in, without discarding any earlier ones.
+ *
+ * A turn that ended in the home folder at a prompt the agent numbered also moves `lastHome` there,
+ * which is where a summon elsewhere places its card (MEMORY-13).
+ */
+export function noteBotSession(slug: string, id: string, directory: string, prompt?: number): void {
   const held = bot(slug)
   if (!held) return
   const known = held.conversations.some((each) => each.id === id && each.directory === directory)
+  const home = directory === held.home && typeof prompt === 'number' && Number.isInteger(prompt) && prompt >= 0
   saveBot({
     ...held,
     session: id,
     conversations: known ? held.conversations : [...held.conversations, { id, directory }],
+    lastHome: home ? { id, prompt } : held.lastHome,
   })
 }
 

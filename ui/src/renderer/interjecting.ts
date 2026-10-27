@@ -29,10 +29,11 @@ export function markersOf(staged: Staged[]): { files: { marker: string; name: st
  * Where Enter sends a line while a turn runs (INPUT-46).
  *
  * A file chosen with the paperclip is a grant the running turn cannot be handed, and the bot's
- * memory update reads nothing from the person: both wait for the turn to end.
+ * memory update reads nothing from the person: both wait for the turn to end. A line that summons
+ * a bot starts a turn addressed to that bot, so it waits too (MEMORY-13).
  */
-export function route(live: Pick<Live, 'consolidating' | 'attachments'>): 'interject' | 'queue' {
-  return live.consolidating || live.attachments?.length ? 'queue' : 'interject'
+export function route(live: Pick<Live, 'consolidating' | 'attachments'>, staged: Staged[] = []): 'interject' | 'queue' {
+  return live.consolidating || live.attachments?.length || staged.some((item) => item.via === 'summon') ? 'queue' : 'interject'
 }
 
 /** Draw `line` as sent into the turn, and take off the composer what it named. */

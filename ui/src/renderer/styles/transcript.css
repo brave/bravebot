@@ -477,10 +477,9 @@
 .run-record-outcome.finished strong { color: var(--added); }
 .run-record-meta { margin-top: 18px; font: var(--type-caption); color: var(--ink-tertiary); overflow-wrap: anywhere; }
 
-/* ---- a bot's own page
+/* ---- a bot's earlier conversations
 
-   Its recent conversations in one card, with the composer docked under them. The rows reuse the
-   sidebar's three lines. */
+   In one card. The rows reuse the sidebar's three lines. */
 .bot-view-body { flex: 1; min-height: 0; overflow-y: auto; }
 .bot-view-column {
   box-sizing: border-box;
@@ -491,24 +490,67 @@
 }
 .bot-view-title { margin: 0 0 var(--leo-spacing-m); font: var(--type-body-strong); color: var(--ink-tertiary); }
 
-/* A bot nobody has talked to yet: its face and a line, 16px apart, then the box 40px under them,
-   the whole of it centred in the column. */
-.bot-first { display: grid; place-items: center; }
-.bot-first-column {
-  box-sizing: border-box;
+/* A bot's conversation with nothing said yet: its face over the greeting, 16px apart. */
+.bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); }
+.bot-first-hero h1 { margin: 0; }
+
+/* ---- a summoned bot (MEMORY-13)
+
+   A bot's face and name in a Nala label: over the reply it gave, on the reply's own left edge,
+   and inside the message that summoned it, where the person typed its marker. */
+.summon-label {
+  display: flex;
+  margin-bottom: calc(var(--leo-spacing-s) - var(--part-gap));
+}
+.bot-label { max-width: 100%; vertical-align: middle; --leo-icon-size: var(--icon-meta); }
+.bot-label-face { display: inline-flex; align-items: center; }
+.bot-label-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A reply the bot gave elsewhere, in its own conversation: a raised card that opens the reply. */
+.replied-card {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: var(--leo-spacing-4xl);
+  gap: var(--leo-spacing-s);
   width: 100%;
-  max-width: calc(var(--reading-width) + 2 * var(--leo-spacing-2xl));
-  padding: var(--leo-spacing-2xl);
+  margin-top: calc(var(--turn-gap) - var(--part-gap));
+  padding: var(--leo-spacing-l) var(--leo-spacing-xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  color: var(--ink-primary);
+  font: inherit;
+  text-align: start;
+  transition: background var(--motion-fast);
 }
-.bot-first-hero { display: flex; flex-direction: column; align-items: center; gap: var(--leo-spacing-xl); text-align: center; }
-.bot-first-hero h1 { margin: 0; font: var(--type-page-title); color: var(--ink-primary); text-wrap: balance; }
-.bot-first-hero p { margin: 0; font: var(--type-lede); color: var(--ink-secondary); text-wrap: pretty; }
-.bot-first .composer-dock { --dock-inset: 0px; padding: 0; }
-.bot-first .composer-dock::before { display: none; }
+.replied-card:hover { background: var(--surface-hover); }
+.replied-card:active { background: var(--surface-selected); }
+.replied-card:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.replied-head {
+  display: flex;
+  align-items: center;
+  gap: var(--leo-spacing-s);
+  min-width: 0;
+  font: var(--type-meta);
+  color: var(--ink-secondary);
+  --leo-icon-size: var(--icon-meta);
+  --leo-icon-color: var(--ink-tertiary);
+}
+.replied-to { flex: none; }
+.replied-where { min-width: 0; overflow: hidden; font: var(--type-meta-strong); color: var(--ink-primary); text-overflow: ellipsis; white-space: nowrap; }
+.replied-when { flex: none; margin-inline-start: auto; color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
+.replied-text {
+  display: -webkit-box;
+  overflow: hidden;
+  font: var(--type-body);
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+@media (forced-colors: active) {
+  .replied-card { border-color: CanvasText; }
+}
 .bot-history-search { display: block; margin-bottom: var(--leo-spacing-l); }
 .bot-conversations {
   display: flex;
