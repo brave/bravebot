@@ -866,6 +866,66 @@ mod tests {
             ))
     }
 
+    /// A terminal that sends its line the moment it has drawn what asks for one: output that ends in
+    /// a space, as the marker and every question do.
+    struct Reacting {
+        shared: Arc<Shared>,
+        drawn: Vec<u8>,
+        taken: Arc<Mutex<Vec<bool>>>,
+    }
+
+    impl Write for Reacting {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.drawn.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            let invited = self.drawn.ends_with(b" ");
+            self.drawn.clear();
+            if invited {
+                let taken = self.shared.offer("hello".to_string());
+                self.taken.lock().expect("the record").push(taken);
+            }
+            Ok(())
+        }
+    }
+
+    /// BG-9: a line sent the moment the prompt is drawn is taken. The session is waiting for it
+    /// before the marker is written, so a terminal that answers at once is not refused with
+    /// `attach-line-not-sent`. A refused line is waited for until the idle time runs out, which is
+    /// short here, so a failure ends the test and does not hang it.
+    #[test]
+    fn a_line_sent_as_the_prompt_is_drawn_is_taken() {
+        let shared = Shared::ending_when_idle_for(
+            Roster::at(a_root()),
+            Job::starting(
+                ID.to_string(),
+                std::path::Path::new("/work"),
+                "fix the build",
+                Mode::Ask,
+            ),
+            None,
+            Duration::from_millis(300),
+        );
+        let taken = Arc::new(Mutex::new(Vec::new()));
+        let hosting = Hosting::of(&shared);
+        let mut asking = Prompting::watched(
+            hosting.input,
+            Reacting {
+                shared: Arc::clone(&shared),
+                drawn: Vec::new(),
+                taken: Arc::clone(&taken),
+            },
+            hosting.watch,
+        );
+
+        let typed = asking.prompt();
+
+        assert_eq!(*taken.lock().expect("the record"), [true]);
+        assert_eq!(typed.as_deref(), Some("hello"));
+    }
+
     fn a_shared() -> Arc<Shared> {
         a_shared_ending_after(IDLE_AFTER)
     }
