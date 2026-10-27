@@ -101,6 +101,7 @@ taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 `verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
 `verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
 `verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::progress::a_call_line_draws_a_targets_control_characters_as_pictures`
 `verified-by: bravebot_cli::main::a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures`
 `verified-by: bravebot_cli::main::a_stored_manifest_report_draws_its_text_as_pictures`
 `verified-by: bravebot_cli::main::the_resume_hint_draws_the_directory_it_names_as_pictures`
