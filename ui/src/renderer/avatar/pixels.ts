@@ -23,14 +23,19 @@ export const EYE_WHITE = '#ffffff'
 export const EYE_PUPIL = '#1d1f27'
 /** The least contrast ratio between an eye's white cell and the fill around it. */
 export const EYE_CONTRAST = 1.8
-/** The least hue distance, in OKLCH degrees, between any two colours in one bot. */
+/**
+ * The least hue distance, in OKLCH degrees, between any two colours in one generated face. A
+ * colour chosen in the editor is one of `COLOURS` instead, whatever its two paints' distance.
+ */
 export const HUE_DISTANCE = 60
 
+type Paint = { name: string; hex: string }
+
 /**
- * The colours a bot can be painted in. Bright, and far enough apart in hue that any two allowed
- * together make a gradient that reads as painted. Named, because the names go into `data-avatar`.
+ * The eleven paints a seed made before `v3:` was drawn with. A stored avatar keeps these, so
+ * widening `PAINT` leaves a face that is already on disk as it was.
  */
-export const PAINT: readonly { name: string; hex: string }[] = [
+const EARLIER_PAINTS: readonly Paint[] = [
   { name: 'red', hex: '#e5484d' },
   { name: 'orange', hex: '#f5923a' },
   { name: 'yellow', hex: '#f2c94c' },
@@ -42,6 +47,39 @@ export const PAINT: readonly { name: string; hex: string }[] = [
   { name: 'violet', hex: '#8e4ec6' },
   { name: 'magenta', hex: '#d6409f' },
   { name: 'pink', hex: '#f38bb5' },
+]
+
+/**
+ * The colours a bot can be painted in. Bright, and far enough apart in hue that any two allowed
+ * together make a gradient that reads as painted. Named, because the names go into `data-avatar`.
+ * The five after the original eleven sit in the wider gaps of that ring: coral between red and
+ * orange, chartreuse between yellow and lime, azure between teal and cyan, indigo between blue
+ * and violet, purple between violet and magenta.
+ */
+export const PAINT: readonly Paint[] = [
+  ...EARLIER_PAINTS,
+  { name: 'coral', hex: '#f16e3b' },
+  { name: 'chartreuse', hex: '#d0d038' },
+  { name: 'azure', hex: '#00b7ce' },
+  { name: 'indigo', hex: '#6e58d7' },
+  { name: 'purple', hex: '#b447b9' },
+]
+
+const paintHex = (name: string): string => (PAINT.find((each) => each.name === name) ?? PAINT[0]!).hex
+
+/** A colour the avatar editor offers: two paints, the first at the top of its swatch. */
+export interface Colour { name: string; paints: [string, string] }
+const colour = (top: string, bottom: string): Colour => ({ name: `${top}-${bottom}`, paints: [top, bottom] })
+
+/**
+ * The colours the avatar editor offers, in the order it lays them out. Eight, because the paints
+ * are all bright and about as light as each other, so a two-paint gradient differs from another
+ * only in where its two hues sit. Sixteen of them overlap their neighbours; these eight each start
+ * and end on different hues.
+ */
+export const COLOURS: readonly Colour[] = [
+  colour('red', 'yellow'), colour('orange', 'lime'), colour('chartreuse', 'teal'), colour('green', 'azure'),
+  colour('cyan', 'indigo'), colour('blue', 'purple'), colour('violet', 'pink'), colour('magenta', 'orange'),
 ]
 
 /** Body outlines as half-widths per row, top to bottom. A half-width of 5 fills the half. */
@@ -58,6 +96,10 @@ const BODIES = {
 
 /** Bodies drawn as a head with no legs, the way the gradient faces in the references are. */
 const LEGLESS: readonly (keyof typeof BODIES)[] = ['blob', 'bust']
+
+export type Body = keyof typeof BODIES
+/** The bodies, in the order the avatar editor offers them. */
+export const BODY_NAMES = Object.keys(BODIES) as Body[]
 
 const CROWNS = ['none', 'antennae', 'spike', 'tuft', 'horns'] as const
 const ARMS = ['none', 'raised', 'down', 'side'] as const
@@ -266,15 +308,67 @@ export function spriteOf(seed: string): Sprite {
   return sprite
 }
 
+/** The prefix on a seed a person chose in the avatar editor: `v4:<body>/<paint>`. */
+const PICKED_VERSION = 'v4:'
+
+/**
+ * The one figure each body is drawn as when it is chosen by name, so the editor's thumbnail of a
+ * body is the face that is saved. Arms only on the bodies narrower than the half, wide eyes only on
+ * the ones that fill it, and no legs on a legless body, as the generator allows.
+ */
+const PICKED_FIGURE: Record<Body, Pick<Traits, 'crown' | 'arms' | 'legs' | 'eyes'>> = {
+  dome: { crown: 'antennae', arms: 'none', legs: 'two', eyes: 'wide' },
+  squat: { crown: 'horns', arms: 'none', legs: 'splayed', eyes: 'wide' },
+  block: { crown: 'spike', arms: 'none', legs: 'feet', eyes: 'close' },
+  round: { crown: 'antennae', arms: 'raised', legs: 'two', eyes: 'close' },
+  tall: { crown: 'tuft', arms: 'side', legs: 'three', eyes: 'close' },
+  diamond: { crown: 'spike', arms: 'down', legs: 'splayed', eyes: 'close' },
+  blob: { crown: 'horns', arms: 'none', legs: 'none', eyes: 'wide' },
+  bust: { crown: 'tuft', arms: 'side', legs: 'none', eyes: 'close' },
+}
+
+/** The seed for a body and a colour chosen in the avatar editor. */
+export function pickedSeed(body: Body, colour: string): string {
+  return `${PICKED_VERSION}${body}/${colour}`
+}
+
+/** The body and colour a `v4:` seed names, or nothing for a seed that names none. */
+function parsePicked(seed: string): { body: Body; colour: Colour } | null {
+  if (!seed.startsWith(PICKED_VERSION)) return null
+  const [body, name] = seed.slice(PICKED_VERSION.length).split('/')
+  const colour = COLOURS.find((each) => each.name === name)
+  if (!body || !(BODY_NAMES as string[]).includes(body) || !colour) return null
+  return { body: body as Body, colour }
+}
+
+/**
+ * The body and colour the editor starts on for a seed. A generated face has no colour of the
+ * editor's, so it starts on the one whose top paint is nearest in hue to the face's first.
+ */
+export function choiceOf(seed: string): { body: Body; colour: string } {
+  const picked = parsePicked(seed)
+  if (picked) return { body: picked.body, colour: picked.colour.name }
+  const { traits } = spriteOf(seed)
+  const first = paintHex(traits.paints[0]!)
+  const away = (each: Colour) => hueDistance(paintHex(each.paints[0]), first)
+  const nearest = COLOURS.reduce((best, each) => (away(each) < away(best) ? each : best))
+  return { body: traits.body, colour: nearest.name }
+}
+
+/** A chosen colour's two paints, top first, as gradient stops. */
+const stopsOf = (colour: Colour): Lch[] => colour.paints.map((name) => lchOf(paintHex(name)))
+
 /** The face a seed describes, built afresh. `spriteOf` is the cached way in. */
 export function buildSprite(seed: string): Sprite {
-  const body = pick(seed, 'body', Object.keys(BODIES) as (keyof typeof BODIES)[])
+  const picked = parsePicked(seed)
+  const figure = picked ? PICKED_FIGURE[picked.body] : null
+  const body = picked ? picked.body : pick(seed, 'body', BODY_NAMES)
   const widths: readonly number[] = BODIES[body]
   const widest = Math.max(...widths)
-  const eyes: Traits['eyes'] = widest === HALF ? pick(seed, 'eyes', ['close', 'wide'] as const) : 'close'
-  const crown = pick(seed, 'crown', CROWNS)
-  const arms: Traits['arms'] = widest < HALF ? pick(seed, 'arms', ARMS) : 'none'
-  const legs: Traits['legs'] = LEGLESS.includes(body) ? 'none' : pick(seed, 'legs', LEGS.slice(1))
+  const eyes: Traits['eyes'] = figure ? figure.eyes : widest === HALF ? pick(seed, 'eyes', ['close', 'wide'] as const) : 'close'
+  const crown = figure ? figure.crown : pick(seed, 'crown', CROWNS)
+  const arms: Traits['arms'] = figure ? figure.arms : widest < HALF ? pick(seed, 'arms', ARMS) : 'none'
+  const legs: Traits['legs'] = figure ? figure.legs : LEGLESS.includes(body) ? 'none' : pick(seed, 'legs', LEGS.slice(1))
 
   // Rows: the crown, the body, then two rows of legs, centred in the inner ten.
   const crownHeight = crown === 'none' ? 0 : crown === 'tuft' ? 1 : 2
@@ -343,15 +437,16 @@ export function buildSprite(seed: string): Sprite {
   for (const eye of [leftEye, rightEye])
     for (let dx = -1; dx <= 2; dx++) for (let dy = -1; dy <= 1; dy++) guarded.add(`${eye.x + dx},${eye.y + dy}`)
 
-  const symmetry = lopsided(seed, filled, guarded)
+  const symmetry = picked ? 'mirror' : lopsided(seed, filled, guarded)
   keepConnected(filled, leftEye)
 
-  const paints = paintsFor(seed)
+  const paints = picked ? [...picked.colour.paints] : paintsFor(seed).map((p) => p.name)
   const direction = pick(seed, 'direction', DIRECTIONS)
   const fringe = stream(`${seed}/fringe`)() < 0.35
-  const traits: Traits = { body, crown, arms, legs, eyes, paints: paints.map((p) => p.name), direction, fringe, symmetry }
+  const traits: Traits = { body, crown, arms, legs, eyes, paints, direction, fringe, symmetry }
 
-  const cells = paint(seed, filled, traits, walk(traits.paints), leftEye, rightEye)
+  const stops = picked ? stopsOf(picked.colour) : walk(paints)
+  const cells = paint(seed, filled, traits, stops, flipped(seed), leftEye, rightEye)
   const xs = cells.map((cell) => cell.x)
   const ys = cells.map((cell) => cell.y)
   const spanX = Math.max(...xs) - Math.min(...xs) + 1
@@ -409,29 +504,64 @@ function keepConnected(filled: boolean[][], from: { x: number; y: number }): voi
   for (let y = 0; y < GRID; y++) for (let x = 0; x < GRID; x++) if (!seen.has(`${x},${y}`)) filled[y]![x]! = false
 }
 
+/**
+ * The paints a seed may use. A seed prefixed with `v3:` (`AVATAR_VERSION` in `shared/avatar.ts`)
+ * uses the sixteen. A seed made earlier uses the original eleven.
+ */
+function paletteFor(seed: string): readonly Paint[] {
+  return seed.startsWith('v3:') ? PAINT : EARLIER_PAINTS
+}
+
 /** Two or three paints, each at least `HUE_DISTANCE` from every other. */
-function paintsFor(seed: string): { name: string; hex: string }[] {
+function paintsFor(seed: string): Paint[] {
+  const palette = paletteFor(seed)
   const next = stream(`${seed}/paints`)
-  const chosen = [PAINT[Math.floor(next() * PAINT.length)]!]
+  const chosen = [palette[Math.floor(next() * palette.length)]!]
   const count = next() < 0.4 ? 3 : 2
   while (chosen.length < count) {
-    const allowed = PAINT.filter((p) => chosen.every((c) => hueDistance(c.hex, p.hex) >= HUE_DISTANCE))
+    const allowed = palette.filter((p) => chosen.every((c) => hueDistance(c.hex, p.hex) >= HUE_DISTANCE))
     if (allowed.length === 0) break
     chosen.push(allowed[Math.floor(next() * allowed.length)]!)
   }
   return chosen
 }
 
+/** Whether a seed's gradient runs from its last stop to its first. */
+const flipped = (seed: string): boolean => stream(`${seed}/flip`)() < 0.5
+
+/** The side of a colour swatch, in cells. */
+export const SWATCH = 8
+
+/**
+ * A colour as a square of cells, for the avatar editor's swatches. The square is mixed from the
+ * stops a face in that colour is, with the same per-tile noise. It runs top to bottom, without a
+ * fringe, and depends on the colour alone, so a colour's swatch is the same for every bot.
+ */
+export function swatchOf(name: string): Cell[] {
+  const known = swatches.get(name)
+  if (known) return known
+  const chosen = COLOURS.find((each) => each.name === name) ?? COLOURS[0]!
+  const filled: boolean[][] = Array.from({ length: GRID }, (_, y) =>
+    Array.from({ length: GRID }, (_, x) => x >= 1 && x <= SWATCH && y >= 1 && y <= SWATCH))
+  const eye = { x: SWATCH / 2, y: SWATCH / 2 }
+  const cells = paint(`swatch:${chosen.name}`, filled, { direction: 'vertical', fringe: false }, stopsOf(chosen), false, eye, eye, false)
+  swatches.set(name, cells)
+  return cells
+}
+const swatches = new Map<string, Cell[]>()
+
 function paint(
   seed: string,
   filled: boolean[][],
-  traits: Traits,
+  traits: Pick<Traits, 'direction' | 'fringe'>,
   stops: Lch[],
+  flip: boolean,
   leftEye: { x: number; y: number },
   rightEye: { x: number; y: number },
+  /** Whether cells near the eyes keep their contrast with the whites, and their fringe. */
+  eyesShown = true,
 ): Cell[] {
   const next = stream(`${seed}/tiles`)
-  const flip = stream(`${seed}/flip`)() < 0.5
   let minX = GRID, maxX = 0, minY = GRID, maxY = 0
   for (let y = 0; y < GRID; y++)
     for (let x = 0; x < GRID; x++)
@@ -444,7 +574,7 @@ function paint(
 
   const eyeCells = new Set<string>()
   for (const eye of [leftEye, rightEye]) for (let dx = 0; dx < 2; dx++) eyeCells.add(`${eye.x + dx},${eye.y}`)
-  const besideEye = (x: number, y: number) =>
+  const besideEye = (x: number, y: number) => eyesShown &&
     [leftEye, rightEye].some((eye) => x >= eye.x - 1 && x <= eye.x + 2 && y >= eye.y - 2 && y <= eye.y + 2)
 
   const cells: Cell[] = []

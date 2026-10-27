@@ -355,7 +355,7 @@
 
 /* ---------------------------------------------------------------- a bot's details
 
-   In place of the panels while a bot's own page is open: its face with a button for a new one, its
+   In place of the panels while a bot's own page is open: its face with a button that edits it, its
    name and purpose, and the memory it keeps in one of its folders, 16px apart. */
 .bot-details { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .bot-details .context-head { padding: 0 var(--leo-spacing-l); }
@@ -369,7 +369,7 @@
   padding: var(--leo-spacing-xl);
 }
 .bot-details-face { position: relative; align-self: center; display: grid; place-items: center; }
-.bot-details-face .bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
+.bot-details-face .bot-avatar-edit { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
 .bot-details .bot-memory-panel { gap: var(--leo-spacing-m); }
 .bot-field-label { font: var(--type-meta-strong); color: var(--ink-primary); }
 /* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */

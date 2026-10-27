@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { newAvatarSeed } from '../../shared/avatar'
 import { botFolders, type Bot } from '../../shared/bots'
 import { projectLabel } from '../../shared/recents'
 import { useFitTextArea } from '../hooks'
 import { Dropdown, Input, TextArea } from '../nala'
-import { BotAvatar } from './BotAvatar'
+import { AvatarEditor } from './AvatarEditor'
 import { BotMemory } from './BotMemory'
 import type { BotFormValue } from './Bots'
 import { ConfirmArchive } from './ConfirmArchive'
-import { IconButton } from './IconButton'
 import { IconMenu } from './IconMenu'
 
 /**
@@ -61,12 +59,8 @@ export function BotDetails({ bot, onSave, onArchive }: {
         </div>
       </div>
       <div className="bot-details-body">
-        <div className="bot-details-face">
-          <BotAvatar seed={bot.avatar} size={80} doing="open" />
-          <IconButton icon="refresh" label="New face" tooltip="Try a new face" kind="filled" size="tiny"
-            className="bot-avatar-refresh"
-            onClick={() => void onSave({ slug: bot.slug, avatar: newAvatarSeed(crypto.randomUUID()) })} />
-        </div>
+        <AvatarEditor seed={bot.avatar} size={80} doing="open" className="bot-details-face"
+          onCommit={(avatar) => void onSave({ slug: bot.slug, avatar })} />
         <div className="bot-field">
           <Input value={name} onInput={({ value }) => setName(value)} onChange={({ value }) => { setName(value); commit({ name: value }) }}>
             Bot name

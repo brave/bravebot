@@ -41,7 +41,8 @@ fn mark(stops: &[Rgb; 3]) -> Palette<'_> {
     }
 }
 
-/// The app's palette, kept to check the port against faces `pixels.ts` drew.
+/// The eleven paints the app uses for a seed from before `v3:`. The test below checks the port
+/// against faces `pixels.ts` drew for those seeds.
 #[cfg(test)]
 const APP: Palette<'static> = Palette {
     paints: &APP_PAINT,

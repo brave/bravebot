@@ -213,6 +213,11 @@ Compose from these before inventing a new pattern.
   overlays the time, sticky caption-ink group headings.
 - **Menus**: Leo menu items with a leading icon column and a check column (`menus.css`).
 - **Modal**: `Modal` with a `size`, the standard head and the footer actions described above.
+- **Popover editor** (`AvatarEditor.tsx`, `dialogs.css`): a manual `popover` in the top layer,
+  placed under the control that opens it and kept inside the window. A title row with at most one
+  plain tiny action, then groups of option cells named by `aria-label` rather than a visible
+  heading, whose chosen cell has the `--border-selected` border. A choice shows at once, a click
+  outside keeps it, and Escape puts back what was there. The bot avatar is edited this way when a bot is created and in its details.
 
 ## Methodology
 

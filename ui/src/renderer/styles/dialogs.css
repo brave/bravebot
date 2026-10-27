@@ -224,8 +224,56 @@
 .bot-form-identity { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: end; gap: var(--leo-spacing-xl); }
 .bot-form-identity leo-input { width: 100%; min-width: 0; }
 .bot-form-avatar { position: relative; display: grid; place-items: center; width: 80px; height: 80px; }
-.bot-avatar-refresh { position: absolute; right: 0; bottom: 0; }
-.icon-button.bot-avatar-refresh { border-radius: var(--radius-pill); --leo-button-radius: var(--radius-pill); }
+.bot-avatar-edit { position: absolute; right: 0; bottom: 0; }
+.icon-button.bot-avatar-edit { border-radius: var(--radius-pill); --leo-button-radius: var(--radius-pill); }
+
+/* The avatar editor: a popover in the top layer, placed under the face by `AvatarEditor`. The
+   option cells keep a transparent border so choosing one does not move the grid. */
+.avatar-editor {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: var(--leo-spacing-xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-field);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-floating);
+  color: var(--ink-primary);
+  user-select: none;
+}
+.avatar-editor:popover-open {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xl);
+  animation: avatar-editor-rise var(--motion-fast);
+}
+@keyframes avatar-editor-rise {
+  from { opacity: 0; transform: translateY(var(--leo-spacing-xs)); }
+}
+.avatar-editor-head { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.avatar-editor-head strong { flex: 1; font: var(--type-body-strong); }
+.avatar-editor-shapes,
+.avatar-editor-colors { display: grid; grid-template-columns: repeat(8, max-content); gap: var(--leo-spacing-s); }
+.avatar-editor-option {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: var(--leo-spacing-xs);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: inherit;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+.avatar-editor-option:hover { background: var(--surface-hover); }
+.avatar-editor-option:active { background: var(--surface-selected); }
+.avatar-editor-option[aria-pressed='true'] { border-color: var(--border-selected); }
+.avatar-editor-swatch { display: block; width: 32px; height: 32px; overflow: hidden; border-radius: var(--radius-swatch); }
+.avatar-editor-swatch .pixel-swatch { display: block; }
+
+@media (forced-colors: active) {
+  .avatar-editor-option[aria-pressed='true'] { border: 2px solid Highlight; }
+}
 
 .bot-field { display: flex; flex-direction: column; gap: var(--leo-spacing-s); min-width: 0; }
 .bot-field > span { font: var(--type-meta-strong); color: var(--ink-primary); }
