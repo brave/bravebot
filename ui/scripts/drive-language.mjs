@@ -26,7 +26,23 @@ Object.assign(world.env, { LANG: 'en_US.UTF-8' })
 const saved = join(world.home, '.bravebot/language')
 
 let current
-const shot = (name) => current.page.screenshot({ path: join(shots, `${name}.png`) })
+// A control that has just been enabled fades into its colours, and a capture taken mid-fade shows
+// it looking disabled: wait out every finite animation first.
+const shot = async (name) => {
+  await current.page.evaluate(async () => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    const roots = [document, ...[...document.querySelectorAll('*')].flatMap((element) => element.shadowRoot ? [element.shadowRoot] : [])]
+    await Promise.all(roots.flatMap((root) => root.getAnimations())
+      .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+      .map((animation) => animation.finished.catch(() => {})))
+  })
+  await current.page.screenshot({ path: join(shots, `${name}.png`) })
+}
+const head = (page) => page.evaluate(() => ({
+  title: document.querySelector('#settings-title')?.textContent,
+  subtitle: document.querySelector('[data-test="settings-subtitle"]')?.textContent,
+  crumbs: [...document.querySelectorAll('.settings-crumb')].map((crumb) => crumb.textContent),
+}))
 
 async function launch(env = world.env) {
   current = await launchWorld({ profile: world.profile, env, timeout: 15000, viewport: { width: 1280, height: 860 } })
@@ -90,6 +106,11 @@ try {
     const { app, page, errors } = await launch()
     const control = await openGeneral(current)
     check(await heading(page, 'Theme').count() === 1, 'the window starts in English')
+    const english = await head(page)
+    check(english.title === 'General' && english.subtitle === 'How this window looks and which language it uses'
+      && english.crumbs.join(' / ') === 'Settings / General', `the page is headed in English (${JSON.stringify(english)})`)
+    check(await heading(page, 'Display language').count() === 1 && await heading(page, /^Language$/).count() === 0,
+      'the row is named Display language under the Language heading, not Language twice')
     check(!(await page.locator('[data-test="language-restart"] button').isDisabled()), 'Restart is offered once the languages are read')
     check(/next time/i.test(await page.locator('[data-test="language-note"]').innerText()), 'the note says it applies from the next start')
     await laidOut('English')
@@ -112,6 +133,11 @@ try {
     const control = await openGeneral(current)
     check(await heading(page, 'Thème').count() === 1, 'after a new start the Theme heading is in French')
     check(await page.evaluate(() => document.documentElement.lang) === 'fr', 'and the document says it is French')
+    const french = await head(page)
+    check(french.title === 'Général' && french.subtitle === "L'apparence de cette fenêtre et la langue qu'elle utilise"
+      && french.crumbs.join(' / ') === 'Réglages / Général', `the page is headed in French (${JSON.stringify(french)})`)
+    check(await heading(page, "Langue d'affichage").count() === 1, 'the row is named Langue d’affichage')
+    check(!(await page.locator('[data-test="language-restart"] button').isDisabled()), 'Restart is offered after a new start')
     await laidOut('French')
     await shot('03-general-fr')
 
