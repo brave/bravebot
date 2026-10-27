@@ -204,7 +204,7 @@ try {
   assert.equal(await editor.locator('[data-colour]').count(), 8, 'the editor offers the eight colours')
   await editor.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
   await page.screenshot({ path: '/tmp/bravebot-avatar-editor-create.png' })
-  // A colour recolours every shape on offer and the face, before anything is kept.
+  // A colour recolours every shape on offer and the face as soon as it is chosen.
   const other = editor.locator('[data-colour][aria-pressed="false"]').first()
   const otherColour = await other.getAttribute('data-colour')
   await other.click()
@@ -212,19 +212,21 @@ try {
   assert.equal(shapeFaces.length, 8)
   assert.ok(shapeFaces.every((face) => face.startsWith(`pixel-${otherColour}-`)), `shapes are drawn in ${otherColour}: ${shapeFaces}`)
   assert.ok((await preview.getAttribute('data-avatar')).startsWith(`pixel-${otherColour}-`))
-  // Escape puts back the face the editor opened on, and leaves the create dialog open.
+  // Escape closes the editor, keeps the choice and leaves the create dialog open.
+  const otherFace = await preview.getAttribute('data-avatar')
   await page.keyboard.press('Escape')
   await editor.waitFor({ state: 'hidden' })
-  assert.equal(await preview.getAttribute('data-avatar'), firstFace, 'Escape keeps the face the editor opened on')
+  assert.equal(await preview.getAttribute('data-avatar'), otherFace, 'Escape keeps what was chosen')
+  assert.notEqual(otherFace, firstFace)
   assert.equal(await form.count(), 1, 'Escape in the editor does not close the create dialog')
   await openEditor.click()
   await editor.waitFor()
   await editor.getByRole('button', { name: 'Randomize', exact: true }).click()
-  await page.waitForFunction((first) => document.querySelector('.bot-form-avatar > .bot-avatar-frame [data-avatar]')?.getAttribute('data-avatar') !== first, firstFace)
+  await page.waitForFunction((first) => document.querySelector('.bot-form-avatar > .bot-avatar-frame [data-avatar]')?.getAttribute('data-avatar') !== first, otherFace)
   await editor.getByRole('button', { name: 'Diamond', exact: true }).click()
   await editor.getByRole('button', { name: 'Cyan to indigo', exact: true }).click()
   assert.equal(await editor.getByRole('button', { name: 'Diamond', exact: true }).getAttribute('aria-pressed'), 'true')
-  // A press on the backdrop keeps the choice and closes the editor, and the create dialog stays.
+  // A press on the backdrop closes the editor, and the create dialog stays.
   await page.mouse.click(4, 4)
   await editor.waitFor({ state: 'hidden' })
   assert.equal(await form.count(), 1, 'closing the editor does not close the create dialog')
@@ -261,18 +263,26 @@ try {
   assert.equal(await detailsEditor.locator('[data-colour="cyan-indigo"]').getAttribute('aria-pressed'), 'true', 'the editor opens on the stored colour')
   await detailsEditor.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
   await page.screenshot({ path: '/tmp/bravebot-avatar-editor-details.png' })
+  // Each choice is saved as it is made, with the editor still open.
   await detailsEditor.getByRole('button', { name: 'Block', exact: true }).click()
+  await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.avatar === 'v4:block/cyan-indigo')
   await detailsEditor.getByRole('button', { name: 'Chartreuse to teal', exact: true }).click()
+  await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.avatar === 'v4:block/chartreuse-teal')
+  assert.equal(await detailsEditor.isVisible(), true, 'the editor stays open while choosing')
+  await detailsEditor.getByRole('button', { name: 'Randomize', exact: true }).click()
+  await page.waitForFunction(async () => ![undefined, 'v4:block/chartreuse-teal'].includes((await window.bravebot.readBots())[0]?.avatar))
+  // Escape and a click outside only close it.
+  const randomised = (await page.evaluate(() => window.bravebot.readBots()))[0].avatar
   await page.keyboard.press('Escape')
   await detailsEditor.waitFor({ state: 'hidden' })
-  assert.equal((await page.evaluate(() => window.bravebot.readBots()))[0].avatar, 'v4:diamond/cyan-indigo', 'Escape saves nothing')
+  assert.equal((await page.evaluate(() => window.bravebot.readBots()))[0].avatar, randomised, 'Escape keeps what was saved')
   await details.getByRole('button', { name: 'Edit avatar', exact: true }).click()
   await detailsEditor.waitFor()
   await detailsEditor.getByRole('button', { name: 'Block', exact: true }).click()
   await detailsEditor.getByRole('button', { name: 'Chartreuse to teal', exact: true }).click()
+  await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.avatar === 'v4:block/chartreuse-teal')
   await page.locator('[data-test="bot-page"]').click({ position: { x: 20, y: 200 } })
   await detailsEditor.waitFor({ state: 'hidden' })
-  await page.waitForFunction(async () => (await window.bravebot.readBots())[0]?.avatar === 'v4:block/chartreuse-teal')
   await botRow.locator('[data-avatar^="pixel-chartreuse-teal-"][data-avatar*="-block-"]').waitFor()
   const botTrigger = page.locator('.composer .model-trigger')
   await botTrigger.click()

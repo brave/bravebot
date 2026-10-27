@@ -15,8 +15,8 @@ const colourLabel = ({ paints: [top, bottom] }: Colour) => `${capital(top)} to $
 const GAP = 8
 /**
  * A bot's face with the button that edits it: a popover of the eight shapes and the colours, and
- * Randomize. The face shows the choice as it is made. A click outside keeps it, and
- * Escape puts back the face the popover opened on.
+ * Randomize. Every choice is saved as it is made, so a click outside or Escape only closes the
+ * popover.
  *
  * The popover is a manual `popover`, so it is drawn in the top layer: the inspector's scrolling
  * body does not clip it, and inside the create dialog it is still part of the modal dialog's
@@ -27,7 +27,7 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
   size: number
   doing: Doing
   className: string
-  /** Called with the new seed when the popover closes on a different face. */
+  /** Called with the new seed each time a choice changes the face. */
   onCommit: (seed: string) => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -38,24 +38,22 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
   const panelId = useId()
   const titleId = useId()
 
-  const latest = useRef({ seed, draft, onCommit })
-  latest.current = { seed, draft, onCommit }
-
-  const close = (keep: boolean) => {
-    const { seed: stored, draft: chosen, onCommit: commit } = latest.current
-    setOpen(false)
-    if (keep && chosen !== stored) commit(chosen)
-  }
+  const close = () => setOpen(false)
   const closeRef = useRef(close)
   closeRef.current = close
 
-  // A face changed from elsewhere (another bot opened in the same panel) ends an edit unsaved.
-  useEffect(() => { setOpen(false) }, [seed])
+  // The last face this editor saved. A face that changes to any other one comes from elsewhere
+  // (another bot opened in the same panel) and ends the edit.
+  const saved = useRef(seed)
+  useEffect(() => { if (seed !== saved.current) setOpen(false) }, [seed])
 
   const choice = choiceOf(open ? draft : seed)
   const choose = (body: Body, colour: string) => {
-    const original = choiceOf(seed)
-    setDraft(body === original.body && colour === original.colour ? seed : pickedSeed(body, colour))
+    if (body === choice.body && colour === choice.colour) return
+    const next = pickedSeed(body, colour)
+    saved.current = next
+    setDraft(next)
+    onCommit(next)
   }
   const randomize = () => {
     let body = choice.body
@@ -92,7 +90,7 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
     const pointerDown = (event: PointerEvent) => {
       if (inside(event)) return
       dismissedAt = event.timeStamp
-      closeRef.current(true)
+      closeRef.current()
     }
     // The click that ends a press on a modal dialog's backdrop would close the dialog as well.
     const click = (event: MouseEvent) => {
@@ -117,7 +115,7 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
     // Kept from the dialog the editor may sit in, which would otherwise close on the same key.
     event.preventDefault()
     event.stopPropagation()
-    closeRef.current(false)
+    closeRef.current()
     trigger.current?.focus({ preventScroll: true })
   }
 
@@ -135,7 +133,8 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
         controls={panelId}
         className="bot-avatar-edit"
         onClick={() => {
-          if (open) { close(true); return }
+          if (open) { close(); return }
+          saved.current = seed
           setDraft(seed)
           setOpen(true)
         }}
