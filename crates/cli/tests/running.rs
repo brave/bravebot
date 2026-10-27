@@ -18909,6 +18909,28 @@ fn a_goal_run_sends_the_work_back_until_the_judge_says_met() {
     );
 }
 
+/// GROUND-4: a one-shot run's judge reads the driver's count of what the rounds since the goal was
+/// set ran and wrote, before the condition, as a session's judge does.
+#[test]
+fn a_goal_runs_judge_is_given_the_record_of_what_ran() {
+    let gateway = a_gateway_for_a_goal(&["MET\nalready green"], 0);
+
+    let (output, requests) = a_goal_run("cli-running-goal-work-record", &gateway, &[]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let check = requests
+        .iter()
+        .find(|body| body.contains(THE_JUDGES_WORDS))
+        .expect("the goal was never checked");
+    assert!(
+        check
+            .contains("Since the goal was set, bravebot counted 0 commands run and 0 writes made.")
+            && check.contains("No file was written."),
+        "the judge was not given the record: {check}"
+    );
+}
+
 /// CLI-35: a condition judged met by the first check ends the run with no second turn.
 ///
 /// Rejects a loop that sends the work back once whatever the verdict says.

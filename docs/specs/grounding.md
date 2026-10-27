@@ -108,11 +108,12 @@ A turn hands back its record however it ended, beside its outcome and decisions.
 `verified-by: bravebot_tui::goals::a_turn_running_when_the_goal_was_set_is_not_counted`
 `verified-by: bravebot_tui::goals::a_turn_while_the_goal_is_paused_is_counted`
 `verified-by: bravebot_tui::state::a_new_goal_starts_a_new_record`
+`verified-by: bravebot_cli::running::a_goal_runs_judge_is_given_the_record_of_what_ran`
 
 <a id="GROUND-5"></a>
 ### GROUND-5: the judge still decides
 
-Verdicts are handled exactly as before. A `MET` ends the goal even if the record shows no commands. bravebot does not compare the record with the verdict, the condition or the reason.
+The verdict alone decides the goal. A `MET` ends it even if the record shows no commands. bravebot does not compare the record with the verdict, the condition or the reason.
 
 **Why.** Overriding the judge would mean bravebot deciding what the condition means. Many conditions need no command at all. The record is evidence for the judge, not a rule.
 
