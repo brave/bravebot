@@ -25,6 +25,12 @@ threads), so read [the pr-fix skill](../pr-fix/SKILL.md) first. Its rules about 
 signing and refused `run` arguments apply here unchanged. Below, `...` stands for
 `python3 agents/skills/pr-fix/pr-fix.py`.
 
+`make implement-issues ISSUES="<argument>"` starts this skill in the terminal client with the argument
+unchanged. First, with no model, [implement-issues.py](implement-issues.py) stops when an item is
+assigned to anybody but the account `gh` writes as, assigns that account to each open issue, and adds
+`bot/in-progress` to each, which it removes when the session ends. Where an item already has both,
+the script did that, so leave the assignee and the label as they are.
+
 An **item** is one issue. The **ledger** is the file in step 0 that records every item's state and
 its checklist. A pull request number given alone, as the whole argument, asks for
 [a round of review comments](#after-review-comments). Among other items, a pull request is left
