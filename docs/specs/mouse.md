@@ -595,22 +595,21 @@ which are found whatever is drawn on them ([MOUSE-50](#MOUSE-50)).
 `verified-by: bravebot_tui::files_mode::a_wheel_turn_with_the_panel_not_drawn_scrolls_the_transcript_and_nothing_else`
 
 <a id="MOUSE-20"></a>
-### MOUSE-20: a click on the Files section of the panel opens the files state
+### MOUSE-20: a click on the totals row of the Files section of the panel opens the files state
 
-In the ordinary state of the panel, a left click that sweeps nothing on the heading of the Files
-section or on the row under it, which reads `{n} files`, does what `/diff` does
-([FILES-3](files-mode.md#FILES-3)): it draws the files state, or answers with the note `/diff`
-gives. As for [MOUSE-11](#MOUSE-11), the press and the release are on one cell and the press is a
-single click, so a drag is a selection and a double click acts once ([MOUSE-50](#MOUSE-50)), and a
-click over the scroller or a history search asks for nothing, since the command is typed at the plain
-prompt. The
-rows around the section are not targets, nor is a heading or a totals row cut for want of room. The
-command stays the way to do it without a mouse, and what the click draws is what the session's own
-write calls changed ([FILES-10](files-mode.md#FILES-10)).
+In the ordinary state of the panel, a left click that sweeps nothing on the row of the Files
+section that reads `{n} files` does what `/diff` does ([FILES-3](files-mode.md#FILES-3)): it draws
+the files state, or answers with the note `/diff` gives. As for [MOUSE-11](#MOUSE-11), the press and
+the release are on one cell and the press is a single click, so a drag is a selection and a double
+click acts once ([MOUSE-50](#MOUSE-50)), and a click over the scroller or a history search asks for
+nothing, since the command is typed at the plain prompt. The heading of the section and the rows
+around it are not targets, nor is a totals row cut for want of room. The command stays the way to
+do it without a mouse, and what the click draws is what the session's own write calls changed
+([FILES-10](files-mode.md#FILES-10)).
 
-`verified-by: bravebot_tui::files_mode::a_click_on_the_files_heading_or_the_row_under_it_opens_the_state`
+`verified-by: bravebot_tui::files_mode::a_click_on_the_files_totals_row_opens_the_state_and_one_on_the_heading_does_not`
 `verified-by: bravebot_tui::files_mode::a_drag_a_double_click_or_a_click_over_the_scroller_or_a_search_opens_no_state`
-`verified-by: bravebot_tui::panel::only_the_files_heading_and_its_totals_row_are_click_targets`
+`verified-by: bravebot_tui::panel::only_the_files_totals_row_is_a_click_target`
 
 <a id="MOUSE-21"></a>
 ### MOUSE-21: a click on the panel's hide row hides the panel

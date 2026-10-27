@@ -228,9 +228,9 @@ narrow for it.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
 8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
-   A click on its heading or on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as
-   `/diff` does ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The
-   Plan takes the rows it leaves, as PANEL-13 says of the server sections.
+   A click on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as `/diff` does
+   ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The Plan takes
+   the rows it leaves, as PANEL-13 says of the server sections.
 9. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible

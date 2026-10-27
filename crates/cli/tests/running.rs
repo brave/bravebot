@@ -230,7 +230,7 @@ fn a_configuration_error_exits_non_zero() {
 /// service configured to serve a turn, which is what a released binary arrives as. A run that went
 /// ahead would be answered by whatever that endpoint gives it, and read as the agent being poor.
 ///
-/// So the run stops before it asks anything, and says the four ways to configure a service. Each
+/// So the run stops before it asks anything, and says the five ways to configure a service. Each
 /// is asserted by the words somebody has to type or write, not by the sentence around them: a
 /// refusal that named the problem and no route out is the first-use experience this replaced.
 #[test]
@@ -264,6 +264,7 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         "amazon-bedrock",
         "OpenRouter",
         "bravebot auth login chatgpt",
+        "bravebot auth login xai",
         "bravebot auth login leo",
     ] {
         assert!(
@@ -9144,21 +9145,21 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt]"),
+        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]"),
         "{stderr}"
     );
 
-    // The refusal for `import` names the ways that can be asked about, ChatGPT among them, in the
-    // language the interface is in.
+    // The refusal for `import` names the ways that can be asked about, ChatGPT and xAI among them, in
+    // the language the interface is in.
     let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
     assert!(
-        english.contains("name leo, bedrock, gateway or chatgpt"),
+        english.contains("name leo, bedrock, gateway, chatgpt or xai"),
         "{english}"
     );
     let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
     let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
     assert!(
-        french.contains("nommez leo, bedrock, gateway ou chatgpt"),
+        french.contains("nommez leo, bedrock, gateway, chatgpt ou xai"),
         "{french}"
     );
 }
@@ -9963,6 +9964,107 @@ fn a_run_sends_the_key_stored_for_its_gateway() {
             format!("Bearer {expected}"),
             "{exported:?}: {stderr}"
         );
+    }
+}
+
+/// CRED-14: the bearer key of an `openai` entry is in no file a run writes and in nothing it
+/// prints. The files are the record of the session and its trail (SESSION-1) and whatever else the
+/// run leaves under the state directory. One service answers and the other refuses with a body
+/// that repeats the key, which is what a service that echoes a credential does, so a body copied
+/// into a record or a message would carry it.
+#[test]
+fn an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints() {
+    const KEY: &str = "placeholder-openai-key-8e41b7";
+    fn text_under(directory: &Path, found: &mut Vec<(PathBuf, String)>) {
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                text_under(&path, found);
+            } else {
+                let text =
+                    String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()).into_owned();
+                found.push((path, text));
+            }
+        }
+    }
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("OPENAI_API_KEY", KEY),
+    ];
+    let settings = |port: u16| {
+        format!(
+            r#"{{"provider": {{"openai": {{"env": ["OPENAI_API_KEY"],
+                "options": {{"baseURL": "http://127.0.0.1:{port}/v1"}}}}}},
+                "model": "openai/reasons-only"}}"#
+        )
+    };
+    let (answering, seen) = a_gateway_seeing_bearers();
+    let refusing = a_gateway(r#"["tools"]"#, |_| {
+        http(
+            401,
+            &format!(r#"{{"error": {{"message": "Incorrect API key provided: {KEY}"}}}}"#),
+        )
+    });
+
+    for (case, port) in [("answered", answering), ("refused", refusing.port)] {
+        let scratch =
+            Scratch::new(&format!("cli-running-openai-key-{case}")).with_settings(&settings(port));
+        let output = bravebot(
+            &scratch.path,
+            &environment,
+            &["--json", "-p", "say something"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.success(),
+            case == "answered",
+            "{case}: {stderr}"
+        );
+
+        let mut files = Vec::new();
+        text_under(&scratch.path.join(".bravebot"), &mut files);
+        if case == "answered" {
+            let bearer = seen
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("the run did not reach the gateway: {stderr}"));
+            assert_eq!(bearer, format!("Bearer {KEY}"), "{stderr}");
+            // The files scanned below include the ones this clause is about.
+            let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+            for ending in [format!("{id}.json"), format!("{id}.audit.jsonl")] {
+                assert!(
+                    files
+                        .iter()
+                        .any(|(path, _)| path.to_string_lossy().ends_with(&ending)),
+                    "no file named {ending}: {:?}",
+                    files.iter().map(|(path, _)| path).collect::<Vec<_>>()
+                );
+            }
+        } else {
+            // The echoing body was served and the run reported the refusal, so a run that failed
+            // before the request was sent does not pass for this half.
+            assert!(
+                refusing.asked.try_recv().is_ok(),
+                "the refused run never asked the gateway: {stderr}"
+            );
+            assert!(
+                stderr.contains("returned HTTP 401"),
+                "the refused run did not report the refusal: {stderr}"
+            );
+        }
+        for (what, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+            assert!(
+                !text.contains(KEY),
+                "the key is in the {what} of the {case} run"
+            );
+        }
+        for (path, text) in &files {
+            assert!(
+                !text.contains(KEY),
+                "the key is in {path:?} after the {case} run"
+            );
+        }
     }
 }
 

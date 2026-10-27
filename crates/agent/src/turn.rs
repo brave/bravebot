@@ -3331,6 +3331,7 @@ where
         // Whatever came of the request: a ChatGPT sign-in renewed for it that the file could not take
         // is news either way, and nothing is said unless one was (CHATGPT-7).
         crate::chatgpt::say_an_unsaved_renewal(reporter);
+        crate::xai::say_an_unsaved_renewal(reporter);
         state.shown_before = written_before + round_shown;
         // Retries included, because a round that had to reconnect really did keep the turn waiting
         // that long. The count is what the turn spent, not what the endpoint would have taken had

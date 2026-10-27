@@ -80,7 +80,7 @@ kernel.
 ### FILES-3: `/diff` enters the state and leaves it
 
 `/diff` draws the panel in its files state and opens the panel if it was closed. A click on the
-heading of the Files section of the ordinary panel, or on the row under it, does the same
+totals row of the Files section of the ordinary panel does the same
 ([MOUSE-20](mouse.md#MOUSE-20)). While the state is open, `q`, Escape and Ctrl-C end it, and so
 does a click on the `x` at the right end of its heading row ([MOUSE-18](mouse.md#MOUSE-18)). A
 person cannot type `/diff` to end it, since no character reaches the box while it is open
@@ -101,7 +101,7 @@ the state (FILES-4) it answers with a note saying how wide the terminal has to b
 `verified-by: bravebot_tui::app::a_typed_diff_cannot_end_the_state_and_a_queued_one_does`
 `verified-by: bravebot_tui::app::entering_and_leaving_the_state_writes_no_panel_choice`
 `verified-by: bravebot_tui::app::the_panel_chord_ends_the_state_with_the_panel`
-`verified-by: bravebot_tui::files_mode::a_click_on_the_files_heading_or_the_row_under_it_opens_the_state`
+`verified-by: bravebot_tui::files_mode::a_click_on_the_files_totals_row_opens_the_state_and_one_on_the_heading_does_not`
 `verified-by: bravebot_tui::files_mode::a_click_on_the_close_control_ends_the_state_as_q_does`
 `verified-by: bravebot_tui::app::diff_with_nothing_written_answers_with_a_note`
 `verified-by: bravebot_tui::app::diff_is_the_command_and_files_is_not_one`

@@ -191,8 +191,9 @@ fn finish(
 ///
 /// Each sentence that names a way to use the account names a command that works as typed: `bravebot`
 /// only where `asks` says a start would ask which model to use, or a command that names one together
-/// with the prompt or the task that starts something. A person with a service of their own configured,
-/// or a model in force that something serves, is not asked, and is not told they will be. `/model` is
+/// with the prompt or the task that starts something. A person with a model in force that something
+/// serves is not asked, and one with a Bedrock or gateway block is asked about that service's models and
+/// not the account's, so neither is told the account's question will be asked. `/model` is
 /// named only as what lists the models once a session is open, since the sign-in does not open one.
 pub(crate) fn said_of_listing(listing: &AccountModels, asks: bool) -> String {
     match listing {
@@ -608,8 +609,9 @@ mod tests {
 
     /// CHATGPT-8, BACKEND-39: the sign-in promises the question only where a start would ask it. The
     /// sentence that sends a person to run `bravebot` for it is said where one would, and where it
-    /// would not, because a service of the person's own is configured or a model is in force that
-    /// something serves, the sentence names the commands and says nothing of being asked. No other
+    /// would not ask about the account, because a service of the person's own is configured, whose models
+    /// it asks about instead, or a model is in force that something serves, the sentence names the
+    /// commands and says nothing of being asked. No other
     /// sentence the command ends with promises it: where the listing could not be had nothing can be
     /// asked, whoever the person is. The regression it rejects is the promise made to everybody.
     #[test]

@@ -2787,6 +2787,202 @@ fn a_vertex_key_is_in_no_error_and_no_recorded_event_on_either_path_for_any_refu
     }
 }
 
+/// The bearer key of an `openai` entry is a credential, so it is in no text a refusal produces, in
+/// no event the run recorded, in no line of the diagnostic log and in nothing a completed reply
+/// holds, on the roster path and on both chat paths. The service here repeats the key in the body
+/// of its refusal, which is what a service that echoes a credential does, so a body copied into an
+/// error or a log line would carry it.
+#[test]
+fn an_openai_key_is_in_no_error_event_log_or_reply_on_the_roster_and_chat_paths() {
+    const KEY: &str = "placeholder-openai-key-3c91d4";
+    let _held = DIAG_LOG.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    bravebot_diag::configure(bravebot_diag::Level::Debug, Some(dir.path().to_path_buf()));
+    // Points the log nowhere again when an assertion below panics.
+    struct Unconfigure;
+    impl Drop for Unconfigure {
+        fn drop(&mut self) {
+            bravebot_diag::configure(bravebot_diag::Level::Error, None);
+        }
+    }
+    let unconfigure = Unconfigure;
+    let echoing = |status| {
+        Attempt::Refused(
+            status,
+            format!(r#"{{"error":{{"message":"Incorrect API key provided: {KEY}"}}}}"#),
+        )
+    };
+
+    let mut said: Vec<(String, String)> = Vec::new();
+    let mut sent_with_the_key = 0;
+    let mut note = |what: String, text: String| said.push((what, text));
+    for status in [401, 403, 404] {
+        let (endpoint, received) = serve_attempts(vec![echoing(status), echoing(status)]);
+        let provider = openai_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let error = {
+            let mut policy = Policy::begin(
+                routing(),
+                ReleasePlan::new(),
+                CapabilitySet::from_iter([Capability::WebFetch]),
+                &mut sink,
+            )
+            .expect("policy");
+            bravebot_aichat::models::list_from_gateway(
+                &mut policy,
+                &provider,
+                Some(KEY),
+                &[],
+                &egress,
+            )
+            .expect_err("the listing was refused")
+        };
+        for sent in received.try_iter() {
+            assert_eq!(
+                sent.header("authorization"),
+                Some(format!("Bearer {KEY}").as_str())
+            );
+            sent_with_the_key += 1;
+        }
+        note(format!("roster, status {status}"), error.to_string());
+        note(format!("roster, status {status}"), format!("{error:?}"));
+        note(
+            format!("roster, status {status}"),
+            format!("{:?}", sink.events()),
+        );
+
+        for streaming in [false, true] {
+            let (endpoint, received) = serve_attempts(vec![echoing(status)]);
+            let config = config_for(&endpoint);
+            let provider = openai_at(&endpoint);
+            let mut sink = RecordingSink::new();
+            let error = {
+                let mut policy = Policy::begin(
+                    routing(),
+                    ReleasePlan::new(),
+                    CapabilitySet::from_iter([Capability::WebFetch]),
+                    &mut sink,
+                )
+                .expect("policy");
+                let mut client = AichatClient::new(&config, &egress).for_gateway(
+                    &provider,
+                    "gpt-4o-mini",
+                    Some(bravebot_config::Secret::new(KEY)),
+                );
+                let request = ChatRequest::new("openai/gpt-4o-mini", vec![Message::user("hello")]);
+                if streaming {
+                    client.complete_streaming(&mut policy, &request, |_| {})
+                } else {
+                    client.complete(&mut policy, &request)
+                }
+                .expect_err("the service refused")
+            };
+            let sent = received.recv().expect("the request arrived");
+            assert_eq!(
+                sent.header("authorization"),
+                Some(format!("Bearer {KEY}").as_str())
+            );
+            sent_with_the_key += 1;
+            let what = format!("chat, status {status}, streaming {streaming}");
+            note(what.clone(), error.to_string());
+            note(what.clone(), format!("{error:?}"));
+            note(what, format!("{:?}", sink.events()));
+        }
+    }
+
+    // A listing and a reply that are accepted, so what a completed exchange holds is read as well.
+    let (endpoint, _received) = serve_attempts(vec![
+        Attempt::Status(404),
+        Attempt::Json(OPENAI_LISTING.into()),
+    ]);
+    let provider = openai_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    {
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let models = bravebot_aichat::models::list_from_gateway(
+            &mut policy,
+            &provider,
+            Some(KEY),
+            &[],
+            &egress,
+        )
+        .expect("the roster was fetched");
+        note("roster, accepted".into(), format!("{models:?}"));
+    }
+    for streaming in [false, true] {
+        let reply = if streaming {
+            Attempt::Frames(vec![
+                frame(r#"{"model":"served-model","choices":[{"delta":{"content":"hi"}}]}"#),
+                frame("[DONE]"),
+            ])
+        } else {
+            Attempt::Json(REPLY.into())
+        };
+        let (endpoint, _received) = serve_attempts(vec![reply]);
+        let config = config_for(&endpoint);
+        let provider = openai_at(&endpoint);
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let mut client = AichatClient::new(&config, &egress).for_gateway(
+            &provider,
+            "gpt-4o-mini",
+            Some(bravebot_config::Secret::new(KEY)),
+        );
+        let request = ChatRequest::new("openai/gpt-4o-mini", vec![Message::user("hello")]);
+        let completion = if streaming {
+            client.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            client.complete(&mut policy, &request)
+        }
+        .expect("the reply was read");
+        note(
+            format!("reply, streaming {streaming}"),
+            format!("{completion:?}"),
+        );
+        note(
+            format!("request, streaming {streaming}"),
+            format!("{request:?}"),
+        );
+    }
+    note(
+        "events of the accepted exchanges".into(),
+        format!("{:?}", sink.events()),
+    );
+
+    let log: String = std::fs::read_dir(dir.path().join("logs"))
+        .expect("a request makes the log")
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    drop(unconfigure);
+    assert!(
+        !log.is_empty(),
+        "nothing was logged, so the log was not read"
+    );
+    note("the diagnostic log".into(), log);
+
+    assert_eq!(
+        sent_with_the_key, 12,
+        "the key was not on the wire of every request"
+    );
+    for (what, text) in &said {
+        assert!(!text.contains(KEY), "the key is in {what}: {text}");
+    }
+}
+
 /// A gateway in front of a service routes on headers of its own, and a request that arrives
 /// without them is refused or sent to the wrong tenant. The configured header has to arrive
 /// beside the credential the client sets. A request carrying only the configured header is
@@ -7646,6 +7842,229 @@ fn a_redirect_in_answer_to_the_accounts_listing_is_a_failure_and_goes_nowhere() 
         landed.recv_timeout(Duration::from_millis(300)).is_err(),
         "the redirect was followed"
     );
+}
+
+/// XAI-1 and XAI-16: a gateway client made to refuse redirects answers one with its status and sends
+/// nothing to the address it names, neither the token nor the conversation, and one that is not made
+/// to follows it, as a configured gateway does, with the token left on the socket it was addressed
+/// to. The refusing client is what a request to a host compiled in is made with.
+#[test]
+fn a_gateway_client_refusing_redirects_goes_nowhere_a_reply_names() {
+    for refusing in [true, false] {
+        let (elsewhere, landed) =
+            serve(r#"{"model":"m","choices":[{"message":{"content":"hi"}}]}"#);
+        let (endpoint, received) = serve_redirect(format!("{elsewhere}/v1/chat/completions"));
+        let model = "a-model";
+        let config = config_for(&endpoint);
+        let gateway = gateway_naming(&format!("{endpoint}/v1"), model);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = Policy::begin(
+            routing(),
+            ReleasePlan::new(),
+            CapabilitySet::from_iter([Capability::WebFetch]),
+            &mut sink,
+        )
+        .expect("policy");
+        let mut client = AichatClient::new(&config, &egress).for_gateway(
+            &gateway,
+            model,
+            Some(bravebot_config::Secret::new(ACCOUNT_TOKENS[0])),
+        );
+        if refusing {
+            client = client.refusing_redirects();
+        }
+
+        let outcome = client.complete(
+            &mut policy,
+            &ChatRequest::new(model, vec![Message::user("a private conversation")]),
+        );
+
+        let first = received.recv().expect("the host was asked");
+        assert_eq!(
+            first.header("authorization"),
+            Some(format!("Bearer {}", ACCOUNT_TOKENS[0]).as_str())
+        );
+        if refusing {
+            assert!(
+                matches!(
+                    &outcome,
+                    Err(ChatError::Egress(bravebot_net::EgressError::Status {
+                        status: 307,
+                        ..
+                    }))
+                ),
+                "{outcome:?}"
+            );
+            assert!(
+                landed.recv_timeout(Duration::from_millis(300)).is_err(),
+                "the redirect was followed"
+            );
+        } else {
+            outcome.expect("a configured gateway follows a redirect");
+            let followed = landed.recv().expect("the redirect was followed");
+            assert_eq!(
+                followed.header("authorization"),
+                None,
+                "the token followed the redirect to another socket"
+            );
+        }
+    }
+}
+
+/// The service a test stands in for the xAI serving host: the account's id and chat completions at a
+/// server of its own.
+fn xai_at(endpoint: &str) -> bravebot_config::provider::Provider {
+    let text = format!(
+        r#"{{"provider": {{"xai": {{"name": "xAI", "options": {{"baseURL": "{endpoint}/v1"}}}}}}}}"#
+    );
+    let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+        panic!("not an object");
+    };
+    bravebot_config::provider::Provider::all(&root)
+        .pop()
+        .expect("one provider")
+}
+
+const XAI_LISTING: &str = r#"{"object":"list","data":[
+    {"id":"grok-4.5","object":"model","owned_by":"xai","context_length":500000},
+    {"id":"grok-imagine-image","object":"model","owned_by":"xai","context_length":16000,"image_price":1},
+    {"id":"grok-4.20-multi-agent-0309","object":"model","owned_by":"xai","context_length":1000000}]}"#;
+
+/// XAI-14: the listing is `GET /models` at the serving host with the access token as a bearer, and
+/// the rule keeps the one text model of three rows. No other credential goes with it: not a gateway's
+/// key, not a header this program sets for Brave, not a session identifier, and the account-scoped route
+/// a gateway has is not asked. A client that sent the key header of another service, or asked the route
+/// a gateway answers, fails one half of this.
+#[test]
+fn the_xai_listing_is_asked_for_at_the_serving_host_with_the_token_and_nothing_else() {
+    let (endpoint, received) = serve(XAI_LISTING);
+    let provider = xai_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let models = bravebot_aichat::models::list_from_xai_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect("the listing was read");
+
+    let sent = received.recv().expect("the host was asked");
+    assert_eq!(sent.request_line, "GET /v1/models HTTP/1.1");
+    assert_eq!(
+        sent.header("authorization"),
+        Some(format!("Bearer {}", ACCOUNT_TOKENS[0]).as_str())
+    );
+    assert_eq!(sent.header("x-api-key"), None);
+    assert_eq!(sent.header("session-id"), None);
+    assert_eq!(sent.header("brave-product"), None);
+    let keys: Vec<&str> = models.iter().map(|m| m.key.as_str()).collect();
+    assert_eq!(keys, ["xai/grok-4.5"]);
+    assert_eq!(models[0].conversation_tokens, Some(500_000));
+}
+
+/// XAI-1 and XAI-14: a redirect in answer to the listing is a failure and nothing is sent to the host it
+/// names, which is the host the token would otherwise follow the request to.
+#[test]
+fn a_redirect_in_answer_to_the_xai_listing_is_a_failure_and_goes_nowhere() {
+    let (elsewhere, landed) = serve(XAI_LISTING);
+    let (endpoint, received) = serve_redirect(format!("{elsewhere}/v1/models"));
+    let provider = xai_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+
+    let error = bravebot_aichat::models::list_from_xai_account(
+        &mut policy,
+        &provider,
+        ACCOUNT_TOKENS[0],
+        &egress,
+    )
+    .expect_err("a redirect is not a listing");
+
+    assert!(
+        matches!(
+            &error,
+            ChatError::Egress(bravebot_net::EgressError::Status { status: 307, .. })
+        ),
+        "{error:?}"
+    );
+    received.recv().expect("the host was asked");
+    assert!(
+        landed.recv_timeout(Duration::from_millis(300)).is_err(),
+        "the redirect was followed"
+    );
+}
+
+/// XAI-14: a reply that is not an object with a `data` list cannot be read, whatever else it is, and a
+/// refusal is a failure told by its status alone: a 400, which is what the service answers a token it
+/// does not accept with, arrives as the status it was and carries nothing of the body, which is not
+/// asked for. An empty `data` is a listing and offers nothing, and so is one whose every row the rule
+/// drops.
+#[test]
+fn a_reply_that_is_not_the_xai_listing_cannot_be_read_and_an_empty_one_can() {
+    let egress = Egress::new();
+    for body in [
+        r#"{"models":[{"slug":"grok-4.5"}]}"#,
+        "not json",
+        r#"[{"id":"grok-4.5"}]"#,
+    ] {
+        let (endpoint, _received) = serve(body);
+        let provider = xai_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let outcome = bravebot_aichat::models::list_from_xai_account(
+            &mut policy,
+            &provider,
+            ACCOUNT_TOKENS[0],
+            &egress,
+        );
+        assert!(
+            matches!(outcome, Err(ChatError::Decode { .. })),
+            "{body}: {outcome:?}"
+        );
+    }
+
+    for status in [400u16, 401, 403] {
+        let (endpoint, _received) = serve_attempts(vec![Attempt::Status(status)]);
+        let provider = xai_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let outcome = bravebot_aichat::models::list_from_xai_account(
+            &mut policy,
+            &provider,
+            ACCOUNT_TOKENS[0],
+            &egress,
+        );
+        assert!(
+            matches!(
+                &outcome,
+                Err(ChatError::Egress(bravebot_net::EgressError::Status { status: got, body: None, .. })) if *got == status
+            ),
+            "{status}: {outcome:?}"
+        );
+    }
+
+    for body in [
+        r#"{"object":"list","data":[]}"#,
+        r#"{"data":[{"id":"grok-imagine-video"}]}"#,
+    ] {
+        let (endpoint, _received) = serve(body);
+        let provider = xai_at(&endpoint);
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let models = bravebot_aichat::models::list_from_xai_account(
+            &mut policy,
+            &provider,
+            ACCOUNT_TOKENS[0],
+            &egress,
+        )
+        .expect("a listing that offers nothing is still a listing");
+        assert!(models.is_empty(), "{body}: {models:?}");
+    }
 }
 
 /// CHATGPT-10 and BACKEND-21: the level a turn was given is the account's `reasoning.effort`, with

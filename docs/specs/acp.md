@@ -168,9 +168,9 @@ question reaches the editor is [MODE-2](permission-modes.md#MODE-2) for acceptin
 ### ACP-8: a prompt whose turn failed ends saying the account's sentence where the account failed
 
 A prompt whose turn failed ends with an error that says `the turn failed: ` and then why. Where it was the
-ChatGPT account that failed, why is the sentence the window is given for that failure
-([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)): one sentence in sentence case, which names the command that
-signs in again where that is the remedy. A refusal that names the account has no status or count after that
+ChatGPT account or the xAI account that failed, why is the sentence the window is given for that failure
+([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8), [XAI-15](xai-sign-in.md#XAI-15)): one sentence in sentence case,
+which names the command that signs in again where that is the remedy. A refusal that names the account has no status or count after that
 sentence, which the terminal's line for a failed turn has, and the wait it asked for is in the sentence as
 [CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8) has it. For a failure of any other service it is the name of the
 failure's category. A summary of the conversation the account could not make, which the turn goes on
@@ -182,5 +182,6 @@ account has reached its usage limit, and the sentence is chosen from a closed va
 service wrote, as the category's name does not.
 
 `verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_chatgpt_account_tells_the_editor_which_command_signs_in`
+`verified-by: bravebot_ui_bridge::acp::a_turn_that_failed_on_the_xai_account_tells_the_editor_which_command_signs_in`
 `verified-by: bravebot_ui_bridge::acp::a_summary_that_failed_on_the_chatgpt_account_is_told_to_the_editor_in_the_windows_words`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_told_the_wait_a_refusal_asked_for_and_no_status`

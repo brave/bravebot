@@ -405,6 +405,7 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::the_cursor_falls_to_the_first_match_when_what_it_was_on_is_filtered_out`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_leaves_nothing_to_choose`
 `verified-by: bravebot_tui::model_prompt::a_search_matching_nothing_says_so`
+`verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::the_picker_is_drawn_as_a_centred_panel`
 `verified-by: bravebot_tui::model_prompt::the_panel_stays_inside_a_tiny_terminal`
 
@@ -426,6 +427,7 @@ a gateway has.
 
 `verified-by: bravebot_tui::model_prompt::every_service_heads_its_own_section`
 `verified-by: bravebot_tui::model_prompt::a_service_that_appears_twice_in_the_roster_is_still_one_section`
+`verified-by: bravebot_tui::model_prompt::an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable`
 `verified-by: bravebot_tui::model_prompt::a_heading_stays_above_the_rows_when_the_list_is_scrolled`
 `verified-by: bravebot_tui::model_prompt::a_heading_is_held_where_the_list_has_room_for_two_rows`
 `verified-by: bravebot_tui::model_prompt::a_blank_row_is_given_up_so_the_heading_and_the_cursor_both_fit`

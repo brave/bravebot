@@ -368,7 +368,7 @@ request.
 
 The last of the four is where the report and the session have to agree. A configuration naming only
 no model service is one a session refuses to open on ([BACKEND-39](backends.md#BACKEND-39)), and
-the four ways to configure one are what the report says, in the same words. A report calling that machine
+the five ways to configure one are what the report says, in the same words. A report calling that machine
 healthy would be read before anything else by the one person certain to run this command, which is
 whoever was just refused.
 
@@ -964,11 +964,13 @@ each by a number and by the word that names it:
 - `gateway` stores a key for a service this program knows an endpoint for, or for a gateway a
   provider block names.
 - `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
+- `xai` signs in to an xAI SuperGrok subscription with a code entered on any device ([XAI-7](xai-sign-in.md#XAI-7)).
 
 A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints for
 the stored subscription. For Bedrock it is shown where every account named has a usable session. For
-a gateway it is the ids keys are stored for, whether or not a block names them. For ChatGPT it is
-that a sign-in is stored. The credential itself is never printed.
+a gateway it is the ids keys are stored for, whether or not a block names them. For ChatGPT it is that a
+sign-in is stored, and for xAI what `auth status xai` says of it: when the access token expires, and that each
+token is sent to one host alone ([XAI-9](xai-sign-in.md#XAI-9)). The credential itself is never printed.
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
@@ -978,7 +980,7 @@ runs nothing without a yes.
 
 `bravebot auth login <way>` runs that way without the list. A word after `leo` is the channel and
 is checked as `import-leo-creds` checks it. A word opening with `-` is refused there, and so are a
-second word and any word after `bedrock`, `import` or `chatgpt`. The list needs a terminal on stdin and on stderr. Without one, the
+second word and any word after `bedrock`, `import`, `chatgpt` or `xai`. The list needs a terminal on stdin and on stderr. Without one, the
 command is refused with the argument status and the forms a script can type instead.
 
 Each way is run by the function its own command runs, so `auth login import` prompts, refuses and
@@ -1064,10 +1066,12 @@ repeated, in that message or any other.
 
 In an incognito session the Leo and import ways are refused by the checks `import-leo-creds` and
 `import-providers` make, with their words. The Bedrock way is not refused. It records nothing, and
-says `BRAVEBOT_USE_BEDROCK=1` still has to be exported.
+says `BRAVEBOT_USE_BEDROCK=1` still has to be exported. The xAI way is refused before the code is asked
+for ([XAI-10](xai-sign-in.md#XAI-10)).
 `bravebot auth logout leo` forgets the stored subscription, as `import-leo-creds --forget` does, and
 is allowed in an incognito session. `bravebot auth logout chatgpt` forgets the stored ChatGPT sign-in
-([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)) and is allowed in one too. `bravebot auth logout gateway [id]` forgets the key stored for
+([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)) and is allowed in one too, as is `bravebot auth logout xai`, which forgets
+the stored xAI sign-in ([XAI-9](xai-sign-in.md#XAI-9)). `bravebot auth logout gateway [id]` forgets the key stored for
 that id, or the only one stored where none is named, and is allowed in an incognito session too.
 With several stored and none named, or an id with none stored, it is refused with the argument
 status and names the ids that hold one. A word after the id is refused with the argument status and
@@ -1221,6 +1225,9 @@ and was told of none.
 `verified-by: bravebot_cli::running::auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`
 `verified-by: bravebot_cli::running::auth_logout_chatgpt_forgets_the_sign_in_and_only_that_one`
+`verified-by: bravebot_cli::xai_sign_in::auth_login_xai_is_refused_before_a_code_is_asked_for_where_it_cannot_be_done`
+`verified-by: bravebot_cli::xai_sign_in::auth_logout_xai_forgets_the_sign_in_and_only_that_one`
+`verified-by: bravebot_cli::xai_sign_in::the_list_of_ways_names_xai_and_says_signed_in_only_where_a_sign_in_is_stored`
 
 <a id="CLI-19"></a>
 ### CLI-19: `--system-prompt` and `--append-system-prompt` put a person's own words in the planner's system prompt for one run
@@ -1371,22 +1378,24 @@ what it leaves out is permission: nothing is added to what the planner may do.
 <a id="CLI-23"></a>
 ### CLI-23: `auth status` says whether a sign-in is usable, and its exit status says it too
 
-`bravebot auth status [leo|bedrock|gateway [id]|chatgpt]` reads what a turn reads, writes nothing, and
+`bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]` reads what a turn reads, writes nothing, and
 prints one line per sign-in: `leo`, `bedrock` for the default AWS profile or `bedrock <profile>`,
-`gateway <id>` and `chatgpt`. Each line is one of:
+`gateway <id>`, `chatgpt` and `xai`. Each line is one of:
 
 - **signed in**, with a detail. For Leo that is the line `doctor` prints, the environment and the
   count of credentials unspent. For an AWS account it is that the session gives credentials, asked
   of the AWS CLI without starting a sign-in. For a gateway it is where a key is found, never what it
   is. For ChatGPT it is the instant the access token expires, and a token past it is still signed in, since
-  the next request replaces it ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)).
+  the next request replaces it ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)). For xAI it is the same instant, and
+  that the access token is sent to `api.x.ai` alone and the refresh token to `auth.x.ai` alone
+  ([XAI-9](xai-sign-in.md#XAI-9)).
 - **not signed in**, with the way to sign in: nothing is imported, the AWS session has lapsed, or
   a gateway has no key.
 - **unusable**, with the reason and remedy, where signing in again does not fix it: a stored
   batch that cannot be read or was written by another version, or one imported for an environment
   the premium endpoint does not accept, in the words a turn uses
   ([PREM-8](premium-credentials.md#PREM-8)); the AWS CLI missing or the profile unknown; a file of
-  gateway keys that cannot be read; a ChatGPT sign-in file that cannot be read or is another version's.
+  gateway keys that cannot be read; a ChatGPT or xAI sign-in file that cannot be read or is another version's.
 
 A gateway whose block names nowhere for a key to live needs none and is signed in. A known service
 no block names is asked about where it is named, and where no id is named, where a key is stored for
@@ -1397,7 +1406,7 @@ no gateway key is stored. Leo needs the
 configuration only to know the endpoint, so nothing imported is reported without it. A configuration
 that cannot be read is reported as unusable on the lines it blocks.
 
-With no way named, all four are asked about. The command exits 0 if any sign-in is usable, since
+With no way named, all five are asked about. The command exits 0 if any sign-in is usable, since
 nobody holds every way and a script asking whether bravebot can run is asking about the set. With a
 way named, it exits 0 only if every sign-in under it is usable. Otherwise it exits with the
 configuration status where a configuration could not be read, and the failure status
@@ -1444,6 +1453,7 @@ start and one that wants to know whether a particular sign-in worked.
 `verified-by: bravebot_cli::auth::a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable`
 `verified-by: bravebot_cli::auth::nothing_imported_is_told_from_a_store_that_could_not_be_read`
 `verified-by: bravebot_cli::running::auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request`
+`verified-by: bravebot_cli::xai_sign_in::auth_status_xai_reports_the_expiry_and_nothing_that_could_sign_a_request`
 
 <a id="CLI-24"></a>
 ### CLI-24: `--json-stream` writes one event per line as the run goes, then the result object

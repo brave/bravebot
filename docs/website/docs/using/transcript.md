@@ -507,7 +507,7 @@ the rest.
 | a task of the plan | moves the transcript to the turn that wrote it, or to its end while that turn runs | `{` and `}` in the scroller go by prompts, and `/` there searches for the words; no key puts the task's row at the top |
 | the mark of a finished task | opens the whole of its words, and closes them when clicked again, as does a click on a row of the words below the first | none while the turn runs, when the mark is the one way to read the whole words; once it has ended the transcript holds them whole |
 | the pull request or issue row | opens the address you gave `/pr` or `/issue` in your browser, with or without ctrl | `/open` and the address |
-| the Files heading or the count under it | opens the files view, which is what `/diff` draws | `/diff` |
+| the count under the Files heading | opens the files view, which is what `/diff` draws | `/diff` |
 | a file in the list of the files view | highlights it and shows its edits from the top | Up and Down |
 | the `x` at the right end of the files view's heading row | leaves the view | `q` or Escape |
 | the previous or next control above the edits of the files view | steps between the edits | Left and Right, or `h` and `l` |

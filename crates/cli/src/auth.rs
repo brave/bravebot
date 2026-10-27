@@ -33,15 +33,17 @@ enum Way {
     Import,
     Gateway,
     ChatGpt,
+    Xai,
 }
 
 impl Way {
-    const ALL: [Way; 5] = [
+    const ALL: [Way; 6] = [
         Way::Leo,
         Way::Bedrock,
         Way::Import,
         Way::Gateway,
         Way::ChatGpt,
+        Way::Xai,
     ];
 
     /// The word that names this way on the command line. Not translated, because a script types it.
@@ -52,6 +54,7 @@ impl Way {
             Way::Import => "import",
             Way::Gateway => "gateway",
             Way::ChatGpt => "chatgpt",
+            Way::Xai => "xai",
         }
     }
 
@@ -70,6 +73,7 @@ impl Way {
             Way::Import => t!(auth_way_import).to_string(),
             Way::Gateway => t!(auth_way_gateway, services = listed(known_ids())),
             Way::ChatGpt => t!(auth_way_chatgpt).to_string(),
+            Way::Xai => t!(auth_way_xai).to_string(),
         }
     }
 }
@@ -99,10 +103,12 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
         "bravebot auth login import",
         "bravebot auth login gateway [id]",
         "bravebot auth login chatgpt",
+        "bravebot auth login xai",
         "bravebot auth logout leo",
         "bravebot auth logout gateway [id]",
         "bravebot auth logout chatgpt",
-        "bravebot auth status [leo|bedrock|gateway [id]|chatgpt]",
+        "bravebot auth logout xai",
+        "bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -229,6 +235,13 @@ fn held(way: Way, directory: Option<&Path>) -> Option<String> {
             crate::chatgpt::Standing::Unusable(_) => Some(t!(chatgpt_held_unusable).to_string()),
             _ => None,
         },
+        Way::Xai => match xai() {
+            // What `status` says of it, so the list does not say less: when the access token expires
+            // and the host each token is sent to.
+            standing @ Standing::SignedIn(_) => Some(standing.said()),
+            Standing::Unusable(_) => Some(t!(xai_held_unusable).to_string()),
+            _ => None,
+        },
         // The ids alone. Which host each key goes to is the provider block's to say.
         Way::Gateway => gateways_held(Keys::read(directory?)),
     }
@@ -258,10 +271,13 @@ fn sign_in(way: Way, rest: &[String]) -> ExitCode {
             [_, extra, ..] => unexpected(way, extra),
             _ => import_leo_creds(rest),
         },
-        Way::Bedrock | Way::Import | Way::ChatGpt if !rest.is_empty() => unexpected(way, &rest[0]),
+        Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai if !rest.is_empty() => {
+            unexpected(way, &rest[0])
+        }
         Way::Bedrock => bedrock(),
         Way::Import => crate::import::providers(&[]),
         Way::ChatGpt => crate::chatgpt::login(),
+        Way::Xai => crate::xai::login(),
         Way::Gateway => match rest {
             [flag, ..] if flag.starts_with('-') => fail(
                 Ending::Argument,
@@ -1176,7 +1192,7 @@ type Line = (String, Standing);
 fn status(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return report(
-            &[Way::Leo, Way::Bedrock, Way::Gateway, Way::ChatGpt],
+            &[Way::Leo, Way::Bedrock, Way::Gateway, Way::ChatGpt, Way::Xai],
             None,
             false,
         );
@@ -1241,6 +1257,7 @@ fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
                 }
             }
             Way::ChatGpt => lines.push(("chatgpt".into(), chatgpt())),
+            Way::Xai => lines.push(("xai".into(), xai())),
             Way::Import => {}
         }
     }
@@ -1332,6 +1349,19 @@ fn chatgpt() -> Standing {
         }
         Stored::NotSignedIn => Standing::NotSignedIn(t!(auth_status_chatgpt_none).into()),
         Stored::Nowhere => Standing::NotSignedIn(t!(auth_status_chatgpt_nowhere).into()),
+        Stored::Unusable(reason) => Standing::Unusable(reason),
+    }
+}
+
+/// The stored xAI sign-in, read from the file a turn would read.
+fn xai() -> Standing {
+    use crate::xai::Standing as Stored;
+    match crate::xai::standing() {
+        Stored::SignedIn { expires } => {
+            Standing::SignedIn(t!(auth_status_xai_expires, expires = expires))
+        }
+        Stored::NotSignedIn => Standing::NotSignedIn(t!(auth_status_xai_none).into()),
+        Stored::Nowhere => Standing::NotSignedIn(t!(auth_status_xai_nowhere).into()),
         Stored::Unusable(reason) => Standing::Unusable(reason),
     }
 }
@@ -1509,8 +1539,8 @@ fn listed<'n>(names: impl Iterator<Item = &'n str>) -> String {
     names.map(printable).collect::<Vec<_>>().join(", ")
 }
 
-/// `bravebot auth logout <way>`. Leo and a gateway keep a credential of their own, so they are the
-/// ways signed out of here; the other two say where what they left is kept.
+/// `bravebot auth logout <way>`. Leo, a gateway, ChatGPT and xAI keep a credential of their own, so
+/// they are the ways signed out of here; the other two say where what they left is kept.
 fn logout(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return refused_with_the_forms(t!(auth_logout_needs_a_way));
@@ -1547,6 +1577,7 @@ fn logout(args: &[String]) -> ExitCode {
         Way::Import => fail(Ending::Argument, t!(auth_logout_import)),
         Way::Gateway => forget_gateway(rest.first().map(String::as_str)),
         Way::ChatGpt => crate::chatgpt::logout(),
+        Way::Xai => crate::xai::logout(),
     }
 }
 
@@ -1869,9 +1900,11 @@ mod tests {
             ("3\n", Some(Way::Import)),
             ("4\n", Some(Way::Gateway)),
             ("5\n", Some(Way::ChatGpt)),
+            ("6\n", Some(Way::Xai)),
             ("bedrock\n", Some(Way::Bedrock)),
             ("gateway\n", Some(Way::Gateway)),
             ("ChatGPT\n", Some(Way::ChatGpt)),
+            ("XAI\n", Some(Way::Xai)),
             ("  import  \n", Some(Way::Import)),
             ("Bedrock\n", Some(Way::Bedrock)),
             ("\n", None),
@@ -1884,7 +1917,7 @@ mod tests {
                 "{answers:?}: {said}"
             );
         }
-        for refused in ["0\n", "6\n", "aws\n"] {
+        for refused in ["0\n", "7\n", "aws\n"] {
             let (said, picked) = asked(refused, &nothing_held);
             let complaint = picked.expect_err(refused);
             assert!(
