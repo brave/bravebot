@@ -180,6 +180,7 @@ at, that a control keeps keyboard focus through an animation.
 | `pnpm run drive:export` | Exporting a conversation to text, Markdown and PDF, with and without the tool calls, and what the file leaves out either way |
 | `pnpm run drive:fork` | Cutting a session in two: that the fork holds the right half and the session it came from is untouched |
 | `pnpm run drive:rewind` | Undo and rewind from each entry point against the real bridge: the file back on disk, the turn gone from the transcript, its prompt in the composer, the coverage warning for a command, and every entry point greyed while a turn runs |
+| `pnpm run drive:note-changelog-awake` | Help > Release Notes as plain text, Chat > Add Note into the Notes panel as typed, and Keep Computer Awake During Turns: Cancel leaves it off, Enable holds Electron's power-save blocker only while a turn runs, and it is not asked again |
 | `pnpm run drive:tree` | The file tree: listing, expanding, the dotfile toggle, the name filter, and that a session with no root and a symlink out of the project both list nothing |
 | `pnpm run drive:theme` | Appearance: System / Light / Dark painting and persistence, legacy palette fallback, and the export renderer's light-only guarantee |
 | `pnpm run drive:bots` | Bots: that the column has two lists and remembers which, that a bot survives a relaunch with what was typed into it, and that two bots have different faces while one bot keeps its own across a rename, asserted on the *form* the seed built, since the face is turning while it is looked at. Also the archive: that a bot put away survives field-for-field and comes back as itself, and that deleting one asks before it does anything |
@@ -253,16 +254,16 @@ These pass `--user-data-dir` with a temporary profile, so the app's own state is
 
 `drive-about`, `drive-agent-settings`, `drive-at-mentions`, `drive-bot-history`, `drive-bot-summon`, `drive-connectors`,
 `drive-conversation-workflow`, `drive-exposure`, `drive-fetch`, `drive-language`, `drive-language-server`,
-`drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-permission-mode`,
-`drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
+`drive-manual-walkthrough`, `drive-mcp`, `drive-models`, `drive-models-live`, `drive-note-changelog-awake`,
+`drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode`,
 `drive-secure-files`, `drive-session-list`, `drive-shown`, `drive-turn-details`,
 `drive-ux-acceptance`, `drive-vetting`, `drive-visual` and `drive-perf`.
 
 `drive-at-mentions`, `drive-connectors`, `drive-drop`, `drive-exposure`, `drive-fetch`,
-`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-paste`,
+`drive-language-server`, `drive-manual-walkthrough`, `drive-mcp`, `drive-note-changelog-awake`, `drive-paste`,
 `drive-permission-mode`, `drive-plan`, `drive-remembered-trust`, `drive-rewind`, `drive-rules`, `drive-sandbox-mode` and `drive-vetting`
 launch through `scripts/drive-world.mjs`, whose `launchWorld` always passes `--user-data-dir`, with
-the temporary profile its caller made. `drive-manual-walkthrough`, `drive-remembered-trust`,
+the temporary profile its caller made. `drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`,
 `drive-rewind` and `drive-vetting` keep their own fixtures and take from it the launch, the
 inherited variables and, for `drive-vetting`, the project opening. The others also take their
 temporary root, `HOME` and settings file from it, and their stub model service where they have one.
@@ -273,7 +274,7 @@ real bridge and agent, with a model service on `127.0.0.1` where they have one: 
 credentials, and `drive-language-server`, `drive-permission-mode` and `drive-sandbox-mode` run real
 programs on your machine. `drive-models-live` sends a live turn through the isolated profile using
 your real credentials.
-`drive-manual-walkthrough`, `drive-remembered-trust`, `drive-rewind` and `drive-vetting` also set a
+`drive-manual-walkthrough`, `drive-note-changelog-awake`, `drive-remembered-trust`, `drive-rewind` and `drive-vetting` also set a
 disposable `HOME` of their own. `drive-sandbox-mode` writes one file under your real home, and
 removes it and the file its confined program tries to plant there when it ends. `drive-agent-rpc`
 never opens a window: it spawns the bridge on its own with a temporary `HOME`. When you write a new driver, build
