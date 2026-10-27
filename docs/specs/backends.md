@@ -3316,6 +3316,10 @@ turning prompt caching off for the rest of the session.
 `verified-by: bravebot_aichat::conversation::only_a_data_uri_with_bytes_is_offered_to_the_wire_and_every_one_takes_a_position`
 `verified-by: bravebot_bedrock::protocol::a_system_turn_becomes_the_top_level_field`
 `verified-by: bravebot_bedrock::protocol::consecutive_tool_results_merge_into_one_turn`
+`verified-by: bravebot_bedrock::protocol::a_note_after_the_line_a_person_typed_is_a_block_on_a_new_paragraph`
+`verified-by: bravebot_aichat::anthropic::protocol::a_note_after_the_line_a_person_typed_is_a_block_on_a_new_paragraph`
+`verified-by: bravebot_aichat::conversation::the_paragraph_separator_follows_the_text_a_turn_ends_in_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_skills_overview_is_a_separate_paragraph_from_the_prompt_on_block_based_wires`
 `verified-by: bravebot_config::provider::an_anthropic_entry_is_reached_through_the_messages_api_at_anthropics_host`
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_failed_messages_call_keeps_its_attempts_and_what_the_service_counted`
@@ -3434,6 +3438,7 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_aichat::generate_content::protocol::an_attachment_is_inline_data_for_a_media_type_this_api_takes`
 `verified-by: bravebot_aichat::generate_content::protocol::a_whole_reply_is_read_into_text_calls_and_cost`
 `verified-by: bravebot_aichat::generate_content::protocol::a_call_naming_no_arguments_has_an_empty_object_and_each_call_its_own_id`
+`verified-by: bravebot_aichat::generate_content::protocol::a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph`
 `verified-by: bravebot_aichat::generate_content::protocol::a_reply_that_stopped_for_a_reason_is_a_failure_and_an_ordinary_stop_is_not`
 `verified-by: bravebot_aichat::generate_content::protocol::a_google_status_word_maps_to_a_failure_in_the_closed_set`
 `verified-by: bravebot_aichat::generate_content::protocol::a_streamed_piece_is_a_response_an_error_or_nothing_this_reads`
@@ -3570,7 +3575,8 @@ The body is built from the conversation as these fields:
   string, and its result is a `function_call_output` item with the same `call_id` and the result as text.
   Calls and results are paired, ordered and cleaned of what the service would refuse by the walk of the
   conversation that [BACKEND-57](#BACKEND-57) names, so a result with no call is dropped there and not here,
-  and arguments that are not a JSON object cross as `{}`.
+  and arguments that are not a JSON object cross as `{}`. A user message merged into a turn that already
+  ends in text starts its first text part on a new paragraph, as [BACKEND-57](#BACKEND-57) says.
 - `tools` is each tool as one object with `type` `function`, a `name`, a `description`, `parameters` and
   `strict` of `false`, and `tool_choice` is `auto` where any is offered.
 - `stream` is `true` on every request, and the reply is read as server-sent events whatever the caller
@@ -3668,6 +3674,7 @@ clause was written for.
 `verified-by: bravebot_aichat::responses::protocol::a_request_offering_no_tools_sends_no_tool_fields_and_its_calls_as_text`
 `verified-by: bravebot_aichat::responses::protocol::reasoning_is_the_level_and_a_summary_only_where_a_level_was_given`
 `verified-by: bravebot_aichat::responses::protocol::a_picture_crosses_as_a_data_uri_and_a_document_is_dropped`
+`verified-by: bravebot_aichat::responses::protocol::a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph`
 `verified-by: bravebot_aichat::responses::protocol::the_events_that_carry_a_reply_decode`
 `verified-by: bravebot_aichat::responses::protocol::a_stream_ends_in_one_of_three_events_and_reports_usage`
 `verified-by: bravebot_aichat::responses::protocol::a_reported_failure_is_one_of_a_closed_set_and_never_named_by_the_service`

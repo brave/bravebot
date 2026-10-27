@@ -681,6 +681,22 @@ mod tests {
         );
     }
 
+    /// The note the agent writes after the first prompt of a session begins with a count, and a
+    /// prompt ending in a number followed by it would read as one number unless the note's part
+    /// starts on a new paragraph.
+    #[test]
+    fn a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph() {
+        let body = body_of(&request(&[
+            Message::user("see issues/1106"),
+            Message::user("16 skills, of your own or the project's, are not listed above: a, b."),
+        ]));
+        let parts = body["contents"][0]["parts"].as_array().expect("parts");
+        assert_eq!(body["contents"].as_array().expect("contents").len(), 1);
+        assert_eq!(parts[0]["text"], "see issues/1106");
+        let note = parts[1]["text"].as_str().expect("a text part");
+        assert!(note.starts_with("\n\n16 skills"), "{note:?}");
+    }
+
     /// A request nobody asked anything of carries no `generationConfig`, no `tools` where none are
     /// offered and no `systemInstruction` where there is no prompt.
     #[test]

@@ -21559,6 +21559,81 @@ fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
     );
 }
 
+/// SKILL-19: the overview is pushed as a user message after the prompt, and a block-based wire puts
+/// it in the prompt's turn. Its first block starts on a new paragraph, so the count it begins with
+/// is never read as the end of the prompt before it ("issues/1106" and "1 skill" as 11061).
+#[test]
+fn the_skills_overview_is_a_separate_paragraph_from_the_prompt_on_block_based_wires() {
+    let scratch = Scratch::new("skills-overview-separate-paragraph");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("first answer")]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("see issues/1106"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let notice = conversation
+        .messages()
+        .iter()
+        .find(|stored| stored.composed == Some(bravebot_agent::conversation::Composed::Notice))
+        .expect("the overview is in the conversation");
+    assert_eq!(notice.message.role, bravebot_aichat::protocol::Role::User);
+
+    let messages = conversation.with_system("be helpful");
+    let bedrock = serde_json::to_value(bravebot_bedrock::protocol::request_from(&messages, None))
+        .expect("serialises");
+    let anthropic = serde_json::to_value(bravebot_aichat::anthropic::protocol::request_from(
+        "claude-test",
+        &messages,
+        None,
+    ))
+    .expect("serialises");
+
+    for (wire, turn) in [
+        ("bedrock", &bedrock["messages"][0]),
+        ("anthropic", &anthropic["messages"][0]),
+    ] {
+        let texts: Vec<&str> = turn["content"]
+            .as_array()
+            .expect("blocks")
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+        let at = texts
+            .iter()
+            .position(|text| text.contains("not listed above"))
+            .unwrap_or_else(|| panic!("{wire}: no block holds the overview: {texts:?}"));
+        assert!(
+            at > 0 && texts[at - 1].contains("see issues/1106"),
+            "{wire}: the overview is not the block after the prompt: {texts:?}"
+        );
+        assert!(
+            texts[at].starts_with("\n\n1 skill"),
+            "{wire}: the overview does not start on a new paragraph: {:?}",
+            texts[at]
+        );
+    }
+}
+
 /// SKILL-19: the overview is not part of the opening, so a prompt handed back to the box
 /// (`forget_since`) takes the opening with it and leaves the overview behind, the same as a
 /// kept-job notice would be. Pushed before `opening_done` instead, it would be forgotten with the
