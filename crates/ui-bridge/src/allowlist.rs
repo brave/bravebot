@@ -121,6 +121,8 @@ pub const DENIED: &[&str] = &[
     "session.open",
     "session.fork",
     "session.delete",
+    "session.purge",
+    "session.import",
     "session.rewind",
     "models.list",
     // Change how the host's own sessions behave, which a person at the host decides.
@@ -139,6 +141,8 @@ pub const DENIED: &[&str] = &[
     "bot.define",
     "bot.migrate",
     "bot.redefine",
+    "bot.servers.read",
+    "bot.servers.write",
     "doctor",
     // Read files or attach them to a turn.
     "mentions.offer",

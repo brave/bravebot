@@ -357,6 +357,25 @@ def a_signing_key(root):
     return key
 
 
+def a_pick_git_refuses_to_continue(tree, rescheduled):
+    """Leave a rebase stopped at a pick that could not be signed as git before 2.56 leaves it.
+
+    The pick is staged and `rebase --continue` refuses until it is committed. The todo list starts with the pick
+    when `rescheduled`, and at the next pick otherwise. git 2.56 adds `message`, `patch` and `stopped-sha` to the
+    rebase directory, commits the staged pick itself on `--continue` when `message` is there, and does not put
+    the pick back in the list. This removes those files and sets the list, so the code that commits the pick runs
+    under whichever git is installed.
+    """
+    state = pr_worktree.rebase_dir(tree)
+    for name in ("message", "patch", "stopped-sha"):
+        (state / name).unlink(missing_ok=True)
+    sha = git("rev-parse", "REBASE_HEAD", cwd=tree)
+    todo = state / "git-rebase-todo"
+    later = [one for one in todo.read_text().splitlines(keepends=True) if one.split()[1:2] != [sha]]
+    back = [f"pick {sha} # {git('log', '-1', '--format=%s', 'REBASE_HEAD', cwd=tree)}\n"] if rescheduled else []
+    todo.write_text("".join(back + later))
+
+
 def test_a_pick_that_failed_to_sign_is_committed_with_its_message_and_author_and_picked_once():
     """git leaves the pick staged and rescheduled, and `rebase --continue` refuses until the changes are committed."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -376,10 +395,12 @@ def test_a_pick_that_failed_to_sign_is_committed_with_its_message_and_author_and
             stopped = subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True, text=True)
             assert stopped.returncode and pr_worktree.rebase_dir(tree), "the pick could not be signed, which is the fixture's point"
             assert git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "git leaves the pick staged"
+            a_pick_git_refuses_to_continue(tree, rescheduled=True)
+            before = (pr_worktree.rebase_dir(tree) / "git-rebase-todo").read_text()
             code, out = quietly(pr_worktree.resolve_or_stop, tree)
         assert code is not None and pr_worktree.rebase_dir(tree), "a failure to sign stops the rebase and says what git said"
         todo = (pr_worktree.rebase_dir(tree) / "git-rebase-todo").read_text()
-        assert todo.count("pick") == 2 and git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "the failed commit left the todo and the index alone"
+        assert before.count("pick") == 2 and todo == before and git("diff", "--cached", "--name-only", cwd=tree) == "b.txt", "the failed commit left the todo and the index alone"
 
         with mock.patch.dict(os.environ, signing(True, key)):
             assert pr_worktree.commit_unsigned_pick(tree).returncode == 0
@@ -411,8 +432,7 @@ def test_a_pick_git_did_not_reschedule_is_committed_and_the_next_pick_still_runs
         git("commit", "-q", "-m", "main moves", cwd=clone)
         with mock.patch.dict(os.environ, signing(False, key)):
             subprocess.run(["git", "rebase", "main"], cwd=tree, capture_output=True)
-        todo = pr_worktree.rebase_dir(tree) / "git-rebase-todo"
-        todo.write_text("".join(todo.read_text().splitlines(keepends=True)[1:]))
+        a_pick_git_refuses_to_continue(tree, rescheduled=False)
         with mock.patch.dict(os.environ, signing(True, key)):
             quietly(pr_worktree.resolve_or_stop, tree)
         assert pr_worktree.rebase_dir(tree) is None
@@ -545,26 +565,65 @@ def test_a_step_in_a_locked_worktree_is_refused_with_the_choice_the_person_has()
         feature_in(clone, root / "elsewhere", lock="build running")
         pr = the_pull_request_in(clone)
         for step in ("start", "continue", "check", "push"):
-            code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", [step, "9"], False)
+            code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", [step, "9"], False)
             assert code == 1, (step, out)
-            assert "(build running)" in out and f"`python3 script.py {step} 9 --use-locked`" in out, out
+            assert "(build running)" in out and f"`python3 script.py {step} 9 --use-existing`" in out, out
             assert f"unlock and remove it themselves: git worktree unlock {root / 'elsewhere'}; " in out, out
             assert f"git worktree remove {root / 'elsewhere'}" in out, out
             assert f"use {clone / '.worktrees' / 'pr-9'} instead" in out, out
             assert "no worktree was touched" in out and out.count("build running") == 1, out
-        code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", ["start", "9"], True)
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start", "9"], True)
         assert code is None and out == "", "the person's yes is the only thing that lets it through"
-        code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", ["check", "9", "check spec"], False)
-        assert "`python3 script.py check 9 'check spec' --use-locked`" in out, "the retry is the step that was refused"
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["check", "9", "check spec"], False)
+        assert "`python3 script.py check 9 'check spec' --use-existing`" in out, "the retry is the step that was refused"
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         clone = a_plain_clone(root)
-        code, out = quietly(pr_worktree.refuse_locked, the_pull_request_in(clone), "python3 script.py", ["start"], False)
+        code, out = quietly(pr_worktree.refuse_held_worktree, the_pull_request_in(clone), "python3 script.py", ["start"], False)
         assert code is None and out == "", "a branch nobody has checked out has no lock"
+        feature_in(clone, clone / ".worktrees" / "other")
+        code, out = quietly(pr_worktree.refuse_held_worktree, the_pull_request_in(clone), "python3 script.py", ["start"], False)
+        assert code is None and out == "", "an unlocked worktree in the worktrees directory is used without asking"
+
+
+def test_a_step_in_an_unlocked_worktree_outside_the_worktrees_directory_is_refused_before_anything_changes():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
         feature_in(clone, root / "elsewhere")
-        code, out = quietly(pr_worktree.refuse_locked, the_pull_request_in(clone), "python3 script.py", ["start"], False)
-        assert code is None and out == "", "an unlocked worktree is used without asking"
+        pr = the_pull_request_in(clone)
+        for step in ("start", "continue", "check", "push"):
+            code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", [step, "9"], False)
+            assert code == 1, (step, out)
+            assert f"feature is already checked out at {root / 'elsewhere'}, which is outside {clone / '.worktrees'}, " in out, out
+            assert "locked" not in out and "unlock" not in out, "an unlocked tree has no lock to speak of"
+            assert f"`python3 script.py {step} 9 --use-existing`" in out, out
+            assert f"`/add-dir {root / 'elsewhere'}`" in out, "the file tools refuse a tree outside the clone"
+            assert f"git worktree remove {root / 'elsewhere'}" in out and "no worktree was touched" in out, out
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start", "9"], True)
+        assert code is None and out == "", "the person's yes lets it through"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        feature_in(clone, root / "trees" / "clone-9")
+        with mock.patch.dict(os.environ, {pr_worktree.WORKTREES_ENV: "../trees"}):
+            pr = the_pull_request_in(clone)
+            code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start"], False)
+            assert code is None and out == "", "the directory the environment names is where worktrees go"
+
+
+def test_the_main_clone_is_not_worked_in_unless_the_person_agrees_and_cannot_be_removed():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone = a_plain_clone(root)
+        git("switch", "-q", "-c", "feature", cwd=clone)
+        pr = the_pull_request_in(clone)
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start"], False)
+        assert code == 1 and f"checked out at {clone}, which is the main clone, " in out, out
+        assert "git worktree remove" not in out and "unlock" not in out, "git refuses both for the main tree"
+        assert "`/add-dir" not in out, "the main clone is in the workspace"
 
 
 def test_a_session_started_in_a_locked_worktree_is_not_stopped_by_its_lock():
@@ -574,7 +633,7 @@ def test_a_session_started_in_a_locked_worktree_is_not_stopped_by_its_lock():
         clone = a_plain_clone(root)
         feature_in(clone, root / "elsewhere", lock="build running")
         pr = the_pull_request_in(clone, here=root / "elsewhere")
-        code, out = quietly(pr_worktree.refuse_locked, pr, "python3 script.py", ["start"], False)
+        code, out = quietly(pr_worktree.refuse_held_worktree, pr, "python3 script.py", ["start"], False)
         assert code is None and out == "", out
         note = pr_worktree.reuse_note(pr)
         assert "(the checkout this was run from; locked: build running)" in note, note

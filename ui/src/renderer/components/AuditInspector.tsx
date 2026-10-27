@@ -1,7 +1,38 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import { auditDescription, isRefusal, type AuditRecord, type TurnDetails } from '../turn-details'
-import { Collapse } from '../nala'
+import { auditDescription, isRefusal, routingAndContent, type AuditRecord, type TurnDetails } from '../turn-details'
+import { Collapse, Label } from '../nala'
 import { IconButton } from './IconButton'
+import { LabelChip } from './LabelChip'
+
+const ROLES: Record<string, { word: string; tooltip: string }> = {
+  routing: { word: 'routing: decides where', tooltip: 'Decides where the effect lands, so it must be trusted and public.' },
+  content: { word: 'content: carried', tooltip: 'Carried to where the effect lands, and decides nothing.' },
+}
+
+/** Which fields each call was checked on, and what every release changed, in the order recorded. */
+function RoutingAndContent({ audit }: { audit: AuditRecord[] }): React.JSX.Element | null {
+  const rows = routingAndContent(audit)
+  if (!rows.length) return null
+  return <section className="audit-routing" aria-labelledby="audit-routing-title" data-test="audit-routing">
+    <strong id="audit-routing-title">Routing &amp; content</strong>
+    {rows.map((row) => 'tool' in row ? <div key={row.records[0]!.sequence} className="audit-routing-group">
+      <code className="audit-routing-tool">{row.tool || 'Unnamed tool'}</code>
+      <ul>{row.records.map((record) => {
+        const role = ROLES[typeof record.event.role === 'string' ? record.event.role : ''] ?? { word: 'unrecognised role', tooltip: 'The record names no role this window knows.' }
+        const refused = isRefusal(record.event)
+        return <li key={record.sequence} className={refused ? 'refused' : undefined}>
+          <code>{typeof record.event.field === 'string' ? record.event.field : 'unnamed field'}</code>
+          <Label mode="outline" color="neutral" className="audit-role" data-tooltip={role.tooltip}>{role.word}</Label>
+          <LabelChip label={record.event.label} />
+          <span className="audit-verdict">{refused ? 'Refused' : 'Allowed'}</span>
+        </li>
+      })}</ul>
+    </div> : <div key={row.sequence} className="audit-routing-group audit-release">
+      <span>Released {typeof row.event.slot === 'string' ? row.event.slot : ''}</span>
+      <LabelChip label={row.event.from} /><span aria-hidden="true">→</span><span className="visually-hidden">to</span><LabelChip label={row.event.to} />
+    </div>)}
+  </section>
+}
 
 const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): React.JSX.Element {
   const { title, detail } = auditDescription(record.event)
@@ -49,6 +80,7 @@ export function AuditInspector({ details, onClose }: { details?: TurnDetails; on
     {!details ? <p>Audit details aren’t available for this saved reply.</p> : <>
       {incomplete && <p>The event stream may be incomplete. Captured evidence is shown below.</p>}
       {details.omitted > 0 && <p className="audit-retention">{details.omitted.toLocaleString()} events omitted by the display retention limit.</p>}
+      <RoutingAndContent audit={details.audit} />
       {refusals.length > 0 && <ol className="audit-timeline">{refusals.map((record) => <Evidence key={record.sequence} record={record} />)}</ol>}
       {!refusals.length && (details.clean === false ? <p>A policy refusal was reported, but its detailed evidence is unavailable.</p> :
         details.clean === true ? <p>No policy refusals recorded for this turn.</p> :

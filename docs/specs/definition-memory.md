@@ -31,6 +31,7 @@ governs:
   - ui/scripts/bot-directory.test.mjs
   - ui/scripts/bot-grounding.test.mjs
   - ui/scripts/bot-model.test.mjs
+  - ui/scripts/bot-servers.test.mjs
   - ui/scripts/memory-note.test.mjs
 documented-by:
   - docs/website/docs/customize/agents.md
@@ -452,7 +453,8 @@ briefing outside the folder today.
 addresses nothing. A worker that names no tools keeps that reach, with every server the session
 reached ([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), less a later look and a watch, which an
 addressed run is never offered ([ADDRESS-8](addressing-a-definition.md#ADDRESS-8)). A person
-narrows it further by editing the file.
+narrows its servers from the bot's details ([MEMORY-13](#MEMORY-13)), and anything else by editing
+the file.
 
 The crate that reads the person's definitions writes it (`bravebot_agent::agents::make_definition`),
 and the desktop asks for it through the bridge method `bot.define` when a bot is made. The row
@@ -628,6 +630,65 @@ All of it is built:
 `verified-by: bravebot_ui_bridge::definitions::a_bot_made_before_definitions_is_migrated_and_its_old_memory_recorded`
 `verified-by: bravebot_ui_bridge::definitions::a_refused_migration_writes_nothing`
 `verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-model.test.mjs pins its half: a bot with no definition is migrated through bot.migrate with the folder its first conversation ran in or its home folder, the row keeps only a name the agent answers with that is a slug, a failed migration leaves the row as it was, a bot with a definition is not migrated again, the compaction's composed prompt names the definition's memory and never the old path, the carry-over prompt names both the old file and the definition's memory, and a turn owes the carry-over only for a bot with no definition in the folder its old notes were recorded under; make check-ui runs it)`
+
+<a id="MEMORY-13"></a>
+### MEMORY-13: a bot's details show and set the servers its definition lists
+
+A bot's details show which of the person's servers the bot may use, read from its definition each
+time they open, so a line written by hand shows. There are two choices. Every connected server
+writes no `mcpServers:` line. Only these writes one line naming the servers ticked, and a bare
+`mcpServers:` where none is ticked, which selects none
+([DELEGATE-24](delegation.md#DELEGATE-24)). A name the line holds that no server declares is shown
+ticked and marked as not set up, so a save does not drop it.
+
+Setting the servers rewrites the `mcpServers:` line alone. It replaces the first such line, a list
+under it included, drops any repeat, and keeps every other line as it was, so a `tools:` line and a
+key nothing here reads survive. A name that is not an alias is refused, and so is a file whose line
+declares a server inline, since rewriting that line would drop what the person declared. Nothing is
+written when the line already says what was chosen. The text is read back before it is written, and
+one that would not read back as the servers chosen is refused.
+
+The details cannot set the servers of a definition whose kind is not `worker`, since those kinds
+hold none whatever the line says, or of one that declares a server inline. They show why, and the
+agent refuses to set the servers of such a kind. Where a `tools:` line stands, removing the
+`mcpServers:` line would leave the bot no server
+([ADDRESS-7](addressing-a-definition.md#ADDRESS-7)), so every connected server is not offered.
+Whether the servers may be set, whether the line selects every server, and whether removing it
+could, are the agent's answers to the read, so the window works none of them out. Where the
+person's servers cannot be listed, nothing is offered, since only these would then save a line
+selecting none.
+
+The window names no definition. It names the row's slug, and the desktop's main process sends the
+definition the row holds, as it does for a turn ([MEMORY-10](#MEMORY-10)). A change applies from
+the bot's next turn, in a conversation already open too, since a turn resolves its definition
+afresh.
+
+**Why the line and not a record of the desktop's.** The definition is what a run is addressed to,
+and the line is what narrows it. A choice kept anywhere else would be one the run never sees, or
+one a hand edit silently contradicts.
+
+**Why only narrowing.** The line narrows what the session reached and cannot widen it
+([DELEGATE-24](delegation.md#DELEGATE-24)). Which servers the session reaches at all is the
+person's settings, set on the Connectors page.
+
+The rewrite is `bravebot_agent::agents::rewrite_servers`, applied to the file by
+`bravebot_agent::agents::set_servers` and read by `bravebot_agent::agents::servers_of`. The desktop
+asks for them through the bridge methods `bot.servers.write` and `bot.servers.read`, which the
+window cannot call.
+
+`verified-by: bravebot_agent::agents::setting_servers_writes_one_line_naming_them_and_keeps_the_body`
+`verified-by: bravebot_agent::agents::setting_no_servers_writes_a_bare_line_that_selects_none`
+`verified-by: bravebot_agent::agents::clearing_servers_removes_the_line_and_every_repeat_of_it`
+`verified-by: bravebot_agent::agents::a_yaml_list_of_servers_is_replaced_in_place`
+`verified-by: bravebot_agent::agents::setting_servers_keeps_a_tools_line_and_keys_this_module_does_not_read`
+`verified-by: bravebot_agent::agents::a_line_that_declares_a_server_inline_is_not_rewritten`
+`verified-by: bravebot_agent::agents::a_server_name_that_is_not_an_alias_is_refused`
+`verified-by: bravebot_agent::agents::setting_the_servers_a_bot_already_has_writes_nothing`
+`verified-by: bravebot_agent::agents::the_servers_a_bot_may_use_are_read_with_its_tools_line_and_any_inline_declaration`
+`verified-by: bravebot_agent::agents::the_servers_of_a_kind_that_holds_none_are_not_set`
+`verified-by: bravebot_ui_bridge::definitions::the_servers_written_for_a_bot_are_read_back`
+`verified-by: bravebot_ui_bridge::definitions::a_refused_server_write_leaves_the_file_untouched`
+`verified-by: by-construction (the desktop's main process is not a crate this workspace compiles, so ui/scripts/bot-servers.test.mjs pins its half: a write is sent only with null or an array of strings, whose names the agent judges; an answer is taken only whole, with the agent's own reading of the line; make check-ui runs it)`
 
 ## Seeing it
 

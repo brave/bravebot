@@ -86,3 +86,38 @@ fn a_list_asked_about_one_path_reports_the_directory_the_record_holds() {
     }
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_list_row_carries_the_pull_request_its_record_holds_and_null_for_a_chat_with_none() {
+    let root = scratch("bravebot-ui-bridge-listing-pull-request");
+    let home = root.join("home");
+    let store = home.join(".bravebot/sessions/-work-my-app");
+    std::fs::create_dir_all(&store).expect("a store");
+    let pull = "https://github.com/brave/bravebot/pull/4309";
+    for (id, extra) in [
+        ("20260101T000000-aaaa", json!({"pull_request": pull})),
+        ("20260101T000000-bbbb", json!({})),
+    ] {
+        let mut record = json!({
+            "id": id, "directory": "/work/my-app", "title": id,
+            "started": 1, "updated": 2,
+            "conversation": {"messages": [], "context": "trusted"},
+        });
+        record
+            .as_object_mut()
+            .expect("an object")
+            .extend(extra.as_object().expect("an object").clone());
+        std::fs::write(store.join(format!("{id}.json")), record.to_string()).expect("a record");
+    }
+
+    let answer = ask(&home, "session.list", json!({}));
+    let rows = answer["ok"]["sessions"].as_array().expect("rows");
+    let row = |id: &str| rows.iter().find(|row| row["id"] == id).expect("a row");
+    assert_eq!(row("20260101T000000-aaaa")["pullRequest"], pull, "{answer}");
+    assert_eq!(
+        row("20260101T000000-bbbb")["pullRequest"],
+        Value::Null,
+        "{answer}"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}

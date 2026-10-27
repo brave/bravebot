@@ -1766,7 +1766,7 @@ mod tests {
     fn the_report_says_what_the_session_is_working_towards_and_how_many_rounds_are_left() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0, false);
         goal.not_met("nothing above runs the tests".to_string(), 1);
 
         let mut facts = facts(&config, &trust);
@@ -1798,7 +1798,7 @@ mod tests {
         let trust = trusting();
         let mut facts = facts(&config, &trust);
         // The session had already spent part of its total before the goal was set.
-        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000);
+        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000, false);
         facts.goal = Some(&goal);
         let report = report(&facts);
 
@@ -1817,7 +1817,7 @@ mod tests {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
         let mut facts = facts(&config, &trust);
-        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000);
+        let goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 10_000, false);
         facts.goal = Some(&goal);
         facts.tokens_in_flight = 500;
         let report = report(&facts);
@@ -2016,7 +2016,7 @@ mod tests {
     fn the_report_says_a_goal_is_paused() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0, false);
         goal.not_met("nothing above runs the tests".to_string(), 1);
         goal.pause();
 
@@ -3839,7 +3839,7 @@ mod tests {
     fn the_groups_of_rows_keep_their_order_when_every_group_has_rows() {
         let config = config_for("http://127.0.0.1:1", None);
         let trust = trusting();
-        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0);
+        let mut goal = crate::goals::Running::begin("cargo test exits 0".to_string(), 0, false);
         goal.not_met("nothing above runs the tests".to_string(), 1);
         let mut mixed = facts(&config, &trust);
         mixed.goal = Some(&goal);

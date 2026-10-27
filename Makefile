@@ -505,6 +505,17 @@ check-docs:
 	pnpm --dir docs/website install --frozen-lockfile --ignore-scripts
 	pnpm --dir docs/website run build
 
+# help.rs compiles each page under docs/website/docs into a fixed table, builds an index naming
+# every page by the title in its front matter, and loads a page by the exact name that index
+# gives. An add, an edit that breaks a page's front matter, or a remove can fail a test that
+# reads one of those, so a change under docs/website/docs/ runs this, whatever its status.
+# Narrower than `check`, which compiles and tests the whole workspace for what only these tests
+# in bravebot-agent need.
+.PHONY: check-help
+check-help:
+	cargo test -p bravebot-agent --lib --locked -- help::tests:: \
+		tools::tests::a_documentation_page_loads_by_the_name_the_index_gives_it
+
 # How far the site has fallen behind the specs it describes. docs/docs-updated-to-sha records how
 # far reading got; these two report against it. Neither is a gate and no CI job runs them:
 # the site going stale is not something a diff can decide, so what they are for is answering
@@ -519,8 +530,9 @@ docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
 # The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
-# or skipped, and whose latest review by REVIEWER is an approval. REPO names another repository,
-# REVIEWER another account and LIMIT raises how many are read.
+# or skipped, whose latest review by REVIEWER is an approval, and with no latest review by anyone
+# that requests changes. REPO names another repository, REVIEWER another account and LIMIT raises
+# how many are read.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
@@ -528,7 +540,7 @@ REVIEW_LIMIT = 500
 review-ready:
 	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
 	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
-	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
+	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.latestReviews[]; .state != "CHANGES_REQUESTED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
 
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
 # written: issue numbers, links and search queries separated by commas. Before the session opens, with

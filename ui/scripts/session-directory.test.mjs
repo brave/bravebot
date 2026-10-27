@@ -57,9 +57,9 @@ test('the request handler makes a bot home again for session.new and session.ope
 
 const GATE_ARGUMENT = '(params as { directory?: unknown } | null)?.directory'
 
-test('the request handler refuses session.new, session.open and session.delete before forwarding them', () => {
+test('the request handler refuses session.new, session.open, session.delete, session.purge and session.import before forwarding them', () => {
   const index = readFileSync('src/main/index.ts', 'utf8')
-  const gate = /method === 'session\.new' \|\| method === 'session\.open' \|\| method === 'session\.delete'\) \{\s*if \(!mayOpenSessionIn\(([^\n]*)\)\) \{\s*return \{ error/.exec(index)
+  const gate = /method === 'session\.new' \|\| method === 'session\.open' \|\| method === 'session\.delete' \|\| method === 'session\.purge' \|\| method === 'session\.import'\) \{\s*if \(!mayOpenSessionIn\(([^\n]*)\)\) \{\s*return \{ error/.exec(index)
   assert.ok(gate, 'an unoffered folder is answered with an error, unconditionally')
   assert.equal(gate[1], GATE_ARGUMENT, 'and what it checks is the directory the window named, not the whole of its params')
   assert.ok(index.indexOf('bridge.request(method', gate.index) > gate.index, 'and the check comes before the request is forwarded')
@@ -68,7 +68,7 @@ test('the request handler refuses session.new, session.open and session.delete b
 // Every method the window may send, placed by whether the bridge reads a directory from it. A method
 // added to ALLOWED has to be put in one of these, so a new one that opens a session in a folder the
 // window composed cannot go unnoticed because the three-method gate above never heard of it.
-const GATED = ['session.new', 'session.open', 'session.delete']
+const GATED = ['session.new', 'session.open', 'session.delete', 'session.purge', 'session.import']
 const NO_GATE = {
   'models.list': 'answered in the main process, which reads the configuration of the folder it is given and opens no session',
   'session.list': 'the sanitiser drops a directory the window states, so the window cannot choose the store',

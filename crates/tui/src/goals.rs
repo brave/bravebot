@@ -98,13 +98,19 @@ pub struct Running {
     /// The session's token total when the goal was armed, so what the goal has cost is the
     /// difference and not a second tally kept beside the session's.
     tokens_at_start: u64,
+    /// What the turns since the goal was armed did, for the judge (GROUND-4).
+    record: bravebot_agent::Work,
+    /// Whether a turn was running when the goal was armed. Its work began before the goal, so it
+    /// is left out of the record.
+    skip_the_running_turn: bool,
 }
 
 impl Running {
     /// Arm a goal. Nothing is sent: a goal has a condition and no prompt.
     ///
     /// `tokens` is what the session has spent so far, which is where [`Running::spent`] counts from.
-    pub fn begin(condition: String, tokens: u64) -> Self {
+    /// `mid_turn` says a turn is running, which the record leaves out.
+    pub fn begin(condition: String, tokens: u64, mid_turn: bool) -> Self {
         Self {
             condition,
             rounds: 0,
@@ -113,7 +119,24 @@ impl Running {
             paused: false,
             started: std::time::Instant::now(),
             tokens_at_start: tokens,
+            record: bravebot_agent::Work::default(),
+            skip_the_running_turn: mid_turn,
         }
+    }
+
+    /// Add what a turn did to the record, however it ended and whether or not the goal is paused,
+    /// since the work is done either way. The turn that was running when the goal was armed is
+    /// left out (GROUND-4).
+    pub fn worked(&mut self, work: bravebot_agent::Work) {
+        match std::mem::replace(&mut self.skip_the_running_turn, false) {
+            true => {}
+            false => self.record.then(work),
+        }
+    }
+
+    /// What the turns since the goal was armed did.
+    pub fn record(&self) -> bravebot_agent::Work {
+        self.record
     }
 
     /// How long the goal has been set, as of `now`.
@@ -232,7 +255,7 @@ mod tests {
 
     #[test]
     fn pausing_keeps_the_condition_and_the_rounds_and_resuming_arms_it_again() {
-        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
         goal.not_met("nothing ran them".to_string(), 1);
         assert!(goal.pause());
         assert!(!goal.pause(), "a second pause reported a change");
@@ -256,7 +279,7 @@ mod tests {
 
     #[test]
     fn a_fresh_goal_has_sent_nothing_back_and_has_heard_nothing() {
-        let goal = Running::begin("the tests pass".to_string(), 0);
+        let goal = Running::begin("the tests pass".to_string(), 0, false);
         assert_eq!(goal.rounds(), 0);
         assert_eq!(goal.last_reason(), None);
         assert_eq!(goal.left(), MAX_ROUNDS);
@@ -264,7 +287,7 @@ mod tests {
 
     #[test]
     fn a_verdict_of_not_yet_is_kept_and_counted() {
-        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
         assert_eq!(
             goal.not_met("nothing ran them".to_string(), 1),
             Next::SendBack
@@ -277,7 +300,7 @@ mod tests {
     /// conversation that grows every round.
     #[test]
     fn a_goal_stops_sending_the_work_back_once_its_rounds_are_spent() {
-        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
         for round in 1..=MAX_ROUNDS {
             assert_eq!(
                 goal.not_met("still nothing".to_string(), 1),
@@ -293,7 +316,7 @@ mod tests {
     /// giving up must not also throw away what the judge said.
     #[test]
     fn the_reason_from_the_round_that_gave_up_is_still_kept() {
-        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
         for _ in 0..MAX_ROUNDS {
             goal.not_met("still nothing".to_string(), 1);
         }
@@ -305,7 +328,7 @@ mod tests {
     /// and the time from the same moment.
     #[test]
     fn a_goal_counts_what_was_spent_and_how_long_from_the_moment_it_was_armed() {
-        let goal = Running::begin("the tests pass".to_string(), 4_000);
+        let goal = Running::begin("the tests pass".to_string(), 4_000, false);
 
         assert_eq!(goal.spent(4_000), 0);
         assert_eq!(goal.spent(9_500), 5_500);
@@ -320,7 +343,7 @@ mod tests {
     /// stays set for the next prompt and the count starts again.
     #[test]
     fn rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it() {
-        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
         for _ in 1..MAX_IDLE_ROUNDS {
             assert_eq!(goal.not_met("say it".to_string(), 0), Next::SendBack);
         }
@@ -332,9 +355,57 @@ mod tests {
     /// Only consecutive rounds count: a round that ran something starts the count over.
     #[test]
     fn a_round_that_made_a_call_starts_the_count_again() {
-        let mut goal = Running::begin("the tests pass".to_string(), 0);
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
         for calls in [0, 0, 1, 0, 0, 1] {
             assert_eq!(goal.not_met("say it".to_string(), calls), Next::SendBack);
         }
+    }
+
+    /// Two writes and a command after them, as a turn that edited and then built.
+    const BUILT: bravebot_agent::Work = bravebot_agent::Work {
+        writes: 2,
+        commands: 1,
+        ran_after_last_write: true,
+    };
+
+    /// GROUND-4. Every turn the goal drives adds to its record, a later write after an earlier
+    /// command included.
+    #[test]
+    fn the_record_adds_every_turn_the_goal_drives() {
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
+        goal.worked(BUILT);
+        goal.worked(bravebot_agent::Work {
+            writes: 1,
+            commands: 0,
+            ran_after_last_write: false,
+        });
+        assert_eq!(
+            goal.record(),
+            bravebot_agent::Work {
+                writes: 3,
+                commands: 1,
+                ran_after_last_write: false,
+            }
+        );
+    }
+
+    /// GROUND-4. The turn that was running when the goal was set began before it, so it is left
+    /// out, and the next one counts.
+    #[test]
+    fn a_turn_running_when_the_goal_was_set_is_not_counted() {
+        let mut goal = Running::begin("the tests pass".to_string(), 0, true);
+        goal.worked(BUILT);
+        assert_eq!(goal.record(), bravebot_agent::Work::default());
+        goal.worked(BUILT);
+        assert_eq!(goal.record(), BUILT);
+    }
+
+    /// GROUND-4. A paused goal still counts, since the work is done whether or not it is judged.
+    #[test]
+    fn a_turn_while_the_goal_is_paused_is_counted() {
+        let mut goal = Running::begin("the tests pass".to_string(), 0, false);
+        goal.pause();
+        goal.worked(BUILT);
+        assert_eq!(goal.record(), BUILT);
     }
 }

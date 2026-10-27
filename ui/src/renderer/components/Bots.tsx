@@ -19,6 +19,7 @@ import { Alert, Button, Icon, Input, TextArea } from '../nala'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { activeBots, retiredBots, type Bot } from '../../shared/bots'
 import { newAvatarSeed } from '../../shared/avatar'
+import { AvatarEditor } from './AvatarEditor'
 import { BotAvatar, BotFace, type Doing } from './BotAvatar'
 import { Fold } from './Fold'
 
@@ -292,11 +293,7 @@ function BotForm({
       <p className="bot-intro">A name, a purpose and a memory. Each conversation runs in a project you pick, or in none.</p>
 
       <div className="bot-form-identity">
-        <div className="bot-form-avatar">
-          <BotAvatar seed={avatar} size={80} doing="waiting" />
-          <IconButton icon="refresh" label="Refresh avatar" tooltip="Try a new avatar appearance" kind="filled" size="tiny"
-            className="bot-avatar-refresh" onClick={() => setAvatar(newAvatarSeed(crypto.randomUUID()))} />
-        </div>
+        <AvatarEditor seed={avatar} size={80} doing="waiting" className="bot-form-avatar" onCommit={setAvatar} />
 
         <div className="bot-field">
           <Input

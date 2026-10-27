@@ -275,22 +275,50 @@ def announce(pr):
         print(hooks, flush=True)
 
 
-def refuse_locked(pr, script, words, allowed):
-    """Stop a step that would work in a locked worktree, which something else may be using, unless the person agreed.
+def refuse_held_worktree(pr, script, words, allowed):
+    """Stop a step before it works in a worktree it was not asked to use, unless the person agreed.
 
+    A branch is checked out in one place, so the steps work where it already is. That is not theirs to
+    use when the worktree is locked, which something else may be using, when it is the main clone, or
+    when it is outside the directory worktrees are made in, which the file tools may refuse to reach.
     `words` are the step's arguments as given, so the command offered for running it again is the same step.
-    A session started in the worktree chose it, so the lock does not stand between it and the step.
+    A session started in a worktree other than the main clone chose it, so it is used.
     """
-    if not pr.checked_out or not pr.held.locked or allowed or same_place(pr.tree, pr.here):
+    if not pr.checked_out or allowed:
         return
+    tree, main, here = (Path(os.path.realpath(one)) for one in (pr.tree, pr.main, pr.here))
+    is_main = tree == main
+    if tree == here and not is_main:
+        return
+    home = Path(os.path.realpath(standard_path(pr))).parent
+    outside = is_main or not tree.is_relative_to(home)
+    if not (pr.held.locked or outside):
+        return
+    facts = []
+    if pr.held.locked:
+        facts.append(f"locked ({lock_reason(pr.held)})")
+    if is_main:
+        facts.append("the main clone")
+    elif outside:
+        facts.append(f"outside {home}")
     quoted = shlex.quote(str(pr.tree))
-    die(
-        f"{pr.tree} is locked ({lock_reason(pr.held)}), so something else may be using it, and no worktree "
-        f"was touched. Ask the person, unless they have already agreed for this pull request: to work in it "
-        f"anyway, run `{script} {shlex.join([*words, '--use-locked'])}`; to use "
-        f"{standard_path(pr)} instead, they unlock and remove it themselves: "
-        f"git worktree unlock {quoted}; git worktree remove {quoted}"
-    )
+    again = f"{script} {shlex.join([*words, '--use-existing'])}"
+    reachable = any(tree.is_relative_to(root) for root in (main, here))
+    anyway = f"to work in it anyway, run `{again}`"
+    if outside and not reachable:
+        anyway += f", after the person opens it for the file tools with `/add-dir {quoted}`"
+    lines = [
+        f"{pr.branch} is already checked out at {pr.tree}, which is {' and '.join(facts)}, "
+        "and no worktree was touched.",
+        f"Ask the person, unless they have already agreed to work in it: {anyway}.",
+    ]
+    if is_main:
+        lines[-1] += f" To use {standard_path(pr)} instead, they check another branch out in the main clone first."
+    else:
+        unlock = f"git worktree unlock {quoted}; " if pr.held.locked else ""
+        what = "unlock and remove it" if pr.held.locked else "remove it"
+        lines[-1] += f" To use {standard_path(pr)} instead, they {what} themselves: {unlock}git worktree remove {quoted}"
+    die("\n".join(lines))
 
 
 def pull(number, view, here, remotes, create, script):
@@ -621,11 +649,11 @@ def pick_target(tree, line):
 def commit_unsigned_pick(tree):
     """Commit a pick that git left staged because it could not write the commit.
 
-    git refuses `rebase --continue` while changes are staged. Most failures also put the same pick back at
-    the head of the todo list, and that copy is dropped so the pick is not applied twice. The commit keeps
-    the pick's message and author, and is signed as the person's configuration says. Returns None when the
-    rebase is not stopped that way, else the `git commit` result, which is a failure when signing failed
-    again; the todo list is then left as it was.
+    git refuses `rebase --continue` while changes are staged. Some failures also put the same pick back at
+    the head of the todo list, as git before 2.56 does for a failure to sign, and that copy is dropped so the
+    pick is not applied twice. The commit keeps the pick's message and author, and is signed as the person's
+    configuration says. Returns None when the rebase is not stopped that way, else the `git commit` result,
+    which is a failure when signing failed again; the todo list is then left as it was.
     """
     state = rebase_dir(tree)
     stopped = run("git", "rev-parse", "--verify", "--quiet", "REBASE_HEAD^{commit}", cwd=tree, check=False)

@@ -45,6 +45,7 @@
     "package": "pnpm run bridge && electron-vite build && node scripts/package.mjs",
     "drive:menu": "pnpm run bridge && electron-vite build && node scripts/drive-menu.mjs",
     "drive:session-list": "pnpm run bridge && electron-vite build && node scripts/drive-session-list.mjs",
+    "drive:project-actions": "pnpm run bridge && electron-vite build && node scripts/drive-project-actions.mjs",
     "drive:about": "pnpm run build && node scripts/drive-about.mjs",
     "drive:export": "pnpm run bridge && electron-vite build && node scripts/drive-export.mjs",
     "drive:fork": "pnpm run bridge && electron-vite build && node scripts/drive-fork.mjs",
@@ -53,6 +54,7 @@
     "drive:bots": "pnpm run bridge && electron-vite build && node scripts/drive-bots.mjs",
     "drive:bot-turn": "pnpm run bridge && electron-vite build && node scripts/drive-bot-turn.mjs",
     "drive:bot-memory": "pnpm run bridge && electron-vite build && node scripts/drive-bot-memory.mjs",
+    "drive:bot-servers": "electron-vite build && node scripts/drive-bot-servers.mjs",
     "drive:packaged": "node scripts/drive-packaged.mjs",
     "demo": "pnpm run bridge && electron-vite build && node scripts/demo.mjs",
     "setup:electron": "node scripts/setup-electron.mjs && node scripts/name-dev-app.mjs",
@@ -79,7 +81,7 @@
     "vite": "^7.3.7"
   },
   "dependencies": {
-    "@brave/leo": "github:brave/leo#3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d",
+    "@brave/leo": "github:brave/leo#c5f9c8f78f3df5b767a83ad67babd8b29323266a",
     "highlight.js": "^11.11.2",
     "lowlight": "^3.3.0",
     "react": "^19.0.0",

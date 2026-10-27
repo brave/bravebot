@@ -31,10 +31,16 @@ variable a `provider` block names, it is [withheld from the programs bravebot
 runs](../../reference/run-tool.md#what-a-program-is-handed).
 
 With no `models` key, OpenAI is asked what it serves and `/model` offers what it lists, less the
-models OpenAI documents as taking only its Responses API, which the chat-completions route cannot reach.
-The listing says nothing about what a model can do, so embedding, speech and image models are in it
-beside the chat models, and picking one of those fails. A Responses-only model the documentation does
-not name is offered too, and fails when picked. An entry that names `@ai-sdk/openai` in `npm`, as it
+models that take only OpenAI's Responses API, which the chat-completions route cannot reach: the
+`-codex` and `-pro` ids among them. That list is compiled into bravebot from OpenAI's published API
+description and from the model pages at `developers.openai.com`, so it changes with a release of
+bravebot. The listing says nothing about what a model can do, so embedding, speech, audio, image and
+video models are in it beside the chat models. On 2026-10-27, asked once for a short reply, each of those
+answered with an error. The listing also keeps rows of models whose `shutdown_date` has passed, and 34 of
+the 36 with a date on or before that day answered that the model has been deprecated. A Responses-only model
+that neither document names, such as one released since, is offered too. `gpt-image-1-mini` is one, and the
+chat-completions route refused it.
+An entry that names `@ai-sdk/openai` in `npm`, as it
 does in opencode, reaches the Responses API and is offered the whole listing. A block that lists
 `models` is offered those and no others, which is how to keep the picker to the models you use:
 
@@ -51,7 +57,20 @@ does in opencode, reaches the Responses API and is offered the whole listing. A 
 
 OpenAI caches a repeated prompt without being asked, so bravebot sends no cache marks to
 `api.openai.com`, and [`promptCacheTtl`](../configuration.md#promptcachettl) does not apply to it. A proxy
-you reach by writing its `baseURL` is sent them, whatever the entry is called.
+you reach by writing its `baseURL` is sent them, whatever the entry is called. The cache lines of
+`/status` show what a turn read from the cache. A line for what the turn wrote appears only for the
+models whose replies state a write. On 2026-10-27 `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra` did, and the older models that
+answered did not, so a turn on one of those shows none, whatever the cache took in.
+
+## Effort levels
+
+A level chosen with [`/effort`](../effort.md) or `--effort` is sent through the chat-completions
+route as `reasoning_effort`. On 2026-10-27 `gpt-4o-mini` and `gpt-4.1-mini` refused it, and so did
+`gpt-5-mini`, `gpt-5.4-mini` and `gpt-5.6-luna` for the levels they do not take: `gpt-5-mini` read `low`,
+`medium` and `high` but not `xhigh`, for example. The turn carries on, because bravebot sends the request
+again without the level. It then sends that model no level until bravebot is restarted, including a level the
+model would have taken, and [`/status`](../../reference/commands.md#status) reports the model as reading none.
 
 ## The Responses API
 

@@ -245,6 +245,23 @@
 .session-row:has(.session-more-menu:focus-within) .session-time,
 .session-row.menu-open .session-time { opacity: 0; }
 
+/* The pull request a chat made, over the bottom right of its row, beside the branch line the row
+   keeps a place for. It is a link of its own, outside the row's button, so it takes its own click. */
+.session-pr {
+  position: absolute;
+  right: var(--leo-spacing-l);
+  bottom: var(--leo-spacing-m);
+  font: var(--type-caption-strong);
+  color: var(--ink-link);
+  text-decoration: underline;
+}
+.session-pr:hover { color: var(--ink-primary); }
+.session-pr:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 1px; border-radius: var(--radius-control); }
+.bot-history-item .session-pr { right: var(--leo-spacing-xl); }
+.session-where.has-pr { display: flex; min-height: 1lh; }
+.session-where.has-pr .branch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.session-pr-room { flex: none; margin-left: auto; padding-left: var(--leo-spacing-m); visibility: hidden; font: var(--type-caption-strong); }
+
 /* The foot of a list drawn a page at a time: quieter than a session, since it is not one. */
 .session-show-more {
   display: flex;
@@ -308,11 +325,14 @@
 .session-group-fold .chevron.open { transform: rotate(90deg); }
 .session-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-group-fold .count { margin-left: auto; flex: none; font: var(--type-caption); }
-/* Starting a session in the checkout the heading names: shown with the heading's hover, and
-   whenever it is focused, so the keyboard still finds it. */
-.session-group-new { flex: none; opacity: 0; transition: opacity var(--motion-fast); }
+/* Starting a session in the checkout the heading names, and the menu of what else can be done
+   with its sessions: shown with the heading's hover, and whenever focused, so the keyboard still
+   finds them. */
+.session-group-new, .session-group-menu { flex: none; opacity: 0; transition: opacity var(--motion-fast); }
 .session-group-head:hover .session-group-new,
-.session-group-new:focus-within { opacity: 1; }
+.session-group-head:hover .session-group-menu,
+.session-group-new:focus-within,
+.session-group-menu:focus-within { opacity: 1; }
 .session-group-head:hover .count { opacity: 0; }
 
 .session-archive { margin-top: var(--leo-spacing-l); }

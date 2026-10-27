@@ -35,6 +35,7 @@ use bravebot_agent::servers::Question;
 use bravebot_aichat::CutOff;
 use bravebot_config::mcp::Declaration;
 use bravebot_core::ask::{Answer, Asking};
+use bravebot_core::label::Label;
 use bravebot_core::todo::{Row, Status};
 use bravebot_sandbox::SandboxMode;
 use serde_json::{Value, json};
@@ -248,6 +249,7 @@ pub fn shown(shown: &Shown) -> Value {
         "origin": shown.origin,
         "reach": reach(shown.reach),
         "label": shown.label,
+        "labelAxes": label_axes(&shown.label),
         "preview": shown.preview,
         "lines": shown.lines,
     })
@@ -469,7 +471,7 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         "shownPath": bravebot_agent::confirm::shown_name(&request.path),
         "intent": intent(request.intent),
         "untrusted": request.untrusted,
-        "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label})),
+        "remark": request.remark.as_ref().map(|r| json!({"preview": r.preview, "lines": r.lines, "label": r.label, "labelAxes": label_axes(&r.label)})),
         // Already a kind, a location and a masked preview each, so sending them repeats no
         // character of the value. The terminal draws these beside the diff for the same
         // reason `CONTEXT_LINES` is shared: the decision is about these lines, and an
@@ -640,6 +642,7 @@ pub fn output_request(id: u64, request: &OutputRequest) -> Value {
         "hiddenNote": bravebot_approval::hidden_note(request.hidden),
         "output": request.output,
         "label": request.label,
+        "labelAxes": label_axes(&request.label),
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
         "summary": request.summary(),
     })
@@ -659,6 +662,7 @@ pub fn vouch_request(id: u64, request: &VouchRequest) -> Value {
         "shownRule": bravebot_agent::confirm::shown_name(&request.rule),
         "preview": request.preview,
         "label": request.label,
+        "labelAxes": label_axes(&request.label),
         "truncated": request.truncated,
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()),
     })
@@ -1043,6 +1047,13 @@ pub fn fitted(answers: Vec<Answer>, asking: &Asking) -> Vec<Answer> {
         .collect()
 }
 
+/// A label as the trail writes it, with both axes named so a client draws it without reading the
+/// short form itself. `Label::named` is the only reader of those words; one it does not know
+/// crosses as untrusted and private.
+fn label_axes(word: &str) -> Value {
+    bravebot_session::audit::label_json(Label::named(word).unwrap_or(Label::untrusted_private()))
+}
+
 /// Advice for the person, never an approval or planner input. The reason carries the label it was
 /// released under (LABEL-10).
 fn vetting(
@@ -1050,7 +1061,8 @@ fn vetting(
     reason: Option<&str>,
     label: Option<&str>,
 ) -> Value {
-    json!({ "verdict": verdict.word(), "reason": reason, "label": label, "detail": match verdict {
+    json!({ "verdict": verdict.word(), "reason": reason, "label": label,
+        "labelAxes": label.map(label_axes), "detail": match verdict {
         bravebot_core::vetting::Verdict::Inconclusive(detail) => Some(detail), _ => None,
     } })
 }
@@ -1065,7 +1077,8 @@ pub fn vet_request(id: u64, request: &VetRequest) -> Value {
             "bytes": picture.bytes })
     });
     json!({ "request": id, "origin": request.origin, "expects": request.expects,
-        "summary": request.summary(), "content": request.content, "label": request.label, "lines": request.lines,
+        "summary": request.summary(), "content": request.content, "label": request.label,
+        "labelAxes": request.label.as_deref().map(label_axes), "lines": request.lines,
         "hidden": request.hidden, "hiddenNote": bravebot_approval::hidden_note(request.hidden), "picture": picture,
         "vetting": vetting(request.verdict, request.reason.as_deref(), request.reason_label.as_deref()) })
 }

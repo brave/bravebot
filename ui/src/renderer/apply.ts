@@ -28,6 +28,9 @@ export function apply(
       case 'turn.started':
         return { ...old, running: true, phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0,
           sandboxMode: message.data.sandbox ?? old.sandboxMode,
+          // Nothing reports the word again until the session is opened or rewound, so the one
+          // read before this turn is no longer current and is not shown.
+          context: null,
           entries: t.beginTurn(old.entries, message.data.turn) }
       case 'turn.interjected':
         return taken(old)

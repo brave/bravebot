@@ -128,6 +128,42 @@ export interface Bot {
   updated: number
 }
 
+/**
+ * The MCP servers a bot's definition lets it use (DELEGATE-24), as the agent reads its `mcpServers:` line.
+ * The agent decides what the line means: `every`, `everyPossible` and `editable` are its answers, so
+ * the window only draws them.
+ */
+export interface BotServers {
+  /** What the line lists, or `null` where there is none. */
+  servers: string[] | null
+  tools: boolean
+  inline: boolean
+  kind: string
+  editable: boolean
+  every: boolean
+  everyPossible: boolean
+}
+
+/** What a window may send: every server (`null`), or a list of names. The agent judges the names. */
+export function isServerSelection(value: unknown): value is string[] | null {
+  return value === null || (Array.isArray(value) && value.every((name) => typeof name === 'string'))
+}
+
+/** What the agent answered for a bot's servers, or `null` where it is not that shape. */
+export function parseBotServers(value: unknown): BotServers | null {
+  if (typeof value !== 'object' || value === null) return null
+  const { servers, tools, inline, kind, editable, every, everyPossible } = value as Record<string, unknown>
+  if (servers !== null && !(Array.isArray(servers) && servers.every((name) => typeof name === 'string'))) return null
+  if (typeof kind !== 'string') return null
+  const flags = [tools, inline, editable, every, everyPossible]
+  if (!flags.every((flag) => typeof flag === 'boolean')) return null
+  return {
+    servers: servers === null ? null : [...(servers as string[])],
+    tools: tools as boolean, inline: inline as boolean, kind,
+    editable: editable as boolean, every: every as boolean, everyPossible: everyPossible as boolean,
+  }
+}
+
 /** Model IDs are opaque provider identifiers, never paths or commands. */
 export function isBotModel(value: unknown): value is string | null {
   return value === null || (

@@ -444,7 +444,7 @@ scopes and the hosts recorded at sign-in. Access tokens from a refresh are held 
 ### Releases
 
 A release says where content may go. This is safehouse's precommitted release, built on machinery
-manifest mode already has and stated as a new clause, MANIFEST-12. There are two paths:
+manifest mode already has and stated as a new clause, MANIFEST-14. There are two paths:
 
 - **Normal manifest mode.** The person approves the plan, its release origins, destinations and
   routing. Approving the plan is the declassification: it authorises each release. It does not make

@@ -583,7 +583,7 @@ table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line 
 `verified-by: bravebot_agent::declared_lsp::an_unreadable_declaration_file_leaves_the_approved_server_running`
 `verified-by: bravebot_agent::declared_lsp::a_prompt_shows_an_argument_with_a_space_as_one_argument`
 `verified-by: bravebot_config::lsp::an_extension_with_a_dot_inside_it_is_a_problem`
-`verified-by: bravebot_tui::confirm::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
+`verified-by: bravebot_tui::confirm::mcp::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
 `verified-by: bravebot_ui_bridge::wire::a_server_prompt_carries_what_would_run_and_whether_it_builds`
 `verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
 

@@ -713,6 +713,29 @@ fn background_start(
     agent: Option<String>,
     prompts: &SystemPrompts,
 ) -> ExitCode {
+    // Every one-shot option `parse_invocation` reads, less `--processor-model` (already refused
+    // below, with `carried`): a condition is judged by the run that took it (CLI-35), a limit is
+    // counted by the run that was given it (CLI-38), and the rest name a model, a file, a session or
+    // a result shape for the one-shot run that reads them. The words after `--bg` are all one
+    // prompt, so none of this is read, and each is refused by the name of the first that appears
+    // rather than sent to the session as text.
+    const ONE_SHOT_OPTIONS: &[&str] = &[
+        "--goal",
+        "--mode",
+        "--model",
+        "--effort",
+        "--advisor",
+        "--file",
+        "--session-ref",
+        "--add-dir",
+        "--trust-workspace",
+        "--trace",
+        "--json",
+        "--json-stream",
+        "--output-schema",
+        "--max-rounds",
+        "--max-tokens",
+    ];
     if skip_permissions {
         return fail(Ending::Argument, t!(bg_bypass_refused));
     }
@@ -725,10 +748,14 @@ fn background_start(
     if let Some(flag) = flag_named(prompts) {
         return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = flag));
     }
-    // A condition is judged by the run that took it (CLI-35), and the words after `--bg` are all one
-    // prompt, so the flag would be sent to the session as text and no goal would be in force.
-    if words.iter().any(|word| word == "--goal") {
-        return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = "--goal"));
+    if let Some(flag) = words
+        .iter()
+        .find(|word| ONE_SHOT_OPTIONS.contains(&word.as_str()))
+    {
+        return fail(
+            Ending::Argument,
+            t!(bg_takes_nothing_else, flag = flag.as_str()),
+        );
     }
     background::start(words)
 }

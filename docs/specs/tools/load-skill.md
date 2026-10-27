@@ -66,9 +66,18 @@ the call selects nothing from it: there is no argument for a file, so nothing re
 A file is named only where the gate the skill passed would let it be read. A skill of the user's own
 is trusted by provenance ([SKILL-3](../skills.md#SKILL-3)), so its files are named unless a `deny`
 rule covers one. A project's skill is named file by file through the trust map and the
-rules, since a file name is content ([SKILL-4](../skills.md#SKILL-4)). A link is left out whatever it
-points at, and the directory is searched where it lands, so a link out of it is never followed and
-never named. A name that is not text or holds a control character is left out, and so is a directory
+rules, since a file name is content ([SKILL-4](../skills.md#SKILL-4)). A link to a file is left out
+whatever it points at, and the directory is searched where it lands, so a link out of it is never
+followed and never named. Where the skill's own directory is a link to another directory inside the
+workspace, the result also says where it lands, as a path a listing shows, and names the files under
+that path as well as under the link; each file is judged by the rules and the trust map under both
+names. A skill whose directory lands outside the workspace is not offered, since its `SKILL.md` is
+read as any file in the workspace is, and one whose landing a rule or the trust map keeps from the
+planner is named no landing. The rules and the trust map are asked about a landing first, and only a
+landing they let the planner read is then left out for being the name the skill is found under or
+for holding a control character, the filter applied to the name of each file. Nothing outside the
+workspace is named. A name that is
+not text or holds a control character is left out, and so is a directory
 `list_files` skips (`__pycache__`, `node_modules`) and a compiled `.pyc`: they are generated, and would
 fill the cap and become the example file offered. The list is capped in count and in depth.
 
@@ -83,6 +92,8 @@ Running a bundled script is not part of this: `run` keeps its own gate.
 `verified-by: bravebot_agent::tools::the_listing_leaves_out_a_name_holding_a_control_character`
 `verified-by: bravebot_agent::tools::the_listing_stops_at_two_hundred_files`
 `verified-by: bravebot_agent::tools::the_listing_searches_six_directories_down_and_no_further`
+`verified-by: bravebot_agent::tools::a_project_skill_reached_through_a_link_names_where_it_lands_inside_the_workspace_only`
+`verified-by: bravebot_agent::tools::a_landing_a_rule_denies_or_the_trust_map_distrusts_is_not_named`
 
 <a id="LOAD-5"></a>
 ### LOAD-5: loading a skill of the user's own lets its directory be read, and nothing else

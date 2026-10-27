@@ -300,7 +300,11 @@ fn table(
                  it contains. A listing does not enter a directory with one of these names, at \
                  any depth, and does not report it, so its absence from a result does not mean \
                  the project has none: {}, and .claude/worktrees. Name one as directory to list \
-                 it. In a directory you may not read, the names are quarantined and you get one \
+                 it. A listing does not enter a symbolic link, to a file or to a directory, and \
+                 does not name it: it says how many it did not enter, so a directory made of \
+                 links lists as that count and not as empty. List the directory a link points \
+                 to, by its own name, to see what is behind it. In a directory you may not \
+                 read, the names are quarantined and you get one \
                  reference per entry instead, saying of each whether it is a file or a directory \
                  the walk stopped at: use a file's as path_ref to read it, process it, and write \
                  it back, without ever being told what it is called.",
@@ -527,7 +531,9 @@ fn table(
             "search",
             "Find regular expressions in workspace files. Returns matching lines. Give every \
              spelling you would otherwise search for one at a time: a list of patterns costs \
-             one call and matches a line matching any of them.",
+             one call and matches a line matching any of them. A search does not enter a \
+             symbolic link, to a file or to a directory: it says how many it did not enter, \
+             and files behind a link are searched by naming the directory it points to.",
             json!({
                 "type": "object",
                 "properties": {
@@ -794,9 +800,10 @@ fn table(
              whole document, so it can work out what is wrong and where the fix goes, and leave \
              a file alone if it turns out not to be the one you are after. Once your context holds \
              private content, as it does after read_output or vet_content shows you some, after \
-             a delegate reports some, and in a conversation resumed with some, every call is \
-             refused for the rest of the conversation: what you write is private from then on, \
-             and a processor takes no private instruction.",
+             a delegate reports some, and in a conversation resumed with some, every later \
+             spawn_processor call is refused for the rest of the conversation: what you write \
+             is private from then on, and a processor takes no private instruction. run, \
+             read_output and the file tools keep working.",
             json!({
                 "type": "object",
                 "properties": {

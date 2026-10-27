@@ -10338,6 +10338,59 @@ fn a_quarantined_listing_tells_the_model_it_was_capped() {
     );
 }
 
+/// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
+/// as a number and with no name. The regression it rejects: a count kept only in the body, which
+/// reaches nobody when the entries are handed over as references, so a directory made of links
+/// reads as empty.
+#[cfg(unix)]
+#[test]
+fn a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter() {
+    let scratch = Scratch::new("list-links-quarantined");
+    std::fs::create_dir(scratch.path.join("real")).unwrap();
+    std::fs::write(scratch.path.join("real/inside.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("plain.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("real"),
+        scratch.path.join("zz-linked-name"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("plain.txt"),
+        "the names reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("1 symbolic link was not entered"),
+        "the link count did not reach the model beside the references: {second}"
+    );
+    assert!(
+        !second.contains("zz-linked-name"),
+        "a link's name reached the model: {second}"
+    );
+}
+
 /// And the ordinary case must stay quiet, or the model learns to ignore the notice.
 ///
 /// Trusted deliberately. Run against an empty trust store the result is quarantined, the model
@@ -13233,6 +13286,134 @@ fn a_turn_that_failed_is_still_part_of_the_conversation() {
     assert!(
         next_turn.contains("what is 2 + 2?"),
         "the failed turn was forgotten: {next_turn}"
+    );
+}
+
+/// What the conversation holds for the final reply of a turn: the last message, and where it
+/// came from.
+fn last_message_of(
+    conversation: &bravebot_agent::Conversation,
+) -> (
+    bravebot_aichat::protocol::Role,
+    String,
+    bravebot_agent::request_view::Provenance,
+) {
+    let stored = conversation.messages().last().expect("a message");
+    (
+        stored.message.role,
+        stored.message.content.text(),
+        stored.provenance(),
+    )
+}
+
+/// TURN-12: the reply that ends a turn and an answer given between calls are put into the
+/// conversation by the same step. In a session that has met nothing untrusted each is the
+/// planner's own words, and the next request can show it what it said.
+#[test]
+fn every_answer_of_a_turn_is_recorded_as_the_planners_own_when_nothing_untrusted_was_met() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("answers-recorded-visible");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        writing_a_task_list(&["completed", "pending"]),
+        reply_with("the first part is done"),
+        reply_with("the rest waits for you"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("do the first part, then ask me about the rest"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert_eq!(outcome.reply_for_display(), "the rest waits for you");
+    let (role, text, provenance) = last_message_of(&conversation);
+    assert_eq!(role, bravebot_aichat::protocol::Role::Assistant);
+    assert_eq!(text, "the rest waits for you");
+    assert_eq!(provenance, Provenance::Planner);
+
+    let between: Vec<_> = conversation
+        .messages()
+        .iter()
+        .filter(|stored| stored.message.content.text() == "the first part is done")
+        .collect();
+    assert_eq!(
+        between.len(),
+        1,
+        "the answer between calls is not recorded once"
+    );
+    assert_eq!(between[0].provenance(), Provenance::Planner);
+}
+
+/// LABEL-8: once a session has met something untrusted, the planner is told that it answered and
+/// given a reference, and the reply is held under that reference. The reply is in no message the
+/// next request carries.
+#[test]
+fn the_final_reply_of_a_turn_is_held_under_a_reference_once_something_untrusted_was_met() {
+    use bravebot_agent::request_view::Provenance;
+
+    let scratch = Scratch::new("answers-recorded-quarantined");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        reply_with("SENTINEL-REPLY-BODY"),
+        reply_with("second"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut conversation = bravebot_agent::Conversation::new();
+    conversation.observed(bravebot_core::label::Label::untrusted_public());
+
+    let outcome = take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("say something"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the turn finishes");
+
+    assert_eq!(outcome.reply_for_display(), "SENTINEL-REPLY-BODY");
+    let (role, text, provenance) = last_message_of(&conversation);
+    assert_eq!(role, bravebot_aichat::protocol::Role::Assistant);
+    assert!(
+        text.starts_with("(you answered. "),
+        "the planner was not told only that it answered: {text}"
+    );
+    assert!(!text.contains("SENTINEL-REPLY-BODY"), "{text}");
+    let Provenance::Reference(token) = provenance else {
+        panic!("the message is not labelled by a reference: {provenance:?}");
+    };
+    assert!(text.contains(&token), "{text} does not name {token}");
+    assert!(
+        conversation
+            .quarantine()
+            .label_of(&bravebot_core::SlotId::new(token))
+            .is_some(),
+        "the reply is not held under the reference the planner was given"
+    );
+
+    take_a_turn_reporting(
+        &config,
+        &workspace,
+        &mut conversation,
+        Task::new("and again"),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("the second turn finishes");
+    let bodies: Vec<String> = received.try_iter().collect();
+    assert_eq!(bodies.len(), 2, "{bodies:#?}");
+    assert!(
+        !bodies[1].contains("SENTINEL-REPLY-BODY"),
+        "the reply reached the next request: {}",
+        bodies[1]
     );
 }
 
@@ -16322,6 +16503,46 @@ fn a_turn_that_wrote_and_ran_is_not_asked_about_it() {
             .any(|said| said.contains("no command was run")),
         "the person was told a built change was unbuilt: {:?}",
         reporter.narration
+    );
+}
+
+/// GROUND-1, GROUND-4. A turn hands back what it did however it ended: each call that changed a
+/// file is a write, each that ran a program is a command, and a command after the last write is
+/// recorded as after it. A goal's record is built from this and nothing a reply said.
+#[test]
+fn a_turns_outcome_carries_the_summary_of_its_work() {
+    let scratch = Scratch::new("work-summary");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("write_file", r#"{"path":"a.txt","contents":"one"}"#),
+        tool_request("write_file", r#"{"path":"a.txt","contents":"two"}"#),
+        tool_request("run", r#"{"command":"echo built | cat"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("add a toggle"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    assert_eq!(
+        completed.work,
+        bravebot_agent::Work {
+            writes: 2,
+            commands: 1,
+            ran_after_last_write: true,
+        },
+        "two writes to one file are two writes, and a pipeline is one command"
     );
 }
 
@@ -21557,6 +21778,81 @@ fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
         "the second turn of the same session either lost the first turn's message or said it \
          again: {second}"
     );
+}
+
+/// SKILL-19: the overview is pushed as a user message after the prompt, and a block-based wire puts
+/// it in the prompt's turn. Its first block starts on a new paragraph, so the count it begins with
+/// is never read as the end of the prompt before it ("issues/1106" and "1 skill" as 11061).
+#[test]
+fn the_skills_overview_is_a_separate_paragraph_from_the_prompt_on_block_based_wires() {
+    let scratch = Scratch::new("skills-overview-separate-paragraph");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("first answer")]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("see issues/1106"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let notice = conversation
+        .messages()
+        .iter()
+        .find(|stored| stored.composed == Some(bravebot_agent::conversation::Composed::Notice))
+        .expect("the overview is in the conversation");
+    assert_eq!(notice.message.role, bravebot_aichat::protocol::Role::User);
+
+    let messages = conversation.with_system("be helpful");
+    let bedrock = serde_json::to_value(bravebot_bedrock::protocol::request_from(&messages, None))
+        .expect("serialises");
+    let anthropic = serde_json::to_value(bravebot_aichat::anthropic::protocol::request_from(
+        "claude-test",
+        &messages,
+        None,
+    ))
+    .expect("serialises");
+
+    for (wire, turn) in [
+        ("bedrock", &bedrock["messages"][0]),
+        ("anthropic", &anthropic["messages"][0]),
+    ] {
+        let texts: Vec<&str> = turn["content"]
+            .as_array()
+            .expect("blocks")
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+        let at = texts
+            .iter()
+            .position(|text| text.contains("not listed above"))
+            .unwrap_or_else(|| panic!("{wire}: no block holds the overview: {texts:?}"));
+        assert!(
+            at > 0 && texts[at - 1].contains("see issues/1106"),
+            "{wire}: the overview is not the block after the prompt: {texts:?}"
+        );
+        assert!(
+            texts[at].starts_with("\n\n1 skill"),
+            "{wire}: the overview does not start on a new paragraph: {:?}",
+            texts[at]
+        );
+    }
 }
 
 /// SKILL-19: the overview is not part of the opening, so a prompt handed back to the box
@@ -27033,11 +27329,13 @@ fn keeping_a_request_writes_nothing_where_it_was_not_offered_or_was_refused() {
     assert!(result.reach_elsewhere.is_empty());
 }
 
-/// SANDBOX-26: the request is refused, and the program does not start, where the mode accepts
-/// none: `off` has no profile to add to. The planner is told, in the same words, that nothing was
-/// added; no prompt is raised.
+/// SANDBOX-26: the request is accepted and dropped where the mode is `off`, which has no profile
+/// to add to. The line is put to the person as an ordinary line is and runs once they approve; the
+/// credential the planner named is not added, so the program has only what the person's own
+/// access gives it. The control is the same call under `strict`, which asks about the line with
+/// the names shown, so the difference is the mode's.
 #[test]
-fn scopes_are_refused_under_off() {
+fn scopes_are_accepted_and_dropped_under_off() {
     if cannot_confine_here() {
         return;
     }
@@ -27045,7 +27343,7 @@ fn scopes_are_refused_under_off() {
     let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
     let seen = confirmer.seen.clone();
     let result = scoped_run(
-        "scopes-refused-off",
+        "scopes-dropped-off",
         serde_json::json!({ "command": WRITES_A_MARKER, "scopes": ["aws"] }),
         mode,
         bravebot_agent::PermissionMode::default(),
@@ -27054,14 +27352,20 @@ fn scopes_are_refused_under_off() {
         &mut confirmer,
     );
     assert!(
-        message_from(&result.second, "Result of run").contains("does not accept a request"),
+        !message_from(&result.second, "Result of run").contains("does not accept a request"),
         "{mode}: {}",
         result.second
     );
-    assert!(!result.ran, "{mode}: the line ran");
     assert!(
-        seen.lock().unwrap().is_empty(),
-        "{mode}: a prompt was raised"
+        result.ran,
+        "{mode}: the line did not run: {}",
+        result.second
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1, "{mode}: the person was not asked once");
+    assert!(
+        seen[0].confined.is_none() && !seen[0].unconfined,
+        "{mode}: the prompt described a profile or an unconfined request for a line that has none"
     );
 }
 
@@ -28168,11 +28472,11 @@ fn the_mode_that_asks_nothing_does_not_approve_an_unconfined_line() {
     );
 }
 
-/// SANDBOX-29: the request is refused, nothing is asked and the line does not run in `strict`, under
-/// `off`, in a workspace the person has not trusted, and when it is combined with `scopes`. The
-/// refusal is the same sentence for the first three, so it does not say which setting withheld it,
-/// and it does not name the argument, which the planner learns from the `run` description. The
-/// control is the same call in `workspace-write` of a trusted workspace, which runs.
+/// SANDBOX-29: the request is refused, nothing is asked and the line does not run in `strict`, in a
+/// workspace the person has not trusted, and when it is combined with `scopes`. The refusal is the
+/// same sentence for the first two, so it does not say which setting withheld it, and it does not
+/// name the argument, which the planner learns from the `run` description. The control is the same
+/// call in `workspace-write` of a trusted workspace, which runs.
 #[test]
 fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     if cannot_confine_here() {
@@ -28185,9 +28489,8 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
         bool,
         Option<serde_json::Value>,
     );
-    let cases: [Case; 4] = [
+    let cases: [Case; 3] = [
         ("strict", bravebot_sandbox::SandboxMode::Strict, true, None),
-        ("off", bravebot_sandbox::SandboxMode::Off, true, None),
         (
             "untrusted",
             bravebot_sandbox::SandboxMode::WorkspaceWrite,
@@ -28267,13 +28570,14 @@ fn an_unconfined_line_is_refused_where_the_session_does_not_accept_it() {
     assert!(wrote, "the control did not run");
 }
 
-/// TRACE-1, SANDBOX-26, SANDBOX-29: in a session whose sandbox mode is `off`, a `run` call that asks
-/// for no sandbox and the next one that asks for a credential scope are each refused with the
-/// sentence the planner always got, which names no setting, and the trail holds a refusal under
-/// `sandbox` for each that names the argument and the mode. The control is the same turn under
-/// `workspace-write` with a person approving, which leaves no such refusal. The regression it
-/// rejects is a refusal the planner is told of and the trail omits, which leaves nobody able to say
-/// whether the mode, the trust, a managed network or a delegate withheld it.
+/// TRACE-1, SANDBOX-26, SANDBOX-29: in a session whose workspace the person has not trusted, a
+/// `run` call that asks for no sandbox and the next one that asks for a credential scope are each
+/// refused with the sentence the planner always got, which names no setting, and the trail holds a
+/// refusal under `sandbox` for each that names the argument and the cause. The control is the same
+/// turn under `workspace-write` with a trusted workspace and a person approving, which leaves no
+/// such refusal. The regression it rejects is a refusal the planner is told of and the trail omits,
+/// which leaves nobody able to say whether the mode, the trust, a managed network or a delegate
+/// withheld it.
 #[test]
 fn a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause() {
     let name = "refused-request-recorded";
@@ -28281,17 +28585,17 @@ fn a_refused_request_for_no_sandbox_or_for_scopes_is_recorded_with_its_cause() {
         name,
         serde_json::json!({ "command": "true", "unconfined": true }),
         serde_json::json!({ "command": "true", "scopes": ["remote"] }),
-        bravebot_sandbox::SandboxMode::Off,
+        bravebot_sandbox::SandboxMode::WorkspaceWrite,
         bravebot_agent::PermissionMode::default(),
-        trusting_the_workspace(),
+        bravebot_core::trust::TrustStore::new("/work"),
         no_programs,
         &mut bravebot_agent::confirm::Unattended,
     );
     for entry in [
-        "run.unconfined: the request was refused and the line did not run: the off sandbox mode \
-         does not take it",
-        "run.scopes: the request was refused and the line did not run: the off sandbox mode does \
-         not take it",
+        "run.unconfined: the request was refused and the line did not run: the workspace is not \
+         trusted",
+        "run.scopes: the request was refused and the line did not run: the workspace is not \
+         trusted",
     ] {
         assert!(
             refused.trail.contains(entry),
@@ -36709,7 +37013,11 @@ fn a_check_runs_on_the_summary_model_the_settings_name() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36741,7 +37049,11 @@ fn a_check_with_no_summary_model_runs_on_the_sessions_own() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36786,7 +37098,11 @@ fn a_summary_model_needing_a_sign_in_sends_no_check() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36833,7 +37149,11 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36865,7 +37185,11 @@ fn a_summary_model_the_machine_excludes_sends_no_check() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         Some("an-expensive-session-model"),
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36893,7 +37217,11 @@ fn a_stop_pressed_during_a_goal_check_reaches_the_request_and_no_verdict_comes_b
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36934,7 +37262,11 @@ fn a_goal_check_reaches_the_model_and_comes_back_as_a_verdict() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -36991,7 +37323,11 @@ fn a_check_over_an_exchange_that_met_something_untrusted_comes_back_quarantined(
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&conversation, "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &conversation,
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -37408,7 +37744,11 @@ fn the_judge_asks_for_no_cache_of_the_exchange_it_judges() {
         &config,
         &egress,
         &bravebot_agent::chatgpt::AccountSession::begin(),
-        bravebot_agent::goal::Check::of(&an_exchange_to_ask_beside(), "a.txt exists"),
+        bravebot_agent::goal::Check::of(
+            &an_exchange_to_ask_beside(),
+            "a.txt exists",
+            bravebot_agent::Work::default(),
+        ),
         None,
         &mut bravebot_agent::report::RecordingReporter::default(),
         &mut sink,
@@ -40942,7 +41282,10 @@ fn a_delegate_that_failed_leaves_its_fixed_cause_in_the_trail_and_none_of_the_re
         *failed,
         "the failed delegate was drawn as an answer: {note}"
     );
-    assert_eq!(note, "the delegate could not finish (refused)");
+    assert_eq!(
+        note,
+        "the delegate could not finish (refused); it ran 0 commands and made 0 writes"
+    );
 
     let told = received
         .try_iter()
@@ -41035,7 +41378,7 @@ fn a_delegate_that_reached_its_round_limit_says_so_in_the_trail_and_the_note() {
     assert_eq!(
         note,
         "a one-round delegate reached its limit of 1 round and answered with what it had, so it \
-         may not be finished"
+         may not be finished; it ran 0 commands and made 0 writes"
     );
 }
 

@@ -36,6 +36,8 @@ import {
   retireBot,
   forgetBotConversation,
   saveBotModel,
+  readBotServers,
+  saveBotServers,
   saveForm,
   migrateBot,
   owesCarryOver,
@@ -43,7 +45,7 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
+import { botFolders, isBotModel, isServerSelection, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
@@ -52,6 +54,7 @@ import { SendRefused, forgetDrops, stageDrops, withDrops } from './drops'
 import { clipboardPng, forgetPastes, stagePaste, withPastes } from './pastes'
 import { isSubpath } from '../shared/files'
 import { chooseDirectory, mayOpenSessionIn, offerDirectories } from './opened'
+import { deletedConversations } from './deleted'
 import {
   parseExportRequest,
   suggestedFilename,
@@ -472,6 +475,8 @@ const ALLOWED = new Set([
   'session.new',
   'session.fork',
   'session.delete',
+  'session.purge',
+  'session.import',
   'session.close',
   'session.mode',
   'session.sandbox',
@@ -558,9 +563,9 @@ app.whenReady().then(() => {
     }
     // A session's directory becomes the root the file helper is pinned to, so the renderer may
     // open one only in a folder it was given (TRUST-20), whatever shape the string it sends has.
-    // A delete names a directory too, and is the one method here that cannot be undone, so it is
-    // held to the same folders.
-    if (method === 'session.new' || method === 'session.open' || method === 'session.delete') {
+    // A delete, a purge and an import name a directory too, and change what is kept for it, so they
+    // are held to the same folders.
+    if (method === 'session.new' || method === 'session.open' || method === 'session.delete' || method === 'session.purge' || method === 'session.import') {
       if (!mayOpenSessionIn((params as { directory?: unknown } | null)?.directory)) {
         return { error: { code: 'bad_request', message: 'that is not a folder this app offered' } }
       }
@@ -609,15 +614,12 @@ app.whenReady().then(() => {
       // always, the directory for an opened or forked session — so a root the tree can browse is
       // one the agent confirmed rather than one the renderer asserted. See `files.ts`.
       noteOpenedRoot(method, params, ok)
-      // The agent has removed the record, so what this app kept about it goes too. The coordinate
-      // is the one the agent confirmed deleting, which is the one the window named.
-      if (method === 'session.delete' && (ok as { deleted?: unknown } | null)?.deleted === true) {
-        const { directory, id } = (params ?? {}) as { directory?: unknown; id?: unknown }
-        if (typeof directory === 'string' && isSessionId(id)) {
-          removeConversation(conversationKey(directory, id))
-          forgetFork({ directory, id })
-          forgetBotConversation(directory, id)
-        }
+      // The agent has removed these records, so what this app kept about them goes too. The
+      // coordinates are the ones the agent confirmed deleting, among the ones the window named.
+      for (const { directory, id } of deletedConversations(method, params, ok)) {
+        removeConversation(conversationKey(directory, id))
+        forgetFork({ directory, id })
+        forgetBotConversation(directory, id)
       }
       if (method === 'session.close') {
         const closing = (params as { session?: unknown } | null)?.session
@@ -751,6 +753,20 @@ app.whenReady().then(() => {
     const held = bot(slug)
     if (!held || !isBotModel(model)) return null
     return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
+  })
+
+  // The window names a bot and a selection; the definition is the row's, so no window chooses which
+  // file is read or rewritten.
+  ipcMain.handle('bravebot:bots:servers:read', async (_event, slug: unknown) => {
+    const held = bot(slug)
+    if (!held) return null
+    return readBotServers(held, bridge ? (method, params) => bridge!.request(method, params) : null)
+  })
+
+  ipcMain.handle('bravebot:bots:servers:write', async (_event, slug: unknown, servers: unknown) => {
+    const held = bot(slug)
+    if (!held || !isServerSelection(servers)) return null
+    return saveBotServers(held, servers, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
 
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {

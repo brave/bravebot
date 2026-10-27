@@ -45,6 +45,7 @@ jobs:
       build: ${{ steps.affected.outputs.build }}
       installers: ${{ steps.affected.outputs.installers }}
       docs: ${{ steps.affected.outputs.docs }}
+      help: ${{ steps.affected.outputs.help }}
       npm: ${{ steps.affected.outputs.npm }}
       fuzz: ${{ steps.affected.outputs.fuzz }}
     steps:
@@ -333,6 +334,34 @@ jobs:
         run: |
           pnpm --dir docs/website install --frozen-lockfile --ignore-scripts
           pnpm --dir docs/website run build
+
+  # help.rs compiles each page under docs/website/docs into a fixed table, builds an index
+  # naming every page by its front matter title, and loads a page by the exact name that index
+  # gives. An add, an edit that breaks a page's front matter, or a remove can fail a test that
+  # reads one of those, and `rust` is more than they need: it maps to `make check` and gates
+  # `check-msrv`, `check-windows` and `check-linux` besides, none of which reads a page.
+  help:
+    name: Documentation pages in the binary
+    runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.help != 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        # nosemgrep: brave-third-party-action-not-pinned-to-commit-sha
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Saved from main only; see the note in the `check` job above.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Test
+        run: make check-help
 
   # The mechanical half of docs/specs, which decides nothing a person has to read a diff for:
   # clause numbering, the tests a clause names, the paths it governs, and the call sites a

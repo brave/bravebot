@@ -67,12 +67,27 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 /// [`Provider::answers_under_the_model_behind_an_alias`].
 const OPENAI_ID: &str = "openai";
 
-/// The models OpenAI's published API description gives to the Responses request alone: the
-/// `ResponsesOnlyModel` list under `ModelIdsResponses` in version 2.3.0 of `openai-openapi`.
+/// The models a chat completions route at OpenAI's own API cannot reach, because they take requests
+/// through the Responses API alone ([BACKEND-19]).
 ///
 /// OpenAI's own listing states no capability for a model, so this list is the only statement of
-/// which ids a chat completions route cannot serve. It changes with each release of that
-/// description.
+/// which ids that route cannot serve. On 2026-10-27 the route answered none of its ids with a 200
+/// when each was asked once with one short message and a ceiling of 16 tokens, and named the
+/// Responses API in its refusal of three of them ([BACKEND-19]). The ids are read from two public
+/// documents:
+///
+/// - the `ResponsesOnlyModel` list under `ModelIdsResponses` in version 2.3.0 of `openai-openapi`;
+/// - the model pages at `https://developers.openai.com/api/docs/models/<id>`, read on 2026-10-27
+///   for each id of the listing of 2026-10-26. A page's Endpoints block marks an endpoint it does
+///   not support in grey. An id is added where its page marks `v1/chat/completions` unsupported and
+///   `v1/responses` supported, and marks no endpoint supported beyond those two and `v1/batch`, so a
+///   model that the Images or Audio endpoints also serve is not added. A dated snapshot is added
+///   where its alias is added, when the alias page lists the snapshot under Snapshots and the
+///   snapshot has no page of its own.
+///
+/// Both change with a release, and the second is read from the markup of a page.
+///
+/// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
 const RESPONSES_ONLY_MODELS: &[&str] = &[
     "o1-pro",
     "o1-pro-2025-03-19",
@@ -94,6 +109,14 @@ const RESPONSES_ONLY_MODELS: &[&str] = &[
     "gpt-daybreak-red-latest",
     "gpt-5.6-cyber",
     "gpt-rosalind-research",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.2-codex",
+    "gpt-5.2-pro",
+    "gpt-5.2-pro-2025-12-11",
+    "gpt-5.3-codex",
+    "gpt-5.4-pro",
+    "gpt-5.4-pro-2026-03-05",
 ];
 
 /// The id a model of the ChatGPT account is qualified by
@@ -1010,10 +1033,12 @@ impl Provider {
     /// Whether a request to this service carries `cache_control` marks on the prefix it will send
     /// again ([BACKEND-32]).
     ///
-    /// False for OpenAI's own API, which caches a repeated prefix without being asked and whose
-    /// published request schema has no such mark on a content part. Sending them there could cost
-    /// one refused request for each model in each process.
+    /// False for OpenAI's own API, whose published request schema has no such mark on a content
+    /// part. On 2026-10-27 six of the seven models tried read a repeated prompt from the cache with
+    /// no mark ([BACKEND-31]), and `gpt-4o-mini` and `gpt-5.4-mini` answered a request that carried
+    /// one with 200. Whether a mark changes what is read is not known. None is sent there.
     ///
+    /// [BACKEND-31]: ../../../docs/specs/backends.md#BACKEND-31
     /// [BACKEND-32]: ../../../docs/specs/backends.md#BACKEND-32
     pub fn takes_cache_markers(&self) -> bool {
         !self.at_openais_api()
@@ -2600,6 +2625,46 @@ mod tests {
             let provider = at(url);
             assert!(provider.takes_cache_markers(), "{url} was taken for OpenAI");
             assert!(provider.responses_only_models().is_empty(), "{url}");
+        }
+    }
+
+    /// The list is the models that take requests through the Responses API alone. It holds each id
+    /// OpenAI's model pages mark as unsupported by chat completions and supported by the Responses
+    /// API, read on 2026-10-27, beside the ones its OpenAPI description lists. The first loop checks
+    /// that the ids the pages added are present. The second is a spot check, not the whole of the
+    /// rest: it names ids that must stay offered, models a page marks as taking chat completions
+    /// and models that are not Responses-only: `gpt-image-1` is served by the Images endpoints
+    /// beside the Responses API, and `sora-2-pro` and `text-embedding-3-small` are served by the
+    /// Videos and Embeddings endpoints and not by the Responses API. A list that gained any other
+    /// id passes.
+    #[test]
+    fn the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered() {
+        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let listed = own.responses_only_models();
+        for id in [
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-mini",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
+            "gpt-5.2-pro",
+            "gpt-5.2-pro-2025-12-11",
+            "gpt-5.4-pro",
+            "gpt-5.4-pro-2026-03-05",
+        ] {
+            assert!(listed.contains(&id), "{id} is Responses-only on its page");
+        }
+        for id in [
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.2",
+            "gpt-5.2-chat-latest",
+            "gpt-4o-mini",
+            "o3",
+            "gpt-image-1",
+            "sora-2-pro",
+            "text-embedding-3-small",
+        ] {
+            assert!(!listed.contains(&id), "{id} takes another route");
         }
     }
 

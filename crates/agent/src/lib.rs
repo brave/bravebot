@@ -23,6 +23,7 @@ pub mod commit_message;
 pub mod compact;
 pub mod confine;
 pub mod confirm;
+pub mod connectors;
 pub mod conversation;
 pub mod delegate;
 pub mod diff;
@@ -109,7 +110,7 @@ pub use confirm::{
 pub use conversation::Conversation;
 pub use delegate::Delegated;
 pub use mode::Mode;
-pub use outcome::{Category, Diagnosis, Ending, Spent};
+pub use outcome::{Category, Diagnosis, Ending, Spent, Work};
 pub use permission_mode::{Confining, LiveMode, PermissionMode};
 pub use processor::ProcessorError;
 pub use report::{Activity, IgnoreReports, Reporter};

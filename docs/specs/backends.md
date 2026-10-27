@@ -825,42 +825,105 @@ gateway is still read: what a gateway puts under `capabilities` is its own.
 first and is expected to be refused, then `/models`. A row states an id and no capability, so nothing is dropped
 for what a model can do, and embedding, speech and image models are offered beside the chat ones ([Known
 costs](#known-costs)). One list compiled into the binary leaves ids out: where an entry is reached in the chat
-completions protocol at `api.openai.com`, the models the `ResponsesOnlyModel` list of OpenAI's published API
-description (version 2.3.0) names are not offered, since that route cannot reach them. A row's id is compared with
-that list only, and the rows go to a picker. The place is told by the host and port of the entry's endpoint,
+completions protocol at `api.openai.com`, the models that take requests through the Responses API alone are not
+offered, since that route cannot reach them. The list is read from two public documents: the `ResponsesOnlyModel` list
+of OpenAI's published API description (version 2.3.0), and the model pages at
+`developers.openai.com/api/docs/models/<id>`, read on 2026-10-27 for each id of the listing of 2026-10-26. On
+2026-10-27 the route answered none of its 28 ids with a 200 when each was asked once with one short message and a
+ceiling of 16 tokens, and named the Responses API in its refusal of three of them (the observations below). An id is
+taken from a page when the page's Endpoints block marks `v1/chat/completions` unsupported and `v1/responses`
+supported and marks no other endpoint supported but `v1/batch`, so a model that the Images or Audio endpoints also
+serve is not on it. A dated snapshot is taken where its alias is taken, when the alias page lists the snapshot and
+the snapshot has no page of its own. A developer reads the pages and writes the ids into the source, so a running program never reads a page, and a page
+can change its markup or its statement without the list changing. A row's id is compared with that list only, and
+the rows go to a picker. The place is told by the host and port of the entry's endpoint,
 whatever the entry's id: the host is compared in lower case without a trailing dot, a port that is the scheme's
 default is the same place whether or not it is written, and a port that is not the default is another service, so
 it is not `api.openai.com`. A proxy keyed `openai` is therefore offered its whole listing, and so is an entry
 naming `@ai-sdk/openai`, which is reached in the Responses protocol ([BACKEND-61](#BACKEND-61)). The list changes
-with a release. A block naming `models` is offered those and no others, so a model on the list is still reached by
-naming it.
+with a release of either document. A block naming `models` is offered those and no others, so a model on the list is
+still reached by naming it.
 
-**What is known of the exchange with OpenAI's own API.** [BACKEND-31](#BACKEND-31) and
-[BACKEND-32](#BACKEND-32) add what bears on usage and on cache marks.
+**What is known of the exchange with OpenAI's own API.** [BACKEND-22](#BACKEND-22),
+[BACKEND-31](#BACKEND-31) and [BACKEND-32](#BACKEND-32) add what bears on the effort level, on usage and on cache marks.
 
-- Observed on 2026-10-26. `GET /v1/models` answered 200 with an object holding `object` and `data`, and `data`
-  held 128 rows. A row held `id`, `object`, `created`, `owned_by` and, on some, `shutdown_date`, and none held a
-  capability, a parameter, a window or a modality. `owned_by` was `openai`, `openai-internal` or `system`, and the
-  ids were chat, reasoning, embedding, speech, transcription, image, audio, realtime, moderation and video models.
-  `GET /v1/models/user` answered 404 with the error type `invalid_request_error` and the code `model_not_found`. A
-  chat completion with one short user message and
-  `max_completion_tokens` of 1, sent once for each listed id, answered 429 `insufficient_quota` for 91, among them
-  speech, transcription, image, realtime and embedding models, so that status does not tell a chat model from the
-  rest; 404 for 35, among them `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`,
-  `gpt-5.2-codex`, `gpt-3.5-turbo`, `o1`, `o3-mini` and `o4-mini`, so a listed model can be unreachable for the key
-  or the route; and 403 for two embedding models. A body with an unknown field, with `cache_control` on a content
-  part, with `reasoning_effort` on `gpt-4o-mini` or with `stream_options.include_usage` answered 429 as well, and
-  `max_tokens` on `o3-mini` answered 404. No chat completion answered 200, so no refusal of a field and no
-  completed reply is on record.
-- Stated by OpenAI's published API description (version 2.3.0), and not observed: a listed model has `id`,
-  `created`, `object`, `owned_by` and an optional `shutdown_date`, and the description has no `/models/user`
-  route. A chat completion request takes `max_completion_tokens` and `reasoning_effort` (`none`, `minimal`, `low`,
-  `medium`, `high`, `xhigh` or `max`, of which not every reasoning model supports every value), and `max_tokens` is
-  deprecated and not compatible with the o-series. The models of its `ResponsesOnlyModel` list belong to the
-  Responses request alone.
-- Assumed: that a listed model not on that list is served by chat completions where the account may use it, that a
-  field a model does not take is refused with an invalid-request status, which is what [BACKEND-22](#BACKEND-22)
-  and [BACKEND-32](#BACKEND-32) read, and that `reasoning_effort` is refused by a model that does not reason.
+- Observed on 2026-10-26. A row of `GET /v1/models` held no capability, no parameter, no window and no modality, and
+  the ids were chat, reasoning, embedding, speech, transcription, image, audio, realtime, moderation and video models.
+  `GET /v1/models/user` answered 404 with the error type `invalid_request_error` and the code `model_not_found`.
+- Observed on 2026-10-27, with a key whose account had credit. `GET /v1/models` answered 200 with an object holding
+  `object` and `data`, and `data` held 134 rows: the 128 of the day before, and `gpt-4`, `gpt-4-0613`, `gpt-4-turbo`,
+  `gpt-4-turbo-2024-04-09`, `o1-pro` and `o1-pro-2025-03-19`. Every row held an `id`, a `created` and an `owned_by`,
+  and `shutdown_date` was a date on 82 rows and `null` or not present on 52, 36 of the dates being on or before
+  2026-10-27. `owned_by` was `system` for 127 rows, `openai-internal` for 4 and `openai` for 3. `GET /v1/models/user`
+  answered 404.
+- Observed on 2026-10-27, one sample for each id. A chat completion with one user message (`Reply with the single word:
+  ok`), `max_completion_tokens` of 16 and no stream, which is not the request this program sends, was sent once for each
+  of the 134 listed ids and for the 12 ids of the compiled list that the listing does not hold, 146 requests. It answered:
+  - 200 for 40 ids: `chat-latest`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4o`, `gpt-4o-mini`, `gpt-5`, `gpt-5-mini`,
+    `gpt-5-nano`, `gpt-5-search-api`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.5`,
+    `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol`,
+    `gpt-6.1-terra` and `o3`, with 16 dated snapshots of them. Ten of the 40 (`gpt-5`, `gpt-5-mini`, `gpt-5-nano`,
+    `gpt-5.5` and `o3`, with their dated snapshots) stopped with the finish reason `length` and an empty content, all 16
+    completion tokens having been spent as reasoning tokens, so the ceiling was reached before a word. The other 30
+    stopped with `stop`.
+  - 404 `invalid_request_error`, a null code and the param `model`, "This is not a chat model and thus not supported in
+    the v1/chat/completions endpoint. Did you mean to use v1/completions?", for 35 ids: the transcription, speech,
+    realtime, `gpt-live-` and moderation ids, `whisper-1`, `text-embedding-ada-002`, and `gpt-5.2-pro`, `gpt-5.4-pro`
+    and `gpt-5.5-pro` with their dated snapshots.
+  - 404 `model_not_found`, "The model `<id>` has been deprecated, learn more here", for 44 ids: 38 of the listed ids
+    and 6 of the compiled list that the listing does not hold (`o3-deep-research*`, `o4-mini-deep-research*` and
+    `computer-use-preview*`). 34 of the 38 hold a `shutdown_date` on or before 2026-10-27 and 4 hold none
+    (`gpt-3.5-turbo-16k`, `gpt-3.5-turbo-instruct-0914`, `gpt-4o-mini-search-preview` and `gpt-4o-search-preview`). The
+    four ids `gpt-3.5-turbo`, `o1`, `o3-mini` and `o4-mini` each hold the `shutdown_date` 2026-10-23. No row with a
+    later date answered so.
+  - 404 `model_not_found`, "The model `<id>` does not exist or you do not have access to it.", for the 6 ids of the
+    compiled list that the listing does not hold and that are not in the group above: `o3-pro`, `o3-pro-2025-06-10`,
+    `gpt-daybreak-blue-latest`, `gpt-daybreak-red-latest`, `gpt-5.6-cyber` and `gpt-rosalind-research`.
+  - 404 with a null code and the param `model`, "This model is only supported in v1/responses and not in
+    v1/chat/completions.", for `gpt-5-pro`, `gpt-5-pro-2025-10-06` and `gpt-image-1-mini`, and "This model is not
+    supported in the v1/chat/completions endpoint. Use the v1/responses endpoint instead." for `gpt-5.3-codex`.
+  - 400 `invalid_request_error`, the code `invalid_value` and the param `model`, "This model requires that either input
+    content or output modality contain audio.", for `gpt-audio`, `gpt-audio-1.5`, `gpt-audio-2025-08-28`,
+    `gpt-audio-mini` and `gpt-audio-mini-2025-12-15`.
+  - 403 `invalid_request_error`, a null code, "You are not allowed to sample from this model", for
+    `text-embedding-3-large` and `text-embedding-3-small`. The 19 requests that followed the first with the same key,
+    one for each id, answered 403 for `text-embedding-3-small` and 404 for the other 18, so in these samples a 403 for
+    one id did not refuse the key for the ids after it.
+  - 503 `invalid_request_error`, "No available capacity was found for the model", for `gpt-image-2.5-flare`,
+    `gpt-image-2.5-sunburst`, their two dated snapshots, `sora-2` and `sora-2-pro`, and 500 `server_error` for
+    `chatgpt-image-latest`, `gpt-image-1.5`, `gpt-image-2` and `gpt-image-2-2026-04-21`.
+- Observed on 2026-10-27, from the same requests. None of the 28 ids of the compiled list answered 200: 3 answered with
+  Responses wording (`gpt-5-pro`, `gpt-5-pro-2025-10-06` and `gpt-5.3-codex`), 6 with "not a chat model" (the `-pro`
+  ids), 13 with "deprecated" and 6 with "does not exist or you do not have access". 16 of the 28 are in the listing.
+  An id the list leaves out, `gpt-image-1-mini`, answered with the Responses wording. None of the 40 ids that answered
+  200 is on the list. Of the 118 listed ids that the list leaves in, 40 answered 200, 61 answered 404 (29 "not a chat
+  model", 31 "deprecated" and `gpt-image-1-mini`), and 17 answered 400, 403, 500 or 503. Of the 36 ids with a
+  `shutdown_date` on or before 2026-10-27, 34 answered "deprecated" and `sora-2` and `sora-2-pro` answered 503.
+- Not shown: a 200 for an audio id, which needs `modalities`; whether the 500 and 503 answers of the image and video ids
+  are about the route; a request that carries tools; whether an id that answered 200 answers the request this program
+  sends, which has no ceiling; a reply of any length from the ten ids that stopped at the ceiling of 16 (`gpt-5-mini`
+  and `gpt-5.5` completed replies to the requests below, and `gpt-5`, `gpt-5-nano` and `o3` with their dated snapshots
+  were asked once); and why `o3-pro`, which a model page marks as Responses-only, answered that it does not exist or
+  the key has no access to it.
+- Stated by OpenAI's published API description (version 2.3.0): a listed model has `id`, `created`, `object`,
+  `owned_by` and an optional `shutdown_date`, and the description has no `/models/user` route. A chat completion
+  request takes `max_completion_tokens` and `reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh` or
+  `max`, of which not every reasoning model supports every value), and `max_tokens` is deprecated and not compatible
+  with the o-series. The models of its `ResponsesOnlyModel` list belong to the Responses request alone.
+- Stated by OpenAI's model pages (read on 2026-10-27), and not observed: the Endpoints block of the page of
+  `gpt-5.1-codex`, `gpt-5.1-codex-mini`, `gpt-5.2-codex`, `gpt-5.3-codex`, `gpt-5.2-pro` and `gpt-5.4-pro` marks
+  `v1/chat/completions` unsupported and `v1/responses` supported, as the pages of `gpt-5-codex`, `gpt-5-pro`,
+  `gpt-5.1-codex-max`, `gpt-5.5-pro`, `o3-pro` and `o1-pro` do for models the description lists, and the pages of
+  `gpt-5.4`, `gpt-4o-mini` and `o3` mark both supported. The page of `gpt-5.1-codex` also says it is available in
+  the Responses API only. The page of `gpt-image-1` marks chat completions unsupported and Responses, Batch and the
+  Images endpoints supported, so it is not on the list. The dated ids `gpt-5.2-pro-2025-12-11` and
+  `gpt-5.4-pro-2026-03-05` have no page and are listed under Snapshots on the page of their alias. Of the 128
+  ids the listing held on 2026-10-26, 81 have a page and 47, most of them dated snapshots, do not.
+- Assumed: that a model the listing holds later, that is not on the compiled list, is served by chat completions where
+  the account may use it. The 118 listed ids that the list leaves in were each asked once on 2026-10-27. 40 answered
+  200, and of the 78 that did not, 29 answered that the id is not a chat model, 31 that it is deprecated, and 18 with
+  the Responses wording, 400, 403, 500 or 503. Being listed and absent from the compiled list did not say that the
+  route serves a model.
 
 **The ChatGPT account is asked as [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) says,** and only where a sign-in
 is stored. It is a roster beside the others, its rows are keyed by its own identifier, and a listing that cannot
@@ -880,6 +943,7 @@ token is not renewed for it.
 `verified-by: bravebot_aichat::models::an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes`
 `verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
 `verified-by: bravebot_config::provider::the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not`
+`verified-by: bravebot_config::provider::the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::client::an_anthropic_listing_is_asked_for_once_as_a_whole_page_with_the_key_in_its_header`
 `verified-by: bravebot_aichat::models::an_anthropic_listing_is_offered_under_the_providers_id_with_the_window_it_states`
@@ -897,6 +961,7 @@ token is not renewed for it.
 `verified-by: bravebot_tui::app::the_accounts_rows_are_met_in_reading_order_listed_or_compiled_and_nothing_else_adds_one`
 `verified-by: bravebot_tui::app::the_picker_says_which_gateway_could_not_be_listed_and_says_nothing_of_the_rest`
 `verified-by: bravebot_ui_bridge::models::the_window_says_which_gateway_could_not_be_listed`
+`verified-by: bravebot_ui_bridge::models::the_window_lists_an_openai_entry_with_its_key_and_offers_every_row_under_openai`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::chatgpt::the_models_an_entry_names_are_offered_in_place_of_the_listing_and_need_no_token`
 
@@ -1041,9 +1106,33 @@ for the life of the process.
 
 **At OpenAI's own API, the level is the one concession.** A request to `api.openai.com` carries no
 breakpoints from the first request ([BACKEND-32](#BACKEND-32)), so the breakpoints are already given up
-and the level is the only field a refusal can be about. A request refused on its contents is sent again
-once, without the level, and then the refusal is reported. A request that carried no level is reported as it
-was refused. A proxy keyed `openai` is sent the breakpoints and is a gateway as the paragraph above says.
+and the level is the only field this program gives up. A refusal does not say which field it is about: a field
+the service does not know is refused with the same status and error type as a level, and is told from one only by
+the request being refused again without the level, which settles nothing and is not remembered. A request refused
+on its contents is sent again once, without the level, and then the refusal is reported. A request that carried no
+level is reported as it was refused. A proxy keyed `openai` is sent the breakpoints and is a gateway as the paragraph above says.
+
+**What is known of a level at OpenAI's own API.** [BACKEND-19](#BACKEND-19) holds what OpenAI's published API
+description states of the field.
+
+- Observed on 2026-10-27, one sample for each model and level, in a chat completion that was not streamed, with one
+  user message and a `max_completion_tokens` of 64 or 800. Two models that do not reason refused the field:
+  `gpt-4o-mini` for `none` and `low`, and `gpt-4.1-mini` for `low`, answered 400 with the error type
+  `invalid_request_error`, a null `code`, a null `param` and the message "Unrecognized request argument supplied:
+  reasoning_effort". Three reasoning models refused a level they do not take with 400, the error type
+  `invalid_request_error`, the code `unsupported_value`, the `param` `reasoning_effort` and a message that names the
+  levels they take ("Unsupported value: 'reasoning_effort' does not support 'xhigh' with this model. Supported values
+  are: ..."). `gpt-5.4-mini` and `gpt-5.6-luna` took `none`,
+  `low`, `medium`, `high` and `xhigh` and refused `minimal` and `max`. `gpt-5-mini` took `minimal`, `low`, `medium` and
+  `high` and refused `none`, `xhigh` and `max`. A level that was taken answered 200, and the reasoning tokens reported
+  were 0 for most of them (10, 12 and 10 for `medium`, `high` and `xhigh` on `gpt-5.4-mini`, and 64 for `high` on
+  `gpt-5-mini`), so a taken level is not a measured one. Of the levels this program sends (`low`, `medium`, `high`,
+  `xhigh` and `max`), `xhigh` was refused by one of the three reasoning models and `max` by all three.
+- Observed on 2026-10-27, through this program. `bravebot -p` with `--effort high` on `openai/gpt-4o-mini` and with
+  `--effort xhigh` on `openai/gpt-5-mini` each exited 0 and printed a reply, and the diagnostic log of each held one
+  refused request with the status 400.
+- Not shown: a level of `max` taken by any model, the levels of a model that was not tried, and a level in a streamed
+  request.
 
 **On Vertex express mode, the level is the one concession.** The request carries no breakpoints, so
 a request refused on its contents is sent again once without the level and not again, and a request
@@ -1087,6 +1176,8 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
 `verified-by: bravebot_aichat::client::one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway`
 `verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
+`verified-by: bravebot_aichat::client::a_level_refused_in_either_body_openai_answers_with_is_given_up_and_the_turn_completes`
+`verified-by: bravebot_aichat::client::a_refusal_naming_another_field_does_not_make_the_level_one_a_model_refuses`
 `verified-by: bravebot_aichat::lib::a_refusal_at_openais_own_api_gives_up_the_level_and_nothing_else`
 `verified-by: bravebot_aichat::client::a_model_that_refuses_the_thinking_budget_is_asked_again_without_it`
 `verified-by: bravebot_aichat::client::a_refusal_of_a_request_asking_for_no_level_is_reported_after_one_request`
@@ -1107,9 +1198,16 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
+`verified-by: bravebot_bedrock::lib::a_model_that_refused_the_level_once_is_remembered_as_refusing_it`
+`verified-by: bravebot_agent::backend::before_any_refusal_every_service_reads_the_level`
+`verified-by: bravebot_agent::backend::a_level_one_gateway_refused_is_not_refused_at_another_service_with_the_slug`
+`verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_level_the_chatgpt_account_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_model_a_bedrock_account_answers_for_is_not_asked_of_the_default_endpoint`
 `verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug`
 `verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
 `verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_level_a_bedrock_model_refused_is_reported_for_that_model_only`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
@@ -1539,32 +1637,92 @@ quoted and the planner is told in the same breath that nothing inside it is addr
 
 A reply's usage carries two figures beside the prompt total: how much of the prompt the service
 answered out of its own cache, and how much this request wrote into that cache for the next one to
-read. Both are counted inside the prompt total rather than beside it, so one figure says what a
-round sent and the other two say what it cost. Bedrock states both, and so does Anthropic, as
-`cache_read_input_tokens` and `cache_creation_input_tokens` beside an `input_tokens` that is net of the
-cache, so the prompt is the three added together. An OpenAI-compatible reply is read for the cached part alone, in
-`prompt_tokens_details.cached_tokens`, and a write is counted as zero. The Responses API states the read in
-`input_tokens_details.cached_tokens` and the write in `input_tokens_details.cache_write_tokens`, both
-counted inside `input_tokens`, and the ChatGPT account is read as the Responses API is
-([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). A service stating neither leaves both at zero, and a figure Anthropic states as `null` is one it did not state.
+read, so the prompt total says what a round sent and the two figures say what it cost. Bedrock states
+both, and so does Anthropic, as `cache_read_input_tokens` and `cache_creation_input_tokens` beside an
+`input_tokens` that is net of the cache, so the prompt is the three added together and both figures are
+counted inside it. An OpenAI-compatible reply states the read in `prompt_tokens_details.cached_tokens`
+and, where a service states one, the write in `prompt_tokens_details.cache_write_tokens`; the prompt total
+is not adjusted by either, and a write that is absent, `null` or not written in the JSON as an unsigned
+integer is zero, which takes text, a negative number and a number written with a fraction or an exponent,
+so `90.0` and `9e1` read as zero as `90.5` does. What OpenAI states of the two figures for a chat
+completions route, and what has been seen of them, is under "What OpenAI's own API reports" below. The
+Responses API states the read in `input_tokens_details.cached_tokens` and the write in
+`input_tokens_details.cache_write_tokens`, both counted inside `input_tokens`, and the ChatGPT account is
+read as the Responses API is ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). A service stating neither
+leaves both at zero, and a figure Anthropic states as `null` is one it did not state.
 
 A turn sums them over its rounds, as it sums the total, and a delegate's are added to the turn that
-spawned it.
+spawned it. A sum of the two figures stops at the largest number a count holds, since a gateway states them and
+one may state that number.
 
 **What OpenAI's own API reports.**
 
-- Observed: no completed reply. On 2026-10-26 no chat completion sent to `api.openai.com` answered 200: they
-  answered 429 `insufficient_quota`, 404 or 403 ([BACKEND-19](#BACKEND-19)), so no `usage` object and no cached
-  figure has been read from it. A test parses a usage object of the shape the next bullet states, with a
-  `cache_write_tokens` beside `cached_tokens`, and holds the cached figure read and the write figure at zero.
+- Observed on 2026-10-27, in replies to chat completions sent to `api.openai.com` with a key whose account had credit.
+  - The request this program sends (the keys `messages`, `model`, `stream`, `stream_options` and `tools`, 22 tools, a
+    system message and a user message with string contents, no `max_tokens`, `max_completion_tokens`,
+    `reasoning_effort` or `cache_control`) was answered 200 by `gpt-4o-mini` with the content type
+    `text/event-stream; charset=utf-8`, and a `bravebot -p` turn on `openai/gpt-4o-mini` exited 0 and printed the
+    reply.
+  - A streamed reply held four data chunks and `[DONE]`: a chunk whose `delta` held `content`, `refusal` and `role`, a
+    chunk with the words, a chunk with an empty `delta` and the `finish_reason` `stop`, and a last chunk whose
+    `choices` was empty and whose `usage` held the figures. Every chunk held `choices`, `created`, `id`, `model`,
+    `obfuscation`, `object`, `service_tier`, `system_fingerprint` and `usage`, and `usage` was `null` on the first
+    three. A reply that was not streamed held `choices`, `created`, `id`, `model`, `object`, `service_tier`,
+    `system_fingerprint` and `usage`, and its `usage` had the shapes of a streamed one.
+  - `usage` held `prompt_tokens`, `completion_tokens`, `total_tokens`, which is their sum, `prompt_tokens_details` and
+    `completion_tokens_details` (`reasoning_tokens`, `audio_tokens`, `accepted_prediction_tokens` and
+    `rejected_prediction_tokens`). `prompt_tokens_details` held `cached_tokens` and `audio_tokens`.
+  - It also held `cache_write_tokens` in the reply to the one short request sent for each id (13 prompt tokens on all
+    eight, not streamed) for 8 of the 40 ids that answered 200: `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+    `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra`, each with the value 0. The other 32 did
+    not hold it: `chat-latest` and the ids of the `o3`, `gpt-4o`, `gpt-4.1`, `gpt-5` and `gpt-5.1` to `gpt-5.5`
+    families, dated snapshots included. The replies of the pair of requests below agreed with that: the key was held
+    for `gpt-5.6-luna` (streamed and not) and `gpt-6-luna` (streamed), and not held for `gpt-4o-mini`, `gpt-4.1-mini`,
+    `gpt-5-mini` and `gpt-5.4-mini` (streamed and not) and `gpt-5.5` (streamed).
+  - A prompt of about 1670 tokens (a system message headed by a tag that differed for each run, and the user message
+    `Reply with the single word: ok`) was sent with no mark in 12 runs of two or three requests each, over seven models:
+    streamed to each, and not streamed to `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-5-mini`, `gpt-5.4-mini` and
+    `gpt-5.6-luna`. Each request carried a `max_completion_tokens` of 64, or of 400 to 800, which the request this
+    program sends does not. The second request of a run was sent about 9 seconds after the first reply ended, and a
+    third was sent about 11 seconds after the second reply ended where the second had read nothing. `cached_tokens` is
+    counted inside `prompt_tokens`: the first request of `gpt-4o-mini` streamed reported 0 of 1671 and the second 1536
+    of 1671. The second request read from the cache in 8 of the 12 runs: 1536 tokens in both runs of `gpt-4o-mini` and
+    of `gpt-4.1-mini` and in `gpt-5-mini` not streamed, and the `gpt-5.6-luna` and `gpt-6-luna` runs below. It did not
+    in 3 runs: `gpt-5-mini` streamed and `gpt-5.4-mini` not streamed read 0, and `gpt-5.4-mini` streamed answered 500
+    `server_error`, the second request of each `gpt-5.4-mini` run having taken 22 seconds. The third request of those
+    three read 1536, and was sent about 21 seconds after the first reply ended for `gpt-5-mini` and about 42 seconds
+    after it for `gpt-5.4-mini`. In the twelfth run, `gpt-5.5` streamed, three requests, the last about 21 seconds
+    after the first reply ended, read 0. The reads of 1536 and the read of 16256 on `gpt-4o-mini` below were multiples
+    of 128, and those of the `luna` models were not.
+  - `gpt-5.6-luna` reported `cached_tokens` 0 and a `cache_write_tokens` of 1670 for a prompt of 1673 on the first
+    request (1669 of 1672 not streamed, and 1673 of 1676 on `gpt-6-luna`, streamed), counted inside `prompt_tokens`,
+    which was not adjusted: `total_tokens` was 1677 for 4 completion tokens. The second request reported the same
+    number as `cached_tokens` (1670, 1669 and 1673) and a `cache_write_tokens` of 0, present in the object. No mark
+    had been sent. These two models are the ones of the eight that were sent the pair.
+  - The body this program sends to `gpt-4o-mini`, with no ceiling, sent a second time about four minutes after the
+    first, reported 16256 `cached_tokens` of 16322 where the first had reported 0.
+- Not shown: a write above 0 on any of the other six ids that hold the key, what a write is charged (no price was
+  read), whether a mark changes the figures (no mark was sent in these requests, and the marked request of
+  [BACKEND-32](#BACKEND-32) is not comparable with them), a `prompt_cache_key`, tool results in the prompt, and
+  `gpt-5.5` reading after more than 21 seconds.
 - Stated by OpenAI's published API description (version 2.3.0): a request with
   `stream_options.include_usage` gets one more chunk before the end of the stream, whose `usage` holds
   `prompt_tokens` and `completion_tokens` and whose `choices` is empty; `usage.prompt_tokens_details` holds
   `cached_tokens`, the cached tokens present in the prompt, and `cache_write_tokens`, the unadjusted number
-  of prompt tokens written to the cache.
-- Assumed: that a reply to the request this program sends carries that chunk, and that
-  `cache_write_tokens` is sent. The second is not read, so a turn reports a write of zero for this service
-  ([Known costs](#known-costs)).
+  of prompt tokens written to the cache. The `openai-python` type of that object
+  (`src/openai/types/completion_usage.py`, read on 2026-10-27) names the same two fields in the same words, as an
+  optional whole number each. OpenAI's prompt caching guide, read on 2026-10-27, shows `cache_write_tokens` for the
+  Responses API only, in `usage.input_tokens_details`, and says nothing of it for chat completions.
+- Shown by an example in OpenAI's cookbook, which is neither this program's observation nor the API's present
+  statement: the notebook `Prompt_Caching101.ipynb`, read on 2026-10-27, prints non-streamed chat completions
+  replies of 1 October 2024 from `gpt-4o-mini-2024-07-18` and `gpt-4o-2024-08-06`. Their `prompt_tokens_details`
+  holds `cached_tokens` alone. The reply of the first that read from the cache has a `prompt_tokens` of 1136, a
+  `cached_tokens` of 1024, 64 completion tokens and a `total_tokens` of 1200, and the second 1548, 1280, 86 and
+  1634. They are examples of two models on one day. No source read states whether `prompt_tokens` counts a
+  write.
+- The figure is read where it is sent, and a turn reports a write of zero for a model that states none, as it does for
+  any other gateway that states none ([Known costs](#known-costs)). A gateway that states a write in another field or
+  shape is not read for it.
 
 **Why.** A cached token is charged at a fraction of a fresh one and a written one above it, so the
 prompt total is the one figure that does not move when caching begins working. Two sessions of the
@@ -1618,7 +1776,14 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_aichat::client::a_whole_anthropic_reply_is_read_into_text_calls_model_and_cost`
 `verified-by: bravebot_aichat::client::an_anthropic_stream_is_assembled_from_its_events_and_asks_for_arguments_as_written`
 `verified-by: bravebot_aichat::protocol::the_cache_figure_is_read_out_of_the_details_object`
-`verified-by: bravebot_aichat::protocol::a_cache_write_figure_beside_the_cached_one_is_not_read_and_does_not_fail_the_reply`
+`verified-by: bravebot_aichat::protocol::a_cache_write_figure_beside_the_cached_one_is_read_as_the_write`
+`verified-by: bravebot_aichat::protocol::a_cache_write_is_read_with_no_cached_figure_beside_it`
+`verified-by: bravebot_aichat::protocol::a_cache_write_not_written_as_an_unsigned_integer_reads_as_silence_and_does_not_fail_the_reply`
+`verified-by: bravebot_aichat::protocol::cache_figures_stated_at_the_largest_number_saturate_when_summed`
+`verified-by: bravebot_aichat::protocol::a_cache_write_in_the_usage_chunk_is_what_the_stream_reports`
+`verified-by: bravebot_aichat::protocol::a_whole_reply_as_openai_sends_it_reports_the_cache_figures_it_states`
+`verified-by: bravebot_aichat::protocol::the_usage_chunk_with_no_choices_after_the_finish_reason_is_the_usage_the_stream_reports`
+`verified-by: bravebot_aichat::client::a_reply_as_openai_sends_it_reports_its_cache_figures_whole_and_streamed`
 `verified-by: bravebot_aichat::protocol::a_usage_object_without_cache_figures_still_parses`
 `verified-by: bravebot_aichat::protocol::a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply`
 `verified-by: bravebot_agent::turn::a_turn_sums_what_its_rounds_read_out_of_the_cache`
@@ -1693,13 +1858,40 @@ again. This is BACKEND-27's rule and its reason, in the statuses this protocol s
 
 **OpenAI's own API is sent none.** A request to `api.openai.com` carries no breakpoints, and they are given up
 before the first request, so no request is spent finding out, and a refusal that follows is read as a refusal of
-the level, since no marks were sent. OpenAI caches a repeated prompt without being asked, and its published API
-description (version 2.3.0) gives a text content part `type`, `text` and `prompt_cache_breakpoint`, an explicit mark
-for gpt-5.6 and later that this program does not send, and no `cache_control`. Whether OpenAI answers a
-`cache_control` with a refusal or ignores it is not observed: on 2026-10-26 a body carrying one answered 429
-`insufficient_quota` ([BACKEND-19](#BACKEND-19)). The host a request goes to decides this, compared as
-[BACKEND-19](#BACKEND-19) says, so a proxy keyed `openai` that reads the marks is sent them, and an entry under
-another id that states OpenAI's endpoint is not. A `promptCacheTtl` rides on the marks and is not sent there either.
+the level, since no marks were sent. The observations below show a repeated prompt read from the cache with no mark
+sent, and a `cache_control` that was sent answered 200 and not refused. The one marked request whose cache figure was
+read is not comparable with an unmarked one, so whether a mark changes what is read is not known. The host a
+request goes to decides this, compared as [BACKEND-19](#BACKEND-19) says, so a proxy keyed `openai` that reads the marks
+is sent them, and an entry under another id that states OpenAI's endpoint is not. A `promptCacheTtl` rides on the marks
+and is not sent there either.
+
+**What is known of OpenAI's own API and these marks.** [BACKEND-31](#BACKEND-31) holds the cache figures its replies
+state.
+
+- Observed on 2026-10-27, one sample for each, in chat completions sent to `api.openai.com`. A `cache_control` of
+  `{"type": "ephemeral"}` on a user text part, and the same with `"ttl": "1h"`, was sent with a `max_completion_tokens`
+  and answered 200 by `gpt-4o-mini` and by `gpt-5.4-mini`, with the `prompt_tokens` of the same message sent without
+  it in the sweep of [BACKEND-19](#BACKEND-19) (14 and 13), so it was not refused. A body in the shape this program builds for a proxy keyed `openai` (two marks, contents as blocks, 22 tools, streamed,
+  no ceiling, 78404 bytes) was answered 200 by `gpt-4o-mini` about seven minutes after the first send of this
+  program's body for `api.openai.com` (contents as strings, no marks, 78278 bytes) and reported 2816 `cached_tokens`
+  of 16322; its marks were on the system message part and on the user message part. That body, sent about four
+  minutes after its first send, had reported 16256 of 16322 ([BACKEND-31](#BACKEND-31)). The two figures are of two
+  bodies sent at different times, once each, and are not compared. A field at the top of the body that the service
+  does not know, sent with a `max_completion_tokens`, was refused with 400 and the error type `invalid_request_error`:
+  by `gpt-4o-mini` with a null `code`, a null `param` and the message "Unrecognized request argument supplied:
+  probe_unknown_field", and by `gpt-5.4-mini` with the code `unknown_parameter`, the `param` `probe_unknown_field` and
+  the message "Unknown parameter: 'probe_unknown_field'.". That is the status and the type of the refusal of a level ([BACKEND-22](#BACKEND-22)).
+- Observed on 2026-10-27, with no mark sent. A prompt sent again was read from the cache by each model tried except
+  `gpt-5.5`: on the second request, or for `gpt-5-mini` streamed and `gpt-5.4-mini` on the third, sent about 21 and about
+  42 seconds after the first reply ended. `gpt-5.5` read nothing in three requests, the last about 21 seconds after
+  the first reply. The body this program sends to `api.openai.com`, which carries no mark, read 16256 of its 16322
+  tokens when sent a second time about four minutes after the first ([BACKEND-31](#BACKEND-31)).
+- Stated by OpenAI's published API description (version 2.3.0): a text content part has `type`, `text` and
+  `prompt_cache_breakpoint`, an explicit mark for gpt-5.6 and later that this program does not send, and no
+  `cache_control`.
+- Not shown: a `cache_control` on a `tool` message part, on a `system` message part with none on the user message,
+  in a request with tool results, or on a model other than the two named; and a field nested elsewhere that the
+  service does not know.
 
 **Remembered against the service as well as the model.** A model id says nothing about who serves
 it: two gateways can offer the same name, and one of them can be the name Brave's own endpoint
@@ -3055,6 +3247,7 @@ parsed number only how long.
 `verified-by: bravebot_aichat::call::a_rate_limit_is_waited_out_and_announced_before_the_wait`
 `verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again`
 `verified-by: bravebot_aichat::client::a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure`
+`verified-by: bravebot_aichat::lib::a_transient_failure_is_retried_unless_a_429_asked_for_more_than_the_ceiling`
 `verified-by: bravebot_aichat::client::a_retry_after_that_does_not_parse_falls_back_to_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`
@@ -3316,6 +3509,10 @@ turning prompt caching off for the rest of the session.
 `verified-by: bravebot_aichat::conversation::only_a_data_uri_with_bytes_is_offered_to_the_wire_and_every_one_takes_a_position`
 `verified-by: bravebot_bedrock::protocol::a_system_turn_becomes_the_top_level_field`
 `verified-by: bravebot_bedrock::protocol::consecutive_tool_results_merge_into_one_turn`
+`verified-by: bravebot_bedrock::protocol::a_note_after_the_line_a_person_typed_is_a_block_on_a_new_paragraph`
+`verified-by: bravebot_aichat::anthropic::protocol::a_note_after_the_line_a_person_typed_is_a_block_on_a_new_paragraph`
+`verified-by: bravebot_aichat::conversation::the_paragraph_separator_follows_the_text_a_turn_ends_in_and_nothing_else`
+`verified-by: bravebot_agent::turn::the_skills_overview_is_a_separate_paragraph_from_the_prompt_on_block_based_wires`
 `verified-by: bravebot_config::provider::an_anthropic_entry_is_reached_through_the_messages_api_at_anthropics_host`
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_failed_messages_call_keeps_its_attempts_and_what_the_service_counted`
@@ -3434,6 +3631,7 @@ value, while which models read a budget at all is learned from a refusal as BACK
 `verified-by: bravebot_aichat::generate_content::protocol::an_attachment_is_inline_data_for_a_media_type_this_api_takes`
 `verified-by: bravebot_aichat::generate_content::protocol::a_whole_reply_is_read_into_text_calls_and_cost`
 `verified-by: bravebot_aichat::generate_content::protocol::a_call_naming_no_arguments_has_an_empty_object_and_each_call_its_own_id`
+`verified-by: bravebot_aichat::generate_content::protocol::a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph`
 `verified-by: bravebot_aichat::generate_content::protocol::a_reply_that_stopped_for_a_reason_is_a_failure_and_an_ordinary_stop_is_not`
 `verified-by: bravebot_aichat::generate_content::protocol::a_google_status_word_maps_to_a_failure_in_the_closed_set`
 `verified-by: bravebot_aichat::generate_content::protocol::a_streamed_piece_is_a_response_an_error_or_nothing_this_reads`
@@ -3570,7 +3768,8 @@ The body is built from the conversation as these fields:
   string, and its result is a `function_call_output` item with the same `call_id` and the result as text.
   Calls and results are paired, ordered and cleaned of what the service would refuse by the walk of the
   conversation that [BACKEND-57](#BACKEND-57) names, so a result with no call is dropped there and not here,
-  and arguments that are not a JSON object cross as `{}`.
+  and arguments that are not a JSON object cross as `{}`. A user message merged into a turn that already
+  ends in text starts its first text part on a new paragraph, as [BACKEND-57](#BACKEND-57) says.
 - `tools` is each tool as one object with `type` `function`, a `name`, a `description`, `parameters` and
   `strict` of `false`, and `tool_choice` is `auto` where any is offered.
 - `stream` is `true` on every request, and the reply is read as server-sent events whatever the caller
@@ -3610,9 +3809,11 @@ attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure repor
 codes with which the ChatGPT account says it has reached its usage limit or may not be used this way
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)), in a `response.failed` event or an `error` event, are read on
 the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of
-that clause without being asked for again. From any other service they are a failure it did not name. A
-stream that stops before any of them is a reply that did not finish and is asked for again, as many times as
-the entry's retries allow ([BACKEND-55](#BACKEND-55)) and no more.
+that clause without being asked for again. The code of an `error` event is the `code` of an `error` object
+in it or, where that holds none, its own `code`, and the object's wins where both are strings. From any
+other service they are a failure it did not name. A stream that stops before any of them is a reply that
+did not finish and is asked for again, as many times as the entry's retries allow
+([BACKEND-55](#BACKEND-55)) and no more.
 
 A reasoning item a reply carried is not sent back. The conversation keeps a model's words and calls, so a
 later request carries none of its earlier reasoning, which the service accepts. The request does not ask
@@ -3635,8 +3836,10 @@ reasoning turn with a summary, a picture, the model's own words as `output_text`
 the refusals above, to end a reply stopped at its ceiling with `response.incomplete`, and to count the
 cached part of a prompt inside `input_tokens`
 ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). A `response.failed`
-event and an `error` event have not been seen there. Nothing has been observed of an entry that names
-`@ai-sdk/openai` on another service.
+event has not been seen there, and an `error` event has not been seen on the POST event stream this protocol
+reads. An `error` event was seen over the ChatGPT host's websocket on 2026-10-27, with its code in an `error`
+object ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). Nothing has
+been observed of an entry that names `@ai-sdk/openai` on another service.
 
 **Built:** the protocol for an entry that names `@ai-sdk/openai`, in `bravebot-aichat` beside the Anthropic
 and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings
@@ -3668,6 +3871,7 @@ clause was written for.
 `verified-by: bravebot_aichat::responses::protocol::a_request_offering_no_tools_sends_no_tool_fields_and_its_calls_as_text`
 `verified-by: bravebot_aichat::responses::protocol::reasoning_is_the_level_and_a_summary_only_where_a_level_was_given`
 `verified-by: bravebot_aichat::responses::protocol::a_picture_crosses_as_a_data_uri_and_a_document_is_dropped`
+`verified-by: bravebot_aichat::responses::protocol::a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph`
 `verified-by: bravebot_aichat::responses::protocol::the_events_that_carry_a_reply_decode`
 `verified-by: bravebot_aichat::responses::protocol::a_stream_ends_in_one_of_three_events_and_reports_usage`
 `verified-by: bravebot_aichat::responses::protocol::a_reported_failure_is_one_of_a_closed_set_and_never_named_by_the_service`
@@ -4064,25 +4268,40 @@ clause was written for.
   compiled-in list.** The listing states an id and an owner for each model and nothing about what it
   can do, so BACKEND-19 has nothing to drop on, and the picker holds embedding, speech and image
   models beside the chat ones. That waives BACKEND-5's promise that picking a listed name works, for
-  the rows of this one service. The ids left out are the `ResponsesOnlyModel` list of OpenAI's
-  published API description, and only where the route is chat completions at `api.openai.com`. The
-  list goes stale with each release. Filtering by anything else an id says would be a guess about
-  OpenAI's naming, and a model named otherwise would be hidden from somebody who could use it. A list
-  of the chat models compiled into the binary, as BACKEND-49 compiles one for Vertex AI, would go
-  stale the same way, and each id on it would first have to be answered with a tool call and its
-  result by the service. A block naming `models` is offered those and no others.
+  the rows of this one service. The ids left out are those of the `ResponsesOnlyModel` list of
+  OpenAI's published API description and of the model pages that mark chat completions unsupported
+  and Responses supported ([BACKEND-19](#BACKEND-19)), and only where the route is chat completions
+  at `api.openai.com`. The list goes stale with each release of either. Filtering by anything else
+  an id says would be a guess about OpenAI's naming, and a model named otherwise would be hidden
+  from somebody who could use it. A list of the chat models compiled into the binary, as BACKEND-49
+  compiles one for Vertex AI, would go stale the same way, and each id on it would first have to be
+  answered with a tool call and its result by the service. A block naming `models` is offered those
+  and no others.
 
-- **A model OpenAI serves only through its Responses API, and that list does not name, is offered
-  and fails when picked.** The route is chat completions unless the entry names `@ai-sdk/openai`,
-  and the listing does not say which models take either. A listed model the key cannot use is
-  offered as well: on 2026-10-26 the `-codex` rows and others answered 404 to a chat completion
+- **A model the chat completions route does not serve is offered and fails when picked.** The route is chat
+  completions unless the entry names `@ai-sdk/openai`, and the listing does not say which models take either.
+  The compiled list holds the ids the description and the model pages read on 2026-10-27 name, so a model
+  released since, or one whose page states no endpoints, is offered, and so is `gpt-image-1-mini`, which the route
+  refuses as Responses-only. The list holds ids the route answers as deprecated or unknown as well: of its 28 ids the
+  route named the Responses API for 3, answered "not a chat model" for 6, "deprecated" for 13 and "does not exist or
+  you do not have access" for 6, and none answered 200. A model whose listed `shutdown_date` has passed is offered
+  too: of the 36 ids of the listing of 2026-10-27 with a date on or before that day, 34 answered that the model has
+  been deprecated and two (`sora-2` and `sora-2-pro`) answered 503, and 4 ids with no date answered it as well. The
+  route answered the same for `gpt-3.5-turbo`, `o1`, `o3-mini` and `o4-mini`, whose pages mark them as taking chat
+  completions. The rows of embedding, speech, transcription, realtime, moderation, audio, image and video models are
+  offered. Asked once each on 2026-10-27 with one short message and no `modalities`, the embedding ids answered 403 or
+  404, the speech, transcription, realtime and moderation ids 404, five of the six audio ids 400 for want of an audio
+  modality, and the image and video ids 500 or 503, which may not be about the route, except two image ids that
+  answered 404. Of the 118 ids of the listing of 2026-10-27 that the compiled list leaves in, 40 answered 200 to a
+  request with a ceiling of 16 tokens, 10 of them with an empty content cut at that ceiling, and 78 did not
   ([BACKEND-19](#BACKEND-19)). A block naming `models` offers only the ones it names.
 
-- **A cache write figure that OpenAI's description names for chat completions is not read.** The
-  published description lists `prompt_tokens_details.cache_write_tokens` for a chat completions
-  reply. BACKEND-31 reads `cached_tokens` alone, so a turn through that route reports a write of
-  zero and the status panel draws no write line for it. No reply holding the field has been
-  observed.
+- **A cache write figure is stated by some of OpenAI's models and not by others.** BACKEND-31 reads
+  `prompt_tokens_details.cache_write_tokens` where a reply states it. On 2026-10-27 eight of the 40 ids that answered 200 to
+  a request with a ceiling of 16 tokens stated it (`gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`,
+  `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra`) and the other 32 did not, although a prompt sent a second time was read from the
+  cache by `gpt-4o-mini`, `gpt-4.1-mini`, `gpt-5-mini` and `gpt-5.4-mini` among them. A turn through a model that
+  states none reports a write of zero and the status panel draws no write line for it, whatever was written.
 
 - **The status panel names the `promptCacheTtl` setting after a turn that sent no lifetime.** The
   line reads the setting whichever route the turn took. A request to `api.openai.com` carries
@@ -4093,15 +4312,24 @@ clause was written for.
   after `/model`.
 
 - **Each OpenAI roster costs a request that is refused.** BACKEND-19 asks what the credential may
-  reach at `/models/user` before it asks for the whole listing. On 2026-10-26 OpenAI answered it
-  with 404 `model_not_found`, and its published API description has no such route. The listing is
+  reach at `/models/user` before it asks for the whole listing. OpenAI answered it with 404 on
+  2026-10-26 and on 2026-10-27, and its published API description has no such route. The listing is
   asked second.
 
 - **A refusal of the `cache_control` markers of BACKEND-32 by a service keyed `openai` at another host
-  costs one refused request.** A request to `api.openai.com` carries none. Whether a proxy keyed
-  `openai` reads them is not known, so one is sent them, and a refusal with an invalid-request
-  status is asked again without them, once for each model in each process. An accepted request is
-  marked as BACKEND-32 says.
+  costs one refused request.** A request to `api.openai.com` carries none. `gpt-4o-mini` and `gpt-5.4-mini` answered 200
+  to a `cache_control` on a content part, so a request there that carried one was not refused on 2026-10-27. Whether a
+  proxy keyed `openai` reads them is not known, so one is sent them, and a
+  refusal with an invalid-request status is asked again without them, once for each model in each
+  process. An accepted request is marked as BACKEND-32 says.
+
+- **A level that one OpenAI model refuses takes every level from it.** The three reasoning models tried on
+  2026-10-27 refused the levels they do not take with the status of any other refused body, and the program
+  reads the status and not the body ([BACKEND-22](#BACKEND-22)). `gpt-5-mini` took `low`, `medium` and `high`
+  and refused `xhigh`, so after a person chose `xhigh` no request to it carries `high` either for the rest
+  of the process, and the model is reported as reading none. A level a model does not take is refused with
+  the status of a field it does not know, and the two are told apart only by sending the request again
+  without the level.
 
 - **An entry keyed `openai` is read as OpenAI's for the model a reply names, at any endpoint.** An
   entry keyed `openai` is not checked for a substituted model, even where its `baseURL` names a

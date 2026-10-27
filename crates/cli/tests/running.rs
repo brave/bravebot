@@ -13397,6 +13397,44 @@ fn bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal() {
             &["--bg", "--processor-model", "haiku", "fix it"][..],
             "--processor-model",
         ),
+        // The one-shot options `parse_invocation` reads, given after the prompt the way the
+        // reproduction in brave/bravebot#2936 gave `--max-rounds`: joined into the words `--bg`
+        // starts the session with, and so refused by name rather than reaching the model as text.
+        (
+            &["--bg", "say hello", "--max-rounds", "3"][..],
+            "--max-rounds",
+        ),
+        (
+            &["--bg", "say hello", "--max-tokens", "100"][..],
+            "--max-tokens",
+        ),
+        (&["--bg", "say hello", "--model", "haiku"][..], "--model"),
+        (&["--bg", "say hello", "--effort", "low"][..], "--effort"),
+        (
+            &["--bg", "say hello", "--advisor", "reviewer"][..],
+            "--advisor",
+        ),
+        (&["--bg", "say hello", "--file", "a.txt"][..], "--file"),
+        (
+            &["--bg", "say hello", "--session-ref", "abc"][..],
+            "--session-ref",
+        ),
+        (
+            &["--bg", "say hello", "--add-dir", "../sibling"][..],
+            "--add-dir",
+        ),
+        (
+            &["--bg", "say hello", "--trust-workspace"][..],
+            "--trust-workspace",
+        ),
+        (&["--bg", "say hello", "--trace"][..], "--trace"),
+        (&["--bg", "say hello", "--json"][..], "--json"),
+        (&["--bg", "say hello", "--json-stream"][..], "--json-stream"),
+        (
+            &["--bg", "say hello", "--output-schema", "schema.json"][..],
+            "--output-schema",
+        ),
+        (&["--bg", "say hello", "--mode", "manifest"][..], "--mode"),
         (&["--vet", "--bg", "fix it"][..], "--vet"),
         (
             &["--settings", "s.json", "--bg", "fix it"][..],
@@ -18906,6 +18944,28 @@ fn a_goal_run_sends_the_work_back_until_the_judge_says_met() {
     assert!(
         stderr.contains("the goal is met: the tests ran"),
         "{stderr}"
+    );
+}
+
+/// GROUND-4: a one-shot run's judge reads the driver's count of what the rounds since the goal was
+/// set ran and wrote, before the condition, as a session's judge does.
+#[test]
+fn a_goal_runs_judge_is_given_the_record_of_what_ran() {
+    let gateway = a_gateway_for_a_goal(&["MET\nalready green"], 0);
+
+    let (output, requests) = a_goal_run("cli-running-goal-work-record", &gateway, &[]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let check = requests
+        .iter()
+        .find(|body| body.contains(THE_JUDGES_WORDS))
+        .expect("the goal was never checked");
+    assert!(
+        check
+            .contains("Since the goal was set, bravebot counted 0 commands run and 0 writes made.")
+            && check.contains("No file was written."),
+        "the judge was not given the record: {check}"
     );
 }
 

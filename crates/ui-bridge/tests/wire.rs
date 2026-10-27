@@ -161,11 +161,12 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
             label: label.into(),
             preview: vec!["first line".into()],
             lines: 240,
-        })["label"]
-            .clone()
+        })
     };
-    assert_eq!(shown("(U,priv)"), json!("(U,priv)"));
-    assert_eq!(shown("(T,pub)"), json!("(T,pub)"));
+    assert_eq!(shown("(U,priv)")["label"], json!("(U,priv)"));
+    assert_eq!(shown("(T,pub)")["label"], json!("(T,pub)"));
+    assert_eq!(shown("(U,priv)")["labelAxes"], axes("untrusted", "private"));
+    assert_eq!(shown("(T,pub)")["labelAxes"], axes("trusted", "public"));
 
     let remark = |label: &str| {
         wire::write_request(
@@ -189,11 +190,16 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
                 record: None,
                 may_edit: false,
             },
-        )["remark"]["label"]
+        )["remark"]
             .clone()
     };
-    assert_eq!(remark("(U,priv)"), json!("(U,priv)"));
-    assert_eq!(remark("(T,pub)"), json!("(T,pub)"));
+    assert_eq!(remark("(U,priv)")["label"], json!("(U,priv)"));
+    assert_eq!(remark("(T,pub)")["label"], json!("(T,pub)"));
+    assert_eq!(
+        remark("(U,priv)")["labelAxes"],
+        axes("untrusted", "private")
+    );
+    assert_eq!(remark("(T,pub)")["labelAxes"], axes("trusted", "public"));
 }
 
 /// A prompt over released bytes states the label each part was released under: the bytes, and
@@ -204,6 +210,21 @@ fn released_content_crosses_the_transport_with_the_label_it_was_released_under()
 fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_under() {
     use bravebot_agent::confirm::{OutputRequest, VetRequest, VouchRequest};
     use bravebot_core::vetting::Verdict;
+    let named = |word: &str| {
+        let label = bravebot_core::label::Label::named(word).unwrap();
+        axes(
+            if label.is_trusted() {
+                "trusted"
+            } else {
+                "untrusted"
+            },
+            if label.is_public() {
+                "public"
+            } else {
+                "private"
+            },
+        )
+    };
     for (bytes, said) in [("(U,priv)", "(T,pub)"), ("(T,pub)", "(U,priv)")] {
         let output = wire::output_request(
             1,
@@ -221,6 +242,8 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
         );
         assert_eq!(output["label"], json!(bytes));
         assert_eq!(output["vetting"]["label"], json!(said));
+        assert_eq!(output["labelAxes"], named(bytes));
+        assert_eq!(output["vetting"]["labelAxes"], named(said));
 
         let vet = wire::vet_request(
             2,
@@ -239,6 +262,8 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
         );
         assert_eq!(vet["label"], json!(bytes));
         assert_eq!(vet["vetting"]["label"], json!(said));
+        assert_eq!(vet["labelAxes"], named(bytes));
+        assert_eq!(vet["vetting"]["labelAxes"], named(said));
 
         let vouch = wire::vouch_request(
             3,
@@ -255,6 +280,46 @@ fn an_approval_prompt_carries_the_labels_its_bytes_and_its_check_were_released_u
         );
         assert_eq!(vouch["label"], json!(bytes));
         assert_eq!(vouch["vetting"]["label"], json!(said));
+        assert_eq!(vouch["labelAxes"], named(bytes));
+        assert_eq!(vouch["vetting"]["labelAxes"], named(said));
+    }
+}
+
+fn axes(integrity: &str, confidentiality: &str) -> Value {
+    json!({ "integrity": integrity, "confidentiality": confidentiality })
+}
+
+/// SHARE-001: the window draws a label from these two words and reads no short form itself, so
+/// each label the agent can write crosses as its own pair, read by `Label::named` and no copy of
+/// it. A word that names no label crosses as untrusted and private, and never as either axis's
+/// better value: the only words that can arrive are the four the kernel's labels name.
+#[test]
+fn each_label_crosses_as_both_axes_named_and_an_unknown_one_as_the_bottom() {
+    use bravebot_core::label::Label;
+    let shown = |label: String| {
+        wire::shown(&Shown {
+            origin: "file.md".into(),
+            reach: Reach::NotThePlanner,
+            label,
+            preview: Vec::new(),
+            lines: 0,
+        })["labelAxes"]
+            .clone()
+    };
+    for (label, integrity, confidentiality) in [
+        (Label::trusted_public(), "trusted", "public"),
+        (Label::trusted_private(), "trusted", "private"),
+        (Label::untrusted_public(), "untrusted", "public"),
+        (Label::untrusted_private(), "untrusted", "private"),
+    ] {
+        assert_eq!(shown(label.to_string()), axes(integrity, confidentiality));
+    }
+    for forged in ["(T,pub) trusted", "trusted", "(t,pub)", "", "(T,pub "] {
+        assert_eq!(
+            shown(forged.into()),
+            axes("untrusted", "private"),
+            "{forged:?}"
+        );
     }
 }
 

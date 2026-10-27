@@ -326,6 +326,16 @@
 }
 .audit-labels dt { color: var(--ink-secondary); }
 .audit-labels dd { margin: 0; }
+.context-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--leo-spacing-xs) var(--leo-spacing-l); margin: 0 0 var(--leo-spacing-m); padding: 0 var(--leo-spacing-s); font: var(--type-meta); }
+.context-facts dt { color: var(--ink-secondary); }
+.context-facts dd { margin: 0; }
+.audit-routing {display: grid; gap: var(--leo-spacing-m); margin: var(--leo-spacing-l) 0; font: var(--type-meta); }
+.audit-routing > strong { font: var(--type-meta-strong); }
+.audit-routing ul { display: grid; gap: var(--leo-spacing-xs); margin: var(--leo-spacing-xs) 0 0; padding: 0; list-style: none; }
+.audit-routing li, .audit-release { display: flex; flex-wrap: wrap; align-items: center; gap: var(--leo-spacing-s); }
+.audit-routing-tool { font: var(--type-meta-strong); font-family: var(--font-mono); }
+.audit-verdict { color: var(--ink-secondary); }
+.audit-routing li.refused .audit-verdict { color: var(--status-error-ink); }
 .audit-evidence, .audit-all {
   --leo-collapse-summary-padding: var(--leo-spacing-s) 0;
   --leo-collapse-summary-color: var(--ink-secondary);
@@ -355,7 +365,7 @@
 
 /* ---------------------------------------------------------------- a bot's details
 
-   In place of the panels while a bot's own page is open: its face with a button for a new one, its
+   In place of the panels while a bot's own page is open: its face with a button that edits it, its
    name and purpose, and the memory it keeps in one of its folders, 16px apart. */
 .bot-details { display: flex; flex-direction: column; min-height: 0; height: 100%; }
 .bot-details .context-head { padding: 0 var(--leo-spacing-l); }
@@ -369,9 +379,14 @@
   padding: var(--leo-spacing-xl);
 }
 .bot-details-face { position: relative; align-self: center; display: grid; place-items: center; }
-.bot-details-face .bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
+.bot-details-face .bot-avatar-edit { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
 .bot-details .bot-memory-panel { gap: var(--leo-spacing-m); }
 .bot-field-label { font: var(--type-meta-strong); color: var(--ink-primary); }
+.bot-servers { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
+.bot-servers-list { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
+.bot-server { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
+.bot-servers-note { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.bot-servers-loading { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
 /* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
 .bot-details .bot-memory {
   margin: 0;

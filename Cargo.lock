@@ -140,6 +140,7 @@ dependencies = [
  "bravebot-aichat",
  "bravebot-bedrock",
  "bravebot-config",
+ "bravebot-connector",
  "bravebot-core",
  "bravebot-filetype",
  "bravebot-i18n",
@@ -251,6 +252,7 @@ name = "bravebot-config"
 version = "0.19.0"
 dependencies = [
  "bravebot-sandbox",
+ "serde",
  "serde_json",
  "sha2",
 ]

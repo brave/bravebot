@@ -26,6 +26,7 @@
 # the required list.
 
 Format, lint, and test
+Documentation pages in the binary
 Minimum supported Rust
 npm lockfile
 Front end

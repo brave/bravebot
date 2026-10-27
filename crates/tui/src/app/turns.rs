@@ -407,6 +407,8 @@ pub(super) struct Continued {
 /// What the joined worker returns, including an ordinary error or cancellation.
 pub(super) struct FinishedTurn {
     pub(super) decisions: Option<turn::Decisions>,
+    /// What the turn did, for a goal's record (GROUND-4).
+    pub(super) work: bravebot_agent::Work,
     pub(super) outcome: Result<turn::Outcome, turn::TurnError>,
     pub(super) conversation: Conversation,
     pub(super) sink: Trail,
@@ -675,6 +677,7 @@ pub(super) fn run_turn_animated(
         );
         FinishedTurn {
             decisions: Some(completed.decisions),
+            work: completed.work,
             outcome: completed.outcome,
             conversation,
             sink,
@@ -1038,6 +1041,7 @@ pub(super) fn run_turn_animated(
         // is asked about a fresh one.
         FinishedTurn {
             decisions: None,
+            work: bravebot_agent::Work::default(),
             outcome: Err(turn::TurnError::Precommit(
                 t!(turn_ended_unexpectedly).to_string(),
             )),
@@ -1072,11 +1076,15 @@ pub(super) fn finish_turn(
 ) -> Continued {
     let FinishedTurn {
         decisions,
+        work,
         outcome,
         mut conversation,
         sink,
         servers,
     } = finished;
+    // Before anything judges the goal, and however the turn ended: a stopped turn's writes are on
+    // disk all the same (GROUND-4).
+    session.goal_worked(work);
     let carried = match decisions {
         Some(turn::Decisions {
             trust,

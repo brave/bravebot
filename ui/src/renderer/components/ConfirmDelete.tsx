@@ -7,6 +7,11 @@ const WORDS = {
     what: 'will be deleted from this computer.',
     cost: 'Its messages and the record of what the agent did are removed. This cannot be undone.',
   },
+  project: {
+    title: 'Delete all chats',
+    what: 'will lose every conversation kept for it.',
+    cost: 'Their messages and the records of what the agent did are removed. This cannot be undone.',
+  },
   bot: {
     title: 'Delete bot',
     what: 'will be deleted.',
@@ -15,9 +20,11 @@ const WORDS = {
 } as const
 
 /** The question asked before something is deleted for good. */
-export function ConfirmDelete({ kind, name, onConfirm, onCancel }: {
+export function ConfirmDelete({ kind, name, detail, onConfirm, onCancel }: {
   kind: keyof typeof WORDS
   name: string
+  /** What is deleted, said before the cost, for a kind that deletes more than one thing. */
+  detail?: string
   onConfirm: () => void
   onCancel: () => void
 }): React.JSX.Element {
@@ -29,6 +36,7 @@ export function ConfirmDelete({ kind, name, onConfirm, onCancel }: {
         <Button kind="plain-faint" onClick={onCancel} data-test="delete-cancel">Cancel</Button>
         <Button kind="filled" className="confirm-delete" onClick={onConfirm} data-test="delete-confirm">Delete</Button>
       </>}>
+      {detail && <p data-test="delete-detail">{detail}</p>}
       <p>{words.cost}</p>
     </Modal>
   )

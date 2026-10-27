@@ -1038,6 +1038,17 @@ impl<'a> Backend<'a> {
         }
     }
 
+    /// The name of the service this backend sends to, in the words a model picker gives its rows.
+    pub fn service_name(&self) -> &str {
+        match self {
+            Self::Aichat { .. } => "Brave",
+            Self::Bedrock { .. } => "AWS Bedrock",
+            Self::Gateway { provider, .. } => provider.display_name(),
+            Self::Account { .. } => "ChatGPT",
+            Self::XaiAccount { .. } => "xAI",
+        }
+    }
+
     /// Sign in for `model`, where its backend needs that and has no usable session.
     ///
     /// Here rather than in an interface because which backend answers, and whether it authenticates
@@ -2248,6 +2259,27 @@ mod tests {
                 Backend::XaiAccount { .. } => "xai",
             };
             assert_eq!(found, expected, "{name}");
+        }
+    }
+
+    /// The service a backend is named by is the one it was selected for, on each of the five.
+    #[test]
+    fn each_backend_is_named_by_the_service_it_sends_to() {
+        let config = with_a_gateway();
+        let egress = Egress::new();
+        let gateway = config.providers[0].display_name().to_string();
+        for (name, expected) in [
+            ("opus-arn", "AWS Bedrock"),
+            ("z-ai/glm-4.6", gateway.as_str()),
+            ("chatgpt/gpt-5.5", "ChatGPT"),
+            ("xai/grok-4.5", "xAI"),
+            (DEFAULT_MODEL, "Brave"),
+        ] {
+            assert_eq!(
+                Backend::select(&config, &egress, name).service_name(),
+                expected,
+                "{name}"
+            );
         }
     }
 
@@ -4103,11 +4135,8 @@ mod tests {
     /// [`Backend::select`] has it, so a refusal the gateway recorded for the same name is not
     /// reported for it. The gateway's own spelling of the model still reports it.
     ///
-    /// The Bedrock record itself is written by the Bedrock client and cannot be reached from
-    /// outside that crate (its host is fixed and its recorder is private), so what is pinned here
-    /// is the order of the lookups and that a Bedrock model is asked of Bedrock's record, which
-    /// `bravebot_bedrock`'s `a_request_refused_on_a_parameter_is_asked_again_without_the_effort_level`
-    /// and its neighbours hold.
+    /// That a Bedrock refusal is reported for the model that made it is
+    /// `a_level_a_bedrock_model_refused_is_reported_for_that_model_only`'s.
     ///
     /// The fault this rejects: asking a gateway before Bedrock, which reports the gateway's
     /// refusal for a model Bedrock serves.
@@ -4180,8 +4209,8 @@ mod tests {
 
     /// The first branch: a model a Bedrock account answers for is asked of Bedrock's record, ahead
     /// of the gateway, ChatGPT and default-endpoint ones, so a refusal Brave's endpoint holds for
-    /// the same name is not the account's. Bedrock's own record is private to its crate, so only
-    /// the order is pinned here and the record is left to the crate that holds it.
+    /// the same name is not the account's. A refusal Bedrock holds is
+    /// `a_level_a_bedrock_model_refused_is_reported_for_that_model_only`'s.
     ///
     /// The faults this rejects: the Bedrock branch dropped or moved behind the last one, which asks
     /// Brave's endpoint about a model it never serves and reports its refusal.
@@ -4199,6 +4228,73 @@ mod tests {
         assert!(config.bedrock_for("opus-arn").is_some());
 
         assert!(!refused_a_level(&config, "opus-arn"));
+    }
+
+    /// The Bedrock branch: a level a Bedrock model refused is reported for that model alone, and
+    /// not for another model of the account or for a gateway offering the same slug.
+    ///
+    /// The refusal is recorded through the Bedrock client's own `Driven::remember`, the call the
+    /// attempt driver makes when a request without the level succeeds after one with it was
+    /// refused. The model names are used by no other test, since the record lasts for the process.
+    ///
+    /// The faults this rejects: the Bedrock branch dropped or moved behind the gateway lookup,
+    /// which asks the model of the aichat record and reports it as reading the level, and the
+    /// record read by something other than the model name, which reports its neighbours.
+    #[test]
+    fn a_level_a_bedrock_model_refused_is_reported_for_that_model_only() {
+        use bravebot_aichat::call::Driven;
+        let (refusing, neighbour) = ("refusing-bedrock-arn", "neighbouring-bedrock-arn");
+        let mut config = Config::from_lookup(|key| {
+            match key {
+                env_var::USE_BEDROCK => Some("1"),
+                env_var::AWS_REGION => Some("us-west-2"),
+                env_var::BEDROCK_OPUS_MODEL => Some(refusing),
+                env_var::BEDROCK_SONNET_MODEL => Some(neighbour),
+                env_var::AWS_PROFILE => Some("a-profile-no-machine-has"),
+                other => return aichat_only(other),
+            }
+            .map(str::to_string)
+        })
+        .expect("configured");
+        let serde_json::Value::Object(root) = serde_json::from_str(&format!(
+            r#"{{"provider": {{"gateway-a": {{
+                "options": {{"baseURL": "http://127.0.0.1:1/v1", "apiKey": "a-key"}},
+                "models": {{"{refusing}": {{}}}}}}}}}}"#
+        ))
+        .expect("json") else {
+            panic!("not an object");
+        };
+        config.providers = bravebot_config::provider::Provider::all(&root);
+        let egress = Egress::new();
+        assert!(matches!(
+            Backend::select(&config, &egress, refusing),
+            Backend::Bedrock { .. }
+        ));
+        assert!(matches!(
+            Backend::select(&config, &egress, &format!("gateway-a/{refusing}")),
+            Backend::Gateway { .. }
+        ));
+        assert!(!refused_a_level(&config, refusing), "before");
+
+        let account = config.bedrock_for(refusing).expect("a Bedrock model");
+        bravebot_bedrock::BedrockClient::new(account, &egress).remember(
+            refusing,
+            bravebot_bedrock::Refusals {
+                effort: true,
+                ..Default::default()
+            },
+        );
+
+        assert!(refused_a_level(&config, refusing), "after");
+        assert!(!bedrock_reads_effort(refusing));
+        for elsewhere in [
+            neighbour,
+            "a-bedrock-model-never-asked",
+            &format!("gateway-a/{refusing}"),
+            DEFAULT_MODEL,
+        ] {
+            assert!(!refused_a_level(&config, elsewhere), "{elsewhere}");
+        }
     }
 
     const ANTHROPIC_WHOLE: &str = r#"{"model":"claude-test-20260101",
