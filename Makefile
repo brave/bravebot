@@ -530,8 +530,9 @@ docs-updated-to-sha:
 	@python3 agents/skills/update-docs/docs-ref.py show
 
 # The pull requests a reviewer can pick up now: mergeable, not a draft, with every check passed
-# or skipped, and whose latest review by REVIEWER is an approval. REPO names another repository,
-# REVIEWER another account and LIMIT raises how many are read.
+# or skipped, whose latest review by REVIEWER is an approval, and with no latest review by anyone
+# that requests changes. REPO names another repository, REVIEWER another account and LIMIT raises
+# how many are read.
 REVIEW_REPO = brave/bravebot
 REVIEW_REVIEWER = netzenbot-reviewer
 REVIEW_LIMIT = 500
@@ -539,7 +540,7 @@ REVIEW_LIMIT = 500
 review-ready:
 	@gh pr list --repo $(or $(REPO),$(REVIEW_REPO)) --limit $(or $(LIMIT),$(REVIEW_LIMIT)) \
 	  --json number,title,url,mergeable,latestReviews,isDraft,statusCheckRollup \
-	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
+	  --jq '.[] | select(.mergeable == "MERGEABLE" and .isDraft == false and any(.latestReviews[]; .author.login == "$(or $(REVIEWER),$(REVIEW_REVIEWER))" and .state == "APPROVED") and all(.latestReviews[]; .state != "CHANGES_REQUESTED") and all(.statusCheckRollup[]; (.conclusion // .state) | IN("SUCCESS", "NEUTRAL", "SKIPPED"))) | "\(.url)  \(.title)"'
 
 # Opens the implement-issues skill in the terminal client on ISSUES, which the skill receives as
 # written: issue numbers, links and search queries separated by commas. Before the session opens, with
