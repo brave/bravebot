@@ -15,6 +15,8 @@ import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
 import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
 import { Icon, Menu, ProgressRing } from '../nala'
+import { PullRequestMark } from './PullRequestMark'
+import { pullRequestLink } from '../../shared/pull-request'
 
 /** What a row says about a session that is open somewhere: only what asks something of the reader. */
 export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
@@ -410,7 +412,7 @@ function Group({
  *
  * The same component under a heading as in the flat list, so the two paths cannot drift into
  * showing different things about a session. Three lines: where it runs and when it was last
- * active, what it is called, and the branch it was started on.
+ * active, what it is called, and the branch it was started on, with the pull request it made beside the branch.
  *
  * The leading mark says what asks something of the reader, working, waiting, failed, and
  * otherwise whose conversation this is: a bot's face, or a folder for an ordinary chat.
@@ -453,6 +455,7 @@ const Session = memo(function Session({
     if (reason !== 'blur') trigger.current?.focus()
   }
   const status = info?.status
+  const pr = pullRequestLink(session.pullRequest)
   return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`} data-session={key}>
     <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
       onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
@@ -471,11 +474,12 @@ const Session = memo(function Session({
         {forked && <span className="fork-mark"><ForkIcon /></span>}
         <span className="session-name">{session.title}</span>
       </span>
-      {session.branch && <span className="session-where"><span className="branch">{session.branch}</span></span>}
+      {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}</span>}
       {info?.bot && <span className="offscreen">, with {info.bot.name}</span>}
       {forked && <span className="offscreen">Forked.</span>}
       {status && <span className="offscreen">, {STATUS_WORDS[status]}</span>}
     </button>
+    {pr && <PullRequestMark url={session.pullRequest} />}
     <div className="session-more-menu">
       <IconButton ref={trigger} icon="more-vertical" size="tiny" className="session-more"
         label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu}
@@ -510,7 +514,7 @@ const Session = memo(function Session({
 /**
  * The sessions a typed query leaves standing.
  *
- * Matched against exactly what a row shows — title, project, branch — so a person can always
+ * Matched against exactly what a row shows — title, project, branch, pull request — so a person can always
  * see why something is in the list. The directory is deliberately not in the haystack even
  * though every session carries one: `project` is its last segment, and searching the whole
  * path would mean every checkout under `~/repos` answered to "repos".
@@ -519,11 +523,11 @@ const Session = memo(function Session({
  * rather than a fuzzy score: a fuzzy match on a list this short mostly buys the right to
  * return rows the reader cannot account for.
  */
-function matching(sessions: SessionSummary[], query: string): SessionSummary[] {
+export function matching(sessions: SessionSummary[], query: string): SessionSummary[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return [...sessions]
   return sessions.filter((session) => {
-    const haystack = `${session.title} ${session.project} ${session.branch ?? ''}`.toLowerCase()
+    const haystack = `${session.title} ${session.project} ${session.branch ?? ''} ${pullRequestLink(session.pullRequest)?.text ?? ''}`.toLowerCase()
     return terms.every((term) => haystack.includes(term))
   })
 }
