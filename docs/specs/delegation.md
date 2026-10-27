@@ -568,6 +568,13 @@ a rule resting on the tool list alone rests on the model reading it.
 
 What it could not settle goes in the report, and the parent asks.
 
+It needs no way to ask for reach to a path where its parent's turn is in bypass: the mode it is
+lent reaches a path outside the workspace for its file tools, its redirections and its `run`
+directory ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), and its programs are given what a
+request would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), within the restrictions it was
+started with ([MODE-9](permission-modes.md#MODE-9)). Under `strict` and on Windows, where programs
+ask for each path, a delegate's program that writes outside the session's directories still fails.
+
 `verified-by: bravebot_agent::tools::a_delegate_is_offered_no_task_list_and_no_way_to_ask`
 `verified-by: bravebot_agent::delegate::no_kind_is_told_it_may_ask_a_person`
 `verified-by: bravebot_agent::turn::a_delegate_naming_ask_user_or_todo_write_reaches_neither_the_person_nor_the_screen`

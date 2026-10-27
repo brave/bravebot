@@ -108,6 +108,17 @@ later run without the flag asks. A remote server whose reply points somewhere el
 followed: a yes would rewrite your declaration to an address the server chose, so the hop is refused
 without asking. See [MCP servers](../customize/mcp-servers.md#approving-one).
 
+**The file tools reach any path your account can.** In this mode `read_file`, `write_file`, `edit_file`,
+`list_files`, `search`, `repo_map`, `read_git`, `download_url`, a `run` directory and the target of
+a redirection reach a path outside the workspace with no call to `request_path`, whatever the sandbox mode is,
+and nothing is opened, trusted or carried by `--resume`: the reach ends when you leave bypass.
+The paths a [`request_path`](../reference/tools.md#request_path) refuses are refused here too (the home
+directory and the directories above it, `~/.ssh`, `~/.bravebot`, credential locations, and the places a write becomes code
+that runs later), and so are your `denyRead` and `denyWrite` paths, `permissions.readsStayInWorkspace`, writes
+under `read-only`, and everything in a workspace you have not trusted. A file the planner reads there is shown
+to it as vouched, including one another account or program wrote, so instructions in it are read as instructions.
+`/status` lists the directories reached.
+
 Starting a language server is answered only where the sandbox mode is `off`, which
 `--dangerously-bypass-approvals-and-sandbox` sets. A server runs with no sandbox profile, so under any
 other sandbox mode this mode would give it access no other program of the session has. There the
@@ -179,4 +190,8 @@ ended. The mode is not written into the session record. `--resume` with the flag
 because the flag was given again.
 
 A [delegate](../reference/tools.md#spawn_agent) inherits the mode of the turn that spawned it, since
-a delegate is that turn's work done somewhere else.
+a delegate is that turn's work done somewhere else. In bypass it has the reach above, its programs are given
+the same writes the session's are under `workspace-write`, and it is asked nothing. A delegate started
+restricted keeps what it was started with: its kind (a `reader` writes nothing), a `tools:` line, a
+`writes:` limit, a checkout (which keeps it out of the working directory and every other checkout), the
+sandbox mode, and your `denyRead`, `denyWrite` and `permissions.readsStayInWorkspace`.

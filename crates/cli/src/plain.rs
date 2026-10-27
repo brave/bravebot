@@ -1259,7 +1259,7 @@ pub(crate) trait Watcher: Send {
     /// Called before the first line of a question is written, so that what is written from here
     /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
     fn asking(&mut self);
-    /// Called before the read, which blocks.
+    /// Called before the read, which blocks, and before what asks for the line is written.
     fn waiting(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
     fn received(&mut self, on: Waiting, line: Option<&str>);
@@ -1314,10 +1314,8 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// The end of the input is how a session in lines is left, this one having no key to press:
     /// the terminal is not in raw mode, so Ctrl-D is the terminal's own end of file and arrives
     /// here as one.
-    fn prompt(&mut self) -> Option<String> {
-        let _ = write!(self.output, "{MARKER}");
-        let _ = self.output.flush();
-        self.line(Waiting::Prompt)
+    pub(crate) fn prompt(&mut self) -> Option<String> {
+        self.line(Waiting::Prompt, MARKER)
     }
 
     /// What a read that is not the prompt is waiting for.
@@ -1327,16 +1325,23 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
 
     /// One line, with its newline taken off, or `None` at the end of the input.
     ///
+    /// `invitation` is what asks for the line, the marker or the end of a question. The watcher is
+    /// told a line is being waited for before it is written, because a terminal attached to a
+    /// background session answers as soon as it has drawn it, and a line that arrives before the
+    /// session has said it is waiting is refused and never read (BG-9).
+    ///
     /// A newline is written either way, because everything that asks for a line wrote a marker or
     /// a question and left the cursor after it. On a terminal the person's own Enter is echoed
     /// there and this is the blank line between what they typed and the answer; where the stream is
     /// a file there is no echo, and without this the progress that follows would be appended to a
     /// question nobody can see the end of. The end of the input needs it most: there is no echo for
     /// Ctrl-D at all, so without this the shell's own prompt comes back on the marker's line.
-    fn line(&mut self, on: Waiting) -> Option<String> {
+    fn line(&mut self, on: Waiting, invitation: &str) -> Option<String> {
         if let Some(watch) = &mut self.watch {
             watch.waiting(on);
         }
+        let _ = write!(self.output, "{invitation}");
+        let _ = self.output.flush();
         let mut line = String::new();
         let read = self.input.read_line(&mut line);
         let _ = writeln!(self.output);
@@ -1358,13 +1363,11 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// said yes to.
     fn put(&mut self, lines: &[String], question: &str) -> Option<Decision> {
         self.say_question(lines);
-        let _ = write!(self.output, "{question} {} ", t!(line_answer));
-        let _ = self.output.flush();
 
         // Only the affirmative approves. Any other line is a person who typed something that was
         // not yes, and the end of the input is nobody answering at all.
         let on = self.answering();
-        let typed = self.line(on)?;
+        let typed = self.line(on, &format!("{question} {} ", t!(line_answer)))?;
         Some(match typed.trim().to_lowercase() == t!(line_answer_yes) {
             true => Decision::Approve,
             false => Decision::Reject,
@@ -1380,10 +1383,9 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// `None` at the end of the input.
     pub(crate) fn answer(&mut self, question: &str) -> Option<String> {
         self.say_question(&[]);
-        let _ = write!(self.output, "{question} ");
-        let _ = self.output.flush();
         let on = self.answering();
-        self.line(on).map(|typed| typed.trim().to_string())
+        self.line(on, &format!("{question} "))
+            .map(|typed| typed.trim().to_string())
     }
 }
 
@@ -1653,11 +1655,10 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         });
         lines.push(t!(message_explained_turn, key = t!(message_answer_turn)));
         self.say_question(&lines);
-        let _ = write!(self.output, "{} {} ", t!(message_title), t!(message_answer));
-        let _ = self.output.flush();
         self.about(Held::Message);
         let on = self.answering();
-        let Some(typed) = self.line(on) else {
+        let invitation = format!("{} {} ", t!(message_title), t!(message_answer));
+        let Some(typed) = self.line(on, &invitation) else {
             return MessageDecision::Decline;
         };
         let typed = typed.trim().to_lowercase();
@@ -1723,11 +1724,9 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
                 }
             }
             self.say_question(&lines);
-            let _ = write!(self.output, "{} ", t!(ask_own_words));
-            let _ = self.output.flush();
             self.about(Held::Question);
             let on = self.answering();
-            fresh.push(match self.line(on) {
+            fresh.push(match self.line(on, &format!("{} ", t!(ask_own_words))) {
                 Some(typed) if !typed.trim().is_empty() => Answer::Typed(typed),
                 _ => Answer::Declined,
             });
@@ -3423,6 +3422,120 @@ mod tests {
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {
             self.announced = false;
         }
+    }
+
+    /// The screen of a session, which a test and its watcher both read.
+    #[derive(Clone, Default)]
+    struct Screen(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Screen {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("the screen").clone()).expect("text")
+        }
+    }
+
+    impl Write for Screen {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("the screen").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A watcher that keeps what the screen held each time it was told a line is being waited for.
+    struct SeesTheScreen {
+        screen: Screen,
+        at_each_wait: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Watcher for SeesTheScreen {
+        fn asking(&mut self) {}
+
+        fn waiting(&mut self, _on: Waiting) {
+            let text = self.screen.text();
+            self.at_each_wait.lock().expect("the record").push(text);
+        }
+
+        fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
+    }
+
+    /// BG-9: the watcher is told a line is being waited for before what asks for the line is
+    /// written. A terminal attached to a background session answers as soon as it has drawn the
+    /// marker or the question, so a session that said it was waiting only afterwards would refuse
+    /// that line.
+    #[test]
+    fn a_line_is_waited_for_before_what_asks_for_it_is_written() {
+        type Asked = Prompting<std::io::BufReader<std::io::Cursor<Vec<u8>>>, Screen>;
+        // What a way of asking is called, what it draws to ask for the line, and the call that asks.
+        type Case = (&'static str, String, Box<dyn Fn(&mut Asked)>);
+        let cases: Vec<Case> = vec![
+            (
+                "the prompt",
+                MARKER.to_string(),
+                Box::new(|asking| {
+                    let _ = asking.prompt();
+                }),
+            ),
+            (
+                "a yes or no question",
+                "Run it?".to_string(),
+                Box::new(|asking| {
+                    let _ = asking.ask(&[], "Run it?");
+                }),
+            ),
+            (
+                "a question answered with a word",
+                "Name it?".to_string(),
+                Box::new(|asking| {
+                    let _ = asking.answer("Name it?");
+                }),
+            ),
+            (
+                "a message to send",
+                t!(message_title).to_string(),
+                Box::new(|asking| {
+                    let _ = asking.confirm_message(&a_message_to_ask_about());
+                }),
+            ),
+            (
+                "a question from the planner",
+                t!(ask_own_words).to_string(),
+                Box::new(|asking| {
+                    let _ = asking.ask_user(&series_of(&[("Region", "Which?")]));
+                }),
+            ),
+        ];
+        let mut problems = Vec::new();
+        for (what, invitation, act) in cases {
+            let screen = Screen::default();
+            let at_each_wait = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut asking = Prompting::watched(
+                std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                screen.clone(),
+                Box::new(SeesTheScreen {
+                    screen: screen.clone(),
+                    at_each_wait: at_each_wait.clone(),
+                }),
+            );
+            act(&mut asking);
+
+            let waits = at_each_wait.lock().expect("the record");
+            if waits.len() != 1 {
+                problems.push(format!("{what} waited {} times, not once", waits.len()));
+            } else if waits[0].contains(&invitation) {
+                problems.push(format!(
+                    "{what} was drawn before the session said it was waiting: {}",
+                    waits[0]
+                ));
+            }
+            if !screen.text().contains(&invitation) {
+                problems.push(format!("{what} never drew {invitation:?}"));
+            }
+        }
+        assert!(problems.is_empty(), "{problems:#?}");
     }
 
     /// BG-7, CLI-14: a server question is put to whoever attaches as a held question of its own

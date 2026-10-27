@@ -177,6 +177,8 @@ fn status_report(
         .map(|home| bravebot_agent::reach::listed(&home, stored.id(), workspace.root()))
         .unwrap_or_default();
     let requested_paths = bravebot_agent::reach::requested_paths_listed(&workspace.path_reach());
+    let reached_directories =
+        bravebot_agent::reach::reached_directories_listed(&workspace.reached_directories());
     crate::status::report(&crate::status::Facts {
         session_name: stored.title(),
         session_id: stored.id(),
@@ -227,6 +229,7 @@ fn status_report(
             }),
         reach: &reach,
         requested_paths: &requested_paths,
+        reached_directories: &reached_directories,
         kept_trust: kept
             .as_ref()
             .map(|(when, path, root)| crate::status::KeptTrust {

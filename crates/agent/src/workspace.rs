@@ -40,6 +40,7 @@ fn locked<T>(lock: &Mutex<T>) -> MutexGuard<'_, T> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+mod bypass;
 mod carry;
 mod checkouts;
 mod error;
@@ -71,6 +72,7 @@ use touched::{Touched, place_by_spelling};
 pub use volume::{BACKSLASH_SEPARATES, key_of, trust_store, volume_folds_case};
 pub(crate) use volume::{on_disk, one_file};
 
+pub use bypass::{BypassReach, Reached};
 pub use carry::{Carried, CarryBound, CarryPlan, NotCarried, StatusRead};
 pub use checkouts::{
     Candidates, CheckoutInfo, CheckoutRead, Happened, Retired, SessionCheckout, Unremoved,
@@ -229,6 +231,9 @@ pub struct Workspace {
     /// path reached by a program is not a path the file tools open or a directory vouched for.
     /// Shared for the reason `kept` is.
     path_reach: Arc<Mutex<Vec<PathReach>>>,
+    /// What the call in progress reaches outside the workspace because of the permission mode
+    /// (PATHREQ-7). Held for one call and copied by a clone.
+    call_reach: bypass::CallReach,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`, and the
     /// ones they declined (SANDBOX-24). Held here and nowhere else, for the reason `path_reach` is.
     host_grants: Arc<Mutex<HostGrants>>,
@@ -269,6 +274,9 @@ pub struct KeptBetweenTurns {
     /// spelling it was typed in (INSTR-14, INSTR-16): a workspace built for each turn would start
     /// every turn with none, and a delegate's reads count.
     touched: Arc<Mutex<Touched>>,
+    /// The directories a bypass session took the file tools into, which `/status` lists
+    /// (PATHREQ-7).
+    reached: Arc<Mutex<bypass::ReachedDirectories>>,
 }
 
 impl Default for KeptBetweenTurns {
@@ -280,6 +288,7 @@ impl Default for KeptBetweenTurns {
             temporary_checkouts: Arc::default(),
             working_writes: Arc::default(),
             touched: Arc::default(),
+            reached: Arc::default(),
         }
     }
 }
@@ -381,6 +390,7 @@ impl Workspace {
             checkout: None,
             kept: KeptBetweenTurns::default(),
             path_reach: Arc::default(),
+            call_reach: bypass::CallReach::default(),
             host_grants: Arc::default(),
             references: Vec::new(),
             reference_problems: Vec::new(),

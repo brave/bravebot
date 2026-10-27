@@ -2944,20 +2944,24 @@ question answers this one with a yes, as it does a line's ([SANDBOX-26](#SANDBOX
 - **Under bypass, nothing needs asking for.** Where the permission mode answers every question
   ([MODE-4](permission-modes.md#MODE-4)), the mode is `workspace-write`, the workspace is trusted
   ([TRUST-7](trust-map.md#TRUST-7), [TRUST-26](trust-map.md#TRUST-26)) and the platform is macOS or
-  Linux, the stages of the lead session's `run` are given at the start what a request for writing
-  would be granted: every path the account can write, except `/`, a drive root, the home
+  Linux, the stages of a `run` are given at the start what a request for writing
+  would be granted, those of a delegate included: every path the account can write, except `/`, a drive root, the home
   directory and any directory above it as a whole (the entries already in them stay writable, and
   no new entry is made directly in one), `~/.ssh`, `~/.bravebot` and everything inside either, each
   credential location of the table ([SANDBOX-12](#SANDBOX-12)) and any directory that holds one,
   each persistence location ([SANDBOX-18](#SANDBOX-18)) and any directory that holds one, and every
   path the person's `denyRead` or `denyWrite` covers. Paths are judged where they lead,
-  through links. It is for programs only: the file tools keep the reach
-  [TRUST-10](trust-map.md#TRUST-10) gives them, and a `request_path` under bypass still opens a
-  directory for them ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). Under `strict` each path is
-  still requested, under `off` there is no profile, in a workspace that is not trusted no request is
-  accepted ([PATHREQ-5](tools/request-path.md#PATHREQ-5)) and the stages keep the session's
-  directories, in a delegate's `run` nothing is added
-  ([DELEGATE-12](delegation.md#DELEGATE-12)), and on Windows, where a grant is an
+  through links. The file tools are given the same reach by the mode itself
+  ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) and a `request_path` under bypass still opens a
+  directory for them. A delegate is lent the mode and is offered no `request_path`
+  ([DELEGATE-12](delegation.md#DELEGATE-12)), and its stages are given the rows as the lead
+  session's are, less the directories its checkout holds it out of: a delegate in a checkout is given
+  no row for the working directory or for another checkout ([CHECKOUT-7](checkouts.md#CHECKOUT-7)).
+  Under `strict` each path is
+  still requested and a delegate has no way to request one, under `off` there is no profile, in a
+  workspace that is not trusted no request is accepted
+  ([PATHREQ-5](tools/request-path.md#PATHREQ-5)) and the stages keep the session's directories, and
+  on Windows, where a grant is an
   access-control entry written onto each directory, each path is still requested. Nothing a
   program wrote or printed decides which rows exist. The trace's `sandbox` gate says the stages
   were given what a request would be granted, `/status` says it in its `Programs write` line, and
@@ -3018,7 +3022,9 @@ the whole of what is held back.
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_the_persons_denied_write_and_says_what_it_writes`
 `verified-by: bravebot_agent::confine::a_bypass_stage_cannot_write_where_the_person_denied_a_read`
-`verified-by: bravebot_agent::tools::only_the_lead_session_in_bypass_is_given_what_a_request_would_be`
+`verified-by: bravebot_agent::tools::a_session_in_bypass_is_given_what_a_request_would_be_and_so_is_its_delegate`
+`verified-by: bravebot_agent::confine::a_bypass_stage_of_a_delegate_in_a_checkout_is_given_no_row_for_the_working_directory`
+`verified-by: bravebot_agent::turn::a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not`
 `verified-by: bravebot_agent::confine::a_bypass_stage_writes_beside_the_working_directory_without_a_request`
 `verified-by: bravebot_agent::confine::a_bypass_stage_still_cannot_write_a_credential_a_file_run_later_or_a_new_entry_in_home`
 `verified-by: bravebot_agent::confine::a_bypass_stage_keeps_a_denied_write_and_strict_keeps_the_request`
@@ -3059,7 +3065,8 @@ none to add to.
   `scopes` request ([SANDBOX-26](#SANDBOX-26)) and does not approve this one, since the permission
   mode never widens the sandbox mode ([SANDBOX-22](#SANDBOX-22)) and an approved request is `off`
   for its line. It goes to the confirmer in that mode as in every other, and a run with nobody to
-  ask refuses it.
+  ask refuses it. A redirection into a directory the permission mode reaches
+  ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) needs no such request.
 - **Refused, with one sentence that does not say which setting withheld it,** in `strict`, in
   `read-only`, under `off`, in a workspace the person has not trusted ([TRUST-7](trust-map.md#TRUST-7)), under a
   managed `run.network` of `closed`, for the reason the managed file floors `off` there

@@ -1732,6 +1732,7 @@ path-not-trusted =
 path-yes = Yes, for this session
 path-no = No
 path-listed = { $number }. every command also { $access } { $path }, for this session
+reached-listed = { $path }, first reached by { $tool } ({ $field })
 path-none = no path was requested this session
 path-removed = ended: commands no longer { $access } { $path }
 path-refused-number = no requested path is numbered { $number }
@@ -2407,6 +2408,10 @@ count-requested-paths = { $count ->
     [one] { $count } path
    *[other] { $count } paths
     }
+count-reached-directories = { $count ->
+    [one] { $count } directory
+   *[other] { $count } directories
+    }
 count-reach-grants = { $count ->
     [one] { $count } grant
    *[other] { $count } grants
@@ -2617,6 +2622,8 @@ status-remembered-this-session = remembered in this session
 status-remembered-earlier = remembered in an earlier session
 status-remembered-where = delete a line from { $path } to be asked again
 status-reach = Remembered reach
+status-reached-directories = Directories reached
+status-reached-directories-note = bypass mode lets the file tools reach these without opening them; they are not trusted, and leaving bypass ends it
 status-requested-paths = Requested paths
 status-requested-paths-note = programs this session starts may reach these; the directories are not trusted. /reach paths remove <number> ends one
 status-reach-note = added to the plan of the command each names; /reach remove <number> forgets one
