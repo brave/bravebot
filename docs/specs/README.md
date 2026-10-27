@@ -62,6 +62,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [compaction.md](compaction.md) | `COMPACT` | 18 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
 | [goal.md](goal.md) | `GOAL` | 20 | one condition a person set, judged after every turn, until it holds |
+| [open-loops.md](open-loops.md) | `OPEN` | 7 | proposed, nothing built: the unfinished business a session leaves, found by fixed rules, shown when it changes, and told to the planner |
 | [file-watches.md](file-watches.md) | `FSWATCH` | 12 | a standing watch on one path, firing with no turn running to notice it |
 | [sessions.md](sessions.md) | `SESSION` | 38 | what is kept between runs: the record of a session, the questions asked beside it, and the prompts a person typed |
 | [commits.md](commits.md) | `COMMIT` | 11 | a commit of the files each turn wrote: which paths, what message, how git is started, and how `/undo` takes the commit back (proposed, nothing built) |

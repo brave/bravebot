@@ -21,6 +21,13 @@ docs/specs/commits.md:COMMIT-8: the person is told what was committed and what w
 docs/specs/commits.md:COMMIT-9: taking a turn back takes its commit back, as one unbroken run the branch still stands on
 docs/specs/commits.md:COMMIT-10: a rewind point holds the commit its turn made, and a resume brings it back
 docs/specs/commits.md:COMMIT-11: every front end commits and rewinds through one shared implementation
+docs/specs/open-loops.md:OPEN-1: an open loop is one of seven kinds, found by fixed rules
+docs/specs/open-loops.md:OPEN-2: each loop is the planner's move, yours, or a wait
+docs/specs/open-loops.md:OPEN-3: you see one line when a turn ends with the list changed
+docs/specs/open-loops.md:OPEN-4: the planner is told at the start of the next turn
+docs/specs/open-loops.md:OPEN-5: `/unfinished` shows every open loop in full
+docs/specs/open-loops.md:OPEN-6: a resumed session shows what it left open
+docs/specs/open-loops.md:OPEN-7: open loops never block, and every new sentence is fixed text
 docs/specs/plugins.md:PLUGIN-1: a plugin is installed only by a command a person types
 docs/specs/plugins.md:PLUGIN-2: `plugin.toml` names its parts, and a part it does not name is not installed
 docs/specs/plugins.md:PLUGIN-3: fetching a source is a network effect, and the host is put to the person before it happens
