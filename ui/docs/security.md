@@ -79,6 +79,14 @@ store records a conversation in. The main process records a folder only when a t
 under that rule ends, so a window cannot widen the set by opening a session somewhere. Memory reads
 and edits from the window name a folder from that recorded set and are refused for any other.
 
+Deleting a conversation, deleting every conversation of a project (`session.purge`) and copying
+Claude Code's sessions in (`session.import`) name a directory, and the main process holds them to
+the folders a session may open in. A purge deletes only ids the renderer names, among the records
+that directory wrote, and the main process forgets only those it named. An import copies only
+names the bridge listed for that folder, matched exactly. The titles it lists are another
+program's text and are drawn as plain text. A copy is this app's record from then on: deleting
+the session in Claude Code does not remove it, and it goes only when deleted here.
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
@@ -170,6 +178,14 @@ settings-file permission grants in this UI.
 Command-output content is released for display so the person deciding can read it.
 Only the agent's approved path admits it to the planner. Confined material is labelled
 in the UI; showing it is not evidence that the planner read it.
+
+A label chip is read only from a label's `{integrity, confidentiality}` words: `labelAxes` on a
+quarantine, a request, a write's remark and a checker's reason, and `label` on an audit record.
+It is never read from content, an origin or a preview, nor from the trail's short form
+(`(T,pub)`), which only the agent's `Label::named` reads (SHARE-001); the bridge reads it there and
+sends the words. Anything but an exact word reads as untrusted and private, axis by axis. The
+chip's words and tooltips are fixed strings, it carries none of the field's text, and it is
+neutral in every state so that trusted never reads as safe.
 
 How it is labelled is this window's answer to
 [LAYER-5](../../docs/specs/layering.md#LAYER-5), the rule that any surface showing released

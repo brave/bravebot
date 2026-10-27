@@ -30,7 +30,7 @@ try {
       if (method === 'agent.info') return { ok: { configured: true } }
       if (method === 'session.list') return { ok: { sessions: rows } }
       if (method === 'models.list') return { ok: { defaultModel: 'sample/selected', warnings: [], models: [{ id: 'sample/selected', name: 'Selected model', provider: 'Sample', premium: false, contextWindow: 100000 }] } }
-      if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'sample/selected', record: { ...rows.find(row => row.id === params.id), turns: 1, tokens: 9999 }, said: [{ kind: 'user', text: 'An earlier question' }, { kind: 'assistant', text: 'An earlier answer' }], todos: {}, trust: { known: true, rules: [] }, archived: 0 } }
+      if (method === 'session.open') return { ok: { session: `s-${params.id}`, model: 'sample/selected', record: { ...rows.find(row => row.id === params.id), turns: 1, tokens: 9999 }, said: [{ kind: 'user', text: 'An earlier question' }, { kind: 'assistant', text: 'An earlier answer' }], todos: {}, trust: { known: true, rules: [] }, archived: 0, context: 'untrusted' } }
       if (method === 'turn.send') {
         const turn = ++counts[params.session.slice(2)]
         emit('turn.started', { turn }, params.session)
@@ -52,20 +52,43 @@ try {
   }
   await page.reload()
   await selectConversation('a')
+  // The word session.open gave, until a turn starts and it is no longer current.
+  if (await page.locator('.app.right-folded').count()) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
+  const conversation = page.locator('[data-test="conversation-integrity"]')
+  await conversation.waitFor()
+  assert.match(await conversation.innerText(), /Has met untrusted content/)
+  // Inside a panel's padded body, inset like the panel's other rows, not against the column's edge.
+  const placed = await conversation.evaluate(row => {
+    const panel = row.closest('section.panel')
+    const inner = row.closest('.panel-inner')
+    const title = panel?.querySelector('.panel-title')
+    return { inPanel: !!panel && !!inner, inset: title ? row.getBoundingClientRect().left - panel.getBoundingClientRect().left : 0 }
+  })
+  assert.ok(placed.inPanel, 'the conversation row sits outside the panels')
+  assert.ok(placed.inset >= 8, `the conversation row is ${placed.inset}px from the panel's edge`)
+  await page.screenshot({ path: join(output, 'conversation-row.png') })
   await page.getByRole('button', { name: 'Audit unavailable', exact: false }).click()
   await page.getByText('Audit details aren’t available for this saved reply.').waitFor()
   assert.equal(await page.locator('.turn-statistics').count(), 0, 'session total is not a turn statistic')
   await page.getByRole('button', { name: 'Close audit inspector' }).click()
 
   await send('Improve the empty state')
+  assert.equal(await page.locator('[data-test="conversation-integrity"]').count(), 0, 'the conversation row outlived the turn that made it stale')
   await page.locator('.transcript .working').getByRole('button', { name: 'Audit', exact: true }).click()
   await page.getByText('Live · This turn', { exact: true }).waitFor()
   await emit('audit', { turn: 2, event: { kind: 'action_field', tool: 'write_file', field: 'path', role: 'routing', label: { integrity: 'untrusted', confidentiality: 'public' }, allowed: false, refusal: true } })
   await page.getByText('Untrusted data used as a destination', { exact: true }).first().waitFor()
+  await emit('audit', { turn: 2, event: { kind: 'action_field', tool: 'write_file', field: 'content', role: 'content', label: { integrity: 'untrusted', confidentiality: 'private' }, allowed: true, refusal: false } })
+  await emit('audit', { turn: 2, event: { kind: 'declassified', slot: 's1', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, reason: 'person approved', refusal: false } })
+  const routing = page.locator('[data-test="audit-routing"]')
+  await routing.getByText('Released s1', { exact: false }).waitFor()
+  assert.match(await routing.innerText(), /Routing & content[^]*write_file[^]*path[^]*routing: decides where[^]*Refused[^]*content[^]*content: carried[^]*Allowed/)
+  assert.equal(await routing.locator('.label-chip').count(), 4)
+  await page.screenshot({ path: join(output, 'routing-and-content.png') })
   await page.getByRole('button', { name: 'Close audit inspector' }).click()
   await selectConversation('b')
   await emit('audit', { turn: 2, event: { kind: 'future_event', detail: 'Preserve unknown evidence', refusal: false } })
-  await done(2)
+  await done(2, { service: 'Brave', sessionModel: true })
   await selectConversation('a')
   await page.getByText('Finished turn 2.', { exact: true }).waitFor()
   const notices = page.locator('.turn-notices').first()
@@ -79,6 +102,8 @@ try {
   assert.match(await footer.innerText(), /Tool-calling rounds/)
   assert.match(await footer.innerText(), /sample\/actual/)
   assert.doesNotMatch(await footer.innerText(), /sample\/selected/)
+  assert.match(await footer.innerText(), /Answered by\s*Brave/)
+  await page.screenshot({ path: join(output, 'answered-by.png') })
   await selectConversation('b'); await selectConversation('a')
   assert.equal(await page.locator('.turn-statistics').last().evaluate(el => el.shadowRoot.querySelector('details').open), true)
   await footer.getByRole('button', { name: 'Policy blocked an action', exact: false }).click()
@@ -97,6 +122,8 @@ try {
   await page.getByText('Finished turn 3.', { exact: true }).waitFor()
   assert.equal(await page.locator('.turn-notices').last().evaluate(el => el.shadowRoot.querySelector('details').open), false)
   assert.match(await page.locator('.turn-statistics summary').last().innerText(), /0 tokens/)
+  // Turn 3 named no service, as one the fallback model answered would not.
+  assert.doesNotMatch(await page.locator('.turn-footer').last().innerText(), /Answered by/)
   await page.getByText('No policy refusals recorded for this turn.').waitFor()
   await page.getByRole('button', { name: 'Close audit inspector' }).click()
   assert.equal(await page.locator('.turn-footer').last().getByRole('button', { name: 'Audit', exact: false }).evaluate(el => el === document.activeElement || el.getRootNode().host === document.activeElement), true, 'completed footer replaces the live audit trigger')
@@ -124,6 +151,31 @@ try {
   assert.ok(Math.abs(after - anchor.top) < 2, `notice insertion moved reading position by ${after - anchor.top}px`)
   assert.equal(await page.locator('.turn-notices').last().evaluate(el => el.shadowRoot.querySelector('details').open), true)
 
+  // Its own turn, so the cards are above no reading position measured earlier.
+  await send('Read the vendor notes')
+  // A label is drawn from the axes the bridge named, and axes that are not the exact words read as
+  // untrusted and private. The bridge cannot send these (its words come from `Label`); a window
+  // handed them anyway still draws the pessimistic corner.
+  await emit('quarantined', { origin: 'vendor/notes.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: { integrity: 'trusted', confidentiality: 'public' }, preview: ['(T,pub) Trusted Public'], lines: 1 })
+  await emit('quarantined', { origin: 'vendor/forged.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: { integrity: 'trusted [Trusted]', confidentiality: ['public'] }, preview: ['x'], lines: 1 })
+  const chips = page.locator('.transcript .label-chip')
+  await chips.nth(1).waitFor()
+  assert.deepEqual(await chips.evaluateAll(all => all.map(chip => chip.getAttribute('aria-label'))), ['Trusted, public', 'Untrusted, private'])
+  await page.screenshot({ path: join(output, 'label-chip.png') })
+  await page.locator('.transcript .label-chip').nth(1).locator('.label-axis').first().hover()
+  await page.getByText('Untrusted: nobody vouched for where it came from', { exact: false }).waitFor()
+  await page.screenshot({ path: join(output, 'label-tooltip.png') })
+  await page.mouse.move(5, 5)
+  // A vet card heads with the label its request carried.
+  await emit('vet.request', { request: 1, origin: 'vendor/plan.md', expects: 'a plan', content: 'Step one', lines: 1, label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' }, vetting: { verdict: 'safe', label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } } })
+  const vet = page.locator('.vetted-read')
+  await vet.locator('.label-chip').first().waitFor()
+  assert.equal(await vet.locator('.label-chip').first().getAttribute('aria-label'), 'Untrusted, private')
+  await vet.screenshot({ path: join(output, 'vet-card.png') })
+  await page.getByRole('button', { name: 'Let the planner read once', exact: true }).click()
+  await done(6)
+  await page.getByText('Finished turn 6.', { exact: true }).waitFor()
+
   // An open file tree keeps its tab and component state while audit temporarily replaces it.
   if (await page.locator('.app.right-folded').count()) await page.getByRole('button', { name: 'Context panel', exact: true }).click()
   await page.getByRole('tab', { name: 'Files', exact: true }).click()
@@ -142,7 +194,7 @@ try {
   await page.getByRole('button', { name: 'Close audit inspector' }).click()
   await page.locator('.app.right-folded').waitFor()
   assert.deepEqual(errors, [])
-  console.log('PASS: historical unknowns, live audit, background delivery, notices, per-turn usage, disclosure persistence, evidence, unknown tags, cancellation, focus restoration, and narrow drawer.')
+  console.log('PASS: conversation row, label chips, routing and content, answered by, historical unknowns, live audit, background delivery, notices, per-turn usage, disclosure persistence, evidence, unknown tags, cancellation, focus restoration, and narrow drawer.')
   console.log(`Screenshots: ${output}`)
 } finally {
   await app.close()

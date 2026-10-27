@@ -15,6 +15,8 @@ import { IconMenu } from './IconMenu'
 import { conversationKey } from '../../shared/experience'
 import { useConversationPreferences, useExperienceValue, setConversation } from '../experience'
 import { Icon, Menu, ProgressRing } from '../nala'
+import { PullRequestMark, PullRequestRoom } from './PullRequestMark'
+import { pullRequestLink } from '../../shared/pull-request'
 
 /** What a row says about a session that is open somewhere: only what asks something of the reader. */
 export type SessionStatus = 'working' | 'answer' | 'approval' | 'failed'
@@ -41,6 +43,10 @@ interface Props {
   /** Remove an archived conversation from disk. */
   onDelete: (summary: SessionSummary) => void
   onNew: (directory?: string) => void
+  /** Ask to delete every conversation kept for one project. */
+  onPurge: (directory: string, project: string) => void
+  /** Offer the project's Claude Code sessions for copying here. */
+  onImport: (directory: string, project: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
   /**
@@ -128,6 +134,8 @@ export function Sessions({
   onOpen,
   onDelete,
   onNew,
+  onPurge,
+  onImport,
   onNewChat,
   grouped,
   onGroup,
@@ -267,6 +275,8 @@ export function Sessions({
               onOpen={onOpen}
               onDelete={onDelete}
               onNew={onNew}
+              onPurge={onPurge}
+              onImport={onImport}
             />
           ))}
         {archivedShown && (
@@ -327,8 +337,8 @@ function ShowMore({ page: { hidden, coming, first }, onMore }: { page: Page; onM
  * the biggest thing in reach, and a group that can be folded should not ask for a 10px arrow
  * to be hit. `aria-expanded` carries the state and the name stays put.
  *
- * The heading is a row of two buttons rather than one, because the second one starts a
- * session here and a button cannot be nested inside a button.
+ * The heading is a row of buttons rather than one, because the others start a session here and
+ * open the project's actions, and a button cannot be nested inside a button.
  *
  * The rows stay mounted while shut, because that is how [`Fold`] has something to animate
  * away from; it hides them from the reader and from the tab order once the collapse has
@@ -346,6 +356,8 @@ function Group({
   onOpen,
   onDelete,
   onNew,
+  onPurge,
+  onImport,
 }: {
   group: Group
   shown: number
@@ -358,6 +370,8 @@ function Group({
   onOpen: (summary: SessionSummary) => void
   onDelete: (summary: SessionSummary) => void
   onNew: (directory: string) => void
+  onPurge: (directory: string, project: string) => void
+  onImport: (directory: string, project: string) => void
 }): React.JSX.Element {
   const drawn = page(group.sessions, shown, keep)
   return (
@@ -387,6 +401,15 @@ function Group({
           tooltip={`New chat in ${group.directory}`}
           onClick={() => onNew(group.directory)}
         />
+        <IconMenu icon="more-vertical" size="tiny" className="session-group-menu" label={`Actions for ${group.project}`}
+          tooltip={false} data-test="session-group-menu">
+          <leo-menu-item onClick={() => onImport(group.directory, group.project)}>
+            <span className="menu-icon-row"><Icon name="import-arrow" />Import from Claude Code…</span>
+          </leo-menu-item>
+          <leo-menu-item className="session-delete" onClick={() => onPurge(group.directory, group.project)}>
+            <span className="menu-icon-row"><Icon name="trash" />Delete all chats in {group.project}…</span>
+          </leo-menu-item>
+        </IconMenu>
       </div>
       <Fold open={open}>
         {drawn.rows.map((session) => (
@@ -410,7 +433,7 @@ function Group({
  *
  * The same component under a heading as in the flat list, so the two paths cannot drift into
  * showing different things about a session. Three lines: where it runs and when it was last
- * active, what it is called, and the branch it was started on.
+ * active, what it is called, and the branch it was started on, with the pull request it made beside the branch.
  *
  * The leading mark says what asks something of the reader, working, waiting, failed, and
  * otherwise whose conversation this is: a bot's face, or a folder for an ordinary chat.
@@ -453,6 +476,7 @@ const Session = memo(function Session({
     if (reason !== 'blur') trigger.current?.focus()
   }
   const status = info?.status
+  const pr = pullRequestLink(session.pullRequest)
   return <div className={`session-row${current ? ' current' : ''}${menu ? ' menu-open' : ''}`} data-session={key}>
     <button type="button" className={`session${current ? ' current' : ''}`} aria-current={current ? 'true' : undefined}
       onClick={() => onOpen(session)} onContextMenu={contextMenu('session', session.id)}>
@@ -471,11 +495,12 @@ const Session = memo(function Session({
         {forked && <span className="fork-mark"><ForkIcon /></span>}
         <span className="session-name">{session.title}</span>
       </span>
-      {session.branch && <span className="session-where"><span className="branch">{session.branch}</span></span>}
+      {(session.branch || pr) && <span className={`session-where${pr ? ' has-pr' : ''}`}>{session.branch && <span className="branch">{session.branch}</span>}{pr && <PullRequestRoom url={session.pullRequest} />}</span>}
       {info?.bot && <span className="offscreen">, with {info.bot.name}</span>}
       {forked && <span className="offscreen">Forked.</span>}
       {status && <span className="offscreen">, {STATUS_WORDS[status]}</span>}
     </button>
+    {pr && <PullRequestMark url={session.pullRequest} />}
     <div className="session-more-menu">
       <IconButton ref={trigger} icon="more-vertical" size="tiny" className="session-more"
         label={`Actions for ${session.title}`} tooltip={false} hasPopup="menu" expanded={menu}
@@ -510,7 +535,7 @@ const Session = memo(function Session({
 /**
  * The sessions a typed query leaves standing.
  *
- * Matched against exactly what a row shows — title, project, branch — so a person can always
+ * Matched against exactly what a row shows — title, project, branch, pull request — so a person can always
  * see why something is in the list. The directory is deliberately not in the haystack even
  * though every session carries one: `project` is its last segment, and searching the whole
  * path would mean every checkout under `~/repos` answered to "repos".
@@ -519,11 +544,11 @@ const Session = memo(function Session({
  * rather than a fuzzy score: a fuzzy match on a list this short mostly buys the right to
  * return rows the reader cannot account for.
  */
-function matching(sessions: SessionSummary[], query: string): SessionSummary[] {
+export function matching(sessions: SessionSummary[], query: string): SessionSummary[] {
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return [...sessions]
   return sessions.filter((session) => {
-    const haystack = `${session.title} ${session.project} ${session.branch ?? ''}`.toLowerCase()
+    const haystack = `${session.title} ${session.project} ${session.branch ?? ''} ${pullRequestLink(session.pullRequest)?.text ?? ''}`.toLowerCase()
     return terms.every((term) => haystack.includes(term))
   })
 }

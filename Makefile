@@ -505,6 +505,17 @@ check-docs:
 	pnpm --dir docs/website install --frozen-lockfile --ignore-scripts
 	pnpm --dir docs/website run build
 
+# help.rs compiles each page under docs/website/docs into a fixed table, builds an index naming
+# every page by the title in its front matter, and loads a page by the exact name that index
+# gives. An add, an edit that breaks a page's front matter, or a remove can fail a test that
+# reads one of those, so a change under docs/website/docs/ runs this, whatever its status.
+# Narrower than `check`, which compiles and tests the whole workspace for what only these tests
+# in bravebot-agent need.
+.PHONY: check-help
+check-help:
+	cargo test -p bravebot-agent --lib --locked -- help::tests:: \
+		tools::tests::a_documentation_page_loads_by_the_name_the_index_gives_it
+
 # How far the site has fallen behind the specs it describes. docs/docs-updated-to-sha records how
 # far reading got; these two report against it. Neither is a gate and no CI job runs them:
 # the site going stale is not something a diff can decide, so what they are for is answering

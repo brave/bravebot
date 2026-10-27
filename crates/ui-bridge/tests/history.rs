@@ -754,6 +754,10 @@ fn a_move_to_the_fallback_model_reaches_the_window_as_a_narration() {
         ended["event"], "turn.done",
         "the fallback did not answer: {ended}"
     );
+    // The fallback is not the session's model, so the window is not told which service the
+    // session's model is sent to as though it had answered.
+    assert_eq!(ended["data"]["sessionModel"], false, "{ended}");
+    assert!(ended["data"]["service"].is_null(), "{ended}");
     let narrations: Vec<Value> = window
         .passed
         .iter()
