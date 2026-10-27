@@ -112,12 +112,6 @@ const owedCarryOver = new Set<string>()
 /** The handles running a turn a person summoned a bot for (MEMORY-14). See `Summoning`. */
 const summoning = new Summoning()
 
-/** Why a bot's turn could not be sent, in the shape `bravebot:request` already answers with. */
-interface BotFailure {
-  code: string
-  message: string
-}
-
 let window: BrowserWindow | null = null
 
 /**
@@ -199,7 +193,7 @@ async function sendBotTurn(
     composed?: 'consolidation'
     staged?: { drops?: unknown; pastes?: unknown }
   },
-): Promise<{ ok?: unknown; error?: BotFailure }> {
+): Promise<Answer> {
   const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
@@ -929,7 +923,7 @@ app.whenReady().then(() => {
    */
   ipcMain.handle(
     'bravebot:bots:send',
-    async (_event, value: unknown): Promise<{ ok?: unknown; error?: BotFailure }> => {
+    async (_event, value: unknown): Promise<Answer> => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
@@ -972,7 +966,7 @@ app.whenReady().then(() => {
    */
   ipcMain.handle(
     'bravebot:bots:summon',
-    async (_event, value: unknown): Promise<{ ok?: unknown; error?: BotFailure }> => {
+    async (_event, value: unknown): Promise<Answer> => {
       if (typeof value !== 'object' || value === null) {
         return { error: { code: 'bad_request', message: 'not a request' } }
       }
