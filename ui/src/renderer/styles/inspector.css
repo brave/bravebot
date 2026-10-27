@@ -326,7 +326,7 @@
 }
 .audit-labels dt { color: var(--ink-secondary); }
 .audit-labels dd { margin: 0; }
-.context-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--leo-spacing-xs) var(--leo-spacing-l); margin: 0 0 var(--leo-spacing-m); font: var(--type-meta); }
+.context-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--leo-spacing-xs) var(--leo-spacing-l); margin: 0 0 var(--leo-spacing-m); padding: 0 var(--leo-spacing-s); font: var(--type-meta); }
 .context-facts dt { color: var(--ink-secondary); }
 .context-facts dd { margin: 0; }
 .audit-routing {display: grid; gap: var(--leo-spacing-m); margin: var(--leo-spacing-l) 0; font: var(--type-meta); }

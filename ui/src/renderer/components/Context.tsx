@@ -102,11 +102,6 @@ export const Context = memo(function Context({ live, audit, details }: {
         </Tabs>
       </div>
 
-      {typeof live.context === 'string' && <dl className="context-facts" data-test="conversation-integrity">
-        <dt>Conversation</dt>
-        <dd>{live.context === 'trusted' ? 'Trusted' : 'Has met untrusted content'}</dd>
-      </dl>}
-
       <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">
         {live.todos.length === 0 ? (
@@ -205,6 +200,10 @@ export const Context = memo(function Context({ live, audit, details }: {
         off={off.has('confined')}
         about="Content held apart from the planner: shown to you, and to no model unless you let it through."
       >
+        {typeof live.context === 'string' && <dl className="context-facts" data-test="conversation-integrity">
+          <dt>Conversation</dt>
+          <dd>{live.context === 'trusted' ? 'Trusted' : 'Has met untrusted content'}</dd>
+        </dl>}
         {live.quarantine.length === 0 ? (
           <Empty icon="shield-done">
             {onlyReplayed

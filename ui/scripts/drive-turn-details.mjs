@@ -57,6 +57,16 @@ try {
   const conversation = page.locator('[data-test="conversation-integrity"]')
   await conversation.waitFor()
   assert.match(await conversation.innerText(), /Has met untrusted content/)
+  // Inside a panel's padded body, inset like the panel's other rows, not against the column's edge.
+  const placed = await conversation.evaluate(row => {
+    const panel = row.closest('section.panel')
+    const inner = row.closest('.panel-inner')
+    const title = panel?.querySelector('.panel-title')
+    return { inPanel: !!panel && !!inner, inset: title ? row.getBoundingClientRect().left - panel.getBoundingClientRect().left : 0 }
+  })
+  assert.ok(placed.inPanel, 'the conversation row sits outside the panels')
+  assert.ok(placed.inset >= 8, `the conversation row is ${placed.inset}px from the panel's edge`)
+  await page.screenshot({ path: join(output, 'conversation-row.png') })
   await page.getByRole('button', { name: 'Audit unavailable', exact: false }).click()
   await page.getByText('Audit details aren’t available for this saved reply.').waitFor()
   assert.equal(await page.locator('.turn-statistics').count(), 0, 'session total is not a turn statistic')
@@ -150,6 +160,17 @@ try {
   await chips.nth(1).waitFor()
   assert.deepEqual(await chips.evaluateAll(all => all.map(chip => chip.getAttribute('aria-label'))), ['Trusted, public', 'Untrusted, private'])
   await page.screenshot({ path: join(output, 'label-chip.png') })
+  await page.locator('.transcript .label-chip').nth(1).locator('.label-axis').first().hover()
+  await page.getByText('Untrusted: nobody vouched for where it came from', { exact: false }).waitFor()
+  await page.screenshot({ path: join(output, 'label-tooltip.png') })
+  await page.mouse.move(5, 5)
+  // A vet card heads with the label its request carried.
+  await emit('vet.request', { request: 1, origin: 'vendor/plan.md', expects: 'a plan', content: 'Step one', lines: 1, label: '(U,priv)', vetting: { verdict: 'safe', label: '(U,priv)' } })
+  const vet = page.locator('.vetted-read')
+  await vet.locator('.label-chip').first().waitFor()
+  assert.equal(await vet.locator('.label-chip').first().getAttribute('aria-label'), 'Untrusted, private')
+  await vet.screenshot({ path: join(output, 'vet-card.png') })
+  await page.getByRole('button', { name: 'Let the planner read once', exact: true }).click()
   await done(6)
   await page.getByText('Finished turn 6.', { exact: true }).waitFor()
 

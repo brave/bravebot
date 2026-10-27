@@ -209,7 +209,7 @@ or the fallback model leaves it out.
 
 Confined content, the vet, output and vouch cards and a write's remark carry a **label
 chip**: two neutral words, Trusted or Untrusted and Public or Private, each with a fixed
-tooltip. The Context overview says whether the **Conversation** is trusted or has met
+tooltip. The Confined content panel opens with whether the **Conversation** is trusted or has met
 untrusted content, as the session reported it when opened or rewound. The row is hidden
 from the moment a turn starts until the next open or rewind, since no event reports it
 in between.
