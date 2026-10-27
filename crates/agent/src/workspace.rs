@@ -1718,6 +1718,12 @@ impl Workspace {
 /// The store's own name is compared without regard to case, because on a volume that ignores
 /// case `FACTS` is the directory `facts` will be made as, and it need not exist yet for the
 /// resolved path to keep the spelling it was written in.
+///
+/// On a volume that tells case apart the comparison is the same, on purpose: `.bravebot/FACTS`
+/// there is a different directory, and the file tools refuse it too. What is refused is a name a
+/// person would read as the store's, which costs nothing that belongs in a workspace, and asking
+/// the volume each time would make the refusal depend on where the check runs. `/undo` is the
+/// other way round: it restores only the store itself, so it asks the volume (RECALL-8).
 pub(crate) fn within_stores(stores: &[PathBuf], resolved: &Path) -> bool {
     stores.iter().any(|store| {
         resolved.starts_with(store)
@@ -5365,6 +5371,24 @@ mod tests {
                 refused.display()
             );
         }
+    }
+
+    /// RECALL-8: a differently cased spelling of a store is refused whether or not the volume
+    /// tells the two names apart. Both are made, the volume is asked whether they are one, and the
+    /// answer is the same either way.
+    #[test]
+    fn a_differently_cased_store_name_is_refused_whatever_the_volume_says() {
+        let (home, _) = home_and_project("cased-store-volume");
+        let state = home.join(".bravebot");
+        std::fs::create_dir_all(state.join("facts")).expect("facts");
+        std::fs::create_dir_all(state.join("FACTS")).expect("FACTS");
+        // One entry where the volume folds case, since making `FACTS` found `facts`.
+        let one = std::fs::read_dir(&state).expect("state").count() == 1;
+        let workspace = Workspace::new(&home).expect("workspace").with_state(&state);
+        assert!(
+            workspace.resolve(".bravebot/FACTS/x.md").is_err(),
+            "the volume folding case ({one}) changed the answer"
+        );
     }
 
     /// A differently cased spelling of a store that does not exist yet is the store as well.

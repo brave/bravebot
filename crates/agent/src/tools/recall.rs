@@ -15,7 +15,8 @@ fn writable_store<S: Sink>(
     tools: &Tools,
 ) -> Option<crate::recall::store::Store> {
     let home = tools.home.filter(|_| crate::home::writable().is_some())?;
-    let project = crate::recall::project::project_id(
+    let project = crate::recall::project::settled(
+        home,
         tools.workspace.root(),
         workspace_is_trusted(policy, tools.workspace),
     );

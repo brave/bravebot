@@ -55,6 +55,8 @@ In a workspace the person has trusted at the startup question ([TRUST-7](trust-m
 
 The id becomes a directory under `~/.bravebot/projects/` named by a hash of the id, with the id written in a file beside it, so two ids never share a directory and the person can see which is which. The directory is made by the first write that needs it ([RECALL-3](#RECALL-3), [RECALL-5](#RECALL-5)), never by a read.
 
+The first time the workspace is trusted, what was kept under its path moves to the `origin` name, so the facts and rules saved before the yes keep loading. Only where the `origin` name has nothing kept yet: nothing is merged or written over, and where both are kept the path's stays where it is. A session that writes nothing to the state directory moves nothing.
+
 **Why not the path.** The session store names a directory by a lossy mangling of the path, and its known costs say two paths can share a store. Rules must not leak between projects that way. Two clones of one repository should share their rules, and moving a checkout should not lose them.
 
 **Why the path until trusted.** `.git/config` is a project file. Choosing which project's rules and facts to load from it is a decision taken from content nobody has vouched for ([LABEL-5](labels.md#LABEL-5)). A hostile repository could name another project's `origin` and have that project's rules and private facts put in front of the planner. Until the yes, a workspace gets only the home layer and the facts kept for its path.
@@ -67,6 +69,7 @@ The id becomes a directory under `~/.bravebot/projects/` named by a hash of the 
 `verified-by: bravebot_agent::recall::project::a_trusted_repository_with_no_origin_is_named_by_its_path`
 `verified-by: bravebot_agent::recall::project::a_tracked_config_beside_a_git_file_does_not_name_the_project`
 `verified-by: bravebot_agent::recall::project::a_bare_repository_is_named_by_its_origin`
+`verified-by: bravebot_agent::recall::project::what_was_kept_under_the_path_moves_to_the_origin_once_trusted`
 `verified-by: bravebot_agent::recall::project::a_linked_worktree_is_named_by_its_repositorys_origin`
 `verified-by: bravebot_agent::recall::project::a_directory_outside_a_repository_is_named_by_its_path`
 `verified-by: bravebot_agent::recall::project::the_directory_name_is_sixteen_hex_of_the_ids_hash`
@@ -83,7 +86,7 @@ The layers, read in this order:
 | person, per project | `~/.bravebot/projects/<id>/rules.md` | the project [RECALL-1](#RECALL-1) names |
 | project | the project's `AGENTS.md` and its fallbacks ([INSTR-1](instructions.md#INSTR-1)) | that project |
 
-`rules.md` becomes an eleventh source in [INSTR-1](instructions.md#INSTR-1), read on the same footing as `~/.bravebot/AGENTS.md`: trusted for sitting in `~/.bravebot` ([TRUST-11](trust-map.md#TRUST-11)), re-read every turn with no cache, and put in the system prompt, never the conversation. Delegates read it as they read the other standing instructions ([INSTR-10](instructions.md#INSTR-10)). Where the person's file and the project's `AGENTS.md` disagree, the project's file wins, and the system prompt says so in one line above the rules. Sources that come later still, nested `AGENTS.md` files ([INSTR-14](instructions.md#INSTR-14)) and words from the command line ([INSTR-10](instructions.md#INSTR-10)), keep their place after both.
+`rules.md` is one of the sources in [INSTR-1](instructions.md#INSTR-1), the second, read on the same footing as `~/.bravebot/AGENTS.md`: trusted for sitting in `~/.bravebot` ([TRUST-11](trust-map.md#TRUST-11)), re-read every turn with no cache, and put in the system prompt, never the conversation. Delegates read it as they read the other standing instructions ([INSTR-10](instructions.md#INSTR-10)). Where the person's file and the project's `AGENTS.md` disagree, the project's file wins, and the system prompt says so in one line above the rules. Sources that come later still, nested `AGENTS.md` files ([INSTR-14](instructions.md#INSTR-14)) and words from the command line ([INSTR-10](instructions.md#INSTR-10)), keep their place after both.
 
 A rule is never dropped to save tokens. A layer is loaded in full, or the session says it could not be read. Its size is counted where [INSTR-1](instructions.md#INSTR-1)'s sources are already measured.
 
@@ -212,7 +215,7 @@ A save under a new key is compared with the live facts in its scope by the share
 <a id="RECALL-8"></a>
 ### RECALL-8: only `remember` and the person write a fact, and a fact keeps the confidentiality of what it was written from
 
-The fact directories are refused to every other tool and to every program, as the rest of the state directory is ([SANDBOX-12](sandboxing.md#SANDBOX-12), [STATE-3](state-directory.md#STATE-3)). A `run` line's `<` redirection is opened by bravebot rather than by a program, so its source is refused where it lands in them, before the line runs and again as it is opened. The git tool reads files from the object store and not through the file tools, so it leaves them out of what it shows and says a file was left out. A workspace that holds the state directory, as one rooted at the home directory does, cannot reach `~/.bravebot/facts/`, `~/.bravebot/projects/`, `~/.bravebot/AGENTS.md` or `~/.bravebot/sessions/` with the file tools either, and a walk over it finds nothing there. The planner's context holds nothing untrusted, and `remember` takes only text from it, so no fact holds untrusted bytes. A file the person puts there by hand is theirs, as `~/.bravebot/AGENTS.md` is.
+A store's name is matched ignoring case, so a differently cased spelling is refused too, on a volume that tells the two apart as well as on one that does not: it reads as the store, and nothing that belongs in a workspace is called that. `/undo` restores only the store itself and asks the volume. The fact directories are refused to every other tool and to every program, as the rest of the state directory is ([SANDBOX-12](sandboxing.md#SANDBOX-12), [STATE-3](state-directory.md#STATE-3)). A `run` line's `<` redirection is opened by bravebot rather than by a program, so its source is refused where it lands in them, before the line runs and again as it is opened. The git tool reads files from the object store and not through the file tools, so it leaves them out of what it shows and says a file was left out. A workspace that holds the state directory, as one rooted at the home directory does, cannot reach `~/.bravebot/facts/`, `~/.bravebot/projects/`, `~/.bravebot/AGENTS.md` or `~/.bravebot/sessions/` with the file tools either, and a walk over it finds nothing there. The planner's context holds nothing untrusted, and `remember` takes only text from it, so no fact holds untrusted bytes. A file the person puts there by hand is theirs, as `~/.bravebot/AGENTS.md` is.
 
 A fact is trusted. Its confidentiality is the planner context's at the moment of the save ([LABEL-2](labels.md#LABEL-2)), joined with the old fact's where the save writes over one, since its tags and date carry over, and written as `label`. A fact read into a turn, by injection or by `recall`, gives the context that label, as any read of private content does, so private content cannot reach a public surface by being remembered. This is a new row in [LABEL-8](labels.md#LABEL-8)'s table: a fact's first label is trusted, with the confidentiality its `label` field states, and private where the field is missing.
 
@@ -225,6 +228,7 @@ A fact is trusted. Its confidentiality is the planner context's at the moment of
 `verified-by: bravebot_agent::workspace::a_walk_over_a_workspace_holding_home_finds_nothing_in_the_stores`
 `verified-by: bravebot_agent::workspace::a_rewind_cannot_reach_the_fact_store`
 `verified-by: bravebot_agent::workspace::a_differently_cased_store_name_is_refused_before_the_store_exists`
+`verified-by: bravebot_agent::workspace::a_differently_cased_store_name_is_refused_whatever_the_volume_says`
 `verified-by: bravebot_sandbox::base::programs_are_refused_the_fact_store`
 `verified-by: bravebot_agent::tools::a_redirection_reading_from_the_stores_is_refused_before_it_runs`
 `verified-by: bravebot_agent::workspace::git_leaves_the_stores_out_of_a_repository_that_tracks_them`
@@ -313,7 +317,7 @@ A query answers with at most eight live facts, from the project's facts and the 
 
 ## What this changes in other specs
 
-- [instructions.md](instructions.md): [INSTR-1](instructions.md#INSTR-1) gains `~/.bravebot/projects/<id>/rules.md` as an eleventh source, after `~/.bravebot/AGENTS.md` and before the project's files. The measured sources gain it too.
+- [instructions.md](instructions.md): [INSTR-1](instructions.md#INSTR-1) gains `~/.bravebot/projects/<id>/rules.md` as its second source, after `~/.bravebot/AGENTS.md` and before the project's files. The measured sources gain it too.
 - [labels.md](labels.md): [LABEL-8](labels.md#LABEL-8)'s table gains the row in [RECALL-8](#RECALL-8).
 - [prompting.md](prompting.md): [PROMPT-11](prompting.md#PROMPT-11)'s register gains `propose_rule`, and the moments a person is asked gain it.
 - [incognito.md](incognito.md): an incognito session saves no fact, proposes no rule, and makes no `projects/<id>/` directory. It still reads rules and facts, so the session is the one the person configured.
@@ -329,7 +333,7 @@ A query answers with at most eight live facts, from the project's facts and the 
 ## Known costs
 
 - BM25 matches words, not meaning. A fact about "the forge" is not found by a prompt about "CI".
-- A fresh clone the person has not yet trusted gets no per-project rules or facts ([RECALL-1](#RECALL-1)). A rule such as "use tabs here" is missing there until the yes. Facts and rules saved while the project was named by its path stay under that name once it is trusted and named by its `origin`, so they stop loading until the person moves the directory.
+- A fresh clone the person has not yet trusted gets no per-project rules or facts ([RECALL-1](#RECALL-1)). A rule such as "use tabs here" is missing there until the yes. What was kept under the path moves to the `origin` name at the yes, except where the `origin` already had its own, which is left for the person to merge by hand.
 - A repository with no `origin` is named by its path, so moving it loses its rules and facts until the person moves the directory under `~/.bravebot/projects/`.
 - A fork with its own `origin` is a different project from its upstream.
 - The planner saving on its own judgement will save things the person would not have. The shown line and `/undo` are the check, and `/memory` shows what is kept.

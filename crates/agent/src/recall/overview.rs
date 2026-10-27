@@ -1,7 +1,7 @@
-//! What `/memory` shows of the rules and facts kept (RECALL-11). It reads and writes nothing.
+//! What `/memory` shows of the rules and facts kept (RECALL-11). It writes nothing but the move
+//! RECALL-1 makes the first time a project is trusted.
 
 use super::fact::{Fact, Scope};
-use super::project::project_id;
 use super::store::Store;
 use std::path::{Path, PathBuf};
 
@@ -24,21 +24,8 @@ pub struct RuleFile {
 /// none.
 fn count_rule_file(path: &Path) -> Option<RuleFile> {
     use std::io::{BufRead, Read};
-    // Opened without waiting, then asked what it is, so a pipe put in the file's place between a
-    // look and the open is not waited on.
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use rustix::fs::OFlags;
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(OFlags::NONBLOCK.bits().cast_signed());
-    }
-    let file = options.open(path).ok()?;
+    let file = super::store::open_regular(path).ok()?;
     let meta = file.metadata().ok()?;
-    if !meta.is_file() {
-        return None;
-    }
     // A file longer than the bytes read has more lines than were counted, whatever they hold.
     let cut = meta.len() > RULE_BYTES_READ;
     let mut lines = 0;
@@ -79,7 +66,7 @@ pub fn overview(
     trusted: bool,
     own: Option<&Path>,
 ) -> Overview {
-    let project = project_id(workspace.root(), trusted);
+    let project = super::project::settled(home, workspace.root(), trusted);
     let mut rules: Vec<RuleFile> = crate::preamble::state_rule_files(&[workspace], home, &project)
         .iter()
         .filter_map(|file| count_rule_file(file))
@@ -95,6 +82,7 @@ pub fn overview(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::recall::project::project_id;
 
     /// RECALL-11: `/memory` lists the state rule files a turn reads. A dotfiles-style link to a
     /// file elsewhere is followed and listed, as the turn follows it; a link that leads into the

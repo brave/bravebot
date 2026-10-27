@@ -30,7 +30,7 @@
 //! AGENTS.md however many turns it runs, where a `Message::user` would accumulate one per turn.
 
 use crate::calendar::civil_from_days;
-use crate::recall::project::{ProjectId, project_id};
+use crate::recall::project::ProjectId;
 use crate::request_view::{Prompt, Provenance};
 use crate::skills::{Catalogue, ImportRefusal, Notice};
 use crate::tools::workspace_is_trusted;
@@ -240,7 +240,11 @@ pub fn compose_in<S: Sink>(
     // so a delegate's checkout reads its parent's.
     let mut rules_read = false;
     if !safe && let Some(home) = home {
-        let project = project_id(sources.root(), workspace_is_trusted(policy, sources));
+        let project = crate::recall::project::settled(
+            home,
+            sources.root(),
+            workspace_is_trusted(policy, sources),
+        );
         if let Some(text) = read_project_rules(
             policy,
             &[sources, workspace],
@@ -926,8 +930,12 @@ fn read_project_rules<S: Sink>(
         notices.push(Notice::project_rules_reached_through_the_workspace());
         return None;
     }
-    // A layer is loaded in full or the session says it could not be read (RECALL-2).
-    let text = match std::fs::read_to_string(file) {
+    // A layer is loaded in full or the session says it could not be read (RECALL-2). Never waited
+    // on: a pipe at the path would hold every turn in the project.
+    let text = match crate::recall::store::open_regular(&file).and_then(|mut opened| {
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut opened, &mut text).map(|_| text)
+    }) {
         Ok(text) => text,
         Err(error) => {
             notices.push(Notice::project_rules_unreadable(

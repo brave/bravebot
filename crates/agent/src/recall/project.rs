@@ -51,6 +51,31 @@ pub fn project_id(working_directory: &Path, trusted: bool) -> ProjectId {
     }
 }
 
+/// [`project_id`], with what was kept for the project under its path moved to its `origin` name the
+/// first time the workspace is trusted (RECALL-1).
+///
+/// Only where the `origin` name has nothing kept yet, so nothing is merged or written over, and
+/// never in a session that writes nothing to the state directory. Where both are kept, the path's
+/// stays where it is.
+pub fn settled(home: &Path, working_directory: &Path, trusted: bool) -> ProjectId {
+    let project = project_id(working_directory, trusted);
+    if !trusted || crate::home::writable().is_none() {
+        return project;
+    }
+    let by_path = project_id(working_directory, false);
+    let projects = home.join("projects");
+    let (from, to) = (projects.join(&by_path.dir), projects.join(&project.dir));
+    if by_path.dir != project.dir
+        && std::fs::symlink_metadata(&from).is_ok_and(|meta| meta.is_dir())
+        && std::fs::symlink_metadata(&to).is_err()
+        && std::fs::rename(&from, &to).is_ok()
+    {
+        // The `id` file names the project the directory is now for.
+        let _ = super::store::Store::new(home, project.clone()).make_project_directory();
+    }
+    project
+}
+
 /// The normalised `origin` URL of the repository at `root`, read from its configuration file
 /// without starting git.
 fn origin_of(root: &Path) -> Option<String> {
@@ -181,6 +206,45 @@ mod tests {
         )
         .expect("config");
         root
+    }
+
+    /// RECALL-1: what was kept under the path before the trust yes moves to the `origin` name at
+    /// the first trusted look, so it keeps loading. Where the `origin` already has its own, nothing
+    /// is merged and the path's stays, and an untrusted look moves nothing.
+    #[test]
+    fn what_was_kept_under_the_path_moves_to_the_origin_once_trusted() {
+        let scratch = Scratch::new("recall-project-settled");
+        let root = repository(&scratch, "git@github.com:x/y.git");
+        let home = scratch.0.join("home");
+        let projects = home.join("projects");
+        let (by_path, by_origin) = (project_id(&root, false), project_id(&root, true));
+        let kept = projects.join(&by_path.dir).join("facts");
+        std::fs::create_dir_all(&kept).expect("facts");
+        std::fs::write(kept.join("k.md"), "KEPT").expect("fact");
+
+        assert_eq!(settled(&home, &root, false), by_path);
+        assert!(kept.join("k.md").exists(), "an untrusted look moved it");
+
+        assert_eq!(settled(&home, &root, true), by_origin);
+        let moved = projects.join(&by_origin.dir);
+        assert_eq!(
+            std::fs::read_to_string(moved.join("facts/k.md")).expect("moved"),
+            "KEPT"
+        );
+        assert_eq!(
+            std::fs::read_to_string(moved.join("id")).expect("id"),
+            "github.com/x/y"
+        );
+        assert!(!projects.join(&by_path.dir).exists());
+
+        std::fs::create_dir_all(&kept).expect("facts again");
+        std::fs::write(kept.join("j.md"), "LATER").expect("fact");
+        settled(&home, &root, true);
+        assert!(
+            kept.join("j.md").exists(),
+            "the origin's own were written over"
+        );
+        assert!(!moved.join("facts/j.md").exists());
     }
 
     #[test]

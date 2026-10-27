@@ -7,6 +7,29 @@ use crate::preamble::{AGENTS_FILE, RULES_FILE};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+/// Open `path` for reading only where it is a regular file.
+///
+/// Opened without waiting, then asked what it is, so a pipe at the path, or one put there between
+/// a look and the open, is never waited on (RECALL-2, RECALL-11).
+pub(crate) fn open_regular(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use rustix::fs::OFlags;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(OFlags::NONBLOCK.bits().cast_signed());
+    }
+    let file = options.open(path)?;
+    match file.metadata()?.is_file() {
+        true => Ok(file),
+        false => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "not a regular file",
+        )),
+    }
+}
+
 /// The facts for one project and for every project, kept under one state directory.
 pub struct Store {
     home: PathBuf,

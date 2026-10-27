@@ -1876,6 +1876,41 @@ fn rules_inside_the_working_directory_are_not_read_as_the_persons_own() {
     );
 }
 
+/// RECALL-2. A pipe where the rules file goes is not waited on, which would hold every turn in
+/// the project, and is said not to have been read. Composed on a thread so a regression fails
+/// rather than hangs.
+#[cfg(unix)]
+#[test]
+fn a_pipe_where_the_rules_file_goes_is_not_waited_on() {
+    let scratch = Scratch::new("rules-pipe");
+    let home = scratch.directory("home");
+    let project = scratch.directory("project");
+    let dir = home.join("projects").join(&project_id(&project, false).dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        dir.join("rules.md"),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .expect("a pipe");
+    let (sent, composed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let workspace = Workspace::new(&project).expect("workspace");
+        let notices = compose_with_home(&workspace, &workspace, &home, &["."]).notices;
+        let _ = sent.send(
+            notices
+                .into_iter()
+                .any(|n| n.message.contains("could not be read")),
+        );
+    });
+    let told = composed
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .expect("composing waited on the pipe");
+    assert!(told, "the pipe was not said to be unreadable");
+}
+
 /// RECALL-2. A rules file that is there and cannot be read is said not to have been read, and a
 /// file with nothing in it is no rules at all.
 #[test]

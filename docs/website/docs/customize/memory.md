@@ -38,11 +38,6 @@ You can also edit either file by hand.
 A rule is never promoted from a fact. If a fact deserves to be a rule, say so, or approve the planner's
 proposal.
 
-Rules from different layers can disagree. At the start of a turn after a layer changes, bravebot asks
-the model to judge the pairs of lines that look alike, at most 20 pairs, and tells you which side
-wins. A layer it has already checked is not checked again, and with nothing to ask, the check is
-skipped and the session says so once.
-
 ## Facts
 
 A fact is one markdown file, `~/.bravebot/projects/<id>/facts/<key>.md` for one project or

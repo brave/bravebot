@@ -43,7 +43,7 @@ use store::Loaded;
 /// Every kept fact of the project and of every project, the project's own first where both scopes
 /// keep a key. The one reading of the store `recall` and the prompt's injection share.
 pub fn kept_facts(home: &Path, root: &Path, trusted: bool) -> Loaded {
-    store::Store::new(home, project::project_id(root, trusted)).load()
+    store::Store::new(home, project::settled(home, root, trusted)).load()
 }
 
 /// The facts of a read in the order a key resolves in: the project's own first.
