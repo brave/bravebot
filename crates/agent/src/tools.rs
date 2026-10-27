@@ -23183,6 +23183,80 @@ mod tests {
         );
     }
 
+    /// LOAD-4: a link that lands in a directory whose name is not text is named no landing, and a
+    /// rule about the directory whose name spells the replacement-character rendering of it decides
+    /// that directory only (PATH-003). The regression it rejects: the landing being judged and named
+    /// on a lossy rendering of its path, so the invalid name is handed to the planner as its
+    /// lookalike, or is allowed or denied by what the rules say about the lookalike. Linux only,
+    /// because the name has to exist on disk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_landing_whose_name_is_not_text_is_not_named_as_its_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let fixture = SkillFixture::new("skill-files-link-not-text");
+        std::fs::create_dir_all(fixture.project.join(".bravebot/skills")).unwrap();
+        let invalid = std::ffi::OsStr::from_bytes(b"lint-\xff");
+        for (name, directory) in [
+            ("invalid", fixture.project.join("shared").join(invalid)),
+            ("lookalike", fixture.project.join("shared/lint-\u{FFFD}")),
+        ] {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\nbody\n"),
+            )
+            .unwrap();
+            std::fs::write(directory.join("a.md"), "a").unwrap();
+            std::os::unix::fs::symlink(
+                &directory,
+                fixture.project.join(format!(".bravebot/skills/{name}")),
+            )
+            .unwrap();
+        }
+
+        let workspace = fixture.workspace();
+        let landings = |rules: bravebot_core::permissions::Permissions| {
+            let mut store = TrustStore::new("/work");
+            store.trust(".");
+            let catalogue =
+                crate::skills::resolved(&workspace, None, store, rules, &mut RecordingSink::new());
+            let landed = |name: &str| {
+                catalogue
+                    .get(name)
+                    .map(|skill| skill.landed.clone())
+                    .expect("offered")
+            };
+            (landed("invalid"), landed("lookalike"))
+        };
+
+        let (invalid_landed, lookalike_landed) =
+            landings(bravebot_core::permissions::Permissions::default());
+        assert_eq!(
+            invalid_landed, None,
+            "a landing that is not text was named as its lookalike"
+        );
+        assert_eq!(
+            lookalike_landed.as_deref(),
+            Some("shared/lint-\u{FFFD}"),
+            "the control: a landing that is text and allowed is named"
+        );
+
+        let (rules, rejected) = bravebot_core::permissions::Permissions::parse(
+            &["Read(shared/lint-\u{FFFD})".to_string()],
+            &[],
+            &[],
+            &bravebot_core::permissions::Anchors::none(),
+        );
+        assert!(rejected.is_empty(), "the rule did not parse: {rejected:?}");
+        let (invalid_landed, lookalike_landed) = landings(rules);
+        assert_eq!(
+            lookalike_landed, None,
+            "a rule about the lookalike did not deny it"
+        );
+        assert_eq!(invalid_landed, None, "a landing that is not text was named");
+    }
+
     /// TURN-10: reads of one round that run beside each other.
     mod reading_together {
         use super::arguments::{Scratch, told, with_tools};

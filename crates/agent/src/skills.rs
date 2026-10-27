@@ -1499,7 +1499,10 @@ fn landing_in_the_workspace<S: Sink>(
     named: &str,
 ) -> Option<String> {
     let landed = found_at.canonicalize().ok()?;
-    landed.strip_prefix(workspace.root()).ok()?;
+    // A landing whose name is not text is refused before the rules or the map are asked, because
+    // both take text and a lossy rendering would give two different directories one string.
+    // What follows is the rendering of a path that is text, so it loses nothing (PATH-001).
+    landed.strip_prefix(workspace.root()).ok()?.to_str()?;
     let relative = workspace.relative_display(&landed);
     if workspace.rule_denies_reading(policy, &relative) || !policy.trusts_path(&relative) {
         return None;
