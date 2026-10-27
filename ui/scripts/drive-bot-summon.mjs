@@ -138,6 +138,8 @@ try {
   const where = (await cards.locator('.replied-where').allInnerTexts()).map((text) => text.trim())
   assert.deepEqual(where, [project.split('/').at(-1), 'Harbour'], 'one card names the project and one Harbour, oldest first')
   assert.deepEqual((await cards.locator('.replied-text').allInnerTexts()).map((text) => text.trim()), ['lantern', 'lantern'], 'each card holds the reply')
+  await page.locator('#context-column [data-test="bot-details"]').waitFor()
+  assert.equal(await page.locator('[data-test="inspector-tabs"]').count(), 0, 'a bot’s conversation has its details in the right column, not the project panels')
   await page.screenshot({ path: join(output, 'bot-summon-cards-light.png') })
   await page.evaluate(() => window.bravebot.writeTheme('dark'))
   await page.waitForFunction(() => document.documentElement.getAttribute('data-theme') === 'dark')

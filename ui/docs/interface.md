@@ -104,7 +104,8 @@ said by the working row and the composer, not by a status line.
 
 Beside the fold toggle, the header shows the bot's face for a bot's conversation, a chip naming
 the project (the full path is its tooltip), and the conversation's title. A bot's conversation with
-no project shows no chip, no vetting chip and no context panel. A **Vetting on** chip appears at
+no project shows no project chip and no vetting chip. Its context panel holds the bot's details,
+with its face, name, purpose and memory, in place of the files and plan. A **Vetting on** chip appears at
 the right while auto-vetting is on. Three controls sit after it, before the context panel's
 toggle:
 
@@ -304,7 +305,7 @@ folder is made by the app under its own data directory, beside the briefing and 
 Opening a bot opens its conversation, one that carries on, in its home folder
 ([MEMORY-13](../../docs/specs/definition-memory.md#MEMORY-13)). A bot nobody has talked to yet
 shows its face and **Talk to** its name above the message box. The conversation has no project
-picker and no context panel. The history button in its header opens **Earlier conversations**,
+picker. The history button in its header opens **Earlier conversations**,
 the bot's other conversations and its details, and the arrow on that page goes back to the
 conversation.
 

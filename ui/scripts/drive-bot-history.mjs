@@ -109,7 +109,7 @@ try {
   for(let tries=0;tries<50&&!delivered.length;tries++){delivered=await app.evaluate((_,n)=>globalThis.ux.sent.slice(n),sent);if(!delivered.length)await page.waitForTimeout(100)}
   assert.equal(delivered.at(-1)?.slug,'review-bot','the first message goes to the bot');
   assert.equal(delivered.at(-1)?.prompt,'Start a newer conversation');
-  assert.equal(await page.locator('.app.no-context').count(),1,'a conversation with no project has no context column');
+  assert.equal(await page.locator('.app.no-context').count(),0,'a bot’s conversation keeps the context column');await page.getByRole('button',{name:/context panel/i}).first().waitFor();await page.locator('#context-column [data-test="bot-details"]').waitFor();assert.equal(await page.locator('[data-test="inspector-tabs"]').count(),0,'the column holds the bot, not the files and plan');
   assert.equal(await page.locator('.transcript-head .where').count(),0,'and no project chip');
   await page.getByRole('textbox',{name:COMPOSER_NAME}).fill('Keep this newer conversation draft');
   await snap('04-history-after-new');

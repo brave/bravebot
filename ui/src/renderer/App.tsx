@@ -369,7 +369,7 @@ export function App(): React.JSX.Element {
   )
 
   const { widths, collapsed, dragging, folding, start, reset, nudge, toggle } = useColumns()
-  const { selectedAudit, openAudit, discloseTurn, auditPanel } = useAudit(live, collapsed, toggle, updateSession)
+  const { openAudit, discloseTurn, auditPanel } = useAudit(live, collapsed, toggle, updateSession)
 
   /** Which sessions in the list came out of another one, for the mark beside their names. */
   const forked = useMemo(() => forkedSessions(forks), [forks])
@@ -874,12 +874,14 @@ export function App(): React.JSX.Element {
     return rows.filter((row) => row !== current)
   }, [viewedBot, ownSessions, preferences])
   const botPage = useMemo(() => viewedBot ? { bot: viewedBot, history: viewedHistory } : null, [viewedBot, viewedHistory])
-  const details = useMemo(() => viewedBot
-    ? <BotDetails bot={viewedBot} onSave={saveBot} onArchive={() => void retireBot(viewedBot.slug, true)} />
-    : null, [viewedBot, saveBot, retireBot])
-
-  // A conversation in a bot's home folder has no project, so no branch and no context column.
+  // A conversation in a bot's home folder has no project, so no branch and no files to list.
   const noProject = !!live && homes.has(live.summary.directory)
+  // The right column of a bot's own page and of its home conversation holds the bot, since a home
+  // folder has no project to inspect.
+  const detailed = viewedBot ?? (noProject ? openBotRecord : null)
+  const details = useMemo(() => detailed
+    ? <BotDetails bot={detailed} onSave={saveBot} onArchive={() => void retireBot(detailed.slug, true)} />
+    : null, [detailed, saveBot, retireBot])
   const [recents, setRecents] = useState<string[]>([])
   useEffect(() => { void window.bravebot.readRecents().then(setRecents).catch(() => undefined) }, [live?.handle])
   const fresh = !!live && live.entries.length === 0 && !live.running
@@ -900,8 +902,6 @@ export function App(): React.JSX.Element {
       className={[
         'app',
         !live && !viewedBot ? 'no-session' : '',
-        // The column comes back while an audit is open, since that is where it is drawn.
-        noProject && !selectedAudit ? 'no-context' : '',
         settings ? 'in-settings' : '',
         dragging ? 'resizing' : '',
         folding ? 'folding' : '',
