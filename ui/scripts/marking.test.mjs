@@ -839,3 +839,28 @@ test('the overview says whether the conversation has met untrusted content, and 
   for (const word of ['untrusted', 'Trusted', 'trusted ', '']) assert.match(panel(word), /<dd>Has met untrusted content<\/dd>/, JSON.stringify(word))
   for (const unknown of [null, undefined]) assert.doesNotMatch(panel(unknown), /Conversation<\/dt>/)
 })
+
+test('the conversation row is hidden from the moment a turn starts, the word read before it being no longer current', () => {
+  const { apply } = load('src/renderer/apply.ts')
+  const { Context } = load('src/renderer/components/Context.tsx')
+  for (const word of ['trusted', 'untrusted']) {
+    let live = { handle: 'h', summary: { directory: '/w' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, tokens: 0, running: false, context: word }
+    const send = (event, data) => apply({ event, session: 'h', data }, (update) => { live = update(live) }, () => {}, () => {})
+    const row = () => /Conversation<\/dt>/.test(renderToStaticMarkup(React.createElement(Context, { live })))
+    assert.equal(row(), true, word)
+    send('turn.started', { turn: 1 })
+    assert.equal(row(), false, `${word}: shown after a turn started`)
+    send('turn.done', { turn: 1, model: 'stub-model', reply: 'done', notices: [] })
+    assert.equal(row(), false, `${word}: shown again with no fresh word`)
+  }
+})
+
+test('a turn the fallback model answered says no service under the reply', () => {
+  const { receiveTurn } = load('src/renderer/turn-details.ts')
+  const { TurnFooter } = load('src/renderer/components/TurnDetails.tsx')
+  // What the bridge sends for a turn that moved to the fallback model.
+  const turns = receiveTurn({}, { event: 'turn.done', session: 's', data: { turn: 1, model: 'fallback-model', service: null, sessionModel: false, tokens: 10, notices: [] } })
+  const footer = renderToStaticMarkup(React.createElement(TurnFooter, { details: { ...turns[1], statsOpen: true }, onDisclosure() {}, onAudit() {} }))
+  assert.match(footer, /fallback-model/)
+  assert.doesNotMatch(footer, /Answered by/)
+})

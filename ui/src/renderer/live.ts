@@ -136,8 +136,8 @@ export interface Live {
    */
   archived: number
   /**
-   * The conversation's integrity word from `session.open` or `session.rewind`. Cleared from
-   * `trusted` when a turn starts, since no event says whether that turn met untrusted content.
+   * The conversation's integrity word from `session.open` or `session.rewind`. Cleared when a
+   * turn starts, since no event reports it again until one of those does.
    */
   context?: string | null
   /** Whether the session opened with auto-vetting on, as the agent settled it then. */

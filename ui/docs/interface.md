@@ -210,9 +210,9 @@ or the fallback model leaves it out.
 Confined content, the vet, output and vouch cards and a write's remark carry a **label
 chip**: two neutral words, Trusted or Untrusted and Public or Private, each with a fixed
 tooltip. The Context overview says whether the **Conversation** is trusted or has met
-untrusted content, as the session reported it when opened or rewound. Starting a turn
-clears a trusted reading, since no event reports it again, and the row is absent when
-unknown.
+untrusted content, as the session reported it when opened or rewound. The row is hidden
+from the moment a turn starts until the next open or rewind, since no event reports it
+in between.
 
 **Audit** opens that turn's policy decisions in the context column (or the drawer in
 a narrow window). **Policy blocked an action** indicates that a gate refused something;

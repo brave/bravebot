@@ -2463,8 +2463,14 @@ fn work(work: Work) {
     // The model that answers is the one this turn names, and the configuration was built without
     // asking which. Taken here, on the worker, because the roster may be a request away.
     crate::models::adopt_window(&mut config, model.as_deref());
-    let service =
-        crate::models::service_of(&config, model.as_deref().unwrap_or(&config.default_model));
+    // Named by the backend the agent selects for the session's model, so it cannot name another.
+    let service = bravebot_agent::backend::Backend::select(
+        &config,
+        &bravebot_net::Egress::new(),
+        model.as_deref().unwrap_or(&config.default_model),
+    )
+    .service_name()
+    .to_string();
 
     // Held for the length of the turn. Nothing else contends for it: a session with a
     // turn in flight refuses another one.

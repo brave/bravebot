@@ -1038,6 +1038,17 @@ impl<'a> Backend<'a> {
         }
     }
 
+    /// The name of the service this backend sends to, in the words a model picker gives its rows.
+    pub fn service_name(&self) -> &str {
+        match self {
+            Self::Aichat { .. } => "Brave",
+            Self::Bedrock { .. } => "AWS Bedrock",
+            Self::Gateway { provider, .. } => provider.display_name(),
+            Self::Account { .. } => "ChatGPT",
+            Self::XaiAccount { .. } => "xAI",
+        }
+    }
+
     /// Sign in for `model`, where its backend needs that and has no usable session.
     ///
     /// Here rather than in an interface because which backend answers, and whether it authenticates
@@ -2248,6 +2259,27 @@ mod tests {
                 Backend::XaiAccount { .. } => "xai",
             };
             assert_eq!(found, expected, "{name}");
+        }
+    }
+
+    /// The service a backend is named by is the one it was selected for, on each of the five.
+    #[test]
+    fn each_backend_is_named_by_the_service_it_sends_to() {
+        let config = with_a_gateway();
+        let egress = Egress::new();
+        let gateway = config.providers[0].display_name().to_string();
+        for (name, expected) in [
+            ("opus-arn", "AWS Bedrock"),
+            ("z-ai/glm-4.6", gateway.as_str()),
+            ("chatgpt/gpt-5.5", "ChatGPT"),
+            ("xai/grok-4.5", "xAI"),
+            (DEFAULT_MODEL, "Brave"),
+        ] {
+            assert_eq!(
+                Backend::select(&config, &egress, name).service_name(),
+                expected,
+                "{name}"
+            );
         }
     }
 
