@@ -46,6 +46,8 @@ STATE = re.compile(r"\b(?:is|state):(?:open|closed)\b", re.IGNORECASE)
 READ = "{state: .state, pull: (.pull_request != null), assignees: [.assignees[].login], labels: [.labels[].name]}"
 SEARCH = ".items[] | select(.pull_request == null) | .number"
 READ_JOBS = 8
+# Statuses after which the skill does nothing more with an item (SKILL.md, step 0), so it needs no claim.
+FINISHED = {"done", "skipped", "blocked"}
 
 
 def _load(name):
@@ -96,6 +98,28 @@ def ledger(piece):
     return path if path.is_file() else None
 
 
+def ledger_items(path):
+    """The issue numbers of the items in a ledger that the skill still has work for.
+
+    The ledger is the markdown table of SKILL.md step 0, `item | group | worktree | branch | status |
+    commits`, with the issue as `#<n>` in the item cell. The header and separator rows have no such cell.
+    """
+    numbers, rows = [], 0
+    for line in path.read_text(errors="replace").splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if not line.strip().startswith("|") or len(cells) < 5:
+            continue
+        item = NUMBER.fullmatch(cells[0].strip("`"))
+        if not item:
+            continue
+        rows += 1
+        if cells[4].strip("`").lower() not in FINISHED:
+            numbers.append(int(item[1]))
+    if not rows:
+        die(f"{path} has no row whose item is #<number>, so the issues of the run cannot be read. Nothing was changed.")
+    return numbers
+
+
 def named(word, notes):
     """The number of the brave/bravebot issue or pull request a number or link names, or None."""
     bare = NUMBER.fullmatch(word)
@@ -125,11 +149,10 @@ def resolve(argument):
     """The numbers the skill may work, and a note for each link it leaves alone."""
     numbers, notes = [], []
     for piece in pieces(argument):
-        if ledger(piece):
-            die(
-                f"{piece} resumes an earlier run, whose issues are in its ledger, so there is nothing here to "
-                f"check or label. Resume it from the client: bravebot -i \"/{SKILL} {piece}\""
-            )
+        resumed = ledger(piece)
+        if resumed:
+            numbers.extend(ledger_items(resumed))
+            continue
         words = piece.split()
         if all(NUMBER.fullmatch(word) or LINK.fullmatch(word) for word in words):
             numbers.extend(number for number in (named(word, notes) for word in words) if number)

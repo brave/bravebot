@@ -357,13 +357,56 @@ class ImplementIssues(unittest.TestCase):
         self.assertEqual(self.calls(), [])
         self.assertIsNone(self.session())
 
-    def test_a_batch_branch_with_a_ledger_is_resumed_from_the_client_and_not_searched_for(self):
-        (self.root / "implement-issues").mkdir()
-        (self.root / "implement-issues" / "fix-i18n-gaps.md").write_text("ledger\n")
+    LEDGER = (
+        "| item | group | worktree | branch | status | commits |\n"
+        "|---|---|---|---|---|---|\n"
+        "| #10 | a | /w/a | fix-a | working | |\n"
+        "| #12 | b | /w/b | fix-b | `committed` | abc |\n"
+        "| #14 | c | /w/c | fix-c | done | def |\n"
+        "| #16 | | | | skipped | |\n"
+        "| #18 | | | | blocked | |\n"
+    )
+
+    def write_ledger(self, text=LEDGER, name="fix-i18n-gaps"):
+        (self.root / "implement-issues").mkdir(exist_ok=True)
+        (self.root / "implement-issues" / f"{name}.md").write_text(text)
+
+    def test_a_batch_branch_with_a_ledger_claims_the_items_still_to_work_and_resumes_it(self):
+        """#14, #16 and #18 are finished, so only #10 and #12 are claimed, and the skill gets the branch name."""
+        self.world["issues"].update({str(n): issue() for n in (14, 16, 18)})
+        self.write_ledger()
+        result = self.run_script("fix-i18n-gaps")
+        self.assertEqual(result.code, 0, result.err)
+        held = self.session()
+        self.assertEqual(held["argv"], ["-i", "/implement-issues fix-i18n-gaps"])
+        self.assertEqual({n: (i["assignees"], i["labels"]) for n, i in held["world"]["issues"].items() if i["assignees"] or i["labels"]},
+                         {"10": (["netzenbot"], [LABEL]), "12": (["netzenbot"], [LABEL])})
+        self.assertEqual(self.state()["10"]["labels"], [])
+        self.assertEqual(self.state()["14"], issue())
+
+    def test_a_ledger_item_assigned_to_somebody_else_stops_the_resume(self):
+        self.world["issues"]["12"] = issue(assignees=["jane"])
+        self.write_ledger()
         result = self.run_script("fix-i18n-gaps")
         self.assertNotEqual(result.code, 0)
-        self.assertIn("fix-i18n-gaps resumes an earlier run", result.err)
-        self.assertEqual([call for call in self.calls() if call != LOGIN_LOOKUP], [])
+        self.assertIn("#12 is assigned to jane", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
+
+    def test_a_ledger_with_no_item_rows_is_refused_rather_than_resumed_unclaimed(self):
+        self.write_ledger("ledger\n")
+        result = self.run_script("fix-i18n-gaps")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("has no row whose item is #<number>", result.err)
+        self.assertEqual(self.writes(), [])
+        self.assertIsNone(self.session())
+
+    def test_a_ledger_with_every_item_finished_opens_no_session(self):
+        self.write_ledger("| #10 | a | w | b | done | c |\n")
+        result = self.run_script("fix-i18n-gaps")
+        self.assertNotEqual(result.code, 0)
+        self.assertIn("no open issue to implement", result.err)
+        self.assertIsNone(self.session())
 
     def test_the_make_target_passes_the_issues_and_the_client_through(self):
         """The recipe takes ISSUES from the environment, so a quote or a `$` in it is not the shell's."""
