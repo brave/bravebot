@@ -934,7 +934,10 @@ fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_b
     };
     assert!(
         has("Makefile", "cargo build --release --locked")
-            && has("contrib/Dockerfile.cross", "cargo zigbuild --release --locked"),
+            && has(
+                "contrib/Dockerfile.cross",
+                "cargo zigbuild --release --locked"
+            ),
         "the commands that build a release were not found, so this test would pass by reading none"
     );
 
