@@ -1477,15 +1477,21 @@ mod tests {
     }
 
     /// BACKEND-19: OpenAI's listing states no capability, so a chat completions route is not
-    /// offered the models OpenAI's published description gives to the Responses request alone, and
-    /// is offered every other row. A name that only looks like one of them (`-pro` on a model the
-    /// description does not list) is offered, because the description does not name it. The same
-    /// listing is offered whole where the route is the Responses one or the host is not OpenAI's.
+    /// offered the models that OpenAI's published API description and its model pages give to the
+    /// Responses request alone, and is offered every other row. A name that only looks like one of
+    /// them (`-pro` or `-codex` on a model neither document lists) is offered, because the list is
+    /// of ids, and so is a model another endpoint also serves (`gpt-image-1`) and one that takes
+    /// chat completions beside the Responses request (`gpt-5.4`). The same listing is offered whole
+    /// where the route is the Responses one or the host is not OpenAI's.
     #[test]
     fn an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes() {
         let listing = r#"{"data": [
             {"id": "gpt-4o-mini"}, {"id": "o3-pro"}, {"id": "gpt-5-codex"},
-            {"id": "text-embedding-3-small"}, {"id": "gpt-5.4-pro"}, {"id": "gpt-5-pro-2025-10-06"}
+            {"id": "text-embedding-3-small"}, {"id": "gpt-5.4-pro"}, {"id": "gpt-5-pro-2025-10-06"},
+            {"id": "gpt-5.1-codex"}, {"id": "gpt-5.1-codex-mini"}, {"id": "gpt-5.2-codex"},
+            {"id": "gpt-5.2-pro"}, {"id": "gpt-5.2-pro-2025-12-11"}, {"id": "gpt-5.3-codex"},
+            {"id": "gpt-5.4-pro-2026-03-05"}, {"id": "gpt-5.4"}, {"id": "gpt-image-1"},
+            {"id": "o9-pro"}, {"id": "gpt-9-codex"}
         ]}"#;
         let keys = |block: &str| -> Vec<String> {
             from_gateway(&entry(block), listing)
@@ -1499,12 +1505,15 @@ mod tests {
             [
                 "openai/gpt-4o-mini",
                 "openai/text-embedding-3-small",
-                "openai/gpt-5.4-pro"
+                "openai/gpt-5.4",
+                "openai/gpt-image-1",
+                "openai/o9-pro",
+                "openai/gpt-9-codex"
             ]
         );
         assert_eq!(
             keys(r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"]}}"#).len(),
-            6,
+            17,
             "the Responses route reaches those models"
         );
         assert_eq!(
@@ -1513,7 +1522,7 @@ mod tests {
                     "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#
             )
             .len(),
-            6,
+            17,
             "a proxy keyed openai was left out of models it may serve"
         );
     }

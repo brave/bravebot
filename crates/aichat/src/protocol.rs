@@ -703,9 +703,11 @@ pub struct Cached {
 
 impl Cached {
     /// Add another request's figures, for a total over a turn or a session.
+    ///
+    /// Saturates at `u64::MAX`, since a gateway can state the largest number for either figure.
     pub fn add(&mut self, other: Cached) {
-        self.read_tokens += other.read_tokens;
-        self.written_tokens += other.written_tokens;
+        self.read_tokens = self.read_tokens.saturating_add(other.read_tokens);
+        self.written_tokens = self.written_tokens.saturating_add(other.written_tokens);
     }
 
     /// Whether either figure has anything in it.
@@ -717,16 +719,19 @@ impl Cached {
 /// Read the cache figure out of the object this protocol nests it in.
 ///
 /// The nesting stops here, so the rest of the agent reads one shape however a service stated it.
-/// Nothing is read for what a request wrote. OpenAI's published description of the usage block
-/// names `prompt_tokens_details.cache_write_tokens` for it, and no reply carrying that field has
-/// been seen ([BACKEND-31]), so the figure is read as zero. A service that charges for a cache write
-/// may report it in a shape of its own.
+/// The read is `cached_tokens` and the write is `cache_write_tokens`, the two figures OpenAI's
+/// published description of the usage block gives `prompt_tokens_details` ([BACKEND-31]). A service
+/// that states no write, or states one that JSON does not write as an unsigned integer, reports a
+/// write of zero. A service that charges for a cache write may report it in a shape of its own.
 ///
 /// [BACKEND-31]: ../../../docs/specs/backends.md#BACKEND-31
 ///
-/// Both levels are optional because a server may state the field and put `null` in it, which
+/// Every level is optional because a server may state the field and put `null` in it, which
 /// `serde(default)` does not cover: that only answers for a field nobody sent. Refusing such a
-/// reply would fail the whole turn over a figure this reads for information.
+/// reply would fail the whole turn over a figure this reads for information. The write is taken as
+/// a JSON value and read as an unsigned integer afterwards for the same reason, so a gateway that
+/// states it as text, a negative number, or a number written with a fraction or an exponent, such
+/// as `90.0` or `9e1`, costs the figure and not the reply.
 fn cached<'de, D>(deserializer: D) -> Result<Cached, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -735,12 +740,19 @@ where
     struct Details {
         #[serde(default)]
         cached_tokens: Option<u64>,
+        #[serde(default)]
+        cache_write_tokens: Option<serde_json::Value>,
     }
+    let details = Option::<Details>::deserialize(deserializer)?;
     Ok(Cached {
-        read_tokens: Option::<Details>::deserialize(deserializer)?
+        read_tokens: details
+            .as_ref()
             .and_then(|details| details.cached_tokens)
             .unwrap_or_default(),
-        written_tokens: 0,
+        written_tokens: details
+            .and_then(|details| details.cache_write_tokens)
+            .and_then(|figure| figure.as_u64())
+            .unwrap_or_default(),
     })
 }
 
@@ -1398,6 +1410,29 @@ mod tests {
             let (_, _, _, usage) = accumulated.finish();
             assert_eq!(usage.prompt_tokens, 11);
             assert_eq!(usage.completion_tokens, 22);
+        }
+
+        /// The last chunk of a streamed reply states the cache figures in the same object a whole
+        /// reply does, so a write stated there is what the turn reports.
+        #[test]
+        fn a_cache_write_in_the_usage_chunk_is_what_the_stream_reports() {
+            let mut accumulated = StreamAccumulator::new();
+            accumulated.push(
+                serde_json::from_str(
+                    r#"{"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":34,
+                        "prompt_tokens_details":{"cached_tokens":1100,"cache_write_tokens":90}}}"#,
+                )
+                .expect("a usage chunk"),
+            );
+
+            let (_, _, _, usage) = accumulated.finish();
+            assert_eq!(
+                usage.cached,
+                Cached {
+                    read_tokens: 1100,
+                    written_tokens: 90
+                }
+            );
         }
 
         /// A streamed request must ask for usage too, or the turn would trade the cost figure for
@@ -2102,13 +2137,13 @@ mod tests {
     }
 
     /// OpenAI's published description of the usage block names a `cache_write_tokens` beside
-    /// `cached_tokens` ([BACKEND-31]). The write figure is not read, so a reply that states it is
-    /// parsed for the cached part and for everything else, and the write is counted as zero. Reading
-    /// it would change what a turn reports as written for a service no reply has been seen from.
+    /// `cached_tokens` ([BACKEND-31]). A reply that states it reports that write, and the prompt
+    /// total, the completion count and the read are what they were without it: this reader neither
+    /// adds the write to the prompt total nor takes it from it.
     ///
     /// [BACKEND-31]: ../../../docs/specs/backends.md#BACKEND-31
     #[test]
-    fn a_cache_write_figure_beside_the_cached_one_is_not_read_and_does_not_fail_the_reply() {
+    fn a_cache_write_figure_beside_the_cached_one_is_read_as_the_write() {
         let raw = r#"{"model":"m","usage":{"prompt_tokens":1200,"completion_tokens":34,
             "prompt_tokens_details":{"cached_tokens":1100,"cache_write_tokens":90,"audio_tokens":0}},
             "choices":[{"message":{"content":"hi"}}]}"#;
@@ -2117,11 +2152,80 @@ mod tests {
             parsed.usage().cached,
             Cached {
                 read_tokens: 1100,
-                written_tokens: 0
+                written_tokens: 90
             }
         );
         assert_eq!(parsed.usage().prompt_tokens, 1200);
         assert_eq!(parsed.usage().completion_tokens, 34);
+        assert_eq!(parsed.usage().total(), 1234);
+    }
+
+    /// A round that established a prefix and read nothing back states a write beside a read of
+    /// zero, or a write alone. Each figure is read whether or not the other is stated.
+    #[test]
+    fn a_cache_write_is_read_with_no_cached_figure_beside_it() {
+        for details in [
+            r#"{"cache_write_tokens":90}"#,
+            r#"{"cached_tokens":0,"cache_write_tokens":90}"#,
+            r#"{"cached_tokens":null,"cache_write_tokens":90}"#,
+        ] {
+            let raw = format!(
+                r#"{{"model":"m","usage":{{"prompt_tokens":100,"prompt_tokens_details":{details}}},
+                "choices":[{{"message":{{"content":"hi"}}}}]}}"#
+            );
+            let parsed: ChatResponse =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{details} was refused: {e}"));
+            assert_eq!(
+                parsed.usage().cached,
+                Cached {
+                    read_tokens: 0,
+                    written_tokens: 90
+                },
+                "{details}"
+            );
+        }
+    }
+
+    /// A gateway may state the write as `null`, as text, as a fraction, as a negative number or as
+    /// something that is not a number at all, and a whole number written with a fraction or an
+    /// exponent (`90.0`, `9e1`) is a float to the JSON reader, not an unsigned integer. Reading the
+    /// figure is worth a field and no more, so each of those reads as a service that stated no
+    /// write, leaves the cached figure and the rest of the usage read, and does not fail the reply
+    /// it arrived on and with it the turn.
+    #[test]
+    fn a_cache_write_not_written_as_an_unsigned_integer_reads_as_silence_and_does_not_fail_the_reply()
+     {
+        for write in [
+            "null",
+            r#""90""#,
+            r#""many""#,
+            "90.5",
+            "90.0",
+            "9e1",
+            "-90",
+            "true",
+            "[90]",
+            r#"{"tokens":90}"#,
+            "18446744073709551616",
+        ] {
+            let raw = format!(
+                r#"{{"model":"m","usage":{{"prompt_tokens":1200,"completion_tokens":34,
+                "prompt_tokens_details":{{"cached_tokens":1100,"cache_write_tokens":{write}}}}},
+                "choices":[{{"message":{{"content":"hi"}}}}]}}"#
+            );
+            let parsed: ChatResponse =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{write} was refused: {e}"));
+            assert_eq!(
+                parsed.usage().cached,
+                Cached {
+                    read_tokens: 1100,
+                    written_tokens: 0
+                },
+                "{write}"
+            );
+            assert_eq!(parsed.usage().prompt_tokens, 1200, "{write}");
+            assert_eq!(parsed.usage().completion_tokens, 34, "{write}");
+        }
     }
 
     /// The field is the newer half of this protocol and plenty of servers state neither it nor the
@@ -2133,6 +2237,35 @@ mod tests {
         let parsed: ChatResponse = serde_json::from_str(raw).unwrap();
         assert_eq!(parsed.usage().cached, Cached::default());
         assert!(!parsed.usage().cached.any());
+    }
+
+    /// A gateway states both cache figures and may state the largest number. Both figures
+    /// saturate when summed, whether `Cached` or the `Usage` that carries it is added. The prompt
+    /// and completion counts of `Usage` are summed as before, which this test does not reach.
+    #[test]
+    fn cache_figures_stated_at_the_largest_number_saturate_when_summed() {
+        let raw = r#"{"model":"m","usage":{"prompt_tokens":10,"completion_tokens":1,
+            "prompt_tokens_details":{"cached_tokens":18446744073709551615,
+            "cache_write_tokens":18446744073709551615}},
+            "choices":[{"message":{"content":"hi"}}]}"#;
+        let stated: ChatResponse = serde_json::from_str(raw).expect("a reply");
+        let largest = Cached {
+            read_tokens: u64::MAX,
+            written_tokens: u64::MAX,
+        };
+        assert_eq!(stated.usage().cached, largest);
+
+        let mut cached = stated.usage().cached;
+        cached.add(Cached {
+            read_tokens: 1,
+            written_tokens: 1,
+        });
+        assert_eq!(cached, largest);
+
+        let mut usage = stated.usage();
+        usage.add(stated.usage());
+        assert_eq!(usage.cached, largest);
+        assert_eq!(usage.prompt_tokens, 20);
     }
 
     /// A server may state the field and put `null` in it, at either level. Reading the figure is
