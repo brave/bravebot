@@ -185,6 +185,11 @@ left them out: version control (`.git`, `.hg`, `.svn`), build output and caches 
 none. The tool description gives the planner the full list, and naming one of them as `directory`
 lists it.
 
+A walk does not enter a symbolic link, to a file or to a directory, and does not name one. Its
+result says how many links it did not enter, as a number, and a directory made only of links is
+said not to be empty. That holds when the names are quarantined, where the count comes beside the
+references. To see what is behind a link, list the directory it points to by its own name.
+
 The glob is literal and the matcher does not backtrack. A truncated listing says it was truncated.
 
 ## `repo_map`
@@ -246,6 +251,11 @@ is reported as written rather than as it was folded to match.
 without reading anything to decide it. The project's own `.gitignore` is not consulted either: it
 would decide what to walk from a file in the tree being walked, and a tree that can hide files from a
 search can hide them from review.
+
+A search does not enter a symbolic link, to a file or to a directory, so a file behind one is not
+read. Every result says how many links were not entered and that the files behind them were not
+searched, as a number with no name, whether or not the search found matches. To search behind a
+link, name the directory it points to as `directory`.
 
 A result touching several files is trusted only if **every one of them** is. A truncated search tells
 the planner it is incomplete. A search that found nothing says which kind of nothing it is: no
@@ -911,7 +921,9 @@ it is refused the same way; you load it by naming it in your own line. See
 [Skills](../customize/skills.md).
 
 Where the skill keeps other files beside its `SKILL.md`, the result ends with the skill's directory
-and their names. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
+and their names. Where a project's skill directory is a link to another directory in the project,
+the result also names the directory it lands on, which is where `list_files` shows the files. Nothing
+outside the project is named. Once a skill of your own is loaded, [`read_file`](#read_file) can read those files
 for the rest of the turn; a project's skill is read through the trust map like any other file in the
 project.
 

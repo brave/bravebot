@@ -2017,6 +2017,12 @@ struct Collected<'a> {
     withheld: bool,
     /// Whether a nested directory could not be opened and the walk went on without it.
     unreadable: bool,
+    /// How many symbolic links the walk met and did not enter.
+    ///
+    /// A number and never a name, for the same reason as `unreadable`: a link's name is a name out
+    /// of the tree, and what it points at is not read, so the count is all a caller can say. It
+    /// is taken from the entry's file type and from nothing in a file.
+    links: usize,
 }
 
 impl Collected<'_> {
@@ -2241,10 +2247,12 @@ impl Workspace {
                 stopped_at: &mut stopped_at,
                 withheld: false,
                 unreadable: false,
+                links: 0,
             };
             let _ =
                 self.walk_filtered(&root, wanted, depth, MAX_ENTRIES, &rules, &mut collected)?;
             let unreadable = collected.unreadable;
+            let links = collected.links;
             found.sort();
             stopped_at.sort();
 
@@ -2272,6 +2280,7 @@ impl Workspace {
                     directories: stopped_at,
                     truncated,
                     unreadable,
+                    links,
                 },
                 label,
             ))
@@ -2329,6 +2338,7 @@ impl Workspace {
                 stopped_at: &mut ignored,
                 withheld: false,
                 unreadable: false,
+                links: 0,
             };
             let hit_the_cap = self.walk_filtered(
                 &root,
@@ -2586,7 +2596,7 @@ impl Workspace {
             let root = self.resolve(&relative)?;
 
             let mut paths = Vec::new();
-            let (unvisited, withheld) = if root.is_file() {
+            let (unvisited, withheld, links) = if root.is_file() {
                 // A file named as the target is the whole walk. `resolve` has already confined it
                 // to the workspace, and `include` selects among files a walk reaches, so it is not
                 // consulted for the one file the call named. A rule covers it as it covers a read
@@ -2595,7 +2605,7 @@ impl Workspace {
                 if !denied {
                     paths.push(self.relative_display(&root));
                 }
-                (false, denied)
+                (false, denied, 0)
             } else {
                 // Whether every file was reached, which the count cannot answer: a tree of exactly
                 // the cap fills `paths` without a single file being left out.
@@ -2613,6 +2623,7 @@ impl Workspace {
                     stopped_at: &mut ignored,
                     withheld: false,
                     unreadable: false,
+                    links: 0,
                 };
                 let unvisited = self.walk_filtered(
                     &root,
@@ -2622,7 +2633,7 @@ impl Workspace {
                     &rules,
                     &mut collected,
                 )?;
-                (unvisited, collected.withheld)
+                (unvisited, collected.withheld, collected.links)
             };
             paths.sort();
             let considered = paths.len();
@@ -2760,6 +2771,7 @@ impl Workspace {
                     withheld,
                     first_match: skip + 1,
                     matched,
+                    links,
                 },
                 label,
             ))
@@ -3520,8 +3532,10 @@ impl Workspace {
                 continue;
             };
             // A link pointing outside the workspace would otherwise pull external files
-            // into a listing.
+            // into a listing. It is counted, so a result can say that links were not entered:
+            // a directory made only of links would otherwise read as an empty one.
             if kind.is_symlink() {
+                collected.links += 1;
                 continue;
             }
             if kind.is_dir() {

@@ -10338,6 +10338,59 @@ fn a_quarantined_listing_tells_the_model_it_was_capped() {
     );
 }
 
+/// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
+/// as a number and with no name. The regression it rejects: a count kept only in the body, which
+/// reaches nobody when the entries are handed over as references, so a directory made of links
+/// reads as empty.
+#[cfg(unix)]
+#[test]
+fn a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter() {
+    let scratch = Scratch::new("list-links-quarantined");
+    std::fs::create_dir(scratch.path.join("real")).unwrap();
+    std::fs::write(scratch.path.join("real/inside.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("plain.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("real"),
+        scratch.path.join("zz-linked-name"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("plain.txt"),
+        "the names reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("1 symbolic link was not entered"),
+        "the link count did not reach the model beside the references: {second}"
+    );
+    assert!(
+        !second.contains("zz-linked-name"),
+        "a link's name reached the model: {second}"
+    );
+}
+
 /// And the ordinary case must stay quiet, or the model learns to ignore the notice.
 ///
 /// Trusted deliberately. Run against an empty trust store the result is quarantined, the model
