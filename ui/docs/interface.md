@@ -114,9 +114,10 @@ toggle:
 - **Export** (a download icon) opens the export menu described under [Forking, and
   export](#forking). It is disabled until somebody has said something in the session.
 - **More** (vertical dots) holds the dialogs that are seldom wanted mid-conversation:
-  **Permissions…** lists and revokes path and command grants after the current turn stops,
-  **File watches…** opens the [watches](#agent-09-controls) list, and **Diagnostics…** opens
-  the [debugging views](#diagnostics).
+  **Permissions…** lists and revokes path and command grants after the current turn stops, and
+  its **Forget** button takes back the trust kept for this directory, so the next session
+  started here asks again. **File watches…** opens the [watches](#agent-09-controls) list, and
+  **Diagnostics…** opens the [debugging views](#diagnostics).
 
 A bot's own page has a header of its face and its name, with a search over its conversations and
 the context panel's toggle.
