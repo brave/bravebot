@@ -13534,9 +13534,12 @@ mod tests {
         );
     }
 
-    /// A conversation shown private content refuses every processor call for the rest of it, and
-    /// the tool's description is where a planner learns that before it earns the refusal. Each way
-    /// a context comes to hold private content is named, so a planner can tell it is in one.
+    /// A conversation shown private content refuses every later processor call for the rest of it,
+    /// and the tool's description is where a planner learns that before it earns the refusal. The
+    /// description names the one tool that is refused and the tools that keep working, because a
+    /// sentence that names none reads as a cost of calling `read_output` and a planner that reads
+    /// it that way stops instead of reading a command's output. Each way a context comes to hold
+    /// private content is named, so a planner can tell it is in one.
     #[test]
     fn the_processor_is_described_as_refused_once_private_content_has_been_shown() {
         let offered = available(
@@ -13551,7 +13554,21 @@ mod tests {
             .expect("the turn is offered a processor");
         let description = &processor.function.description;
         assert!(
-            description.contains("every call is refused for the rest of the conversation"),
+            description.contains(
+                "every later spawn_processor call is refused for the rest of the conversation"
+            ),
+            "{description}"
+        );
+        assert!(
+            !description.contains("every call is refused"),
+            "{description}"
+        );
+        assert!(
+            description.contains("run, read_output and the file tools keep working"),
+            "{description}"
+        );
+        assert!(
+            description.contains("a processor takes no private instruction"),
             "{description}"
         );
         assert!(

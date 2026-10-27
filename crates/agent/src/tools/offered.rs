@@ -794,9 +794,10 @@ fn table(
              whole document, so it can work out what is wrong and where the fix goes, and leave \
              a file alone if it turns out not to be the one you are after. Once your context holds \
              private content, as it does after read_output or vet_content shows you some, after \
-             a delegate reports some, and in a conversation resumed with some, every call is \
-             refused for the rest of the conversation: what you write is private from then on, \
-             and a processor takes no private instruction.",
+             a delegate reports some, and in a conversation resumed with some, every later \
+             spawn_processor call is refused for the rest of the conversation: what you write \
+             is private from then on, and a processor takes no private instruction. run, \
+             read_output and the file tools keep working.",
             json!({
                 "type": "object",
                 "properties": {

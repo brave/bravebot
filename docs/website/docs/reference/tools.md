@@ -776,8 +776,9 @@ nowhere.
 
 **Refused once the model has been shown private content.** After [`read_output`](#read_output) or
 [`vet_content`](#vet_content) has shown it something private, or a delegate has reported something
-private, what it writes is private too, and a processor takes no private instruction, so every call
-is refused for the rest of the conversation. Quarantined results made from then on do not suggest a
+private, what it writes is private too, and a processor takes no private instruction, so every
+`spawn_processor` call is refused for the rest of the conversation. `run`, `read_output` and the
+file tools keep working. Quarantined results made from then on do not suggest a
 processor, and the refusal names what still works: a filter such as `grep` or `tail` run with
 `stdin_ref` set to the reference, then `read_output` on what it printed, or `vet_content` for a
 reference that holds no text.
