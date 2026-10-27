@@ -4,7 +4,7 @@
 //! The reply is bytes this program did not write. What is taken from it is two tokens that are never
 //! read, the ID token of a code exchange, which [`super::id_token`] verifies and nothing stores, a
 //! number of seconds, and whether the scope that allows this use was granted. The one field of an
-//! error body that is read is the code, compared with the one value that says a refresh token is no
+//! error body that is read is the code, compared with the six values that say a refresh token is no
 //! longer valid. The rest of the body, including every error text, is dropped in this module
 //! ([CHATGPT-5](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-5)).
 
@@ -12,9 +12,27 @@ use super::Hosts;
 use super::authorize::{RESOURCE, USE_SCOPE};
 use crate::Secret;
 use crate::oauth::{
-    Class, Lifetime, REPLY_LIMIT, Refused, Renewed, class_of, ends_the_sign_in, form, send,
+    Class, INVALID_GRANT, Lifetime, REPLY_LIMIT, Refused, Renewed, class_of, ends_the_sign_in,
+    form, send,
 };
 use crate::secret::Document;
+
+/// The codes that say a refresh token can no longer be used, which end the sign-in at a refresh
+/// refused with a 400 or 401: RFC 6749's `invalid_grant`, which this server sent for a refresh token
+/// it did not know and for one revoked at its revocation endpoint, and the five others OpenAI's
+/// documentation lists for an unusable refresh token. OpenAI's SDK reads all six as ending the
+/// sign-in and Codex three of the five
+/// ([CHATGPT-7](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-7)). Each is compared as a whole
+/// with the string an `error` field holds, so an `error` object, a code in another field and a code
+/// that is only part of another end nothing. The xAI sign-in reads `invalid_grant` alone.
+const ENDED: [&str; 6] = [
+    INVALID_GRANT,
+    "invalid_refresh_token",
+    "token_expired",
+    "refresh_token_expired",
+    "refresh_token_invalidated",
+    "refresh_token_reused",
+];
 
 /// An access token's life when the reply states none.
 const DEFAULT_LIFETIME: u64 = 3600;
@@ -78,7 +96,7 @@ pub(super) fn refresh(
         ("resource", RESOURCE),
     ]));
     let mut response = send(agent, &hosts.token, &body, None).map_err(Refused::Failed)?;
-    if ends_the_sign_in(&mut response) {
+    if ends_the_sign_in(&mut response, &ENDED) {
         return Err(Refused::Ended);
     }
     let granted = granted(response).map_err(Refused::Failed)?;
@@ -328,64 +346,137 @@ mod tests {
         assert_eq!(asked[0].header("authorization"), None);
     }
 
-    /// Only a 400 or 401 whose error code is `invalid_grant` ends the sign-in. The same code at
-    /// another status, another code at those statuses, and a body that is not the shape are each a
-    /// failure of the request, so a busy server or a proxy's page cannot delete a person's sign-in.
-    /// The token endpoint sends `error` as a string, with the other codes of RFC 6749 for the other
-    /// faults of a request. The serving host sends `error` as an object with a `code`, and a body of
-    /// that shape is not the token endpoint saying the sign-in is over. An implementation that read
-    /// `error.code`, or ended the sign-in for any 400, would delete a sign-in that a retry or a
-    /// corrected request would have kept.
-    #[test]
-    fn only_the_recorded_code_at_a_refusing_status_ends_the_sign_in() {
+    /// The six codes OpenAI's documentation lists for a refresh token that cannot be used, as the
+    /// clause writes them and not as the table in the crate holds them.
+    const REFRESH_CODES: [&str; 6] = [
+        "invalid_grant",
+        "invalid_refresh_token",
+        "token_expired",
+        "refresh_token_expired",
+        "refresh_token_invalidated",
+        "refresh_token_reused",
+    ];
+
+    /// What a refresh whose reply holds this body at this status comes to.
+    fn refreshed_as(status: u16, body: &str) -> Option<Refused> {
         use crate::oauth::stand_in::{Reply, serve};
-        let cases: [(u16, &str, Refused); 11] = [
-            (400, "{\"error\":\"invalid_grant\"}", Refused::Ended),
-            (401, "{\"error\":\"invalid_grant\"}", Refused::Ended),
-            (
-                403,
-                "{\"error\":\"invalid_grant\"}",
-                Refused::Failed(Class::Refused),
-            ),
-            (
-                500,
-                "{\"error\":\"invalid_grant\"}",
-                Refused::Failed(Class::Unavailable),
-            ),
-            (
-                400,
-                "{\"error\":\"invalid_request\"}",
-                Refused::Failed(Class::Refused),
-            ),
-            (400, "not json", Refused::Failed(Class::Refused)),
-            (400, "{\"error\":7}", Refused::Failed(Class::Refused)),
-            (
-                429,
-                "{\"error\":\"invalid_grant\"}",
-                Refused::Failed(Class::RateLimited),
-            ),
-            (
-                400,
-                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":\"invalid_grant\"}}",
-                Refused::Failed(Class::Refused),
-            ),
-            (
+        let server = serve(vec![Reply::json(status, body)]);
+        let (agent, hosts) = at(&server);
+        let outcome = refresh(&agent, &hosts, "client", &Secret::new("r"));
+        server.finish();
+        outcome.err()
+    }
+
+    /// Only a 400 or 401 whose `error`, read as a string, is one of the six refresh codes ends the
+    /// sign-in. The same codes at another status, another code at those statuses, and a body that is
+    /// not the shape are each a failure of the request, so a busy server or a proxy's page cannot
+    /// delete a person's sign-in. The token endpoint sends `error` as a string, with the other codes
+    /// of RFC 6749 for the other faults of a request. The serving host sends `error` as an object with
+    /// a `code`, and Codex's fixtures for its own endpoint write the same, and a body of that shape is
+    /// not read as the token endpoint saying the sign-in is over. An implementation that ended the
+    /// sign-in for `invalid_grant` alone would keep a sign-in whose refresh token is past its age and
+    /// make every later turn try it, one that read `error.code`, or ended the sign-in for any 400 or
+    /// any 401, would delete a sign-in that a retry or a corrected request would have kept.
+    #[test]
+    fn only_one_of_the_six_refresh_codes_at_a_refusing_status_ends_the_sign_in() {
+        for code in REFRESH_CODES {
+            let body = format!("{{\"error\":\"{code}\",\"error_description\":\"d\"}}");
+            for (status, expected) in [
+                (400, Refused::Ended),
+                (401, Refused::Ended),
+                (403, Refused::Failed(Class::Refused)),
+                (404, Refused::Failed(Class::Refused)),
+                (429, Refused::Failed(Class::RateLimited)),
+                (500, Refused::Failed(Class::Unavailable)),
+                (503, Refused::Failed(Class::Unavailable)),
+            ] {
+                assert_eq!(
+                    refreshed_as(status, &body),
+                    Some(expected),
+                    "{status} {code}"
+                );
+            }
+            // The form the serving host and Codex's fixtures use, and a code in another field.
+            for body in [
+                format!("{{\"error\":{{\"code\":\"{code}\"}}}}"),
+                format!(
+                    "{{\"error\":{{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":\"{code}\"}}}}"
+                ),
+                format!("{{\"detail\":\"{code}\"}}"),
+                format!("{{\"code\":\"{code}\"}}"),
+                format!("{{\"error\":[\"{code}\"]}}"),
+                format!("{{\"error\":\"x\",\"error_description\":\"{code}\"}}"),
+            ] {
+                for status in [400, 401] {
+                    assert_eq!(
+                        refreshed_as(status, &body),
+                        Some(Refused::Failed(Class::Refused)),
+                        "{status} {body}"
+                    );
+                }
+            }
+        }
+        for body in [
+            "{\"error\":\"invalid_request\"}",
+            "{\"error\":\"invalid_client\"}",
+            "{\"error\":\"unsupported_grant_type\"}",
+            "{\"error\":\"access_denied\"}",
+            "{\"error\":\"invalid_token\"}",
+            "{\"error\":\"invalid_api_key\"}",
+            "{\"error\":\"token_revoked\"}",
+            "{\"error\":\"refresh_token_expired_\"}",
+            "{\"error\":\"_token_expired\"}",
+            "{\"error\":\" token_expired\"}",
+            "{\"error\":\"Token_Expired\"}",
+            "{\"error\":\"INVALID_GRANT\"}",
+            "{\"error\":\"refresh_token\"}",
+            "{\"error\":\"expired\"}",
+            "{\"error\":\"\"}",
+            "{\"error\":7}",
+            "{\"error\":null}",
+            "{\"detail\":\"refresh_token_reused\"}",
+            "not json",
+            "",
+        ] {
+            for status in [400, 401] {
+                assert_eq!(
+                    refreshed_as(status, body),
+                    Some(Refused::Failed(Class::Refused)),
+                    "{status} {body}"
+                );
+            }
+        }
+        assert_eq!(
+            refreshed_as(
                 405,
-                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":null}}",
-                Refused::Failed(Class::Refused),
+                "{\"error\":{\"message\":\"m\",\"type\":\"t\",\"param\":null,\"code\":null}}"
             ),
-            (
-                400,
-                "{\"detail\":\"invalid_grant\"}",
-                Refused::Failed(Class::Refused),
-            ),
-        ];
-        for (status, body, expected) in cases {
-            let server = serve(vec![Reply::json(status, body)]);
-            let (agent, hosts) = at(&server);
-            let outcome = refresh(&agent, &hosts, "client", &Secret::new("r"));
-            server.finish();
-            assert_eq!(outcome.err(), Some(expected), "{status} {body}");
+            Some(Refused::Failed(Class::Refused))
+        );
+    }
+
+    /// A refresh that did not complete, or that was answered by a server that is busy, ends nothing:
+    /// the person's sign-in is kept for the next ask whichever code a busy server's body names. A
+    /// reader that ended the sign-in on the six codes at any status, or on a connection that did not
+    /// complete, would delete a sign-in that the next request would have renewed.
+    #[test]
+    fn a_refresh_that_did_not_complete_or_met_a_busy_server_ends_nothing() {
+        use crate::oauth::stand_in::{Reply, serve};
+        let server = serve(vec![Reply::hang_up()]);
+        let (agent, hosts) = at(&server);
+
+        let outcome = refresh(&agent, &hosts, "client", &Secret::new("r"));
+
+        server.finish();
+        assert_eq!(outcome.err(), Some(Refused::Failed(Class::Transport)));
+        for code in REFRESH_CODES {
+            for status in [500, 502, 503, 504] {
+                assert_eq!(
+                    refreshed_as(status, &format!("{{\"error\":\"{code}\"}}")),
+                    Some(Refused::Failed(Class::Unavailable)),
+                    "{status} {code}"
+                );
+            }
         }
     }
 }

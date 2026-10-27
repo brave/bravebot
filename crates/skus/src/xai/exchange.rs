@@ -13,7 +13,8 @@ use super::{
 use crate::Secret;
 use crate::oauth::encoding::base64url_decode;
 use crate::oauth::{
-    Class, Lifetime, REPLY_LIMIT, Refused, Renewed, class_of, ends_the_sign_in, error_code, form,
+    Class, INVALID_GRANT, Lifetime, REPLY_LIMIT, Refused, Renewed, class_of, ends_the_sign_in,
+    error_code, form,
 };
 use crate::secret::Document;
 
@@ -140,7 +141,9 @@ pub(super) fn refresh(
         ("client_id", CLIENT_ID),
     ]));
     let mut response = send(agent, &hosts.token, &body).map_err(Refused::Failed)?;
-    if ends_the_sign_in(&mut response) {
+    // The one code RFC 6749 gives for it: the xAI sign-in ends for no other
+    // ([XAI-6](../../../../docs/specs/xai-sign-in.md#XAI-6)).
+    if ends_the_sign_in(&mut response, &[INVALID_GRANT]) {
         return Err(Refused::Ended);
     }
     let text = success_text(&mut response).map_err(Refused::Failed)?;

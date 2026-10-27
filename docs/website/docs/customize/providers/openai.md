@@ -31,10 +31,13 @@ variable a `provider` block names, it is [withheld from the programs bravebot
 runs](../../reference/run-tool.md#what-a-program-is-handed).
 
 With no `models` key, OpenAI is asked what it serves and `/model` offers what it lists, less the
-models OpenAI documents as taking only its Responses API, which the chat-completions route cannot reach.
-The listing says nothing about what a model can do, so embedding, speech and image models are in it
-beside the chat models, and picking one of those fails. A Responses-only model the documentation does
-not name is offered too, and fails when picked. An entry that names `@ai-sdk/openai` in `npm`, as it
+models that take only OpenAI's Responses API, which the chat-completions route cannot reach: the
+`-codex` and `-pro` ids among them. That list is compiled into bravebot from OpenAI's published API
+description and from the model pages at `developers.openai.com`, read on 2026-10-27. It is not checked
+against a reply from OpenAI. The listing says nothing about what a model can do, so embedding, speech
+and image models are in it beside the chat models, and picking one of those fails. A Responses-only
+model that neither document names, such as one released since, is offered too, and fails when picked.
+An entry that names `@ai-sdk/openai` in `npm`, as it
 does in opencode, reaches the Responses API and is offered the whole listing. A block that lists
 `models` is offered those and no others, which is how to keep the picker to the models you use:
 

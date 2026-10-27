@@ -443,11 +443,30 @@ pub fn stream_event(value: &Value) -> Decoded {
         }
         "response.completed" => ended(value, Ending::Completed),
         "response.incomplete" => ended(value, Ending::Incomplete),
-        "response.failed" => failed(value.pointer("/response/error/code")),
+        "response.failed" => failed(
+            value
+                .pointer("/response/error/code")
+                .and_then(Value::as_str),
+        ),
         // An error the service raised on the stream itself, outside any response.
-        "error" => failed(value.get("code")),
+        "error" => failed(error_event_code(value)),
         _ => Decoded::Ignored,
     }
+}
+
+/// The code an `error` event names, as a string where it holds one.
+///
+/// OpenAI's OpenAPI description states it as the event's own `code`. The service was seen to send it
+/// inside an `error` object, with the status beside that object, over its websocket, and the readers
+/// of OpenAI's SDK and of Codex take it from there. Where both are strings the object's wins, as it
+/// does for those readers, and where the object holds none, or one that is not a string, the event's
+/// own is the code. The comparison is made on the whole string, against closed lists
+/// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+fn error_event_code(value: &Value) -> Option<&str> {
+    value
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("code").and_then(Value::as_str))
 }
 
 /// A final event: the model that answered and the usage, where the response states them.
@@ -506,12 +525,17 @@ impl std::fmt::Display for Refusal {
     }
 }
 
-/// The codes of a refusal that says the account may not be used this way, each with what it says.
+/// The codes of a refusal that says something about the account, each with what it says.
 ///
-/// Read from another program's source and listed in OpenAI's documentation. One of the seven,
-/// `subscription_sharing_unsupported_capability`, was seen from the service, as the `error.code` of a
-/// 400, and the other six were not. A code that is not listed, whatever it says, is not one of
-/// these: the two codes that service uses for a condition that passes are left out on purpose.
+/// Seven are read from another program's source and listed in OpenAI's documentation. One of the
+/// seven, `subscription_sharing_unsupported_capability`, was seen from the service, as the
+/// `error.code` of a 400, and the other six were not. The eighth,
+/// `subscription_sharing_workplace_individual_usage_limit_exceeded`, is stated by other programs'
+/// sources and a pull request of theirs, is not in the OpenAI pages and API description that were
+/// read ([Known costs]), and was not seen. A code that is not listed, whatever it says, is not one
+/// of these: the two codes that service uses for a condition that passes are left out on purpose.
+///
+/// [Known costs]: ../../../../docs/specs/chatgpt-sign-in.md#known-costs
 pub(crate) const REFUSAL_CODES: &[(&str, Refusal)] = &[
     (
         "subscription_sharing_usage_limit_exceeded",
@@ -534,6 +558,11 @@ pub(crate) const REFUSAL_CODES: &[(&str, Refusal)] = &[
     (
         "chatpass_v2_invalid_authorization_context",
         Refusal::NotPermitted,
+    ),
+    // The limit a workspace administrator sets for a user of a ChatGPT Business plan.
+    (
+        "subscription_sharing_workplace_individual_usage_limit_exceeded",
+        Refusal::UsageLimit,
     ),
 ];
 
@@ -578,8 +607,7 @@ pub(crate) fn model_not_offered_in(body: &[u8]) -> bool {
 
 /// What a failure event says, from the `code` the service wrote in it: the account's refusal where it
 /// is one of [`REFUSAL_CODES`], and otherwise the failure the code stands for.
-fn failed(code: Option<&Value>) -> Decoded {
-    let code = code.and_then(Value::as_str);
+fn failed(code: Option<&str>) -> Decoded {
     match code.and_then(refusal_named) {
         Some(refusal) => Decoded::Event(Event::Refused(refusal)),
         None => Decoded::Event(Event::Failed(code.map_or(Failure::Unknown, failure_named))),
@@ -951,13 +979,16 @@ mod tests {
         );
     }
 
-    use super::refusal_codes::{INVALID_USER, NOT_ELIGIBLE, USAGE_LIMIT};
+    use super::refusal_codes::{INVALID_USER, NOT_ELIGIBLE, USAGE_LIMIT, WORKPLACE_USAGE_LIMIT};
 
-    /// CHATGPT-8: the codes that say something about the account are these seven, and the usage limit
-    /// is told apart from the six that say it may not be used this way. The two codes the same
-    /// service uses for a condition that passes are not among them.
+    /// CHATGPT-8: the codes that say something about the account are these eight, and the two usage
+    /// limits are told apart from the six that say it may not be used this way. The two codes the
+    /// same service uses for a condition that passes are not among them. A list that gave the
+    /// workplace limit the sentence for an account that may not be used this way would not say the
+    /// limit was reached, and one that left it out would have a 429 that names it waited out and
+    /// asked for again.
     #[test]
-    fn the_listed_codes_are_the_seven_the_clause_names_and_the_usage_limit_is_told_apart() {
+    fn the_listed_codes_are_the_eight_the_clause_names_and_the_usage_limits_are_told_apart() {
         assert_eq!(
             REFUSAL_CODES,
             [
@@ -977,6 +1008,7 @@ mod tests {
                     "chatpass_v2_invalid_authorization_context",
                     Refusal::NotPermitted
                 ),
+                (WORKPLACE_USAGE_LIMIT, Refusal::UsageLimit),
             ]
         );
     }
@@ -1005,6 +1037,9 @@ mod tests {
             "subscription_sharing_invalid_user_",
             " subscription_sharing_invalid_user",
             "Subscription_Sharing_Invalid_User",
+            "subscription_sharing_workplace_usage_limit_exceeded",
+            "subscription_sharing_workplace_individual_usage_limit",
+            "subscription_sharing_workplace_individual_usage_limit_exceeded_",
             "rate_limit_exceeded",
             "",
         ] {
@@ -1102,6 +1137,88 @@ mod tests {
                 event(json!({"type": "response.failed", "response": {"error": {"code": code}}})),
                 Decoded::Event(Event::Failed(Failure::Unknown)),
                 "{code}"
+            );
+        }
+    }
+
+    /// CHATGPT-8: an `error` event names its code in the event itself, which is the form OpenAI's
+    /// OpenAPI description states, or in an `error` object inside it, which is the form the service
+    /// sent over its websocket and the one the readers of OpenAI's SDK and of Codex take. Where both
+    /// are strings the object's is the code, as it is for those readers, and where the object holds
+    /// none the event's own is. A reader of the event's own `code` alone reads no code in the form
+    /// the service sent and reports an account's refusal as an unknown failure, one that preferred
+    /// the event's own would read a different code for an event that holds both, and one that read
+    /// the object's `type` where it has no code would report the frame the service sent with a null
+    /// code as an invalid request.
+    #[test]
+    fn an_error_event_names_its_code_in_the_event_or_in_its_error_object_and_the_object_wins() {
+        let nested = |code: Value| {
+            event(json!({"type": "error", "status": 400,
+                         "error": {"type": "invalid_request_error", "message": "x",
+                                   "code": code, "param": null}}))
+        };
+        assert_eq!(
+            nested(json!("insufficient_quota")),
+            Decoded::Event(Event::Failed(Failure::Billing))
+        );
+        for (code, refusal) in REFUSAL_CODES {
+            assert_eq!(
+                nested(json!(code)),
+                Decoded::Event(Event::Refused(*refusal)),
+                "{code}"
+            );
+        }
+        // What the service sent over its websocket for a request that named a listed model and no
+        // input: an `error` object whose `type` is `invalid_request_error` and whose `code` is null,
+        // and no code in the event. The `type` is a code this reader maps to a failure of its own,
+        // so a reader that took it for the code where the object holds none would report an invalid
+        // request.
+        assert_eq!(
+            nested(Value::Null),
+            Decoded::Event(Event::Failed(Failure::Unknown))
+        );
+
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT, "message": "x"})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "the form the OpenAPI description states is still read"
+        );
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT, "error": {"code": null}})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "an `error` object with no code leaves the event's own"
+        );
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT, "error": {"code": 7}})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "an `error` object whose code is not a string leaves the event's own"
+        );
+
+        assert_eq!(
+            event(json!({"type": "error", "code": "rate_limit_exceeded",
+                         "error": {"code": USAGE_LIMIT}})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "the object's code wins over the event's"
+        );
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT,
+                         "error": {"code": "rate_limit_exceeded"}})),
+            Decoded::Event(Event::Failed(Failure::RateLimit)),
+            "the object's code wins over the event's, listed or not"
+        );
+
+        for none in [
+            json!({"type": "error"}),
+            json!({"type": "error", "error": "a string"}),
+            json!({"type": "error", "error": {"message": USAGE_LIMIT}}),
+            json!({"type": "error", "error": [{"code": USAGE_LIMIT}]}),
+            json!({"type": "error", "response": {"error": {"code": USAGE_LIMIT}}}),
+            json!({"type": "error", "detail": {"code": USAGE_LIMIT}}),
+        ] {
+            assert_eq!(
+                event(none.clone()),
+                Decoded::Event(Event::Failed(Failure::Unknown)),
+                "{none}"
             );
         }
     }

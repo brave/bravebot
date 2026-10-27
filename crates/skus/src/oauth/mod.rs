@@ -24,7 +24,9 @@ pub use wire::{Lifetime, Refused, Renewed};
 #[cfg(test)]
 pub(crate) use file::ABANDONED_AFTER;
 pub(crate) use file::{claim, forget_at, load_at, path, remove_held, save_at, write_held};
-pub(crate) use wire::{REPLY_LIMIT, agent, class_of, ends_the_sign_in, error_code, form, send};
+pub(crate) use wire::{
+    INVALID_GRANT, REPLY_LIMIT, agent, class_of, ends_the_sign_in, error_code, form, send,
+};
 
 use crate::Secret;
 

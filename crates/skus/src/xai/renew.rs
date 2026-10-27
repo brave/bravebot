@@ -220,6 +220,24 @@ mod tests {
         assert_eq!(server.finish().len(), 1);
         assert!(!path.exists(), "the sign-in that ended was kept");
 
+        // The codes the ChatGPT sign-in also ends for are another sign-in's: this one ends for
+        // `invalid_grant` alone ([XAI-6](../../../../docs/specs/xai-sign-in.md#XAI-6)).
+        let others = [
+            "invalid_refresh_token",
+            "token_expired",
+            "refresh_token_expired",
+            "refresh_token_invalidated",
+            "refresh_token_reused",
+        ]
+        .into_iter()
+        .flat_map(|code| {
+            [400, 401].map(move |status| {
+                (
+                    Reply::json(status, &format!("{{\"error\":\"{code}\"}}")),
+                    Class::Refused,
+                )
+            })
+        });
         for (reply, class) in [
             (
                 Reply::json(503, "{\"error\":\"invalid_grant\"}"),
@@ -231,7 +249,10 @@ mod tests {
             ),
             (Reply::json(429, "{}"), Class::RateLimited),
             (Reply::json(200, "{\"nothing\":1}"), Class::Incomplete),
-        ] {
+        ]
+        .into_iter()
+        .chain(others)
+        {
             let path = scratch("failed");
             account::save_at(&path, &stored("old", "r0", -5)).expect("a stored account");
             let server = serve(vec![reply]);
