@@ -3649,9 +3649,11 @@ attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure repor
 codes with which the ChatGPT account says it has reached its usage limit or may not be used this way
 ([CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8)), in a `response.failed` event or an `error` event, are read on
 the stream as that account's refusal and not as a failure of this list, and end the turn in the sentence of
-that clause without being asked for again. From any other service they are a failure it did not name. A
-stream that stops before any of them is a reply that did not finish and is asked for again, as many times as
-the entry's retries allow ([BACKEND-55](#BACKEND-55)) and no more.
+that clause without being asked for again. The code of an `error` event is the `code` of an `error` object
+in it or, where that holds none, its own `code`, and the object's wins where both are strings. From any
+other service they are a failure it did not name. A stream that stops before any of them is a reply that
+did not finish and is asked for again, as many times as the entry's retries allow
+([BACKEND-55](#BACKEND-55)) and no more.
 
 A reasoning item a reply carried is not sent back. The conversation keeps a model's words and calls, so a
 later request carries none of its earlier reasoning, which the service accepts. The request does not ask
@@ -3674,8 +3676,10 @@ reasoning turn with a summary, a picture, the model's own words as `output_text`
 the refusals above, to end a reply stopped at its ceiling with `response.incomplete`, and to count the
 cached part of a prompt inside `input_tokens`
 ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). A `response.failed`
-event and an `error` event have not been seen there. Nothing has been observed of an entry that names
-`@ai-sdk/openai` on another service.
+event has not been seen there, and an `error` event has not been seen on the POST event stream this protocol
+reads. An `error` event was seen over the ChatGPT host's websocket on 2026-10-27, with its code in an `error`
+object ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). Nothing has
+been observed of an entry that names `@ai-sdk/openai` on another service.
 
 **Built:** the protocol for an entry that names `@ai-sdk/openai`, in `bravebot-aichat` beside the Anthropic
 and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings

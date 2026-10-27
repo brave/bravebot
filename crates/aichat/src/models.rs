@@ -544,10 +544,11 @@ pub fn named_by_entry(
 /// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
 ///
 /// Names only, so a row takes the window and the label a model the listing did not describe has.
-/// They are the seven rows the service's listing offered a signed-in account, each of which answered
-/// a request. A release changes this list; no reply, model or settings file does. The `-fast` names
-/// opencode offers are not here, since the service refuses them as models. It accepts the
-/// `service_tier` `priority`, which this program does not send.
+/// They are the eight rows the service's listing offered a signed-in account on 2026-10-25 and
+/// 2026-10-26, each of which answered a request. A release changes this list; no reply, model or
+/// settings file does. The `-fast` names opencode offers are not here: the service refused eight of
+/// the nine as models and `gpt-6.1-terra-fast` was not asked for. It accepts the `service_tier`
+/// `priority`, which this program does not send.
 const COMPILED_ACCOUNT_MODELS: &[&str] = &[
     "gpt-5.6-luna",
     "gpt-5.6-sol",
@@ -556,6 +557,7 @@ const COMPILED_ACCOUNT_MODELS: &[&str] = &[
     "gpt-6-luna",
     "gpt-6-sol",
     "gpt-6.1-sol",
+    "gpt-6.1-terra",
 ];
 
 /// The picker rows of the compiled list, under the account's identifier for the reason
@@ -1794,13 +1796,13 @@ mod tests {
         }
     }
 
-    /// CHATGPT-9: the compiled list is the seven models the service listed for a signed-in account
+    /// CHATGPT-9: the compiled list is the eight models the service listed for a signed-in account
     /// and accepted. The list opencode offers has sixteen names, and the service refuses nine of
     /// them as models (`gpt-5.5` and every `-fast` name), so a picker built on it offers rows that
-    /// fail at the first request. An exact list fails for a restored name and for a `-fast` name
-    /// added again.
+    /// fail at the first request. An exact list fails for a restored name, for a `-fast` name added
+    /// again and for `gpt-6.1-terra`, which the listing of 2026-10-26 added, left out.
     #[test]
-    fn the_compiled_list_is_the_seven_models_the_service_offered() {
+    fn the_compiled_list_is_the_eight_models_the_service_offered() {
         let rows = compiled_for_account(&bravebot_config::provider::Provider::chatgpt_account());
 
         let keys: Vec<&str> = rows.iter().map(|row| row.key.as_str()).collect();
@@ -1814,6 +1816,7 @@ mod tests {
                 "chatgpt/gpt-6-luna",
                 "chatgpt/gpt-6-sol",
                 "chatgpt/gpt-6.1-sol",
+                "chatgpt/gpt-6.1-terra",
             ]
         );
     }
