@@ -42,6 +42,17 @@ source file under `crates/` as text, so a missing reason fails `make check` on a
 the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
 the same rule.
 
+Clippy is run for one target per operating system the project ships for: the Linux job, the macOS job
+and `cargo clippy --target x86_64-pc-windows-gnu`. Those cover the other shipped architectures
+(`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-pc-windows-gnullvm`) as long as no
+condition in `crates/` selects code by anything but the operating system, because the arms for an
+operating system are the same on both of its architectures. `crates/cli/tests/cfg_targets.rs` fails
+any condition listed in its `BEYOND_THE_OPERATING_SYSTEM` constant (`target_arch`, `target_env`,
+`target_family` and `target_pointer_width` among them), and a `target_os` other than `macos`,
+`linux` or `windows`, in a source file or manifest under `crates/`.
+Adding one means adding a clippy target for it to CI and to this page, then listing it in that test.
+`fuzz/` is a package of its own and is linted by `make check-fuzz`.
+
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
 with `bravebot_sandbox::programs::start`, which takes a `Resolved`, the variables the program
