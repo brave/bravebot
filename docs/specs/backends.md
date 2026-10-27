@@ -295,6 +295,11 @@ person ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)). A turn on that model that fi
 before a request is sent, naming the command. Replacing an access token that is about to expire is not a
 sign-in and is done inside the turn ([CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7)).
 
+The xAI sign-in starts none either: `bravebot auth login xai` is typed by a person
+([XAI-7](xai-sign-in.md#XAI-7)). A model named `xai/<name>` needs no sign-in before work starts, and a turn
+on it that finds no usable sign-in ends before a request is sent, naming the command
+([XAI-17](xai-sign-in.md#XAI-17)).
+
 `verified-by: bravebot_agent::backend::a_brave_model_never_needs_an_aws_sign_in`
 `verified-by: bravebot_agent::backend::without_bedrock_configured_nothing_needs_a_sign_in`
 `verified-by: bravebot_agent::backend::signing_in_for_a_model_no_aws_account_serves_does_nothing`
@@ -304,6 +309,8 @@ sign-in and is done inside the turn ([CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7)).
 `verified-by: bravebot_agent::backend::an_aws_block_leaves_the_other_rosters_needing_no_sign_in`
 `verified-by: bravebot_agent::backend::the_account_answers_for_its_own_models_and_for_nothing_a_credential_of_another_service_is_for`
 `verified-by: bravebot_cli::layering::the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else`
+`verified-by: bravebot_cli::layering::the_xai_sign_in_is_started_by_the_command_and_nothing_else`
+`verified-by: bravebot_agent::backend::a_turn_on_an_xai_model_with_no_usable_sign_in_ends_before_a_request_naming_the_command`
 `verified-by: bravebot_cli::running::a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_nothing`
 
 <a id="BACKEND-10"></a>
@@ -639,9 +646,13 @@ for none of them where the machine-level layer names the gateways. It shows each
 its entry would reach: a known name asked for alone is read as an entry that holds no field is, so
 the host it shows is the one a session sends the key to.
 
-A known name supplies an endpoint and nothing else. An `openai` entry is otherwise reached as any
-other gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
-[BACKEND-16](#BACKEND-16) says. An `anthropic` entry names it the same way, and is the one known name
+A known name supplies an endpoint and no credential. An `openai` entry is reached as any other
+gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
+[BACKEND-16](#BACKEND-16) says. What differs at OpenAI's own host follows the host and port a request goes
+to, whatever the entry is called. [BACKEND-19](#BACKEND-19) states the models its chat completions route
+cannot reach, which the roster leaves out, and [BACKEND-32](#BACKEND-32) states that no cache marks are sent.
+A proxy keyed `openai` is a gateway as any other is, and an entry under another id that states OpenAI's
+endpoint is treated as OpenAI's. An `anthropic` entry names the key the same way, and is the one known name
 whose entry may say it is not Anthropic's: one that names `@ai-sdk/openai-compatible` in `npm`, as
 opencode names the SDK for a gateway, is an OpenAI-compatible gateway like any other and states an
 endpoint of its own, since the address compiled in is the one the other protocol is spoken at. Its models are asked for as [BACKEND-19](#BACKEND-19) says, and
@@ -675,6 +686,7 @@ what keeps a known name usable against a proxy or a private deployment.
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
 `verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
+`verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
 `verified-by: bravebot_agent::backend::an_openai_alias_is_not_expected_to_be_the_name_that_comes_back`
 `verified-by: bravebot_config::provider::an_anthropic_entry_is_reached_through_the_messages_api_at_anthropics_host`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_anthropic`
@@ -701,6 +713,12 @@ gateway and none is the account's. An entry with that id that states no endpoint
 are the ones the account is offered as. A bare name that begins `chatgpt/` is the account's even where a gateway
 of another id lists it, and that gateway's model is reached by naming it with the gateway's identifier ahead of
 the name, as for any model: `<id>/chatgpt/<name>`.
+
+The xAI account of [XAI-13](xai-sign-in.md#XAI-13) is named the same way, by the identifier `xai`, and a
+`provider` entry with that id that states an endpoint keeps it: the entry's models go to its gateway and none is
+the account's. An entry with that id that states no endpoint and is no known name is no gateway and holds
+nothing, and its `models` are not read for the account. A bare name that begins `xai/` is the account's even where
+a gateway of another id lists it, and that gateway's model is reached as `<id>/xai/<name>`.
 
 **Why.** One model is reachable through more than one service, billed and credentialled differently,
 and a bare name cannot say which was chosen. That mattered less while a gateway served only what a
@@ -729,6 +747,10 @@ qualified name at all, which is what keeps the other rosters' spellings out of t
 `verified-by: bravebot_agent::backend::a_gateway_entry_named_chatgpt_keeps_its_name_and_no_model_is_the_accounts`
 `verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_chatgpt_is_reached_by_its_qualified_name_alone`
 `verified-by: bravebot_agent::backend::a_gateway_listing_a_chatgpt_name_does_not_take_it_from_the_account`
+`verified-by: bravebot_config::lib::only_the_qualified_name_selects_the_xai_account_and_only_the_rest_of_it_is_sent`
+`verified-by: bravebot_config::lib::a_provider_entry_named_xai_keeps_the_name_and_no_model_is_the_accounts`
+`verified-by: bravebot_config::lib::an_entry_named_xai_that_states_no_endpoint_holds_nothing_and_its_models_are_not_read`
+`verified-by: bravebot_config::lib::a_gateway_listing_a_name_that_begins_with_xai_is_reached_by_its_qualified_name_alone`
 
 <a id="BACKEND-19"></a>
 ### BACKEND-19: a gateway that was told no models is asked what it serves
@@ -744,6 +766,9 @@ The desktop says it in a warning that names the gateway and says to
 try again, and gives no command line, since a window has none. A gateway whose block names a credential
 nothing holds is not asked, and the picker does not say it could not be read, since `doctor` says the
 credential is missing. A gateway whose block names its models is not asked and is not mentioned.
+
+The xAI account's models are asked for beside a gateway's when a person signed in to xAI, and are said in the same two
+places when the listing could not be had ([XAI-19](xai-sign-in.md#XAI-19)).
 
 What the credential in use may reach is asked for ahead of what the service offers generally, and the
 wider roster answers only where the narrower question does not. A block naming no credential has no
@@ -796,6 +821,47 @@ reads an effort level, which [BACKEND-22](#BACKEND-22) reads. A value in either 
 null, zero or not a whole number states nothing, and a roster that is not in that shape for another
 gateway is still read: what a gateway puts under `capabilities` is its own.
 
+**An `openai` service is asked as any gateway is, and its listing is read for ids.** `/models/user` is asked
+first and is expected to be refused, then `/models`. A row states an id and no capability, so nothing is dropped
+for what a model can do, and embedding, speech and image models are offered beside the chat ones ([Known
+costs](#known-costs)). One list compiled into the binary leaves ids out: where an entry is reached in the chat
+completions protocol at `api.openai.com`, the models the `ResponsesOnlyModel` list of OpenAI's published API
+description (version 2.3.0) names are not offered, since that route cannot reach them. A row's id is compared with
+that list only, and the rows go to a picker. The place is told by the host and port of the entry's endpoint,
+whatever the entry's id: the host is compared in lower case without a trailing dot, a port that is the scheme's
+default is the same place whether or not it is written, and a port that is not the default is another service, so
+it is not `api.openai.com`. A proxy keyed `openai` is therefore offered its whole listing, and so is an entry
+naming `@ai-sdk/openai`, which is reached in the Responses protocol ([BACKEND-61](#BACKEND-61)). The list changes
+with a release. A block naming `models` is offered those and no others, so a model on the list is still reached by
+naming it.
+
+**What is known of the exchange with OpenAI's own API.** [BACKEND-31](#BACKEND-31) and
+[BACKEND-32](#BACKEND-32) add what bears on usage and on cache marks.
+
+- Observed on 2026-10-26. `GET /v1/models` answered 200 with an object holding `object` and `data`, and `data`
+  held 128 rows. A row held `id`, `object`, `created`, `owned_by` and, on some, `shutdown_date`, and none held a
+  capability, a parameter, a window or a modality. `owned_by` was `openai`, `openai-internal` or `system`, and the
+  ids were chat, reasoning, embedding, speech, transcription, image, audio, realtime, moderation and video models.
+  `GET /v1/models/user` answered 404 with the error type `invalid_request_error` and the code `model_not_found`. A
+  chat completion with one short user message and
+  `max_completion_tokens` of 1, sent once for each listed id, answered 429 `insufficient_quota` for 91, among them
+  speech, transcription, image, realtime and embedding models, so that status does not tell a chat model from the
+  rest; 404 for 35, among them `gpt-5-codex`, `gpt-5.1-codex`, `gpt-5.1-codex-max`, `gpt-5.1-codex-mini`,
+  `gpt-5.2-codex`, `gpt-3.5-turbo`, `o1`, `o3-mini` and `o4-mini`, so a listed model can be unreachable for the key
+  or the route; and 403 for two embedding models. A body with an unknown field, with `cache_control` on a content
+  part, with `reasoning_effort` on `gpt-4o-mini` or with `stream_options.include_usage` answered 429 as well, and
+  `max_tokens` on `o3-mini` answered 404. No chat completion answered 200, so no refusal of a field and no
+  completed reply is on record.
+- Stated by OpenAI's published API description (version 2.3.0), and not observed: a listed model has `id`,
+  `created`, `object`, `owned_by` and an optional `shutdown_date`, and the description has no `/models/user`
+  route. A chat completion request takes `max_completion_tokens` and `reasoning_effort` (`none`, `minimal`, `low`,
+  `medium`, `high`, `xhigh` or `max`, of which not every reasoning model supports every value), and `max_tokens` is
+  deprecated and not compatible with the o-series. The models of its `ResponsesOnlyModel` list belong to the
+  Responses request alone.
+- Assumed: that a listed model not on that list is served by chat completions where the account may use it, that a
+  field a model does not take is refused with an invalid-request status, which is what [BACKEND-22](#BACKEND-22)
+  and [BACKEND-32](#BACKEND-32) read, and that `reasoning_effort` is refused by a model that does not reason.
+
 **The ChatGPT account is asked as [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) says,** and only where a sign-in
 is stored. It is a roster beside the others, its rows are keyed by its own identifier, and a listing that cannot
 be had contributes the compiled names of [CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9) and takes nothing away from
@@ -811,6 +877,9 @@ token is not renewed for it.
 `verified-by: bravebot_aichat::models::a_gateway_model_that_cannot_call_tools_is_not_offered`
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
 `verified-by: bravebot_aichat::client::an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists`
+`verified-by: bravebot_aichat::models::an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes`
+`verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
+`verified-by: bravebot_config::provider::the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not`
 `verified-by: bravebot_aichat::models::a_fetched_entry_with_no_usable_name_is_dropped`
 `verified-by: bravebot_aichat::client::an_anthropic_listing_is_asked_for_once_as_a_whole_page_with_the_key_in_its_header`
 `verified-by: bravebot_aichat::models::an_anthropic_listing_is_offered_under_the_providers_id_with_the_window_it_states`
@@ -914,6 +983,10 @@ Anthropic's listing states the capability per model, as an object with a `suppor
 `effort`, and only a `false` there says the model reads none. A model whose entry omits the object,
 or states it as anything else, is a model the listing does not describe.
 
+The xAI account is sent no level and is reported as reading none ([XAI-16](xai-sign-in.md#XAI-16)). Its listing
+states `reasoning_effort` levels for some models in a field this clause does not read for a gateway, and the
+service was not asked with a level.
+
 The ChatGPT account's listing states it per model in `supported_reasoning_levels`
 ([CHATGPT-9](chatgpt-sign-in.md#CHATGPT-9)). A row that lists levels reads one, a row whose list is empty
 reads none, and a row that does not mention the field, or states it as anything but a list, is a model the
@@ -957,14 +1030,20 @@ concession has been given up, and a service that refuses it refuses the request 
 any other option it does not take. What is given up is the level somebody chose in the interface,
 that being the one this program decided to send.
 
-**On a gateway, the level is the last concession given up.** A request to a gateway also carries
-cache breakpoints nobody asked for, and either field is refused with the same status, so the two are
-given up in order: a request still marking a prefix is sent again without the marks first, and the
+**On a gateway, the level is the last concession given up.** A request to a gateway other than
+OpenAI's own API also carries cache breakpoints nobody asked for, and either field is refused with
+the same status, so the two are given up in order: a request still marking a prefix is sent again without the marks first, and the
 level goes only where that request is refused too. Giving up the level first would read a refusal of
 the caching as the model refusing to be told how hard to think, and stop sending a level to a model
 that reads one. Where the request that answered had given up both, both are remembered, the status
 naming no field: a service that reads a breakpoint and refuses a level gives up the caching as well
 for the life of the process.
+
+**At OpenAI's own API, the level is the one concession.** A request to `api.openai.com` carries no
+breakpoints from the first request ([BACKEND-32](#BACKEND-32)), so the breakpoints are already given up
+and the level is the only field a refusal can be about. A request refused on its contents is sent again
+once, without the level, and then the refusal is reported. A request that carried no level is reported as it
+was refused. A proxy keyed `openai` is sent the breakpoints and is a gateway as the paragraph above says.
 
 **On Vertex express mode, the level is the one concession.** The request carries no breakpoints, so
 a request refused on its contents is sent again once without the level and not again, and a request
@@ -1008,6 +1087,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_aichat::client::a_level_refusal_the_retry_did_not_fix_is_not_remembered`
 `verified-by: bravebot_aichat::client::one_model_refusing_a_level_says_nothing_about_another_on_the_same_gateway`
 `verified-by: bravebot_aichat::client::a_level_a_block_wrote_down_is_not_given_up`
+`verified-by: bravebot_aichat::lib::a_refusal_at_openais_own_api_gives_up_the_level_and_nothing_else`
 `verified-by: bravebot_aichat::client::a_model_that_refuses_the_thinking_budget_is_asked_again_without_it`
 `verified-by: bravebot_aichat::client::a_refusal_of_a_request_asking_for_no_level_is_reported_after_one_request`
 `verified-by: bravebot_aichat::call::the_order_fields_are_given_up_in_is_the_callers`
@@ -1038,6 +1118,7 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_tui::app::a_level_the_service_refused_stops_being_reported_as_in_force`
 `verified-by: bravebot_tui::app::a_turn_that_refused_nothing_does_not_restore_a_level_the_roster_says_is_unread`
 `verified-by: bravebot_tui::status::a_level_the_model_does_not_read_is_reported_as_unread`
+`verified-by: bravebot_agent::backend::the_xai_account_reads_no_level_is_one_service_and_is_asked_for_the_name_after_its_identifier`
 
 
 <a id="BACKEND-23"></a>
@@ -1461,14 +1542,29 @@ answered out of its own cache, and how much this request wrote into that cache f
 read. Both are counted inside the prompt total rather than beside it, so one figure says what a
 round sent and the other two say what it cost. Bedrock states both, and so does Anthropic, as
 `cache_read_input_tokens` and `cache_creation_input_tokens` beside an `input_tokens` that is net of the
-cache, so the prompt is the three added together. An OpenAI-compatible reply states the read alone, in
-`prompt_tokens_details.cached_tokens`, there being no field in that protocol for a write. The Responses API states the read in
+cache, so the prompt is the three added together. An OpenAI-compatible reply is read for the cached part alone, in
+`prompt_tokens_details.cached_tokens`, and a write is counted as zero. The Responses API states the read in
 `input_tokens_details.cached_tokens` and the write in `input_tokens_details.cache_write_tokens`, both
 counted inside `input_tokens`, and the ChatGPT account is read as the Responses API is
 ([CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10)). A service stating neither leaves both at zero, and a figure Anthropic states as `null` is one it did not state.
 
 A turn sums them over its rounds, as it sums the total, and a delegate's are added to the turn that
 spawned it.
+
+**What OpenAI's own API reports.**
+
+- Observed: no completed reply. On 2026-10-26 no chat completion sent to `api.openai.com` answered 200: they
+  answered 429 `insufficient_quota`, 404 or 403 ([BACKEND-19](#BACKEND-19)), so no `usage` object and no cached
+  figure has been read from it. A test parses a usage object of the shape the next bullet states, with a
+  `cache_write_tokens` beside `cached_tokens`, and holds the cached figure read and the write figure at zero.
+- Stated by OpenAI's published API description (version 2.3.0): a request with
+  `stream_options.include_usage` gets one more chunk before the end of the stream, whose `usage` holds
+  `prompt_tokens` and `completion_tokens` and whose `choices` is empty; `usage.prompt_tokens_details` holds
+  `cached_tokens`, the cached tokens present in the prompt, and `cache_write_tokens`, the unadjusted number
+  of prompt tokens written to the cache.
+- Assumed: that a reply to the request this program sends carries that chunk, and that
+  `cache_write_tokens` is sent. The second is not read, so a turn reports a write of zero for this service
+  ([Known costs](#known-costs)).
 
 **Why.** A cached token is charged at a fraction of a fresh one and a written one above it, so the
 prompt total is the one figure that does not move when caching begins working. Two sessions of the
@@ -1503,7 +1599,8 @@ before it on the panel.
 **The lifetime asked for is reported beside them.** The status panel's cache lines end with the
 `promptCacheTtl` the settings chose, or say none was and the service's own applies. That is the
 setting and not a reading: no reply says how long a service kept a prefix, and a model that refuses
-the field is sent the request without it (BACKEND-27, BACKEND-32). It sits there because a read of
+the field is sent the request without it (BACKEND-27, BACKEND-32). The line is drawn from the setting
+whichever service answered ([Known costs](#known-costs)). It sits there because a read of
 zero after a pause means a different thing under five minutes than under an hour.
 
 **Presented as two figures and never as their sum.** They are priced in opposite directions, a read
@@ -1521,6 +1618,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_aichat::client::a_whole_anthropic_reply_is_read_into_text_calls_model_and_cost`
 `verified-by: bravebot_aichat::client::an_anthropic_stream_is_assembled_from_its_events_and_asks_for_arguments_as_written`
 `verified-by: bravebot_aichat::protocol::the_cache_figure_is_read_out_of_the_details_object`
+`verified-by: bravebot_aichat::protocol::a_cache_write_figure_beside_the_cached_one_is_not_read_and_does_not_fail_the_reply`
 `verified-by: bravebot_aichat::protocol::a_usage_object_without_cache_figures_still_parses`
 `verified-by: bravebot_aichat::protocol::a_null_cache_figure_reads_as_silence_rather_than_failing_the_reply`
 `verified-by: bravebot_agent::turn::a_turn_sums_what_its_rounds_read_out_of_the_cache`
@@ -1541,7 +1639,7 @@ says which turn it speaks for, the counts beside it being the session's.
 `verified-by: bravebot_aichat::client::an_account_reply_is_read_from_its_events_and_its_cost_from_the_final_one`
 
 <a id="BACKEND-32"></a>
-### BACKEND-32: an aichat request marks the prefix it will send again
+### BACKEND-32: an aichat request marks the prefix it will send again, except at OpenAI's own API
 
 A request in the OpenAI-compatible wire format marks two prefixes: the system prompt, which the tool
 schemas travel in front of, and the last thing the user said. The second is left off where the caller
@@ -1549,7 +1647,8 @@ says the conversation is given up once it has been answered, marking the prompt 
 `cache_control` of `{"type": "ephemeral"}` on the content block the prefix ends at, which is the field
 the Anthropic API defines for this and the field a gateway fronting such a model reads. A marked
 message carries its words as a block rather than as a bare string, that being the only shape the
-field exists in.
+field exists in. A request to `api.openai.com` is the exception: it carries no mark and no lifetime, as
+"OpenAI's own API is sent none" below says.
 
 **Why.** The arithmetic is BACKEND-27's, and so is the measurement behind it: a turn re-sends its
 whole history every round, the system prompt and the schemas are identical on every round of every
@@ -1592,13 +1691,24 @@ A refusal with nothing further to give up proves nothing, an invalid-request sta
 prompt too long for the model is answered with, so nothing is remembered and the next request asks
 again. This is BACKEND-27's rule and its reason, in the statuses this protocol says it with.
 
+**OpenAI's own API is sent none.** A request to `api.openai.com` carries no breakpoints, and they are given up
+before the first request, so no request is spent finding out, and a refusal that follows is read as a refusal of
+the level, since no marks were sent. OpenAI caches a repeated prompt without being asked, and its published API
+description (version 2.3.0) gives a text content part `type`, `text` and `prompt_cache_breakpoint`, an explicit mark
+for gpt-5.6 and later that this program does not send, and no `cache_control`. Whether OpenAI answers a
+`cache_control` with a refusal or ignores it is not observed: on 2026-10-26 a body carrying one answered 429
+`insufficient_quota` ([BACKEND-19](#BACKEND-19)). The host a request goes to decides this, compared as
+[BACKEND-19](#BACKEND-19) says, so a proxy keyed `openai` that reads the marks is sent them, and an entry under
+another id that states OpenAI's endpoint is not. A `promptCacheTtl` rides on the marks and is not sent there either.
+
 **Remembered against the service as well as the model.** A model id says nothing about who serves
 it: two gateways can offer the same name, and one of them can be the name Brave's own endpoint
 answers to. A refusal recorded against the id alone would stop the asking everywhere one appeared.
 
 **A gateway may be asked how long to keep it.** With a `promptCacheTtl` setting, `cache_control`
 becomes `{"type": "ephemeral", "ttl": "1h"}` (or `"5m"`) on a request to a gateway, and is unchanged
-on a request to Brave's own endpoint, which reads no such field. The refusal rule is BACKEND-27's: a
+on a request to Brave's own endpoint, which reads no such field. A request to `api.openai.com` carries no
+`cache_control`, so it carries no lifetime. The refusal rule is BACKEND-27's: a
 gateway that refuses a request carrying a lifetime is sent it again without the lifetime and with the
 breakpoints, and is not sent one again for that model on that service.
 
@@ -1616,6 +1726,9 @@ sent.
 
 `verified-by: bravebot_aichat::protocol::the_system_prompt_and_the_last_thing_the_user_said_are_marked`
 `verified-by: bravebot_aichat::lib::a_chosen_lifetime_goes_to_a_gateway_and_to_nothing_else`
+`verified-by: bravebot_aichat::lib::a_request_to_openais_own_api_is_sent_no_breakpoints_and_one_to_a_proxy_is`
+`verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
+`verified-by: bravebot_config::provider::the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not`
 `verified-by: bravebot_aichat::client::a_lifetime_a_gateway_refuses_is_given_up_before_the_breakpoints_and_remembered`
 `verified-by: bravebot_aichat::protocol::a_result_the_assistant_asked_for_is_not_marked`
 `verified-by: bravebot_aichat::protocol::the_last_user_turn_is_marked_through_several_rounds_of_results`
@@ -2029,11 +2142,13 @@ that path rather than with the person in front of the screen.
 
 Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
 subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
-A session does not open and a one-shot run asks nothing. What is said instead is the four ways to
+A session does not open and a one-shot run asks nothing. What is said instead is the five ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
 through Bedrock, an OpenAI-compatible gateway, signing in with a ChatGPT account
-(`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), and importing a Leo
-Premium subscription. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
+(`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), signing in with an xAI
+account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and importing a Leo Premium
+subscription. The line for each sign-in says that the account's models are then offered in `/model`
+as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
 `bravebot --bg <prompt>` is refused the same way, in the terminal that typed it, before the
 background process is started.
 
@@ -2057,30 +2172,36 @@ its shape from lands: those blocks name their models and name no default, so the
 one the build baked in. What is said there is the key that names one of the configured service's
 models, and the routes are left out.
 
-**A stored ChatGPT sign-in is such a service.** It is a fourth way to configure one, beside a Bedrock
+**A stored ChatGPT or xAI sign-in is such a service.** Each is a way to configure one, beside a Bedrock
 block, a gateway block and a stored Leo batch, and is read only where none of those has answered. A
-Bedrock or gateway block that is configured keeps the line above whatever else is stored: the file is not
-read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT is told to name a
-model with the `model` key, and that line is not replaced by one about the account. A start whose model
-in force is Brave's own and that finds a sign-in stored and nothing else configured, and that is not
-asked which model to use (below) or declines, is told that a ChatGPT sign-in is stored, and to name one
-of the account's models in a command that works as typed: `bravebot -i "<prompt>" --model
-chatgpt/<model>` opens a session on it, and `bravebot "<task>" --model chatgpt/<model>` runs a task on
-it. `bravebot --model chatgpt/<model>` alone starts nothing, since a task is required, and is not named.
-`/model` is named only as what lists the account's models once a session is open. It says that
-`bravebot` started on its own asks which one to use, in a terminal outside an incognito session, where
-the account lists its models, because a one-shot run, a start that names a model and `doctor` end in the
-same refusal and ask nothing. It is not shown the routes, and no import is offered, since a service is
-configured. A sign-in file that cannot be read
-configures nothing and is said first, with the remedy of
-[CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11), above the routes. `doctor` says it once, in its own line
-for the sign-in. A model that a configured service serves does not read the file.
+Bedrock or gateway block that is configured keeps the line above whatever else is stored: neither file is
+read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT or xAI is asked
+which of that service's models to use where a person can be asked (below), and is told to name a model with
+the `model` key where that is declined or cannot be asked, and neither the question nor that line is about
+an account. A sign-in file that cannot be read is not said there, since it is not read; `doctor` reports it. A start whose
+model in force is Brave's own and that finds a sign-in stored and nothing else configured, and that is not
+asked which model to use (below) or declines, is told which sign-in is stored, and to name one of the
+account's models in a command that works as typed: `bravebot -i "<prompt>" --model chatgpt/<model>` or
+`--model xai/<model>` opens a session on it, and `bravebot "<task>" --model chatgpt/<model>` or `--model
+xai/<model>` runs a task on it. `bravebot --model xai/<model>` alone starts nothing, since a task is
+required, and is not named. `/model` is named only as what lists the account's models once a session is
+open. It says that `bravebot` started on its own asks which one to use, in a terminal outside an incognito
+session, where the account lists its models, because a one-shot run, a start that names a model and `doctor`
+end in the same refusal and ask nothing. It is not shown the routes, and no import is offered, since a
+service is configured. Where both sign-ins are stored it says so once, in one line that names both, and
+names a command for each account's models. A sign-in file that cannot be read configures nothing and is said
+first, with the remedy of [CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11) or of
+[XAI-8](xai-sign-in.md#XAI-8), above the routes. `doctor` says it once, in its own line for the sign-in. A
+model that a configured service serves does not read either file.
 
-**A start with that sign-in asks which of the account's models to use before it refuses.** Where the
-start would be refused for the stored sign-in alone, no model was named on the command line, the
+**A start with a stored sign-in asks which of the accounts' models to use before it refuses.** Where the
+start would be refused for the stored sign-in or sign-ins alone, no model was named on the command line, an
 account lists at least one model, stdin, stdout and stderr are all terminals and the session is not
-incognito, the account's rows are shown as numbered lines, in the order and without the models the
-pickers leave out, and the start asks which to use. The question goes to stderr and is read from
+incognito, the rows of the accounts that listed some are shown as numbered lines, the ChatGPT account's
+first and the xAI account's after them, each account's in the order and without the models the pickers
+leave out, and the start asks which to use. Only an account whose sign-in is stored is asked. A heading
+over the rows names the accounts that gave them, so a number is the one row it numbers whichever account
+it belongs to, and a pick of a row is recorded under its own identifier. The question goes to stderr and is read from
 stdin a line at a time, as the question about an import is ([import.md](import.md)). A number picks
 its row. The pick is recorded as a `/model` pick is, and the start goes on and opens on it, so the next
 start has it in force and asks nothing. The start says the pick is remembered only where what it reads
@@ -2091,14 +2212,16 @@ records nothing: the start is refused as it is where nothing can be asked. Nothi
 nothing is read from stdin, where a person cannot be asked or a model was named on the command line.
 The start never chooses a model for the person.
 
-The account is asked for its listing only where a person can be asked, and that may renew the access
-token and write the sign-in file, as any turn does ([CHATGPT-14](chatgpt-sign-in.md#CHATGPT-14)), or
-remove it where the sign-in has ended. Where the account offers no row, because the listing could not
-be had, was refused with a code that names the account, is empty, or the sign-in ended while it was
-asked for, nothing is asked and the refusal says why, under its first line, in the sentence the
-sign-in command says it in. The compiled names that stand in for a listing in a picker are not rows
-here. The refusal is built from the sign-in as it stands after the listing, so a sign-in the listing
-found ended is said to have ended, with the routes, and is not said to be stored.
+An account is asked for its listing only where a person can be asked, and that may renew the access
+token and write the sign-in file, as any turn does ([CHATGPT-14](chatgpt-sign-in.md#CHATGPT-14),
+[XAI-17](xai-sign-in.md#XAI-17)), or remove it where the sign-in has ended. Where an account offers no row,
+because the listing could not be had, was refused with a code that names the account, is empty, or the
+sign-in ended while it was asked for, that account is said, in the sentence the sign-in command says it in
+for ChatGPT and in a sentence of its own for xAI. Where another account gave rows the sentence is said above
+them and the rows are offered; where none did, nothing is asked and the refusal says why, under its first
+line. The compiled names that stand in for a listing in a picker are not rows here, and no list is built in
+for the xAI account. The refusal is built from the sign-ins as they stand after the listings, so a sign-in a
+listing found ended is said to have ended, with the routes, and is not said to be stored.
 
 **A start with a Bedrock or gateway block asks the same question about that service's models.** Where
 the start would be refused for the model in force being Brave's own, a Bedrock or gateway block is
@@ -2132,23 +2255,26 @@ Refusing rather than letting the request go, for the reason
 over it: what comes back from a request that was never going to be served carries no sign of why,
 and nothing about a bad session points at where a request went.
 
-Four routes rather than one, and each named by what to type, because a refusal that states the
+Five routes rather than one, and each named by what to type, because a refusal that states the
 problem and no way out of it has moved the work to the person and told them nothing they could not
 already see. Leo Premium is last and says why it is last: those models are reached through Brave's
 AI gateway, which has problems of its own being worked on. It is still the shortest route for
 somebody who already subscribes, which is why it is offered rather than left out. The ChatGPT
-sign-in comes before it, since it reaches OpenAI's own service and not Brave's gateway, and says the
-command to type because a session never starts that sign-in itself
-([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
+and xAI sign-ins come before it, since each reaches its own service and not Brave's gateway, and each says
+the command to type because a session never starts a sign-in itself
+([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1), [XAI-7](xai-sign-in.md#XAI-7)).
 
 A person who has only signed in has no model name to give. The names are known from the account's
 listing, and a session that would show the listing does not open until a model is served. Asking at the
 start puts the listing in front of the person at the moment the start would be refused, and the answer
-applies at once, to a sign-in made earlier as well as to one made now. A model named on the command
+applies at once, to a sign-in made earlier as well as to one made now. The xAI account's start is the
+same question over the same mechanism, so the two accounts are asked by one start: a person with both
+signed in is asked once, over one list, and one account that is down does not keep the other's models
+from being chosen. A model named on the command
 line is left alone because it outranks a recorded pick, so a pick made there would change nothing.
 
 Telling the configured case apart is the same argument in the other direction. Somebody there is
-one settings key from working, and four ways to set up a service would be four things to read
+one settings key from working, and five ways to set up a service would be five things to read
 past on the way to the one that applies, the first of which is the thing they already did.
 
 The test is the endpoint rather than a switch somebody sets. A build pointed at a host that is not
@@ -2206,8 +2332,31 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::model::the_rows_are_numbered_from_one_in_the_order_given_and_the_number_typed_picks_its_row`
 `verified-by: bravebot_cli::model::an_answer_that_is_not_the_number_of_a_row_picks_none`
 `verified-by: bravebot_cli::model::a_name_the_service_gave_is_shown_without_its_control_characters`
+`verified-by: bravebot_agent::backend::a_stored_xai_sign_in_is_a_service_configured_and_an_unreadable_one_is_not`
+`verified-by: bravebot_agent::xai::a_stored_sign_in_is_told_apart_from_an_absent_one_and_from_one_that_cannot_be_read`
+`verified-by: bravebot_cli::model::a_stored_xai_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes`
+`verified-by: bravebot_cli::model::where_both_accounts_are_signed_in_the_refusal_says_both`
+`verified-by: bravebot_cli::model::an_xai_sign_in_that_cannot_be_read_configures_nothing_and_the_routes_stay`
+`verified-by: bravebot_cli::model::a_start_asks_the_accounts_that_are_stored_and_nothing_else`
+`verified-by: bravebot_cli::model::an_xai_listing_that_gave_no_row_says_which_way_and_the_heading_names_the_accounts_that_offered`
+`verified-by: bravebot_tui::app::a_start_is_offered_what_the_xai_account_listed_in_the_pickers_order_and_nothing_else`
+`verified-by: bravebot_cli::xai_sign_in::a_start_with_only_an_xai_sign_in_asks_which_model_and_the_pick_is_what_the_session_and_the_next_start_open_on`
+`verified-by: bravebot_cli::xai_sign_in::the_interface_that_draws_asks_the_same_question_for_an_xai_sign_in_and_draws_once_a_row_is_picked`
+`verified-by: bravebot_cli::xai_sign_in::a_start_with_both_accounts_signed_in_asks_over_both_lists_and_records_the_pick_of_either`
+`verified-by: bravebot_cli::xai_sign_in::an_account_that_gave_no_row_is_said_above_the_rows_the_other_account_gave`
+`verified-by: bravebot_cli::xai_sign_in::an_xai_listing_that_gave_no_row_ends_the_start_with_the_sentence_that_says_which_way_it_did_not`
+`verified-by: bravebot_cli::xai_sign_in::an_xai_sign_in_that_ended_while_the_listing_was_asked_for_is_not_said_to_be_stored`
+`verified-by: bravebot_cli::xai_sign_in::a_start_that_is_not_in_a_terminal_asks_nothing_reads_nothing_and_names_the_xai_commands`
+`verified-by: bravebot_cli::xai_sign_in::the_routes_offered_where_nothing_is_stored_include_xai_with_the_command_and_the_name_its_models_have`
+`verified-by: bravebot_cli::xai_sign_in::an_incognito_start_with_an_xai_sign_in_asks_nothing_and_records_nothing`
+`verified-by: bravebot_cli::xai_sign_in::nothing_is_asked_where_a_model_is_named_or_served_or_a_gateway_is_configured`
+`verified-by: bravebot_cli::xai_sign_in::an_unreadable_xai_sign_in_beside_a_configured_gateway_is_not_read_at_the_start`
+`verified-by: bravebot_cli::xai_sign_in::every_command_the_xai_refusal_names_works_as_typed`
+`verified-by: bravebot_cli::xai_sign_in::doctor_says_an_xai_sign_in_is_stored_where_a_start_would_and_asks_the_account_nothing`
+`verified-by: bravebot_cli::xai_sign_in::an_xai_sign_in_that_cannot_be_read_is_said_before_the_routes_and_the_report_says_it_once`
 `verified-by: bravebot_tui::app::a_start_is_offered_what_the_account_listed_in_the_pickers_order_and_nothing_else`
 `verified-by: bravebot_tui::app::a_start_is_not_offered_a_model_the_machine_level_layer_refuses`
+`verified-by: bravebot_tui::app::a_start_is_not_offered_an_xai_model_the_machine_level_layer_refuses`
 
 <a id="BACKEND-40"></a>
 ### BACKEND-40: completed replies keep reported usage even when their content is unusable
@@ -3911,32 +4060,53 @@ clause was written for.
   for one that is absent: the next tool is tried, and with none left a copy goes out as the
   terminal's own escape sequence and a paste reads as an empty clipboard.
 
-- **An `openai` entry naming no models is offered everything OpenAI's listing returns.** The listing
-  states an id and an owner for each model and nothing about what it can do, so BACKEND-19 has
-  nothing to drop on, and the picker holds embedding, speech and image models beside the chat ones.
-  That waives BACKEND-5's promise that picking a listed name works, for the rows of this one
-  service. Filtering by id would be a guess about OpenAI's naming, and a model named otherwise would
-  be hidden from somebody who could use it. A list compiled into the binary, as BACKEND-49 compiles
-  one for Vertex AI, would go stale with each release, and each id on it would first have to be
-  answered with a tool call and its result by the service. A block naming `models` is offered those
-  and no others.
+- **An `openai` entry naming no models is offered everything OpenAI's listing returns, less one
+  compiled-in list.** The listing states an id and an owner for each model and nothing about what it
+  can do, so BACKEND-19 has nothing to drop on, and the picker holds embedding, speech and image
+  models beside the chat ones. That waives BACKEND-5's promise that picking a listed name works, for
+  the rows of this one service. The ids left out are the `ResponsesOnlyModel` list of OpenAI's
+  published API description, and only where the route is chat completions at `api.openai.com`. The
+  list goes stale with each release. Filtering by anything else an id says would be a guess about
+  OpenAI's naming, and a model named otherwise would be hidden from somebody who could use it. A list
+  of the chat models compiled into the binary, as BACKEND-49 compiles one for Vertex AI, would go
+  stale the same way, and each id on it would first have to be answered with a tool call and its
+  result by the service. A block naming `models` is offered those and no others.
 
-- **A model OpenAI serves only through its Responses API is offered and fails when picked.** The
-  route is chat completions unless the entry names `@ai-sdk/openai`, and the listing does not say
-  which models take either. A block naming `models` offers only the ones it names.
+- **A model OpenAI serves only through its Responses API, and that list does not name, is offered
+  and fails when picked.** The route is chat completions unless the entry names `@ai-sdk/openai`,
+  and the listing does not say which models take either. A listed model the key cannot use is
+  offered as well: on 2026-10-26 the `-codex` rows and others answered 404 to a chat completion
+  ([BACKEND-19](#BACKEND-19)). A block naming `models` offers only the ones it names.
 
-- **Each OpenAI roster costs a request that is expected to be refused.** BACKEND-19 asks what the
-  credential may reach at `/models/user` before it asks for the whole listing, and OpenAI is not
-  known to serve that route. The listing is asked second.
+- **A cache write figure that OpenAI's description names for chat completions is not read.** The
+  published description lists `prompt_tokens_details.cache_write_tokens` for a chat completions
+  reply. BACKEND-31 reads `cached_tokens` alone, so a turn through that route reports a write of
+  zero and the status panel draws no write line for it. No reply holding the field has been
+  observed.
 
-- **A refusal of the `cache_control` markers of BACKEND-32 by OpenAI costs one refused request.**
-  Whether OpenAI reads them is not known here. A refusal with an invalid-request status is asked
-  again without them, once for each model in each process, and an accepted request is marked as
-  BACKEND-32 says.
+- **The status panel names the `promptCacheTtl` setting after a turn that sent no lifetime.** The
+  line reads the setting whichever route the turn took. A request to `api.openai.com` carries
+  no lifetime ([BACKEND-32](#BACKEND-32)), and neither does one reached in the Responses protocol,
+  the ChatGPT account's among them, so after a reply of either that reported cached tokens the line
+  reads `5 minutes` or `1 hour`. The panel holds the model chosen for the next turn, and the turn
+  that reported the figures may have run on another, so naming the route from it can be wrong
+  after `/model`.
 
-- **The name `openai` means OpenAI's behaviour at any endpoint.** An entry keyed `openai` is not
-  checked for a substituted model, even where its `baseURL` names a proxy that does substitute
-  one. A proxy whose replies should be compared is reached by keying the entry with another name.
+- **Each OpenAI roster costs a request that is refused.** BACKEND-19 asks what the credential may
+  reach at `/models/user` before it asks for the whole listing. On 2026-10-26 OpenAI answered it
+  with 404 `model_not_found`, and its published API description has no such route. The listing is
+  asked second.
+
+- **A refusal of the `cache_control` markers of BACKEND-32 by a service keyed `openai` at another host
+  costs one refused request.** A request to `api.openai.com` carries none. Whether a proxy keyed
+  `openai` reads them is not known, so one is sent them, and a refusal with an invalid-request
+  status is asked again without them, once for each model in each process. An accepted request is
+  marked as BACKEND-32 says.
+
+- **An entry keyed `openai` is read as OpenAI's for the model a reply names, at any endpoint.** An
+  entry keyed `openai` is not checked for a substituted model, even where its `baseURL` names a
+  proxy that does substitute one. A proxy whose replies should be compared is reached by keying the
+  entry with another name.
 
 - **A bare name beginning `openai/` reaches an `openai` entry.** BACKEND-18 reads a name as
   qualified before it reads it as a bare name a block lists, so `openai/gpt-oss-120b` listed by

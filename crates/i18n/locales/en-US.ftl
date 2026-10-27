@@ -40,7 +40,7 @@ cli-usage-bug-report = Write the version, what doctor reports and the newest log
 cli-usage-import = Import a Leo Premium subscription
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
-cli-usage-auth-logout = Forget an imported Leo Premium subscription or a stored gateway key
+cli-usage-auth-logout = Forget an imported Leo Premium subscription, a stored gateway key, or a ChatGPT or xAI sign-in
 cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
@@ -425,6 +425,10 @@ onboarding-name-a-configured-model =
 # Brave's. The sign-in is the service that is configured, so what is left is naming one of its
 # models, which chatgpt-use-by-name says on the line after.
 onboarding-chatgpt-signed-in = A ChatGPT sign-in is stored, but the model in force is one of Brave's.
+# The same where an xAI sign-in is stored, which xai-use-by-name follows, and where both are stored, which
+# accounts-use-by-name follows.
+onboarding-xai-signed-in = An xAI sign-in is stored, but the model in force is one of Brave's.
+onboarding-accounts-signed-in = A ChatGPT sign-in and an xAI sign-in are stored, but the model in force is one of Brave's.
 onboarding-pick-one = Configure one of these, then run bravebot again:
 onboarding-bedrock =
     AWS Bedrock, through your own account: put a `provider` block named `amazon-bedrock` in ~/.bravebot/settings.json, with its region and the models to offer.
@@ -433,11 +437,14 @@ onboarding-openrouter =
 # The ChatGPT route: a person types the command and signs in in the browser it opens.
 onboarding-chatgpt =
     A ChatGPT Plus or Pro account, if you have one: run `bravebot auth login chatgpt` in a terminal and sign in in the browser it opens. Its models are then offered in /model as chatgpt/<model>.
-# Last of the four, and said to be last, because these models are reached through Brave's AI
+# The xAI route: a person types the command and signs in at the address it prints, on any device.
+onboarding-xai =
+    An xAI SuperGrok subscription, if you have one: run `bravebot auth login xai` in a terminal and open the address it prints on any device. Its models are then offered in /model as xai/<model>.
+# Last of the five, and said to be last, because these models are reached through Brave's AI
 # gateway, which has open problems of its own. It is still the shortest route for somebody who
 # already subscribes, so it is offered rather than left out.
 onboarding-leo =
-    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the three above for now.
+    Brave Leo Premium, if you already subscribe: run `bravebot auth login leo` on a machine where Brave is signed in to that subscription. It reaches models through Brave's AI gateway, which has open issues being worked on, so prefer one of the four above for now.
 # Said after either, so it reads after the routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
@@ -492,6 +499,8 @@ doctor-ends-subscription-batch =
     an imported subscription's credential batch: minted by Brave's subscription service against the order this install registered as a device on; each credential is spent by one premium request and the batch stops working when its last window closes, and nothing revokes an unspent one, so `bravebot auth logout leo` ends this machine's custody and leaves the batch spendable by whatever copied the file
 doctor-ends-chatgpt-account =
     a ChatGPT sign-in: issued by OpenAI to the account that signed in, and the refresh token replaces the access token without asking anybody, so the access token's expiry ends that copy rather than this program's access; ended at OpenAI by signing out of the account or removing this program's access in its settings, since `bravebot auth logout chatgpt` ends this machine's custody and leaves the tokens live there
+doctor-ends-xai-account =
+    an xAI sign-in: issued by xAI to the account that signed in, and the refresh token replaces the access token without asking anybody. The access token was issued for 21600 seconds, observed once, and what xAI answers it past that was not observed, so its expiry is taken to end that copy rather than this program's access. The refresh token ends when xAI revokes it, which its revocation endpoint did once on 2026-10-26, a call this program does not make, since `bravebot auth logout xai` ends this machine's custody and ends nothing there
 # Which tier the gate walk left a credential on, shown under the account of what would end it. One
 # sentence per tier rather than per credential: the tier is where the walk stopped, and what is
 # particular to a credential is the line above this one. Delegated is here although nothing stands
@@ -519,6 +528,8 @@ doctor-outlives-aws-access-key =
     a session credential STS already issued under that access key, which runs to its own expiry: deleting the key does not reach it
 doctor-outlives-chatgpt-account =
     an access token OpenAI already issued from the refresh token: it was refused within seconds after the refresh token was revoked at OpenAI's revocation endpoint (one account, one revocation, a call this program does not make), and whether signing out of the account or removing this program's access in its settings ends it has not been observed
+doctor-outlives-xai-account =
+    an access token xAI already issued from the refresh token: one request made right after the refresh token was revoked at xAI's revocation endpoint, a call this program does not make, was accepted with an access token issued before it (one account, once, on 2026-10-26), and how long such a token keeps working was not observed, so it may work until it expires
 # Whether a derived credential is bound to the party that presents it. Shown only for the
 # credentials minted from something else. A bearer secret is usable by whatever holds a copy, and the
 # two bearer sentences keep apart an issuer that offers no bound form from one nobody has asked.
@@ -571,6 +582,12 @@ doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the sign-in may do is fixed before it is issued, since nothing here asks OpenAI to narrow it to this run
 doctor-dropped-chatgpt-account-renewable-without-authority =
     gate { $gate }, { $answer }: the agent renews it without further authority, since the refresh token replaces the access token without asking anybody
+doctor-dropped-xai-account-nothing-decides-each-use =
+    gate { $gate }, { $answer }: nothing the agent cannot impersonate decides each use, since this program holds the access token itself and nothing is asked to authorise a use of it
+doctor-dropped-xai-account-no-bound-fixed-before-issue =
+    gate { $gate }, { $answer }: no bound on what the sign-in may do is fixed before it is issued, since nothing here asks xAI to narrow it to this run
+doctor-dropped-xai-account-renewable-without-authority =
+    gate { $gate }, { $answer }: the agent renews it without further authority, since the refresh token xAI issued replaces the access token without asking anybody
 # The ChatGPT sign-in, shown only where one is stored. A sign-in that cannot be read is shown on the
 # same line with the sentence that names its remedy. The instant is the one the access token expires,
 # written as 2026-10-22T21:05:27Z, and is the only part of the file shown: the file also holds the
@@ -578,6 +595,11 @@ doctor-dropped-chatgpt-account-renewable-without-authority =
 # since the token is replaced when it is next used.
 doctor-chatgpt = chatgpt
 doctor-chatgpt-signed-in = signed in, the access token expires { $expires }
+# The xAI sign-in, shown on the same terms as the ChatGPT one: only where one is stored, an unreadable
+# one with its remedy, and only the instant of the file. The host is the token endpoint's, which the
+# refresh token is sent to and no other.
+doctor-xai = xai
+doctor-xai-signed-in = signed in, the access token expires { $expires } and is sent to api.x.ai alone, and the refresh token is sent to auth.x.ai alone
 # Both are reported when both are reachable, so this names one of the two rather than the backend.
 doctor-backend = offers
 doctor-backend-bedrock = AWS Bedrock
@@ -1096,6 +1118,7 @@ auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or ll
 # The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
 auth-way-gateway = A key for { $services } or a gateway a provider block in settings names, typed here and kept by bravebot
 auth-way-chatgpt = A ChatGPT Plus or Pro account, signed in to in a browser
+auth-way-xai = An xAI SuperGrok subscription, signed in to with a code entered on any device
 # The status of the gateway way where keys are stored. The ids are provider ids.
 auth-gateway-held = a key stored for { $ids }
 auth-gateway-held-unreadable = the file of gateway keys cannot be read
@@ -1229,7 +1252,7 @@ auth-status-not-signed-in = not signed in: { $detail }
 auth-status-unusable = unusable: { $detail }
 auth-status-none-usable = no sign-in is usable
 auth-status-not-all-usable = a sign-in asked about is not usable
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway or chatgpt
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name leo, bedrock, gateway, chatgpt or xai
 auth-status-leo-none = no Leo subscription is imported; run bravebot auth login leo
 auth-status-leo-nowhere = this machine has nowhere to keep credentials, so none is imported
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
@@ -1243,6 +1266,11 @@ auth-status-gateway-unrecorded =
 auth-status-chatgpt-expires = the access token expires { $expires }
 auth-status-chatgpt-none = no ChatGPT sign-in is stored; run bravebot auth login chatgpt
 auth-status-chatgpt-nowhere = this machine has nowhere to keep a sign-in, so none is stored
+# The instant is the one the access token expires, as for ChatGPT. The token is replaced when it is
+# next used, so a past instant is still signed in.
+auth-status-xai-expires = the access token expires { $expires } and is sent to api.x.ai alone, and the refresh token is sent to auth.x.ai alone
+auth-status-xai-none = no xAI sign-in is stored; run bravebot auth login xai
+auth-status-xai-nowhere = this machine has nowhere to keep a sign-in, so none is stored
 auth-status-bedrock-good = the AWS session gives credentials to sign a request with
 # The next four are fixed sentences because a line of `auth status` carries no text the AWS CLI
 # chose: its error text names accounts and roles, and its profile list can embed an account id.
@@ -1269,17 +1297,21 @@ chatgpt-open-this = Open this address in a browser to sign in to ChatGPT:
 chatgpt-waiting = Waiting for the browser on 127.0.0.1, port { $port }. A browser on another machine reaches it only through a forwarded port.
 chatgpt-stored = signed in to ChatGPT; the access token expires { $expires }. The sign-in is stored in { $path }
 # What the sign-in command ends with where the account lists models and a start would ask which one to
-# use (chatgpt-start-question): running bravebot is the way to choose. The commands name a model together
+# use (account-start-question): running bravebot is the way to choose. The commands name a model together
 # with the prompt or the task that starts something.
 chatgpt-use-by-asking = Run bravebot to be asked which of the account's models to use, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them.
-# The same where a start would not ask, because a service of the person's own is configured or a model
-# is already in force: nothing is said of being asked.
+# The same where a start would not ask about the account, because a service of the person's own is
+# configured, whose models a start asks about instead, or a model is already in force: nothing is said of
+# being asked.
 chatgpt-use-by-naming = Name one of the account's models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them.
 # What a refusal says. A refusal is also what a one-shot run, a start that names a model and `doctor` end
 # in, and none of those asks, so the last sentence says which start does: one on its own. Both commands
 # name a model together with the prompt or the task that starts something, since
 # `bravebot --model chatgpt/<model>` alone starts nothing. /model is reached once a session is open.
 chatgpt-use-by-name = Name one of the account's models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`. Once a session is open, /model lists them. Started on its own, in a terminal outside an incognito session, bravebot asks which one to use when the account lists its models.
+# The same for an xAI sign-in, and for both signed in, where each command names a model of one account.
+xai-use-by-name = Name one of the account's models, as in `bravebot -i "<prompt>" --model xai/<model>` or `bravebot "<task>" --model xai/<model>`. Once a session is open, /model lists them. Started on its own, in a terminal outside an incognito session, bravebot asks which one to use when the account lists its models.
+accounts-use-by-name = Name one of the accounts' models, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model xai/<model>`. Once a session is open, /model lists them. Started on its own, in a terminal outside an incognito session, bravebot asks which one to use when an account lists its models.
 # What the command says after the sign-in is stored when the account's listing answered with no model,
 # could not be had, or was refused in a code that names the account. The sign-in is stored in each. Of the
 # two for a listing that could not be had, the second is for an account whose picker offers the built-in
@@ -1335,6 +1367,76 @@ chatgpt-defect-no-expiry = it has no expiry
 # port. They are shown in the browser, not in the terminal.
 chatgpt-page-done = You can close this tab and return to bravebot, which says whether the sign-in worked.
 chatgpt-page-not-found = Not found.
+
+## Signing in to xAI with a SuperGrok subscription
+
+xai-not-while-incognito = signing in stores a token on disk, which an incognito session will not do
+xai-needs-a-terminal =
+    signing in to xAI shows an address and a code and waits for them to be used, so bravebot auth login xai needs a terminal on standard error
+# The status of the xAI way in the list of ways, where a sign-in is stored and cannot be read.
+xai-name-is-a-gateway =
+    a provider block named xai is a gateway, and one name cannot select two services: rename the block, then run bravebot auth login xai again
+xai-held-unusable = a stored sign-in cannot be read
+# Said in four lines as the code arrives: this, the address, the code and the wait. The address and the
+# code are the ones xAI's reply gave, shown only where they are printable and the address is https.
+xai-open-this = Open this address on any device to sign in to xAI:
+xai-enter-code = The code to enter, if the page asks for one: { $code }
+xai-waiting =
+    { $minutes ->
+        [one] Waiting for the code to be used. It stops working in about 1 minute.
+       *[other] Waiting for the code to be used. It stops working in about { $minutes } minutes.
+    }
+xai-stored = signed in to xAI; the access token expires { $expires }. The sign-in is stored in { $path }
+xai-forgotten =
+    forgot the stored xAI sign-in. This removes the copy kept here and ends nothing at xAI
+xai-nothing-to-forget = no xAI sign-in is stored
+# What stops a sign-in. None holds text taken from xAI's reply, and none says more of a failed request
+# than the class of its status.
+xai-failed-access-denied =
+    xAI denied access, so nothing was stored; run bravebot auth login xai to try again
+xai-failed-authorization-denied =
+    xAI denied the authorization, so nothing was stored; run bravebot auth login xai to try again
+xai-failed-expired =
+    the code stopped working before it was used, so nothing was stored; run bravebot auth login xai to try again
+xai-failed-timed-out =
+    the code was not used within the time bravebot waits for one, so the sign-in stopped and nothing was stored; run bravebot auth login xai to try again
+xai-failed-code = xAI did not give a code to sign in with: { $reason }; nothing was stored
+xai-failed-exchange = the sign-in could not be completed: { $reason }; nothing was stored
+xai-failed-clock =
+    the clock of this computer is set before 1970, so the sign-in cannot tell when the code stops working and nothing was stored; set the clock, then run bravebot auth login xai to try again
+xai-class-refused = xAI refused the request
+xai-class-rate-limited = xAI is limiting requests; try again later
+xai-class-unavailable = xAI is unavailable; try again later
+xai-class-incomplete = xAI's reply could not be read
+xai-class-transport = xAI could not be reached
+# The detail is a path and what the operating system said.
+xai-account-nowhere = there is nowhere to keep an xAI sign-in: { $detail }
+xai-account-unusable =
+    the stored xAI sign-in could not be read: { $detail }; run bravebot auth login xai to sign in again, or bravebot auth logout xai to forget it
+xai-account-malformed =
+    the stored xAI sign-in is unusable: { $defect }; run bravebot auth login xai to sign in again, or bravebot auth logout xai to forget it
+xai-account-unwritable = the xAI sign-in could not be stored: { $detail }; nothing was changed
+xai-defect-empty = the file holds nothing, which an interrupted write leaves behind
+xai-defect-not-json = the file is not valid JSON
+xai-defect-other-version = it was written by another version, and this build reads version 1
+xai-defect-missing-field = a field is missing or empty
+xai-defect-no-expiry = it has no expiry
+# Why no access token could be had, in the words a turn will say it in. Signing in again is named
+# where it is the remedy, and not for a renewal that may pass.
+xai-not-signed-in = not signed in to xAI. Run `bravebot auth login xai` to sign in
+xai-ended = the xAI sign-in has ended. Run `bravebot auth login xai` to sign in again
+xai-renewal-failed = the xAI sign-in could not be renewed: { $reason }
+# Said once, in the turn that renewed the sign-in, where the file could not take the renewal. xAI replaced
+# the refresh token at a refresh once with one account, so the file may still hold one xAI no longer accepts.
+xai-renewal-unwritten = the xAI sign-in was renewed and could not be saved, so it lasts only until bravebot exits; check that the folder it is kept in has room and can be written to, and if the next start says the sign-in ended, run bravebot auth login xai
+xai-unusable = the stored xAI sign-in could not be read. Run `bravebot auth status xai` to see why
+# Said when a turn's request was refused for its access token and refused again for the new one.
+xai-token-refused = xAI refused the xAI sign-in's access token, and a new one as well. Run `bravebot auth login xai` to sign in again
+# Said where the serving host refused a request with a 403 after the access token was replaced. A first 403 is
+# how it refused a token it could not validate, so a new token is asked for first. No refusal for a plan was
+# observed. It names no command, since signing in again does not change a refusal that a new token did not,
+# says what to check, and quotes nothing the host wrote.
+xai-not-permitted = xAI refused the request for this account, and signing in again will not change that. Check the plan at xAI, or choose another model
 
 
 ## Declaring an MCP server, and approving one
@@ -3487,6 +3589,9 @@ session-models-unavailable = could not list models: { $problem }
 session-chatgpt-models-unreadable = could not list the ChatGPT account's models; try again or sign in again with bravebot auth login chatgpt, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
 session-chatgpt-models-compiled = could not list the ChatGPT account's models, so /model shows a built-in list that may name a model the account cannot reach; try again or sign in again with bravebot auth login chatgpt, or name one, as in `bravebot -i "<prompt>" --model chatgpt/<model>` or `bravebot "<task>" --model chatgpt/<model>`
 session-chatgpt-models-refused = could not list the ChatGPT account's models: { $refusal }
+# Said when the picker opens and a stored xAI sign-in's listing could not be had, so none of the account's
+# models are offered. A sign-in that was never made is not said here.
+session-xai-models-unreadable = could not list the xAI account's models; try again or sign in again with bravebot auth login xai, or name one, as in `bravebot -i "<prompt>" --model xai/<model>` or `bravebot "<task>" --model xai/<model>`
 # Said when the picker opens and a gateway whose settings name no models could not be asked for its list,
 # so none of its models are offered. A gateway whose key is missing is not asked and is not said here.
 session-gateway-models-unreadable = could not read the list of models from { $gateway }, so none of its models are offered; try again, or name one, as in `bravebot -i "<prompt>" --model { $id }/<model>` or `bravebot "<task>" --model { $id }/<model>`
@@ -3723,6 +3828,31 @@ desktop-chatgpt-models-unreadable = Could not load models from ChatGPT, so try a
 desktop-chatgpt-models-compiled = Could not load models from ChatGPT, so the list shown is built in and may name a model the account cannot reach; try again, or run { $command } in a terminal to sign in again.
 desktop-chatgpt-models-usage-limit = Could not load models from ChatGPT because the account has reached its usage limit, so try again later.
 desktop-chatgpt-models-not-permitted = Could not load models from ChatGPT because OpenAI does not allow this account to be used this way, so use another account or another service's model.
+# The model picker's warning for the xAI account's models, said where a sign-in is stored and its listing
+# could not be had. The window draws { $command } as code.
+desktop-xai-models-unreadable = Could not load models from xAI, so try again, or run { $command } in a terminal to sign in again.
+
+## What the desktop window says of the xAI account
+
+# One sentence each, in sentence case, saying what happened and what to do, for the window's error card and
+# its run card. They are chosen from the step that failed and repeat nothing xAI, the sign-in file or a
+# settings file said. The window draws { $command } as code, so it is passed in and sent beside the sentence
+# and is not written into the words with backticks. The window reads the reference catalog whatever
+# language the machine is set to, so the French of these messages is read by no program and is kept so that
+# both catalogs hold the same messages.
+desktop-xai-not-signed-in = You are not signed in to xAI, so run { $command } in a terminal to sign in.
+desktop-xai-ended = The xAI sign-in has ended, so run { $command } in a terminal to sign in again.
+desktop-xai-token-refused = The xAI sign-in's access token was refused, and so was a new one, so run { $command } in a terminal to sign in again.
+desktop-xai-not-permitted = The request was refused by xAI for this account, and signing in again will not change that, so check the plan at xAI or choose another model.
+desktop-xai-unusable = The stored xAI sign-in could not be read, so run { $command } in a terminal to see why.
+desktop-xai-renewal-refused = The xAI sign-in could not be renewed because xAI refused the request, so try again later.
+desktop-xai-renewal-rate-limited = The xAI sign-in could not be renewed because xAI is limiting requests, so try again later.
+desktop-xai-renewal-unavailable = The xAI sign-in could not be renewed because xAI is unavailable, so try again later.
+desktop-xai-renewal-incomplete = The xAI sign-in could not be renewed because the reply from xAI could not be read, so try again.
+desktop-xai-renewal-transport = The xAI sign-in could not be renewed because xAI could not be reached, so check the connection and try again.
+desktop-xai-fell-back-rate-limited = This turn moves from { $from } to { $to } because the xAI sign-in could not be renewed while xAI is limiting requests.
+desktop-xai-fell-back-unavailable = This turn moves from { $from } to { $to } because the xAI sign-in could not be renewed while xAI is unavailable.
+desktop-xai-fell-back = This turn moves from { $from } to { $to } because the xAI account could not be used.
 
 
 ## Repeating a prompt
@@ -4697,21 +4827,35 @@ deep-link-started-in-home = The link named { $dir }, which is not a directory yo
 deep-link-banner = Prompt from an external link, not sent yet  ·  read it, then Enter sends it
 deep-link-banner-long = Prompt from an external link, { $count } characters, not sent  ·  scroll and review it all first
 
-## Choosing one of a ChatGPT account's models at a start that nothing serves
+## Choosing one of the signed-in accounts' models at a start that nothing serves
 
 # Said above the numbered rows at a start where a ChatGPT sign-in is stored, the model in force is one of
 # Brave's and the account lists models.
 chatgpt-start-heading = A ChatGPT sign-in is stored, and the account offers these models:
+# The same where an xAI sign-in is stored, and where both are and both list models.
+xai-start-heading = An xAI sign-in is stored, and the account offers these models:
+accounts-start-heading = A ChatGPT sign-in and an xAI sign-in are stored, and the accounts offer these models:
 # One row: the name the service shows and the name to give --model. Both are the service's text.
-chatgpt-start-row = { $name } ({ $key })
-chatgpt-start-question = Which one will bravebot use? Type its number, or nothing to stop:
+account-start-row = { $name } ({ $key })
+account-start-question = Which one will bravebot use? Type its number, or nothing to stop:
 # Said after the pick is recorded. The name is the service's text.
-chatgpt-start-chosen = Using { $name }. It is remembered for the next start, and /model changes it.
+account-start-chosen = Using { $name }. It is remembered for the next start, and /model changes it.
 # Said instead where what the start reads back is not the pick: the name is one that is not kept or the write
 # failed. The start is then refused as it is where nothing is picked.
-chatgpt-start-not-remembered = Could not remember { $name }, so no model is chosen.
+account-start-not-remembered = Could not remember { $name }, so no model is chosen.
 # The same question where a Bedrock account or a gateway is configured and the model in force is Brave's own.
 configured-start-heading = A model service is configured, and offers these models:
+# What an xAI account that gave no row says at a start, under the first line of the refusal or above the
+# rows another account gave. An ended sign-in says xai-ended.
+xai-start-listing-unreadable = The xAI account's models could not be listed, so none is offered to choose from. Name one, as in `bravebot -i "<prompt>" --model xai/<model>` or `bravebot "<task>" --model xai/<model>`
+xai-start-reaches-no-model = This xAI account lists no model that bravebot offers, so /model offers none. The sign-in stays stored.
+# What the xAI sign-in command ends with, after the sign-in is stored. The first is for a start that would
+# ask which of the account's models to use, and runs bravebot to be asked; the second is for a start that
+# would not ask about the account, because a service of the person's own is configured, whose models a
+# start asks about instead, or a model is already in force. Both name a model together with the prompt or
+# the task that starts something.
+xai-use-by-asking = Run bravebot to be asked which of the account's models to use, or name one, as in `bravebot -i "<prompt>" --model xai/<model>` or `bravebot "<task>" --model xai/<model>`. Once a session is open, /model lists them.
+xai-use-by-naming = Name one of the account's models, as in `bravebot -i "<prompt>" --model xai/<model>` or `bravebot "<task>" --model xai/<model>`. Once a session is open, /model lists them.
 
 ## A model the ChatGPT account does not offer
 

@@ -13,7 +13,6 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[path = "../../../skus/test-support/stored_sign_in.rs"]
@@ -136,45 +135,7 @@ pub fn in_a_terminal(arguments: &[&str]) -> Command {
     command
 }
 
-/// What a terminal has shown, read as it arrives on a thread of its own.
-pub struct Shown {
-    bytes: Arc<Mutex<Vec<u8>>>,
-    reading: std::thread::JoinHandle<()>,
-}
-
-impl Shown {
-    pub fn read(mut source: impl Read + Send + 'static) -> Self {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let reading = std::thread::spawn({
-            let bytes = Arc::clone(&bytes);
-            move || {
-                let mut buffer = [0u8; 4096];
-                while let Ok(read) = source.read(&mut buffer) {
-                    if read == 0 {
-                        break;
-                    }
-                    bytes
-                        .lock()
-                        .expect("what was shown")
-                        .extend_from_slice(&buffer[..read]);
-                }
-            }
-        });
-        Self { bytes, reading }
-    }
-
-    /// What has been shown so far.
-    pub fn text(&self) -> String {
-        String::from_utf8_lossy(&self.bytes.lock().expect("what was shown")).into_owned()
-    }
-
-    /// Everything shown, once the terminal has closed.
-    pub fn finished(self) -> String {
-        let Self { bytes, reading } = self;
-        reading.join().expect("the terminal was read");
-        String::from_utf8_lossy(&bytes.lock().expect("what was shown")).into_owned()
-    }
-}
+pub use crate::terminal::Shown;
 
 /// `bravebot auth login chatgpt` in a terminal, with a browser that returns to the listener with
 /// [`CODE`] and [`CLIENT`]. Returns everything the terminal showed, the authorization URL and whether

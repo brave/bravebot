@@ -3,14 +3,15 @@ import type { CutOff } from '../shared/protocol'
 /**
  * Stable agent categories, independent of backend wording or translated diagnostics.
  *
- * `accountMessage` is the bridge's sentence for a failure of a ChatGPT account, where it was one: one
+ * `accountMessage` is the bridge's sentence for a failure of a ChatGPT or an xAI account, where it was one: one
  * sentence in sentence case that says what happened and what to do. It is the description over the
  * category it arrives beside, under one title, so which failure it was is said once, in the bridge's
  * catalog, and this window keeps no table of the words (SHARE-001). The command it names arrives as
- * `accountCommand` and the card draws it as code.
+ * `accountCommand` and the card draws it as code. The title is one for both accounts, since a title that
+ * named the service would be a table of service names here, and the sentence under it names the service.
  */
 export function failureSummary(category: string, cutOff?: CutOff | null, accountMessage?: string | null): { title: string; description: string } {
-  if (accountMessage) return { title: 'The ChatGPT account could not be used', description: accountMessage }
+  if (accountMessage) return { title: 'The account could not be used', description: accountMessage }
   const rows: Record<string, [string, string]> = {
     cancelled: ['Task stopped', 'Completed changes remain in the project. You can continue from here.'],
     unauthorized: ['Authentication failed', 'Check the model service credentials in Agent settings before continuing.'],

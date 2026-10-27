@@ -8,7 +8,7 @@
 use super::*;
 use bravebot_agent::backend::BackendError;
 use bravebot_aichat::responses::protocol::Refusal;
-use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure};
+use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure, XaiFailure};
 use std::time::Duration;
 
 fn configured() -> Config {
@@ -135,6 +135,75 @@ fn a_failure_of_the_account_is_sent_as_its_own_name_beside_its_category() {
     });
     assert_eq!(counted["account"], "ended", "{counted}");
     assert_eq!(counted["attempts"], 2, "{counted}");
+}
+
+/// XAI-15: a failure of the xAI account reaches the window as its own fixed name beside its category,
+/// with the window's sentence and the command it names, so the window says it in xAI's words and sends
+/// a person to xAI's command. The name of one service's failure is never the other's, so a window
+/// that drew ChatGPT's sentence for an xAI failure would name `bravebot auth login chatgpt`.
+#[test]
+fn a_failure_of_the_xai_account_is_sent_as_its_own_name_with_xais_sentence_and_command() {
+    for (failure, name, category, command) in [
+        (
+            XaiFailure::NotSignedIn,
+            "xai-not-signed-in",
+            "unauthorized",
+            Some("bravebot auth login xai"),
+        ),
+        (
+            XaiFailure::Ended,
+            "xai-ended",
+            "unauthorized",
+            Some("bravebot auth login xai"),
+        ),
+        (
+            XaiFailure::Rejected,
+            "xai-token-refused",
+            "unauthorized",
+            Some("bravebot auth login xai"),
+        ),
+        (
+            XaiFailure::NotPermitted,
+            "xai-not-permitted",
+            "refused",
+            None,
+        ),
+        (
+            XaiFailure::Unusable,
+            "xai-unusable",
+            "unauthorized",
+            Some("bravebot auth status xai"),
+        ),
+        (
+            XaiFailure::Renewal(RenewalFailure::RateLimited),
+            "xai-renewal-rate-limited",
+            "rate-limited",
+            None,
+        ),
+        (
+            XaiFailure::Renewal(RenewalFailure::Transport),
+            "xai-renewal-transport",
+            "transport",
+            None,
+        ),
+    ] {
+        let sent = failed_with(ChatError::Account(AccountFailure::Xai(failure)));
+
+        assert_eq!(sent["account"], name, "{failure:?}: {sent}");
+        assert_eq!(sent["category"], category, "{failure:?}: {sent}");
+        assert_eq!(
+            sent["accountCommand"],
+            json!(command),
+            "{failure:?}: {sent}"
+        );
+        let message = sent["accountMessage"].as_str().unwrap_or_default();
+        assert!(message.contains("xAI"), "{failure:?}: {sent}");
+        assert!(
+            !message.contains("ChatGPT") && !message.contains("chatgpt") && !message.contains('`'),
+            "{failure:?}: {sent}"
+        );
+        assert_eq!(sent["status"], json!(null), "{failure:?}: {sent}");
+    }
 }
 
 /// CHATGPT-8: the account is named only where the account failed. Any other failure of a chat

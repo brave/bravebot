@@ -51,7 +51,7 @@ cli-usage-bug-report = Écrire la version, le rapport de doctor et le nom du jou
 cli-usage-import = Importer un abonnement Leo Premium
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
-cli-usage-auth-logout = Oublier un abonnement Leo Premium importé ou une clé de passerelle enregistrée
+cli-usage-auth-logout = Oublier un abonnement Leo Premium importé, une clé de passerelle enregistrée, ou une connexion ChatGPT ou xAI
 cli-usage-auth-status = Dire si une connexion est utilisable, avec le code de sortie 0 seulement si elle l'est
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
@@ -394,6 +394,8 @@ onboarding-import-many =
 onboarding-name-a-configured-model =
     Un service est configuré, mais le modèle en vigueur est l'un de ceux de Brave : indiquez l'un des vôtres avec la clé `model` dans ~/.bravebot/settings.json, ou avec --model pour une exécution unique. `bravebot doctor` indique ce que propose chaque service configuré.
 onboarding-chatgpt-signed-in = Une connexion ChatGPT est enregistrée, mais le modèle en vigueur est l'un de ceux de Brave.
+onboarding-xai-signed-in = Une connexion xAI est enregistrée, mais le modèle en vigueur est l'un de ceux de Brave.
+onboarding-accounts-signed-in = Une connexion ChatGPT et une connexion xAI sont enregistrées, mais le modèle en vigueur est l'un de ceux de Brave.
 onboarding-pick-one = Configurez l'une de ces options, puis relancez bravebot :
 onboarding-bedrock =
     AWS Bedrock, via votre propre compte : ajoutez un bloc `provider` nommé `amazon-bedrock` dans ~/.bravebot/settings.json, avec sa région et les modèles à proposer.
@@ -401,8 +403,10 @@ onboarding-openrouter =
     OpenRouter, ou toute autre passerelle compatible OpenAI : ajoutez un bloc `provider` à son nom dans ~/.bravebot/settings.json, avec la variable qui contient sa clé d'API et les modèles à proposer.
 onboarding-chatgpt =
     Un compte ChatGPT Plus ou Pro, si vous en avez un : lancez `bravebot auth login chatgpt` dans un terminal et connectez-vous dans le navigateur qu'il ouvre. Ses modèles sont ensuite proposés dans /model sous la forme chatgpt/<modèle>.
+onboarding-xai =
+    Un abonnement xAI SuperGrok, si vous en avez un : lancez `bravebot auth login xai` dans un terminal et ouvrez l'adresse qu'il affiche sur n'importe quel appareil. Ses modèles sont ensuite proposés dans /model sous la forme xai/<modèle>.
 onboarding-leo =
-    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des trois options ci-dessus.
+    Brave Leo Premium, si vous y êtes déjà abonné : lancez `bravebot auth login leo` sur une machine où Brave est connecté à cet abonnement. Les modèles passent alors par la passerelle IA de Brave, dont certains problèmes restent à résoudre, donc préférez pour l'instant l'une des quatre options ci-dessus.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -449,6 +453,8 @@ doctor-ends-subscription-batch =
     le lot d'identifiants d'un abonnement importé : émis par le service d'abonnement de Brave pour la commande sur laquelle cette installation s'est enregistrée comme appareil ; chaque identifiant est dépensé par une requête premium et le lot cesse de fonctionner à la fermeture de sa dernière fenêtre, et rien ne révoque un identifiant non dépensé, donc `bravebot auth logout leo` met fin à la garde de cette machine et laisse le lot dépensable par tout ce qui a copié le fichier
 doctor-ends-chatgpt-account =
     une connexion ChatGPT : émise par OpenAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne, de sorte que l'expiration du jeton d'accès met fin à cette copie et non à l'accès de ce programme ; on y met fin chez OpenAI en se déconnectant du compte ou en retirant l'accès de ce programme dans ses réglages, car `bravebot auth logout chatgpt` met fin à la garde de cette machine et laisse les jetons actifs là-bas
+doctor-ends-xai-account =
+    une connexion xAI : émise par xAI pour le compte qui s'est connecté, et le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne. Le jeton d'accès a été émis pour 21600 secondes, observé une fois, et ce que xAI répond à un jeton au-delà n'a pas été observé, donc son expiration est tenue pour mettre fin à cette copie et non à l'accès de ce programme. Le jeton d'actualisation prend fin quand xAI le révoque, ce que son point de révocation a fait une fois le 2026-10-26, un appel que ce programme ne fait pas, car `bravebot auth logout xai` met fin à la garde de cette machine et ne met fin à rien là-bas
 doctor-tier = niveau
 doctor-tier-delegated =
     délégué : rien n'est détenu ici, et quelque chose que ce programme ne peut usurper décide de chaque usage et peut le refuser
@@ -466,6 +472,8 @@ doctor-outlives-aws-access-key =
     une identification de session déjà émise par STS sous cette clé d'accès, qui court jusqu'à sa propre expiration : la suppression de la clé ne l'atteint pas
 doctor-outlives-chatgpt-account =
     un jeton d'accès qu'OpenAI a déjà émis à partir du jeton d'actualisation : il a été refusé en quelques secondes après la révocation du jeton d'actualisation au point de révocation d'OpenAI (un compte, une révocation, un appel que ce programme ne fait pas), et on n'a pas observé si la déconnexion du compte ou le retrait de l'accès de ce programme dans ses paramètres y met fin
+doctor-outlives-xai-account =
+    un jeton d'accès que xAI a déjà émis à partir du jeton d'actualisation : une requête faite juste après la révocation du jeton d'actualisation au point de révocation de xAI, un appel que ce programme ne fait pas, a été acceptée avec un jeton d'accès émis avant (un compte, une fois, le 2026-10-26), et on n'a pas observé combien de temps un tel jeton continue de fonctionner, donc il peut fonctionner jusqu'à son expiration
 doctor-binding = liaison
 doctor-binding-sender-constrained =
     liée à l'émetteur de la requête : l'émetteur vérifie qui la présente, donc une copie prise sur cette machine ne sert à rien ailleurs
@@ -508,6 +516,12 @@ doctor-dropped-chatgpt-account-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que la connexion peut faire n'est fixée avant son émission, car rien ici ne demande à OpenAI de la restreindre à cette exécution
 doctor-dropped-chatgpt-account-renewable-without-authority =
     porte { $gate }, { $answer } : l'agent la renouvelle sans autre autorisation, car le jeton d'actualisation remplace le jeton d'accès sans rien demander à personne
+doctor-dropped-xai-account-nothing-decides-each-use =
+    porte { $gate }, { $answer } : rien que l'agent ne puisse usurper ne décide de chaque usage, car ce programme détient lui-même le jeton d'accès et rien n'est sollicité pour autoriser un usage
+doctor-dropped-xai-account-no-bound-fixed-before-issue =
+    porte { $gate }, { $answer } : aucune limite sur ce que la connexion peut faire n'est fixée avant son émission, car rien ici ne demande à xAI de la restreindre à cette exécution
+doctor-dropped-xai-account-renewable-without-authority =
+    porte { $gate }, { $answer } : l'agent la renouvelle sans autre autorisation, car le jeton d'actualisation émis par xAI remplace le jeton d'accès sans rien demander à personne
 # La connexion ChatGPT, montrée seulement là où il y en a une d'enregistrée. Une connexion illisible
 # est montrée sur la même ligne, avec la phrase qui nomme son remède. L'instant est celui où le jeton
 # d'accès expire, écrit sous la forme 2026-10-22T21:05:27Z, et c'est la seule partie du fichier
@@ -516,6 +530,8 @@ doctor-dropped-chatgpt-account-renewable-without-authority =
 # à sa prochaine utilisation.
 doctor-chatgpt = chatgpt
 doctor-chatgpt-signed-in = connecté, le jeton d'accès expire le { $expires }
+doctor-xai = xai
+doctor-xai-signed-in = connecté, le jeton d'accès expire le { $expires } et n'est envoyé qu'à api.x.ai, et le jeton d'actualisation n'est envoyé qu'à auth.x.ai
 doctor-backend = service
 doctor-backend-bedrock = AWS Bedrock
 doctor-backend-aichat = Brave Leo
@@ -930,6 +946,7 @@ auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
 auth-way-gateway = Une clé pour { $services } ou pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
 auth-way-chatgpt = Un compte ChatGPT Plus ou Pro, auquel se connecter dans un navigateur
+auth-way-xai = Un abonnement SuperGrok de xAI, auquel se connecter avec un code saisi sur n'importe quel appareil
 auth-gateway-held = une clé enregistrée pour { $ids }
 auth-gateway-held-unreadable = le fichier des clés de passerelle ne peut pas être lu
 auth-way-held = { $description } ({ $status })
@@ -1027,7 +1044,7 @@ auth-status-not-signed-in = non connecté : { $detail }
 auth-status-unusable = inutilisable : { $detail }
 auth-status-none-usable = aucune connexion n'est utilisable
 auth-status-not-all-usable = une connexion demandée n'est pas utilisable
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway ou chatgpt
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez leo, bedrock, gateway, chatgpt ou xai
 auth-status-leo-none = aucun abonnement Leo n'est importé ; lancez bravebot auth login leo
 auth-status-leo-nowhere = cette machine n'a nulle part où garder des identifiants, donc aucun n'est importé
 auth-status-gateway-none = aucune clé de passerelle n'est enregistrée ; lancez bravebot auth login gateway
@@ -1039,6 +1056,11 @@ auth-status-gateway-unrecorded =
 auth-status-chatgpt-expires = le jeton d'accès expire le { $expires }
 auth-status-chatgpt-none = aucune connexion ChatGPT n'est enregistrée ; lancez bravebot auth login chatgpt
 auth-status-chatgpt-nowhere = cette machine n'a nulle part où garder une connexion, donc aucune n'est enregistrée
+# L'instant est celui où le jeton d'accès expire, comme pour ChatGPT. Le jeton est remplacé à sa prochaine
+# utilisation, donc un instant passé reste connecté.
+auth-status-xai-expires = le jeton d'accès expire le { $expires } et n'est envoyé qu'à api.x.ai, et le jeton d'actualisation n'est envoyé qu'à auth.x.ai
+auth-status-xai-none = aucune connexion xAI n'est enregistrée ; lancez bravebot auth login xai
+auth-status-xai-nowhere = cette machine n'a nulle part où garder une connexion, donc aucune n'est enregistrée
 auth-status-bedrock-good = la session AWS fournit des identifiants pour signer une requête
 
 
@@ -1067,6 +1089,8 @@ chatgpt-open-this = Ouvrez cette adresse dans un navigateur pour vous connecter 
 chatgpt-waiting = En attente du navigateur sur 127.0.0.1, port { $port }. Un navigateur sur une autre machine ne l'atteint que par un port redirigé.
 chatgpt-stored = connecté à ChatGPT ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
 chatgpt-use-by-name = Nommez l'un des modèles du compte, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`. Une fois une session ouverte, /model les liste. Lancé seul, dans un terminal hors d'une session incognito, bravebot demande lequel utiliser quand le compte liste ses modèles.
+xai-use-by-name = Nommez l'un des modèles du compte, comme dans `bravebot -i "<invite>" --model xai/<modèle>` ou `bravebot "<tâche>" --model xai/<modèle>`. Une fois une session ouverte, /model les liste. Lancé seul, dans un terminal hors d'une session incognito, bravebot demande lequel utiliser quand le compte liste ses modèles.
+accounts-use-by-name = Nommez l'un des modèles des comptes, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model xai/<modèle>`. Une fois une session ouverte, /model les liste. Lancé seul, dans un terminal hors d'une session incognito, bravebot demande lequel utiliser quand un compte liste ses modèles.
 # Ce que la commande dit une fois la connexion enregistrée quand la liste du compte ne contient aucun
 # modèle, n'a pas pu être obtenue, ou a été refusée par un code qui désigne le compte. La connexion est
 # enregistrée dans chaque cas. Des deux messages pour une liste qui n'a pas pu être obtenue, le second
@@ -1123,6 +1147,93 @@ chatgpt-defect-no-expiry = il n'a pas d'expiration
 # requête sur le port. Elles sont affichées dans le navigateur, pas dans le terminal.
 chatgpt-page-done = Vous pouvez fermer cet onglet et revenir à bravebot, qui dit si la connexion a réussi.
 chatgpt-page-not-found = Introuvable.
+
+## Se connecter à xAI avec un abonnement SuperGrok
+
+xai-not-while-incognito = se connecter enregistre un jeton sur le disque, ce qu'une session incognito ne fera pas
+xai-needs-a-terminal =
+    se connecter à xAI affiche une adresse et un code et attend qu'ils soient utilisés, donc bravebot auth login xai a besoin d'un terminal sur la sortie d'erreur standard
+xai-name-is-a-gateway =
+    un bloc provider nommé xai est une passerelle, et un même nom ne peut pas choisir deux services : renommez le bloc, puis relancez bravebot auth login xai
+xai-held-unusable = une connexion enregistrée ne peut pas être lue
+xai-open-this = Ouvrez cette adresse sur n'importe quel appareil pour vous connecter à xAI :
+xai-enter-code = Le code à saisir, si la page en demande un : { $code }
+xai-waiting =
+    { $minutes ->
+        [one] En attente de l'utilisation du code. Il cesse de fonctionner dans environ 1 minute.
+       *[other] En attente de l'utilisation du code. Il cesse de fonctionner dans environ { $minutes } minutes.
+    }
+xai-stored = connecté à xAI ; le jeton d'accès expire le { $expires }. La connexion est enregistrée dans { $path }
+xai-forgotten =
+    la connexion xAI enregistrée est oubliée. Cela retire la copie conservée ici et ne met fin à rien chez xAI
+xai-nothing-to-forget = aucune connexion xAI n'est enregistrée
+xai-failed-access-denied =
+    xAI a refusé l'accès, donc rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
+xai-failed-authorization-denied =
+    xAI a refusé l'autorisation, donc rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
+xai-failed-expired =
+    le code a cessé de fonctionner avant d'être utilisé, donc rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
+xai-failed-timed-out =
+    le code n'a pas été utilisé pendant le temps où bravebot en attend un, donc la connexion s'est arrêtée et rien n'a été enregistré ; lancez bravebot auth login xai pour réessayer
+xai-failed-code = xAI n'a pas donné de code pour se connecter : { $reason } ; rien n'a été enregistré
+xai-failed-exchange = la connexion n'a pas pu être terminée : { $reason } ; rien n'a été enregistré
+xai-failed-clock =
+    l'horloge de cet ordinateur est réglée avant 1970, donc la connexion ne peut pas dire quand le code cesse de fonctionner et rien n'a été enregistré ; réglez l'horloge, puis lancez bravebot auth login xai pour réessayer
+xai-class-refused = xAI a refusé la requête
+xai-class-rate-limited = xAI limite les requêtes ; réessayez plus tard
+xai-class-unavailable = xAI est indisponible ; réessayez plus tard
+xai-class-incomplete = la réponse de xAI n'a pas pu être lue
+xai-class-transport = xAI n'a pas pu être joint
+# Le détail est un chemin et ce que le système d'exploitation en a dit.
+xai-account-nowhere = il n'y a nulle part où garder une connexion xAI : { $detail }
+xai-account-unusable =
+    la connexion xAI enregistrée n'a pas pu être lue : { $detail } ; lancez bravebot auth login xai pour vous reconnecter, ou bravebot auth logout xai pour l'oublier
+xai-account-malformed =
+    la connexion xAI enregistrée est inutilisable : { $defect } ; lancez bravebot auth login xai pour vous reconnecter, ou bravebot auth logout xai pour l'oublier
+xai-account-unwritable = la connexion xAI n'a pas pu être enregistrée : { $detail } ; rien n'a été modifié
+xai-defect-empty = le fichier ne contient rien, ce que laisse une écriture interrompue
+xai-defect-not-json = le fichier n'est pas du JSON valide
+xai-defect-other-version = il a été écrit par une autre version, et cette version lit la version 1
+xai-defect-missing-field = un champ manque ou est vide
+xai-defect-no-expiry = il n'a pas d'expiration
+xai-not-signed-in = pas connecté à xAI. Lancez `bravebot auth login xai` pour vous connecter
+xai-ended = la connexion xAI a pris fin. Lancez `bravebot auth login xai` pour vous reconnecter
+xai-renewal-failed = la connexion xAI n'a pas pu être renouvelée : { $reason }
+xai-renewal-unwritten = la connexion xAI a été renouvelée sans pouvoir être enregistrée, elle ne dure donc que jusqu'à la fin de bravebot ; vérifiez que le dossier où elle est conservée a de la place et accepte l'écriture, et si le prochain démarrage indique que la connexion a pris fin, lancez bravebot auth login xai
+xai-unusable = la connexion xAI enregistrée n'a pas pu être lue. Lancez `bravebot auth status xai` pour savoir pourquoi
+xai-token-refused = xAI a refusé le jeton d'accès de la connexion xAI, et un nouveau aussi. Lancez `bravebot auth login xai` pour vous reconnecter
+# Dit quand l'hôte de service a refusé une requête par un 403 après le remplacement du jeton d'accès. Un premier
+# 403 est la façon dont il a refusé un jeton qu'il n'a pas pu valider, donc un nouveau jeton est demandé d'abord.
+# Aucun refus pour une offre n'a été observé. Aucune commande n'est nommée, car se reconnecter ne change pas un
+# refus qu'un nouveau jeton n'a pas changé, et rien de ce que l'hôte a écrit n'est cité.
+xai-not-permitted = xAI a refusé la requête pour ce compte, et se reconnecter n'y changera rien. Vérifiez l'offre chez xAI, ou choisissez un autre modèle
+# Ce que la commande dit une fois la connexion enregistrée. La première est pour un démarrage qui demanderait
+# lequel des modèles du compte utiliser, et invite à lancer bravebot ; la seconde est pour un démarrage qui
+# ne le demanderait pas pour le compte, parce qu'un service de la personne est configuré, dont un démarrage
+# demande les modèles à la place, ou qu'un modèle est déjà en vigueur.
+xai-use-by-asking = Lancez bravebot pour qu'il demande lequel des modèles du compte utiliser, ou nommez-en un, comme dans `bravebot -i "<invite>" --model xai/<modèle>` ou `bravebot "<tâche>" --model xai/<modèle>`. Une fois une session ouverte, /model les liste.
+xai-use-by-naming = Nommez l'un des modèles du compte, comme dans `bravebot -i "<invite>" --model xai/<modèle>` ou `bravebot "<tâche>" --model xai/<modèle>`. Une fois une session ouverte, /model les liste.
+# Ce qu'un compte xAI qui n'a donné aucune ligne dit au démarrage, sous la première ligne du refus ou au-dessus
+# des lignes qu'un autre compte a données. Une connexion terminée dit xai-ended.
+xai-start-listing-unreadable = Les modèles du compte xAI n'ont pas pu être listés, donc aucun n'est proposé au choix. Nommez-en un, comme dans `bravebot -i "<invite>" --model xai/<modèle>` ou `bravebot "<tâche>" --model xai/<modèle>`
+xai-start-reaches-no-model = Ce compte xAI ne liste aucun modèle que bravebot propose, donc /model n'en propose aucun. La connexion reste enregistrée.
+
+## Choisir l'un des modèles des comptes connectés à un démarrage que rien ne sert
+
+# Dit au-dessus des lignes numérotées à un démarrage où une connexion ChatGPT est enregistrée, où le modèle en
+# vigueur est l'un de ceux de Brave et où le compte liste des modèles.
+chatgpt-start-heading = Une connexion ChatGPT est enregistrée, et le compte propose ces modèles :
+# De même quand une connexion xAI est enregistrée, et quand les deux le sont et listent toutes deux des modèles.
+xai-start-heading = Une connexion xAI est enregistrée, et le compte propose ces modèles :
+accounts-start-heading = Une connexion ChatGPT et une connexion xAI sont enregistrées, et les comptes proposent ces modèles :
+# Une ligne : le nom que le service affiche et le nom à donner à --model. Les deux sont du texte du service.
+account-start-row = { $name } ({ $key })
+account-start-question = Lequel bravebot utilisera-t-il ? Tapez son numéro, ou rien pour arrêter :
+# Dit une fois le choix enregistré. Le nom est du texte du service.
+account-start-chosen = { $name } sera utilisé. Il est retenu pour le prochain démarrage, et /model le change.
+# Dit à la place quand ce que le démarrage relit n'est pas le choix : le nom n'est pas conservé ou l'écriture
+# a échoué. Le démarrage est alors refusé comme quand rien n'est choisi.
+account-start-not-remembered = Impossible de retenir { $name }, donc aucun modèle n'est choisi.
 mcp-forms-heading = bravebot mcp prend l'une de ces formes :
 mcp-needs-a-command = bravebot mcp a besoin d'une commande
 mcp-unknown-command = bravebot mcp n'a pas de commande { $command }
@@ -2882,6 +2993,7 @@ session-models-unavailable = impossible de lister les modèles : { $problem }
 session-chatgpt-models-unreadable = impossible de lister les modèles du compte ChatGPT ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
 session-chatgpt-models-compiled = impossible de lister les modèles du compte ChatGPT, donc /model montre une liste intégrée qui peut nommer un modèle que le compte ne peut pas utiliser ; réessayez ou reconnectez-vous avec bravebot auth login chatgpt, ou nommez-en un, comme dans `bravebot -i "<invite>" --model chatgpt/<modèle>` ou `bravebot "<tâche>" --model chatgpt/<modèle>`
 session-chatgpt-models-refused = impossible de lister les modèles du compte ChatGPT : { $refusal }
+session-xai-models-unreadable = impossible de lister les modèles du compte xAI ; réessayez ou reconnectez-vous avec bravebot auth login xai, ou nommez-en un, comme dans `bravebot -i "<invite>" --model xai/<modèle>` ou `bravebot "<tâche>" --model xai/<modèle>`
 # Dit à l'ouverture du sélecteur quand une passerelle dont les réglages ne nomment aucun modèle n'a pas pu
 # être interrogée sur sa liste, donc aucun de ses modèles n'est proposé. Une passerelle dont la clé manque
 # n'est pas interrogée et n'est pas signalée ici.
@@ -3079,6 +3191,28 @@ desktop-chatgpt-models-unreadable = Impossible de charger les modèles de ChatGP
 desktop-chatgpt-models-compiled = Impossible de charger les modèles de ChatGPT, donc la liste affichée est intégrée et peut nommer un modèle que le compte ne peut pas utiliser ; réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
 desktop-chatgpt-models-usage-limit = Impossible de charger les modèles de ChatGPT parce que le compte a atteint sa limite d'utilisation, donc réessayez plus tard.
 desktop-chatgpt-models-not-permitted = Impossible de charger les modèles de ChatGPT parce qu'OpenAI n'autorise pas ce compte à être utilisé de cette façon, donc utilisez un autre compte ou un modèle d'un autre service.
+desktop-xai-models-unreadable = Impossible de charger les modèles de xAI, donc réessayez, ou lancez { $command } dans un terminal pour vous reconnecter.
+
+## Ce que la fenêtre dit du compte xAI
+
+# Une phrase chacun, avec une majuscule de phrase, qui dit ce qui s'est passé et quoi faire, pour la
+# carte d'erreur de la fenêtre et sa carte d'exécution. Elles sont choisies d'après l'étape qui a échoué et ne
+# répètent rien de ce que xAI, le fichier de connexion ou un fichier de réglages a dit. La fenêtre dessine
+# { $command } comme du code, donc il est passé et envoyé à côté de la phrase. La fenêtre lit le catalogue de
+# référence quelle que soit la langue de la machine, donc aucun programme ne lit le français de ces messages.
+desktop-xai-not-signed-in = Vous n'êtes pas connecté à xAI, donc lancez { $command } dans un terminal pour vous connecter.
+desktop-xai-ended = La connexion xAI a pris fin, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-xai-token-refused = Le jeton d'accès de la connexion xAI a été refusé, et un nouveau aussi, donc lancez { $command } dans un terminal pour vous reconnecter.
+desktop-xai-not-permitted = La requête a été refusée par xAI pour ce compte, et se reconnecter n'y changera rien, donc vérifiez l'offre chez xAI ou choisissez un autre modèle.
+desktop-xai-unusable = La connexion xAI enregistrée n'a pas pu être lue, donc lancez { $command } dans un terminal pour savoir pourquoi.
+desktop-xai-renewal-refused = La connexion xAI n'a pas pu être renouvelée parce que xAI a refusé la requête, donc réessayez plus tard.
+desktop-xai-renewal-rate-limited = La connexion xAI n'a pas pu être renouvelée parce que xAI limite les requêtes, donc réessayez plus tard.
+desktop-xai-renewal-unavailable = La connexion xAI n'a pas pu être renouvelée parce que xAI est indisponible, donc réessayez plus tard.
+desktop-xai-renewal-incomplete = La connexion xAI n'a pas pu être renouvelée parce que la réponse de xAI n'a pas pu être lue, donc réessayez.
+desktop-xai-renewal-transport = La connexion xAI n'a pas pu être renouvelée parce que xAI n'a pas pu être joint, donc vérifiez la connexion et réessayez.
+desktop-xai-fell-back-rate-limited = Ce tour passe de { $from } à { $to } parce que la connexion xAI n'a pas pu être renouvelée pendant que xAI limite les requêtes.
+desktop-xai-fell-back-unavailable = Ce tour passe de { $from } à { $to } parce que la connexion xAI n'a pas pu être renouvelée pendant que xAI est indisponible.
+desktop-xai-fell-back = Ce tour passe de { $from } à { $to } parce que le compte xAI n'a pas pu être utilisé.
 
 
 ## Répéter une consigne

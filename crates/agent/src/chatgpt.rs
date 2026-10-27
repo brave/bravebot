@@ -31,8 +31,11 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 static RENEWER: Mutex<Option<Renewer>> = Mutex::new(None);
 
 /// Whether the file holds the last renewal, and whether the person has been told where it does not.
+///
+/// Kept by each sign-in that renews, since each says its own sentence
+/// ([XAI-17](../../../docs/specs/xai-sign-in.md#XAI-17) for xAI's).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Saving {
+pub(crate) enum Saving {
     /// No renewal has failed to be written, or the last one that did has since been written.
     Saved,
     /// A renewal could not be written and no turn has said so.
@@ -50,7 +53,7 @@ static SAVING: Mutex<Saving> = Mutex::new(Saving::Saved);
 ///
 /// Each request retries a write that failed, so a file that stays unwritable fails on every request
 /// and the person is told once. A write that then succeeds clears it, so the next failure is told.
-fn record_a_token(saving: &Mutex<Saving>, unwritten: bool) {
+pub(crate) fn record_a_token(saving: &Mutex<Saving>, unwritten: bool) {
     let mut saving = saving.lock().unwrap_or_else(PoisonError::into_inner);
     *saving = match (unwritten, *saving) {
         (false, _) => Saving::Saved,
@@ -60,7 +63,7 @@ fn record_a_token(saving: &Mutex<Saving>, unwritten: bool) {
 }
 
 /// The token of `access`, noting in `saving` whether the file took the renewal that made it.
-fn token_of(saving: &Mutex<Saving>, access: &Access) -> Secret {
+pub(crate) fn token_of(saving: &Mutex<Saving>, access: &Access) -> Secret {
     record_a_token(saving, access.unwritten.is_some());
     Secret::new(access.token.expose())
 }
@@ -75,7 +78,7 @@ fn token_of(saving: &Mutex<Saving>, access: &Access) -> Secret {
 /// which is what the sentence tells the person. It names no path and quotes nothing the file or the
 /// operating system said.
 pub(crate) fn say_an_unsaved_renewal(reporter: &mut (impl Reporter + ?Sized)) {
-    say_from(&SAVING, reporter);
+    say_from(&SAVING, reporter, t!(chatgpt_renewal_unwritten));
 }
 
 /// Note that the renewal behind a request's token could not be written, as having the token does.
@@ -88,8 +91,12 @@ pub fn note_a_renewal_the_file_could_not_take(unwritten: bool) {
 }
 
 /// [`say_an_unsaved_renewal`] for a given record of what the file holds, so a test need not share
-/// the process's.
-fn say_from(saving: &Mutex<Saving>, reporter: &mut (impl Reporter + ?Sized)) {
+/// the process's, and for the sentence a sign-in says it in.
+pub(crate) fn say_from(
+    saving: &Mutex<Saving>,
+    reporter: &mut (impl Reporter + ?Sized),
+    said: &str,
+) {
     let mut saving = saving.lock().unwrap_or_else(PoisonError::into_inner);
     let say = *saving == Saving::Unsaid;
     if say {
@@ -97,7 +104,7 @@ fn say_from(saving: &Mutex<Saving>, reporter: &mut (impl Reporter + ?Sized)) {
     }
     drop(saving);
     if say {
-        reporter.notice(t!(chatgpt_renewal_unwritten).into());
+        reporter.notice(said.into());
     }
 }
 
@@ -460,6 +467,8 @@ pub fn said_of_failure(failure: AccountFailure) -> String {
         AccountFailure::Renewal(RenewalFailure::Transport) => {
             t!(failure_account_renewal_transport).into()
         }
+        // Another service's account, worded by its own module ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
+        AccountFailure::Xai(failure) => crate::xai::said_of_failure(failure),
     }
 }
 
@@ -473,6 +482,10 @@ pub enum Remedy {
     SignIn,
     /// Asking why the stored sign-in cannot be read.
     Status,
+    /// Signing in to xAI again.
+    XaiSignIn,
+    /// Asking why the stored xAI sign-in cannot be read.
+    XaiStatus,
 }
 
 impl Remedy {
@@ -482,6 +495,8 @@ impl Remedy {
         match self {
             Self::SignIn => "bravebot auth login chatgpt",
             Self::Status => "bravebot auth status chatgpt",
+            Self::XaiSignIn => "bravebot auth login xai",
+            Self::XaiStatus => "bravebot auth status xai",
         }
     }
 }
@@ -498,6 +513,7 @@ pub fn remedy_of_failure(failure: AccountFailure) -> Option<Remedy> {
         AccountFailure::Named { .. }
         | AccountFailure::ModelNotOffered
         | AccountFailure::Renewal(_) => None,
+        AccountFailure::Xai(failure) => crate::xai::remedy_of_failure(failure),
     }
 }
 
@@ -902,25 +918,25 @@ mod tests {
         let saving = Mutex::new(Saving::Saved);
         let mut reporter = crate::report::RecordingReporter::default();
 
-        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
         assert!(reporter.notices.is_empty(), "said with nothing to say");
 
         record_a_token(&saving, true);
-        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
         assert_eq!(reporter.notices, [t!(chatgpt_renewal_unwritten)]);
 
         // The next request retries the write and it fails again.
         record_a_token(&saving, true);
-        say_from(&saving, &mut reporter);
-        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
         assert_eq!(reporter.notices.len(), 1, "{:?}", reporter.notices);
 
         // The write succeeds, and a later one fails.
         record_a_token(&saving, false);
-        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
         assert_eq!(reporter.notices.len(), 1, "said after a write succeeded");
         record_a_token(&saving, true);
-        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
         assert_eq!(reporter.notices.len(), 2, "a new failure was not said");
 
         // A failure no turn has said yet, which a later request's retry then wrote: nothing is left
@@ -929,7 +945,7 @@ mod tests {
         let mut reporter = crate::report::RecordingReporter::default();
         record_a_token(&saving, true);
         record_a_token(&saving, false);
-        say_from(&saving, &mut reporter);
+        say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
         assert!(reporter.notices.is_empty(), "{:?}", reporter.notices);
     }
 
@@ -949,7 +965,7 @@ mod tests {
             let token = token_of(&saving, &access(unwritten));
             assert_eq!(token.expose(), "a-token");
             let mut reporter = crate::report::RecordingReporter::default();
-            say_from(&saving, &mut reporter);
+            say_from(&saving, &mut reporter, t!(chatgpt_renewal_unwritten));
             reporter.notices.len()
         };
 

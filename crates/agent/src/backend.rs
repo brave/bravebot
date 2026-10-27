@@ -18,13 +18,13 @@ use bravebot_aichat::protocol::{ChatRequest, Usage};
 use bravebot_aichat::responses::ResponsesClient;
 use bravebot_aichat::{
     AccountFailure, AichatClient, ChatError, Completion, CutOff, Progress, RenewalFailure,
-    Subscription,
+    Subscription, XaiFailure,
 };
 pub use bravebot_bedrock::credentials::CredentialError;
 use bravebot_bedrock::{BedrockClient, BedrockError};
 use bravebot_config::Config;
 use bravebot_config::ModelRefusal;
-use bravebot_config::provider::{Credential, Protocol};
+use bravebot_config::provider::{self, Credential, Protocol};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::event::Sink;
 use bravebot_core::policy::Policy;
@@ -110,6 +110,25 @@ impl BackendError {
         }
     }
 
+    /// This failure with `earlier` more requests counted, which an earlier call of the same turn's
+    /// request made before it. A failure that counted none is counted as `earlier`.
+    pub(crate) fn after_earlier_attempts(self, earlier: u32) -> Self {
+        match self {
+            Self::Attempted {
+                attempts,
+                usage,
+                context_tokens,
+                cause,
+            } => Self::Attempted {
+                attempts: attempts.saturating_add(earlier),
+                usage,
+                context_tokens,
+                cause,
+            },
+            other => other.counted(earlier, None, None),
+        }
+    }
+
     /// Preserve the request count and any known usage when a request fails.
     pub(crate) fn counted(
         self,
@@ -166,12 +185,20 @@ impl BackendError {
                     // a new sign-in or another request does not change, so it is no failure of
                     // the credential.
                     AccountFailure::ModelNotOffered => Category::Refused,
-                    AccountFailure::Renewal(class) => match class {
-                        RenewalFailure::Refused => Category::Refused,
-                        RenewalFailure::RateLimited => Category::RateLimited,
-                        RenewalFailure::Unavailable => Category::Unavailable,
-                        RenewalFailure::Incomplete => Category::Incomplete,
-                        RenewalFailure::Transport => Category::Transport,
+                    AccountFailure::Renewal(class) => category_of_renewal(*class),
+                    // The sign-in is what failed or what the service refused, which signing in again
+                    // mends, except for the renewal that was refused or could not be made, which is
+                    // told as the class of the request, as the ChatGPT account's is.
+                    AccountFailure::Xai(failure) => match failure {
+                        XaiFailure::NotSignedIn
+                        | XaiFailure::Ended
+                        | XaiFailure::Rejected
+                        | XaiFailure::Unusable => Category::Unauthorized,
+                        // The host answered and refused the request for this account, which a new
+                        // sign-in does not change, so it is no failure of the credential and no
+                        // fallback model answers for it, as for a refusal the ChatGPT account names.
+                        XaiFailure::NotPermitted => Category::Refused,
+                        XaiFailure::Renewal(class) => category_of_renewal(*class),
                     },
                 },
                 ChatError::Decode { .. } | ChatError::NoContent => Category::Undecodable,
@@ -441,6 +468,17 @@ pub(crate) mod scripted {
     }
 }
 
+/// The category of a renewal that failed, in the class of the request that failed.
+fn category_of_renewal(class: RenewalFailure) -> Category {
+    match class {
+        RenewalFailure::Refused => Category::Refused,
+        RenewalFailure::RateLimited => Category::RateLimited,
+        RenewalFailure::Unavailable => Category::Unavailable,
+        RenewalFailure::Incomplete => Category::Incomplete,
+        RenewalFailure::Transport => Category::Transport,
+    }
+}
+
 /// Keep the HTTP status but omit URLs, which may contain credentials.
 fn of_egress(error: &bravebot_net::EgressError) -> Diagnosis {
     use bravebot_net::EgressError;
@@ -539,6 +577,21 @@ pub enum Backend<'a> {
         /// of its own.
         session: Option<crate::chatgpt::AccountSession>,
     },
+    /// The xAI account of the stored sign-in
+    /// ([XAI-16](../../../docs/specs/xai-sign-in.md#XAI-16)).
+    ///
+    /// Spoken to in chat completions by the client every gateway is, at a host compiled in. A variant
+    /// of its own because its credential is not a key in a block: it is the sign-in, asked for before
+    /// each request and replaced once where the host may have refused it
+    /// ([XAI-17](../../../docs/specs/xai-sign-in.md#XAI-17)). Carries no provider, since the service is
+    /// one constant.
+    XaiAccount {
+        config: &'a Config,
+        /// What the account calls the model: the name after the `xai/` that selected it.
+        wire_model: String,
+        egress: &'a Egress,
+        cancel: Option<Cancel>,
+    },
 }
 
 /// Whether a level chosen for `model` is one that model reads.
@@ -591,9 +644,11 @@ pub fn installed_on_llama_server<S: Sink>(
 /// against the service as well as the model, so asking the wrong one would report a refusal that
 /// belongs to some other gateway offering the same slug.
 ///
-/// Only ever a refusal, never a permission. A roster row that states which parameters it takes and
-/// does not name the field has said the model reads no level, and no absence of a refusal un-says
-/// it: a caller already holding that answer takes this one away from it rather than replacing it.
+/// Where a service has refused one, never a permission. A roster row that states which parameters it takes
+/// and does not name the field has said the model reads no level, and no absence of a refusal un-says
+/// it: a caller already holding that answer takes this one away from it rather than replacing it. The
+/// xAI account is the one answer that is not a refusal: no level is sent to it whatever the model, so
+/// every name of the account answers true without the service having been asked.
 ///
 /// Not content. What a service refused is the transport's own report, read from a status.
 pub fn refused_a_level(config: &Config, model: &str) -> bool {
@@ -609,6 +664,9 @@ pub fn refused_a_level(config: &Config, model: &str) -> bool {
                 &crate::chatgpt::account_provider().completion_url(),
                 wire_model,
             ),
+            // The xAI account is sent no level, so it reads none, which is not something it
+            // refused ([XAI-16](../../../docs/specs/xai-sign-in.md#XAI-16)).
+            None if config.xai_model(model).is_some() => true,
             None => !bravebot_aichat::reads_effort(&config.chat_completions_url(), model),
         },
     }
@@ -637,7 +695,7 @@ pub enum Serving {
         /// which Brave's endpoint answers. Worth telling apart, because what that person has to do
         /// is name one of their own models rather than set a service up.
         ///
-        /// A stored ChatGPT sign-in is such a service
+        /// A stored ChatGPT or xAI sign-in is such a service
         /// ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)).
         a_service_is_configured: bool,
         /// What the ChatGPT sign-in file holds, which decides what the person is told: a sign-in
@@ -646,6 +704,10 @@ pub enum Serving {
         /// Not read where a Bedrock or gateway block is configured, and then `NotStored`, so a
         /// stored sign-in is the whole of the service configured only where nothing else is.
         chatgpt: crate::chatgpt::AccountFile,
+        /// The same for the xAI sign-in file
+        /// ([BACKEND-39](../../../docs/specs/backends.md#BACKEND-39)), read where the ChatGPT file
+        /// is and by the same rule.
+        xai: crate::chatgpt::AccountFile,
     },
     /// The machine-level layer does not let this machine request the model (BACKEND-48).
     ///
@@ -672,17 +734,24 @@ pub enum Serving {
 /// each is a file in somebody's home directory and a read that cannot change the answer is a read
 /// for nothing.
 pub fn serving(config: &Config, egress: &Egress, model: &str) -> Serving {
-    serving_with(config, egress, model, crate::chatgpt::account_file)
+    serving_with(
+        config,
+        egress,
+        model,
+        crate::chatgpt::account_file,
+        crate::xai::account_file,
+    )
 }
 
-/// [`serving`] with the sign-in file read by `chatgpt`, so a test is not answered by the file of
-/// whoever runs it. Called only where nothing before it has answered and no Bedrock or gateway
-/// block is configured, as the store is.
+/// [`serving`] with the sign-in files read by `chatgpt` and `xai`, so a test is not answered by the
+/// files of whoever runs it. Each is called only where nothing before it has answered and no Bedrock
+/// or gateway block is configured, as the store is.
 fn serving_with(
     config: &Config,
     egress: &Egress,
     model: &str,
     chatgpt: impl FnOnce() -> crate::chatgpt::AccountFile,
+    xai: impl FnOnce() -> crate::chatgpt::AccountFile,
 ) -> Serving {
     // First, because it is the one answer no configuration changes: a model the machine-level layer
     // refuses is refused whichever service would have answered for it, and asking which service that
@@ -721,10 +790,13 @@ fn serving_with(
     // somebody who has one is told to name a model with the `model` key, and a sign-in beside it
     // must not take that line from them. One that cannot be read configures nothing and is said.
     let configured_elsewhere = config.bedrock.is_some() || !config.providers.is_empty();
-    let chatgpt = if configured_elsewhere {
-        crate::chatgpt::AccountFile::NotStored
+    let (chatgpt, xai) = if configured_elsewhere {
+        (
+            crate::chatgpt::AccountFile::NotStored,
+            crate::chatgpt::AccountFile::NotStored,
+        )
     } else {
-        chatgpt()
+        (chatgpt(), xai())
     };
     Serving::NothingConfigured {
         subscription: stored
@@ -732,8 +804,10 @@ fn serving_with(
             .and_then(|found| found.complaint())
             .map(str::to_string),
         a_service_is_configured: configured_elsewhere
-            || chatgpt == crate::chatgpt::AccountFile::Stored,
+            || chatgpt == crate::chatgpt::AccountFile::Stored
+            || xai == crate::chatgpt::AccountFile::Stored,
         chatgpt,
+        xai,
     }
 }
 
@@ -948,6 +1022,14 @@ impl<'a> Backend<'a> {
                 session: None,
             };
         }
+        if let Some(wire_model) = config.xai_model(model) {
+            return Self::XaiAccount {
+                config,
+                wire_model: wire_model.to_string(),
+                egress,
+                cancel: None,
+            };
+        }
         Self::Aichat {
             config,
             egress,
@@ -1019,11 +1101,18 @@ impl<'a> Backend<'a> {
     /// False for an `openai` entry, whose names are aliases for dated models: the reply names the
     /// one the alias resolved to, which is the alias working. Compared anyway, nearly every OpenAI
     /// turn would report a substitution.
+    ///
+    /// False for the xAI account too, whose listing states aliases for its models (`grok-code-fast-1`
+    /// for `grok-build-0.1`) and whose names are taken by any of them
+    /// ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)). Whether the service answers an alias under
+    /// its canonical id was not observed, and a run that worked would be ended as a substitution if it
+    /// did.
     pub fn reports_the_model_it_was_asked_for(config: &Config, model: &str) -> bool {
         let behind_an_alias = config
             .provider_for(model)
             .is_some_and(|(provider, _)| provider.answers_under_the_model_behind_an_alias())
-            || config.chatgpt_model(model).is_some();
+            || config.chatgpt_model(model).is_some()
+            || config.xai_model(model).is_some();
         !behind_an_alias
             && !config
                 .bedrock
@@ -1043,7 +1132,11 @@ impl<'a> Backend<'a> {
     pub fn name_as_asked(config: &Config, model: &str) -> String {
         match config.provider_for(model) {
             Some((_, wire)) => wire.to_string(),
-            None => config.chatgpt_model(model).unwrap_or(model).to_string(),
+            None => config
+                .chatgpt_model(model)
+                .or_else(|| config.xai_model(model))
+                .unwrap_or(model)
+                .to_string(),
         }
     }
 
@@ -1065,9 +1158,14 @@ impl<'a> Backend<'a> {
             (None, None) => {}
             _ => return false,
         }
-        // The account answers for its own models and for no other, and a model of no gateway that
-        // is not the account's belongs to Brave's endpoint.
-        config.chatgpt_model(one).is_some() == config.chatgpt_model(other).is_some()
+        // An account answers for its own models and for no other, and a model of no gateway that is
+        // no account's belongs to Brave's endpoint.
+        let account = |model| match (config.chatgpt_model(model), config.xai_model(model)) {
+            (Some(_), _) => Some(provider::CHATGPT_ID),
+            (None, Some(_)) => Some(provider::XAI_ID),
+            (None, None) => None,
+        };
+        account(one) == account(other)
     }
 
     /// Whether [`Backend::sign_in_if_needed`] would do anything, without doing it.
@@ -1111,7 +1209,8 @@ impl<'a> Backend<'a> {
             Self::Aichat { cancel, .. }
             | Self::Bedrock { cancel, .. }
             | Self::Gateway { cancel, .. }
-            | Self::Account { cancel, .. } => *cancel = Some(stop),
+            | Self::Account { cancel, .. }
+            | Self::XaiAccount { cancel, .. } => *cancel = Some(stop),
         }
         self
     }
@@ -1178,6 +1277,18 @@ impl<'a> Backend<'a> {
                     client = client.with_cancel(cancel.clone());
                 }
                 client.complete(policy, request)
+            }
+            Self::XaiAccount {
+                config,
+                wire_model,
+                egress,
+                cancel,
+            } => {
+                let request = crate::xai::without_effort(request);
+                crate::xai::presenting(&mut crate::xai::StoredSignIn, |token| {
+                    xai_client(config, wire_model, egress, token, cancel.as_ref())
+                        .complete(policy, &request)
+                })
             }
         }
     }
@@ -1248,6 +1359,19 @@ impl<'a> Backend<'a> {
                 }
                 client.complete_streaming(policy, request, progress)
             }
+            Self::XaiAccount {
+                config,
+                wire_model,
+                egress,
+                cancel,
+            } => {
+                let request = crate::xai::without_effort(request);
+                let mut progress = progress;
+                crate::xai::presenting(&mut crate::xai::StoredSignIn, |token| {
+                    xai_client(config, wire_model, egress, token, cancel.as_ref())
+                        .complete_streaming(policy, &request, &mut progress)
+                })
+            }
         }
     }
 }
@@ -1313,6 +1437,34 @@ fn account_client<'a>(
         Some(session) => client.holding_the_level(session.effort()),
         None => client,
     })
+}
+
+/// A client for the xAI account, presenting `token`.
+///
+/// The client is the one every gateway has, in chat completions, and the provider is the one built from
+/// constants ([XAI-16](../../../docs/specs/xai-sign-in.md#XAI-16)), so nothing a settings file, a
+/// variable or a gateway block says reaches it, and the token goes to that host and no other. It is
+/// built for each request, and so for the replacement that follows a refusal, with the token in hand.
+fn xai_client<'a>(
+    config: &'a Config,
+    wire_model: &str,
+    egress: &'a Egress,
+    token: &bravebot_config::Secret,
+    cancel: Option<&Cancel>,
+) -> GatewayClient<'a> {
+    let client = GatewayClient::Chat(
+        AichatClient::new(config, egress)
+            .for_gateway(
+                crate::xai::serving_provider(),
+                wire_model,
+                Some(bravebot_config::Secret::new(token.expose())),
+            )
+            .refusing_redirects(),
+    );
+    match cancel {
+        Some(cancel) => client.with_cancel(cancel.clone()),
+        None => client,
+    }
 }
 
 /// A client pointed at `provider`, with its token resolved, in the protocol the provider speaks.
@@ -1637,12 +1789,14 @@ mod tests {
                 &braves_endpoint_without_premium(),
                 &egress,
                 DEFAULT_MODEL,
+                || AccountFile::NotStored,
                 || AccountFile::NotStored
             ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: false,
                 chatgpt: AccountFile::NotStored,
+                xai: AccountFile::NotStored,
             }
         );
     }
@@ -1661,26 +1815,63 @@ mod tests {
             (AccountFile::Unreadable, false),
         ] {
             assert_eq!(
-                serving_with(&config, &egress, DEFAULT_MODEL, || found),
+                serving_with(
+                    &config,
+                    &egress,
+                    DEFAULT_MODEL,
+                    || found,
+                    || AccountFile::NotStored
+                ),
                 Serving::NothingConfigured {
                     subscription: None,
                     a_service_is_configured: configured,
                     chatgpt: found,
+                    xai: AccountFile::NotStored,
                 },
                 "{found:?}"
             );
         }
 
-        // A model a configured service serves never asks about the file.
+        // A model a configured service serves never asks about either file.
         assert_eq!(
             serving_with(
                 &braves_endpoint_with_a_gateway(),
                 &egress,
                 "z-ai/glm-4.6",
-                || panic!("the sign-in file was read for a model a gateway serves")
+                || panic!("the ChatGPT sign-in file was read for a model a gateway serves"),
+                || panic!("the xAI sign-in file was read for a model a gateway serves")
             ),
             Serving::Configured
         );
+    }
+
+    /// BACKEND-39: a stored xAI sign-in is a service configured as a ChatGPT one is, whichever of the
+    /// two files holds a sign-in, and an unreadable one configures nothing. The regression it rejects is
+    /// the xAI file left out of the answer, which tells a person who has signed in to xAI and nothing
+    /// else that nothing is configured and offers them the routes again.
+    #[test]
+    fn a_stored_xai_sign_in_is_a_service_configured_and_an_unreadable_one_is_not() {
+        let egress = Egress::new();
+        let config = braves_endpoint_without_premium();
+        for (chatgpt, xai, configured) in [
+            (AccountFile::NotStored, AccountFile::Stored, true),
+            (AccountFile::Stored, AccountFile::Stored, true),
+            (AccountFile::Stored, AccountFile::NotStored, true),
+            (AccountFile::NotStored, AccountFile::NotStored, false),
+            (AccountFile::NotStored, AccountFile::Unreadable, false),
+            (AccountFile::Unreadable, AccountFile::Unreadable, false),
+        ] {
+            assert_eq!(
+                serving_with(&config, &egress, DEFAULT_MODEL, || chatgpt, || xai),
+                Serving::NothingConfigured {
+                    subscription: None,
+                    a_service_is_configured: configured,
+                    chatgpt,
+                    xai,
+                },
+                "{chatgpt:?} {xai:?}"
+            );
+        }
     }
 
     /// BACKEND-39: a Bedrock or gateway block that is configured while Brave's own model is in force
@@ -1723,13 +1914,18 @@ mod tests {
             (an_aws_block, "an AWS block"),
         ] {
             assert_eq!(
-                serving_with(&config, &egress, DEFAULT_MODEL, || panic!(
-                    "the sign-in file was read beside {configured}"
-                )),
+                serving_with(
+                    &config,
+                    &egress,
+                    DEFAULT_MODEL,
+                    || panic!("the ChatGPT sign-in file was read beside {configured}"),
+                    || panic!("the xAI sign-in file was read beside {configured}")
+                ),
                 Serving::NothingConfigured {
                     subscription: None,
                     a_service_is_configured: true,
                     chatgpt: AccountFile::NotStored,
+                    xai: AccountFile::NotStored,
                 },
                 "{configured}"
             );
@@ -1766,12 +1962,14 @@ mod tests {
                 &braves_endpoint_with_a_gateway(),
                 &egress,
                 DEFAULT_MODEL,
+                || AccountFile::NotStored,
                 || AccountFile::NotStored
             ),
             Serving::NothingConfigured {
                 subscription: None,
                 a_service_is_configured: true,
                 chatgpt: AccountFile::NotStored,
+                xai: AccountFile::NotStored,
             }
         );
     }
@@ -1909,6 +2107,7 @@ mod tests {
             subscription: subscription.map(str::to_string),
             a_service_is_configured: true,
             chatgpt: AccountFile::NotStored,
+            xai: AccountFile::NotStored,
         };
         assert!(sets_aside(refused(None), || Serving::Configured));
         assert!(!sets_aside(
@@ -2046,8 +2245,749 @@ mod tests {
                 Backend::Gateway { .. } => "gateway",
                 Backend::Bedrock { .. } => "bedrock",
                 Backend::Account { .. } => "account",
+                Backend::XaiAccount { .. } => "xai",
             };
             assert_eq!(found, expected, "{name}");
+        }
+    }
+
+    /// XAI-13: a name carrying the account's id selects the account and is sent as the part after it.
+    /// A bare name keeps its meaning, the account takes no model of another roster, and a name of
+    /// ChatGPT's account is not xAI's.
+    #[test]
+    fn an_xai_model_selects_the_account_and_a_bare_name_selects_nothing_of_it() {
+        let config = with_a_gateway();
+        let egress = Egress::new();
+
+        let Backend::XaiAccount { wire_model, .. } =
+            Backend::select(&config, &egress, "xai/grok-4.5")
+        else {
+            panic!("an xai model did not select the account");
+        };
+        assert_eq!(wire_model, "grok-4.5");
+
+        for (name, expected) in [
+            ("grok-4.5", "aichat"),
+            ("xai", "aichat"),
+            ("xai/", "aichat"),
+            ("x-ai/grok-4.5", "aichat"),
+            ("chatgpt/gpt-5.5", "account"),
+            ("z-ai/glm-4.6", "gateway"),
+            (DEFAULT_MODEL, "aichat"),
+            ("opus-arn", "bedrock"),
+        ] {
+            let found = match Backend::select(&config, &egress, name) {
+                Backend::Aichat { .. } => "aichat",
+                Backend::Gateway { .. } => "gateway",
+                Backend::Bedrock { .. } => "bedrock",
+                Backend::Account { .. } => "account",
+                Backend::XaiAccount { .. } => "xai",
+            };
+            assert_eq!(found, expected, "{name}");
+        }
+    }
+
+    /// XAI-13: an entry with the id keeps it. Its requests go to its endpoint with its key, and none
+    /// goes to xAI with a person's subscription because a model carries the same prefix.
+    #[test]
+    fn a_gateway_entry_named_xai_keeps_its_name_and_no_model_is_the_accounts() {
+        let config = with_providers(
+            r#"{"provider": {"xai": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://gateway.example.invalid/v1"},
+                "models": {"grok-4.5": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&config, &egress, "xai/grok-4.5")
+        else {
+            panic!("the entry did not keep its name");
+        };
+        assert_eq!(provider.base_url, "https://gateway.example.invalid/v1");
+        assert_eq!(wire_model, "grok-4.5");
+    }
+
+    /// XAI-13: a gateway of another id that lists a model named `xai/grok-4.5` does not take that name
+    /// from the account. The bare name selects the account and is sent as `grok-4.5`, with the
+    /// account's token and not the gateway's key, and the gateway's model is the one its row is keyed
+    /// by, `litellm/xai/grok-4.5`, which sends the gateway the name it lists.
+    #[test]
+    fn a_gateway_listing_an_xai_name_does_not_take_it_from_the_account() {
+        let config = with_providers(
+            r#"{"provider": {"litellm": {
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {"baseURL": "https://litellm.example.invalid/v1"},
+                "models": {"xai/grok-4.5": {}}
+            }}}"#,
+        );
+        let egress = Egress::new();
+
+        let Backend::XaiAccount { wire_model, .. } =
+            Backend::select(&config, &egress, "xai/grok-4.5")
+        else {
+            panic!("the gateway's listing took the account's name");
+        };
+        assert_eq!(wire_model, "grok-4.5");
+        let Backend::Gateway {
+            provider,
+            wire_model,
+            ..
+        } = Backend::select(&config, &egress, "litellm/xai/grok-4.5")
+        else {
+            panic!("the gateway's own spelling did not reach it");
+        };
+        assert_eq!(provider.id, "litellm");
+        assert_eq!(wire_model, "xai/grok-4.5");
+    }
+
+    /// XAI-16: the account is asked what it reads of a level from what was learned of its own host, and
+    /// it is never sent one, so it reads none whatever the session chose. It is one service, apart from
+    /// ChatGPT's and from a gateway offering the same slug, and a request names the part after the
+    /// identifier, whose reply name is not compared since the listing states aliases for its models.
+    #[test]
+    fn the_xai_account_reads_no_level_is_one_service_and_is_asked_for_the_name_after_its_identifier()
+     {
+        let config = with_a_gateway();
+
+        assert!(refused_a_level(&config, "xai/grok-4.5"));
+        assert!(!refused_a_level(&config, "z-ai/glm-4.6"));
+        assert_eq!(Backend::name_as_asked(&config, "xai/grok-4.5"), "grok-4.5");
+        assert_eq!(Backend::name_as_asked(&config, "chatgpt/gpt-5"), "gpt-5");
+        assert!(!Backend::reports_the_model_it_was_asked_for(
+            &config,
+            "xai/grok-4.5"
+        ));
+
+        assert!(Backend::serves_both(
+            &config,
+            "xai/grok-4.5",
+            "xai/grok-4.6"
+        ));
+        for (one, other) in [
+            ("xai/grok-4.5", "chatgpt/gpt-5"),
+            ("xai/grok-4.5", DEFAULT_MODEL),
+            ("xai/grok-4.5", "z-ai/glm-4.6"),
+            ("xai/grok-4.5", "opus-arn"),
+        ] {
+            assert!(!Backend::serves_both(&config, one, other), "{one} {other}");
+            assert!(!Backend::serves_both(&config, other, one), "{other} {one}");
+        }
+        assert!(Backend::serves_both(&config, "chatgpt/a", "chatgpt/b"));
+    }
+
+    /// Open a policy that may fetch, as a turn's requests are made under.
+    fn a_policy_that_may_fetch(
+        sink: &mut bravebot_core::event::RecordingSink,
+    ) -> bravebot_core::policy::Policy<'_, bravebot_core::event::RecordingSink> {
+        bravebot_core::policy::Policy::begin(
+            {
+                let mut routing = bravebot_core::policy::Routing::new();
+                routing.insert_trusted("task", "say hello");
+                routing
+            },
+            bravebot_core::policy::ReleasePlan::new(),
+            bravebot_core::capability::CapabilitySet::from_iter([
+                bravebot_core::capability::Capability::WebFetch,
+            ]),
+            sink,
+        )
+        .expect("policy")
+    }
+
+    /// XAI-16: a request on an account model is made in chat completions to the serving host, with the
+    /// access token as a bearer and no other credential, whole or streamed, carrying the name after
+    /// the identifier as the model and no effort level even where the session chose one. The tools and
+    /// the conversation are the request's own. A client that sent the qualified name, kept the level,
+    /// or sent the key header of another service would fail one half of this, and whole and streamed
+    /// calls are dispatched separately.
+    #[test]
+    fn a_request_on_an_xai_model_is_made_in_chat_completions_with_the_bearer_and_no_level() {
+        use crate::testutil::{XaiAnswer, xai_host};
+        for streamed in [false, true] {
+            let host = xai_host(vec![if streamed {
+                XaiAnswer::Streamed("hello")
+            } else {
+                XaiAnswer::Whole("hello")
+            }]);
+            let _at = crate::xai::stand_in::at(&host.endpoint, &["placeholder-xai-token-1"]);
+            let mut config = with_a_gateway();
+            config.endpoint = "http://127.0.0.1:9/never-asked".into();
+            let egress = Egress::new();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = a_policy_that_may_fetch(&mut sink);
+            let request = ChatRequest::new(
+                "xai/grok-4.5",
+                vec![bravebot_aichat::protocol::Message::user("hi")],
+            )
+            .with_effort(Some(bravebot_aichat::protocol::Effort::Xhigh));
+
+            let mut backend = Backend::select(&config, &egress, "xai/grok-4.5");
+            let reply = if streamed {
+                backend.complete_streaming(&mut policy, &request, |_| {})
+            } else {
+                backend.complete(&mut policy, &request)
+            }
+            .expect("the account answered");
+
+            assert_eq!(reply.model, "grok-test", "streamed: {streamed}");
+            let taken = host.requests();
+            assert_eq!(taken.len(), 1, "streamed: {streamed}");
+            assert_eq!(
+                taken[0].path, "/v1/chat/completions",
+                "streamed: {streamed}"
+            );
+            assert_eq!(
+                taken[0].authorization.as_deref(),
+                Some("Bearer placeholder-xai-token-1")
+            );
+            assert_eq!(taken[0].body["model"], "grok-4.5", "streamed: {streamed}");
+            assert!(
+                taken[0].body.get("reasoning_effort").is_none(),
+                "a level was sent: {}",
+                taken[0].body
+            );
+            // The conversation is the request's own, written as any gateway's is: a prefix the service may
+            // cache is marked, so the content is a list of parts and not the bare text.
+            assert!(
+                taken[0].body["messages"][0]["content"]
+                    .to_string()
+                    .contains("\"hi\""),
+                "{}",
+                taken[0].body
+            );
+            for name in ["x-api-key", "brave-product", "cookie", "digest"] {
+                assert!(
+                    !taken[0]
+                        .headers
+                        .iter()
+                        .any(|(each, _)| each.eq_ignore_ascii_case(name)),
+                    "{name} was sent: {:?}",
+                    taken[0].headers
+                );
+            }
+            assert_eq!(
+                request.effort,
+                Some(bravebot_aichat::protocol::Effort::Xhigh),
+                "the session's own level was changed"
+            );
+        }
+    }
+
+    /// One request on `xai/grok-4.5`, whole or streamed, at `config`, made under a policy that may fetch.
+    fn ask_the_xai_account(config: &Config, streamed: bool) -> Result<Completion, BackendError> {
+        let egress = Egress::new();
+        let mut sink = bravebot_core::event::RecordingSink::new();
+        let mut policy = a_policy_that_may_fetch(&mut sink);
+        let request = ChatRequest::new(
+            "xai/grok-4.5",
+            vec![bravebot_aichat::protocol::Message::user(
+                "a private conversation",
+            )],
+        );
+        let mut backend = Backend::select(config, &egress, "xai/grok-4.5");
+        if streamed {
+            backend.complete_streaming(&mut policy, &request, |_| {})
+        } else {
+            backend.complete(&mut policy, &request)
+        }
+    }
+
+    /// The text of a body a reply carries that names the account and must never be repeated: the real
+    /// service's answer to a token it did not accept was a 400 whose text held the account's team
+    /// identifier, and an unknown model's 404 did too.
+    const A_BODY_WITH_AN_IDENTIFIER: &str = r#"{"code":"invalid-argument","error":"Incorrect API key provided for team placeholder-team-id-7f3a"}"#;
+
+    /// XAI-1 and XAI-16: the token goes to the serving host and to no other. Beside the account are a
+    /// gateway whose key is set and Brave's endpoint, each a server of its own that is asked nothing,
+    /// and the host answers with a redirect to a third, which is asked nothing either: the redirect is
+    /// a failure that carries its status, and neither the token nor the conversation reaches the host
+    /// it names. A request that followed any of them would be seen as a connection to one of the three.
+    #[test]
+    fn the_xai_token_goes_to_the_serving_host_alone_and_a_redirect_goes_nowhere() {
+        use crate::testutil::{XaiAnswer, xai_host};
+        // Each of the three answers whatever it is asked, so a request that reached one is seen as a
+        // request it took and not as a connection nobody answered.
+        let answering = || xai_host(vec![XaiAnswer::Whole("answered")]);
+        let (gateway, brave, elsewhere) = (answering(), answering(), answering());
+        let host = xai_host(vec![XaiAnswer::Redirect(format!(
+            "{}/v1/chat/completions",
+            elsewhere.endpoint
+        ))]);
+        let _at = crate::xai::stand_in::at(&host.endpoint, &["placeholder-xai-token-1"]);
+        let mut config = with_providers(&format!(
+            r#"{{"provider": {{"a-gateway": {{
+                "env": ["A_TOKEN_VARIABLE"],
+                "options": {{"baseURL": "{}/v1", "apiKey": "a-gateway-key"}},
+                "models": {{"grok-4.5": {{}}}}
+            }}}}}}"#,
+            gateway.endpoint
+        ));
+        config.endpoint = brave.endpoint.clone();
+
+        let error = ask_the_xai_account(&config, false).expect_err("a redirect is not an answer");
+
+        assert_eq!(error.diagnosis().status, Some(307), "{error}");
+        assert_eq!(host.requests().len(), 1);
+        for (name, other) in [
+            ("the gateway", &gateway),
+            ("Brave's endpoint", &brave),
+            ("the redirect's target", &elsewhere),
+        ] {
+            assert!(other.requests().is_empty(), "{name} was sent a request");
+        }
+    }
+
+    /// XAI-17 and BACKEND-9: a turn on an account model with no usable sign-in ends before any request
+    /// is sent, in the sentence of the step that found it so, which names the command where signing in
+    /// again is the remedy, whole or streamed. A client that sent the request and read the failure from
+    /// its answer would be seen as a request the host took.
+    #[test]
+    fn a_turn_on_an_xai_model_with_no_usable_sign_in_ends_before_a_request_naming_the_command() {
+        use crate::testutil::xai_host;
+        for (failure, command) in [
+            (XaiFailure::NotSignedIn, Some("bravebot auth login xai")),
+            (XaiFailure::Ended, Some("bravebot auth login xai")),
+            (XaiFailure::Unusable, Some("bravebot auth status xai")),
+            (XaiFailure::Renewal(RenewalFailure::RateLimited), None),
+        ] {
+            for streamed in [false, true] {
+                let host = xai_host(vec![]);
+                let _at = crate::xai::stand_in::at_without_a_token(&host.endpoint, failure);
+                let config = with_a_gateway();
+
+                let error = ask_the_xai_account(&config, streamed).expect_err("no sign-in");
+
+                assert_eq!(
+                    error.diagnosis().account,
+                    Some(AccountFailure::Xai(failure)),
+                    "{failure:?}"
+                );
+                assert_eq!(error.diagnosis().attempts, Some(0), "{failure:?}");
+                assert_eq!(
+                    error.to_string(),
+                    crate::xai::said_of_failure(failure),
+                    "{failure:?}"
+                );
+                if let Some(command) = command {
+                    assert!(error.to_string().contains(command), "{failure:?}: {error}");
+                }
+                assert!(
+                    host.requests().is_empty(),
+                    "{failure:?}: a request was made"
+                );
+            }
+        }
+    }
+
+    /// XAI-17: the token is asked for at each request, so a token renewed between two rounds of a turn
+    /// is the one the second carries, and one that was good for the first is not kept past its
+    /// expiry. A client that asked once for a session would send the first token twice.
+    #[test]
+    fn the_token_is_asked_for_at_each_request_and_not_once_for_a_session() {
+        use crate::testutil::{XaiAnswer, xai_host};
+        let host = xai_host(vec![XaiAnswer::Whole("one"), XaiAnswer::Whole("two")]);
+        let _at = crate::xai::stand_in::at(
+            &host.endpoint,
+            &["placeholder-xai-token-1", "placeholder-xai-token-2"],
+        );
+        let config = with_a_gateway();
+
+        ask_the_xai_account(&config, false).expect("the first request");
+        ask_the_xai_account(&config, false).expect("the second request");
+
+        let bearers: Vec<Option<String>> = host
+            .requests()
+            .iter()
+            .map(|request| request.authorization.clone())
+            .collect();
+        assert_eq!(
+            bearers,
+            [
+                Some("Bearer placeholder-xai-token-1".to_string()),
+                Some("Bearer placeholder-xai-token-2".to_string())
+            ]
+        );
+        assert!(crate::xai::stand_in::refused().is_empty());
+    }
+
+    /// XAI-18: a request the host refuses with a 400, a 401 or a 403 is made once more with a token the
+    /// authorization server replaced it with, and the turn goes on where the second is accepted. The
+    /// service answered a token it could not validate with a 403 and a bearer that is no token with a 400,
+    /// so those statuses are among them, and the decision is made from the status alone: a 400 whose text
+    /// names the account's key and one whose text says something else are treated alike, which a reader
+    /// of the text would not do. The token that was turned away is the one replaced, once. The regression
+    /// it rejects is a first 403 told without a renewal, which ends the turn for a token that a renewal
+    /// would have mended.
+    #[test]
+    fn a_request_refused_with_a_400_a_401_or_a_403_is_made_once_more_with_a_replacement_token() {
+        use crate::testutil::{XaiAnswer, xai_host};
+        for (status, body) in [
+            (400, A_BODY_WITH_AN_IDENTIFIER),
+            (400, r#"{"error":"something else entirely"}"#),
+            (401, ""),
+            (403, A_BODY_WITH_AN_IDENTIFIER),
+        ] {
+            for streamed in [false, true] {
+                // The client gives up the breakpoints it marked a prefix with before it gives up on a
+                // 400, so one is sent twice with the token it was made with, and a 401 or a 403 once.
+                let mut answers =
+                    vec![XaiAnswer::Status(status, body); if status == 400 { 2 } else { 1 }];
+                answers.push(if streamed {
+                    XaiAnswer::Streamed("hello")
+                } else {
+                    XaiAnswer::Whole("hello")
+                });
+                let host = xai_host(answers);
+                let _at = crate::xai::stand_in::at(
+                    &host.endpoint,
+                    &["placeholder-xai-token-1", "placeholder-xai-token-2"],
+                );
+                let config = with_a_gateway();
+
+                let reply = ask_the_xai_account(&config, streamed);
+
+                assert!(
+                    reply.is_ok(),
+                    "{status} streamed {streamed}: {:?}",
+                    reply.err().map(|e| e.to_string())
+                );
+                assert_eq!(
+                    crate::xai::stand_in::refused(),
+                    ["placeholder-xai-token-1"],
+                    "{status}: the token turned away was not the one replaced, once"
+                );
+                let bearers: Vec<String> = host
+                    .requests()
+                    .iter()
+                    .filter_map(|request| request.authorization.clone())
+                    .collect();
+                assert_eq!(
+                    bearers.last().map(String::as_str),
+                    Some("Bearer placeholder-xai-token-2")
+                );
+                assert!(
+                    bearers
+                        .iter()
+                        .take(bearers.len() - 1)
+                        .all(|b| b == "Bearer placeholder-xai-token-1"),
+                    "{bearers:?}"
+                );
+            }
+        }
+    }
+
+    /// XAI-18: a replacement the host refuses with a 401 is the sign-in refused, in the sentence that
+    /// names the command, and nothing of the reply is repeated. One it refuses with a 400 is a request
+    /// that was wrong, not a token: the failure is the status as for any gateway, so a prompt too long
+    /// for the model is still a refusal of the body that shortens the conversation, and no sign-in is
+    /// said to have been refused. The refresh is asked for once for the request. One it refuses with a
+    /// 403 is the refusal for this account and not the sign-in: a token the authorization server has just
+    /// issued is not one the host could not validate.
+    #[test]
+    fn a_replacement_refused_with_a_401_is_the_sign_in_refused_with_a_403_the_account_and_with_a_400_a_bad_request()
+     {
+        use crate::testutil::{XaiAnswer, xai_host};
+        for (status, rejected) in [(401, true), (403, false), (400, false)] {
+            let mut answers = vec![XaiAnswer::Status(status, A_BODY_WITH_AN_IDENTIFIER)];
+            answers.extend((0..8).map(|_| XaiAnswer::Status(status, A_BODY_WITH_AN_IDENTIFIER)));
+            let host = xai_host(answers);
+            let _at = crate::xai::stand_in::at(
+                &host.endpoint,
+                &["placeholder-xai-token-1", "placeholder-xai-token-2"],
+            );
+            let config = with_a_gateway();
+
+            let error = ask_the_xai_account(&config, false).expect_err("every request was refused");
+
+            let diagnosis = error.diagnosis();
+            assert_eq!(
+                diagnosis.account == Some(AccountFailure::Xai(XaiFailure::Rejected)),
+                rejected,
+                "{status}: {error}"
+            );
+            assert_eq!(
+                error.to_string().contains("bravebot auth login xai"),
+                rejected,
+                "{status}: {error}"
+            );
+            assert_eq!(
+                diagnosis.account == Some(AccountFailure::Xai(XaiFailure::NotPermitted)),
+                status == 403,
+                "{status}: {error}"
+            );
+            assert_eq!(
+                error.refused_the_body(),
+                !rejected && status != 403,
+                "{status}"
+            );
+            assert_eq!(
+                diagnosis.status.is_some(),
+                !rejected && status != 403,
+                "{status}"
+            );
+            assert!(
+                !error.to_string().contains("placeholder-team-id")
+                    && !format!("{error:?}").contains("placeholder-team-id"),
+                "{status}: a reply was repeated: {error}"
+            );
+            assert_eq!(
+                crate::xai::stand_in::refused(),
+                ["placeholder-xai-token-1"],
+                "{status}: more than one replacement for one request"
+            );
+            assert!(
+                diagnosis.attempts.is_some_and(|attempts| attempts >= 2),
+                "{status}: the requests of both calls were not counted: {:?}",
+                diagnosis.attempts
+            );
+            let bearers: Vec<String> = host
+                .requests()
+                .iter()
+                .filter_map(|request| request.authorization.clone())
+                .collect();
+            assert!(
+                bearers.contains(&"Bearer placeholder-xai-token-1".to_string())
+                    && bearers.contains(&"Bearer placeholder-xai-token-2".to_string()),
+                "{status}: {bearers:?}"
+            );
+            assert!(
+                !bearers.iter().any(|b| b != "Bearer placeholder-xai-token-1"
+                    && b != "Bearer placeholder-xai-token-2"),
+                "{bearers:?}"
+            );
+        }
+    }
+
+    /// XAI-16: a stop reaches a streamed request on the xAI account, so a person who presses it is not kept
+    /// waiting for a host that has not answered, nor for one whose reply stalled after its first words. The
+    /// gateway client reads a whole reply without a stop, and so does this one. The regressions it rejects are a stop that is not handed to the client that makes the
+    /// request, which leaves the turn waiting for as long as the host is silent, and a backend that drops
+    /// the stop it was given.
+    #[test]
+    fn a_stop_reaches_a_request_on_the_xai_account_and_does_not_wait_for_the_host() {
+        use crate::testutil::{XaiAnswer, xai_host};
+        use std::time::{Duration, Instant};
+        for (answer, what) in [
+            (
+                XaiAnswer::Silent(Duration::from_secs(10)),
+                "a streamed reply the host never began",
+            ),
+            (
+                XaiAnswer::Stalled("a first word", Duration::from_secs(10)),
+                "a streamed reply that stalled after its first words",
+            ),
+        ] {
+            let host = xai_host(vec![answer]);
+            let _at = crate::xai::stand_in::at(&host.endpoint, &["placeholder-xai-token-1"]);
+            let config = with_a_gateway();
+            let egress = Egress::new();
+            let mut sink = bravebot_core::event::RecordingSink::new();
+            let mut policy = a_policy_that_may_fetch(&mut sink);
+            let request = ChatRequest::new(
+                "xai/grok-4.5",
+                vec![bravebot_aichat::protocol::Message::user("a question")],
+            );
+            let cancel = bravebot_core::cancel::Cancel::new();
+            let mut backend =
+                Backend::select(&config, &egress, "xai/grok-4.5").with_cancel(cancel.clone());
+            let stopping = cancel.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                stopping.cancel();
+            });
+
+            let started = Instant::now();
+            let error = backend
+                .complete_streaming(&mut policy, &request, |_| {})
+                .expect_err("a stopped request produced a completion");
+
+            assert!(error.is_cancelled(), "{what}: {error}");
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "{what}: the stop waited for the host: {:?}",
+                started.elapsed()
+            );
+        }
+    }
+
+    /// XAI-16: a stop given to the backend is the one its request carries, and is the turn's own: the
+    /// variant holds it where the client is made from it. A backend whose `with_cancel` ignores the xAI
+    /// account would hold none.
+    #[test]
+    fn the_stop_a_backend_is_given_is_held_by_the_xai_account_variant() {
+        let config = with_a_gateway();
+        let egress = Egress::new();
+        let stop = bravebot_core::cancel::Cancel::new();
+
+        let backend = Backend::select(&config, &egress, "xai/grok-4.5").with_cancel(stop.clone());
+
+        let Backend::XaiAccount {
+            cancel: Some(carried),
+            ..
+        } = backend
+        else {
+            panic!("the xAI account's backend holds no stop");
+        };
+        assert!(!carried.is_cancelled());
+        stop.cancel();
+        assert!(carried.is_cancelled(), "the stop is not the turn's");
+    }
+
+    /// XAI-18: a request the host refuses with a 403 renews the token once, as a 400 and a 401 do, and
+    /// where the renewed token is refused with a 403 as well the failure is the refusal for this account,
+    /// in a sentence of its own that names no command, whole or streamed. The host refused an access
+    /// token it could not validate with a 403, so a first 403 is a question about the token, and one that
+    /// outlives a renewal is not an invalid token. It is decided from the status alone, so a 403 whose
+    /// text names the account is told the same way and nothing of the reply is repeated. Both requests
+    /// are counted. The regressions it rejects are a first 403 told as the account's refusal without a
+    /// renewal, a second 403 told as the sign-in refused, which sends a person to sign in again for what
+    /// that does not change, and a renewal for every 403 repeated.
+    #[test]
+    fn a_request_refused_with_a_403_renews_the_token_once_and_a_second_403_is_a_refusal_for_the_account()
+     {
+        use crate::testutil::{XaiAnswer, xai_host};
+        for streamed in [false, true] {
+            let host = xai_host(vec![
+                XaiAnswer::Status(403, A_BODY_WITH_AN_IDENTIFIER),
+                XaiAnswer::Status(403, A_BODY_WITH_AN_IDENTIFIER),
+                XaiAnswer::Whole("never sent"),
+            ]);
+            let _at = crate::xai::stand_in::at(
+                &host.endpoint,
+                &["placeholder-xai-token-1", "placeholder-xai-token-2"],
+            );
+            let config = with_a_gateway();
+
+            let error = ask_the_xai_account(&config, streamed).expect_err("refused");
+
+            let diagnosis = error.diagnosis();
+            assert_eq!(
+                diagnosis.account,
+                Some(AccountFailure::Xai(XaiFailure::NotPermitted)),
+                "streamed {streamed}: {error}"
+            );
+            assert_eq!(diagnosis.category, Category::Refused, "{error}");
+            assert_eq!(
+                diagnosis.attempts,
+                Some(2),
+                "both requests were not counted: {error}"
+            );
+            assert_eq!(
+                error.to_string(),
+                crate::xai::said_of_failure(XaiFailure::NotPermitted)
+            );
+            assert!(
+                !error.to_string().contains("auth login")
+                    && !error.to_string().contains("sign-in has ended"),
+                "{error}"
+            );
+            assert!(
+                !error.to_string().contains("placeholder-team-id")
+                    && !format!("{error:?}").contains("placeholder-team-id"),
+                "a reply was repeated: {error}"
+            );
+            assert_eq!(
+                crate::xai::stand_in::refused(),
+                ["placeholder-xai-token-1"],
+                "the token was not replaced exactly once for a 403"
+            );
+            let bearers: Vec<Option<String>> = host
+                .requests()
+                .iter()
+                .map(|request| request.authorization.clone())
+                .collect();
+            assert_eq!(
+                bearers,
+                [
+                    Some("Bearer placeholder-xai-token-1".to_string()),
+                    Some("Bearer placeholder-xai-token-2".to_string())
+                ],
+                "streamed {streamed}"
+            );
+        }
+    }
+
+    /// XAI-18: where the token cannot be replaced the failure is the renewal's, and the request is not
+    /// made again: a sign-in the authorization server ended names the command, and a renewal that
+    /// failed as a class of request does not. The first request was made with the token in hand.
+    #[test]
+    fn a_token_that_cannot_be_replaced_ends_the_turn_in_the_renewals_sentence_with_no_second_request()
+     {
+        use crate::testutil::{XaiAnswer, xai_host};
+        for (status, failure) in [
+            (400, XaiFailure::Ended),
+            (400, XaiFailure::Unusable),
+            (400, XaiFailure::Renewal(RenewalFailure::RateLimited)),
+            (400, XaiFailure::Renewal(RenewalFailure::Transport)),
+            // A first 403 is refused for a token the host could not validate, so a renewal that
+            // finds the sign-in ended is the sign-in ended, and not a refusal for the account.
+            (403, XaiFailure::Ended),
+            (403, XaiFailure::Renewal(RenewalFailure::Transport)),
+        ] {
+            let host = xai_host(vec![
+                XaiAnswer::Status(status, A_BODY_WITH_AN_IDENTIFIER),
+                XaiAnswer::Status(status, A_BODY_WITH_AN_IDENTIFIER),
+                XaiAnswer::Whole("never sent"),
+            ]);
+            let _at = crate::xai::stand_in::at(&host.endpoint, &["placeholder-xai-token-1"]);
+            crate::xai::stand_in::fail_the_replacement(failure);
+            let config = with_a_gateway();
+
+            let error =
+                ask_the_xai_account(&config, false).expect_err("the token could not be replaced");
+
+            assert_eq!(
+                error.diagnosis().account,
+                Some(AccountFailure::Xai(failure)),
+                "{failure:?}: {error}"
+            );
+            assert_eq!(error.to_string(), crate::xai::said_of_failure(failure));
+            // The client gives up the breakpoints it marked a prefix with before it gives up on a 400,
+            // so that status is sent twice with the token in hand, and a 403 once. None follows the
+            // failed renewal.
+            let sent = host.requests().len();
+            let wanted = if status == 400 { 2 } else { 1 };
+            assert_eq!(sent, wanted, "{status} {failure:?}: {sent} requests");
+            assert!(
+                host.requests()
+                    .iter()
+                    .all(|request| request.authorization.as_deref()
+                        == Some("Bearer placeholder-xai-token-1")),
+                "{failure:?}: a replacement was sent that was never had"
+            );
+        }
+    }
+
+    /// XAI-18: a status that is none of the three is the failure it is, with no renewal: a model the
+    /// account does not have (404), and a redirect, do not ask the authorization server for anything.
+    /// A turn that renewed on every failure would spend a refresh token on each.
+    #[test]
+    fn a_failure_that_is_not_a_400_a_401_or_a_403_asks_the_authorization_server_for_nothing() {
+        use crate::testutil::{XaiAnswer, xai_host};
+        for status in [404, 413] {
+            let host = xai_host(vec![XaiAnswer::Status(status, A_BODY_WITH_AN_IDENTIFIER)]);
+            let _at = crate::xai::stand_in::at(
+                &host.endpoint,
+                &["placeholder-xai-token-1", "placeholder-xai-token-2"],
+            );
+            let config = with_a_gateway();
+
+            let error = ask_the_xai_account(&config, false).expect_err("refused");
+
+            assert_eq!(error.diagnosis().status, Some(status), "{error}");
+            assert!(
+                crate::xai::stand_in::refused().is_empty(),
+                "{status}: a token was replaced"
+            );
+            assert_eq!(host.requests().len(), 1, "{status}");
+            assert!(
+                !error.to_string().contains("placeholder-team-id"),
+                "{error}"
+            );
         }
     }
 
@@ -2350,6 +3290,72 @@ mod tests {
         }
     }
 
+    /// XAI-15: each failure of the xAI account is diagnosed from its step, as the ChatGPT account's is,
+    /// and where signing in again is the remedy the sentence says which command to type. The sentence
+    /// of one failure is not the other service's, and a renewal that was refused or could not be made is
+    /// told as the class of the request, which a fallback model may answer for where it was rate
+    /// limited or unavailable.
+    #[test]
+    fn an_xai_failure_is_diagnosed_by_its_step_and_names_the_command_where_it_is_the_remedy() {
+        for (failure, category, names_the_command) in [
+            (XaiFailure::NotSignedIn, Category::Unauthorized, true),
+            (XaiFailure::Ended, Category::Unauthorized, true),
+            (XaiFailure::Rejected, Category::Unauthorized, true),
+            (XaiFailure::NotPermitted, Category::Refused, false),
+            (XaiFailure::Unusable, Category::Unauthorized, false),
+            (
+                XaiFailure::Renewal(RenewalFailure::Refused),
+                Category::Refused,
+                false,
+            ),
+            (
+                XaiFailure::Renewal(RenewalFailure::RateLimited),
+                Category::RateLimited,
+                false,
+            ),
+            (
+                XaiFailure::Renewal(RenewalFailure::Unavailable),
+                Category::Unavailable,
+                false,
+            ),
+            (
+                XaiFailure::Renewal(RenewalFailure::Incomplete),
+                Category::Incomplete,
+                false,
+            ),
+            (
+                XaiFailure::Renewal(RenewalFailure::Transport),
+                Category::Transport,
+                false,
+            ),
+        ] {
+            let error = BackendError::from(ChatError::Account(AccountFailure::Xai(failure)));
+            let diagnosis = error.diagnosis();
+            assert_eq!(diagnosis.category, category, "{failure:?}");
+            assert_eq!(
+                diagnosis.account,
+                Some(AccountFailure::Xai(failure)),
+                "{failure:?}"
+            );
+            assert_eq!((diagnosis.status, diagnosis.retry_after), (None, None));
+            assert_eq!(
+                error.to_string().contains("bravebot auth login xai"),
+                names_the_command,
+                "{failure:?}: {error}"
+            );
+            assert!(
+                !error.to_string().contains("ChatGPT"),
+                "{failure:?}: {error}"
+            );
+            // Not a refusal of the body, so no summary is spent and the conversation is not shortened
+            // for a sign-in.
+            assert!(!error.refused_the_body(), "{failure:?}");
+            let counted = error.counted(0, None, None).diagnosis();
+            assert_eq!(counted.account, Some(AccountFailure::Xai(failure)));
+            assert_eq!(counted.attempts, Some(0));
+        }
+    }
+
     /// CHATGPT-8: which of the account's failures it was travels with the category, so a front end
     /// can say it in the sentence of that failure and not in the category's. Every value reaches
     /// the diagnosis as itself, including where the call was counted, and the usage limit and the
@@ -2609,6 +3615,29 @@ mod tests {
                 "{model} was not compared with the name that came back"
             );
         }
+    }
+
+    /// XAI-16: the name an xAI reply reports is not compared with the name asked for, since the listing
+    /// states aliases for its models and a name given as one is taken. The regression it rejects is a
+    /// run that worked, on `xai/grok-code-fast-1` answered under `grok-build-0.1`, ended as a model
+    /// that was not served. A gateway's own model is still compared.
+    #[test]
+    fn an_xai_alias_is_not_expected_to_be_the_name_that_comes_back() {
+        let config = with_a_gateway();
+        for model in [
+            "xai/grok-code-fast-1",
+            "xai/grok-build-0.1",
+            "xai/an-id-nobody-listed",
+        ] {
+            assert!(
+                !Backend::reports_the_model_it_was_asked_for(&config, model),
+                "{model} was expected to come back under its own name"
+            );
+        }
+        assert!(Backend::reports_the_model_it_was_asked_for(
+            &config,
+            "z-ai/glm-4.6"
+        ));
     }
 
     /// An `anthropic` entry is a gateway by selection and speaks the Messages protocol, and the name

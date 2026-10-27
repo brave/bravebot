@@ -661,6 +661,66 @@ fn the_scan_for_the_chatgpt_sign_in_finds_each_way_to_name_it_and_not_a_read_of_
     }
 }
 
+/// Whether `text` names the xAI flow's `sign_in`.
+///
+/// Read as text, as [`names_the_chatgpt_sign_in`] is: the module path and the function in one file,
+/// the module's path ahead of the call whatever the crate is called, a glob or a group imported from
+/// the module under that alias, and the module renamed. A file naming `sign_in` alone is not a
+/// caller, and neither is one that names the module and not the function.
+fn names_the_xai_sign_in(text: &str) -> bool {
+    (text.contains("bravebot_skus::xai") && text.contains("sign_in"))
+        || text.contains("xai::sign_in")
+        || (text.contains("xai::*") && text.contains("sign_in("))
+        || (text.contains("xai::{") && text.contains("sign_in"))
+        || (text.contains("xai as ") && text.contains("sign_in("))
+}
+
+/// XAI-7 says only a command a person types signs in. The flow is `bravebot_skus::xai`'s `sign_in`,
+/// which shows a code, waits for it to be used for as long as it lasts and ends with a credential on
+/// disk, so a tool, a hook, a slash command or a background host that called it would start that on
+/// content's say. The one caller is the command's own file, and a file that names the module and
+/// `sign_in` together is a second. A file a test module declares is a test, and is not read. A file
+/// that only reads the sign-in file or words its failures names the module and not `sign_in`.
+#[test]
+fn the_xai_sign_in_is_started_by_the_command_and_nothing_else() {
+    let callers: Vec<String> = shipped::sources()
+        .iter()
+        .filter(|source| names_the_xai_sign_in(&source.without_test_modules))
+        .map(|source| source.name.clone())
+        .collect();
+    assert_eq!(callers, ["crates/cli/src/xai.rs"]);
+}
+
+/// The scan above reads the way a file names the flow, so the ways it can be named are held here:
+/// each form that starts the sign-in is found, and the read of the sign-in file is not.
+#[test]
+fn the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file() {
+    for starts in [
+        "bravebot_skus::xai::sign_in(&hosts)",
+        "use bravebot_skus::xai;\nxai::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nskus::xai::sign_in(&hosts)",
+        "use bravebot_skus::xai::sign_in as start;\nstart(&hosts)",
+        "use bravebot_skus::xai::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai::{Hosts, sign_in};\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai as flow;\nflow::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai::sign_in as start;\nstart(&hosts)",
+    ] {
+        assert!(names_the_xai_sign_in(starts), "{starts}");
+    }
+    for reads in [
+        "use bravebot_skus::xai::Account;\nAccount::load()",
+        "use bravebot_skus as skus;\nskus::xai::Account::load()",
+        "fn needs_sign_in(model: &str) -> bool { false }",
+        "use bravebot_skus as skus;\nuse skus::xai::{Account, Hosts};\nAccount::load()",
+        "use bravebot_skus as skus;\nuse skus::xai::*;\nlet _ = Account::load();",
+        "use bravebot_skus::xai::{Class, TokenError};\nsaid_of_renewal(&failure)",
+        "use bravebot_skus::chatgpt::sign_in;\nsign_in(&hosts)",
+    ] {
+        assert!(!names_the_xai_sign_in(reads), "{reads}");
+    }
+}
+
 /// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test
 /// above passes on a crate that has found one it does not look for.
 #[test]

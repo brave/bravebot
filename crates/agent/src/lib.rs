@@ -92,6 +92,7 @@ pub mod usability;
 pub mod vet;
 pub mod watch;
 pub mod workspace;
+pub mod xai;
 
 /// What a crash of this process may leave behind, re-exported for the front ends.
 ///

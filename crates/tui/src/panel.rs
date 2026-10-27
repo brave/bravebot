@@ -372,8 +372,7 @@ pub enum Target {
     PreviousEdit,
     /// The control for the next edit in the bar of the files state.
     NextEdit,
-    /// The heading of the Files section and the row under it: the same question `/diff` asks
-    /// (MOUSE-20).
+    /// The totals row of the Files section: the same question `/diff` asks (MOUSE-20).
     Files,
     /// The row that names the key hiding the panel: the same thing that key does (MOUSE-21).
     Hide,
@@ -515,9 +514,8 @@ fn laid_out(session: &Session, width: u16, height: u16) -> Body {
             t!(panel_files).to_string(),
             vec![Line::from(total)],
         );
-        // The heading and the row under it, which are the last two rows so far.
-        let totals = body.len() - 1;
-        targets.extend([totals - 1, totals].map(|row| Place::on_row(row, Target::Files)));
+        // The heading is not a target, only the row under it, which is the last row so far.
+        targets.push(Place::on_row(body.len() - 1, Target::Files));
     }
 
     // The blank row and the heading come out of the room before the rows do.
@@ -3235,11 +3233,11 @@ mod tests {
         );
     }
 
-    /// MOUSE-20. Rejects: a Files target on the rows under the section or on the plan, whose rows
-    /// belong to their tasks (MOUSE-32), on the border column, and a section whose heading or
+    /// MOUSE-20. Rejects: a Files target on the heading, on the rows under the section or on the
+    /// plan, whose rows belong to their tasks (MOUSE-32), on the border column, and a section whose
     /// totals row is not one.
     #[test]
-    fn only_the_files_heading_and_its_totals_row_are_click_targets() {
+    fn only_the_files_totals_row_is_a_click_target() {
         let tasks: Vec<(String, Status)> = (0..6)
             .map(|n| (format!("task {n}"), Status::Pending))
             .collect();
@@ -3254,7 +3252,7 @@ mod tests {
         let inside = area.x + 3;
         let at = |row: u16, column: u16| target_at(&session, area, area.y + row, column);
 
-        assert_eq!(at(heading, inside), Some(Target::Files));
+        assert_eq!(at(heading, inside), None, "the heading is not a target");
         assert_eq!(at(heading + 1, inside), Some(Target::Files));
         assert_eq!(at(heading - 1, inside), None, "{drawn:#?}");
         assert_eq!(at(heading + 2, inside), None, "{drawn:#?}");
@@ -3265,27 +3263,22 @@ mod tests {
             "the first row of the plan is the first task's, not the section's"
         );
         assert_eq!(
-            at(heading, area.x),
+            at(heading + 1, area.x),
             None,
             "the border column is the resize handle"
         );
 
-        // A heading or a totals row that the height of the panel cuts is not a target. The last row
-        // of the panel names the key that hides it, so a panel `n` rows tall draws `n - 1`.
+        // A totals row that the height of the panel cuts is not a target. The last row of the panel
+        // names the key that hides it, so a panel `n` rows tall draws `n - 1`.
         let target = |height: u16, row: u16| {
             let area = Rect::new(84, 0, WIDTH, height);
             target_at(&session, area, row, inside)
         };
-        assert_eq!(target(heading + 2, heading), Some(Target::Files));
+        assert_eq!(target(heading + 3, heading + 1), Some(Target::Files));
         assert_eq!(
             target(heading + 2, heading + 1),
             Some(Target::Hide),
             "the totals row is cut"
-        );
-        assert_eq!(
-            target(heading + 1, heading),
-            Some(Target::Hide),
-            "the heading is cut"
         );
 
         // A session that has written nothing has no section to click.

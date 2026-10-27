@@ -292,8 +292,8 @@ pub(super) fn targets() -> Vec<Target> {
             || {
                 let mut session = wrote_two_files(2);
                 session.toggle_panel();
-                let buffer = draw_at(&mut session, 120, 40);
-                let cell = find_on(&buffer, t!(panel_files));
+                draw_at(&mut session, 120, 40);
+                let cell = a_panel_target(&session, crate::panel::Target::Files);
                 (session, cell)
             },
             |session, _| session.files_open(),

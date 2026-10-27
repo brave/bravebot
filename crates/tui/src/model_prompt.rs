@@ -1125,6 +1125,128 @@ mod tests {
             .collect()
     }
 
+    /// What an `openai` entry that names no models is offered (BACKEND-19): the rows OpenAI lists
+    /// less the Responses-only ids. The rows state no capability, so chat, reasoning, embedding,
+    /// speech, image and moderation models arrive in one list. Each is keyed by the entry's id and
+    /// filed under it.
+    fn an_openai_roster() -> Vec<Model> {
+        [
+            "babbage-002",
+            "davinci-002",
+            "chat-latest",
+            "chatgpt-image-latest",
+            "gpt-3.5-turbo",
+            "gpt-3.5-turbo-0125",
+            "gpt-3.5-turbo-instruct",
+            "gpt-4.1",
+            "gpt-4.1-2025-04-14",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "gpt-4o",
+            "gpt-4o-2024-11-20",
+            "gpt-4o-mini",
+            "gpt-4o-mini-2024-07-18",
+            "gpt-4o-mini-search-preview",
+            "gpt-4o-mini-transcribe",
+            "gpt-4o-mini-tts",
+            "gpt-4o-search-preview",
+            "gpt-4o-transcribe",
+            "gpt-5",
+            "gpt-5-2025-08-07",
+            "gpt-5-chat-latest",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "gpt-5.1",
+            "gpt-5.1-chat-latest",
+            "gpt-5.2",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.5",
+            "gpt-audio",
+            "gpt-image-1",
+            "gpt-image-1-mini",
+            "gpt-realtime",
+            "gpt-realtime-mini",
+            "o1",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "omni-moderation-latest",
+            "sora-2",
+            "text-embedding-3-large",
+            "text-embedding-3-small",
+            "text-embedding-ada-002",
+            "tts-1",
+            "tts-1-hd",
+            "whisper-1",
+        ]
+        .iter()
+        .map(|id| served_by("openai", &format!("openai/{id}"), id))
+        .collect()
+    }
+
+    /// VIEW-14, VIEW-15: a roster that mixes chat, embedding, speech and image models, as an
+    /// `openai` entry naming no models is offered, is one section under one heading with nothing
+    /// capped. A person reaches an embedding or a speech model by typing words from its name, and a
+    /// pick is recorded under the entry's id. Rejects a roster cut to a count, a heading repeated
+    /// for each row, and a search that matches any word typed where the clause says every word.
+    /// The roster is given to the picker as it is, so this test does not reach the filter that
+    /// leaves the Responses-only ids out of a listing ([BACKEND-19]).
+    ///
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    #[test]
+    fn an_openai_roster_of_mixed_models_is_one_section_with_every_row_reachable() {
+        let roster = an_openai_roster();
+        let mut picker = Picker::new(roster.clone(), Some("openai/gpt-4o-mini"));
+
+        assert_eq!(picker.matching().len(), roster.len(), "a row was dropped");
+        assert_eq!(
+            picker.chosen().map(|model| model.key.as_str()),
+            Some("openai/gpt-4o-mini"),
+            "the picker did not open on the model in use"
+        );
+        let output = rendered_at(&picker, 60, 20);
+        assert_eq!(output.matches("openai").count(), 1, "{output}");
+        assert!(output.contains("● gpt-4o-mini"), "{output}");
+        assert!(!output.contains("openai/gpt-4o-mini"), "{output}");
+
+        let found = |picker: &mut Picker, text: &str| -> Vec<String> {
+            for _ in 0..picker.search.len() {
+                handle_key(picker, KeyCode::Backspace, KeyModifiers::NONE);
+            }
+            typing(picker, text);
+            picker
+                .matching()
+                .iter()
+                .map(|model| model.key.clone())
+                .collect()
+        };
+        assert_eq!(found(&mut picker, "whisper"), ["openai/whisper-1"]);
+        assert_eq!(
+            found(&mut picker, "embedding"),
+            [
+                "openai/text-embedding-3-large",
+                "openai/text-embedding-3-small",
+                "openai/text-embedding-ada-002"
+            ]
+        );
+        assert_eq!(
+            found(&mut picker, "gpt-5.4"),
+            ["openai/gpt-5.4", "openai/gpt-5.4-mini"]
+        );
+        assert_eq!(found(&mut picker, "o3 mini"), ["openai/o3-mini"]);
+
+        found(&mut picker, "tts-1-hd");
+        assert_eq!(
+            handle_key(&mut picker, KeyCode::Enter, KeyModifiers::NONE),
+            Outcome::Select
+        );
+        assert_eq!(
+            picker.chosen().map(|model| model.key.as_str()),
+            Some("openai/tts-1-hd")
+        );
+    }
+
     /// A premium model returns 403 without a subscription, so which rows those are has to be on the
     /// screen rather than discovered by a request failing.
     #[test]

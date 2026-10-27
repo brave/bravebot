@@ -349,6 +349,20 @@ impl Claim {
             std::thread::sleep(LOOK_AGAIN_IN);
         }
     }
+
+    /// Make this claim as young as a new one.
+    ///
+    /// A holder whose work under the claim is more than one step that waits on the network calls this
+    /// between the steps, so that each step starts under a claim of the age a new one has and none of
+    /// them is the one the age of abandonment lands in. A claim another process broke and removed is
+    /// not made again by this, and one whose time cannot be set keeps the age it has.
+    pub(crate) fn touch(&self) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()))
+            .ok();
+    }
 }
 
 /// Create the claim file at `path`, failing if it is already there.

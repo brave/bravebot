@@ -5,7 +5,7 @@
 //! nonce of a sign-in is random, so a token the verifier accepts has to be signed while the
 //! sign-in runs, and that needs the private half.
 
-use super::encoding::base64url;
+use crate::oauth::encoding::base64url;
 use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair, RsaPublicKeyComponents};
 
 /// The `kid` the key set names the key by, and a token's header names it with.

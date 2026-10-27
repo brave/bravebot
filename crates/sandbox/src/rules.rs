@@ -1382,10 +1382,11 @@ mod tests {
     /// back to decide what runs or what is allowed, and a name the product may start to write
     /// later. None is among the entries a stage reads.
     #[cfg(unix)]
-    const STATE_FILES: [&str; 13] = [
+    const STATE_FILES: [&str; 14] = [
         "gateway-keys.json",
         "leo-premium.json",
         "chatgpt-account.json",
+        "xai-account.json",
         "mcp.json",
         "settings.json",
         "hooks.json",
