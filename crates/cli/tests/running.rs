@@ -13397,6 +13397,44 @@ fn bg_is_refused_with_what_it_cannot_carry_and_without_a_terminal() {
             &["--bg", "--processor-model", "haiku", "fix it"][..],
             "--processor-model",
         ),
+        // The one-shot options `parse_invocation` reads, given after the prompt the way the
+        // reproduction in brave/bravebot#2936 gave `--max-rounds`: joined into the words `--bg`
+        // starts the session with, and so refused by name rather than reaching the model as text.
+        (
+            &["--bg", "say hello", "--max-rounds", "3"][..],
+            "--max-rounds",
+        ),
+        (
+            &["--bg", "say hello", "--max-tokens", "100"][..],
+            "--max-tokens",
+        ),
+        (&["--bg", "say hello", "--model", "haiku"][..], "--model"),
+        (&["--bg", "say hello", "--effort", "low"][..], "--effort"),
+        (
+            &["--bg", "say hello", "--advisor", "reviewer"][..],
+            "--advisor",
+        ),
+        (&["--bg", "say hello", "--file", "a.txt"][..], "--file"),
+        (
+            &["--bg", "say hello", "--session-ref", "abc"][..],
+            "--session-ref",
+        ),
+        (
+            &["--bg", "say hello", "--add-dir", "../sibling"][..],
+            "--add-dir",
+        ),
+        (
+            &["--bg", "say hello", "--trust-workspace"][..],
+            "--trust-workspace",
+        ),
+        (&["--bg", "say hello", "--trace"][..], "--trace"),
+        (&["--bg", "say hello", "--json"][..], "--json"),
+        (&["--bg", "say hello", "--json-stream"][..], "--json-stream"),
+        (
+            &["--bg", "say hello", "--output-schema", "schema.json"][..],
+            "--output-schema",
+        ),
+        (&["--bg", "say hello", "--mode", "manifest"][..], "--mode"),
         (&["--vet", "--bg", "fix it"][..], "--vet"),
         (
             &["--settings", "s.json", "--bg", "fix it"][..],
