@@ -328,7 +328,7 @@ is in [the mouse](transcript.md#what-a-click-does). It holds
   the first turn, and a round that reports nothing spent leaves the previous figures in place,
 - the language servers the session has started, by program name, and the MCP servers, by alias,
 - the files the session has written, as a count with the lines added and removed, once one has been
-  written. Clicking its heading or the count opens the files view below,
+  written. Clicking the count opens the files view below,
 - the plan, which stays after the turn ends. A task still pending or in progress is drawn with a
   filled `■` while a turn is running, and dim with a hollow `□` while none is, as after the turn
   that wrote the list has ended or in a resumed session. Where it runs past the bottom it shows the
@@ -352,7 +352,7 @@ session's own counters, the servers you approved and where the session runs, and
 
 ### The files the session wrote
 
-Type `/diff`, or click the Files section of the panel, and the panel lists every file the session's write calls changed, in the order each was
+Type `/diff`, or click the count in the Files section of the panel, and the panel lists every file the session's write calls changed, in the order each was
 first written, with the lines added and removed at the right edge. Under the list are all the edits to
 the highlighted file, oldest first, each under a header with its place, its turn and its counts, with
 line numbers in a gutter and every change drawn, where the transcript draws the first twelve of each

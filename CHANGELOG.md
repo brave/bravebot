@@ -1,3 +1,7 @@
+## Unreleased
+
+ - Changed the info panel's Files section so that clicking its heading no longer opens `/diff`. Click the count under it.
+
 ## [0.19.0](https://github.com/brave/bravebot/releases/tag/v0.19.0)
 
  - Added signing in with a ChatGPT account: `bravebot auth login chatgpt` opens a browser, stores the sign-in, and offers the account's models in `/model` and the desktop picker as `chatgpt/<model>`. A start with only that sign-in asks which model to use. A model the account does not offer is said so in one sentence, and a picture over 1 MiB is sent. ([#1106](https://github.com/brave/bravebot/issues/1106))
