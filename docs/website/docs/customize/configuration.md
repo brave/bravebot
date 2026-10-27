@@ -711,7 +711,8 @@ none.
 
 How long the service keeps the cached prompt after the last request that read it: `5m` for five
 minutes or `1h` for one hour. It applies to requests that go to an AWS account and to an
-OpenAI-compatible gateway, and not to Brave's own endpoint. A person who pauses for longer than the
+OpenAI-compatible gateway, and not to Brave's own endpoint or to `api.openai.com`, which caches without
+being asked. A person who pauses for longer than the
 default lifetime between turns pays to read the whole conversation again; the one-hour lifetime avoids
 that, and the providers charge a higher rate to write it. With the key absent, bravebot sends no
 lifetime and every service keeps its own default. Any other word names nothing and sends nothing.

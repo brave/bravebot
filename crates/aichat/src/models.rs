@@ -731,10 +731,16 @@ struct GatewayListing {
 /// Nothing is capped. A gateway's roster runs to hundreds, and the picker filters as a person types,
 /// so a limit here would be this program deciding somebody may not choose a model their gateway
 /// serves.
+///
+/// What a listing leaves out is what it says cannot call tools, and the ids the provider is
+/// compiled with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a
+/// route that cannot reach a model does not offer it. The ids are compared with that list only,
+/// and the rows go to a picker, as those the capability filter keeps do.
 fn offered_by_gateway(
     provider: &bravebot_config::provider::Provider,
     listed: Vec<ListedByGateway>,
 ) -> Vec<Model> {
+    let left_out = provider.responses_only_models();
     listed
         .into_iter()
         .filter(|entry| match entry.supported_parameters.as_ref() {
@@ -742,6 +748,7 @@ fn offered_by_gateway(
             None => true,
         })
         .filter(|entry| !entry.id.trim().is_empty())
+        .filter(|entry| !left_out.contains(&entry.id.as_str()))
         .map(|entry| Model {
             key: format!("{}/{}", provider.id, entry.id),
             // The bare name the gateway knows it by. What a person reads is composed by whoever
@@ -1455,6 +1462,60 @@ mod tests {
     fn a_gateway_that_reports_no_capabilities_still_offers_its_models() {
         let models = from_gateway(&gateway(), r#"{"data": [{"id": "z-ai/glm-4.6"}]}"#);
         assert_eq!(models.len(), 1);
+    }
+
+    /// An entry as a block states it, for the tests of what a listing is left out of.
+    fn entry(block: &str) -> bravebot_config::provider::Provider {
+        let serde_json::Value::Object(root) =
+            serde_json::from_str(&format!(r#"{{"provider": {block}}}"#)).expect("json")
+        else {
+            panic!("not an object");
+        };
+        bravebot_config::provider::Provider::all(&root)
+            .pop()
+            .expect("one provider")
+    }
+
+    /// BACKEND-19: OpenAI's listing states no capability, so a chat completions route is not
+    /// offered the models OpenAI's published description gives to the Responses request alone, and
+    /// is offered every other row. A name that only looks like one of them (`-pro` on a model the
+    /// description does not list) is offered, because the description does not name it. The same
+    /// listing is offered whole where the route is the Responses one or the host is not OpenAI's.
+    #[test]
+    fn an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes() {
+        let listing = r#"{"data": [
+            {"id": "gpt-4o-mini"}, {"id": "o3-pro"}, {"id": "gpt-5-codex"},
+            {"id": "text-embedding-3-small"}, {"id": "gpt-5.4-pro"}, {"id": "gpt-5-pro-2025-10-06"}
+        ]}"#;
+        let keys = |block: &str| -> Vec<String> {
+            from_gateway(&entry(block), listing)
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+
+        assert_eq!(
+            keys(r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#),
+            [
+                "openai/gpt-4o-mini",
+                "openai/text-embedding-3-small",
+                "openai/gpt-5.4-pro"
+            ]
+        );
+        assert_eq!(
+            keys(r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"]}}"#).len(),
+            6,
+            "the Responses route reaches those models"
+        );
+        assert_eq!(
+            keys(
+                r#"{"openai": {"env": ["OPENAI_API_KEY"],
+                    "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#
+            )
+            .len(),
+            6,
+            "a proxy keyed openai was left out of models it may serve"
+        );
     }
 
     /// A name is what a request carries, so an entry without one cannot be asked for. Nothing else
