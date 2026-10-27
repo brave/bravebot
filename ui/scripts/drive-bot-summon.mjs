@@ -161,7 +161,7 @@ try {
   const summonedBefore = await page.evaluate(() => window.bravebot.readSummons())
   const direct = await page.evaluate(async ({ directory, lanternHome, FAIL }) => {
     const api = window.bravebot
-    const open = async (where) => {
+    const openSession = async (where) => {
       const made = await api.request('session.new', { directory: where })
       await api.request('trust.reply', { session: made.ok.session, trusted: true })
       return made.ok.session
@@ -172,8 +172,8 @@ try {
       })
     })
     const refusals = {}
-    const session = await open(directory)
-    const home = await open(lanternHome)
+    const session = await openSession(directory)
+    const home = await openSession(lanternHome)
     refusals.unknown = await api.summonBot({ session, slug: 'nobody', prompt: 'hi' })
     refusals.notASlug = await api.summonBot({ session, slug: { slug: 'lantern' }, prompt: 'hi' })
     refusals.badSession = await api.summonBot({ session: '../x', slug: 'lantern', prompt: 'hi' })
