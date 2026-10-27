@@ -8418,12 +8418,15 @@ fn run_call<S: Sink>(
     }
 
     // A line whose stages start with no profile, under the mode `off` or in a turn that does not
-    // confine, already runs with the person's own access. A scope has nothing to lend and
+    // confine, in a workspace the person trusts, already runs with the person's own access. A scope has nothing to lend and
     // `unconfined` nothing to remove, so both are accepted and dropped: the line is asked about and
     // its output quarantined as an ordinary line's is, and nothing is refused, recorded as
     // requested or spent (SANDBOX-26, SANDBOX-29). The shape checks above still apply, so a
-    // mistyped argument is an error in every mode.
-    if starts_without_a_profile(tools.confine_runs, tools.sandbox) {
+    // mistyped argument is an error in every mode. An untrusted workspace falls through to the
+    // refusals below, as it did before (SANDBOX-16).
+    if starts_without_a_profile(tools.confine_runs, tools.sandbox)
+        && workspace_is_trusted(policy, tools.workspace)
+    {
         return Ok(RunCall {
             limit,
             in_the_background,
@@ -20479,7 +20482,7 @@ mod tests {
         /// the `off` mode or in a turn that confines none of its runs, a `scopes` or `unconfined`
         /// argument is accepted and dropped. The call reaches the confirmer as an ordinary line does,
         /// the trail holds no refusal, and a malformed argument or the two together are still errors
-        /// in those sessions. The regressions it rejects are the old refusal of a request that has
+        /// in those sessions. An untrusted workspace is still refused. The regressions it rejects are the old refusal of a request that has
         /// nothing to add, and a check that skips the shape of the arguments once the session is
         /// known to ignore them.
         #[test]
@@ -20509,6 +20512,27 @@ mod tests {
                     assert_eq!(
                         sandbox_refusals(&refused),
                         Vec::<&str>::new(),
+                        "{why}: {arguments}: {refused:?}"
+                    );
+                }
+                // An untrusted workspace is refused as it was, with the line not run and the
+                // refusal on the trail, so the early return is not a way round SANDBOX-16.
+                let untrusted = Session {
+                    trusted: false,
+                    ..session
+                };
+                for arguments in [
+                    json!({"command": "echo hi", "scopes": ["remote"]}),
+                    json!({"command": "echo hi", "unconfined": true}),
+                ] {
+                    let (said, refused, _) = run_in("run-request-untrusted", &arguments, untrusted);
+                    assert!(
+                        said.starts_with("refused: this session does not accept a request"),
+                        "{why}: {arguments}: an untrusted workspace was not refused: {said}"
+                    );
+                    assert_eq!(
+                        sandbox_refusals(&refused).len(),
+                        1,
                         "{why}: {arguments}: {refused:?}"
                     );
                 }
