@@ -113,14 +113,12 @@ function LanguageGroup({ running }: { running: boolean }): React.JSX.Element {
               void window.bravebot.relaunch().then((restarting) => setRefused(!restarting), () => setRefused(true))
             }}>{t.uiSettingsRestart()}</Button>
         </div>
-      </div>
-      {(unread || unsaved) && (
-        <div className="settings-row">
-          <Alert type="error" role="alert" data-test="language-error">
+        {(unread || unsaved) && (
+          <Alert type="error" role="alert" className="settings-row-alert" data-test="language-error">
             {unread ? t.uiSettingsLanguageUnread() : t.uiSettingsLanguageUnsaved()}
           </Alert>
-        </div>
-      )}
+        )}
+      </div>
     </SettingsGroup>
   )
 }
