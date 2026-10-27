@@ -221,11 +221,17 @@ mod tests {
         assert!(untrusted.relabel(Label::untrusted_public()).is_none());
     }
 
-    /// Incomparable labels are not reachable from one another.
+    /// Incomparable labels are not reachable from one another, in either direction.
     #[test]
     fn relabel_refuses_incomparable_labels() {
-        let v = Labelled::new(1u8, Label::untrusted_private());
-        assert!(v.relabel(Label::trusted_public()).is_none());
+        for (from, to) in [
+            (Label::untrusted_private(), Label::trusted_public()),
+            (Label::trusted_private(), Label::untrusted_public()),
+            (Label::untrusted_public(), Label::trusted_private()),
+        ] {
+            let v = Labelled::new(1u8, from);
+            assert!(v.relabel(to).is_none(), "{from} must not relabel to {to}");
+        }
     }
 
     /// How much content there is, is not what the content says. The quarantine hands the

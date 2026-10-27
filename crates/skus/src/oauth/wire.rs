@@ -1,9 +1,9 @@
 //! The requests to a token endpoint, and what is read of the reply of a refused one.
 //!
 //! The reply is bytes this program did not write. What a sign-in takes from it is two tokens that are
-//! never read, a number of seconds and, for a refused refresh, the one error code that says the
-//! refresh token is no longer valid, which is compared with that code and nothing else. The rest of
-//! the body, including every error text, is dropped in this module.
+//! never read, a number of seconds and, for a refused refresh, the error code that says the refresh
+//! token is no longer valid, which is compared with the codes the caller says end its sign-in and
+//! nothing else. The rest of the body, including every error text, is dropped in this module.
 
 use super::Class;
 use crate::Secret;
@@ -13,9 +13,10 @@ use crate::secret::Document;
 pub(crate) const REPLY_LIMIT: u64 = 1024 * 1024;
 
 /// The error code that says a refresh token is no longer valid: RFC 6749 section 5.2's
-/// `invalid_grant`, sent as a string in `{"error":"invalid_grant"}`. A refresh refused with any other
-/// code is a failure of the request and ends nothing.
-const ENDED: &str = "invalid_grant";
+/// `invalid_grant`, sent as a string in `{"error":"invalid_grant"}`. It is the one code that ends the
+/// xAI sign-in and one of the codes that end the ChatGPT one, and each caller names the codes of its
+/// own to [`ends_the_sign_in`].
+pub(crate) const INVALID_GRANT: &str = "invalid_grant";
 
 /// The statuses a refused refresh is read for its error code at. RFC 6749 gives 400, and a server
 /// answering a token as unauthorized gives 401.
@@ -98,16 +99,17 @@ pub(crate) fn agent(
 }
 
 /// Whether a refused refresh is one the server says ends the sign-in: a status of 400 or 401 whose
-/// body names the one error code that does.
+/// body names, as a string `error` and as a whole, one of the codes `ended` lists. A refresh refused
+/// with any other code or status is a failure of the request and ends nothing.
 ///
-/// A body that cannot be read or is not the shape is not that code: nothing is concluded from it.
-pub(crate) fn ends_the_sign_in(response: &mut ureq::http::Response<ureq::Body>) -> bool {
-    ENDED_STATUSES.contains(&response.status().as_u16()) && says_ended(response)
-}
-
-/// Whether a refused refresh's body names the one error code that ends a sign-in.
-fn says_ended(response: &mut ureq::http::Response<ureq::Body>) -> bool {
-    error_code(response).as_deref() == Some(ENDED)
+/// A body that cannot be read or is not the shape names no code: nothing is concluded from it, and
+/// the body is not read at another status.
+pub(crate) fn ends_the_sign_in(
+    response: &mut ureq::http::Response<ureq::Body>,
+    ended: &[&str],
+) -> bool {
+    ENDED_STATUSES.contains(&response.status().as_u16())
+        && error_code(response).is_some_and(|code| ended.contains(&code.as_str()))
 }
 
 /// The `error` of a refused reply's body, where the body is JSON that holds a string under it.

@@ -616,7 +616,7 @@ check and caught the attempt. The prompt that grants the most was the one saying
 
 `verified-by: bravebot_agent::turn::a_quarantined_read_offers_the_user_the_chance_to_vouch`
 `verified-by: bravebot_agent::turn::a_vouch_offer_carries_what_a_check_said_about_the_whole_file`
-`verified-by: bravebot_tui::confirm::the_vouch_prompt_says_what_a_check_found`
+`verified-by: bravebot_tui::confirm::vet::the_vouch_prompt_says_what_a_check_found`
 `verified-by: bravebot_agent::turn::a_quarantined_file_with_nothing_in_it_is_still_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_picture_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::a_path_that_names_no_file_is_not_offered_for_vouching`
@@ -625,7 +625,7 @@ check and caught the attempt. The prompt that grants the most was the one saying
 `verified-by: bravebot_agent::turn::a_vouch_for_a_file_with_an_awkward_name_is_a_rule_about_that_file_alone`
 `verified-by: bravebot_agent::turn::a_trusted_file_is_not_offered_for_vouching`
 `verified-by: bravebot_agent::turn::the_same_file_is_offered_once_per_turn`
-`verified-by: bravebot_tui::confirm::a_preview_with_nothing_in_it_says_so`
+`verified-by: bravebot_tui::confirm::vet::a_preview_with_nothing_in_it_says_so`
 
 <a id="TRUST-9"></a>
 ### TRUST-9: `/add-dir` makes a directory both reachable and trusted, for the session

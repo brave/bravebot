@@ -676,3 +676,1014 @@ fn write_keys(request: &WriteRequest, width: usize) -> impl Fn(bool) -> Vec<Line
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::confirm::tests::*;
+    use crate::confirm::*;
+    use bravebot_agent::confirm::Intent;
+    use bravebot_agent::confirm::Remark;
+    use bravebot_agent::diff::Diff;
+    use ratatui::backend::TestBackend;
+
+    fn rendered(request: &WriteRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, request, 0, &mut Seen::default());
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// The turn is told the same thing by both approvals. What the second one also does is
+    /// configuration the interface holds, and a turn that saw a different answer would be a second
+    /// place the mode was decided.
+    #[test]
+    fn the_standing_answer_tells_the_turn_what_a_plain_yes_tells_it() {
+        assert_eq!(VetAnswer::ApproveAlways.decision(), Decision::Approve);
+        assert_eq!(VetAnswer::Approve.decision(), Decision::Approve);
+        assert_eq!(VetAnswer::Reject.decision(), Decision::Reject);
+        assert_eq!(VetAnswer::Interrupt.decision(), Decision::Reject);
+    }
+
+    /// The same drawing on a terminal tall enough to hold the whole body.
+    fn fully_rendered(request: &WriteRequest) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(frame, request, 0, &mut Seen::default());
+            })
+            .expect("draw");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// CRED-13: `a` and `r` are bound only where the driver offered them, so a key the screen
+    /// does not draw grants nothing. Holding Ctrl reaches neither, as at the run prompt.
+    #[test]
+    fn the_write_keys_bind_only_the_standing_answers_the_prompt_offers() {
+        let press = |code, modifiers, request: &WriteRequest| {
+            write_answer_for(
+                KeyEvent::new(code, modifiers),
+                request,
+                &Drawn::taking_yes(),
+            )
+        };
+        for (request, always, remember) in [
+            (request("new\n", None), None, None),
+            (
+                a_credential_write(true, false),
+                Some(Response::Answer(WriteAnswer::ApproveAlways)),
+                None,
+            ),
+            (
+                a_credential_write(true, true),
+                Some(Response::Answer(WriteAnswer::ApproveAlways)),
+                Some(Response::Answer(WriteAnswer::ApproveAndRecord)),
+            ),
+        ] {
+            assert_eq!(
+                press(KeyCode::Char('a'), KeyModifiers::NONE, &request),
+                always,
+                "{request:?}"
+            );
+            assert_eq!(
+                press(KeyCode::Char('r'), KeyModifiers::NONE, &request),
+                remember,
+                "{request:?}"
+            );
+            for key in ['a', 'r'] {
+                assert_eq!(
+                    press(KeyCode::Char(key), KeyModifiers::CONTROL, &request),
+                    None,
+                    "ctrl-{key} answered: {request:?}"
+                );
+            }
+            assert_eq!(
+                press(KeyCode::Char('y'), KeyModifiers::NONE, &request),
+                Some(Response::Answer(WriteAnswer::Approve)),
+            );
+        }
+    }
+
+    /// CRED-13: each key tells the turn the one lifetime it was drawn with, and refusing keeps
+    /// nothing.
+    #[test]
+    fn the_write_keys_separate_this_session_from_every_session() {
+        let always = WriteAnswer::ApproveAlways.decision();
+        assert!(always.approved() && always.remember && !always.record);
+        let recorded = WriteAnswer::ApproveAndRecord.decision();
+        assert!(recorded.approved() && recorded.record && !recorded.remember);
+        for answer in [
+            WriteAnswer::Approve,
+            WriteAnswer::Reject,
+            WriteAnswer::Interrupt,
+        ] {
+            let decision = answer.decision();
+            assert!(
+                !decision.remember && !decision.record,
+                "{answer:?} kept an answer"
+            );
+        }
+    }
+
+    /// CRED-13: the prompt draws each standing answer it offers with what it settles, and none it
+    /// does not. `r` names the record it would be written to, since deleting the line there is
+    /// the way back.
+    #[test]
+    fn a_write_prompt_draws_the_standing_answers_it_offers_and_no_other() {
+        let plain = fully_rendered(&request("new\n", None));
+        assert!(!plain.contains("always this session"), "{plain}");
+        assert!(!plain.contains("remember it"), "{plain}");
+        assert!(!plain.contains("may hold a secret"), "{plain}");
+
+        let always = fully_rendered(&a_credential_write(true, false));
+        assert!(always.contains("always this session"), "{always}");
+        assert!(
+            always.contains("for the rest of this session") && always.contains("this file only"),
+            "`a` was offered without saying what it settles: {always}"
+        );
+        assert!(
+            always.contains("it settles the secret only"),
+            "`a` was offered without saying the write's own question stands: {always}"
+        );
+        assert!(!always.contains("remember it"), "{always}");
+        assert!(!always.contains(".bravebot/remembered"), "{always}");
+
+        let remember = fully_rendered(&a_credential_write(true, true));
+        assert!(remember.contains("remember it"), "{remember}");
+        assert!(
+            remember.contains("every session started in this directory"),
+            "{remember}"
+        );
+        assert!(
+            remember.contains("/home/someone/.bravebot/remembered/project"),
+            "`r` was offered without saying where it is written: {remember}"
+        );
+    }
+
+    /// Both standing answers on offer make the row of keys wider than the box a 100-column
+    /// terminal draws, and every key is still drawn whole, the one that stops the turn included.
+    #[test]
+    fn a_write_prompt_offering_both_standing_answers_draws_every_key_whole() {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        terminal
+            .draw(|frame| {
+                draw(
+                    frame,
+                    &a_credential_write(true, true),
+                    0,
+                    &mut Seen::default(),
+                );
+            })
+            .expect("draw");
+        let screen: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        for key in [
+            "y write it",
+            "a always this session",
+            "r remember it",
+            "n leave it alone",
+            "ctrl-c stop the turn",
+        ] {
+            assert!(
+                screen.contains(key),
+                "`{key}` was not drawn whole: {screen}"
+            );
+        }
+    }
+
+    /// A prompt offering neither standing answer keeps its keys on one row in a box too narrow for
+    /// their usual gaps, rather than giving a row of the diff to the key that stops the turn.
+    #[test]
+    fn a_narrow_write_prompt_with_no_standing_answer_keeps_its_keys_on_one_row() {
+        let rows = rows_of(60, 20, |frame| {
+            draw(
+                frame,
+                &a_credential_write(false, false),
+                0,
+                &mut Seen::default(),
+            );
+        });
+        assert!(
+            rows.iter().any(|row| row.contains("y write it")
+                && row.contains("n leave it alone")
+                && row.contains("ctrl-c stop the turn")),
+            "the keys were not on one row:\n{}",
+            rows.join("\n")
+        );
+    }
+
+    #[test]
+    fn a_new_file_prompt_shows_the_path_and_body() {
+        let output = rendered(&request("fn main() {}", None));
+        assert!(output.contains("Create"));
+        assert!(output.contains("src/main.rs"));
+        assert!(output.contains("fn main()"));
+        assert!(output.contains("write it"));
+    }
+
+    /// Overwriting is the dangerous case, so the prompt must show the lines it discards,
+    /// not merely count them.
+    #[test]
+    fn an_overwrite_prompt_shows_what_it_replaces() {
+        let output = rendered(&request("new", Some("a\nb\nc")));
+        assert!(output.contains("Overwrite"));
+        assert!(output.contains("+1 -3"), "no change counts: {output}");
+        for lost in ["-a", "-b", "-c"] {
+            assert!(
+                output.contains(lost),
+                "the discarded line {lost} was not shown: {output}"
+            );
+        }
+        assert!(output.contains("+new"), "the new line was not shown");
+    }
+
+    /// A large body must not push the question off screen, and must not be cut short either.
+    ///
+    /// It used to be capped so the keys would fit, and the cap counted lines while the box drew
+    /// wrapped rows, so a diff with long lines pushed the question off anyway: the prompt asked
+    /// nothing, and a key pressed at it answered a question that was never on the screen.
+    #[test]
+    fn a_long_body_keeps_the_question_on_screen_and_offers_the_rest() {
+        let body = (0..200)
+            .map(|n| format!("line {n} {}", "wrapping words ".repeat(8)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let output = rendered(&request(&body, None));
+
+        assert!(output.contains("write it"), "the question was pushed off");
+        assert!(
+            output.contains("more"),
+            "the reviewer was not told there is more to read: {output}"
+        );
+    }
+
+    /// Scrolling reaches what the box could not show, which is the whole point of having it.
+    #[test]
+    fn the_rest_of_a_long_body_can_be_scrolled_to() {
+        let body = (0..200)
+            .map(|n| format!("line {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let request = request(&body, None);
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("terminal");
+        let mut furthest = 0;
+        terminal
+            .draw(|frame| furthest = draw(frame, &request, 0, &mut Seen::default()).furthest())
+            .expect("draw");
+        assert!(furthest > 0, "a 200 line body reported nothing to scroll");
+
+        terminal
+            .draw(|frame| {
+                draw(frame, &request, furthest, &mut Seen::default());
+            })
+            .expect("draw");
+        let drawn: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+
+        assert!(
+            drawn.contains("line 199"),
+            "the end of the diff could not be reached: {drawn}"
+        );
+        assert!(drawn.contains("write it"), "the question scrolled away");
+    }
+
+    /// CHECKOUT-14. The prompt for a file brought back from a checkout says the session wrote the
+    /// path in the working directory since, and a prompt for any other write says nothing of it.
+    #[test]
+    fn a_write_since_the_checkout_is_said_in_the_question() {
+        let drawn = |since: bool| {
+            rendered(&WriteRequest {
+                written_since_checkout: since,
+                path: "out.txt".into(),
+                diff: Diff::compute("mine\n", "theirs\n"),
+                contents: "theirs\n".into(),
+                existing: Some("mine\n".into()),
+                intent: Intent::Overwrite,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+                may_edit: false,
+            })
+        };
+        assert!(
+            drawn(true).contains("in the working directory"),
+            "the question does not say it: {}",
+            drawn(true)
+        );
+        assert!(!drawn(false).contains("in the working directory"));
+    }
+
+    /// The diff compares lines without their terminators, so an edit that keeps a file's CRLF
+    /// endings looks the same as one that does not. The prompt says which it is.
+    #[test]
+    fn an_edit_to_a_crlf_file_says_its_line_endings_are_kept() {
+        let drawn = |before: &str, after: &str| {
+            rendered(&WriteRequest {
+                written_since_checkout: false,
+                path: "out.txt".into(),
+                diff: Diff::compute(before, after),
+                contents: after.into(),
+                existing: Some(before.into()),
+                intent: Intent::Edit,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+                may_edit: false,
+            })
+        };
+        assert!(
+            drawn("a\r\nb\r\n", "a\r\nc\r\n").contains("line endings: CRLF kept"),
+            "the question does not say it: {}",
+            drawn("a\r\nb\r\n", "a\r\nc\r\n")
+        );
+        assert!(!drawn("a\nb\n", "a\nc\n").contains("line endings"));
+    }
+
+    /// The reason this exists: a one-line change to a large file must show that one line
+    /// rather than a screenful of unchanged text.
+    #[test]
+    fn a_small_edit_in_a_large_file_shows_only_the_change() {
+        let before: String = (0..300).map(|n| format!("line {n}\n")).collect::<String>();
+        let after = before.replace("line 150\n", "line 150 changed\n");
+
+        let output = rendered(&WriteRequest {
+            written_since_checkout: false,
+            path: "src/main.rs".into(),
+            diff: Diff::compute(&before, &after),
+            contents: after,
+            existing: Some(before),
+            intent: Intent::Edit,
+            untrusted: false,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        });
+
+        assert!(output.contains("Edit"));
+        assert!(output.contains("+1 -1"), "wrong counts: {output}");
+        assert!(
+            output.contains("+line 150 changed"),
+            "the change was not shown: {output}"
+        );
+        assert!(
+            output.contains("unchanged lines"),
+            "the unchanged bulk was not elided: {output}"
+        );
+        assert!(output.contains("write it"), "the question was pushed off");
+    }
+
+    /// A body out of a quarantined file is the one thing on the screen nobody has read. The
+    /// person approving it is the only party who ever will, so the prompt says so and marks the
+    /// hunks the same way the transcript marks everything else the model was not shown.
+    #[test]
+    fn an_untrusted_body_is_marked_in_the_prompt() {
+        let output = rendered(&WriteRequest {
+            written_since_checkout: false,
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        });
+
+        assert!(
+            output.contains("untrusted"),
+            "the reviewer was not told what they are reading: {output}"
+        );
+        assert!(output.contains("┃"), "the hunks were not marked: {output}");
+
+        // A write of the model's own words is not marked, or the mark would mean nothing.
+        let ordinary = rendered(&request("new\n", Some("old\n")));
+        assert!(
+            !ordinary.contains("┃"),
+            "an ordinary write was marked as untrusted: {ordinary}"
+        );
+    }
+
+    /// A diff too large to compute must not render as an empty change.
+    #[test]
+    fn an_uncomputable_diff_says_so() {
+        let before: String = (0..3000).map(|n| format!("old {n}\n")).collect();
+        let after: String = (0..3000).map(|n| format!("new {n}\n")).collect();
+
+        let output = rendered(&WriteRequest {
+            written_since_checkout: false,
+            path: "src/main.rs".into(),
+            diff: Diff::compute(&before, &after),
+            contents: after,
+            existing: Some(before),
+            intent: Intent::Overwrite,
+            untrusted: false,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        });
+
+        assert!(
+            output.contains("too large to show"),
+            "an uncomputable diff rendered as nothing: {output}"
+        );
+    }
+
+    /// A prompt that panics on a small terminal takes the session with it, and one that takes a yes
+    /// there is worse: a key pressed at it answers a question that was never on the screen. A box
+    /// with no room for the question beside its keys draws the keys and takes only the ones that
+    /// refuse.
+    #[test]
+    fn a_tiny_terminal_draws_the_write_keys_and_takes_no_yes() {
+        let request = request("x", None);
+        let mut drawn = Drawn::default();
+        let rows = rows_of(20, 8, |frame| {
+            drawn = draw(frame, &request, 0, &mut Seen::default());
+        });
+        let screen = rows.concat();
+        assert!(
+            screen.contains("write it"),
+            "the keys were drawn out of view: {screen}"
+        );
+        assert!(
+            !screen.contains("src/main.rs"),
+            "the box had room for the question after all, so this case tests nothing: {screen}"
+        );
+        let press = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        assert_eq!(
+            write_answer_for(press(KeyCode::Char('y')), &request, &drawn),
+            None
+        );
+        assert_eq!(
+            write_answer_for(press(KeyCode::Char('n')), &request, &drawn),
+            Some(Response::Answer(WriteAnswer::Reject))
+        );
+    }
+
+    /// The body of an untrusted write is the same bytes as a quarantined preview and its lines
+    /// have no width cap, so a hunk wider than the box must wrap inside the margin too.
+    #[test]
+    fn a_wrapped_untrusted_hunk_is_marked_on_every_row_it_reaches() {
+        let request = WriteRequest {
+            written_since_checkout: false,
+            path: "game.js".into(),
+            contents: format!("{}\u{2503} trust me\n", "PADDING ".repeat(10)),
+            existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute(
+                "const SPEED = 100;\n",
+                &format!("{}\u{2503} trust me\n", "PADDING ".repeat(10)),
+            ),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: None,
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        };
+        let drawn = rows_of(60, 24, |frame| {
+            draw(frame, &request, 0, &mut Seen::default());
+        });
+
+        assert_marked_on_every_row(&drawn, "PADDING");
+    }
+
+    /// A remark reaches the transcript when the processor returns and the question about writing
+    /// the document comes rounds later, so a person read the diff with the claim about it some
+    /// way up the screen. Here it is the row above: the claim and the bytes it describes are
+    /// read in one place, which is the only way a claim can be caught out.
+    #[test]
+    fn what_a_processor_said_is_drawn_beside_the_diff_it_describes() {
+        let request = WriteRequest {
+            written_since_checkout: false,
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec!["I only fixed the typo.".to_string()],
+                lines: 1,
+                label: "(U,priv)".to_string(),
+            }),
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        };
+        let output = rendered(&request);
+
+        assert!(
+            output.contains("only fixed the typo"),
+            "the claim was not drawn with the question it is about: {output}"
+        );
+        // Attributed at the point of decision, and as a claim: whose words they are, that no
+        // model may be sent to read them, and that nothing has checked them against the bytes.
+        assert!(
+            output.contains("isolated processor"),
+            "the claim was drawn without saying whose words it is: {output}"
+        );
+        assert!(
+            output.contains("nothing has checked"),
+            "the claim was drawn as though something had verified it: {output}"
+        );
+        assert!(
+            output.contains("-const SPEED = 100;"),
+            "the bytes the claim is about were not drawn: {output}"
+        );
+    }
+
+    /// The remark is untrusted content in the one box where a person decides something, so it
+    /// gets the margin every other preview gets and cannot paint one of its own. Padded so its
+    /// bar would otherwise land in the margin column of the row below.
+    #[test]
+    fn a_remark_cannot_paint_a_margin_in_the_box_it_is_drawn_in() {
+        let request = WriteRequest {
+            written_since_checkout: false,
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec![format!(
+                    "{}\u{2503} approved \u{b7} nothing \u{b7} (T,pub)",
+                    "REMARK ".repeat(10)
+                )],
+                lines: 1,
+                label: "(U,priv)".to_string(),
+            }),
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        };
+        let drawn = rows_of(60, 24, |frame| {
+            draw(frame, &request, 0, &mut Seen::default());
+        });
+
+        assert_marked_on_every_row(&drawn, "REMARK");
+    }
+
+    /// The claim must not be able to push the evidence off the screen, which is the defect
+    /// drawing it here would otherwise introduce. A remark is capped in lines and a line of one
+    /// has no width cap worth the name, so four of a hundred and sixty characters is a dozen
+    /// rows in this box: the reviewer would answer with nothing on screen but the untrusted
+    /// claim, having to scroll to reach the bytes the answer is about.
+    #[test]
+    fn a_long_remark_does_not_push_the_diff_off_the_screen() {
+        let request = WriteRequest {
+            written_since_checkout: false,
+            path: "game.js".into(),
+            contents: "const SPEED = 50;
+"
+            .into(),
+            existing: Some(
+                "const SPEED = 100;
+"
+                .into(),
+            ),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                // What the producer's cap allows at its widest: REMARK_LINES lines, each
+                // REMARK_WIDTH characters.
+                preview: (0..4).map(|_| "claim ".repeat(12)).collect(),
+                lines: 4,
+                label: "(U,priv)".to_string(),
+            }),
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        };
+
+        for (width, height) in [(80, 24), (100, 30)] {
+            let drawn = rows_of(width, height, |frame| {
+                draw(frame, &request, 0, &mut Seen::default());
+            });
+            let screen = drawn.join(
+                "
+",
+            );
+            assert!(
+                drawn.iter().any(|row| row.contains("-const SPEED = 100;")),
+                "at {width}x{height} the claim left no room for the bytes it is about:
+{screen}"
+            );
+            // And the claim is still there to be read, rather than dropped to make room.
+            assert!(
+                drawn.iter().any(|row| row.contains("claim")),
+                "at {width}x{height} the claim was not drawn at all:
+{screen}"
+            );
+        }
+
+        // A box this small has no room for the change under the claim, so the yes waits until the
+        // change has been scrolled to.
+        let yes = press(KeyCode::Char('y'));
+        let mut seen = Seen::default();
+        let mut drawn = Drawn::default();
+        let top = rows_of(60, 20, |frame| drawn = draw(frame, &request, 0, &mut seen));
+        assert!(top.iter().any(|row| row.contains("claim")));
+        assert!(!top.iter().any(|row| row.contains("-const SPEED = 100;")));
+        assert_eq!(write_answer_for(yes, &request, &drawn), None);
+        let end = drawn.furthest();
+        let bottom = rows_of(60, 20, |frame| {
+            drawn = draw(frame, &request, end, &mut seen)
+        });
+        assert!(bottom.iter().any(|row| row.contains("-const SPEED = 100;")));
+        assert_eq!(
+            write_answer_for(yes, &request, &drawn),
+            Some(Response::Answer(WriteAnswer::Approve))
+        );
+    }
+
+    /// Neutralised rather than dropped, as everywhere else: a remark that could clear the line
+    /// the margin was drawn on would erase the one mark it can never imitate.
+    #[test]
+    fn a_control_character_in_a_remark_is_replaced() {
+        let request = WriteRequest {
+            written_since_checkout: false,
+            path: "game.js".into(),
+            contents: "const SPEED = 50;\n".into(),
+            existing: Some("const SPEED = 100;\n".into()),
+            diff: Diff::compute("const SPEED = 100;\n", "const SPEED = 50;\n"),
+            intent: Intent::Overwrite,
+            untrusted: true,
+            remark: Some(Remark {
+                preview: vec!["before\u{1b}[2Kafter".to_string()],
+                lines: 1,
+                label: "(U,priv)".to_string(),
+            }),
+            protected: false,
+            credentials: Vec::new(),
+            may_always: false,
+            record: None,
+            may_edit: false,
+        };
+        let output = rendered(&request);
+
+        assert!(
+            !output.contains("\u{1b}[2K"),
+            "a remark could clear the line the margin was drawn on: {output}"
+        );
+        assert!(
+            output.contains("before\u{241b}"),
+            "the escape in the remark was not neutralised: {output}"
+        );
+    }
+
+    /// PROMPT-1: the write prompt, for a create and for an overwrite, draws a name that would draw
+    /// as nothing quoted with its characters spelled, so a yes to `note.md ` cannot be read as one
+    /// to `note.md`.
+    #[test]
+    fn the_write_prompt_marks_an_unreadable_name() {
+        let screen = |path: &str, existing: Option<&str>| {
+            let mut asked = request("a line", existing);
+            asked.path = path.into();
+            rows_of(100, 30, |frame| {
+                draw(frame, &asked, 0, &mut Seen::default());
+            })
+            .join("\n")
+        };
+        for existing in [None, Some("old")] {
+            let plain = screen("note.md", existing);
+            assert!(plain.contains("note.md"), "{plain}");
+            for (name, spelled) in UNSEEN_NAMES {
+                let drawn = screen(name, existing);
+                assert_ne!(drawn, plain, "{name:?}");
+                assert!(drawn.contains(spelled), "{name:?}\n{drawn}");
+            }
+        }
+    }
+
+    /// WRITE-7: `e` opens the editor only at a prompt that offers it, so a key the screen does not
+    /// draw is unbound. A control chord does not count, since Ctrl-E is a line editor's, and the
+    /// answer it gives approves nothing: it is a refusal for any caller that cannot act on it.
+    #[test]
+    fn the_edit_key_is_bound_only_where_the_request_offers_it() {
+        let offered = an_editable_write();
+        for key in [KeyCode::Char('e'), KeyCode::Char('E')] {
+            assert_eq!(
+                write_answer_for(press(key), &offered, &Drawn::taking_yes()),
+                Some(Response::Answer(WriteAnswer::Edit)),
+                "{key:?}"
+            );
+        }
+        let not_offered = request("new line\n", Some("old line\n"));
+        assert_eq!(
+            write_answer_for(
+                press(KeyCode::Char('e')),
+                &not_offered,
+                &Drawn::taking_yes()
+            ),
+            None,
+            "a key the prompt did not draw opened an editor"
+        );
+        assert_eq!(
+            write_answer_for(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+                &offered,
+                &Drawn::taking_yes()
+            ),
+            None
+        );
+
+        assert!(!WriteAnswer::Edit.approves());
+        assert!(!WriteAnswer::Edit.stops_the_turn());
+        assert!(!WriteAnswer::Edit.decision().approved());
+        assert_eq!(WriteAnswer::Edit.decision().edited(), None);
+    }
+
+    /// WRITE-7: the keys row says `e` where it is bound, and says nothing of it where it is not,
+    /// so the screen and the keys agree.
+    #[test]
+    fn the_key_row_offers_the_editor_only_where_the_request_does() {
+        let offered = rendered(&an_editable_write());
+        assert!(offered.contains("e edit it first"), "{offered}");
+        let not_offered = rendered(&request("new line\n", Some("old line\n")));
+        assert!(!not_offered.contains("edit it first"), "{not_offered}");
+    }
+
+    /// WRITE-7: a prompt offering the editor beside both standing answers still draws every key's
+    /// label on one row at the width a hundred-column terminal gives it, since a label broken
+    /// across two rows reads as two keys.
+    #[test]
+    fn every_key_label_is_drawn_whole_beside_the_editor_and_both_standing_answers() {
+        let request = WriteRequest {
+            may_edit: true,
+            ..a_credential_write(true, true)
+        };
+        let rows = rows_of(100, 30, |frame| {
+            draw(frame, &request, 0, &mut Seen::default());
+        });
+        let keys = rows
+            .iter()
+            .find(|row| row.contains("write it"))
+            .expect("the key row was drawn");
+        for label in [
+            "y write it",
+            "e edit it first",
+            "a always this session",
+            "r remember it",
+            "n leave it alone",
+        ] {
+            assert!(
+                keys.contains(label),
+                "{label:?} was broken across rows: {rows:#?}"
+            );
+        }
+    }
+
+    /// What a person does at a write prompt that can open an editor, with `edit` standing in for
+    /// the editor: each call is recorded with the body and the path it was given.
+    fn editing_write(
+        script: &[(KeyEvent, bool)],
+        request: &WriteRequest,
+        edits: &mut Vec<(String, String)>,
+        mut returns: impl FnMut() -> Result<String, String>,
+    ) -> (write::Asked, String) {
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
+        let (next, alone) = scripted(script);
+        let asked = write::ask_editing_reading(
+            &mut terminal,
+            request,
+            next,
+            alone,
+            |_terminal, body, path| {
+                edits.push((body.to_string(), path.to_string()));
+                returns()
+            },
+        );
+        let buffer = terminal.backend().buffer().clone();
+        let screen = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        (asked, screen)
+    }
+
+    /// WRITE-7: what the person saved comes back as their answer and approves nothing, and the
+    /// editor is given the body as it was drawn and the path it is for.
+    #[test]
+    fn text_saved_from_the_editor_is_returned_and_approves_nothing() {
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[lone(KeyCode::Char('e'))],
+            &an_editable_write(),
+            &mut edits,
+            || Ok("saved line\n".to_string()),
+        );
+        assert_eq!(asked, write::Asked::Edited("saved line\n".to_string()));
+        assert!(!asked.stops_the_turn());
+        let decision = asked.decision();
+        assert!(!decision.approved(), "saving was taken for a yes");
+        assert_eq!(decision.edited(), Some("saved line\n"));
+        assert_eq!(
+            edits,
+            [("new line\n".to_string(), "src/main.rs".to_string())]
+        );
+    }
+
+    /// WRITE-7: an editor that hands back what it was given changed nothing, so the question is
+    /// still there with its own diff and the next key answers it.
+    #[test]
+    fn an_unchanged_body_leaves_the_question_where_it_was() {
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[lone(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &an_editable_write(),
+            &mut edits,
+            || Ok("new line\n".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject))
+        );
+        assert_eq!(edits.len(), 1);
+    }
+
+    /// WRITE-7: an editor that would not start is said above the question, which stays open, since
+    /// a key that fails and a key that does nothing look the same.
+    #[test]
+    fn an_editor_that_fails_is_said_above_the_question() {
+        let mut edits = Vec::new();
+        let (asked, screen) = editing_write(
+            &[lone(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &an_editable_write(),
+            &mut edits,
+            || Err("no editor found: set $VISUAL or $EDITOR to the one you want".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject))
+        );
+        assert!(screen.contains("no editor found"), "{screen}");
+        assert!(
+            screen.contains("approve this write?"),
+            "the question was not drawn again: {screen}"
+        );
+    }
+
+    /// WRITE-7: a final newline the editor adds on save is not a change, since most editors add one
+    /// and the person changed nothing, while any other difference is.
+    #[test]
+    fn a_final_newline_the_editor_added_is_not_an_edit() {
+        let bare = WriteRequest {
+            may_edit: true,
+            ..request("new line", Some("old line"))
+        };
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[lone(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &bare,
+            &mut edits,
+            || Ok("new line\n".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject)),
+            "a newline the editor added was taken for an edit"
+        );
+
+        for (shown, saved) in [
+            ("new line", "newer line"),
+            ("new line", "new line\n\n"),
+            ("new line\n", "new line\n\n"),
+            ("new line\n", "new line"),
+        ] {
+            let request = WriteRequest {
+                may_edit: true,
+                ..request(shown, Some("old line"))
+            };
+            let mut edits = Vec::new();
+            let (asked, _) =
+                editing_write(&[lone(KeyCode::Char('e'))], &request, &mut edits, || {
+                    Ok(saved.to_string())
+                });
+            assert_eq!(
+                asked,
+                write::Asked::Edited(saved.to_string()),
+                "{shown:?} -> {saved:?}"
+            );
+        }
+    }
+
+    /// WRITE-7: an `e` that arrived with other keys opens no editor. An editor reads whatever
+    /// arrives after the key that started it, so text another program writes into the terminal
+    /// could otherwise drive it, as it could drive a note field.
+    #[test]
+    fn an_e_that_arrived_with_other_keys_opens_no_editor() {
+        let mut edits = Vec::new();
+        let (asked, _) = editing_write(
+            &[crowded(KeyCode::Char('e')), lone(KeyCode::Char('n'))],
+            &an_editable_write(),
+            &mut edits,
+            || Ok("changed\n".to_string()),
+        );
+        assert_eq!(
+            asked,
+            write::Asked::Answered(Noted::plain(WriteAnswer::Reject))
+        );
+        assert!(edits.is_empty(), "an editor was opened by a crowded key");
+    }
+
+    /// WRITE-7: coming back from an editor that returned nothing leaves the person where they were
+    /// in the diff, since the question they are looking at has not changed.
+    #[test]
+    fn the_place_in_a_long_diff_survives_an_editor_that_returns_nothing() {
+        let long: String = (1..=80).map(|n| format!("line {n:02}\n")).collect();
+        let request = WriteRequest {
+            may_edit: true,
+            ..request(&long, None)
+        };
+        let mut edits = Vec::new();
+        let (_, screen) = editing_write(
+            &[
+                lone(KeyCode::PageDown),
+                lone(KeyCode::Char('e')),
+                lone(KeyCode::Char('n')),
+            ],
+            &request,
+            &mut edits,
+            || Ok(long.clone()),
+        );
+        assert_eq!(edits.len(), 1);
+        assert!(
+            !screen.contains("+line 01"),
+            "the question came back at the top of the diff: {screen}"
+        );
+    }
+
+    /// WRITE-7: the editor key does not break the key row on a narrow terminal. The stop key and
+    /// its note hint stay on one row together, below the answers where they do not fit beside them.
+    #[test]
+    fn the_stop_key_stays_whole_beside_the_editor_key_on_a_narrow_terminal() {
+        let rows = rows_of(80, 30, |frame| {
+            draw(frame, &an_editable_write(), 0, &mut Seen::default());
+        });
+        let answers = rows
+            .iter()
+            .find(|row| row.contains("y write it"))
+            .expect("the answers were drawn");
+        assert!(answers.contains("n leave it alone"), "{rows:#?}");
+        let stop = rows
+            .iter()
+            .find(|row| row.contains("ctrl-c"))
+            .expect("the stop key was drawn");
+        assert!(stop.contains("tab note"), "{rows:#?}");
+    }
+}

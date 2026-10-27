@@ -20,6 +20,7 @@
   --border-subtle: var(--leo-color-divider-subtle);
   --border-strong: var(--leo-color-divider-strong);
   --border-focus: var(--leo-color-divider-interactive);
+  --border-selected: var(--leo-color-icon-interactive);
 
   /* Ink. Three levels and disabled; no ad-hoc opacity for text. */
   --ink-primary: var(--leo-color-text-primary);
@@ -59,6 +60,8 @@
 
   /* Radius roles. */
   --radius-chip: var(--leo-radius-s);
+  /* 6px: a control radius less the spacing inside it, for a swatch set in an option cell. */
+  --radius-swatch: calc(var(--leo-radius-s) + var(--leo-radius-xs));
   --radius-control: var(--leo-radius-m);
   --radius-card: var(--leo-radius-l);
   --radius-field: var(--leo-radius-xl);

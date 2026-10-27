@@ -731,20 +731,33 @@ def test_the_command_each_pull_request_runs_carries_the_step_and_its_flags():
     assert Path(command[1]).name == "pr-fix.py", command
 
 
-def test_a_branch_already_checked_out_elsewhere_is_used_there_and_every_report_says_so():
+def test_a_branch_checked_out_outside_the_worktrees_directory_is_not_used_unless_the_person_agrees():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp).resolve()
         pr, _, _ = world(root)
-        elsewhere = root / "elsewhere"
-        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
-        code, out = quietly(pr_fix.start, pr())
+        clone, elsewhere = root / "bravebot", root / "elsewhere"
+        helpers.the_forks_feature_in(clone, elsewhere)
+        head, base = git("rev-parse", "HEAD", cwd=elsewhere), git("rev-parse", "upstream/main", cwd=clone)
+
+        for step in ("start", "continue", "check", "push"):
+            code, out = run_main(pr(), step, "9")
+            assert code == 1 and f"feature is already checked out at {elsewhere}, which is outside " in out, (step, out)
+            assert f"{pr_fix.SCRIPT} {step} 9 --use-existing" in out and "a.txt" not in out, (step, out)
+            assert "locked" not in out and f"`/add-dir {elsewhere}`" in out and "no worktree was touched" in out, out
+        assert git("rev-parse", "HEAD", cwd=elsewhere) == head and pr_fix.rebase_dir(elsewhere) is None
+        assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
+        assert not (clone / ".worktrees").exists(), "nothing was made in the standard place"
+
+        code, out = run_main(pr(), "start", "9", "--use-existing")
         assert code == 1 and "  a.txt:1-5" in out, out
         assert f"worktree {elsewhere}" in out, out
         assert f"reused: feature is already checked out in {elsewhere} (outside the main clone" in out, out
-        assert not (root / "bravebot" / ".worktrees").exists(), "the standard place is not made as well"
+        assert not (clone / ".worktrees").exists(), "the standard place is not made as well"
 
         (elsewhere / "a.txt").write_text("from main and the pull request\n")
-        code, out = quietly(pr_fix.resume, pr())
+        code, out = run_main(pr(), "continue", "9")
+        assert code == 1 and "--use-existing" in out, "a yes given to one step is not given to the next"
+        code, out = run_main(pr(), "continue", "9", "--use-existing")
         assert code == 0 and "push 9" in out and "reused: feature" in out, out
 
 
@@ -755,9 +768,36 @@ def test_a_reused_worktree_with_uncommitted_changes_says_it_was_reused_when_star
         elsewhere = root / "elsewhere"
         helpers.the_forks_feature_in(root / "bravebot", elsewhere)
         (elsewhere / "a.txt").write_text("the person's own edit\n")
-        code, out = quietly(pr_fix.start, pr())
+        code, out = run_main(pr(), "start", "9", "--use-existing")
         assert code == 1 and f"{elsewhere} has uncommitted changes" in out, out
         assert "reused: feature is already checked out in" in out, out
+
+
+def test_a_branch_checked_out_in_the_main_clone_is_not_rebased_there_unless_the_person_agrees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        clone, other = root / "bravebot", root / "other"
+        git("fetch", "-q", "origin", cwd=clone)
+        git("checkout", "-q", "-b", "feature", "origin/feature", cwd=clone)
+        git("worktree", "add", "-q", "-b", "other", str(other), "upstream/main", cwd=clone)
+        head = git("rev-parse", "HEAD", cwd=clone)
+
+        code, out = run_main(pr(other), "start", "9")
+        assert code == 1 and f"feature is already checked out at {clone}, which is the main clone, " in out, out
+        assert "git worktree remove" not in out, "git refuses to remove the main working tree"
+        assert git("rev-parse", "HEAD", cwd=clone) == head and pr_fix.rebase_dir(clone) is None
+
+
+def test_a_worktree_start_is_run_from_is_used_even_when_it_is_outside_the_worktrees_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        pr, _, _ = world(root)
+        elsewhere = root / "elsewhere"
+        helpers.the_forks_feature_in(root / "bravebot", elsewhere)
+        code, out = run_main(pr(elsewhere), "start", "9")
+        assert code == 1 and "  a.txt:1-5" in out and "already checked out at" not in out, out
+        assert pr_fix.rebase_dir(elsewhere) is not None, "the rebase ran in the tree the caller is in"
 
 
 @contextlib.contextmanager
@@ -785,20 +825,20 @@ def test_no_step_works_in_a_locked_worktree_until_the_person_agrees():
         for step in ("start", "continue", "check", "push"):
             code, out = run_main(pr(), step, "9")
             assert code == 1 and "build running" in out, (step, out)
-            assert f"{pr_fix.SCRIPT} {step} 9 --use-locked" in out, (step, out)
+            assert f"{pr_fix.SCRIPT} {step} 9 --use-existing" in out, (step, out)
             assert "a.txt" not in out, "no conflict was reached"
         assert git("rev-parse", "HEAD", cwd=elsewhere) == head and pr_fix.rebase_dir(elsewhere) is None
         assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
 
         code, out = run_main(pr(), "check", "9", "--target", "check-spec")
-        assert code == 1 and f"{pr_fix.SCRIPT} check 9 --target check-spec --use-locked" in out, "the targets are kept"
+        assert code == 1 and f"{pr_fix.SCRIPT} check 9 --target check-spec --use-existing" in out, "the targets are kept"
 
         code, out = run_main(pr(), "start", "9", "--use-locked")
         assert code == 1 and "  a.txt:1-5" in out and "locked: build running" in out, out
         (elsewhere / "a.txt").write_text("from main and the pull request\n")
         code, out = run_main(pr(), "continue", "9")
-        assert code == 1 and "--use-locked" in out, "a yes given to one step is not given to the next"
-        code, out = run_main(pr(), "continue", "9", "--use-locked")
+        assert code == 1 and "--use-existing" in out, "a yes given to one step is not given to the next"
+        code, out = run_main(pr(), "continue", "9", "--use-existing")
         assert code == 0 and "push 9" in out, out
 
 
@@ -824,11 +864,12 @@ def test_a_session_run_from_a_locked_worktree_is_not_stopped_by_its_lock():
         assert "(the checkout this was run from; locked: build running)" in out, out
 
 
-def test_use_locked_is_refused_where_it_cannot_apply():
+def test_use_existing_is_refused_where_it_cannot_apply():
     with in_a_git_directory():
         for argv, said in (
-            (["ci", "9", "--use-locked"], "only start, continue, check and push work in a worktree"),
-            (["start", "12,13", "--use-locked"], "takes the one pull request"),
+            (["ci", "9", "--use-existing"], "only start, continue, check, push, open and issue with --branch"),
+            (["start", "12,13", "--use-existing"], "takes the one pull request"),
+            (["issue", "5", "--use-existing"], "only start, continue, check, push, open and issue with --branch"),
         ):
             with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]):
                 code, out = quietly(pr_fix.main)
@@ -1146,11 +1187,124 @@ def test_an_issue_worktree_that_is_locked_is_refused_until_the_person_agrees():
         tree = clone / ".worktrees" / "issue-5"
         git("worktree", "add", "-q", "-b", "fix-thing", str(tree), "upstream/main", cwd=clone)
         git("worktree", "lock", "--reason", "build running", str(tree), cwd=clone)
+        base = git("rev-parse", "upstream/main", cwd=clone)
         _, patched = gh_calls(lambda args: "[]")
         with patched:
             code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
-        assert code == 1 and f"{tree} is locked" in out and "ask the person" in out, out
-        assert "reused:" not in out, "a locked worktree is not offered as the one to use"
+            assert code == 1 and f"fix-thing is already checked out at {tree}, which is locked (build running)" in out, out
+            assert f"{pr_fix.SCRIPT} issue 5 --branch fix-thing --use-existing" in out, out
+            assert f"git worktree unlock {tree}; git worktree remove {tree}" in out and "Ask the person" in out, out
+            assert "reused:" not in out, "a locked worktree is not offered as the one to use"
+            assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
+
+            code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes, True)
+            assert code == 0 and f"worktree {tree}" in out and "reused: fix-thing" in out, out
+            assert git("rev-parse", "upstream/main", cwd=clone) != base, "once the person agrees it goes on"
+
+
+def an_issue_branch_checked_out_beside_the_clone(root):
+    """The clone, its remotes, and `fix-thing` checked out in a worktree outside .worktrees/."""
+    world(root)
+    clone, elsewhere = root / "bravebot", root / "elsewhere"
+    git("worktree", "add", "-q", "-b", "fix-thing", str(elsewhere), "upstream/main", cwd=clone)
+    return clone, elsewhere, ISSUE_REMOTES(root)
+
+
+def test_an_issue_worktree_outside_the_worktrees_directory_is_not_used_unless_the_person_agrees():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone, elsewhere, remotes = an_issue_branch_checked_out_beside_the_clone(root)
+        base, tip = git("rev-parse", "upstream/main", cwd=clone), git("rev-parse", "fix-thing", cwd=clone)
+        _, patched = gh_calls(lambda args: "[]")
+        with patched:
+            code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+            assert code == 1 and f"fix-thing is already checked out at {elsewhere}, which is outside " in out, out
+            assert "locked" not in out and f"`/add-dir {elsewhere}`" in out and "no worktree was touched" in out, out
+            assert f"{pr_fix.SCRIPT} issue 5 --branch fix-thing --use-existing" in out, out
+            assert f"they remove it themselves: git worktree remove {elsewhere}" in out, out
+            assert "reused:" not in out, out
+            assert git("rev-parse", "upstream/main", cwd=clone) == base, "not even a fetch happened"
+            assert not (clone / ".worktrees").exists(), "nothing was made in the standard place"
+
+            code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes, True)
+            assert code == 0 and f"worktree {elsewhere}" in out and "reused: fix-thing" in out, out
+            assert git("rev-parse", "fix-thing", cwd=clone) == tip and not (clone / ".worktrees").exists()
+
+            code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", elsewhere, remotes)
+            assert code == 0 and f"worktree {elsewhere}" in out, "a session started in that tree chose it"
+
+
+def test_an_issue_worktree_in_the_standard_place_is_used_without_asking():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        git("worktree", "add", "-q", "-b", "fix-thing", str(clone / ".worktrees" / "issue-5"), "upstream/main", cwd=clone)
+        _, patched = gh_calls(lambda args: "[]")
+        with patched:
+            code, out = quietly(pr_fix.issue_worktree, 5, "fix-thing", clone, remotes)
+        assert code == 0 and "reused: fix-thing" in out and "already checked out at" not in out, out
+
+
+def test_open_does_not_push_from_a_worktree_the_person_has_not_agreed_to():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        clone, elsewhere, remotes = an_issue_branch_checked_out_beside_the_clone(root)
+        (elsewhere / "b.txt").write_text("fix\n")
+        git("add", "b.txt", cwd=elsewhere)
+        git("commit", "-q", "-m", "fix the thing", cwd=elsewhere)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY)
+        seen, patched = gh_calls(
+            lambda args: "[]" if args[1] == "pr" and args[2] == "list" else "https://github.com/brave/bravebot/pull/30\n"
+        )
+        fork = root / "fork.git"
+        with patched:
+            for given in (None, "fix-thing"):
+                code, out = quietly(pr_fix.open_pull, 5, given, "Fix the thing", body, clone, remotes)
+                if given is None:
+                    assert code == 1 and "no worktree for issue #5" in out, "a branch in another worktree is not guessed"
+                    continue
+                assert code == 1 and f"fix-thing is already checked out at {elsewhere}, which is outside " in out, out
+                assert f"{pr_fix.SCRIPT} open 5 --title 'Fix the thing' --body-file {body} --branch fix-thing --use-existing" in out, out
+            assert not pr_fix.succeeds("rev-parse", "--verify", "--quiet", "refs/heads/fix-thing", cwd=fork), "nothing is pushed"
+            assert not any(call[1:3] == ("pr", "create") for call in seen), "nothing is opened"
+
+            code, out = quietly(pr_fix.open_pull, 5, "fix-thing", "Fix the thing", body, clone, remotes, True)
+            assert code == 0 and "pull/30" in out, out
+        assert git("rev-parse", "fix-thing", cwd=fork) == git("rev-parse", "HEAD", cwd=elsewhere)
+
+
+def test_open_in_a_locked_issue_worktree_is_refused_without_a_branch_in_the_retry_it_offers():
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp).resolve()
+        world(root)
+        clone, remotes = root / "bravebot", ISSUE_REMOTES(root)
+        tree = clone / ".worktrees" / "issue-5"
+        git("worktree", "add", "-q", "-b", "fix-thing", str(tree), "upstream/main", cwd=clone)
+        git("worktree", "lock", "--reason", "build running", str(tree), cwd=clone)
+        body = root / "body.md"
+        body.write_text(GOOD_BODY)
+        _, patched = gh_calls(lambda args: "[]")
+        with patched:
+            code, out = quietly(pr_fix.open_pull, 5, None, "t", body, clone, remotes)
+        assert code == 1 and "which is locked (build running)" in out, out
+        assert f"open 5 --title t --body-file {body} --use-existing" in out and "--branch" not in out, out
+
+
+def test_use_existing_reaches_the_issue_steps():
+    calls = []
+    with in_a_git_directory():
+        for argv, name in ((["issue", "5", "--branch", "fix-x", "--use-existing"], "issue_worktree"),
+                           (["open", "5", "--title", "t", "--body-file", "b", "--use-locked"], "open_pull")):
+            with mock.patch.object(sys, "argv", ["pr-fix.py", *argv]), \
+                    mock.patch.object(pr_fix, name, lambda *args: calls.append((name, args[-1])) or 0):
+                assert quietly(pr_fix.main)[0] == 0, argv
+        assert calls == [("issue_worktree", True), ("open_pull", True)], calls
+        with mock.patch.object(sys, "argv", ["pr-fix.py", "issue", "5", "--branch", "fix-x"]), \
+                mock.patch.object(pr_fix, "issue_worktree", lambda *args: calls.append(args[-1]) or 0):
+            quietly(pr_fix.main)
+        assert calls[-1] is False, "without the person's yes the stop stays"
 
 
 def test_open_refuses_what_it_cannot_push_from_before_it_touches_anything():
@@ -1174,7 +1328,7 @@ def test_open_refuses_what_it_cannot_push_from_before_it_touches_anything():
             old = root / "old"
             git("fetch", "-q", "upstream", cwd=clone)
             git("worktree", "add", "-q", "-b", "fix-old", str(old), "upstream/main~1", cwd=clone)
-            code, out = quietly(pr_fix.open_pull, 5, "fix-old", "t", body, clone, remotes)
+            code, out = quietly(pr_fix.open_pull, 5, "fix-old", "t", body, clone, remotes, True)
             assert code == 1 and "fix-old is not on upstream/main" in out, out
         assert not any(call[1:3] == ("pr", "create") for call in seen), "nothing is opened after a refusal"
         assert not pr_fix.succeeds("rev-parse", "--verify", "--quiet", "refs/heads/fix-old", cwd=root / "fork.git"), "nothing is pushed"

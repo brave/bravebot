@@ -182,9 +182,9 @@ const PREVIEW_LINES: usize = 12;
 pub(crate) const PREVIEW_WIDTH: usize = 160;
 
 /// The first lines of some quarantined content, released for a screen.
-struct Preview {
-    preview: Vec<String>,
-    lines: usize,
+pub(crate) struct Preview {
+    pub(crate) preview: Vec<String>,
+    pub(crate) lines: usize,
 }
 
 /// Shape quarantined content into a few lines and release those.
@@ -192,7 +192,7 @@ struct Preview {
 /// The shaping happens inside the kernel, so the driver never holds the whole of it, and what
 /// comes out is released for display and for nothing else: it goes to a terminal, and no part of
 /// it reaches the planner's context or a processor's input.
-fn preview_for<S: Sink>(
+pub(crate) fn preview_for<S: Sink>(
     policy: &mut Policy<'_, S>,
     tool: &str,
     content: &Labelled<String>,
@@ -3109,36 +3109,8 @@ where
     let proof = policy.authorise_display_release("assistant reply");
     let display = completion.content.clone().declassify(&proof);
 
-    // The answer joins the conversation the same way a round's account of itself does, and by
-    // the same reasoning: it is what this model said, labelled from the context it said it in.
-    // A session that has met nothing untrusted can be asked "shorter, please" and know what to
-    // shorten; one that has met something untrusted is told that it answered and no more.
-    let answer = policy
-        .adopt_model_output("chat", completion.content.clone())
-        .map_err(|d| TurnError::Precommit(d.to_string()))?;
-    let slot = conversation.next_reference();
-    let presented = policy
-        .present(
-            "reply",
-            slot,
-            "your previous answer",
-            &answer,
-            conversation.quarantine(),
-        )
-        .map_err(|d| TurnError::Precommit(d.to_string()))?;
-    conversation.push_from(
-        Message::assistant(match &presented {
-            Presentation::Visible(text) => text.clone(),
-            Presentation::Quarantined(reference) => {
-                format!("(you answered. {})", reference.describe())
-            }
-        }),
-        match &presented {
-            Presentation::Visible(_) => Provenance::Planner,
-            Presentation::Quarantined(_) => provenance_of(&presented, "answer"),
-        },
-    );
-    conversation.observed(policy.context_label());
+    // The answer joins the conversation the way an answer given between calls does.
+    let answer = record_answer(policy, conversation, &completion.content)?;
     // Here and nowhere earlier: a turn that was stopped or failed has not answered, and the next
     // prompt is usually the same task carried on rather than a new one.
     conversation.turn_answered();
@@ -3719,9 +3691,11 @@ where
                 } else {
                     ""
                 };
+                // A count and no names, in the sentence every quarantined walk result shares.
+                let linked = sentences::links_note(&output.tool, output.links);
                 format!(
                     "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}\n\n{}",
+             quarantined, one reference each.{capped}{linked}\n\n{}",
                     output.tool,
                     references.len(),
                     described.join("\n")
@@ -4078,6 +4052,7 @@ where
                         // like one that found everything there was.
                         let capped =
                             sentences::capped_note(&output.tool, output.incomplete, output.paging);
+                        let linked = sentences::links_note(&output.tool, output.links);
                         // How to see this one and how to stop being asked, for a run and only for a run:
                         // the reasoning is on `sentences::run_advice`.
                         let advice = sentences::run_advice(
@@ -4101,7 +4076,7 @@ where
                                 .any(|directory| workspace.read_git_opens(policy, directory)),
                         );
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{advice}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{linked}{advice}{history}",
                             output.tool,
                             reference.describe()
                         )

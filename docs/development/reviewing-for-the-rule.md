@@ -78,6 +78,21 @@ The seventh is the same shape: `bravebot_filetype::looks_binary` and `decode_tex
 `declassify`, so a second sniff or decoding of untrusted bytes elsewhere is found by reading the
 diff.
 
+A count that comes from file-type metadata is not one of the seven. A listing or a search tells the
+planner how many symbolic links its walk did not enter. The walk reads each directory entry's file
+type, which is not file content, and counts the links. The planner is given a number with no name
+and nothing to branch on, and nothing in the driver branches on it: the count is released beside
+the other shape facts of the result (the cap, the unreadable-directory flag) through the existing
+`declassify` in `list_files` and `search`, which adds no use of `declassify` to the source. A change that put a link's
+name or target in that sentence, or that read the target to decide what to say, would be a violation
+of shape 1 or 3 and is not covered by this paragraph.
+
+`load_skill` also names the directory a project skill's link lands on inside the workspace. That
+path is file-name content, so the rules and the trust map are asked about it first, and only a path
+they let the planner read is examined further: it is dropped when it equals the name the skill is
+found under or holds a control character, the same filter `files_beside` applies to each file name
+before it is offered. Nothing is compared or searched in a path they refuse.
+
 ## The inverse mistake: inventing a violation
 
 This rule is about content that could reach the planner or steer a turn in progress. It is not a

@@ -36,6 +36,8 @@ import {
   retireBot,
   forgetBotConversation,
   saveBotModel,
+  readBotServers,
+  saveBotServers,
   saveForm,
   migrateBot,
   owesCarryOver,
@@ -43,7 +45,7 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
+import { botFolders, isBotModel, isServerSelection, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
@@ -751,6 +753,20 @@ app.whenReady().then(() => {
     const held = bot(slug)
     if (!held || !isBotModel(model)) return null
     return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
+  })
+
+  // The window names a bot and a selection; the definition is the row's, so no window chooses which
+  // file is read or rewritten.
+  ipcMain.handle('bravebot:bots:servers:read', async (_event, slug: unknown) => {
+    const held = bot(slug)
+    if (!held) return null
+    return readBotServers(held, bridge ? (method, params) => bridge!.request(method, params) : null)
+  })
+
+  ipcMain.handle('bravebot:bots:servers:write', async (_event, slug: unknown, servers: unknown) => {
+    const held = bot(slug)
+    if (!held || !isServerSelection(servers)) return null
+    return saveBotServers(held, servers, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
 
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {

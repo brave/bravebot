@@ -3675,6 +3675,52 @@ fn list_under(root: &std::path::Path, directory: &str, pattern: &str) -> Vec<Str
     listing.declassify(&proof).files
 }
 
+/// LIST-6: a walk counts the symbolic links it meets and does not enter, at every depth, whether
+/// they point at a file or a directory, inside the tree or outside it. The regression it rejects: a
+/// walk that drops a link with no count (a directory made of links lists as empty), one that counts
+/// only the links at the top, and one that reports a link as a file.
+#[cfg(unix)]
+#[test]
+fn a_listing_counts_every_symbolic_link_it_did_not_enter() {
+    let scratch = profiles_tree("links-counted");
+    let outside = profiles_tree("links-counted-outside");
+    std::fs::write(scratch.path.join("kept.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(outside.path.join("projects"), scratch.path.join("to-dir")).unwrap();
+    std::os::unix::fs::symlink(scratch.path.join("kept.txt"), scratch.path.join("to-file"))
+        .unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("kept.txt"),
+        scratch.path.join("projects/a/deep-link"),
+    )
+    .unwrap();
+
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let mut sink = RecordingSink::new();
+    let mut policy = Policy::begin(
+        routing(),
+        ReleasePlan::new(),
+        all_file_capabilities(),
+        &mut sink,
+    )
+    .expect("policy");
+    let listing = workspace
+        .list(&mut policy, &Labelled::trusted(".".to_string()), None, None)
+        .expect("list succeeds");
+    let proof = policy.authorise_content_release("test", "paths");
+    let listing = listing.declassify(&proof);
+
+    assert_eq!(listing.links, 3, "{:?}", listing.files);
+    assert!(
+        listing
+            .files
+            .iter()
+            .all(|file| !file.contains("link") && !file.contains("to-")),
+        "a link was listed as a file: {:?}",
+        listing.files
+    );
+    assert!(listing.files.contains(&"kept.txt".to_string()));
+}
+
 /// A caller naming a directory writes the rest of the path from there. Read from the root alone,
 /// `*/profile.json` under `projects` selects nothing and is reported as a glob that matched no
 /// files, which sends the planner guessing globs for files that are there.
@@ -7057,6 +7103,7 @@ fn a_search_that_ran_out_of_time_offers_no_page_and_no_count() {
         withheld: false,
         first_match,
         matched: 200,
+        links: 0,
     };
     let one = Match {
         path: "a.txt".to_string(),

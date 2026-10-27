@@ -21,7 +21,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
 | [delegation.md](delegation.md) | `DELEGATE` | 30 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
-| [definition-memory.md](definition-memory.md) | `MEMORY` | 12 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
+| [definition-memory.md](definition-memory.md) | `MEMORY` | 13 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |
 | [checkouts.md](checkouts.md) | `CHECKOUT` | 23 | a delegate given a checkout of its own, so workers stop editing and building in one tree, and how its work comes back (partly built) |
 | [worktrees.md](worktrees.md) | `WORKTREE` | 10 | a session working in a worktree the driver made for it: asking for one, its name, what the session keeps of it, resuming into it and leaving it (proposed, nothing built) |
 | [turns.md](turns.md) | `TURN` | 14 | how long a turn may go on, what happens when it does not stop, what is said when it produces nothing, checks nothing or runs into its output ceiling, what a session does when it has spent its limit, what is done about the same call three times running, how the reads of one round are run together, what the note under a finished turn says about refusals, what is done about the planner's task list when a turn answers with tasks still open, what the planner is told when a turn ends in a failure, and what a limit a person gave a run does to it |
@@ -37,7 +37,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [skills.md](skills.md) | `SKILL` | 19 | `AGENTS.md` and skills: what a skill file is and what each source is trusted for, and what a skill kept as a mode adds to every turn |
 | [instructions.md](instructions.md) | `INSTR` | 16 | which instruction files are looked for, where, in what order, and where what they say ends up |
 | [cli.md](cli.md) | `CLI` | 38 | running without the interactive interface: one-shot tasks, piped input, `doctor` and `auth`, and opening it on a task |
-| [manifest.md](manifest.md) | `MANIFEST` | 12 | plan the whole run first, then execute it with no model in the control path |
+| [manifest.md](manifest.md) | `MANIFEST` | 14 | plan the whole run first, then execute it with no model in the control path |
 | [terminal-input.md](terminal-input.md) | `INPUT` | 49 | what the user types into: the box, the keys, and where a terminal's own limits show through |
 | [commands.md](commands.md) | `CMD` | 30 | a line beginning with `/`: where one may come from, when a line is one, what it does to the line, what a slash word is offered, what `/copy` copies, what `/caffeinate` holds awake, what `/init` asks the planner to write, what `/review` asks the planner to review, what `/help` asks the planner to answer from the documentation, what `/changelog` shows, what `/todos` prints, how `/resume` leaves for another session, what `/request` opens, what `/context` divides, what `/lsp` says, what `/open` lists, what `/recap` asks for, when one is given unasked, what `/effort` shows and completes, what `/sandbox`, `/limit`, `/review` and `/reach` show after the word, how a prompt file is expanded, how a line that starts with the word of an MCP server's prompt runs it, and what `/mode` keeps applied |
 | [terminal-transcript.md](terminal-transcript.md) | `VIEW` | 39 | what is drawn back: the transcript, a resumed session, a fenced block in a reply, and how content reaches the screen |
@@ -52,7 +52,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [sandboxing.md](sandboxing.md) | `SANDBOX` | 32 | operating-system confinement for processes running code we did not write |
 | [mcp.md](mcp.md) | `MCP` | 12 | tools that come from outside this repository, the prompts such a server offers a person, and what they are allowed to do |
 | [mcp-servers.md](mcp-servers.md) | `SERVERS` | 20 | how a person declares one of those servers, what that declaration is trusted for, and what is asked before a tool from one runs |
-| [connectors.md](connectors.md) | `CONNECTOR` | 9 | the client that hands a credential authority one request for a connector call and reads its one reply |
+| [connectors.md](connectors.md) | `CONNECTOR` | 21 | the installed definitions a connector call is made against, and the client that hands a credential authority one request and reads its one reply |
 | [browser.md](browser.md) | `BROWSER` | 17 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
@@ -90,8 +90,8 @@ the routing-versus-content split they share.
 |---|---|---|---|
 | [tools/tool-surface.md](tools/tool-surface.md) | `TOOL` | 6 | the surface every tool shares |
 | [tools/read-file.md](tools/read-file.md) | `READ` | 10 | `read_file` |
-| [tools/list-files.md](tools/list-files.md) | `LIST` | 5 | `list_files` |
-| [tools/search.md](tools/search.md) | `SEARCH` | 12 | `search` |
+| [tools/list-files.md](tools/list-files.md) | `LIST` | 6 | `list_files` |
+| [tools/search.md](tools/search.md) | `SEARCH` | 13 | `search` |
 | [tools/repo-map.md](tools/repo-map.md) | `MAP` | 5 | `repo_map` |
 | [tools/read-git.md](tools/read-git.md) | `GIT` | 15 | `read_git` |
 | [tools/lsp.md](tools/lsp.md) | `LSP` | 13 | `lsp` |

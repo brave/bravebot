@@ -86,9 +86,12 @@ The fields of a failed event and of an `error` event are the exception: that fil
 OpenAPI description and its API reference page state the fields of both events, and OpenAI's sign-in
 documentation states the code of a failed event and names no `error` event. Each is a value to confirm with
 a sign-in unless the observed list of [What the exchange has to record](#what-the-exchange-has-to-record)
-includes it. That section records what documents state. A statement of a document shows nothing about what
-the service did for this program. The section also lists what has not been observed and what no source
-states. Whether OpenAI's terms allow a program to use a subscription this way, and whether OpenAI registers a
+includes it. That section records what documents state, and what the source of OpenAI's own SDK, of Codex and
+of other programs and the two catalogs of models, models.dev's and opencode's own, state, each apart from
+what was observed. A statement of a
+document or of a program's source shows nothing about what the service did for this program. The section also
+lists what has not been observed and what none of the sources it names states. Whether OpenAI's terms allow a
+program to use a subscription this way, and whether OpenAI registers a
 client for this program, are [decisions left open](#decisions-left-open). The command is built on the values
 as stated, and a release that carries it waits on the first of those decisions. A request with the sign-in is
 sent in the Responses protocol of [BACKEND-61](backends.md#BACKEND-61), as [CHATGPT-10](#CHATGPT-10) states.
@@ -398,13 +401,19 @@ shape:
   against the key set and the values this sign-in sent. They decide this program's own sign-in. What crosses
   into the driver is a token and a category, which is the class of a reply's status, as the failure
   categories of the backends spec are for the reply of any other service. A refused refresh adds one value,
-  that the refresh token is no longer valid, chosen by comparing one field of the error body with `invalid_grant`
+  that the refresh token is no longer valid, chosen by comparing one field of the error body with six codes
   ([CHATGPT-7](#CHATGPT-7)). A refused model request adds three more, that the account has reached its usage
   limit, that it may not be used this way and that it does not offer the model, chosen by comparing the error
-  code of the body with a closed list of codes the exchange records and with the one code of a model not
-  offered ([CHATGPT-8](#CHATGPT-8)); that comparison is made in the client that sends the request, which is
-  not the driver, and the egress crate hands the client the whole body of the refusal under the label of its
-  request and reads none of it ([NET-12](network-egress.md#NET-12)). A turn already branches on the
+  code of the body with a closed list of eight codes the exchange records and with the one code of a model not
+  offered ([CHATGPT-8](#CHATGPT-8)). Seven of the eight are listed by OpenAI's documentation, and the eighth,
+  `subscription_sharing_workplace_individual_usage_limit_exceeded`, is stated by other programs' sources
+  and a pull request of theirs, and is not in the OpenAI pages and API description that were read
+  ([Known costs](#known-costs)). That comparison is made in the client that sends
+  the request, which is not the driver, and the egress crate hands the client the whole body of the refusal
+  under the label of its request and reads none of it ([NET-12](network-egress.md#NET-12)). The same client
+  compares the closed list with the code of a failure event of the stream, which it reads from the event's
+  own `code` or from an `error` object in it, and from the `response.error.code` of a `response.failed`
+  event, and what it carries on from a failure event is a value of its own set. A turn already branches on the
   categories, and none is content anyone authored. Which of these values a failure was is carried to the
   terminal and the desktop beside its category, where it chooses a sentence ([CHATGPT-8](#CHATGPT-8)), and
   the driver adds no comparison of its own for it. The rest of a reply's body, its error text and its claims
@@ -584,8 +593,10 @@ expiry is the instant of the reply plus its `expires_in`, or plus 3600 seconds w
 instant is read from the system clock, and a clock set before 1970 reads as 0 here (Known costs).
 Otherwise the refresh token is presented to the token endpoint, with the stored client and the `resource`
 of [CHATGPT-3](#CHATGPT-3), the reply is written to the file, and only then is the new access token used. A
-refresh reply that grants no refresh token keeps the one presented. No request is sent with a token past its
-expiry. A token the serving host refuses before its expiry,
+refresh reply that grants no refresh token keeps the one presented. The `earliest_refresh_at` of a refresh
+reply was seen once, 300 seconds before the instant a minute ahead of the expiry, so for that reply it does
+not delay this refresh, and it is not read ([Known costs](#known-costs)). No request is sent with a token
+past its expiry. A token the serving host refuses before its expiry,
 whether the clock here runs behind or the token was revoked early, is replaced in the same way once, and the
 request is sent once more, unless the refusal carries a code of [CHATGPT-8](#CHATGPT-8)'s closed list or the
 code of a model the account does not offer: those say the account has reached its usage limit, may not be
@@ -608,11 +619,19 @@ by moving it aside and judging it there. A holder that was stopped that long can
 what follows from that is below.
 
 A refresh the authorization server refuses as the refresh token no longer being valid ends the sign-in. That
-is a status of 400 or 401 whose error code is `invalid_grant`, which is RFC 6749 section 5.2's code for it and
-the one this server sent, as `{"error":"invalid_grant"}` in a 400, for a refresh token it does not know. The
-code is read from `error` as a string, so a body whose `error` is an object, as the serving host's refusals
-have it, is not that code. A refusal with any other code or status is a failure of the request and ends
-nothing. The file is read again immediately before it is removed, and is removed only while it holds a refresh
+is a status of 400 or 401 whose error code is one of six. `invalid_grant` is RFC 6749 section 5.2's code for
+it and the one this server sent, as `{"error":"invalid_grant"}` in a 400, for a refresh token it does not know
+and for one revoked at the revocation endpoint. The other five are the codes OpenAI's documentation lists for
+a refresh token that cannot be used: `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
+`refresh_token_invalidated` and `refresh_token_reused`. OpenAI's SDK reads all six as ending the sign-in and
+Codex reads three of the five and `invalid_grant`, and ends its sign-in for any 401 ([Known costs](#known-costs)). None of the five has been
+seen from this server, and the documentation gives no status for any of the six, so each ends the sign-in at
+the two statuses `invalid_grant` ends it at. The code is read from `error` as a string and compared as a whole, so
+a body whose `error` is an object, as the serving host's refusals have it, names none of the six. A refusal
+with any other code or status is a failure of the request and ends nothing, as is a refresh that did not
+complete and one answered by a server that is busy or unavailable, whatever its body names. The xAI sign-in
+reads `invalid_grant` alone ([XAI-6](xai-sign-in.md#XAI-6)). The file is read again immediately before it is
+removed, and is removed only while it holds a refresh
 token this process knows to be spent: the one just refused, or the one it replaced before it, which the server
 killed when it gave the refused one. A claim is judged abandoned by its age, so a holder that was stopped and is
 alive can have its claim broken, and the process that broke it then presents a refresh token the holder has
@@ -664,10 +683,13 @@ A turn asks the renewal before every request (`Renewer::access_token`) and after
 (`Renewer::replace_refused`), which gives a token other than the refused one and never the refused one back.
 Only a refusal with the status 401 is a refusal of the token, and one whose body names a code of the closed
 list, or the code of a model not offered, ends the turn without a replacement. A 401 whose body names neither
-is a refusal of the token, whatever else the body holds: another code (`token_expired`, `invalid_jwt` and
-`invalid_api_key` among them), a null code, a listed code that is only part of the code or is in another
-field, a body that is not JSON, or no body. A replacement is asked for once, and the request is sent again
-with it where one is given.
+is a refusal of the token, whatever else the body holds: another code (`token_expired`, `token_revoked`,
+`invalid_jwt` and `invalid_api_key` among them), a null code, a listed code that is only part of the code or
+is in another field, a body that is not JSON, or no body, and whatever its content type, `text/plain` among
+them. The bodies the service sent for an access token past its expiry, and for one past its expiry whose
+refresh token had been revoked, are two of those
+([What the exchange has to record](#what-the-exchange-has-to-record)). A replacement is asked for once, and
+the request is sent again with it where one is given.
 
 `verified-by: bravebot_skus::chatgpt::renew::a_token_with_more_than_a_minute_left_is_used_and_nothing_is_asked`
 `verified-by: bravebot_skus::chatgpt::renew::a_token_within_a_minute_of_its_expiry_or_past_it_is_replaced`
@@ -695,7 +717,11 @@ with it where one is given.
 `verified-by: bravebot_cli::chatgpt_account::a_session_in_lines_says_the_sign_in_ended_to_every_turn_after_it_ended`
 `verified-by: bravebot_skus::chatgpt::renew::each_failure_is_named_by_its_step_and_class_alone`
 `verified-by: bravebot_skus::chatgpt::exchange::a_refresh_presents_the_refresh_token_under_the_client_and_the_resource`
-`verified-by: bravebot_skus::chatgpt::exchange::only_the_recorded_code_at_a_refusing_status_ends_the_sign_in`
+`verified-by: bravebot_skus::chatgpt::exchange::only_one_of_the_six_refresh_codes_at_a_refusing_status_ends_the_sign_in`
+`verified-by: bravebot_skus::chatgpt::exchange::a_refresh_that_did_not_complete_or_met_a_busy_server_ends_nothing`
+`verified-by: bravebot_skus::chatgpt::renew::a_refresh_refused_in_another_documented_code_removes_the_sign_in`
+`verified-by: bravebot_skus::chatgpt::renew::a_refresh_reply_gives_the_same_expiry_whatever_its_earliest_refresh_at_says`
+`verified-by: bravebot_skus::xai::renew::a_refresh_refused_as_ended_removes_the_sign_in_and_any_other_leaves_it`
 `verified-by: bravebot_skus::chatgpt::exchange::a_reply_without_a_refresh_token_keeps_the_one_presented`
 `verified-by: bravebot_skus::chatgpt::exchange::the_exchange_refuses_a_reply_that_grants_no_refresh_token`
 `verified-by: bravebot_aichat::client::an_account_asks_for_its_token_before_every_request_and_sends_the_one_it_is_given`
@@ -712,7 +738,7 @@ with it where one is given.
 ### CHATGPT-8: a failure names its step and quotes nothing
 
 Every refusal is one fixed sentence, chosen from the step that failed, the class of an HTTP status and,
-for a refused refresh, whether its error code is the one that ends the sign-in, and for a refused model
+for a refused refresh, whether its error code is one of the six that end the sign-in, and for a refused model
 request, whether its error code is one of a closed list or is the code of a model not offered. None holds
 text taken from a reply, a request, a
 callback or a settings file. A request to either host that did not succeed reports one
@@ -732,20 +758,36 @@ failure. The rest are these, each saying which it is:
   remedy the Leo store gives for a batch it cannot use.
 - **The account has reached its usage limit, or may not be used this way.** A request is refused with one of
   the codes the exchange records as ending the use of a subscription, in the `error.code` of the refusal's
-  body, whatever its status, or in the `response.error.code` of a `response.failed` event or the `code` of an
-  `error` event of the stream. The request is not repeated and no token is replaced. A refusal that came in a reply keeps the
+  body, whatever its status, or in the `response.error.code` of a `response.failed` event or the code of an
+  `error` event of the stream. The code of an `error` event is the `code` of an `error` object in the event
+  or, where that holds none, the event's own `code`, and the object's wins where both are strings: the
+  service was seen to send the object over its websocket, which this program does not use, and was not seen to
+  send an `error` event on the POST event stream, which this program uses, and OpenAI's OpenAPI description states
+  the event's own `code` ([What the exchange has to record](#what-the-exchange-has-to-record)). The request
+  is not repeated and no
+  token is replaced. A refusal that came in a reply keeps the
   status of that reply and, at a 429, the wait its `Retry-After` asked for, as numbers and bounded as any
   other wait is. A refusal reported in an event of the stream arrives in a reply that was answered 200 and
-  carries neither. `subscription_sharing_usage_limit_exceeded`
-  has a sentence of its own, which says the account has reached its usage limit. The other six (user not
-  eligible, capability or route not supported, invalid user, the token's scope or authorization context not
+  carries neither. `subscription_sharing_usage_limit_exceeded` and
+  `subscription_sharing_workplace_individual_usage_limit_exceeded` have a sentence of their own, which says
+  the account has reached its usage limit, and is the same for both since it is chosen from the value alone.
+  The other six (user not eligible, capability or route not supported, invalid user, the token's scope or authorization context not
   authorized) have one sentence that says the account may not be used this way. It names no cause, since it
-  is chosen from the code alone, and does not name signing in again as the remedy. Both are a refusal among the
+  is chosen from the code alone, and does not name signing in again as the remedy. Both kinds are a refusal among the
   categories, which no fallback model is used for: the account answers for every model it serves, so the
-  fallback would be refused the same way. Of the seven, only `subscription_sharing_unsupported_capability`
+  fallback would be refused the same way. OpenAI's documentation lists seven of the eight. The workplace
+  code is stated by the sources of other programs and by a pull request of theirs as a 429 that ChatGPT
+  returns when a workspace administrator's limit on a user is reached. It is not in the nine `siwc` pages
+  read on 2026-10-27 or in OpenAI's OpenAPI description read on 2026-10-26, so it is
+  listed as a usage limit on those programs' word, and a 429 that names it is not waited out and asked for again
+  ([Known costs](#known-costs)). Of the eight, only `subscription_sharing_unsupported_capability`
   has been seen, as the `error.code` of a 400 for the tool `image_generation`, which this program does not
   send, and its message named the tool ([What the exchange has to record](#what-the-exchange-has-to-record)).
-  The sentence's advice can be wrong for that code ([Known costs](#known-costs)).
+  The sentence's advice can be wrong for that code ([Known costs](#known-costs)). An `error` event that
+  names a failure code outside the eight in its `error` object, such as `rate_limit_exceeded` or
+  `invalid_prompt`, is handled as one that names it in the event's own `code`: it is a failure of the
+  backends spec's categories, asked for again only where a second attempt could get past it
+  ([BACKEND-61](backends.md#BACKEND-61)), so the first is asked for again and the second is not.
 - **The model is not one the account offers.** A request is refused with the `error.code` `model_not_found`
   in the body of the refusal. The service gave it as a 400 and no other status was seen, so the code is read
   at any status, and a 401 that carried it would replace no token. The sentence says that OpenAI does not
@@ -1056,8 +1098,10 @@ nothing a second request or a wait of this program's does changes it.
 `verified-by: bravebot_aichat::client::a_listed_code_is_not_repeated_at_whatever_status_it_comes_with`
 `verified-by: bravebot_aichat::client::a_rate_limit_that_names_no_listed_code_is_asked_for_again`
 `verified-by: bravebot_aichat::client::a_listed_code_reported_on_the_stream_ends_the_turn_as_the_same_refusal`
+`verified-by: bravebot_aichat::client::an_error_event_naming_a_failure_in_its_error_object_is_handled_as_one_naming_it_itself`
 `verified-by: bravebot_aichat::client::a_gateways_reply_naming_a_listed_code_is_not_the_account_being_refused`
-`verified-by: bravebot_aichat::responses::protocol::the_listed_codes_are_the_seven_the_clause_names_and_the_usage_limit_is_told_apart`
+`verified-by: bravebot_aichat::responses::protocol::the_listed_codes_are_the_eight_the_clause_names_and_the_usage_limits_are_told_apart`
+`verified-by: bravebot_aichat::responses::protocol::an_error_event_names_its_code_in_the_event_or_in_its_error_object_and_the_object_wins`
 `verified-by: bravebot_aichat::responses::protocol::only_a_refusals_error_code_that_is_a_listed_code_says_something_of_the_account`
 `verified-by: bravebot_aichat::responses::protocol::a_listed_code_reported_on_the_stream_is_a_refusal_and_no_other_failure`
 `verified-by: bravebot_aichat::client::a_model_the_account_does_not_offer_ends_the_turn_as_that_refusal_and_replaces_nothing`
@@ -1137,15 +1181,16 @@ Where the roster comes from, in order:
 The window comes from the entry or the listing as it does for a gateway's, and the assumed low window applies
 where neither states one. An output ceiling is not read from the entry, for the reason above, and no model is
 left out for what it can call, since neither source says. The compiled list is a constant of the source that
-names models only and takes nothing from a reply. It holds the seven models the serving host's listing offered
+names models only and takes nothing from a reply. It holds the eight models the serving host's listing offered
 an account that signed in with this program, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`,
-`gpt-6-luna`, `gpt-6-sol` and `gpt-6.1-sol`, each of which answered a request. It holds no name ending in
-`-fast`: the service refuses those as models ([Known costs](#known-costs)). Each row takes the assumed
+`gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra`, each of which answered a request. It holds no name ending in
+`-fast`: the service refused eight of the nine that opencode offers as models, and `gpt-6.1-terra-fast` was
+not asked for ([Known costs](#known-costs)). Each row takes the assumed
 window, which a turn on one of the account's models compacts against where the listing cannot be read, and no
 label of its own, and whether it reads an effort level is what a request has already learned from the
-service, as for the model an entry names. The list is one account's listing on 2026-10-25, so another account
-or a later date may differ: the same account's listing on 2026-10-26 offered an eighth model,
-`gpt-6.1-terra`, which the list lacks ([Known costs](#known-costs)).
+service, as for the model an entry names. The list is one account's listing on 2026-10-25 and 2026-10-26, so
+another account or a later date may differ ([Known costs](#known-costs)). A listing that offers a model the
+list lacks does not change the list, which a release changes.
 
 An account whose listing is empty, where the entry names no model, is signed in. The command completes,
 says the account reaches no model, and the picker has no row for it. Nothing is invented for a tier nobody named.
@@ -1215,7 +1260,7 @@ model.
 `verified-by: bravebot_agent::chatgpt::a_machine_nobody_signed_in_on_offers_nothing_and_asks_the_service_nothing`
 `verified-by: bravebot_agent::chatgpt::an_account_whose_token_cannot_be_had_is_offered_the_compiled_list_and_asks_the_service_nothing`
 `verified-by: bravebot_aichat::models::the_compiled_list_is_rows_under_the_accounts_identifier_one_to_a_name`
-`verified-by: bravebot_aichat::models::the_compiled_list_is_the_seven_models_the_service_offered`
+`verified-by: bravebot_aichat::models::the_compiled_list_is_the_eight_models_the_service_offered`
 `verified-by: bravebot_agent::chatgpt::a_signed_in_account_is_offered_what_the_service_lists_under_its_own_identifier`
 `verified-by: bravebot_agent::chatgpt::an_unreadable_listing_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::chatgpt::a_listing_refused_for_its_token_is_asked_again_once_with_a_replacement`
@@ -1560,10 +1605,9 @@ ChatGPT account, whose observations and the items still unobserved are listed in
   subscription this way, and whether OpenAI's registration accepts this program, has to be decided before
   this ships. If it does not, this should not land as written.
 - **The compiled list.** [CHATGPT-9](#CHATGPT-9) offers one where the listing cannot be read. Its contents
-  are the seven models one account's listing offered on 2026-10-25, a constant a release changes. The
-  listing of the same account on 2026-10-26 offered an eighth model, `gpt-6.1-terra`, which the service
-  accepted and the list lacks. The alternative is to offer nothing in that case and say to name the models in
-  the `chatgpt` entry.
+  are the eight models one account's listing offered on 2026-10-25 and 2026-10-26, each of which the service
+  accepted, a constant a release changes. A later listing may offer a model it lacks. The alternative is to
+  offer nothing in that case and say to name the models in the `chatgpt` entry.
 
 ## What the exchange has to record
 
@@ -1571,8 +1615,11 @@ A sign-in made with a real ChatGPT account, with the requests it makes observed,
 establish each of the following before a clause states it as observed. What a document states is recorded in
 separate lists: the key set and the discovery document, which the service publishes to anyone and which were
 read with no account, OpenAI's documentation of this sign-in, and OpenAI's OpenAPI description of the
-Responses API. A clause that cites one states what the document says and no more. What users of other
-programs have reported in public issues is a further list, since OpenAI did not state it and it was not
+Responses API. A clause that cites one states what the document says and no more. What the source of
+OpenAI's own SDK, of Codex and of other programs, and the two catalogs of models, models.dev's and
+opencode's own, state is a further list,
+since a program's code shows what that program does and not what the service did for this one. What users of
+other programs have reported in public issues is another, since OpenAI did not state it and it was not
 observed here. What is recorded is a name, a shape, a status, a duration or a host. A token, code, state,
 nonce, challenge, verifier, client or host identifier or claim value is never recorded, in this repository
 or in the tracker.
@@ -1583,7 +1630,9 @@ made with a real ChatGPT account, whose plan is not recorded, on this program's 
 an item says "through the program" where it was the program. An item dated 2026-10-26 is a request made with
 the tokens of the later of two sign-ins of 2026-10-25, whose refresh token was still valid, except that the
 item on a revoked refresh token also holds a request made with the tokens of the earlier sign-in, whose
-refresh token had been revoked on 2026-10-25:
+refresh token had been revoked on 2026-10-25. An item dated 2026-10-27 is a request made with the tokens that
+later sign-in held that day, which each refresh replaces: the refresh used the refresh token it held, and the
+websocket requests used the access token that refresh returned:
 
 - The authorization endpoint and token endpoint on `auth.openai.com`, with the paths of
   [CHATGPT-2](#CHATGPT-2), complete a sign-in through a loopback listener on a port the operating system
@@ -1609,7 +1658,7 @@ refresh token had been revoked on 2026-10-25:
 - The field names of the code exchange and of the refresh are accepted, both form encoded. A reply to a
   refresh holds a new `access_token` and a new `refresh_token`. The stored expiry was 3600 seconds after the
   sign-in and 3597 after a refresh, which is `expires_in` or the default the renewal assumes where it is
-  absent. The two are not told apart.
+  absent. The two are not told apart there, and the refresh replies recorded below hold `expires_in`.
 - **A refresh replaces the refresh token.** The client and host identifiers are unchanged. The claim and the
   write-before-use of [CHATGPT-7](#CHATGPT-7) are therefore required and not a precaution. Through the program,
   a refresh made by a turn whose access token was past its expiry replaced both tokens and left the other
@@ -1621,9 +1670,9 @@ refresh token had been revoked on 2026-10-25:
   unknown grant type with 400 and `unsupported_grant_type`, a code exchange with an unknown code with 400 and
   `invalid_grant`, and a refresh sent as JSON in place of a form with 400 and `invalid_grant`, since it was
   not read as a form. A `GET` on the token path was refused with 405
-  and an `error` object holding `message`, `type`, `param` and `code`. No request to the token endpoint was
-  answered with a redirect. A `DPoP` header holding a garbage proof changed nothing, since the refresh was
-  still refused as `invalid_grant`, so no sender-constrained form was seen.
+  and an `error` object holding `message`, `type`, `param` and `code`, the `code` null. No request to the
+  token endpoint was answered with a redirect. A `DPoP` header holding a garbage proof changed nothing, since
+  the refresh was still refused as `invalid_grant`, so no sender-constrained form was seen.
 - **A valid `DPoP` proof at a refresh changed nothing.** On 2026-10-26 a refresh with a
   `DPoP` header holding a valid proof (an ES256 key made for the purpose, `typ` `dpop+jwt` with the key as
   `jwk`, and `jti`, `htm`, `htu` and `iat` for this request) was answered 200 with the fields of a refresh
@@ -1646,6 +1695,16 @@ refresh token had been revoked on 2026-10-25:
   where it matches, so the two tokens differ in at least that claim. This program neither verifies nor stores
   the ID token of a refresh. Whether the token of the code exchange holds `iat`, and what other names it
   holds, was not observed.
+- **`earliest_refresh_at` in a refresh reply.** On 2026-10-27 one refresh of the sign-in the items of
+  2026-10-26 used, sent with no `DPoP` header, was answered 200. The reply names `access_token`,
+  `earliest_refresh_at`, `expires_in`, `id_token`, `refresh_token`, `scope` and `token_type`. The
+  `earliest_refresh_at` is an integer of ten digits, which reads as seconds since 1970. It is 3240 seconds
+  after the reply, which is 0.9 of `expires_in`, an integer of 3600, with the reply taken at the instant of
+  its `date` header, known to within a second. The refresh of [CHATGPT-7](#CHATGPT-7), made a minute before
+  the expiry, is 3540 seconds after the reply and so 300 seconds after that instant, which therefore does
+  not delay it. This is one reply. Not shown: what the token endpoint does with a refresh made before that
+  instant, since none was made, whether 0.9 of `expires_in` holds for another `expires_in`, another client or
+  a refresh that carries a proof, and what the `id_token` of the reply holds, since its claims were not read.
 - Through the program, a refresh presenting such a refresh token, made for a turn whose access token was past
   its expiry, ended the turn with the sentence that the sign-in has ended and removed the file, and
   `auth status` then said not signed in and exited 1. An access token the serving host refused with a 401,
@@ -1690,7 +1749,7 @@ refresh token had been revoked on 2026-10-25:
   and `ultra`, so eight rows have `visibility` `list`, two have `hide` and six list `ultra`. The other nine
   rows have the slugs, `visibility`, windows and efforts of 2026-10-25, every row has `supported_in_api`
   true, and a row has 54 keys. A minimal streamed request on `gpt-6.1-terra` was answered 200, with that name
-  as the `model` of the completed response. The compiled list of [CHATGPT-9](#CHATGPT-9) does not hold it.
+  as the `model` of the completed response. The compiled list of [CHATGPT-9](#CHATGPT-9) holds it.
 - `POST /responses` on the serving host, with the access token as the only header, a body with `stream` `true`
   and `store` `false`, and a listed model, is answered 200 as server-sent events in a chunked body with no
   `content-type` header. The other headers seen, by name, are `set-cookie`, `x-codex-turn-state`,
@@ -1782,6 +1841,31 @@ refresh token had been revoked on 2026-10-25:
   `/v1` were answered 404. A `GET` on `/responses` that asks to upgrade to a websocket was answered 101, and
   the connection was closed with no frame sent. The same upgrade on `/models` was answered 403 with
   `content-type` `text/plain`.
+- **An `error` event over the websocket.** On 2026-10-27 two `GET` requests on `/responses` of the serving
+  host asked to upgrade to a websocket, with the access token of the sign-in the items of 2026-10-26 used,
+  renewed that day, as the only header. Each was answered 101 with no extension negotiated, and one
+  `response.create` frame was sent on each connection. This is the websocket transport, which this program
+  does not use: it uses the POST event stream. In the first case the frame held `type`, `model`, `input`,
+  `stream` and `store`, and the model was a name the service has no row for. One frame arrived, 0.23 seconds
+  after the send, of 198 bytes, whose `type` was `error`. Its top-level names were `type`, `status` and
+  `error`, `status` the integer 400, and it had no top-level `code`. The `error` object held `type`
+  (`invalid_request_error`), `message` and `code` (`model_not_found`), and no `param`. No `response.failed`
+  frame, `response` object or `sequence_number` was in it. No close frame was sent, and the peer closed the
+  connection cleanly, as an end of stream and not a reset, 3.24 seconds after the send. In the second case the
+  frame held `type`, `model`, `stream` and `store`, a listed model and no `input`. Three frames arrived. At
+  0.13 seconds a frame whose `type` was `codex.response.metadata` and whose names were `type` and `headers`,
+  `headers` naming `x-codex-turn-state` and `x-models-etag`. At 0.23 seconds an `error` frame of 235 bytes
+  with the top-level names `type`, `error` and `status`, `status` the integer 400, and no top-level `code`.
+  Its `error` object held `type` (`invalid_request_error`), `code`, `message` and `param`, `code` and `param`
+  present and null. At 0.23 seconds a close frame with code 1000 and an empty reason. In both cases `code`
+  was inside `error` and never at the top level, the status was at the top level as `status` and not as
+  `status_code`, and no `response.failed` frame arrived. Each case was made once. Not shown: anything about
+  the POST event stream, so whether it sends the top-level `code` that OpenAI's OpenAPI description states;
+  a failure after a response had started, either as `response.failed` or as an `error` after
+  `response.created`; a usage-limit or other account-state error; a frame with
+  `status_code` or with `headers` inside `error`; an `error.code` or `error.param` holding a value in the
+  second case; whether a header of a client, `OpenAI-Beta` among them, changes what is sent, since none was
+  sent; and whether the way each connection ended depends on the body, since each body was sent once.
 - With `max_output_tokens` 16 and a long answer the stream ended with `response.incomplete`. Its
   `response.incomplete_details.reason` is `max_output_tokens`, its `status` `incomplete`, and its `output`
   holds the partial item.
@@ -1805,11 +1889,12 @@ refresh token had been revoked on 2026-10-25:
   `invalid_value` or null.
 - A request whose single text was 1.4 MB of `a `, far past the window, was answered 200 and was not refused
   for its length.
-- Of the 16 names opencode offers for this sign-in, exactly seven were accepted as the `model` of a streamed
-  request with 200: `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`
-  and `gpt-6.1-sol`, which are the seven rows of the listing of 2026-10-25 with `visibility` `list`. `gpt-5.5`,
-  `gpt-5.5-fast`, the seven other `-fast` names and a made-up name were refused with 400. The two rows of the
-  listing with `visibility` `hide` were accepted as well. The body of the refusal holds a `detail` and an
+- Of the 16 names that opencode's `chatgpt.ts` at commit `ac68d6a929` offers for this sign-in, exactly seven
+  were accepted as the `model` of a streamed request with 200: `gpt-5.6-luna`, `gpt-5.6-sol`,
+  `gpt-5.6-terra`, `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol` and `gpt-6.1-sol`, which are the seven rows of the
+  listing of 2026-10-25 with `visibility` `list`. `gpt-5.5`, `gpt-5.5-fast`, the seven other `-fast` names and
+  a made-up name were refused with 400. The two rows of the listing with `visibility` `hide` were accepted as
+  well. The body of the refusal holds a `detail` and an
   `error` object, and `error` has `type` `invalid_request_error`, `code` `model_not_found` and a `message`,
   both sentences naming the model and saying it is not supported with a ChatGPT account.
 - `service_tier` `priority` was accepted and `fast` was refused with 400 and a `detail` sentence. On
@@ -1820,8 +1905,11 @@ refresh token had been revoked on 2026-10-25:
   Every row of the listing carries `service_tiers`, a list of one object with `id` `priority`, `name` `Fast`
   and a `description` that states a speed of 1.5x or 2x, most adding increased usage, a null
   `default_service_tier` and `additional_speed_tiers` `["fast"]`. So the listing names its `Fast` tier by the
-  identifier `priority`, and the response to a request for `priority` does not report it. Whether the `-fast`
-  names that opencode offers stand for that tier was not observed. This program sends no service tier.
+  identifier `priority`, and the response to a request for `priority` does not report it. What the nine
+  `-fast` names that opencode offers stand for was not observed, since the service refused eight of them as
+  models and `gpt-6.1-terra-fast` was not asked for. The two catalogs of models and opencode's source state it,
+  in the list below of what OpenAI's own SDK, Codex, the catalogs and other programs' source state. This
+  program sends no service tier.
 - Sizes of a request. Plain bodies of 0.1 to 8 MiB with a field the service does not take reached validation
   and were refused with 400 and a `detail` sentence, and valid plain bodies of 1.2, 4 and 8 MiB were answered
   200. A single text field of 16, 32 and 64 MiB was refused with 400 and the `error.code`
@@ -1996,13 +2084,14 @@ differs from a statement, the item or an entry of [Known costs](#known-costs) sa
 **Stated in OpenAI's OpenAPI description of the Responses API, read on 2026-10-26** from `openapi.yaml` in
 the public repository `openai/openai-openapi`, at commit `0597e6fb7a`, by one anonymous `GET` of the file
 (`info.version` 2.3.0). The file describes the Responses API in general. It names no ChatGPT sign-in and
-none of the seven codes of [CHATGPT-8](#CHATGPT-8), and it shows nothing about what the serving host of this
+none of the eight codes of [CHATGPT-8](#CHATGPT-8), and it shows nothing about what the serving host of this
 service sends:
 
 - `ResponseErrorEvent`, the event whose `type` is `error`, has the fields `type`, `code`, `message`, `param`
   and `sequence_number`, and all five are required. `code` and `param` are each a string or null, `message`
   is a string and `sequence_number` an integer. Its example holds a placeholder code. This states `code` in
-  an `error` event, which [CHATGPT-8](#CHATGPT-8) reads.
+  an `error` event, which [CHATGPT-8](#CHATGPT-8) reads, as it reads the `code` of an `error` object in the
+  event.
 - `ResponseFailedEvent`, the event whose `type` is `response.failed`, has `type`, `sequence_number` and
   `response`, all required, where `response` is the response object that failed. The `error` of a response
   object is null or an object. The object has `code` and `message`, both required, and may have `type`,
@@ -2013,7 +2102,7 @@ service sends:
   `invalid_base64_image`, `image_parse_error`, `unsupported_image_media_type`, `empty_image_file`,
   `image_too_large`, `image_too_small`, `invalid_image_mode`, `invalid_image_url`,
   `failed_to_download_image` and `image_file_not_found`. The replies to the requests with an image in the list
-  above from a sign-in held none of these. None of the seven codes of [CHATGPT-8](#CHATGPT-8) is among the
+  above from a sign-in held none of these. None of the eight codes of [CHATGPT-8](#CHATGPT-8) is among the
   21, so this description does not state that a failed response carries one, and the sign-in documentation
   above does state it for `subscription_sharing_usage_limit_exceeded` and
   `subscription_sharing_usage_unavailable`.
@@ -2035,8 +2124,10 @@ service sends:
   back to 1457, with a comment that the fallback is kept in sync with the Codex CLI's redirect URI allow-list.
   That is another client, and it says nothing of the clients registered for this program. RFC 8252 section
   7.3, read on 2026-10-26, says an authorization server must allow any port for a loopback redirect, which
-  binds a server that follows it and shows nothing of this one. No source states which ports this
-  authorization server accepts for a client registered by this program.
+  binds a server that follows it and shows nothing of this one. OpenAI's own SDK takes any port as a
+  setting, and other programs listen on port 0 or on the fixed port 1455 (listed below), which are those
+  programs' choices. None of the sources read states which ports this authorization server accepts for a
+  client registered by this program.
 - The error codes that end the use of a subscription, other than
   `subscription_sharing_unsupported_capability`, which the observed list holds:
   `subscription_sharing_usage_limit_exceeded`, `subscription_sharing_user_not_eligible`,
@@ -2053,26 +2144,128 @@ service sends:
   in it, and a comment there says some OpenAI-compatible proxies and older SDK versions nest the fields. Those
   are fixtures its authors wrote, and show nothing of what this service sends. OpenAI's documentation lists
   the codes with their statuses and states `error.code` of a Responses-layer error object and
-  `response.error.code` of `response.failed`. None of the six was seen. The account tried was not at a usage
+  `response.error.code` of `response.failed`, and OpenAI's own SDK reads the codes from the same places
+  (listed below). None of the six was seen. The account tried was not at a usage
   limit, so `subscription_sharing_usage_limit_exceeded` and its 429 were not seen, and seeing them needs an
   account at a limit. No account that the service finds ineligible was used for
   `subscription_sharing_user_not_eligible`, which users of other programs report for accounts described as
   Plus (listed below). The 24 requests of a method or path other than a turn and the listing did not provoke
   `subscription_sharing_route_not_supported`, and an access token past its expiry was refused as
-  `token_expired` and not as `subscription_sharing_invalid_user`. No document or report names a request that
-  provokes `subscription_sharing_route_not_supported` or either `chatpass_v2` code.
-- The fields of a `response.failed` event that carries a code and of an `error` event, as this service sends
-  them. OpenAI's OpenAPI description, listed above, states `response.error.code` for the first and `code` for
-  the second, which are the fields this program reads, and the API reference page lists the same fields for
-  the second and shows `response.error.code` in its example of the first. The reader of server-sent
-  events of Codex (`codex-rs/codex-api/src/sse/responses.rs`, at the commit above) takes the details of an
-  `error` event from an `error` object nested in it, which this program does not read. opencode's
-  `chatgpt.ts` names no field, and its tests of its Responses reader write the three forms of an `error` event
-  above. Neither event was seen from this service. Of the twelve requests with an image, eight were answered
-  400 or 404 before any stream, three were completed and one was not answered, and none provoked a failure
-  after a 200. The documentation gives a usage limit reached after streaming has begun as a cause of
-  `response.failed`, so seeing one needs an account at its limit. No document or report says which request
-  makes the service send an `error` event.
+  `token_expired` and not as `subscription_sharing_invalid_user`. No document, source or report read names a
+  request that provokes `subscription_sharing_route_not_supported` or either `chatpass_v2` code.
+- The fields of a `response.failed` event that carries a code, and of an `error` event on the POST event
+  stream, as this service sends them. OpenAI's OpenAPI description, listed above, states
+  `response.error.code` for the first and `code` for the second, which are fields this program reads, and the
+  API reference page lists the same fields for the second and shows `response.error.code` in its example of
+  the first. The reader of server-sent events of Codex (`codex-rs/codex-api/src/sse/responses.rs`, at the
+  commit above) takes the details of an `error` event from an `error` object nested in it, which this program
+  reads as well. OpenAI's own SDK reads the `code` of an `error` event from an `error` object in it where
+  there is one, and from the event itself where there is none (listed below). opencode's `chatgpt.ts` names no
+  field, and its tests of its Responses reader write the three forms of an `error` event above. No
+  `response.failed` event was seen from this service, and no
+  `error` event on the POST event stream, which this program uses. An `error` event was seen over the
+  websocket, with `code` inside an `error` object, as the observed list records for 2026-10-27. Of the twelve
+  requests with an image, eight were answered 400 or 404 before any stream, three were completed and one was
+  not answered, and none provoked a failure after a 200. The documentation gives a usage limit reached after
+  streaming has begun as a cause of `response.failed`, so seeing one needs an account at its limit. No
+  document, source or report read says which request makes the POST event stream carry an `error` event.
+
+**Stated by OpenAI's own SDK, by Codex, by the two catalogs of models (models.dev's and opencode's own) and by
+other programs' source, read on 2026-10-27 and not observed against the service.** Each item paraphrases
+what a program's code or a catalog holds or does, or what a test its authors wrote assumes. It shows what
+that program does or assumes, and nothing of what the service did for this program:
+
+- OpenAI's SDK for this sign-in, `openai/sign-in-with-chatgpt-devkit` at commit `0a36fefeb913` (pushed
+  2026-10-07), on the redirect port. `packages/local/src/types.ts` describes its setting as the port of the
+  IPv4 loopback callback, or 0 to select an available port, `packages/local/src/index.ts` accepts any whole
+  number from 0 to 65535, and the repository's example application (`examples/paste-perfect/electron/main.ts`)
+  defaults to 8787. These are settings of the SDK and state no rule of the authorization server.
+- The same SDK, on the authorization request and the callback (`packages/local/src/types.ts`, `index.ts`,
+  `oauth.ts` and `storage.ts`). Its `sendHostId` setting adds the host identifier to the authorization
+  request, defaults to false, and carries a comment to enable it only for an authorization provider that
+  supports the parameter. It sends the placeholder client where it holds no issued one, refuses a callback
+  whose `client_id` is the placeholder, and refuses a stored connection that holds the placeholder as its
+  client. It refuses to use a connection whose granted scopes lack `chatgpt.tokens.use.direct`, before a
+  refresh and after one, with the code `sharing_not_enabled`.
+- The same SDK, on the ID token and the refresh reply (`packages/local/src/oauth.ts`). Its check of an ID
+  token accepts RS256 only, requires `iss`, `aud`, `exp`, `iat` and `sub`, allows a clock tolerance of five
+  seconds, takes the issued client as the audience, refuses an `azp` that is present and is not that client,
+  compares the `nonce` where it holds one for the attempt, and reads `name` and `email`. The ID token of a
+  refresh reply is optional there and is checked with no nonce. A refresh reply may omit `scope`, and the SDK
+  then keeps the scopes it holds. Every request it makes refuses a redirect.
+- The same SDK, on `earliest_refresh_at` (`packages/local/src/index.ts`). It keeps the field of a refresh
+  reply as a string or a number, and refreshes an access token that is within a minute of its expiry only once
+  that instant has passed, reading a number as seconds and a string as a date. A token that has also expired
+  is answered with an error that says to try again shortly. The reply of 2026-10-27 in the observed list
+  above puts the instant 300 seconds before the point a minute ahead of the expiry.
+- The same SDK, on errors (`packages/local/src/errors.ts` and `responses.ts`). It reads a code from a string
+  `error`, or from the `code` of the `error` object it descends into, or else of a `detail` object. It names
+  the seven codes of OpenAI's documentation, the two 503 codes, `invalid_client`, `invalid_token`,
+  `invalid_api_key`, `access_denied`, `model_not_found` and the six codes of an unusable refresh token, and it
+  does not name `subscription_sharing_workplace_individual_usage_limit_exceeded`. It reads four earlier
+  spellings, `subscription_sharing_v2_user_not_eligible`, `subscription_sharing_v2_route_not_supported`,
+  `subscription_sharing_v2_invalid_user` and `subscription_sharing_v2_user_unavailable`, as the codes without
+  `v2`, and answers `subscription_sharing_v2_client_not_enabled` with a message that the app is not enabled
+  for token sharing. It ends a connection for a refresh that fails with one of the six, whatever the status,
+  and for three failures of its own checks of a refresh: a token reply that is not complete, an ID token it
+  cannot verify, and an ID token whose subject differs from the connection's. It reads a refusal of the token
+  endpoint named by the discovery document, which is the endpoint this program uses, in the same way, so a
+  refresh refused with one of the six in an `error` object or in a `detail` object ends its connection. This
+  program reads a string `error` alone and ends nothing for that form ([Known costs](#known-costs)). It
+  reads a `response.failed` event
+  through its `response` and then `error.code`, and an `error` event from the event itself, taking the `code`
+  of an `error` object in it where there is one and the event's own `code` where there is none. A stream is a
+  success only at `response.completed`, and one with no `content-type` header is read as an event stream,
+  which the service was seen to send. Its tests, which its authors wrote, build an `error` event with a
+  `code` at its top level, a 401 whose body is an `error` string with a description, a 429 whose body holds
+  `subscription_sharing_usage_limit_exceeded` as `error.code`, and a `response.failed` event with the code in
+  `response.error.code`.
+- Codex, on the refresh (`codex-rs/login/src/auth/manager.rs` in `openai/codex`, read on 2026-10-27 from the
+  repository's default branch). A refresh that Codex's own token endpoint
+  (`https://auth.openai.com/oauth/token`, with Codex's own client) refuses is a permanent failure where the status is 401, where the code is `refresh_token_expired`,
+  `refresh_token_reused` or `refresh_token_invalidated`, or where the status is 400 and the code is
+  `invalid_grant`, compared without regard to case. Any other refusal is a transient failure. Its tests
+  (`codex-rs/login/tests/suite/auth_refresh.rs`) hold fixtures its authors wrote for a mock server: a 401 and
+  a 400 whose `error` object holds `refresh_token_reused`, a 401 whose `error` object holds
+  `refresh_token_expired`, a 400 `{"error":"invalid_grant"}`, which is the form this program saw from its
+  own token endpoint, and a 400 `{"error":"invalid_request"}`, which is transient.
+- Codex, on the websocket (`codex-rs/codex-api/src/endpoint/responses_websocket.rs`, at commit
+  `4aca387e3ea9`). Its reader of a frame whose `type` is `error` takes the status from `status` or from
+  `status_code`, and a code, a message and headers from an `error` object in the frame, and reads the frame's
+  own top-level `headers` as well, taking a retry wait from either. The frames of
+  2026-10-27 in the observed list above had the `status` and the object.
+- The `-fast` names, in two catalogs and in opencode's source. Under the provider `openai`, each of the nine
+  base names in opencode's list for this sign-in (`gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+  `gpt-6-astra`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6.1-sol` and `gpt-6.1-terra`) holds a mode `fast` whose request
+  body is `{"service_tier":"priority"}`, in the catalog of models.dev (`https://models.dev/api.json`) and in
+  the catalog opencode reads by default (`https://models.opencode.ai/experimental/v2.0/api.json`), each read
+  by one anonymous `GET`. opencode's `packages/core/src/models-dev.ts`, at commit `15e56cfd4593`, builds from
+  each mode of a catalog model another model named `<id>-<mode>`, which keeps the model's own id as its
+  `modelID` and carries the mode's request body. Its `chatgpt.ts`, at commit `7b3f52f810`, offers 18 names
+  for this sign-in, the nine and each of them with `-fast`. So the sources say that `<id>-fast` is the base
+  model sent with `service_tier` `priority`. The observed list above records that the service refused eight of
+  the nine `-fast` names as models, was not asked for `gpt-6.1-terra-fast`, accepted the tier `priority` and
+  listed its `Fast` tier as `priority`. Both catalogs also hold a mode `ultrafast`, with `service_tier`
+  `ultrafast`, for `gpt-6-astra` and `gpt-6.1-sol`, and a mode `pro`, which sets `reasoning.mode`, for eight
+  of the nine. No request here asked for either.
+- Other programs' choice of redirect port. These listen on port 0, which the operating system turns into a
+  free port: opencode, `Open-Less/openless` (`openless-all/app/crates/openless-core/src/siwc/mod.rs`),
+  `alibaba/open-code-review` (`internal/chatgptauth/oauth.go`), `TabularisDB/tabularis`
+  (`src-tauri/src/transport/desktop/chatgpt/auth.rs`) and `danku13/CanvasDesk`
+  (`crates/canvas-llm/src/chatgpt_oauth/auth.rs`, a comment on its listener). These use the fixed port 1455:
+  `pydantic/pydantic-ai` (`pydantic_ai_slim/pydantic_ai/providers/openai_chatgpt.py`, with a comment that
+  only the port may vary between sign-ins) and `xuzhougeng/wisp-science` (`crates/wisp-llm/src/chatgpt_auth.rs`).
+  Each is that program's working choice, and none states a rule of the server.
+- `subscription_sharing_workplace_individual_usage_limit_exceeded`. The source of `earendil-works/pi`
+  (`packages/ai/src/api/openai-responses.ts`) adds a hint for ChatGPT Business plans to an error message that
+  holds it, and the source of `openclaw/openclaw` (`ui/src/pages/chat/chat-gateway.ts`) reads it as the code
+  of an HTTP 429 and classes it as a Business plan's usage limit. The body of pull request 23361 of
+  `pingdotgg/t3code`, merged 2026-10-22, says that ChatGPT returns a new 429 with this code when a workspace
+  administrator's limit on using the plan in other apps is reached. The body also says that OpenAI's partner
+  guidelines ask partners to show that limit and give the treatment for the existing consumer limit, which is
+  that program's statement of guidelines that were not read here. OpenAI's SDK above does not name it, and
+  the nine `siwc` pages read that day and the OpenAPI description read on 2026-10-26 do not hold the word
+  `workplace`.
 
 **Reported by users of other programs, not stated by OpenAI and not observed here.** These are public
 issues read on 2026-10-26: number 10605 of `earendil-works/pi`, number 2 of `Samffprice/loopcut`, number
@@ -2099,7 +2292,7 @@ says:
   that sentence printed after the words "stream disconnected before completion". It names no event and no
   field.
 
-**Not observed, and stated by no source in full:**
+**Not observed, and stated in full by no source read:**
 
 - What an account with no subscription reaches. The plan of the account tried is not recorded, and no
   account without a subscription was used.
@@ -2113,16 +2306,18 @@ says:
 - The header names and the claim names of the ID token of the code exchange, with the `nonce` it holds, and
   any header or claim that differs from the ID token of a refresh reply. OpenID Connect Core section 2, read
   on 2026-10-26, requires `iss`, `sub`, `aud`, `exp` and `iat` in an ID token. opencode's verifier requires
-  RS256 and the claims `exp`, `nonce` and `sub`, and does not require `iat`. The ID token of a refresh reply
-  holds `iat`, as the observed list records, and the token of the code exchange was not captured. Capturing
-  its names takes a sign-in answered in a browser by a person.
+  RS256 and the claims `exp`, `nonce` and `sub`, and does not require `iat`, and OpenAI's SDK, listed above,
+  requires `iat` as well. The ID token of a refresh reply holds `iat`, as the observed list records, and the
+  token of the code exchange was not captured. Capturing its names takes a sign-in answered in a browser by a
+  person.
 - Whether the service issues a sender-constrained form at the code exchange. A valid proof at a refresh was
   not acted on, and no proof was presented at the code exchange. Presenting one takes a sign-in answered in a
   browser by a person.
 - What the token endpoint answers a refresh token that an earlier refresh already replaced. OpenAI's
   documentation lists `refresh_token_reused` among the codes for an unusable refresh token and gives no
-  status. A refresh token presented again after it was replaced has not been observed, and presenting one may
-  end the sign-in it belongs to.
+  status, and Codex's tests, listed above, write it as a 401 and as a 400 at Codex's own endpoint. A refresh
+  token presented again after it was replaced has not been observed, and presenting one may end the sign-in
+  it belongs to.
 - What the token endpoint answers a refresh token past its 30 days. OpenAI's documentation lists
   `invalid_grant`, `invalid_refresh_token`, `token_expired`, `refresh_token_expired`,
   `refresh_token_invalidated` and `refresh_token_reused` as codes of an unusable refresh token and does not
@@ -2135,6 +2330,10 @@ says:
   seen, and no account on another plan was used.
 - Whether OpenAI limits the clients registered for one host identifier. Seeing it needs repeated sign-ins in
   a browser that present one host identifier.
+- What the token endpoint does with a refresh made before the instant `earliest_refresh_at` names, and
+  whether that instant is 0.9 of `expires_in` after the reply for another `expires_in`, another client or a
+  refresh that carries a proof. One reply was seen. OpenAI's documentation lists the field among those of a
+  token response and says nothing else of it, and OpenAI's SDK waits for it, as listed above.
 
 ## What this changes elsewhere
 
@@ -2227,18 +2426,22 @@ These are the places where another spec states something about this service, eac
 - A person on a machine with no browser forwards the listener's port, which changes at every sign-in, and
   no device-code route is available to this program.
 - Where the listing cannot be read the pickers list the compiled names ([CHATGPT-9](#CHATGPT-9)), and a
-  person who wants another types `chatgpt/<name>`. The names are the seven one account's listing offered on
-  2026-10-25, so another account may be offered others and one may name a model the account cannot reach. The
-  listing of the same account on 2026-10-26 offered an eighth model, `gpt-6.1-terra`, which the service
-  accepted and the list lacks. The service refuses a model the account cannot reach at the first request with
+  person who wants another types `chatgpt/<name>`. The names are the eight one account's listing offered on
+  2026-10-25 and 2026-10-26, so another account may be offered others and one may name a model the account
+  cannot reach. The eighth, `gpt-6.1-terra`, is in the listing of 2026-10-26 and answered a request, and
+  opencode's `chatgpt.ts` at commit `7b3f52f810` names it. A model that a later listing offers is not in the
+  list until a release adds it. The service refuses a model the account cannot reach at the first request with
   `model_not_found`, and the turn says that the account does not offer that model and that another can be
   chosen, without naming the model ([CHATGPT-8](#CHATGPT-8)).
-- The names ending in `-fast`, which opencode offers as models, are not offered, since the service refuses
-  them as models. The service accepts the `service_tier` `priority` and refuses `fast`, its listing names a
-  tier `Fast` with the identifier `priority`, and a completed response reports `default` for a request that
-  asked for `priority`. This program sends no service tier. Whether the `-fast` names stand for the
-  `priority` tier was not observed. Offering a tier takes a request field and a way for a person to choose
-  it, and neither is built.
+- The nine names ending in `-fast`, which opencode offers as models, are not offered. The service refused
+  eight of them as models, and `gpt-6.1-terra-fast` was not asked for. The service accepts the `service_tier`
+  `priority` and refuses `fast`, its listing names a tier `Fast` with the identifier `priority`, and a
+  completed response reports `default` for a request that asked for `priority`. The catalog of models.dev, the
+  catalog opencode reads and opencode's source state that each `-fast` name is the base model sent with the
+  `priority` tier (listed above). That was not observed: the service refused eight of the names as models, and
+  a response reports `default` for a request that asked for the tier. This program builds no tier and asks
+  the service for none, since offering one takes a request field and a way for a person to choose it, and
+  neither exists.
 - The egress layer reads at most 2 MiB of a reply, and the listing is 655,784 bytes for ten rows,
   so an account whose listing passes 2 MiB is read as one that cannot be read and is offered the compiled
   names.
@@ -2286,13 +2489,16 @@ These are the places where another spec states something about this service, eac
 - A skill's file that asks for a level changes nothing where the account answers, in every front end, and
   the desktop is told so in the notice a skill gets although it offers no way to choose a level.
 - The codes that say the account has reached its usage limit or may not be used this way are read from
-  another program's source and are listed with their statuses in OpenAI's documentation. The fields of a
-  refusal and of a failed event that hold them are stated by that documentation and by OpenAI's OpenAPI
-  description of the Responses API, and opencode's `chatgpt.ts` names none. One of the seven,
-  `subscription_sharing_unsupported_capability`, was seen from this service, as the `error.code` of a 400. The
-  other six were not, and neither was a failed event or an `error` event: of twelve requests with an image,
-  eight were answered 400 or 404 before any stream, three were completed and one was not answered, and no
-  request provoked a failure after a 200.
+  other programs' sources, and seven of the eight are listed with their statuses in OpenAI's documentation.
+  The fields of a refusal and of a failed event that hold them are stated by that documentation and by
+  OpenAI's OpenAPI description of the Responses API, and OpenAI's own SDK reads them from those fields
+  (listed above), where opencode's `chatgpt.ts` names none. One of the eight,
+  `subscription_sharing_unsupported_capability`, was seen from this service, as the `error.code` of a 400.
+  The other seven were not, and neither was a `response.failed` event or an `error` event on the POST
+  event stream, which this program uses: of twelve requests with an image, eight were answered 400 or 404
+  before any stream, three were completed and one was not answered, and no request provoked a failure after
+  a 200. An `error` event was seen over the websocket, for two requests that were refused as invalid, and
+  carried no code of the list.
   Users of other programs report two of the codes (listed above), and none names a failed event or an
   `error` event. A refusal in a reply that says it in another code or another field is handled as its status:
   a 401 is replaced once, a 429 or a 5xx is asked for again, and the turn ends with the sentence of that
@@ -2305,11 +2511,32 @@ These are the places where another spec states something about this service, eac
   documentation says a usage-limit error can arrive that way after streaming has begun. It names no `error`
   event. OpenAI's OpenAPI description states one, with a `code` that is a string or null, and lists no
   `subscription_sharing_` or `chatpass_v2_` code among the codes of a failed response.
-- An `error` event is read for a `code` in the event itself, as OpenAI's OpenAPI description and API reference
-  page state it. The reader of server-sent events of Codex takes an `error` event's details from an `error`
-  object nested in it, so a service that sends that form gives a code this program does not read, and the
-  event is read as an unknown failure. No source says which form this service sends, so this program does not
-  also read `error.code` in such an event.
+- An `error` event is read for a `code` in an `error` object nested in it and, where that holds none, in the
+  event itself. Over its websocket the service was seen to send the object, with the code in it, the status
+  beside it as `status` and no `code` at the top level, for two requests that were refused as invalid. OpenAI's
+  OpenAPI description and API reference page state the event's own `code`. OpenAI's SDK
+  (`openai/sign-in-with-chatgpt-devkit`, `packages/local/src/errors.ts` and `responses.ts`, at commit
+  `0a36fefeb913`, read on 2026-10-27) reads the object where there is one and the event's own `code` where
+  there is none, and the reader of server-sent events of Codex takes the details from the object. Which form
+  the POST event stream sends was
+  not seen, so both are read, and where an event holds both with different codes the object's is the code. An
+  event that holds a code in neither, or in a field this program does not read, is read as an unknown
+  failure.
+- `subscription_sharing_workplace_individual_usage_limit_exceeded` is listed as a usage limit on the word of
+  other programs. The sources of `earendil-works/pi` (`packages/ai/src/api/openai-responses.ts`, a hint for
+  ChatGPT Business plans) and of `openclaw/openclaw` (`ui/src/pages/chat/chat-gateway.ts`, which reads it from
+  the code of an HTTP 429) and the body of pull request 23361 of `pingdotgg/t3code` (a 429 that ChatGPT
+  returns when a workspace administrator's limit is reached) state it, read on 2026-10-27. The extracted text
+  of nine pages of `developers.openai.com/siwc` read that day, which list seven codes under "Errors and
+  recovery", and OpenAI's OpenAPI description read on 2026-10-26 do not hold the word `workplace`, and the
+  source of OpenAI's own SDK does not name it. The body of the pull request cites OpenAI's partner
+  guidelines for the limit, and those were not read, so a document of OpenAI's that states the code may
+  exist. It was not seen from this service, so its status, any `Retry-After` and its fields are those
+  programs' word. A program
+  that left it out would read a 429 that names it as a rate limit, wait, and send the request again, up to
+  the entry's retries, although a wait of seconds does not end a limit a workspace administrator set. It
+  ends the turn in the sentence of the other usage limit, which says the account has reached its usage limit
+  and names no administrator, who is the person that can lift this one.
 - `subscription_sharing_unsupported_capability` was seen caused by the tool `image_generation`, which this
   program never sends, and the message of the refusal named the tool. The sentence for the code is chosen
   from the code alone, so it does not say the cause, and the window's adds to use another account or another
@@ -2331,16 +2558,44 @@ These are the places where another spec states something about this service, eac
   command each names is the one the other names, for every failure of the account including the failed
   renewals, and for each way the account's models could not be listed. The window keeps no table of its
   own. The twelve names are listed in `ui/docs/phase-0-rpc-protocol.md`.
-- The code that says a refresh token is no longer valid is RFC 6749's. This server sent it for a refresh
-  token it did not know and for one revoked at the revocation endpoint. No refresh token that had ended by age
-  or by reuse was presented, so one of those may come in another code. A server that ends a sign-in with
-  another code leaves the file in place, and each later turn tries the dead refresh token and is told the
-  refresh failed, until the person signs in again. OpenAI's documentation lists `invalid_grant` on refresh
-  and five more codes for an unusable refresh token: `invalid_refresh_token`, `token_expired`,
-  `refresh_token_expired`, `refresh_token_invalidated` and `refresh_token_reused`. The renewal reads only
-  `invalid_grant`, and only at a 400 or 401, which the documentation gives for no code. A refresh refused with any of the five, or
-  with `invalid_grant` at another status, is the case this entry describes. The documentation lists
-  `invalid_client` for a fault in the client's configuration, which the renewal treats as any other refusal.
+- `invalid_grant` is RFC 6749's code for a refresh token that is no longer valid. This server sent it for a
+  refresh token it did not know and for one revoked at the revocation endpoint. No refresh token that had
+  ended by age or by reuse was presented, so none of the other five codes OpenAI's documentation lists for an
+  unusable refresh token has been seen from this server: `invalid_refresh_token`, `token_expired`,
+  `refresh_token_expired`, `refresh_token_invalidated` and `refresh_token_reused`. The documentation gives no
+  status for any of the six and does not say which condition ends in which, and no source read gives either
+  for this server. The renewal reads all six, in a string `error` at a 400 or 401, as the end of the
+  sign-in. OpenAI's SDK reads all six as a refresh token that needs a new sign-in
+  (`requiresReauthentication` in `packages/local/src/errors.ts`, at commit `0a36fefeb913`, read on
+  2026-10-27). Codex (`codex-rs/login/src/auth/manager.rs`, read on 2026-10-27 from the repository's
+  default branch) ends its sign-in for `refresh_token_expired`, `refresh_token_reused`
+  and `refresh_token_invalidated` at any status, for `invalid_grant` at a 400 and for any 401, at its own
+  token endpoint and client, which are not the ones this program uses. Codex also compares each code without
+  regard to case, which this program does not, so a body whose `error` is `INVALID_GRANT`, at a 400, or
+  `Refresh_Token_Expired` ends Codex's sign-in and ends nothing here. A guess that is wrong deletes a
+  sign-in that a retry would have kept: a refresh refused as `token_expired` or `invalid_refresh_token`, for
+  a reason other than the refresh token's end, removes the file and the person signs in again, which is what
+  the documentation says to do. `token_expired` is also the code the serving host gives an access token past
+  its expiry, in an `error` object, and the renewal reads a string `error` alone, so that body is not read as
+  the end. A refresh refused with one of the six at another status, or with a code in an `error` object,
+  ends nothing: the file stays, and a server that ends a sign-in that way has each later turn try the dead
+  refresh token and be told the refresh failed, until the person signs in again. The object form is the one
+  Codex's tests write for its own endpoint, and OpenAI's SDK reads the `code` of an `error` object or of a
+  `detail` object in a refusal from the reply of the discovery document's token endpoint, which is the endpoint
+  this program uses, so a refusal such as `{"error":{"code":"refresh_token_expired"}}` ends the SDK's
+  connection and does not end this program's sign-in, which reads a string `error` alone. This server was seen
+  to send an `error` object with a null `code` at that endpoint, in the answer to a `GET` (405), and no refusal
+  of a refresh in the object form was seen. The xAI sign-in reads `invalid_grant` alone
+  ([XAI-6](xai-sign-in.md#XAI-6)). The documentation lists `invalid_client` for a fault in the client's
+  configuration, which the renewal treats as any other refusal.
+- A refresh reply's `earliest_refresh_at` is not read. OpenAI's documentation lists the field, and OpenAI's
+  SDK does not refresh before it (listed above). One reply put it 3240 seconds after the reply, which is 0.9
+  of an `expires_in` of 3600 and 300 seconds before the point a minute ahead of the expiry where
+  [CHATGPT-7](#CHATGPT-7) refreshes, so the field was not seen to delay a refresh here. Not shown: what the
+  token endpoint does with a refresh made before the instant, and whether another `expires_in`, another
+  client or a refresh that carries a proof gives another instant. A reply that put the instant after the
+  point a minute ahead of the expiry would have this program refresh before it, and what the endpoint
+  answers to that is not known.
 - A code exchange whose reply holds no ID token ends the sign-in, so a server that stopped sending one, or
   that named another issuer, would refuse every sign-in until a release changes the check. The expiry is
   compared with the clock with no allowance, so a clock running ahead of the server's by more than the

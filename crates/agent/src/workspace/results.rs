@@ -215,6 +215,12 @@ pub struct Listing {
     /// it produced spells that name, which is a name out of the tree and would reach the planner
     /// as a sentence the driver wrote (LIST-2).
     pub unreadable: bool,
+    /// How many symbolic links the walk met and did not enter.
+    ///
+    /// A number and never a name, for the same reason as `unreadable`. A directory made only of
+    /// links lists as empty without it, and a planner reads an empty listing as an empty
+    /// directory (LIST-6).
+    pub links: usize,
 }
 
 /// The result of a repository map.
@@ -307,6 +313,11 @@ pub struct Matches {
     /// tree holds. It answers the one question a page cannot: an offset past the last match returns
     /// nothing, and nothing reads as the pattern being absent unless the count says otherwise.
     pub matched: usize,
+    /// How many symbolic links the walk met and did not enter.
+    ///
+    /// A number and never a name. A search whose files are behind links reads nothing there, and
+    /// without the count that reads as the pattern being absent or the glob being wrong (SEARCH-13).
+    pub links: usize,
 }
 
 impl Matches {
