@@ -1081,6 +1081,30 @@ impl CacheTtl {
     }
 }
 
+/// Which accounts a roster asks for its rows: a stored sign-in's token goes to the serving host of each
+/// that is asked
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9),
+/// [XAI-19](../../../docs/specs/xai-sign-in.md#XAI-19)).
+///
+/// One rule for the terminal's roster and the window's, so neither holds its own copy of which accounts
+/// are asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RosterAccounts {
+    pub chatgpt: bool,
+    pub xai: bool,
+}
+
+impl RosterAccounts {
+    /// What a picker asks: both accounts, whatever model is in force, since it lists every model a
+    /// person could choose.
+    pub fn for_a_picker() -> Self {
+        Self {
+            chatgpt: true,
+            xai: true,
+        }
+    }
+}
+
 /// Everything needed to talk to the backends this build can reach.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -1742,6 +1766,17 @@ impl Config {
     pub fn runs_on_chatgpt_account(&self, model: Option<&str>) -> bool {
         self.chatgpt_model(model.unwrap_or(&self.default_model))
             .is_some()
+    }
+
+    /// The accounts a roster asks for the sake of a turn on `model`, or on the configured default
+    /// where `model` is `None`: the account that model belongs to, and no other. The turn needs the
+    /// row of its own model, so a turn on a Brave or a gateway model sends no stored sign-in's token
+    /// to a serving host for a listing it has no use for.
+    pub fn roster_accounts_for_a_turn(&self, model: Option<&str>) -> RosterAccounts {
+        RosterAccounts {
+            chatgpt: self.runs_on_chatgpt_account(model),
+            xai: self.runs_on_xai_account(model),
+        }
     }
 
     /// Whether the ChatGPT account may be reached at all, which it may not where a `provider`
@@ -3411,6 +3446,55 @@ mod tests {
         }
         assert_eq!(config.chatgpt_model("xai/grok-4.5"), None);
         assert_eq!(config.chatgpt_model("chatgpt/gpt-5"), Some("gpt-5"));
+    }
+
+    /// CHATGPT-9, XAI-19: a roster asks the account a turn runs on and no other, and a picker asks both
+    /// whatever is in force. This is the one rule the terminal's roster and the window's both take, so
+    /// it is pinned here and not once in each. The regressions it rejects are a turn on a Brave or a
+    /// gateway model that asks an account, which sends a stored sign-in's token for a listing it does
+    /// not use, and a picker that leaves an account out.
+    #[test]
+    fn a_roster_asks_the_account_a_turn_runs_on_and_no_other_and_a_picker_asks_both() {
+        let config = with_a_gateway("{}");
+        let only = |chatgpt, xai| RosterAccounts { chatgpt, xai };
+
+        assert_eq!(
+            config.roster_accounts_for_a_turn(Some("chatgpt/gpt-5")),
+            only(true, false)
+        );
+        assert_eq!(
+            config.roster_accounts_for_a_turn(Some("xai/grok-4.5")),
+            only(false, true)
+        );
+        for model in [
+            Some("gpt-5"),
+            Some("grok-4.5"),
+            Some("openrouter/z-ai/glm-4.6"),
+        ] {
+            assert_eq!(
+                config.roster_accounts_for_a_turn(model),
+                only(false, false),
+                "{model:?}"
+            );
+        }
+        assert_eq!(
+            config.roster_accounts_for_a_turn(None),
+            only(false, false),
+            "the default is Brave's"
+        );
+        assert_eq!(RosterAccounts::for_a_picker(), only(true, true));
+
+        // Where the default is an account's model, a turn that names none is on that account.
+        let mut default_on_xai = with_a_gateway("{}");
+        default_on_xai.default_model = "xai/grok-4.5".to_string();
+        assert_eq!(
+            default_on_xai.roster_accounts_for_a_turn(None),
+            only(false, true)
+        );
+        assert_eq!(
+            default_on_xai.roster_accounts_for_a_turn(Some("chatgpt/gpt-5")),
+            only(true, false)
+        );
     }
 
     /// XAI-13: an entry that already has the id keeps it. Taking the id over would send a working

@@ -2946,8 +2946,12 @@ mod tests {
                 "{failure:?}: {error}"
             );
             assert_eq!(error.to_string(), crate::xai::said_of_failure(failure));
+            // The client gives up the breakpoints it marked a prefix with before it gives up on a 400,
+            // so that status is sent twice with the token in hand, and a 403 once. None follows the
+            // failed renewal.
             let sent = host.requests().len();
-            assert!((1..=2).contains(&sent), "{failure:?}: {sent} requests");
+            let wanted = if status == 400 { 2 } else { 1 };
+            assert_eq!(sent, wanted, "{status} {failure:?}: {sent} requests");
             assert!(
                 host.requests()
                     .iter()

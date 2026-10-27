@@ -158,7 +158,6 @@ pub(crate) struct XaiHost {
 }
 
 impl XaiHost {
-    /// Every request taken so far, in order.
     pub(crate) fn requests(&self) -> std::sync::MutexGuard<'_, Vec<XaiRequest>> {
         self.taken.lock().expect("the requests taken")
     }

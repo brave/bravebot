@@ -1337,7 +1337,6 @@ fn refreshed() -> Served {
     )
 }
 
-/// The bearer a request carried.
 fn bearer(asked: &Asked) -> Option<&str> {
     asked.header("authorization")
 }

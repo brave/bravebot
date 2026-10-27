@@ -78,12 +78,12 @@ pub enum Refused {
 /// token would send them to a host nobody compiled in, so one is a failure. A status of 400 or more
 /// is read here rather than raised, so that the class of a reply is decided in one place.
 ///
-/// It keeps no connection for a later request, as a hardening whose cause was not isolated. A sign-in
-/// asks every eight seconds for up to an hour, so up to about 450 new connections, which the endpoint
-/// can take. A connection kept between two asks is one the server or something in front of it may
-/// have closed while the sign-in waited for a person to approve a code, which the next ask would
-/// meet as a failure of the transport. The library probes a pooled connection before it reuses one,
-/// so what is guarded against is a drop that the probe does not see.
+/// It keeps no connection for a later request, as a hardening. A sign-in asks every eight seconds for
+/// up to an hour, so up to about 450 new connections, which the endpoint can take. A connection kept
+/// between two asks is one the server or something in front of it may have closed while the sign-in
+/// waited for a person to approve a code, which the next ask would meet as a failure of the
+/// transport. The library probes a pooled connection before it reuses one, so what is guarded against
+/// is a drop that the probe does not see.
 pub(crate) fn agent(
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,
 ) -> ureq::Agent {
@@ -201,12 +201,9 @@ mod tests {
     /// closed since the first reply, which a server that offered to keep it does when it has idled, is not
     /// the one the second meets. The stand-in offers the connection for reuse and hangs up on a request
     /// that comes on it, as a closed connection the client has not noticed does, and counts the
-    /// connections it accepts. Five real runs of `auth login xai` ended with "xAI could not be reached"
-    /// and nothing stored, none of them approved, after times that included about 18 seconds, 80
-    /// seconds, 3.5 minutes and 5 minutes, and the sockets of one run showed a connection used for
-    /// several polls. The cause was not isolated, and the library probes a pooled connection before it
-    /// reuses one, so this stand-in models a drop the probe does not see or a race with it. The
-    /// regression it rejects is a pooled connection, which would fail the second request.
+    /// connections it accepts. The library probes a pooled connection before it reuses one, so this
+    /// stand-in models a drop the probe does not see or a race with it. The regression it rejects is a
+    /// pooled connection, which would fail the second request.
     #[test]
     fn two_requests_through_one_agent_do_not_share_a_connection_the_server_may_have_closed() {
         use crate::oauth::stand_in::{Reply, serve};

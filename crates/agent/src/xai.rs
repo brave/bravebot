@@ -55,7 +55,6 @@ pub(crate) fn failure_of(failure: &TokenError) -> XaiFailure {
     }
 }
 
-/// The class of a failed request that a renewal failure stands for.
 fn class_of(failure: RenewalFailure) -> Class {
     match failure {
         RenewalFailure::Refused => Class::Refused,

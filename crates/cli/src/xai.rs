@@ -113,7 +113,6 @@ fn what_to_do_next(a_start_would_ask: bool) -> &'static str {
     }
 }
 
-/// Show the address, the code and how long they last, line by line.
 fn announce(announcement: &Announcement<'_>) {
     announce_to(announcement, &mut std::io::stderr());
 }

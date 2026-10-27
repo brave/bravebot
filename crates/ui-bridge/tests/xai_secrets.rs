@@ -251,7 +251,6 @@ impl Host {
         );
     }
 
-    /// How many requests were made for `path`.
     fn asked(&self, path: &str) -> usize {
         self.paths
             .lock()
@@ -261,7 +260,6 @@ impl Host {
             .count()
     }
 
-    /// How many replies are still waiting for a request.
     fn waiting(&self) -> usize {
         self.replies
             .lock()

@@ -2,6 +2,7 @@
 //! it reads effort or structured output.
 
 use super::*;
+use bravebot_config::RosterAccounts;
 
 /// The model a request names now: the pick where there is one, and otherwise the configured default,
 /// which a `model` key of the settings file sets.
@@ -35,26 +36,7 @@ pub(super) fn list_models(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<Vec<bravebot_aichat::models::Model>, String> {
-    // An account is asked only for a turn on one of its own models: every other caller needs the
-    // row of the model in force, and a session on a Brave or a gateway model has no business
-    // sending a stored sign-in's token to the serving host at each start and each turn.
-    roster(
-        config,
-        chosen,
-        Accounts {
-            chatgpt: config.runs_on_chatgpt_account(chosen),
-            xai: config.runs_on_xai_account(chosen),
-        },
-    )
-    .map(|roster| roster.models)
-}
-
-/// Which accounts a roster asks for its rows: a stored sign-in's token goes to the serving host of each
-/// that is asked.
-#[derive(Clone, Copy)]
-struct Accounts {
-    chatgpt: bool,
-    xai: bool,
+    roster(config, chosen, config.roster_accounts_for_a_turn(chosen)).map(|roster| roster.models)
 }
 
 /// The rows a picker offers, and what a person is told where the rows of a service they use are not
@@ -75,21 +57,14 @@ pub(super) fn list_models_for_picker(
     config: &Config,
     chosen: Option<&str>,
 ) -> Result<PickerRoster, String> {
-    roster(
-        config,
-        chosen,
-        Accounts {
-            chatgpt: true,
-            xai: true,
-        },
-    )
+    roster(config, chosen, RosterAccounts::for_a_picker())
 }
 
 /// The rosters of every service, with the accounts' where `accounts` says to ask them.
 fn roster(
     config: &Config,
     chosen: Option<&str>,
-    accounts: Accounts,
+    accounts: RosterAccounts,
 ) -> Result<PickerRoster, String> {
     let (mut configured, mut problems) = configured_rows(config, chosen);
 

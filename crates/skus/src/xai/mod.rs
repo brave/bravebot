@@ -582,7 +582,7 @@ mod tests {
     /// the next interval, up to three in a row, and the sign-in goes on to be approved. The waits are
     /// the ordinary interval and three seconds. The regression it rejects is a sign-in that ends at the
     /// first poll the network drops, which ends one waiting on a person who has not yet approved the
-    /// code. Five real runs ended that way before any was approved, and the cause was not isolated.
+    /// code.
     #[test]
     fn up_to_three_polls_in_a_row_that_do_not_complete_are_asked_again_at_the_next_interval() {
         let path = scratch("cut-polls");

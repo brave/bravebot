@@ -231,13 +231,11 @@ nothing stored.
 The requests of the sign-in and of a renewal are made on a connection of their own each, and none is kept for a
 later one. A sign-in asks every eight seconds for up to an hour, which is up to about 450 new connections, and
 the endpoint can take that. A connection kept between two polls is one the server or something in front of it
-may have closed while the code waited for approval, which the next poll would meet as a transport failure.
-Five real runs of `auth login xai` ended with the sentence for a service that could not be reached and nothing
-stored, none of them approved, after times that included about 18 seconds, 80 seconds, 3.5 minutes and 5
-minutes. The sockets of one run showed one connection used for several polls. The cause was not isolated, and
-the HTTP library probes a pooled connection before it reuses it, so this is a hardening against a connection
-closed in a way that probe does not see, and its effect on the real service was not observed. The agent is the
-one both sign-ins' token endpoint requests use, so the ChatGPT sign-in's are made the same way.
+may have closed while the code waited for approval, which the next poll would meet as a transport failure. The
+HTTP library probes a pooled connection before it reuses it, so this is a hardening against a connection closed
+in a way that probe does not see. Whether a kept connection caused a transport failure seen in a real sign-in
+was not isolated, and the effect of not keeping one on the real service was not observed. The agent is the one
+both sign-ins' token endpoint requests use, so the ChatGPT sign-in's are made the same way.
 
 **Why.** Each ending of the sign-in is a different thing for a person to do: nothing is wrong and the code is
 waited on, xAI answered one of the two codes that deny the request, the code has to be asked for again, or the
@@ -1050,7 +1048,9 @@ asked nothing.
 
 The roster is asked each time a picker opens, and otherwise only for the window of the model in force where that is
 the account's, so a session on another model, a one-shot run on another model and a turn on another model send the
-stored token nowhere. A row carries the window the listing states, and reads no effort level ([XAI-16](#XAI-16)), so
+stored token nowhere. The rule that says which accounts a roster asks is one function of the configuration,
+`Config::roster_accounts_for_a_turn`, with `RosterAccounts::for_a_picker` for a picker, and the terminal and the window
+both take it. A row carries the window the listing states, and reads no effort level ([XAI-16](#XAI-16)), so
 neither front end says a level is in force on it.
 
 A start that nothing serves asks the same function for the rows to choose from, as [BACKEND-39](backends.md#BACKEND-39)
@@ -1074,6 +1074,7 @@ a turn on one of the account's models, which is the one place a person has agree
 `verified-by: bravebot_agent::xai::a_listing_refused_for_the_token_is_asked_again_once_with_a_replacement`
 `verified-by: bravebot_agent::xai::a_listing_that_cannot_be_had_offers_nothing_and_is_told_apart_from_an_empty_one`
 `verified-by: bravebot_agent::xai::a_gateway_entry_named_xai_keeps_the_name_and_the_account_is_not_asked_about`
+`verified-by: bravebot_config::lib::a_roster_asks_the_account_a_turn_runs_on_and_no_other_and_a_picker_asks_both`
 `verified-by: bravebot_tui::app::the_picker_asks_the_xai_account_whatever_model_is_in_force_and_lists_what_it_offers`
 `verified-by: bravebot_tui::app::a_caller_asks_the_xai_account_only_for_one_of_its_own_models_and_takes_the_window_it_lists`
 `verified-by: bravebot_tui::app::the_picker_says_why_the_xai_accounts_models_are_missing_and_says_nothing_otherwise`
@@ -1176,14 +1177,13 @@ These are a person's to decide, and no test can settle them.
   nothing else at a refusal that does not mention the sign-in. Reversing it takes removing the `xai` field of
   `Serving::NothingConfigured` and the xAI arm of the question in `crates/cli/src/model.rs`.
 - **Up to three polls in a row that do not complete are asked again, and no connection is kept between
-  requests.** Five real runs of `auth login xai` ended with the sentence for a service that could not be reached,
-  with nothing stored and before any was approved ([XAI-3](#XAI-3)). The sockets of one run showed one connection
-  used for several polls. The cause was not isolated. The HTTP library probes a pooled connection before it
-  reuses it, so a connection the server closed would be caught unless it was closed in a way the probe does not
-  see. Not keeping connections is a hardening against that, and its effect on the real service was not observed.
-  Tolerating three cut polls in a row is added beside it, so a poll that the network drops does not end a
-  sign-in that is waiting on a person. The alternative is to end at the first, as before, which is simpler and
-  ends a sign-in for every dropped packet. The cost is up to three more intervals before a machine that cannot
+  requests.** A kept connection may be closed while the code waits, and the next poll would meet that as a
+  transport failure ([XAI-3](#XAI-3)). The HTTP library probes a pooled connection before it reuses it, so not
+  keeping connections is a hardening against a close the probe does not see. Whether a kept connection caused a
+  transport failure seen in a real sign-in was not isolated, and the effect on the real service was not
+  observed. Tolerating three cut polls in a row is added beside it, so a poll that the network drops does not end
+  a sign-in that is waiting on a person. The alternative is to end at the first, which is simpler and ends a
+  sign-in for every dropped packet. The cost is up to three more intervals before a machine that cannot
   reach the service is told so: 24 seconds on the default interval where the connection fails at once, and up to
   114 seconds where it hangs, since each of the three polls then waits out the 30-second deadline of a request
   before the next interval. A new connection for each poll is up to about 450 an hour. Reversing it takes the

@@ -3,29 +3,15 @@
 use crate::account_words::{self, Said};
 use bravebot_aichat::models::{self, Advertised, Model};
 use bravebot_config::provider::Credential;
-use bravebot_config::{Config, ModelRefusal};
+use bravebot_config::{Config, ModelRefusal, RosterAccounts};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_net::Egress;
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
-    let (rows, warnings) = roster(
-        config,
-        Accounts {
-            chatgpt: true,
-            xai: true,
-        },
-    );
+    let (rows, warnings) = roster(config, RosterAccounts::for_a_picker());
     catalogue(config, rows, warnings)
-}
-
-/// Which accounts a roster asks for its rows: a stored sign-in's token goes to the serving host of each
-/// that is asked.
-#[derive(Clone, Copy)]
-struct Accounts {
-    chatgpt: bool,
-    xai: bool,
 }
 
 /// Take the window of the model a turn will be answered by, the one `model` names or, where it names
@@ -37,16 +23,7 @@ struct Accounts {
 /// row describes, or a listing that could not be fetched, leaves the default in place, except that the
 /// compiled names of the ChatGPT account stand in for its listing and carry the assumed window.
 pub fn adopt_window(config: &mut Config, model: Option<&str>) {
-    // An account is asked only for a turn on one of its own models, as the terminal does: a turn on
-    // any other model has no use for the account's listing, and its token goes nowhere for it.
-    let rows = roster(
-        config,
-        Accounts {
-            chatgpt: config.runs_on_chatgpt_account(model),
-            xai: config.runs_on_xai_account(model),
-        },
-    )
-    .0;
+    let rows = roster(config, config.roster_accounts_for_a_turn(model)).0;
     config.adopt_window_of_model_in_force(model, |in_force| {
         rows.iter()
             .find(|row| row.key == in_force)
@@ -64,7 +41,7 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 /// text built here. The window reads the reference catalog whatever language the machine is set to
 /// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so a person reads the same words from
 /// either.
-fn roster(config: &Config, accounts: Accounts) -> (Vec<Model>, Vec<Said>) {
+fn roster(config: &Config, accounts: RosterAccounts) -> (Vec<Model>, Vec<Said>) {
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     if let Some(bedrock) = &config.bedrock {
