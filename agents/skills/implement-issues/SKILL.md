@@ -120,7 +120,8 @@ subagents made up 84% of the token cost, and workers and the orchestrator reache
 Make `<tmp>/implement-issues/<branch>.md` at the end of step 1, once the items are known and the
 integration branch has its name. `<tmp>` is `${TMPDIR:-/tmp}`. The path follows from the branch,
 so a later session finds it from the pull request's head ref. Keep it outside every worktree. It
-holds one row per item (`item | group | worktree | branch | status | commits`), the path of each
+holds one row per item (`item | group | worktree | branch | status | commits`, with the issue as `#<n>`
+in the item cell, which `implement-issues.py` reads to claim a resumed run's issues), the path of each
 item's brief, which holds its checklist ([step 3](#3-plan)) and reproduction, the decisions, every
 dependency commit that bypassed the hook, and the follow-ups. The briefs, the handoff files and the
 subagents' reports are in `<tmp>/implement-issues/<branch>/`. Update the ledger at every status
