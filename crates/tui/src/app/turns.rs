@@ -690,10 +690,6 @@ pub(super) fn run_turn_animated(
         consult.is_some(),
         briefed.as_ref().is_some_and(|brief| brief.private),
     );
-    let answering = addressed
-        .as_ref()
-        .and_then(|addressed| addressed.model.clone())
-        .unwrap_or_else(|| session.model().unwrap_or(&config.default_model).to_string());
 
     let worker = thread::spawn(move || {
         let mut sink = Trail::new();
@@ -1142,7 +1138,7 @@ pub(super) fn run_turn_animated(
         }
     });
     let finished = match (host, &consult) {
-        (Some(host), Some(consult)) => handed_back(line, consult, &answering, host, finished),
+        (Some(host), Some(consult)) => handed_back(line, consult, host, finished),
         _ => finished,
     };
 
@@ -1256,7 +1252,6 @@ pub(super) use bravebot_agent::consult::pick;
 pub(super) fn handed_back(
     line: &str,
     consult: &Consult,
-    model: &str,
     mut host: Conversation,
     finished: FinishedTurn,
 ) -> FinishedTurn {
@@ -1267,18 +1262,14 @@ pub(super) fn handed_back(
         mut sink,
         servers,
     } = finished;
-    if let Ok(replied) = &outcome {
-        let answered = bravebot_agent::consult::Answered {
-            bot: &consult.addressed.name,
-            definition: &consult.definition,
-            model,
-            answer: &replied.answer,
-        };
-        if let Err(denied) = bravebot_agent::consult::record(line, &answered, &mut host, &mut sink)
-        {
-            outcome = Err(turn::TurnError::Precommit(denied.to_string()));
-        }
-    }
+    bravebot_agent::consult::hand_back(
+        line,
+        &consult.addressed.name,
+        &consult.definition,
+        &mut outcome,
+        &mut host,
+        &mut sink,
+    );
     FinishedTurn {
         decisions,
         outcome,
@@ -1301,11 +1292,10 @@ pub(super) fn set_aside(
     if !consulting {
         return (conversation, None);
     }
-    let mut fresh = Conversation::new();
-    if private {
-        fresh.observed(bravebot_core::label::Label::trusted_private());
-    }
-    (fresh, Some(conversation))
+    (
+        bravebot_agent::consult::conversation(private),
+        Some(conversation),
+    )
 }
 
 /// What a turn may leave running once it has replied.

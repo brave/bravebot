@@ -23816,7 +23816,6 @@ mod tests {
         let finished = handed_back(
             "@rule-reviewer is this safe?",
             &consult,
-            "a-model",
             host,
             FinishedTurn {
                 decisions: None,

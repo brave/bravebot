@@ -3012,13 +3012,9 @@ fn work(work: Work) {
     let began_at = std::time::Instant::now();
     // A consult's context is its line and what it reads, never the host's conversation, which is
     // given the reply when the consult ends (CONSULT-1, CONSULT-15).
-    let mut consulted = consulting.as_ref().map(|_| {
-        let mut fresh = bravebot_agent::Conversation::new();
-        if private {
-            fresh.observed(bravebot_core::label::Label::trusted_private());
-        }
-        fresh
-    });
+    let mut consulted = consulting
+        .as_ref()
+        .map(|_| bravebot_agent::consult::conversation(private));
     let conversation = match consulted.as_mut() {
         Some(fresh) => fresh,
         None => &mut state.conversation,
@@ -3046,20 +3042,15 @@ fn work(work: Work) {
     // Cleanup has finished on every return, including cancellation and request errors.
     state.answers.adopt(completed.decisions);
     let mut outcome = completed.outcome;
-    // Only a reply hands anything over: a consult that failed or was stopped leaves the host as it
-    // was (CONSULT-11).
-    if let (Some(consulting), Ok(replied)) = (&consulting, &outcome) {
-        let answered = bravebot_agent::consult::Answered {
-            bot: &consulting.bot,
-            definition: &consulting.definition,
-            model: &replied.model,
-            answer: &replied.answer,
-        };
-        if let Err(denied) =
-            bravebot_agent::consult::record(&named, &answered, &mut state.conversation, &mut sink)
-        {
-            outcome = Err(TurnError::Precommit(denied.to_string()));
-        }
+    if let Some(consulting) = &consulting {
+        bravebot_agent::consult::hand_back(
+            &named,
+            &consulting.bot,
+            &consulting.definition,
+            &mut outcome,
+            &mut state.conversation,
+            &mut sink,
+        );
     }
     // The next bot is asked only once this one replied. A consult that failed or was stopped ends
     // the rest (CONSULT-9).

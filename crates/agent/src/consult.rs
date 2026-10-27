@@ -103,6 +103,42 @@ pub fn record<S: Sink>(
     Ok(())
 }
 
+/// The conversation a consult runs over in place of the host's, which holds none of it
+/// (CONSULT-1). A brief drafted from private content leaves the consult holding it (CONSULT-6).
+pub fn conversation(private: bool) -> Conversation {
+    let mut fresh = Conversation::new();
+    if private {
+        fresh.observed(bravebot_core::label::Label::trusted_private());
+    }
+    fresh
+}
+
+/// Give the host `line` and the reply of the consult that ended with `outcome` (CONSULT-15).
+///
+/// Only a reply hands anything over: a consult that failed or was stopped leaves the host as it
+/// was (CONSULT-11). A reply the host may not be given turns `outcome` into that refusal.
+pub fn hand_back<S: Sink>(
+    line: &str,
+    bot: &str,
+    definition: &str,
+    outcome: &mut Result<crate::turn::Outcome, crate::turn::TurnError>,
+    host: &mut Conversation,
+    sink: &mut S,
+) {
+    let Ok(replied) = outcome else {
+        return;
+    };
+    let answered = Answered {
+        bot,
+        definition,
+        model: &replied.model,
+        answer: &replied.answer,
+    };
+    if let Err(denied) = record(line, &answered, host, sink) {
+        *outcome = Err(crate::turn::TurnError::Precommit(denied.to_string()));
+    }
+}
+
 /// What is drawn in place of a reply the host was given a reference to, which the record keeps no
 /// content for.
 pub fn kept() -> String {
