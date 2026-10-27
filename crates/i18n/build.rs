@@ -180,6 +180,10 @@ fn locale_enum(locales: &[Catalog]) -> String {
 
 /// The catalog's own `locale-name`, or its tag where it has none: the reference's name for itself
 /// is not a name for another language.
+#[expect(
+    clippy::panic,
+    reason = "a build script refuses a malformed catalog by failing the build"
+)]
 fn own_name(locale: &Catalog) -> String {
     match locale
         .messages
