@@ -204,6 +204,10 @@ try {
   assert.equal(await editor.locator('[data-colour]').count(), 8, 'the editor offers the eight colours')
   await editor.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)))
   await page.screenshot({ path: '/tmp/bravebot-avatar-editor-create.png' })
+  // Choosing the pair the editor opened on turns a generated face into the one the thumbnail shows.
+  await editor.locator('[data-body][aria-pressed="true"]').click()
+  assert.equal(await preview.getAttribute('data-avatar'),
+    await editor.locator('[data-body][aria-pressed="true"] [data-avatar]').getAttribute('data-avatar'), 'the face is the thumbnail that was chosen')
   // A colour recolours every shape on offer and the face as soon as it is chosen.
   const other = editor.locator('[data-colour][aria-pressed="false"]').first()
   const otherColour = await other.getAttribute('data-colour')
@@ -219,6 +223,13 @@ try {
   assert.equal(await preview.getAttribute('data-avatar'), otherFace, 'Escape keeps what was chosen')
   assert.notEqual(otherFace, firstFace)
   assert.equal(await form.count(), 1, 'Escape in the editor does not close the create dialog')
+  // Escape closes it from outside the panel as well, and the dialog stays.
+  await openEditor.click()
+  await editor.waitFor()
+  await form.getByRole('textbox', { name: 'Name', exact: true }).focus()
+  await page.keyboard.press('Escape')
+  await editor.waitFor({ state: 'hidden' })
+  assert.equal(await form.count(), 1, 'Escape with focus outside the editor does not close the create dialog')
   await openEditor.click()
   await editor.waitFor()
   await editor.getByRole('button', { name: 'Randomize', exact: true }).click()

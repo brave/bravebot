@@ -255,24 +255,27 @@ export function contrast(a: string, b: string): number {
 }
 
 /** The paints in hue order, so a gradient can walk from one to another through the ones between. */
-const RING = [...PAINT].sort((a, b) => lchOf(a.hex).h - lchOf(b.hex).h)
+const byHue = (paints: readonly Paint[]): Paint[] => [...paints].sort((a, b) => lchOf(a.hex).h - lchOf(b.hex).h)
+const RING = byHue(PAINT)
+/** The ring a seed made before `v3:` walks, which has none of the five paints added since. */
+const EARLIER_RING = byHue(EARLIER_PAINTS)
 
 /**
  * The stops from one paint to the next, through every paint between them the short way round.
  * Mixing two distant hues directly passes through a dull, low-chroma middle (red to green is
  * olive), and walking through the real paints keeps every step as bright as they are.
  */
-function walk(names: string[]): Lch[] {
-  const at = names.map((name) => RING.findIndex((paint) => paint.name === name))
-  const stops: Lch[] = [lchOf(RING[at[0]!]!.hex)]
+function walk(names: string[], ring: readonly Paint[] = RING): Lch[] {
+  const at = names.map((name) => ring.findIndex((paint) => paint.name === name))
+  const stops: Lch[] = [lchOf(ring[at[0]!]!.hex)]
   for (let i = 1; i < at.length; i++) {
     const from = at[i - 1]!
     const to = at[i]!
-    const forward = (to - from + RING.length) % RING.length
-    const step = forward <= RING.length / 2 ? 1 : -1
+    const forward = (to - from + ring.length) % ring.length
+    const step = forward <= ring.length / 2 ? 1 : -1
     for (let k = from; k !== to; ) {
-      k = (k + step + RING.length) % RING.length
-      stops.push(lchOf(RING[k]!.hex))
+      k = (k + step + ring.length) % ring.length
+      stops.push(lchOf(ring[k]!.hex))
     }
   }
   return stops
@@ -445,7 +448,7 @@ export function buildSprite(seed: string): Sprite {
   const fringe = stream(`${seed}/fringe`)() < 0.35
   const traits: Traits = { body, crown, arms, legs, eyes, paints, direction, fringe, symmetry }
 
-  const stops = picked ? stopsOf(picked.colour) : walk(paints)
+  const stops = picked ? stopsOf(picked.colour) : walk(paints, seed.startsWith('v3:') ? RING : EARLIER_RING)
   const cells = paint(seed, filled, traits, stops, flipped(seed), leftEye, rightEye)
   const xs = cells.map((cell) => cell.x)
   const ys = cells.map((cell) => cell.y)

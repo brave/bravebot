@@ -49,8 +49,8 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
 
   const choice = choiceOf(open ? draft : seed)
   const choose = (body: Body, colour: string) => {
-    if (body === choice.body && colour === choice.colour) return
     const next = pickedSeed(body, colour)
+    if (next === (open ? draft : seed)) return
     saved.current = next
     setDraft(next)
     onCommit(next)
@@ -75,7 +75,8 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
       const { offsetWidth: width, offsetHeight: height } = element
       const left = Math.min(Math.max(GAP, face.left + face.width / 2 - width / 2), window.innerWidth - width - GAP)
       const below = face.bottom + GAP
-      const top = below + height <= window.innerHeight - GAP ? below : Math.max(GAP, face.top - GAP - height)
+      const wanted = below + height <= window.innerHeight - GAP ? below : face.top - GAP - height
+      const top = Math.max(GAP, Math.min(wanted, window.innerHeight - height - GAP))
       element.style.left = `${Math.round(left)}px`
       element.style.top = `${Math.round(top)}px`
     }
@@ -96,12 +97,23 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
     const click = (event: MouseEvent) => {
       if (event.timeStamp - dismissedAt < 1000 && event.composedPath()[0] instanceof HTMLDialogElement) event.stopPropagation()
     }
+    // Escape closes the editor wherever focus is, ahead of the create dialog, which would otherwise
+    // close on the same key.
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      closeRef.current()
+      trigger.current?.focus({ preventScroll: true })
+    }
     document.addEventListener('pointerdown', pointerDown, true)
+    window.addEventListener('keydown', keyDown, true)
     window.addEventListener('click', click, true)
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
     return () => {
       document.removeEventListener('pointerdown', pointerDown, true)
+      window.removeEventListener('keydown', keyDown, true)
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
       // Kept a moment longer than the edit, for the click that follows the press that ended it.
@@ -109,15 +121,6 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
       if (element.matches(':popover-open')) element.hidePopover()
     }
   }, [open])
-
-  const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key !== 'Escape') return
-    // Kept from the dialog the editor may sit in, which would otherwise close on the same key.
-    event.preventDefault()
-    event.stopPropagation()
-    closeRef.current()
-    trigger.current?.focus({ preventScroll: true })
-  }
 
   return (
     <div ref={frame} className={className}>
@@ -140,7 +143,7 @@ export function AvatarEditor({ seed, size, doing, className, onCommit }: {
         }}
       />
       <div ref={panel} id={panelId} popover="manual" role="dialog" aria-labelledby={titleId}
-        className="avatar-editor" data-test="avatar-editor" onKeyDown={onKeyDown}>
+        className="avatar-editor" data-test="avatar-editor">
         <div className="avatar-editor-head">
           <strong id={titleId}>Edit bot avatar</strong>
           <Button kind="plain" size="tiny" className="avatar-editor-randomize" onClick={randomize}>Randomize</Button>

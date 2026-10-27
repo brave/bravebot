@@ -1,4 +1,5 @@
 import test from 'node:test'
+import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import {
   buildSprite, spriteOf, placeEyes, hueDistance, contrast, choiceOf, pickedSeed, swatchOf, SWATCH,
@@ -163,6 +164,32 @@ test('a stored seed keeps the colours it was painted with', () => {
   for (const seed of [...seeds(64), ...LEGACY]) {
     for (const name of buildSprite(seed).traits.paints)
       assert.ok(earlier.has(name), `${seed} painted ${name}`)
+  }
+})
+
+/**
+ * A seed from before `v3:` walks the eleven-paint ring, so the five paints added since do not turn
+ * up in its gradient. The hashes are of every cell's fill as `main` drew these seeds before those
+ * paints existed, so a gradient that passes through a new paint changes one of them.
+ */
+test('a seed from before v3 is drawn cell for cell as it was', () => {
+  const drawn = [
+  ['v2:example-0', '8c5d8c9475af'],
+  ['v2:example-7', '2f969f3a55cb'],
+  ['v2:example-13', '7d0228a66cda'],
+  ['v2:example-21', '8832645a1062'],
+  ['review-3', '6a4d4cd25ecf'],
+  ['existing-bot', '58a28d99d91a'],
+  ['a492-fc02', '4550a798980b'],
+  ['v2:bot-5', 'f09b13a08e48'],
+  ['v2:bot-17', 'de94511e03c9'],
+  ['v2:bot-33', '09c583cf5b51'],
+  ['v2:bot-40', '26b52c746630'],
+  ['v2:bot-52', 'e6b1dd679487'],
+  ]
+  for (const [seed, hash] of drawn) {
+    const fills = buildSprite(seed).cells.map(cell => `${cell.x},${cell.y},${cell.fill}`).join(';')
+    assert.equal(createHash('sha1').update(fills).digest('hex').slice(0, 12), hash, seed)
   }
 })
 
