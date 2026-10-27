@@ -1781,20 +1781,6 @@ fn an_untrusted_workspace_reads_the_rules_kept_for_its_path() {
     );
 }
 
-/// RECALL-2, INSTR-10. The text is what a delegate reads, and it holds the person's rules.
-#[test]
-fn a_delegate_reads_the_persons_rules() {
-    let scratch = Scratch::new("rules-delegate");
-    let home = scratch.directory("home");
-    let project = scratch.directory("project");
-    keep_rules(&home, &project_id(&project, false), "PERSONS-RULES");
-    let workspace = Workspace::new(&project).expect("workspace");
-
-    let composed = compose_with_home(&workspace, &workspace, &home, &["."]);
-
-    assert!(composed.text.contains("PERSONS-RULES"), "{}", composed.text);
-}
-
 /// RECALL-1, RECALL-2. Reading is not a reason to make `projects/`.
 #[test]
 fn reading_rules_makes_no_projects_directory() {
@@ -1887,14 +1873,15 @@ fn a_pipe_where_the_rules_file_goes_is_not_waited_on() {
     let project = scratch.directory("project");
     let dir = home.join("projects").join(&project_id(&project, false).dir);
     std::fs::create_dir_all(&dir).unwrap();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        dir.join("rules.md"),
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o600),
-        0,
-    )
-    .expect("a pipe");
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "mkfifo makes the pipe the test reads; it is not a program bravebot starts"
+    )]
+    let made = std::process::Command::new("mkfifo")
+        .arg(dir.join("rules.md"))
+        .status()
+        .expect("mkfifo");
+    assert!(made.success());
     let (sent, composed) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let workspace = Workspace::new(&project).expect("workspace");

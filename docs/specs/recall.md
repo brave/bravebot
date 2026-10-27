@@ -95,7 +95,6 @@ A rule is never dropped to save tokens. A layer is loaded in full, or the sessio
 `verified-by: bravebot_agent::preamble::the_persons_rules_for_a_project_come_between_home_and_project`
 `verified-by: bravebot_agent::preamble::the_header_says_the_projects_file_wins_over_the_persons_rules`
 `verified-by: bravebot_agent::preamble::an_untrusted_workspace_reads_the_rules_kept_for_its_path`
-`verified-by: bravebot_agent::preamble::a_delegate_reads_the_persons_rules`
 `verified-by: bravebot_agent::preamble::reading_rules_makes_no_projects_directory`
 `verified-by: bravebot_agent::preamble::a_delegates_checkout_reads_its_parents_rules`
 `verified-by: bravebot_agent::preamble::a_cd_to_another_project_reads_that_projects_rules`

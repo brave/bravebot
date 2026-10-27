@@ -58,8 +58,23 @@ pub fn project_id(working_directory: &Path, trusted: bool) -> ProjectId {
 /// never in a session that writes nothing to the state directory. Where both are kept, the path's
 /// stays where it is.
 pub fn settled(home: &Path, working_directory: &Path, trusted: bool) -> ProjectId {
+    settled_where(
+        home,
+        working_directory,
+        trusted,
+        crate::home::writable().is_some(),
+    )
+}
+
+/// [`settled`], told whether the session may write to the state directory.
+fn settled_where(
+    home: &Path,
+    working_directory: &Path,
+    trusted: bool,
+    writable: bool,
+) -> ProjectId {
     let project = project_id(working_directory, trusted);
-    if !trusted || crate::home::writable().is_none() {
+    if !trusted || !writable {
         return project;
     }
     let by_path = project_id(working_directory, false);
@@ -71,6 +86,11 @@ pub fn settled(home: &Path, working_directory: &Path, trusted: bool) -> ProjectI
         && std::fs::rename(&from, &to).is_ok()
     {
         // The `id` file names the project the directory is now for.
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the id file only labels the directory for a person tracing it back, and the \
+                      next save writes it again; the files are already where they belong"
+        )]
         let _ = super::store::Store::new(home, project.clone()).make_project_directory();
     }
     project
@@ -210,7 +230,8 @@ mod tests {
 
     /// RECALL-1: what was kept under the path before the trust yes moves to the `origin` name at
     /// the first trusted look, so it keeps loading. Where the `origin` already has its own, nothing
-    /// is merged and the path's stays, and an untrusted look moves nothing.
+    /// is merged and the path's stays, and neither an untrusted look nor a session that writes
+    /// nothing to the state directory moves anything.
     #[test]
     fn what_was_kept_under_the_path_moves_to_the_origin_once_trusted() {
         let scratch = Scratch::new("recall-project-settled");
@@ -224,6 +245,11 @@ mod tests {
 
         assert_eq!(settled(&home, &root, false), by_path);
         assert!(kept.join("k.md").exists(), "an untrusted look moved it");
+        assert_eq!(settled_where(&home, &root, true, false), by_origin);
+        assert!(
+            kept.join("k.md").exists(),
+            "a session that writes nothing to the state directory moved it"
+        );
 
         assert_eq!(settled(&home, &root, true), by_origin);
         let moved = projects.join(&by_origin.dir);
