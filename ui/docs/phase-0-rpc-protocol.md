@@ -1171,10 +1171,9 @@ not come from an account. For ChatGPT it is one of `not-signed-in`, `ended`, `to
 `xai-ended`, `xai-token-refused`, `xai-not-permitted`, `xai-unusable`, `xai-renewal-refused`,
 `xai-renewal-rate-limited`, `xai-renewal-unavailable`, `xai-renewal-incomplete` and `xai-renewal-transport`.
 The `category` beside it is still the class the failure belongs to, which is `refused` for `xai-not-permitted`.
-The card draws the sentence under one title for either account, `The account could not be used`, which was
-`The ChatGPT account could not be used` for ChatGPT alone: the window keeps no table of service names, and the
-sentence names the service. `accountMessage` is the bridge's sentence for that failure, and `null`
-where `account` is: one sentence in sentence case that says what happened and what to do. `accountCommand`
+The card draws the sentence under one title for either account, `The account could not be used`: the window
+keeps no table of service names, and the sentence names the service. `accountMessage` is the bridge's sentence
+for that failure, and `null` where `account` is: one sentence in sentence case that says what happened and what to do. `accountCommand`
 is the words of it that are a command to run, as they stand in the sentence, and `null` where it names none.
 A client draws the sentence as text with the command in a code element, and does not word the failure from
 the name or read the sentence for the command. Neither holds text from a reply. For `usage-limit` and

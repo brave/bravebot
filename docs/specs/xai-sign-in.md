@@ -438,8 +438,8 @@ dropped.
 The renewal is the code that [chatgpt-sign-in.md](chatgpt-sign-in.md) describes for the ChatGPT account,
 given this sign-in's file and request, so each state of it is exercised through that account's tests and
 what is particular to this sign-in is exercised here. The re-read before a removal is in that shared code, so
-it holds for both accounts, and the tests of the ChatGPT renewer are kept passing under it. A turn asks it for the access token before each request
-([XAI-17](#XAI-17)).
+it holds for both accounts, and the tests of the ChatGPT renewer pass under it. A turn asks it for the access
+token before each request ([XAI-17](#XAI-17)).
 
 **Why.** An authorization server may replace the refresh token each time it is used, and then the copy a
 second process read before the first's reply is dead. The claim is held across up to two network round trips, so
@@ -802,7 +802,7 @@ request for this account ([XAI-18](#XAI-18)), the sign-in file cannot be read, a
 of the five classes of a request that [XAI-3](#XAI-3) lists. Each is a
 fixed sentence of the message catalog, in English and in French, chosen from the value alone. None holds text
 taken from a reply, a request, a file or a settings file: the service answers a token it does not accept with a
-400, and an error body can carry an identifier, so the body of a refusal is not read.
+403 or a 400, and an error body can carry an identifier, so the body of a refusal is not read.
 
 The sentence names the command that is the remedy. `bravebot auth login xai` is named for a sign-in that is not
 stored, one that has ended and a token that was refused, and `bravebot auth status xai` for a file that cannot be
@@ -1181,8 +1181,8 @@ These are a person's to decide, and no test can settle them.
   transport failure ([XAI-3](#XAI-3)). The HTTP library probes a pooled connection before it reuses it, so not
   keeping connections is a hardening against a close the probe does not see. Whether a kept connection caused a
   transport failure seen in a real sign-in was not isolated, and the effect on the real service was not
-  observed. Tolerating three cut polls in a row is added beside it, so a poll that the network drops does not end
-  a sign-in that is waiting on a person. The alternative is to end at the first, which is simpler and ends a
+  observed. Three cut polls in a row are also tolerated, so a poll that the network drops does not end a
+  sign-in that is waiting on a person. The alternative is to end at the first, which is simpler and ends a
   sign-in for every dropped packet. The cost is up to three more intervals before a machine that cannot
   reach the service is told so: 24 seconds on the default interval where the connection fails at once, and up to
   114 seconds where it hangs, since each of the three polls then waits out the 30-second deadline of a request
@@ -1272,7 +1272,7 @@ No source states these, and the clauses state no value for them:
 ## What this changes elsewhere
 
 - **Credential protection.** [CRED-14](credential-protection.md#CRED-14) and [CRED-25](credential-protection.md#CRED-25)
-  gain this sign-in's file and its account in `doctor`, and [CRED-26](credential-protection.md#CRED-26) its
+  cover this sign-in's file and its account in `doctor`, and [CRED-26](credential-protection.md#CRED-26) its
   binding.
 - **The command line.** [CLI-18](cli.md#CLI-18) lists six ways and states `logout xai`. [CLI-23](cli.md#CLI-23)
   takes `xai` as a way.
@@ -1288,10 +1288,9 @@ No source states these, and the clauses state no value for them:
   well, and its pins of who names a host read them. The re-read before a removal ([XAI-6](#XAI-6)) is in the
   shared renewer and so holds for the ChatGPT sign-in as well, and so does keeping no connection between the
   requests of the shared agent ([XAI-3](#XAI-3)).
-- **The desktop failure card.** The title of the card for a failure of an account names neither service, where
-  it named ChatGPT, since one card serves both accounts and the window keeps no table of service names. The
-  sentence under it names the service. `ui/src/renderer/failure.ts` and `ui/docs/phase-0-rpc-protocol.md`
-  say so.
+- **The desktop failure card.** The title of the card for a failure of an account names neither service, since
+  one card serves both accounts and the window keeps no table of service names. The sentence under it names the
+  service. `ui/src/renderer/failure.ts` and `ui/docs/phase-0-rpc-protocol.md` say so.
 - **The Agent Client Protocol.** [ACP-8](acp.md#ACP-8) says an editor is told an account's failure in its
   sentence, for either account.
 

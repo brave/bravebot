@@ -37,7 +37,7 @@ Each way is the command it was before, run for you:
 | `import` | `bravebot import-providers` | [Importing](importing.md) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
 | `chatgpt` | nothing before it: a sign-in in a browser | [ChatGPT](providers/chatgpt.md) |
-| `xai` | nothing before it: a sign-in with a code entered on any device | [below](#xai) |
+| `xai` | no other command: a sign-in with a code entered on any device | [below](#xai) |
 
 A script names the way, so nothing is asked: `bravebot auth login leo nightly`,
 `bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`,
