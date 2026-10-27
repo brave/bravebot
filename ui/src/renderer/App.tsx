@@ -58,6 +58,7 @@ import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
 import { NoteDialog } from './components/NoteDialog'
+import { CaffeinateConfirm } from './components/CaffeinateConfirm'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -586,6 +587,21 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // Keeping the computer awake during turns (CMD-12): off at launch, and the main process holds
+  // the computer awake only while this is on and a turn runs.
+  const [caffeinated, setCaffeinated] = useState(false)
+  const [askingCaffeinate, setAskingCaffeinate] = useState(false)
+  const caffeinate = useCallback(async () => {
+    if (caffeinated) return setCaffeinated(false)
+    if (await window.bravebot.caffeinateConfirmed()) setCaffeinated(true)
+    else setAskingCaffeinate(true)
+  }, [caffeinated])
+  const enableCaffeinate = useCallback(async () => {
+    setAskingCaffeinate(false)
+    await window.bravebot.confirmCaffeinate()
+    setCaffeinated(true)
+  }, [])
+
   // The open chat's handle while its note dialog is up.
   const [noting, setNoting] = useState<string | null>(null)
   const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
@@ -866,6 +882,7 @@ export function App(): React.JSX.Element {
     find: () => document.dispatchEvent(new Event(FIND_EVENT)),
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
+    caffeinate: () => void caffeinate(),
     changelog: () => void changelog(),
     note: askNote,
     doctor: () => void doctor(),
@@ -892,9 +909,10 @@ export function App(): React.JSX.Element {
       canExport,
       includeTools,
       canRewind: live !== null && !live.running && (live.rewind?.length ?? 0) > 0,
+      caffeinated,
       folded: collapsed,
     }),
-    [live, draft, collapsed, canExport, includeTools, backendReady],
+    [live, draft, collapsed, canExport, includeTools, backendReady, caffeinated],
   )
   usePublishedState(menuState)
 
@@ -1133,6 +1151,9 @@ export function App(): React.JSX.Element {
       )}
       {noting && live?.handle === noting && (
         <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
+      )}
+      {askingCaffeinate && (
+        <CaffeinateConfirm onCancel={() => setAskingCaffeinate(false)} onEnable={() => void enableCaffeinate()} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
       {rewinding && live?.handle === rewinding.handle && (() => {

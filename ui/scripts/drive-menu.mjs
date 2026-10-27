@@ -135,6 +135,9 @@ const ALLOWED_IDS = [
   // Opens a dialog for a note kept on the record. It reaches `session.note`, which sends the
   // model nothing.
   'session.note',
+  // A setting, not an action: it keeps the computer awake while a turn runs. It reaches no agent
+  // method, and the first time it is turned on a dialog says what it does.
+  'app.caffeinate',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(

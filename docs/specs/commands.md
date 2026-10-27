@@ -905,6 +905,14 @@ Each one's standard input is a pipe this process holds, and each ends the hold w
 ends, so a crash leaves no machine held awake. An inhibitor that will not start, and one that exits
 by itself, is said in the transcript with the program's name, and `/caffeinate` is then off.
 
+The desktop window's Brave Bot › Keep Computer Awake During Turns is the same setting for the whole
+app. It is off at every launch, and while it is on the main process holds Electron's
+`powerSaveBlocker` with `prevent-app-suspension` whenever any session has a turn in flight, and
+lets go once none has, when the setting goes off, when the window closes and when the app quits.
+The first time it is turned on a dialog says the same as the first `/caffeinate`, and nothing is
+held until the person presses Enable; that agreement is kept in the window's own state file rather
+than in `~/.bravebot/caffeinate`. The window runs no loop, and a watch holds nothing.
+
 **Why.** A laptop that sleeps during a long turn, a loop or a `schedule_next` wait stops the request
 in flight and the programs the turn runs, and the person comes back to a stalled session or a failed
 request. Holding the machine only while work is pending keeps it from sleeping through that and lets
@@ -935,6 +943,7 @@ did not write ([sandboxing.md](sandboxing.md)).
 `verified-by: bravebot_tui::caffeinate::an_inhibitor_with_no_cat_but_a_planted_one_is_not_started`
 `verified-by: bravebot_tui::caffeinate::a_program_the_inhibitor_starts_by_name_is_never_one_a_stage_may_have_written`
 `verified-by: bravebot_session::store::only_the_confirmed_word_is_an_agreement_to_caffeinate`
+`verified-by: by-construction (the desktop main process is not a crate this workspace compiles, so ui/scripts/caffeinate.test.mjs drives its hold with a stand-in powerSaveBlocker: nothing is held while the setting is off or no turn runs, the hold is taken once and let go when the turns end, when the setting goes off and on quitting, and the menu item is a checkbox ticked from the window state; make check-ui runs the test)`
 
 ## Drafting the project's instructions
 

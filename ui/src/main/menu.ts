@@ -97,7 +97,12 @@ function item(id: CommandId): MenuItemConstructorOptions {
     ...(declared.checkbox
       ? { type: 'checkbox' as const, checked: isChecked(declared.id, state) }
       : {}),
-    click: () => choose(declared.id),
+    click: (clicked) => {
+      // Put the tick back to what the window believes: a setting can be refused, as keeping the
+      // computer awake is when its first dialog is cancelled, and then no new state arrives.
+      if (declared.checkbox) clicked.checked = isChecked(declared.id, state)
+      choose(declared.id)
+    },
   }
 }
 
@@ -150,6 +155,8 @@ export function installMenu(window: BrowserWindow): void {
       label: NAME,
       submenu: [
         item('app.about'),
+        SEPARATOR,
+        item('app.caffeinate'),
         SEPARATOR,
         { role: 'services' },
         SEPARATOR,

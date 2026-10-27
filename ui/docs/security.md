@@ -92,6 +92,13 @@ else. It is not a prompt, is not queued and is not in what a turn is given, so i
 model ([SESSION-36](../../docs/specs/sessions.md#SESSION-36)). The window draws notes as plain text.
 The host does not offer the method to its clients.
 
+Keep Computer Awake During Turns holds Electron's `powerSaveBlocker` (`prevent-app-suspension`)
+in the main process, only while the setting is on and a turn runs, and lets go when either ends,
+when the window closes and when the app quits. The screen still locks, but the computer stays up
+with whatever credentials it holds, so nothing is held until the person has agreed to a dialog that
+says so; the main process keeps that agreement and ignores the setting without it. It is off at
+every launch and reaches no agent method ([CMD-12](../../docs/specs/commands.md#CMD-12)).
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
