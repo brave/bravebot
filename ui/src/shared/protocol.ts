@@ -169,6 +169,11 @@ export interface SessionSummary {
   directory: string
   project: string
   branch: string | null
+  /**
+   * The pull request URL the record holds for the chat, as written. The row reads the number out
+   * of it and draws `PR #<number>` as a link; absent from an older bridge, null for a chat with none.
+   */
+  pullRequest?: string | null
   title: string
   updated: number
   bytes: number

@@ -371,6 +371,8 @@ impl Bridge {
                     "directory": entry.project.display().to_string(),
                     "project": entry.project_name(),
                     "branch": entry.summary.branch,
+                    // Carried to the row as the string the record holds. Nothing here reads it.
+                    "pullRequest": entry.summary.pull_request,
                     "title": entry.summary.title,
                     "updated": entry.summary.updated,
                     "bytes": entry.summary.bytes,

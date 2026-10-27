@@ -528,7 +528,8 @@
   font: inherit;
   text-align: left;
 }
-.bot-history-row + .bot-history-row { border-top: 1px solid var(--border-subtle); }
+.bot-history-item { position: relative; }
+.bot-history-item + .bot-history-item { border-top: 1px solid var(--border-subtle); }
 .bot-conversations .session-show-more { border-top: 1px solid var(--border-subtle); border-radius: 0; }
 .bot-history-row:hover { background: var(--surface-hover); }
 .bot-history-row:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
