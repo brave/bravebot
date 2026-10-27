@@ -500,6 +500,9 @@ trail and to the person's note and never to the planner ([TRACE-8](trace.md#TRAC
 **Why.** This is the feature rather than a restriction on it. A delegate whose reading reached
 its parent's context would have moved the log rather than absorbed it.
 
+The parent is told beside each report how many commands the delegate ran and writes it made
+([GROUND-2](grounding.md#GROUND-2)).
+
 `verified-by: bravebot_agent::turn::what_a_delegate_read_never_reaches_the_planner_that_asked`
 `verified-by: bravebot_agent::turn::a_program_a_delegate_ran_in_the_workspace_counts_as_the_turns_own`
 

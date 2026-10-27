@@ -641,6 +641,8 @@ The check is one request with no tools over a copy of the conversation, the shap
 there. Nothing the judge said arrives as your words either: what carries the work on is a sentence
 written by this program, naming the condition and quoting the reason inside it.
 
+**The judge is told what ran.** Beside the conversation, the judge reads this program's own count of the turns since the goal was set: how many commands ran, how many writes were made, and whether a command ran after the last write. Compaction can shrink the run that showed the tests passing to a sentence, and the count survives it. It says nothing about whether a command succeeded, and the judge still decides.
+
 One answer carries the work on, and everything else ends the goal:
 
 | What came back | What happens |

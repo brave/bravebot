@@ -19,6 +19,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [permissions.md](permissions.md) | `PERM` | 20 | rules written in advance about what to ask about and what to refuse |
 | [processors.md](processors.md) | `PROC` | 14 | the one component that reads untrusted content, and what it may do with it |
 | [vetting.md](vetting.md) | `CHECK` | 15 | checking quarantined content for an injection attempt before every prompt that would promote it, so a person deciding has a second opinion |
+| [grounding.md](grounding.md) | `GROUND` | 6 | counting what a delegate or a goal's turns actually ran and wrote, and telling the planner and the goal judge (proposed: not built) |
 | [delegation.md](delegation.md) | `DELEGATE` | 30 | a second planner, narrower than the first, and what crosses back from one |
 | [addressing-a-definition.md](addressing-a-definition.md) | `ADDRESS` | 13 | running one of those definitions yourself, in place of describing the work and hoping the planner picks it |
 | [definition-memory.md](definition-memory.md) | `MEMORY` | 13 | what a definition keeps between conversations, which checkout it works in, and the desktop's bots as definitions (the desktop's bots proposed, not built) |

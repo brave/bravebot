@@ -37,6 +37,7 @@ use bravebot_core::slot::SlotId;
 use std::fmt;
 
 use crate::conversation::Conversation;
+use crate::outcome::Work;
 use crate::processor::Chat;
 
 /// What the model is told it is doing.
@@ -111,10 +112,14 @@ impl Check {
     /// Fork the exchange and put the condition on the end of it.
     ///
     /// `condition` is the line the person typed, which is trusted in the sense a prompt is: it
-    /// came from the keyboard of the user who owns the session.
-    pub fn of(conversation: &Conversation, condition: &str) -> Self {
+    /// came from the keyboard of the user who owns the session. `record` is what the turns since
+    /// the goal was set did, which the judge reads before the condition (GROUND-4).
+    pub fn of(conversation: &Conversation, condition: &str, record: Work) -> Self {
         let mut messages = conversation.with_system(SYSTEM_PROMPT);
-        messages.push(Message::user(format!("{INSTRUCTION} {condition}")));
+        messages.push(Message::user(format!(
+            "{}\n\n{INSTRUCTION} {condition}",
+            what_ran(record)
+        )));
         Self {
             messages,
             context: conversation.context(),
@@ -125,6 +130,26 @@ impl Check {
     pub fn context(&self) -> Integrity {
         self.context
     }
+}
+
+/// What the turns since the goal was set did, in bravebot's words and numbers alone (GROUND-4).
+///
+/// The judge rules a condition met only where the exchange shows it, and compaction can shrink
+/// the run that showed it to a sentence. This survives compaction. It names no path and no
+/// command, so nothing a turn did can speak to the judge through it (GROUND-6).
+fn what_ran(record: Work) -> String {
+    let after = match (record.writes, record.ran_after_last_write) {
+        (0, _) => "No file was written.",
+        (_, true) => "A command ran after the last write.",
+        (_, false) => "No command ran after the last write.",
+    };
+    format!(
+        "Since the goal was set, bravebot counted {} run and {} made. {after} This is bravebot's \
+         own count of the calls, not something the agent said. It says nothing about what any \
+         command did or whether it succeeded.",
+        crate::tools::tally(record.commands, "command", "commands"),
+        crate::tools::tally(record.writes, "write", "writes"),
+    )
 }
 
 /// What one check decided.
@@ -336,7 +361,7 @@ mod tests {
     /// doing the job it exists to grade.
     #[test]
     fn the_condition_is_marked_as_one_rather_than_left_on_the_end_of_the_work() {
-        let check = Check::of(&an_exchange(), "cargo test exits 0");
+        let check = Check::of(&an_exchange(), "cargo test exits 0", Work::default());
 
         let last = check
             .messages
@@ -344,7 +369,7 @@ mod tests {
             .expect("the condition closes the request");
         let text = last.content.text();
         assert!(
-            text.starts_with(INSTRUCTION),
+            text.contains(INSTRUCTION),
             "the condition was sent without anything saying it was one: {text}"
         );
         assert!(
@@ -353,10 +378,92 @@ mod tests {
         );
     }
 
+    /// The text the judge's request ends with, given `record`.
+    fn closing(record: Work) -> String {
+        Check::of(&an_exchange(), "cargo test exits 0", record)
+            .messages
+            .last()
+            .expect("the condition closes the request")
+            .content
+            .text()
+    }
+
+    /// GROUND-4. The judge reads how many commands ran and writes were made since the goal was
+    /// set, before the condition, and that the count is bravebot's and says nothing of success.
+    #[test]
+    fn the_judge_is_given_the_commands_and_writes_since_the_goal_was_set() {
+        let text = closing(Work {
+            writes: 3,
+            commands: 1,
+            ran_after_last_write: true,
+        });
+        let record = text
+            .find("Since the goal was set, bravebot counted 1 command run and 3 writes made.")
+            .unwrap_or_else(|| panic!("the record did not reach the judge: {text}"));
+        assert!(record < text.find(INSTRUCTION).unwrap(), "{text}");
+        assert!(
+            text.contains("It says nothing about what any command did or whether it succeeded."),
+            "{text}"
+        );
+    }
+
+    /// GROUND-4. Whether a command ran after the last write is said both ways, and a record with
+    /// no write says there was none rather than either.
+    #[test]
+    fn the_judge_is_told_whether_a_command_ran_after_the_last_write() {
+        let with = |writes, ran_after_last_write| {
+            closing(Work {
+                writes,
+                commands: 2,
+                ran_after_last_write,
+            })
+        };
+        assert!(with(1, true).contains("A command ran after the last write."));
+        assert!(with(1, false).contains("No command ran after the last write."));
+        assert!(with(0, true).contains("No file was written."));
+    }
+
+    /// GROUND-6. The paragraph is fixed words and numbers, so whatever the turns ran or wrote,
+    /// nothing a turn chose reaches the judge through it.
+    #[test]
+    fn the_record_put_to_the_judge_holds_no_path_and_no_command() {
+        let paragraph = what_ran(Work {
+            writes: 7,
+            commands: 9,
+            ran_after_last_write: false,
+        });
+        let words: String = paragraph.chars().filter(|c| !c.is_ascii_digit()).collect();
+        assert_eq!(
+            words,
+            what_ran(Work {
+                writes: 2,
+                commands: 2,
+                ran_after_last_write: false,
+            })
+            .chars()
+            .filter(|c| !c.is_ascii_digit())
+            .collect::<String>()
+        );
+        assert!(!paragraph.contains('/'), "{paragraph}");
+    }
+
+    /// GROUND-5. The verdict is read from the judge's words alone, so a MET ends the goal whatever
+    /// the record says, including a record of nothing run.
+    #[test]
+    fn a_met_verdict_ends_the_goal_whatever_the_record_says() {
+        assert!(closing(Work::default()).contains("0 commands run"));
+        assert_eq!(
+            read("MET\nthe log shows it"),
+            Verdict::Met {
+                reason: "the log shows it".to_string()
+            }
+        );
+    }
+
     /// A condition about the state of the work cannot be judged from the condition alone.
     #[test]
     fn the_exchange_goes_out_with_the_condition() {
-        let check = Check::of(&an_exchange(), "cargo test exits 0");
+        let check = Check::of(&an_exchange(), "cargo test exits 0", Work::default());
 
         let said: Vec<String> = check
             .messages
@@ -381,7 +488,7 @@ mod tests {
         let conversation = an_exchange();
         let before = conversation.len();
 
-        let _ = Check::of(&conversation, "cargo test exits 0");
+        let _ = Check::of(&conversation, "cargo test exits 0", Work::default());
 
         assert_eq!(
             conversation.len(),
@@ -397,13 +504,13 @@ mod tests {
     fn the_check_carries_what_the_exchange_had_met() {
         let mut conversation = an_exchange();
         assert_eq!(
-            Check::of(&conversation, "the tests pass").context(),
+            Check::of(&conversation, "the tests pass", Work::default()).context(),
             Integrity::Trusted
         );
 
         conversation.observed(bravebot_core::label::Label::untrusted_public());
         assert_eq!(
-            Check::of(&conversation, "the tests pass").context(),
+            Check::of(&conversation, "the tests pass", Work::default()).context(),
             Integrity::Untrusted
         );
     }
