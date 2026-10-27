@@ -713,20 +713,8 @@ fn background_start(
     agent: Option<String>,
     prompts: &SystemPrompts,
 ) -> ExitCode {
-    if skip_permissions {
-        return fail(Ending::Argument, t!(bg_bypass_refused));
-    }
-    if agent.is_some() {
-        return fail(
-            Ending::Argument,
-            t!(bg_takes_nothing_else, flag = "--agent"),
-        );
-    }
-    if let Some(flag) = flag_named(prompts) {
-        return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = flag));
-    }
     // Every one-shot option `parse_invocation` reads, less `--processor-model` (already refused
-    // above, with `carried`): a condition is judged by the run that took it (CLI-35), a limit is
+    // below, with `carried`): a condition is judged by the run that took it (CLI-35), a limit is
     // counted by the run that was given it (CLI-38), and the rest name a model, a file, a session or
     // a result shape for the one-shot run that reads them. The words after `--bg` are all one
     // prompt, so none of this is read, and each is refused by the name of the first that appears
@@ -748,6 +736,18 @@ fn background_start(
         "--max-rounds",
         "--max-tokens",
     ];
+    if skip_permissions {
+        return fail(Ending::Argument, t!(bg_bypass_refused));
+    }
+    if agent.is_some() {
+        return fail(
+            Ending::Argument,
+            t!(bg_takes_nothing_else, flag = "--agent"),
+        );
+    }
+    if let Some(flag) = flag_named(prompts) {
+        return fail(Ending::Argument, t!(bg_takes_nothing_else, flag = flag));
+    }
     if let Some(flag) = words
         .iter()
         .find(|word| ONE_SHOT_OPTIONS.contains(&word.as_str()))
