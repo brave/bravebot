@@ -102,7 +102,7 @@ lists the account's models and asks which one to
 use, remembers the answer for the next start, and opens on it, as it does for a ChatGPT account. With both
 accounts signed in it asks once, over both lists, and an account that could not be listed is said above the
 other's models. An answer that is not the number of a model, a start in a script or in an incognito session, and
-an account whose models could not be listed are refused as before, with the forms that name a model, such as
+an account whose models could not be listed are refused, with the forms that name a model, such as
 `bravebot -i "<prompt>" --model xai/<model>`, and a listing that gave no model is said why.
 `bravebot auth logout xai` forgets the copy here and ends nothing at xAI. `bravebot auth status xai` says when
 the access token expires, that it is sent to `api.x.ai` alone and that the refresh token is sent to `auth.x.ai`

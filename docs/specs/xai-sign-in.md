@@ -199,9 +199,9 @@ The lifetime a grant or a refresh reply states for an access token is held to be
 reply that states 18446744073709551615 does not make a token the clock never replaces, and one that states 1
 does not make a refresh token be spent on every ask. A lifetime stated as 0 or less has run out, and is the
 shortest, 300 seconds. The service stated 21600. This is the reading of this sign-in's replies alone and the
-ChatGPT account's is as it was. An access token whose reply states no lifetime, or null, takes the `exp` claim
-of the token, held to the same two figures counted from the reply, so an `exp` that never comes or that has
-passed does not defeat them either ([XAI-6](#XAI-6)).
+ChatGPT account's is in [CHATGPT-7](chatgpt-sign-in.md#CHATGPT-7). An access token whose reply states no
+lifetime, or null, takes the `exp` claim of the token, held to the same two figures counted from the reply, so
+an `exp` that never comes or that has passed does not defeat them either ([XAI-6](#XAI-6)).
 
 An ask of the token endpoint ends in one of these, and no other:
 
@@ -1060,8 +1060,8 @@ had is no row there, as it is none in the picker. A start asks it only where the
 sends the token to the serving host for the listing as any picker does.
 
 The desktop picker draws the rows it is sent and groups them by the provider each names. Nothing in it names a service,
-so the account's rows reach it as they are and it was not changed: the failure card is the one place the window named
-a service, and [XAI-15](#XAI-15) says what changed there.
+so the account's rows reach it as they are: the failure card is the one place the window names a service, and
+[XAI-15](#XAI-15) says what it shows there.
 
 **Why.** None is offered without a sign-in, for the reason [XAI-14](#XAI-14) gives for offering only what the listing
 shows, and a roster that could not be had is said where it is missed and not guessed at from one account's listing
@@ -1150,11 +1150,11 @@ These are a person's to decide, and no test can settle them.
   account.** The host answered an access token it could not validate with a 403, so a first 403 is a question
   about the token, and the turn asks for a new token and sends the request again before it concludes anything
   ([XAI-18](#XAI-18)). The alternatives are to end the turn at the first 403 with the sentence for the account,
-  which was the rule before this one and tells a person whose token was merely invalid that their plan is the
-  problem, and to treat a second 403 as a 401, which tells a person to sign in again for what a fresh token did
-  not mend. The sentence for the account after a renewal rests on a refusal that was not observed (a plan that
-  cannot use this sign-in was not tried, brave/bravebot#3377), and a 403 for another reason is told the same way.
-  The cost is a refresh and a request for a refusal that is the account's. Reversing it takes the statuses of
+  which tells a person whose token was merely invalid that their plan is the problem, and to treat a second 403
+  as a 401, which tells a person to sign in again for what a fresh token did not mend. The sentence for the
+  account after a renewal rests on a refusal that was not observed (a plan that cannot use this sign-in was not
+  tried, brave/bravebot#3377), and a 403 for another reason is told the same way. The cost is a refresh and a
+  request for a refusal that is the account's. Reversing it takes the statuses of
   `MAY_BE_THE_TOKEN` and the `NOT_PERMITTED` arm of `presenting` in `crates/agent/src/xai.rs`, the value
   `XaiFailure::NotPermitted` and its two sentences.
 - **The roster is the listing filtered by a rule on the id, with no list built in.** [XAI-14](#XAI-14) keeps the
@@ -1173,7 +1173,7 @@ These are a person's to decide, and no test can settle them.
   read where the ChatGPT file is, the refusal names xAI as a route and says an xAI sign-in is stored where it is,
   and the question lists the rows of each stored account that lists some. The alternative is to leave the start
   unasked and the refusal naming no xAI route, and have the person name a model with `--model xai/<model>` or
-  the `model` key, which keeps the start unchanged for ChatGPT and leaves a person who has signed in to xAI and
+  the `model` key, which asks about ChatGPT's models alone and leaves a person who has signed in to xAI and
   nothing else at a refusal that does not mention the sign-in. Reversing it takes removing the `xai` field of
   `Serving::NothingConfigured` and the xAI arm of the question in `crates/cli/src/model.rs`.
 - **Up to three polls in a row that do not complete are asked again, and no connection is kept between
