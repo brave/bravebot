@@ -82,7 +82,7 @@ const TAKES_NO_DIRECTORY = [
   'output.reply', 'vouch.reply', 'vet.reply', 'fetch.reply', 'server.reply', 'manifest.run',
   'manifest.reply', 'exposure.reply', 'mcp-server.reply', 'mcp-tools.reply', 'mcp-call.reply',
   'mcp-move.reply', 'host.reply', 'ask.reply', 'trust.reply', 'permissions.list', 'permissions.revoke',
-  'doctor', 'hooks.inspect', 'language.get', 'language.set', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
+  'doctor', 'changelog.read', 'hooks.inspect', 'language.get', 'language.set', 'connectors.list', 'connectors.disconnect', 'connectors.remove',
   'settings.inspect', 'watches.list', 'watches.add', 'watches.stop', 'update.status',
 ]
 

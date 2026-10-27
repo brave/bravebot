@@ -573,6 +573,7 @@ const ALLOWED = new Set([
   'permissions.list',
   'permissions.revoke',
   'doctor',
+  'changelog.read',
   'hooks.inspect',
   'language.get',
   'language.set',

@@ -1425,6 +1425,10 @@ The command takes no argument, so `/changelog` followed by words is a prompt (CM
 nothing a running turn holds, so typed during one it is carried out as it is typed (CMD-8). A prompt
 file or skill named `changelog` is shadowed by the command (CMD-17).
 
+The desktop window's Help › Release Notes… shows the same notes through the bridge's
+`changelog.read`, as plain text under a heading that names the version, and says when they are the
+newest release's rather than the running version's.
+
 **Why.** The release notes are written for the people who run a version, and the version that
 runs is what a person asking has in mind. The text is carried in the program, so the notes match
 the build with no network and no checkout, and a model is not needed to read out a file.
@@ -1435,16 +1439,18 @@ the build with no network and no checkout, and a model is not needed to read out
 `verified-by: bravebot_tui::state::the_changelog_is_headed_by_the_running_version_and_has_its_links_written_as_text`
 `verified-by: bravebot_tui::state::the_changelog_of_a_build_with_no_notes_of_its_own_says_whose_notes_it_shows`
 `verified-by: bravebot_tui::state::a_changelog_with_no_release_says_so`
-`verified-by: bravebot_tui::help_command::a_link_is_drawn_as_its_text_and_the_rest_of_the_line_is_untouched`
-`verified-by: bravebot_tui::help_command::brackets_that_are_not_a_link_are_kept`
-`verified-by: bravebot_tui::help_command::an_address_that_is_not_closed_takes_nothing_after_it`
-`verified-by: bravebot_tui::help_command::a_backtick_left_open_does_not_hide_the_links_on_the_next_line`
-`verified-by: bravebot_tui::help_command::an_address_with_parentheses_of_its_own_is_one_address`
-`verified-by: bravebot_tui::help_command::an_image_and_a_link_in_a_code_span_are_kept_and_a_link_after_them_is_not`
-`verified-by: bravebot_tui::help_command::a_release_is_the_lines_under_its_heading_up_to_the_next_heading`
-`verified-by: bravebot_tui::help_command::only_a_line_that_begins_with_the_heading_mark_starts_a_release`
-`verified-by: bravebot_tui::help_command::a_release_is_found_by_its_whole_version_and_else_the_newest_is_given`
-`verified-by: bravebot_tui::help_command::the_carried_changelog_lists_releases_newest_first_and_the_newest_has_notes`
+`verified-by: bravebot_agent::help::a_link_is_drawn_as_its_text_and_the_rest_of_the_line_is_untouched`
+`verified-by: bravebot_agent::help::brackets_that_are_not_a_link_are_kept`
+`verified-by: bravebot_agent::help::an_address_that_is_not_closed_takes_nothing_after_it`
+`verified-by: bravebot_agent::help::a_backtick_left_open_does_not_hide_the_links_on_the_next_line`
+`verified-by: bravebot_agent::help::an_address_with_parentheses_of_its_own_is_one_address`
+`verified-by: bravebot_agent::help::an_image_and_a_link_in_a_code_span_are_kept_and_a_link_after_them_is_not`
+`verified-by: bravebot_agent::help::a_release_is_the_lines_under_its_heading_up_to_the_next_heading`
+`verified-by: bravebot_agent::help::only_a_line_that_begins_with_the_heading_mark_starts_a_release`
+`verified-by: bravebot_agent::help::a_release_is_found_by_its_whole_version_and_else_the_newest_is_given`
+`verified-by: bravebot_agent::help::the_carried_changelog_lists_releases_newest_first_and_the_newest_has_notes`
+`verified-by: bravebot_ui_bridge::help::the_notes_say_whether_they_are_the_running_versions`
+`verified-by: bravebot_ui_bridge::help::a_build_with_no_release_answers_with_no_notes`
 
 ## Running a prompt of an MCP server
 

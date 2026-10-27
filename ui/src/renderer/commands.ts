@@ -40,6 +40,8 @@ export interface CommandActions {
   /** Put the caret in the composer. */
   focusComposer: () => void
   about: () => void
+  /** Show the release notes the agent carries. */
+  changelog: () => void
   doctor: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
@@ -145,6 +147,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.theme()
         case 'app.about':
           return act.about()
+        case 'help.changelog':
+          return act.changelog()
         case 'help.doctor':
           return act.doctor()
         case 'help.update':

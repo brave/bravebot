@@ -1577,6 +1577,11 @@ Still open:
   chooses its catalog once, before its first paint, and `bravebot:app:relaunch` (main-process IPC)
   restarts the app to apply a new choice. It answers false and does nothing while a turn runs in
   any session, since quitting would refuse what the turn waits on.
+- `changelog.read` takes no parameters and returns `{ version, running, notes }`: the release
+  notes compiled into the agent for the version that runs, with each markdown link written as its
+  text. Where the build carries none for that version they are the newest release's, `version`
+  names that release and `running` is false. `notes` is null where the build carries no release.
+  Nothing is read or fetched, and the window shows `notes` as plain text (CMD-25).
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last

@@ -352,6 +352,7 @@ impl Bridge {
             "hooks.inspect" => crate::hooks::inspect(),
             "language.get" => Ok(crate::language::get(request)),
             "language.set" => crate::language::set(request),
+            "changelog.read" => Ok(crate::help::changelog()),
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),

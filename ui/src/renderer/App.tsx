@@ -111,7 +111,7 @@ export function App(): React.JSX.Element {
     } catch { setBackendReady(false) }
   }, [live?.handle])
   useEffect(() => { void checkBackend() }, [checkBackend])
-  const [notice, setNotice] = useState<{ title: string; body: string } | null>(null)
+  const [notice, setNotice] = useState<{ title: string; subtitle?: string; body: string } | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
   const [bugReportOpen, setBugReportOpen] = useState(false)
   /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
@@ -564,6 +564,25 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // Plain text, not Markdown: the notes link every issue, and the agent has already written each
+  // link as its label, so nothing in this dialog opens anything.
+  const changelog = useCallback(async () => {
+    try {
+      const read = await call<{ version: string; running: boolean; notes: string | null }>('changelog.read')
+      if (read.notes === null) {
+        setNotice({ title: 'Release notes', body: 'No release notes in this build.' })
+        return
+      }
+      setNotice({
+        title: `Release notes for ${read.version}`,
+        subtitle: read.running ? undefined : 'This build has no notes of its own. These are the newest release’s.',
+        body: read.notes,
+      })
+    } catch (error) {
+      setProblem(String(error))
+    }
+  }, [])
+
   const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
   const resetColumns = useCallback(() => {
@@ -828,6 +847,7 @@ export function App(): React.JSX.Element {
     find: () => document.dispatchEvent(new Event(FIND_EVENT)),
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
+    changelog: () => void changelog(),
     doctor: () => void doctor(),
     bugReport: () => setBugReportOpen(true),
     openSession,
@@ -1082,7 +1102,7 @@ export function App(): React.JSX.Element {
         onReportBug={() => { setAboutInfo(null); setBugReportOpen(true) }} onClose={() => setAboutInfo(null)} />}
       {bugReportOpen && <BugReport onClose={() => setBugReportOpen(false)} />}
       {notice && (
-        <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
+        <Notice title={notice.title} subtitle={notice.subtitle} body={notice.body} onClose={() => setNotice(null)} />
       )}
       {projectAction?.kind === 'purge' && (
         <PurgeProject directory={projectAction.directory} opened={projectAction.opened} onClose={leaveProjectAction}

@@ -45,6 +45,7 @@ export type CommandId =
   | 'view.focus-composer'
   | 'view.theme'
   | 'app.about'
+  | 'help.changelog'
   | 'help.doctor'
   | 'help.update'
   | 'help.bug-report'
@@ -197,6 +198,8 @@ export const COMMANDS: readonly Command[] = [
   // shortcuts left are worth more to the folds.
   { id: 'view.theme', label: 'Appearance…', requires: 'always' },
   { id: 'app.about', label: 'About Brave Bot', requires: 'always' },
+  // The release notes compiled into the agent, shown as plain text. Nothing is fetched.
+  { id: 'help.changelog', label: 'Release Notes…', requires: 'always' },
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
   // Opens About, which says what the last check found. It asks nothing of the network: the check
   // is at most hourly and never in front of anything (UPDATE-1, UPDATE-6).

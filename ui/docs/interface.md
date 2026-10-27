@@ -585,6 +585,7 @@ and an item is greyed when its `requires` tag is not met. (On Windows and Linux,
 | `⌘.` | Chat › Cancel Turn | Cancel the running turn; greyed when nothing is running |
 | `⇧⌘M` | Chat › Cycle Permission Mode | Ask, then Accept edits, then Plan, then Ask again; needs a session |
 | | Chat › Undo Last Turn… | [Undo](#undo-and-rewind) the latest turn; greyed while a turn runs or with nothing to undo |
+| | Help › Release Notes… | Show the release notes this build carries, as plain text with no links; the heading says when they are the newest release's rather than the running version's |
 | `⌥⌘←` / `⌥⌘→` | View › Hide/Show Chat List / Context Panel | Fold the chat list / the context panel |
 | `Enter` | | In the message box: send, or send the message into the turn that is running. With the file list open on a half-typed `@` name, complete it instead |
 | `Alt+Enter` | | In the message box while a turn runs: hold the message until the turn ends |

@@ -39,6 +39,11 @@ pub const OFFERED: &[Operation] = &[
         method: "instance.info",
         fields: &[],
     },
+    // The release notes compiled into this program. Reads nothing and needs no session.
+    Operation {
+        method: "changelog.read",
+        fields: &[],
+    },
     Operation {
         method: "session.new",
         fields: &["directory"],
@@ -252,6 +257,7 @@ mod tests {
             ("run.reply", "remember"),
             ("trust.reply", "remember"),
             ("session.new", "settings"),
+            ("changelog.read", "path"),
         ] {
             let failure = check(&request(method, json!({ extra: true })))
                 .err()

@@ -214,7 +214,7 @@ export function installMenu(window: BrowserWindow): void {
     { role: 'windowMenu' },
     {
       label: 'Help',
-      submenu: [item('help.doctor'), item('help.bug-report'), SEPARATOR, item('help.update')],
+      submenu: [item('help.changelog'), SEPARATOR, item('help.doctor'), item('help.bug-report'), SEPARATOR, item('help.update')],
     },
   ]
 
