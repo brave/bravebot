@@ -9,7 +9,7 @@
 //! [MEMORY-8]: ../../../docs/specs/definition-memory.md
 
 use crate::protocol::{ErrorCode, Failure, Request};
-use bravebot_agent::agents::{self, MakeRefused, RedefineRefused};
+use bravebot_agent::agents::{self, MakeRefused, RedefineRefused, Refused};
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -62,6 +62,96 @@ fn remake_in(home: &Path, request: &Request) -> Result<Value, Failure> {
             ErrorCode::NoHome,
             format!("the bot's definition could not be written: {error}"),
         )),
+    }
+}
+
+/// Answer what a bot's definition says about the servers it may use.
+///
+/// `name` is required. The answer is `servers`, the names `mcpServers:` lists or null where there
+/// is no such line, `tools`, whether a `tools:` line limits it to no servers unless listed,
+/// `inline`, whether the line declares a server itself, and the definition's `kind`.
+pub fn servers_read(request: &Request) -> Result<Value, Failure> {
+    let home = bravebot_agent::home::directory().ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NoHome,
+            "this machine names no state directory, so a bot has nowhere to keep its definition",
+        )
+    })?;
+    servers_read_in(&home, request)
+}
+
+fn servers_read_in(home: &Path, request: &Request) -> Result<Value, Failure> {
+    let name = request.string("name")?;
+    match agents::servers_of(home, &name) {
+        Ok(choice) => Ok(json!({
+            "servers": choice.servers,
+            "tools": choice.tools,
+            "inline": choice.inline,
+            "kind": choice.kind,
+        })),
+        Err(refused) => Err(servers_refusal(&name, refused)),
+    }
+}
+
+/// Rewrite the `mcpServers:` line of a bot's definition, and answer with its name.
+///
+/// `name` and `servers` are required. `servers` is an array of server names, which writes a line
+/// naming those alone, or null, which removes the line so the bot holds every server. A refusal
+/// leaves the file as it was.
+pub fn servers_write(request: &Request) -> Result<Value, Failure> {
+    let home = bravebot_agent::home::directory().ok_or_else(|| {
+        Failure::new(
+            ErrorCode::NoHome,
+            "this machine names no state directory, so a bot has nowhere to keep its definition",
+        )
+    })?;
+    servers_write_in(&home, request)
+}
+
+fn servers_write_in(home: &Path, request: &Request) -> Result<Value, Failure> {
+    let name = request.string("name")?;
+    let servers = match request.params.get("servers") {
+        Some(Value::Null) => None,
+        Some(Value::Array(items)) => Some(
+            items
+                .iter()
+                .map(|item| item.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| Failure::bad_request("every server must be named by a string"))?,
+        ),
+        _ => {
+            return Err(Failure::bad_request(
+                "servers must be a list of server names, or null for every server",
+            ));
+        }
+    };
+    match agents::set_servers(home, &name, servers.as_deref()) {
+        Ok(()) => Ok(json!({ "name": name })),
+        Err(refused) => Err(servers_refusal(&name, refused)),
+    }
+}
+
+fn servers_refusal(name: &str, refused: RedefineRefused) -> Failure {
+    match refused {
+        RedefineRefused::Name => {
+            Failure::bad_request("the bot's definition is not named as a definition can be")
+        }
+        RedefineRefused::Missing => {
+            Failure::bad_request(format!("the definition {name} is not there"))
+        }
+        RedefineRefused::Refused(Refused::ServerName) => Failure::bad_request(
+            "a server name may hold only letters, digits, - and _, and must start with a letter or digit",
+        ),
+        RedefineRefused::Refused(Refused::InlineServers) => Failure::bad_request(format!(
+            "the definition {name} declares a server inline, so its servers are edited in the file"
+        )),
+        RedefineRefused::Refused(_) => Failure::bad_request(format!(
+            "the servers could not be written so that the definition {name} reads them back"
+        )),
+        RedefineRefused::Io(error) => Failure::new(
+            ErrorCode::NoHome,
+            format!("the bot's definition could not be written: {error}"),
+        ),
     }
 }
 
@@ -290,5 +380,85 @@ mod tests {
             assert!(refused.is_err(), "{params} was made");
         }
         assert!(!home.path().join("agents").exists());
+    }
+
+    /// The servers a bot may use are read back as they were written, and null clears them.
+    #[test]
+    fn the_servers_written_for_a_bot_are_read_back() {
+        let home = home("servers-round-trip");
+        make_in(
+            home.path(),
+            &request(json!({"slug": "ed", "purpose": "P."})),
+        )
+        .expect("made");
+
+        let read = servers_read_in(home.path(), &request(json!({"name": "ed"}))).expect("read");
+        assert_eq!(read["servers"], Value::Null);
+        assert_eq!(read["tools"], json!(false));
+        assert_eq!(read["inline"], json!(false));
+        assert_eq!(read["kind"], json!("worker"));
+
+        let answer = servers_write_in(
+            home.path(),
+            &request(json!({"name": "ed", "servers": ["github", "slack"]})),
+        )
+        .expect("written");
+        assert_eq!(answer["name"], json!("ed"));
+        let read = servers_read_in(home.path(), &request(json!({"name": "ed"}))).expect("read");
+        assert_eq!(read["servers"], json!(["github", "slack"]));
+
+        servers_write_in(home.path(), &request(json!({"name": "ed", "servers": []})))
+            .expect("written");
+        let read = servers_read_in(home.path(), &request(json!({"name": "ed"}))).expect("read");
+        assert_eq!(read["servers"], json!([]));
+
+        servers_write_in(
+            home.path(),
+            &request(json!({"name": "ed", "servers": null})),
+        )
+        .expect("written");
+        let read = servers_read_in(home.path(), &request(json!({"name": "ed"}))).expect("read");
+        assert_eq!(read["servers"], Value::Null);
+    }
+
+    /// A name that is no alias, a list that is not one of names, a missing servers key, an inline
+    /// declaration and a definition that is not there each leave the file as it was.
+    #[test]
+    fn a_refused_server_write_leaves_the_file_untouched() {
+        let home = home("servers-refused");
+        make_in(
+            home.path(),
+            &request(json!({"slug": "ed", "purpose": "P."})),
+        )
+        .expect("made");
+        let path = home.path().join("agents/ed.md");
+        let before = std::fs::read_to_string(&path).expect("written");
+
+        for params in [
+            json!({"name": "ed", "servers": ["git hub"]}),
+            json!({"name": "ed", "servers": ["github\nkind: reader"]}),
+            json!({"name": "ed", "servers": [1]}),
+            json!({"name": "ed", "servers": "github"}),
+            json!({"name": "ed"}),
+            json!({"name": "../ed", "servers": null}),
+            json!({"name": "absent", "servers": ["github"]}),
+        ] {
+            let refused = servers_write_in(home.path(), &request(params.clone()));
+            assert!(refused.is_err(), "{params} rewrote the definition");
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert!(!home.path().join("agents/absent.md").exists());
+
+        let inline = before.replacen("\n---", "\nmcpServers:\n  - gh:\n      command: gh\n---", 1);
+        std::fs::write(&path, &inline).unwrap();
+        let read = servers_read_in(home.path(), &request(json!({"name": "ed"}))).expect("read");
+        assert_eq!(read["inline"], json!(true));
+        let refused = servers_write_in(
+            home.path(),
+            &request(json!({"name": "ed", "servers": null})),
+        )
+        .expect_err("an inline declaration was rewritten");
+        assert!(refused.message.contains("inline"), "{}", refused.message);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), inline);
     }
 }
