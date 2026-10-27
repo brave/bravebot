@@ -33,7 +33,7 @@
 //!   consequence outside the slot store, and they are the ones a person endorses.
 
 use crate::slot::SlotId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Which of the three tiers a step belongs to.
@@ -220,17 +220,24 @@ impl Step {
             .and_then(|field| self.args.get(field).and_then(Arg::text))
             .unwrap_or("");
 
-        let reads = match self.reads.as_slice() {
+        // The item an act lands on reads as such, apart from what it reads its text from.
+        let on = contract
+            .slot_refs
+            .contains(&"on")
+            .then(|| self.args.get("on").and_then(Arg::text))
+            .flatten()
+            .filter(|slot| !slot.is_empty());
+        let read: Vec<&str> = self
+            .reads
+            .iter()
+            .map(SlotId::as_str)
+            .filter(|slot| Some(*slot) != on)
+            .collect();
+        let reads = match read.as_slice() {
             [] => String::new(),
-            slots => format!(
-                " from {}",
-                slots
-                    .iter()
-                    .map(SlotId::as_str)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            slots => format!(" from {}", slots.join(", ")),
         };
+        let on = on.map(|slot| format!(" on {slot}")).unwrap_or_default();
         let writes = match &self.out_slot {
             Some(slot) => format!(" into {slot}"),
             None => String::new(),
@@ -257,7 +264,7 @@ impl Step {
             false => format!(" ({})", elsewhere.join(", ")),
         };
 
-        format!("{} {subject}{reads}{writes}{routing}", contract.verb)
+        format!("{} {subject}{reads}{on}{writes}{routing}", contract.verb)
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
@@ -271,11 +278,21 @@ impl Step {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     steps: Vec<Step>,
+    /// Words a person reads after a step, set once by whoever knows what the step's definition
+    /// fills in for itself. They decide nothing: no check reads them.
+    notes: BTreeMap<usize, String>,
 }
 
 impl Manifest {
     pub fn steps(&self) -> &[Step] {
         &self.steps
+    }
+
+    /// The plan with a note after some steps, as the line a person approves then reads it.
+    #[must_use]
+    pub fn with_notes(mut self, notes: BTreeMap<usize, String>) -> Self {
+        self.notes = notes;
+        self
     }
 
     pub fn len(&self) -> usize {
@@ -463,6 +480,20 @@ impl std::error::Error for ManifestError {}
 /// that will disagree with itself: the release plan, and the driver's choice of what to print.
 pub const ANSWER: &str = "answer";
 
+/// The step that fetches from an account through a connector.
+///
+/// Named as constants for the reason [`ANSWER`] is: the releases, the driver's dispatch and the
+/// check on what an act targets all depend on the names.
+pub const CONNECTOR_FETCH: &str = "connector_fetch";
+
+/// The step that acts on an account through a connector.
+pub const CONNECTOR_ACT: &str = "connector_act";
+
+/// Whether a step reaches an account through a connector rather than the workspace.
+pub fn is_connector(tool: &str) -> bool {
+    tool == CONNECTOR_FETCH || tool == CONNECTOR_ACT
+}
+
 /// The static contract for one tool.
 ///
 /// This is the specification's `TOOL_SCHEMA`, and it plays the same role: the single place that
@@ -585,6 +616,88 @@ const CONTRACTS: &[Contract] = &[
         headline: &["path"],
         verb: "write",
     },
+    // A connector's provider and resource are argument values, so a second service adds no row
+    // here. Which fields a resource takes, and in what form, is the connector definition's to
+    // say, and the driver checks a plan against it before the plan is put to anybody.
+    //
+    // `place` is always routing and never a slot: it is the repository, mailbox or channel
+    // the step reads from or lands in. A fetch may have none, as a search across places does;
+    // the definition says which resources need one. `select` is a selector in the definition's
+    // vocabulary, and `with` the named values the definition asks for, such as an event's start,
+    // each held to its form.
+    Contract {
+        tool: CONNECTOR_FETCH,
+        tier: Tier::Fetch,
+        required: &["connector", "resource", "out_slot"],
+        accepted: &[
+            "connector",
+            "resource",
+            "place",
+            "item",
+            "select",
+            "with",
+            "out_slot",
+        ],
+        slot_output: Some("out_slot"),
+        slot_inputs: &[],
+        slot_refs: &[],
+        paths: &[],
+        counts: &[],
+        texts: &[],
+        alternatives: &[],
+        routing: &["connector", "resource", "place", "item", "select", "with"],
+        headline: &["resource"],
+        verb: "fetch",
+    },
+    // `on` is a slot reference and not routing: it names the fetch whose chosen item the act
+    // lands on, and the item itself is known only to the authority, which puts it to a person.
+    // It cannot be optional routing, since routing defaults are filled before slot references
+    // are read and an empty default would name a slot called "".
+    //
+    // `path` is a place in the service, such as a file in a branch, not a workspace path.
+    // `title` is carried content the plan wrote, like `contents`. `take` is routing: which field of
+    // which earlier fetch fills which `with` value is fixed before the run, and the value itself
+    // is known only to the authority, which takes it from that fetch's receipt.
+    Contract {
+        tool: CONNECTOR_ACT,
+        tier: Tier::Act,
+        required: &["connector", "resource", "place"],
+        accepted: &[
+            "connector",
+            "resource",
+            "place",
+            "item",
+            "select",
+            "with",
+            "path",
+            "option",
+            "take",
+            "on",
+            "title",
+            "contents",
+            "from_slot",
+        ],
+        slot_output: None,
+        slot_inputs: &[],
+        slot_refs: &["on", "from_slot"],
+        paths: &[],
+        counts: &[],
+        texts: &["title", "contents"],
+        alternatives: &["contents", "from_slot"],
+        routing: &[
+            "connector",
+            "resource",
+            "place",
+            "item",
+            "select",
+            "with",
+            "path",
+            "option",
+            "take",
+        ],
+        headline: &["resource"],
+        verb: "act",
+    },
     Contract {
         tool: ANSWER,
         tier: Tier::Act,
@@ -607,6 +720,12 @@ fn contract_for(tool: &str) -> Option<&'static Contract> {
     CONTRACTS.iter().find(|contract| contract.tool == tool)
 }
 
+/// The fields a tool's step locks into routing before the run, in the contract's order. None for
+/// a tool the schema does not know.
+pub fn routing_fields(tool: &str) -> &'static [&'static str] {
+    contract_for(tool).map_or(&[], |contract| contract.routing)
+}
+
 /// The value locked when the plan left a routing field out.
 ///
 /// Optional routing still has to go through `Routing::insert`. Inventing the default in the
@@ -617,8 +736,18 @@ fn routing_default(tool: &str, field: &str) -> Option<&'static str> {
     match (tool, field) {
         ("search", "directory") => Some("."),
         ("list_files", "pattern") | ("search", "include") => Some(""),
+        // A connector step's optional routing is locked as the absence of a value, and the
+        // definition decides whether the resource needs it.
+        (CONNECTOR_FETCH, "place" | "item" | "select" | "with")
+        | (CONNECTOR_ACT, "item" | "select" | "with" | "path" | "option" | "take") => Some(""),
         _ => None,
     }
+}
+
+/// Whether a step may carry no text at all. A connector act's definition says whether its
+/// resource takes text, so the connector check holds it to exactly one or none.
+fn text_optional(tool: &str) -> bool {
+    tool == CONNECTOR_ACT
 }
 
 /// Fill every routing field the contract names, so [`Manifest::routing`] cannot skip one.
@@ -714,7 +843,7 @@ pub(crate) fn validate(draft: &Draft) -> Result<Manifest, ManifestError> {
                         .is_some_and(|value| !value.is_empty())
                 })
                 .count();
-            if given != 1 {
+            if given > 1 || (given == 0 && !text_optional(contract.tool)) {
                 return Err(ManifestError::Alternatives {
                     step: index,
                     tool: contract.tool,
@@ -899,7 +1028,188 @@ pub(crate) fn validate(draft: &Draft) -> Result<Manifest, ManifestError> {
         });
     }
 
-    Ok(Manifest { steps })
+    Ok(Manifest {
+        steps,
+        notes: BTreeMap::new(),
+    })
+}
+
+/// Where the content in a slot came from.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Origin {
+    /// Read out of the workspace.
+    Workspace,
+    /// Fetched through a connector, from one place.
+    Place { connector: String, place: String },
+}
+
+impl fmt::Display for Origin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Workspace => f.write_str("workspace"),
+            Self::Place { connector, place } if place.is_empty() => f.write_str(connector),
+            Self::Place { connector, place } => f.write_str(&destination(connector, place)),
+        }
+    }
+}
+
+/// One connector act's release: the slot it carries, where it carries one, where its content and
+/// any it takes came from, and the one connector and place it goes to.
+///
+/// Fixed at validation, from the frozen plan alone, which is what makes it a precommitted
+/// release: the plan was written from the task string and nothing had been read when this was
+/// decided, so fetched content can change what the slot says and never where it goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Release {
+    pub step: usize,
+    /// The slot whose content leaves, where the act carries one. An act that only takes values
+    /// sends none: the authority reads them from the receipts it issued.
+    pub slot: Option<SlotId>,
+    pub origins: BTreeSet<Origin>,
+    pub connector: String,
+    pub place: String,
+}
+
+impl Release {
+    /// The destination this release is precommitted to, as the policy's release plan names it.
+    pub fn destination(&self) -> String {
+        destination(&self.connector, &self.place)
+    }
+
+    /// The release as the line a person approves names it.
+    pub fn describe(&self) -> String {
+        format!(
+            "content from {} to {}",
+            named(&self.origins),
+            self.destination()
+        )
+    }
+}
+
+/// Where a slot's content came from, as a plan line names it.
+fn named(origins: &BTreeSet<Origin>) -> String {
+    if origins.is_empty() {
+        "nowhere".to_string()
+    } else {
+        let from: Vec<String> = origins.iter().map(Origin::to_string).collect();
+        from.join(", ")
+    }
+}
+
+/// One connector place, as a release names it.
+pub fn destination(connector: &str, place: &str) -> String {
+    format!("{connector} {place}")
+}
+
+impl Manifest {
+    /// One step as the line a person approves reads: its own description, and for a connector
+    /// act that carries a slot, where that content came from and where it goes. A file write
+    /// that carries a slot names where its content came from too, where that is anywhere but the
+    /// workspace.
+    ///
+    /// Here rather than on [`Step`] because a release is a fact about the whole plan: which
+    /// places a slot's content came from depends on every step before it.
+    pub fn describe_step(&self, index: usize) -> String {
+        let step = &self.steps[index];
+        let mut described = step.describe();
+        let carried = step.args.get("from_slot").and_then(Arg::text);
+        let origins = self.origins();
+        if let Some(release) = self.release_at(index, &origins) {
+            described = format!("{described}; {}", release.describe());
+        }
+        if step.tool == "write_file"
+            && let Some(name) = carried
+        {
+            let from = origins.get(&SlotId::new(name)).cloned().unwrap_or_default();
+            if from != BTreeSet::from([Origin::Workspace]) {
+                described = format!("{described}; content from {}", named(&from));
+            }
+        }
+        match self.notes.get(&index) {
+            Some(note) => format!("{described}; {note}"),
+            None => described,
+        }
+    }
+
+    /// Every connector act that carries a slot or takes a value from one, with where that content
+    /// came from, as [`Manifest::origins`] finds it. An act that carries text the plan wrote
+    /// releases nothing, since that text was written before anything was read.
+    pub fn releases(&self) -> Vec<Release> {
+        let origins = self.origins();
+        (0..self.steps.len())
+            .filter_map(|index| self.release_at(index, &origins))
+            .collect()
+    }
+
+    /// The release the step at `index` makes, where it is a connector act carrying a slot or taking
+    /// values from fetches, with the origins of each looked up in `origins`.
+    fn release_at(
+        &self,
+        index: usize,
+        origins: &BTreeMap<SlotId, BTreeSet<Origin>>,
+    ) -> Option<Release> {
+        let step = &self.steps[index];
+        if step.tool != CONNECTOR_ACT {
+            return None;
+        }
+        let carried = step
+            .args
+            .get("from_slot")
+            .and_then(Arg::text)
+            .map(SlotId::new);
+        let taken = taken_slots(step.text("take"));
+        if carried.is_none() && taken.is_empty() {
+            return None;
+        }
+        Some(Release {
+            step: index,
+            origins: carried
+                .iter()
+                .chain(&taken)
+                .flat_map(|slot| origins.get(slot).cloned().unwrap_or_default())
+                .collect(),
+            slot: carried,
+            connector: step.text("connector").to_string(),
+            place: step.text("place").to_string(),
+        })
+    }
+
+    /// Where the content in each slot came from. A workspace read gives the workspace, a
+    /// connector fetch gives its connector and place, and a processor's slot gets the union of
+    /// the slots it reads. A slot is written once and before anything reads it, so the map for
+    /// the whole plan holds what each slot held when it was read.
+    fn origins(&self) -> BTreeMap<SlotId, BTreeSet<Origin>> {
+        let mut origins: BTreeMap<SlotId, BTreeSet<Origin>> = BTreeMap::new();
+        for step in &self.steps {
+            if let Some(out) = &step.out_slot {
+                let from = if step.tool == CONNECTOR_FETCH {
+                    BTreeSet::from([Origin::Place {
+                        connector: step.text("connector").to_string(),
+                        place: step.text("place").to_string(),
+                    }])
+                } else if step.tier == Tier::Fetch {
+                    BTreeSet::from([Origin::Workspace])
+                } else {
+                    step.reads
+                        .iter()
+                        .flat_map(|slot| origins.get(slot).cloned().unwrap_or_default())
+                        .collect()
+                };
+                origins.insert(out.clone(), from);
+            }
+        }
+        origins
+    }
+}
+
+/// The slots an act's `take` names. A malformed `take` names none here; the connector check
+/// refuses it.
+fn taken_slots(take: &str) -> Vec<SlotId> {
+    crate::selector::take_terms(take)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, slot, _)| slot)
+        .collect()
 }
 
 /// Whether a path stays inside the workspace.
@@ -1172,8 +1482,8 @@ mod tests {
         );
     }
 
-    /// Rejects: a validator that leaves `contents` and `instruction` to the driver, which reads a
-    /// number or a list as an empty body and writes it.
+    /// Rejects: a validator that leaves `contents`, `title` and `instruction` to the driver, which
+    /// reads a number or a list as an empty body and writes or sends it.
     #[test]
     fn a_body_field_must_hold_text() {
         let wrong = [Arg::Count(42), Arg::List(vec!["a".to_string()])];
@@ -1190,6 +1500,19 @@ mod tests {
                     wanted: "text"
                 }
             );
+
+            for field in ["title", "contents"] {
+                let send = act("send", "brave/bravebot").with(field, value.clone());
+                assert_eq!(
+                    validate(&Draft::new(vec![send])).unwrap_err(),
+                    ManifestError::WrongType {
+                        step: 0,
+                        tool: CONNECTOR_ACT,
+                        field,
+                        wanted: "text"
+                    }
+                );
+            }
 
             let mut step = process(&["doc"], "out");
             step.args.insert("instruction".to_string(), value);
@@ -1496,5 +1819,276 @@ mod tests {
         for (tool, _) in tools() {
             assert!(contract_for(tool).is_some(), "{tool} is listed only");
         }
+    }
+
+    fn fetch(resource: &str, place: &str, out: &str) -> DraftStep {
+        DraftStep::new(CONNECTOR_FETCH)
+            .with_text("connector", "github")
+            .with_text("resource", resource)
+            .with_text("place", place)
+            .with_text("select", "state:open no:label sort:created-asc")
+            .with_text("out_slot", out)
+    }
+
+    #[test]
+    fn a_connector_fetch_locks_every_routing_field_and_an_omitted_one_as_no_value() {
+        let plan = validate(&Draft::new(vec![
+            fetch("find_issue", "brave/bravebot", "issue"),
+            DraftStep::new(CONNECTOR_FETCH)
+                .with_text("connector", "github")
+                .with_text("resource", "search")
+                .with_text("out_slot", "found"),
+        ]))
+        .expect("two fetches");
+
+        let routing: BTreeMap<String, String> = plan.routing().into_iter().collect();
+        assert_eq!(routing["step_0_connector"], "github");
+        assert_eq!(routing["step_0_resource"], "find_issue");
+        assert_eq!(routing["step_0_place"], "brave/bravebot");
+        assert_eq!(
+            routing["step_0_select"],
+            "state:open no:label sort:created-asc"
+        );
+        assert_eq!(routing["step_0_item"], "");
+        for field in ["place", "item", "select"] {
+            assert_eq!(routing[&format!("step_1_{field}")], "", "{field}");
+        }
+        assert_eq!(plan.steps()[0].out_slot(), Some(&SlotId::new("issue")));
+    }
+
+    #[test]
+    fn a_described_write_names_where_its_content_came_from_unless_that_is_the_workspace() {
+        let write = |path: &str, slot: &str| {
+            DraftStep::new("write_file")
+                .with_text("path", path)
+                .with_text("from_slot", slot)
+        };
+        let plan = validate(&Draft::new(vec![
+            read("docs/x.md", "doc"),
+            fetch("issue", "brave/bravebot", "issue"),
+            process(&["doc", "issue"], "both"),
+            write("a.md", "doc"),
+            write("b.md", "issue"),
+            write("c.md", "both"),
+        ]))
+        .unwrap();
+
+        assert_eq!(plan.describe_step(3), plan.steps()[3].describe());
+        assert_eq!(
+            plan.describe_step(4),
+            format!(
+                "{}; content from github brave/bravebot",
+                plan.steps()[4].describe()
+            )
+        );
+        assert_eq!(
+            plan.describe_step(5),
+            format!(
+                "{}; content from workspace, github brave/bravebot",
+                plan.steps()[5].describe()
+            )
+        );
+    }
+
+    fn act(resource: &str, place: &str) -> DraftStep {
+        DraftStep::new(CONNECTOR_ACT)
+            .with_text("connector", "github")
+            .with_text("resource", resource)
+            .with_text("place", place)
+    }
+
+    /// Whether a connector act carries text is its definition's to say, so here it may carry
+    /// none, and never two.
+    #[test]
+    fn a_connector_act_gives_at_most_one_source() {
+        let act = || {
+            DraftStep::new(CONNECTOR_ACT)
+                .with_text("connector", "mail")
+                .with_text("resource", "modify")
+                .with_text("place", "me")
+                .with_text("option", "archive")
+        };
+        assert!(validate(&Draft::new(vec![act()])).is_ok());
+        let both = act()
+            .with_text("contents", "x")
+            .with_text("from_slot", "doc");
+        let err = validate(&Draft::new(vec![read("a.md", "doc"), both])).unwrap_err();
+        assert!(matches!(err, ManifestError::Alternatives { step: 1, .. }));
+    }
+
+    /// The shape the connector steps exist for: fetch one item, process it, act on that item.
+    /// Every routing field is locked, the ones the plan left out as empty, and `on` is not
+    /// among them because it names a slot, not a destination.
+    #[test]
+    fn a_connector_plan_locks_every_routing_field_and_not_its_target_slot() {
+        let plan = validate(&Draft::new(vec![
+            fetch("find_issue", "brave/bravebot", "issue"),
+            process(&["issue"], "summary"),
+            act("comment", "brave/bravebot")
+                .with_text("on", "issue")
+                .with_text("from_slot", "summary"),
+        ]))
+        .expect("a fetch, a processor and an act on what the fetch chose");
+
+        let routing: BTreeMap<String, String> = plan.routing().into_iter().collect();
+        assert_eq!(routing["step_0_place"], "brave/bravebot");
+        assert_eq!(
+            routing["step_0_select"],
+            "state:open no:label sort:created-asc"
+        );
+        assert_eq!(routing["step_0_item"], "");
+        assert_eq!(routing["step_2_place"], "brave/bravebot");
+        assert_eq!(routing["step_2_item"], "");
+        assert_eq!(routing["step_2_option"], "");
+        assert!(!routing.contains_key("step_2_on"));
+        assert_eq!(
+            plan.steps()[2].reads(),
+            &[SlotId::new("issue"), SlotId::new("summary")]
+        );
+    }
+
+    /// An act that names its item by number needs no fetch at all.
+    #[test]
+    fn a_connector_act_naming_its_item_validates_without_a_fetch() {
+        let plan = validate(&Draft::new(vec![
+            act("comment", "brave/bravebot")
+                .with_text("item", "914")
+                .with_text("contents", "thanks"),
+        ]))
+        .expect("a comment on a named issue");
+        assert!(
+            plan.releases().is_empty(),
+            "text the plan wrote releases nothing"
+        );
+    }
+
+    /// Each act's release is fixed from the frozen plan: the places its slot's content came
+    /// from, through every processor, and the one place it goes to.
+    #[test]
+    fn a_connector_act_release_is_named_before_anything_is_read() {
+        let plan = validate(&Draft::new(vec![
+            read("docs/x.md", "doc"),
+            fetch("issue", "brave/bravebot", "issue"),
+            process(&["doc", "issue"], "fix"),
+            act("put_file", "brave/bravebot")
+                .with_text("item", "bravebot/fix-x")
+                .with_text("path", "docs/x.md")
+                .with_text("title", "Fix x")
+                .with_text("from_slot", "fix"),
+        ]))
+        .unwrap();
+
+        let releases = plan.releases();
+        assert_eq!(releases.len(), 1);
+        let release = &releases[0];
+        assert_eq!(release.step, 3);
+        assert_eq!(release.slot, Some(SlotId::new("fix")));
+        assert_eq!(release.destination(), "github brave/bravebot");
+        assert_eq!(
+            release.origins,
+            BTreeSet::from([
+                Origin::Workspace,
+                Origin::Place {
+                    connector: "github".into(),
+                    place: "brave/bravebot".into()
+                }
+            ])
+        );
+        assert_eq!(
+            release.describe(),
+            "content from workspace, github brave/bravebot to github brave/bravebot"
+        );
+        assert_eq!(
+            plan.describe_step(3),
+            "act put_file from fix (connector github, place brave/bravebot, item bravebot/fix-x, \
+             path docs/x.md); content from workspace, github brave/bravebot to github \
+             brave/bravebot"
+        );
+        assert_eq!(plan.describe_step(0), plan.steps()[0].describe());
+    }
+
+    /// The person approving an act needs to see which item it lands on apart from the text it
+    /// sends, so the line names the fetch in `on` as the target and the processor's slot as the
+    /// source.
+    #[test]
+    fn an_act_reads_on_the_item_it_lands_on_and_from_the_slot_it_sends() {
+        let plan = validate(&Draft::new(vec![
+            fetch("find_issue", "brave/bravebot", "issue"),
+            process(&["issue"], "summary"),
+            act("comment", "brave/bravebot")
+                .with_text("on", "issue")
+                .with_text("from_slot", "summary"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            plan.steps()[2].describe(),
+            "act comment from summary on issue (connector github, place brave/bravebot)"
+        );
+    }
+
+    /// A note is words after a step and decides nothing: the same plan with and without one has
+    /// the same steps, routing and releases, and the note follows the release on the line.
+    #[test]
+    fn a_note_follows_the_step_and_changes_nothing_else() {
+        let draft = Draft::new(vec![
+            fetch("find_issue", "brave/bravebot", "issue"),
+            process(&["issue"], "summary"),
+            act("comment", "brave/bravebot")
+                .with_text("on", "issue")
+                .with_text("from_slot", "summary"),
+        ]);
+        let plain = validate(&draft).unwrap();
+        let noted = plain.clone().with_notes(BTreeMap::from([(
+            2,
+            "the authority fills in the recipient".to_string(),
+        )]));
+        assert_eq!(plain.steps(), noted.steps());
+        assert_eq!(plain.routing(), noted.routing());
+        assert_eq!(plain.releases(), noted.releases());
+        assert_eq!(noted.describe_step(0), plain.describe_step(0));
+        assert_eq!(
+            noted.describe_step(2),
+            format!(
+                "{}; the authority fills in the recipient",
+                plain.describe_step(2)
+            )
+        );
+        assert!(noted.describe_step(2).contains(
+            "content from github brave/bravebot to github brave/bravebot; the authority"
+        ));
+    }
+
+    /// An act that carries one slot and takes values from another names the origins of both, and
+    /// one that only takes values releases no slot of its own.
+    #[test]
+    fn a_release_names_what_an_act_carries_and_what_it_takes() {
+        let plan = validate(&Draft::new(vec![
+            read("docs/x.md", "doc"),
+            fetch("find_pull", "brave/bravebot", "pr"),
+            act("comment", "brave/bravebot")
+                .with_text("item", "1")
+                .with_text("take", "branch:pr.head")
+                .with_text("from_slot", "doc"),
+            act("protect", "brave/bravebot").with_text("take", "branch:pr.head"),
+        ]))
+        .unwrap();
+        let releases = plan.releases();
+        assert_eq!(releases.len(), 2);
+        assert_eq!(releases[0].slot, Some(SlotId::new("doc")));
+        assert_eq!(
+            releases[0].origins,
+            BTreeSet::from([
+                Origin::Workspace,
+                Origin::Place {
+                    connector: "github".into(),
+                    place: "brave/bravebot".into()
+                }
+            ])
+        );
+        assert_eq!(releases[1].slot, None);
+        assert_eq!(
+            releases[1].describe(),
+            "content from github brave/bravebot to github brave/bravebot"
+        );
     }
 }

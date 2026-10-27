@@ -53,7 +53,7 @@ guards:
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
-      - crates/core/src/policy.rs: 63
+      - crates/core/src/policy.rs: 64
       - crates/core/src/value.rs: 1
       - crates/mcp/tests/http.rs: 4
       - crates/mcp/tests/stdio.rs: 7
@@ -63,8 +63,9 @@ guards:
       - crates/agent/src/agents.rs: 1
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/commit_message.rs: 3
+      - crates/agent/src/connectors.rs: 1
       - crates/agent/src/tools/message.rs: 1
-      - crates/agent/src/manifest.rs: 11
+      - crates/agent/src/manifest.rs: 12
       - crates/agent/src/preamble.rs: 1
       - crates/agent/src/skills.rs: 3
       - crates/agent/src/styles.rs: 1
@@ -85,7 +86,7 @@ guards:
       - crates/core/src/value.rs: 6
   - symbol: Declassification::authorise
     sites:
-      - crates/core/src/policy.rs: 60
+      - crates/core/src/policy.rs: 61
   - symbol: SlotStore::path_of
     sites:
       - crates/core/src/policy.rs: 5
@@ -424,6 +425,7 @@ could read that the driver may not read for itself.
 `verified-by: bravebot_agent::turn::a_fetched_pages_lines_are_counted_inside_the_kernel`
 `verified-by: bravebot_agent::turn::an_asides_cut_is_made_inside_the_kernel`
 `verified-by: bravebot_agent::manifest::the_answer_steps_line_count_is_taken_inside_the_kernel`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_unread_slot_and_the_act_sends_the_released_text`
 
 ## Which direction a label may move
 
@@ -471,6 +473,7 @@ and the content has no say in it.
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
 | the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
+| what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes, counts withheld and a link | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count, a reason in lower-case kebab and one `https://` URL, and a value out of form is replaced or dropped rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
 | what a program that can only transform its input printed, fed content | private, and trusted only where what was fed in is, because a program prints what it was given and a run is not a release | `verified-by: bravebot_core::policy::a_filter_fed_an_untrusted_label_prints_untrusted_output` `verified-by: bravebot_core::policy::a_filter_fed_a_trusted_label_prints_trusted_private_output` |

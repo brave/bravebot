@@ -7,7 +7,8 @@ governs:
   - crates/connector/src/lib.rs
   - crates/config/src/connectors.rs
   - crates/config/src/connectors/forms.rs
-documented-by: none (gap: a page is owed once a manifest run calls a connector; until then nothing a person runs reaches this client)
+  - crates/agent/src/connectors.rs
+documented-by: none (gap: a manifest run fetches through a connector, and the page saying how to install a definition and its authority is owed)
 ---
 
 ## Scope
@@ -22,8 +23,8 @@ side, are
 [../design/connectors.md](../design/connectors.md) and
 [../design/credential-brokering.md](../design/credential-brokering.md).
 
-Nothing in a run calls the client or reads a definition yet. These clauses are what each owes the
-driver that will.
+A manifest run reads the installed definitions, tells the planner what they offer, holds the plan
+to them, and fetches and acts through the client ([manifest.md](manifest.md)).
 
 ## Clauses
 
@@ -114,6 +115,7 @@ and only goes back to the authority, which issued it.
 `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form`
 `verified-by: bravebot_connector::lib::a_link_is_kept_only_when_it_is_one_https_url_on_one_line`
 `verified-by: bravebot_connector::lib::a_reply_keeps_its_link_only_when_it_is_well_formed`
+`verified-by: bravebot_agent::manifest::a_fetch_the_authority_cannot_vouch_for_fails_its_step`
 `verified-by: bravebot_connector::lib::what_the_service_sent_carries_the_capabilitys_label_and_the_authoritys_fields_do_not`
 
 <a id="CONNECTOR-8"></a>
@@ -153,6 +155,7 @@ not having happened, and a hung authority never holds the run.
 `verified-by: bravebot_connector::lib::a_reply_is_read_though_the_authority_did_not_read_the_whole_request`
 `verified-by: bravebot_connector::lib::a_started_authority_whose_reply_is_lost_is_not_said_to_have_done_nothing`
 `verified-by: bravebot_connector::lib::a_reply_is_kept_though_a_program_the_authority_started_holds_its_output`
+`verified-by: bravebot_agent::manifest::a_run_stopped_while_a_fetch_waits_stops_waiting`
 
 <a id="CONNECTOR-10"></a>
 ### CONNECTOR-10: a definition is read from the person's own directory, writable by them alone
@@ -278,3 +281,122 @@ is made against one the authority would refuse:
 `verified-by: bravebot_config::connectors::a_fetch_narrows_only_by_terms_its_own_select_offers`
 `verified-by: bravebot_config::connectors::with_values_are_declared_with_a_form_exactly_when_a_resource_uses_with`
 `verified-by: bravebot_config::connectors::a_surface_or_name_the_authority_would_refuse_is_refused`
+
+<a id="CONNECTOR-17"></a>
+### CONNECTOR-17: a plan's connector steps are held to their definitions before anybody is asked
+
+Each connector step in a frozen plan is held to the definition it names before the plan is put to
+anybody: a connector that is installed and readable, a resource it offers for that step, only the
+fields that resource takes and exactly one of each either-or, each value in its form and among the
+values listed for its field, selector terms the resource offers, and one of its narrowing terms
+where it lists any. A field the definition gives a default for is filled before the plan is locked,
+unless the plan gave it in any shape or it is half of an either-or whose other half was given, so
+the line a person approves holds the value that will be sent.
+
+An act carries exactly one of `contents` or `from_slot` where its resource takes text, and neither
+where it does not, and never gives a value the authority takes from the item it lands on. An act on
+every match of its own selector narrows it by one of its resource's terms. The fetch an act's `on`
+names is of the same connector and place, chooses a single item, and either names it or narrows by
+one of the act's terms, and by the stricter ones an option asks for.
+
+**Why.** The authority holds every request to the same rules, so a plan that breaks one would only
+fail at its step, after earlier steps had run. Here it fails before anything has.
+
+`verified-by: bravebot_agent::connectors::a_step_is_held_to_its_resource_fields_values_and_selector_terms`
+`verified-by: bravebot_agent::connectors::a_with_given_to_a_resource_that_takes_none_is_refused_by_name`
+`verified-by: bravebot_core::selector::a_malformed_term_is_refused`
+`verified-by: bravebot_core::selector::a_pattern_matches_its_key_and_its_value_or_the_rest_of_it`
+`verified-by: bravebot_agent::connectors::a_fetch_names_a_place_only_when_its_resource_uses_one`
+`verified-by: bravebot_agent::connectors::a_value_outside_its_named_form_is_refused_before_anything_is_asked`
+`verified-by: bravebot_agent::connectors::mail_reads_take_a_selector_or_an_opaque_id_and_nothing_else`
+`verified-by: bravebot_agent::connectors::a_resource_that_lists_its_own_values_takes_only_those`
+`verified-by: bravebot_agent::connectors::a_fetch_whose_surface_lists_narrow_terms_uses_one_in_its_select`
+`verified-by: bravebot_agent::connectors::a_default_is_not_filled_beside_the_other_half_of_an_either_or`
+`verified-by: bravebot_agent::connectors::a_default_never_replaces_a_value_the_plan_gave_in_another_shape`
+`verified-by: bravebot_agent::connectors::a_connector_that_is_not_installed_or_could_not_be_read_refuses_the_plan`
+`verified-by: bravebot_agent::manifest::a_plan_that_breaks_a_connector_surface_is_refused_before_anybody_is_asked`
+`verified-by: bravebot_agent::connectors::a_mail_definition_is_checked_by_the_same_rules_with_no_item`
+`verified-by: bravebot_agent::connectors::a_plan_may_send_to_several_but_each_is_one_mailbox`
+`verified-by: bravebot_agent::connectors::an_act_with_no_text_takes_an_option_and_one_on_every_match_narrows_its_selector`
+`verified-by: bravebot_agent::connectors::a_fetch_an_act_lands_on_narrows_only_by_naming_its_item_or_by_a_narrowing_term`
+`verified-by: bravebot_agent::connectors::an_approval_lands_only_on_a_pull_chosen_by_its_branch_or_named`
+`verified-by: bravebot_agent::connectors::an_option_is_one_the_definition_lists_and_an_omitted_one_takes_its_default`
+`verified-by: bravebot_agent::connectors::an_act_lands_only_on_an_item_a_fetch_chose_and_narrowed`
+`verified-by: bravebot_agent::connectors::an_act_lands_only_on_an_item_its_own_connector_fetched`
+`verified-by: bravebot_agent::connectors::an_act_on_every_match_needs_narrowing_only_where_its_resource_lists_it`
+`verified-by: bravebot_agent::connectors::an_act_that_takes_values_from_its_item_is_planned_without_them`
+`verified-by: bravebot_agent::connectors::an_acts_own_values_replace_the_definitions_for_its_option`
+`verified-by: bravebot_agent::connectors::an_act_that_takes_no_text_takes_no_slot`
+`verified-by: bravebot_agent::manifest::plans_the_checks_refuse_reach_neither_the_authority_nor_a_person`
+`verified-by: bravebot_agent::manifest::a_plan_that_gives_a_value_the_item_supplies_is_refused_before_anybody_is_asked`
+
+<a id="CONNECTOR-18"></a>
+### CONNECTOR-18: the planner is told what a definition offers, and only that
+
+Where a connector is usable, the planner is told each one's resources in the definition's own words,
+with the fields, selector terms, narrowing terms and listed values each takes, and for each act
+whether it takes text, which fetches its `on` may name and how they must narrow, and the values the
+authority fills in, which the plan must not give. It is told each `with` value with an example of
+its form, the fields a fetch records, and the values an act may take from them. It is told today's
+date and the machine's time zone where it names one. The goal call is told the same resources in
+the definition's summaries and no step or field name. Where none is usable, no connector step is
+offered at all. Both calls are told which definitions are installed but refused, with why, whether
+or not another is usable.
+
+`verified-by: bravebot_agent::connectors::the_catalogue_lists_each_resource_under_the_capability_it_uses`
+`verified-by: bravebot_agent::connectors::the_goal_call_is_told_each_connector_and_what_it_does_in_plain_words`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_which_fetches_an_act_may_name_in_on`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_how_the_fetch_an_act_lands_on_must_narrow`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_which_values_it_must_not_give`
+`verified-by: bravebot_agent::connectors::with_values_are_each_given_once_in_their_form_and_shown_to_the_planner`
+`verified-by: bravebot_agent::connectors::the_planner_is_told_a_value_with_a_space_is_quoted_and_such_a_term_parses`
+`verified-by: bravebot_agent::manifest::the_catalogue_offers_no_connector_step_where_none_is_installed`
+`verified-by: bravebot_agent::manifest::a_refused_definition_offers_no_step_and_is_named_with_its_reason`
+
+<a id="CONNECTOR-19"></a>
+### CONNECTOR-19: a grant is for one connector
+
+A run holds the connector capability for each connector its frozen plan names and for no other, and
+a grant for one connector is no grant for another. What a connector returns is untrusted and
+private. The call to the service is the authority's, made from its own process, so no request to
+the service passes this process's network path.
+
+`verified-by: bravebot_core::capability::a_connector_is_untrusted_private_and_granted_per_connector`
+`verified-by: bravebot_agent::manifest::a_connector_fetch_fills_one_slot_that_no_planner_reads`
+`verified-by: bravebot_agent::manifest::a_run_is_granted_only_the_connectors_its_plan_names`
+
+<a id="CONNECTOR-20"></a>
+### CONNECTOR-20: an act's plan line says what the person is approving
+
+The line a person approves for a connector act says whether its effect reaches further than its
+text, the text and title the plan wrote for it, and what the authority fills in from the item it
+lands on, such as a reply's recipient, and from which fetch or named item. The words are the plan's
+and the definition's, and nothing on the line names a service. A character that would draw a line
+of its own, or reorder or hide text without showing itself, is shown as its escape.
+
+`verified-by: bravebot_agent::connectors::a_high_impact_act_says_so_on_its_plan_line`
+`verified-by: bravebot_agent::connectors::the_plan_line_says_what_the_authority_fills_in_and_from_which_fetch`
+`verified-by: bravebot_agent::connectors::the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line`
+`verified-by: bravebot_agent::manifest::a_reply_is_sent_with_no_recipient_or_title_and_the_plan_line_says_who_fills_them_in`
+`verified-by: bravebot_agent::connectors::text_that_reorders_or_hides_itself_is_escaped_on_the_plan_line`
+`verified-by: bravebot_agent::connectors::the_note_names_the_item_an_act_named_itself`
+
+<a id="CONNECTOR-21"></a>
+### CONNECTOR-21: a value an act takes from a fetch never reaches this process
+
+A step gives each `with` value its resource asks for once, in its form or among its listed values.
+An act may instead take a value, in `take`, from a field an earlier fetch of any connector records,
+where its definition lets it take that value and it does not also give it. The request carries that
+fetch's receipt and the field's name, never the value: the authority alone reads it, from what it
+recorded when it made the fetch.
+
+**Why.** A value taken this way is service content, such as a flight's departure. Taken through a
+receipt it can fill an act without any planner or processor reading it, under the release the plan
+line names.
+
+`verified-by: bravebot_agent::connectors::with_values_are_each_given_once_in_their_form_and_shown_to_the_planner`
+`verified-by: bravebot_agent::connectors::an_act_takes_only_what_an_earlier_fetch_records_and_its_definition_allows`
+`verified-by: bravebot_agent::manifest::an_act_takes_a_recorded_field_as_the_fetch_s_receipt`
+`verified-by: bravebot_agent::manifest::an_act_taking_from_a_fetch_that_returned_no_receipt_is_never_sent`
+`verified-by: bravebot_core::selector::a_take_names_a_slot_and_a_field_for_each_value`
+`verified-by: bravebot_agent::connectors::a_take_names_only_a_slot_a_fetch_filled`
