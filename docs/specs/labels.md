@@ -215,17 +215,21 @@ L = I × C      I ∈ {T, U}      trusted / untrusted
                C ∈ {pub, priv} public  / private
 ```
 
-Untrusted input degrades integrity; private input raises confidentiality. `(U,priv)` and `(T,pub)`
-are **incomparable**, so this is a lattice rather than a pair of booleans and no total order may be
-imposed on it. Integrity meets pessimistically and confidentiality joins pessimistically.
+Untrusted input degrades integrity; private input raises confidentiality. A label degrades into
+another when the other is no more trusted and no less private than it. `(T,priv)` and `(U,pub)` are
+**incomparable**: neither degrades into the other. So this is a lattice rather than a pair of
+booleans, and no total order may be imposed on it: `Label` implements neither `PartialOrd` nor
+`Ord`. Integrity meets pessimistically and confidentiality joins pessimistically.
 
 `verified-by: bravebot_core::label::middle_elements_are_incomparable`
-`verified-by: bravebot_core::label::bottom_flows_everywhere_and_top_flows_nowhere`
+`verified-by: bravebot_core::label::degradation_has_one_source_and_one_sink`
+`verified-by: bravebot_core::label::degradation_is_reflexive`
+`verified-by: bravebot_core::label::degradation_is_antisymmetric`
+`verified-by: bravebot_core::label::degradation_is_transitive`
 `verified-by: bravebot_core::label::integrity_meet_is_pessimistic`
 `verified-by: bravebot_core::label::confidentiality_join_is_pessimistic`
-`verified-by: bravebot_core::label::ordering_is_reflexive_and_antisymmetric`
-`verified-by: bravebot_core::label::ordering_is_transitive`
 `verified-by: bravebot_core::label::display_matches_the_canonical_notation`
+`verified-by: by-construction (Label implements neither PartialOrd nor Ord, so two labels cannot be ranked with <, <=, > or >=; the compile_fail doctest on Label in crates/core/src/label.rs pins the < case)`
 
 <a id="LABEL-2"></a>
 ### LABEL-2: a derived value is labelled by taint over its inputs
@@ -443,7 +447,7 @@ design is wrong, not the label.
 `verified-by: bravebot_core::value::relabel_may_not_upgrade`
 `verified-by: bravebot_core::value::relabel_refuses_incomparable_labels`
 `verified-by: bravebot_core::value::relabel_may_not_make_private_content_public`
-`verified-by: bravebot_core::label::degradation_is_not_the_lattice_ordering`
+`verified-by: bravebot_core::label::degradation_never_raises_integrity_or_lowers_confidentiality`
 `verified-by: bravebot_core::label::trusted_input_cannot_launder_untrusted`
 `verified-by: bravebot_core::label::top_of_taint_degrades_from_everything`
 
