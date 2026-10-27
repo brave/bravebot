@@ -545,6 +545,7 @@ const ALLOWED = new Set([
   'session.mode',
   'session.sandbox',
   'session.rewind',
+  'session.note',
   'turn.send',
   'turn.cancel',
   'turn.interject',

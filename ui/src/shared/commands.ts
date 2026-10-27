@@ -38,6 +38,7 @@ export type CommandId =
   | 'turn.cancel'
   | 'mode.cycle'
   | 'turn.rewind'
+  | 'session.note'
   | 'view.fold-left'
   | 'view.fold-right'
   | 'view.reset-columns'
@@ -177,6 +178,9 @@ export const COMMANDS: readonly Command[] = [
   },
   // No accelerator: Cmd+Z belongs to the text being edited, and this one asks first anyway.
   { id: 'turn.rewind', label: 'Undo Last Turn…', requires: 'rewindable' },
+  // Kept on the record and never sent to the model (SESSION-36). Not while a turn runs: the
+  // turn holds the record until it ends.
+  { id: 'session.note', label: 'Add Note…', requires: 'forkable' },
   {
     id: 'view.fold-left',
     label: 'Hide Chat List',

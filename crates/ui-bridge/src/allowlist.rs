@@ -130,6 +130,7 @@ pub const DENIED: &[&str] = &[
     "session.purge",
     "session.import",
     "session.rewind",
+    "session.note",
     "models.list",
     // Change how the host's own sessions behave, which a person at the host decides.
     "session.mode",

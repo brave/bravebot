@@ -87,6 +87,11 @@ names the bridge listed for that folder, matched exactly. The titles it lists ar
 program's text and are drawn as plain text. A copy is this app's record from then on: deleting
 the session in Claude Code does not remove it, and it goes only when deleted here.
 
+A note added from the window (`session.note`) is written to the session's record and nowhere
+else. It is not a prompt, is not queued and is not in what a turn is given, so it never reaches a
+model ([SESSION-36](../../docs/specs/sessions.md#SESSION-36)). The window draws notes as plain text.
+The host does not offer the method to its clients.
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,

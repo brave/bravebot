@@ -1582,6 +1582,14 @@ Still open:
   text. Where the build carries none for that version they are the newest release's, `version`
   names that release and `running` is false. `notes` is null where the build carries no release.
   Nothing is read or fetched, and the window shows `notes` as plain text (CMD-25).
+- `session.note` takes `{ session, text }` and keeps the text as a note on the session's record,
+  on its last finished turn, as the terminal's `/note` does (SESSION-36). It returns
+  `{ noted, notes }`: `noted` is `kept`, `unwritable` where the session writes no record and the
+  note is held for this process only, or `empty` where the text is blank and nothing was added;
+  `notes` is the session's notes as `{ turn, text }`, oldest first. It is refused with
+  `turn_in_flight` while a turn runs and with `bad_request` before the session's first turn, when
+  there is no record yet. `session.open` returns the record's `notes` in the same shape. A note is
+  not part of the conversation and is never sent to the model.
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last

@@ -124,6 +124,18 @@ export interface TodoRow {
   status: TodoStatus
 }
 
+/** A note the person kept on a session, on the turn it was added after (SESSION-36). Never sent to the model. */
+export interface SessionNote {
+  turn: number
+  text: string
+}
+
+/** `session.note`'s answer: what became of the text, and the session's notes as they now stand. */
+export interface NotedSession {
+  noted: 'kept' | 'unwritable' | 'empty'
+  notes: SessionNote[]
+}
+
 /** An `allow` rule a project's settings file wrote, which answers no question here. */
 export interface ProposedRule {
   rule: string
@@ -277,6 +289,8 @@ export interface OpenedSession extends SessionSettled {
   said: Said[]
   context: string
   todos: Record<string, TodoRow[]>
+  /** Absent from an older bridge, which sent none. */
+  notes?: SessionNote[]
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
   /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string

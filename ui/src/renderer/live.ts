@@ -11,6 +11,7 @@ import type {
   SessionSummary,
   SettingsRules,
   Shown,
+  SessionNote,
   TodoRow,
   Waiting,
 } from '../shared/protocol'
@@ -61,6 +62,8 @@ export interface Live {
   entries: Entry[]
   turns: Turns
   todos: TodoRow[]
+  /** The notes kept on this session's record, oldest first. Shown beside it, never sent. */
+  notes?: SessionNote[]
   quarantine: Shown[]
   phase: Waiting | null
   /** What a running confined check was given. Beside the phase, which a check does not change. */

@@ -42,6 +42,8 @@ export interface CommandActions {
   about: () => void
   /** Show the release notes the agent carries. */
   changelog: () => void
+  /** Ask for a note to keep on the open chat's record. */
+  note: () => void
   doctor: () => void
   /** Open the bug report, which shows what a saved one would hold before anything is written. */
   bugReport: () => void
@@ -133,6 +135,8 @@ export function useCommandRouter(actions: CommandActions): void {
           return act.cycleMode()
         case 'turn.rewind':
           return act.undoTurn()
+        case 'session.note':
+          return act.note()
         case 'view.fold-left':
           return act.toggle('left')
         case 'view.fold-right':

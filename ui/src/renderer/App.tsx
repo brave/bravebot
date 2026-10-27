@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   BridgeEvent,
   ForkedSession,
+  NotedSession,
   OpenedSession,
   PermissionMode,
   SandboxMode,
@@ -56,6 +57,7 @@ import { RewindConfirm } from './components/Rewind'
 import { PurgeProject } from './components/PurgeProject'
 import { ImportSessions } from './components/ImportSessions'
 import { type Purged, purgeReport, turnRunningIn } from './purge'
+import { NoteDialog } from './components/NoteDialog'
 import { apply } from './apply'
 import { hadConversation, listSessions } from './session-list'
 import { type Live, NEW_CHAT, cameFrom, liveKey, newLive, preIdKey, promoteDraft, settledBy } from './live'
@@ -290,6 +292,7 @@ export function App(): React.JSX.Element {
         },
         entries: t.fromSaid(opened.said),
         todos: Object.values(opened.todos).flat(),
+        notes: opened.notes ?? [],
         // A record with no stored map was written before maps were kept. Nothing
         // recorded is not the same as nothing trusted, so it is asked about again.
         contextTokens: opened.contextTokens,
@@ -583,6 +586,22 @@ export function App(): React.JSX.Element {
     }
   }, [])
 
+  // The open chat's handle while its note dialog is up.
+  const [noting, setNoting] = useState<string | null>(null)
+  const askNote = useCallback(() => { if (liveRef.current) setNoting(liveRef.current.handle) }, [])
+  const addNote = useCallback(async (text: string) => {
+    if (!noting) return true
+    try {
+      const noted = await call<NotedSession>('session.note', { session: noting, text })
+      updateSession(noting, (old) => (old ? { ...old, notes: noted.notes } : old))
+      if (noted.noted === 'unwritable') setProblem('The note is held for this window only, because this chat has no record to keep it in.')
+      return noted.noted !== 'empty'
+    } catch (error) {
+      setProblem(String(error))
+      return false
+    }
+  }, [noting, updateSession])
+
   const { includeTools, toggleTools, canExport, exportSession } = useExport(live, setProblem)
 
   const resetColumns = useCallback(() => {
@@ -848,6 +867,7 @@ export function App(): React.JSX.Element {
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     changelog: () => void changelog(),
+    note: askNote,
     doctor: () => void doctor(),
     bugReport: () => setBugReportOpen(true),
     openSession,
@@ -1069,7 +1089,7 @@ export function App(): React.JSX.Element {
         onReset={reset}
         onNudge={nudge}
       />
-      <Context live={live} audit={auditPanel} details={details} />
+      <Context live={live} audit={auditPanel} details={details} onAddNote={askNote} />
       </div>
       </div>
       {agentsOpen && (
@@ -1110,6 +1130,9 @@ export function App(): React.JSX.Element {
       )}
       {projectAction?.kind === 'import' && (
         <ImportSessions directory={projectAction.directory} onClose={leaveProjectAction} onImported={() => void refresh()} />
+      )}
+      {noting && live?.handle === noting && (
+        <NoteDialog running={live.running} onCancel={() => setNoting(null)} onAdd={addNote} />
       )}
       {unconfigured && <Unconfigured detail={unconfigured} onClose={() => setUnconfigured(null)} />}
       {rewinding && live?.handle === rewinding.handle && (() => {

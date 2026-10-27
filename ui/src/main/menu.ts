@@ -209,6 +209,7 @@ export function installMenu(window: BrowserWindow): void {
         item('mode.cycle'),
         SEPARATOR,
         item('turn.rewind'),
+        item('session.note'),
       ],
     },
     { role: 'windowMenu' },

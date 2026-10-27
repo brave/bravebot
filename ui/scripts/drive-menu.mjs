@@ -132,6 +132,9 @@ const ALLOWED_IDS = [
   // Open About and the bug report. Neither decides anything, and the report is written only where
   // its Save button and a native sheet put it.
   'help.update', 'help.bug-report',
+  // Opens a dialog for a note kept on the record. It reaches `session.note`, which sends the
+  // model nothing.
+  'session.note',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -148,8 +151,8 @@ check(
 // `session.rewind` puts files back to what they held, and only after a dialog naming each one.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 53,
-  'the main-process allow-list is 53 methods including model discovery, rewind, the release notes and the update status, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 54,
+  'the main-process allow-list is 54 methods including model discovery, rewind, notes, the release notes and the update status, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------

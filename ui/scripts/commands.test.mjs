@@ -17,3 +17,11 @@ test('the release notes can be shown with nothing open, since they belong to no 
   assert.equal(isEnabled(notes.requires, NOTHING_OPEN), true)
   assert.equal(isEnabled(notes.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), true)
 })
+
+test('a note is offered on an open chat with no turn running, which holds the record until it ends', () => {
+  const note = command('session.note')
+  assert.equal(note.label, 'Add Note…')
+  assert.equal(isEnabled(note.requires, NOTHING_OPEN), false)
+  assert.equal(isEnabled(note.requires, { ...NOTHING_OPEN, hasSession: true }), true)
+  assert.equal(isEnabled(note.requires, { ...NOTHING_OPEN, hasSession: true, running: true }), false)
+})

@@ -120,6 +120,7 @@ export function installAcceptanceBridge({ ipcMain, BrowserWindow, dialog }, { di
       return { ok: { found: true, text: 'Backend not configured. Install a configured build or rebuild with the approved environment.' } }
     }
     if (method === 'changelog.read') return { ok: { version: '0.19.0', running: true, notes: ' - Added a thing. (#1)' } }
+    if (method === 'session.note') return { ok: { noted: 'kept', notes: [{ turn: 1, text: String(p.text).trim() }] } }
     if (method === 'session.list') return { ok: { sessions: rows } }
     if (method === 'models.list') {
       return {
