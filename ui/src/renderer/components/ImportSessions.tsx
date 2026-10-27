@@ -5,6 +5,7 @@ import { call } from '../request'
 import { shortAgo } from '../time'
 import { showToast } from '../toasts'
 import { Modal } from './Modal'
+import { plural } from '../plural'
 
 /** One of Claude Code's sessions for the project, as `session.import` lists it. */
 export interface Found {
@@ -29,7 +30,6 @@ export function afterCopy(found: Found[], chosen: ReadonlySet<string>, answer: C
   return { found: rows, chosen: new Set([...chosen].filter((sourceId) => !rows.some((one) => one.sourceId === sourceId && one.imported))) }
 }
 
-const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`
 
 /**
  * Copy chosen Claude Code sessions of one project into this app's chats (SESSION-32).

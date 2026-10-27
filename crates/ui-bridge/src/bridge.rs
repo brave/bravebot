@@ -2316,7 +2316,7 @@ fn existing_directory(request: &Request) -> Result<PathBuf, Failure> {
         })
 }
 
-/// A required list of strings.
+/// One entry that is not a string refuses the whole list, so a request never acts on part of it.
 fn strings(request: &Request, name: &str) -> Result<Vec<String>, Failure> {
     request
         .param(name)
@@ -4295,6 +4295,10 @@ mod closing_tests;
 #[cfg(test)]
 #[path = "mentions_running_tests.rs"]
 mod mentions_running_tests;
+
+#[cfg(test)]
+#[path = "purge_busy_tests.rs"]
+mod purge_busy_tests;
 
 #[cfg(all(test, unix))]
 #[path = "../tests/ending/worker.rs"]

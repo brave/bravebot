@@ -5,6 +5,7 @@ import { call } from '../request'
 import { showToast } from '../toasts'
 import { ConfirmDelete } from './ConfirmDelete'
 import { Modal } from './Modal'
+import { plural } from '../plural'
 
 /** What `session.purge` with `dryRun` answers: the records it would remove, and the ids it holds. */
 interface Plan {
@@ -12,7 +13,6 @@ interface Plan {
   held: string[]
 }
 
-const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`
 
 /**
  * The question asked before every chat of one project is deleted.

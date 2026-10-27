@@ -609,7 +609,8 @@ fn a_purge_holds_a_session_a_window_has_open() {
     );
 }
 
-/// A purge is refused while a turn runs in the project, and deletes nothing.
+/// A purge is refused while a turn runs in the project, and deletes nothing. A dry run is still
+/// answered, since it deletes nothing and the dialog opens before the user knows a turn is running.
 #[test]
 fn a_purge_waits_for_a_running_turn() {
     let scratch = Scratch::new("bridge-purge-running");
@@ -624,6 +625,11 @@ fn a_purge_waits_for_a_running_turn() {
     holding
         .recv_timeout(PATIENCE)
         .expect("the service never received the held request");
+    let planned = purge(&mut window, &project, json!({"dryRun": true}));
+    assert!(
+        ids(&planned["ok"]["delete"]).contains(&stored_id),
+        "{planned}"
+    );
     let unnamed = purge(&mut window, &project, json!({}));
     assert_eq!(unnamed["error"]["code"], "bad_request", "{unnamed}");
     let refused = purge(&mut window, &project, json!({"ids": [stored_id]}));
