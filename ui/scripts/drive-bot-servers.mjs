@@ -72,15 +72,21 @@ try {
     }
   }
 
+  const mode = picker.locator('[data-test="bot-servers-mode"]')
+  const choose = async (name) => {
+    await mode.click()
+    await page.getByRole('option', { name, exact: true }).click()
+  }
+
   await page.reload()
   await page.getByRole('button', { name: 'Bots', exact: true }).click()
   await page.locator('[data-test="bot-details"]').waitFor()
-  await picker.getByText('Every connected server').waitFor()
+  await page.waitForFunction(() => document.querySelector('[data-test="bot-servers-mode"]')?.value === 'every', null, { polling: 100, timeout: 5000 })
   assert.equal(await picker.locator('[data-test="bot-server"]').count(), 0, 'every server lists none to tick')
   await picker.getByText('Applies from this bot’s next turn, in open conversations too.').waitFor()
   await snap('00-every-server')
 
-  await picker.getByText('Only these', { exact: true }).click()
+  await choose('Only these')
   assert.deepEqual(await wrote(1), ['github', 'linear'], 'choosing only these keeps every declared server at first')
   await row('linear').waitFor()
   await ticked('github', true)
@@ -100,7 +106,7 @@ try {
   await snap('02-refused')
 
   await app.evaluate(() => { globalThis.servers.refuse = null })
-  await picker.getByText('Every connected server').click()
+  await choose('Every connected server')
   assert.equal(await wrote(4), null, 'every server removes the line')
   await page.waitForFunction(() => !document.querySelector('[data-test="bot-server"]'), null, { polling: 100, timeout: 5000 })
   await snap('03-every-again')
@@ -132,6 +138,25 @@ try {
   assert.deepEqual(await wrote(5), ['github'])
   await ticked('github', true)
   await snap('05-tools-line')
+
+  // With the details panel dragged to its narrowest, the choice still fits inside it.
+  await app.evaluate(() => {
+    globalThis.servers.line = { ...globalThis.servers.line, tools: false, every: true, everyPossible: true, servers: null }
+  })
+  await reopen()
+  await mode.waitFor()
+  const seam = await page.locator('.gutter.right').boundingBox()
+  await page.mouse.move(seam.x + seam.width / 2, seam.y + seam.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(seam.x + 400, seam.y + seam.height / 2, { steps: 10 })
+  await page.mouse.up()
+  const [panel, choice] = await Promise.all([
+    page.locator('[data-test="bot-details"]').boundingBox(),
+    mode.boundingBox(),
+  ])
+  assert.ok(panel.width < 260, `the panel was dragged narrow, and is ${panel.width}px`)
+  assert.ok(choice.x + choice.width <= panel.x + panel.width, 'the choice stays inside the details panel')
+  await snap('06-narrow')
 
   assert.deepEqual(errors, [])
   // A checkout without `pnpm run bridge` throws from the watch poll; that is not the picker's.

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import type { BotServers as Answer } from '../../shared/bots'
 import { STANDING_LABEL, standing, type Connector, type ConnectorList } from '../../shared/connectors'
 import { useDelayedFlag } from '../hooks'
-import { Alert, Checkbox, ControlItem, Label, ProgressRing, SegmentedControl } from '../nala'
+import { Alert, Checkbox, Dropdown, Label, ProgressRing } from '../nala'
 import { call, invokeMessage } from '../request'
 
 /**
@@ -89,15 +89,15 @@ export function BotServers({ slug }: { slug: string }): React.JSX.Element {
       </Alert>
     )}
     {editable && answer.everyPossible && (
-      <SegmentedControl value={answer.every ? 'every' : 'only'} size="small" aria-label="Which servers this bot may use" data-test="bot-servers-mode"
+      <Dropdown value={answer.every ? 'every' : 'only'} size="small" disabled={saving} aria-label="Which servers this bot may use" data-test="bot-servers-mode"
         onChange={(detail) => {
           if (saving) return
           if (detail.value === 'every' && !answer.every) void save(null)
           if (detail.value === 'only' && answer.every) void save(declared)
         }}>
-        <ControlItem value="every">Every connected server</ControlItem>
-        <ControlItem value="only">Only these</ControlItem>
-      </SegmentedControl>
+        <leo-option value="every">Every connected server</leo-option>
+        <leo-option value="only">Only these</leo-option>
+      </Dropdown>
     )}
     {editable && !answer.everyPossible && (
       <p className="bot-servers-note" data-test="bot-servers-tools">
