@@ -12,8 +12,8 @@ importers:
   .:
     dependencies:
       '@brave/leo':
-        specifier: github:brave/leo#3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d
-        version: https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.19(supports-color@7.2.0))(typescript@5.9.3)
+        specifier: github:brave/leo#c5f9c8f78f3df5b767a83ad67babd8b29323266a
+        version: https://codeload.github.com/brave/leo/tar.gz/c5f9c8f78f3df5b767a83ad67babd8b29323266a(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.19(supports-color@7.2.0))(typescript@5.9.3)
       highlight.js:
         specifier: ^11.11.2
         version: 11.11.2
@@ -184,14 +184,14 @@ packages:
     resolution: {integrity: sha512-Vj1jF3cPfxg7OAfoI7QnVKLoILlm2JF9pnVHrX8qx7AHMiYWT+NDAA7jChlNgRS4WTLc/fD1lXLmPixluj+3Gg==}
     engines: {node: '>=6.9.0'}
 
-  '@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d':
-    resolution: {gitHosted: true, integrity: sha512-DwQnOBPGyKCqqAzJQfZncHp16mvGIydg7d1E5V2IxuRLB4bxAUvJ3vaULdJ4AHLaCniKfkfodDYYIdSb3TMCCw==, tarball: https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d}
+  '@brave/leo@https://codeload.github.com/brave/leo/tar.gz/c5f9c8f78f3df5b767a83ad67babd8b29323266a':
+    resolution: {gitHosted: true, integrity: sha512-+g4O6rIaulJlMQ0rIZ4R8B9EsnPO9ik5QDW74J8SRc/BSKog4eQ//R5uLVMT8rjk7oH0CcT2dz0Jm6MGJX6bzg==, tarball: https://codeload.github.com/brave/leo/tar.gz/c5f9c8f78f3df5b767a83ad67babd8b29323266a}
     version: 0.0.1
     hasBin: true
     peerDependencies:
       '@material/material-color-utilities': '>= 0.2.7'
       react: '>= 16.0.0'
-      typescript: '>= 4.7.0'
+      typescript: '>= 4.7.0 < 7.0.0'
     peerDependenciesMeta:
       '@material/material-color-utilities':
         optional: true
@@ -601,6 +601,9 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
+  '@jridgewell/sourcemap-codec@1.6.0':
+    resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
+
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
@@ -909,9 +912,6 @@ packages:
 
   '@types/responselike@1.0.3':
     resolution: {integrity: sha512-H/+L+UkTV33uf49PH5pCAUBVPNj2nDBXTN+qS1dOwyyg24l3CcicicCA7ca+HMvJBZcFgl5r8e+RR6elsb4Lyw==}
-
-  '@types/trusted-types@2.0.7':
-    resolution: {integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==}
 
   '@types/unist@2.0.11':
     resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
@@ -2582,8 +2582,8 @@ packages:
     resolution: {integrity: sha512-ot0WnXS9fgdkgIcePe6RHNk1WA8+muPa6cSjeR3V8K27q9BB1rTE3R1p7Hv0z1ZyAc8s6Vvv8DIyWf681MAt0w==}
     engines: {node: '>= 0.4'}
 
-  svelte-preprocess@6.0.3:
-    resolution: {integrity: sha512-PLG2k05qHdhmRG7zR/dyo5qKvakhm8IJ+hD2eFRQmMLHp7X3eJnjeupUtvuRpbNiF31RjVw45W+abDwHEmP5OA==}
+  svelte-preprocess@6.0.5:
+    resolution: {integrity: sha512-sgwew5yV/2eMeQobIWgAxCNarKwiTUDIc3siAUbq3sp0G6ONtzk0W+wJihMdqjbYb3iGU3ubpGv0usnnuXT3qg==}
     engines: {node: '>= 18.0.0'}
     peerDependencies:
       '@babel/core': ^7.10.2
@@ -2596,7 +2596,7 @@ packages:
       stylus: '>=0.55'
       sugarss: ^2.0.0 || ^3.0.0 || ^4.0.0
       svelte: ^4.0.0 || ^5.0.0-next.100 || ^5.0.0
-      typescript: ^5.0.0
+      typescript: ^5.0.0 || ^6.0.0
     peerDependenciesMeta:
       '@babel/core':
         optional: true
@@ -2619,8 +2619,8 @@ packages:
       typescript:
         optional: true
 
-  svelte@5.55.7:
-    resolution: {integrity: sha512-ymI5ykLPwIHW839E053FQbI1G+jnRFJEw3Kv5Y4njixVWywQBx+NUFpkkKyk5LIb36Fg9DVXSYpqiGekLD0hyw==}
+  svelte@5.57.1:
+    resolution: {integrity: sha512-Uqj49lWKB+iSSnneuwiYYJ7MZgkB+eXr0LXBhv4uDuAkXqnWmq65Sxflfvp0Lc6MdKjMUxGaeOKWJqz5SNiVIA==}
     engines: {node: '>=18'}
 
   tailwindcss@3.4.19:
@@ -3012,11 +3012,11 @@ snapshots:
       '@babel/helper-string-parser': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
 
-  '@brave/leo@https://codeload.github.com/brave/leo/tar.gz/3f491c2c44b3fd4bd29ae2aa843b226ec1f9fa0d(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.19(supports-color@7.2.0))(typescript@5.9.3)':
+  '@brave/leo@https://codeload.github.com/brave/leo/tar.gz/c5f9c8f78f3df5b767a83ad67babd8b29323266a(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(react@19.2.8)(storybook@8.6.19(supports-color@7.2.0))(typescript@5.9.3)':
     dependencies:
       '@storybook/test': 8.6.15(storybook@8.6.19(supports-color@7.2.0))
-      svelte: 5.55.7
-      svelte-preprocess: 6.0.3(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(svelte@5.55.7)(typescript@5.9.3)
+      svelte: 5.57.1
+      svelte-preprocess: 6.0.5(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(svelte@5.57.1)(typescript@5.9.3)
       tailwindcss: 3.4.19
       tslib: 2.8.1
     optionalDependencies:
@@ -3364,6 +3364,8 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
+  '@jridgewell/sourcemap-codec@1.6.0': {}
+
   '@jridgewell/trace-mapping@0.3.31':
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
@@ -3656,8 +3658,6 @@ snapshots:
   '@types/responselike@1.0.3':
     dependencies:
       '@types/node': 22.20.3
-
-  '@types/trusted-types@2.0.7': {}
 
   '@types/unist@2.0.11': {}
 
@@ -5703,22 +5703,21 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  svelte-preprocess@6.0.3(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(svelte@5.55.7)(typescript@5.9.3):
+  svelte-preprocess@6.0.5(@babel/core@7.29.7(supports-color@7.2.0))(postcss-load-config@6.0.1(jiti@1.21.7)(postcss@8.5.26))(postcss@8.5.26)(svelte@5.57.1)(typescript@5.9.3):
     dependencies:
-      svelte: 5.55.7
+      svelte: 5.57.1
     optionalDependencies:
       '@babel/core': 7.29.7(supports-color@7.2.0)
       postcss: 8.5.26
       postcss-load-config: 6.0.1(jiti@1.21.7)(postcss@8.5.26)
       typescript: 5.9.3
 
-  svelte@5.55.7:
+  svelte@5.57.1:
     dependencies:
       '@jridgewell/remapping': 2.3.5
-      '@jridgewell/sourcemap-codec': 1.5.5
+      '@jridgewell/sourcemap-codec': 1.6.0
       '@sveltejs/acorn-typescript': 1.0.13(acorn@8.18.0)
       '@types/estree': 1.0.9
-      '@types/trusted-types': 2.0.7
       acorn: 8.18.0
       aria-query: 5.3.1
       axobject-query: 4.1.0

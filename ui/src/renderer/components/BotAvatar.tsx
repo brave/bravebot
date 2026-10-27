@@ -15,7 +15,7 @@
 import { memo, useEffect, useRef } from 'react'
 import { Icon } from '../nala'
 import { show, tell, lookOf, type Doing } from '../avatar/clock'
-import { EYE_PUPIL, EYE_WHITE, LID, placeEyes, spriteOf, type Look, type Sprite } from '../avatar/pixels'
+import { EYE_PUPIL, EYE_WHITE, LID, SWATCH, placeEyes, spriteOf, swatchOf, type Look, type Sprite } from '../avatar/pixels'
 
 export type { Doing }
 
@@ -83,6 +83,16 @@ export function BotFace({ seed, size = 16 }: { seed: string; size?: number }): R
     <span className="bot-face" style={{ width: size, height: size }} aria-hidden="true">
       <PixelSprite sprite={sprite} size={size} look={lookOf(sprite, 'idle')} />
     </span>
+  )
+}
+
+/** A colour as a square of pixels mixed the way a face in it is, for the avatar editor's swatches. */
+export function PixelSwatch({ colour, size }: { colour: string; size: number }): React.JSX.Element {
+  return (
+    <svg className="pixel-swatch" width={size} height={size} viewBox={`1 1 ${SWATCH} ${SWATCH}`}
+      shapeRendering="crispEdges" aria-hidden="true" focusable="false">
+      {swatchOf(colour).map((cell) => <rect key={`${cell.x},${cell.y}`} x={cell.x} y={cell.y} width={1} height={1} fill={cell.fill} />)}
+    </svg>
   )
 }
 
