@@ -11,8 +11,11 @@
 Every step that needs no judgement is decided here, so what it prints is only what a model has to
 act on: the line ranges of each conflict. <pr> is a number or a pull request URL.
 
-A branch already checked out in another worktree is rebased there and a `reused:` line says where.
-Every step refuses a locked one, which something else may be using, unless given --use-locked.
+A branch already checked out in another worktree is rebased there only when that worktree is not
+locked and is inside the directory worktrees are made in, or is the checkout the script was run from.
+Every step stops, before it fetches, rebases or pushes, at a locked one, the main clone, or one outside
+that directory, and says where the branch is checked out and what the person can do, unless given
+--use-existing (also spelled --use-locked). A reused worktree is named in a `reused:` line.
 """
 
 import argparse
@@ -100,13 +103,15 @@ def main():
     parser.add_argument("pr")
     parser.add_argument("targets", nargs="*")
     parser.add_argument(
-        "--use-locked", action="store_true", help="work in a locked worktree the branch is already checked out in"
+        "--use-existing", "--use-locked", dest="use_existing", action="store_true",
+        help="work in the worktree the branch is already checked out in although it is locked "
+        "or outside the worktrees directory",
     )
     args = parser.parse_args()
     if args.targets and args.step != "check":
         parser.error("only check takes make targets")
     pr = lookup(pr_number(args.pr), create=args.step == "start")
-    pr_worktree.refuse_locked(pr, SCRIPT, [args.step, str(pr.number), *args.targets], args.use_locked)
+    pr_worktree.refuse_held_worktree(pr, SCRIPT, [args.step, str(pr.number), *args.targets], args.use_existing)
     if args.step == "start":
         sys.exit(start(pr))
     if args.step == "continue":
