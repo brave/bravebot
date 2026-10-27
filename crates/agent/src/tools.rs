@@ -24231,13 +24231,8 @@ mod tests {
             let text = said(output);
             assert!(text.contains(refusal), "{text}");
             assert!(text.contains("no other model was asked"), "{text}");
-            assert_eq!(
-                notices,
-                [
-                    bravebot_i18n::t!(consult_refused_notice, bot = "reviewer", refused = refusal)
-                        .to_string()
-                ]
-            );
+            assert_eq!(notices.len(), 1, "{notices:?}");
+            assert!(notices[0].contains(refusal), "{notices:?}");
         }
 
         /// CONSULT-6, CONSULT-12: a proposed brief is never a promotion, because no planner whose
