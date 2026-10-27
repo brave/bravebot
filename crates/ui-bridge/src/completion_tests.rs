@@ -87,6 +87,7 @@ fn check_completion(ending: &str) -> (bool, bool) {
             permission_mode: bravebot_agent::LiveMode::default(),
             mcp_requested: Vec::new(),
             watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+            last_request: Default::default(),
             model: None,
             addressing: None,
             workspace,

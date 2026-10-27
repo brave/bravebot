@@ -132,6 +132,8 @@ pub const DENIED: &[&str] = &[
     "settings.select",
     "permissions.list",
     "permissions.revoke",
+    "permissions.check",
+    "request.last",
     "hooks.inspect",
     "connectors.list",
     "connectors.preview",

@@ -16,8 +16,11 @@
 
 use crate::granted::Proposed;
 use bravebot_config::{PermissionLists, Settings};
-use bravebot_core::permissions::{Anchors, Permissions, Rejected, Rule, Unreadable};
+use bravebot_core::permissions::{
+    Anchors, Permissions, Rejected, Rule, Ruling, Subject, Unreadable,
+};
 use bravebot_i18n::t;
+use std::path::PathBuf;
 
 /// The rules a settings file carried, and any of its lines that were not rules.
 ///
@@ -433,6 +436,122 @@ pub fn as_allow_list(
 /// neither has a route the other lacks.
 pub fn additional_directories(settings: &Settings) -> &[String] {
     &settings.permissions().additional_directories
+}
+
+/// A call a person asked about, in the one spelling each family is matched in (CLI-30).
+///
+/// Only matched against rules: nothing is opened, started or fetched, and the specifier is what a
+/// person typed, so the match is on routing alone (PERM-1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Call {
+    Path(Subject, String),
+    Command(Vec<String>),
+    Host(String),
+    Tool(String, String),
+}
+
+impl Call {
+    /// What `family` and the words after it name, as `bravebot permissions check` reads its
+    /// arguments, or `None` where they name no call.
+    pub fn read(family: &str, rest: &[String]) -> Option<Self> {
+        match (Subject::parse(family)?, rest) {
+            (subject @ (Subject::Read | Subject::Edit), [path]) => {
+                Some(Self::Path(subject, path.clone()))
+            }
+            (Subject::Bash, argv) if !argv.is_empty() => Some(Self::Command(argv.to_vec())),
+            // A URL is reduced to its host, as a fetch is (PERM-1); anything that is not one is
+            // taken as the host it spells.
+            (Subject::WebFetch, [target]) => Some(Self::Host(
+                bravebot_core::url::host_of(target).unwrap_or_else(|| target.clone()),
+            )),
+            (Subject::Mcp, [target]) => {
+                let (alias, tool) = target.split_once(':')?;
+                Some(Self::Tool(alias.to_string(), tool.to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    /// What `family` and one typed specifier name. A command is split as the planner's are, by
+    /// [`crate::cmdline::parse`], and must be one command of literal words.
+    pub fn typed(family: &str, specifier: &str) -> Option<Self> {
+        if specifier.is_empty() {
+            return None;
+        }
+        let words = match Subject::parse(family)? {
+            Subject::Bash => match crate::cmdline::parse(specifier).ok()? {
+                crate::cmdline::Node::Command(command)
+                    if command.assignments.is_empty() && command.redirections.is_empty() =>
+                {
+                    command
+                        .words
+                        .iter()
+                        .map(crate::cmdline::Word::literal)
+                        .collect::<Option<Vec<_>>>()?
+                }
+                _ => return None,
+            },
+            _ => vec![specifier.to_string()],
+        };
+        Self::read(family, &words)
+    }
+
+    /// The rule of `permissions` that decides this call, and the list it is in.
+    pub fn decided_by<'a>(&self, permissions: &'a Permissions) -> Option<(Ruling, &'a Rule)> {
+        match self {
+            Self::Path(subject, path) => permissions.rule_for_path(*subject, path),
+            Self::Command(argv) => permissions.rule_for_command(argv),
+            Self::Host(host) => permissions.rule_for_host(host),
+            Self::Tool(alias, tool) => permissions.rule_for_mcp(alias, tool),
+        }
+    }
+}
+
+/// The rule that decides a call, and where it came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Check {
+    pub ruling: Ruling,
+    /// The rule as the file spelled it where a layer wrote it, and as it is held otherwise.
+    pub rule: String,
+    /// The settings file that wrote the rule.
+    pub file: Option<PathBuf>,
+    /// The checkout's settings file a person granted the rule from at the question (PERM-15),
+    /// where no layer wrote it in force.
+    pub granted: Option<PathBuf>,
+    /// The person's own reason for the rule, where they wrote one. Display text that decides
+    /// nothing.
+    pub reason: Option<String>,
+}
+
+/// Which rule of `permissions` decides `call`, or `None` where no rule does and the ordinary gates
+/// decide. `granted` is the checkout `allow` rules a person granted, which `permissions` holds.
+pub fn check(
+    permissions: &Permissions,
+    settings: &Settings,
+    granted: &[Proposed],
+    call: &Call,
+) -> Option<Check> {
+    let (ruling, rule) = call.decided_by(permissions)?;
+    let (rule_text, file, granted) = match settings.rule_source(ruling.as_str(), rule.written()) {
+        Some((file, written)) => (written.to_string(), Some(file.to_path_buf()), None),
+        None => (
+            rule.written().to_string(),
+            None,
+            granted
+                .iter()
+                .find(|g| g.rule.trim() == rule.written())
+                .map(|g| g.path.clone()),
+        ),
+    };
+    Some(Check {
+        ruling,
+        rule: rule_text,
+        file,
+        granted,
+        reason: settings
+            .rule_reason(ruling.as_str(), rule.written())
+            .map(str::to_string),
+    })
 }
 
 #[cfg(test)]
@@ -1545,5 +1664,104 @@ mod tests {
             additional_directories(&settings),
             ["../shared", "/opt/other"]
         );
+    }
+
+    /// A typed specifier names the call the CLI's arguments would: a command split into its
+    /// words, a URL reduced to its host, a tool named by its server.
+    #[test]
+    fn a_typed_specifier_names_the_call_its_arguments_would() {
+        let words = |list: &[&str]| list.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            Call::typed("Bash", "git push 'origin main'"),
+            Some(Call::Command(words(&["git", "push", "origin main"])))
+        );
+        assert_eq!(
+            Call::typed("Read", "src/lib.rs"),
+            Some(Call::Path(Subject::Read, "src/lib.rs".into()))
+        );
+        assert_eq!(
+            Call::typed("WebFetch", "https://example.com/docs?q=1"),
+            Some(Call::Host("example.com".into()))
+        );
+        assert_eq!(
+            Call::typed("Mcp", "github:create_issue"),
+            Some(Call::Tool("github".into(), "create_issue".into()))
+        );
+    }
+
+    /// A line that is not one command of plain words, an empty specifier and an unknown family
+    /// name no call, so the caller can say so instead of answering that no rule matches.
+    #[test]
+    fn a_specifier_that_names_no_one_call_is_refused() {
+        for (family, specifier) in [
+            ("Bash", "git diff | less"),
+            ("Bash", "git diff > out.txt"),
+            ("Bash", "FOO=1 git diff"),
+            ("Bash", "rm *.txt"),
+            ("Bash", ""),
+            ("Mcp", "no-colon"),
+            ("Shell", "ls"),
+            ("Read", ""),
+        ] {
+            assert_eq!(Call::typed(family, specifier), None, "{family} {specifier}");
+        }
+    }
+
+    /// Each list decides a call it holds a rule for, and a call no rule covers is left to the
+    /// ordinary gates.
+    #[test]
+    fn a_check_names_the_rule_and_list_that_decide_a_call() {
+        let root = crate::testutil::scratch_dir("Permissions-Check");
+        std::fs::create_dir_all(&root).unwrap();
+        let settings = Settings::parse(
+            r#"{"permissions": {"deny": ["Read(.env)"], "ask": ["Bash(git push *)"], "allow": ["WebFetch(domain:example.com)"]}}"#,
+        );
+        let (permissions, _) = from_settings(&settings, None, &root);
+        let checked = |family: &str, specifier: &str| {
+            check(
+                &permissions,
+                &settings,
+                &[],
+                &Call::typed(family, specifier).unwrap(),
+            )
+            .map(|check| (check.ruling, check.rule))
+        };
+        assert_eq!(
+            checked("Read", ".env"),
+            Some((Ruling::Deny, "Read(.env)".into()))
+        );
+        assert_eq!(
+            checked("Bash", "git push origin"),
+            Some((Ruling::Ask, "Bash(git push *)".into()))
+        );
+        assert_eq!(
+            checked("WebFetch", "https://example.com/a"),
+            Some((Ruling::Allow, "WebFetch(domain:example.com)".into()))
+        );
+        assert_eq!(checked("Bash", "git status"), None);
+    }
+
+    /// A checkout `allow` rule the person granted at the question is named with the file it was
+    /// granted from, since no layer wrote it in force.
+    #[test]
+    fn a_granted_rule_names_the_file_it_was_granted_from() {
+        let root = crate::testutil::scratch_dir("Permissions-Check-Granted");
+        std::fs::create_dir_all(&root).unwrap();
+        let settings = Settings::parse("{}");
+        let granted = [Proposed {
+            rule: "Bash(cargo test *)".into(),
+            path: root.join(".bravebot").join("settings.json"),
+        }];
+        let (permissions, _) = with_granted(&settings, &["Bash(cargo test *)".into()], None, &root);
+        let checked = check(
+            &permissions,
+            &settings,
+            &granted,
+            &Call::typed("Bash", "cargo test -p one").unwrap(),
+        )
+        .expect("the granted rule decides");
+        assert_eq!(checked.ruling, Ruling::Allow);
+        assert_eq!(checked.file, None);
+        assert_eq!(checked.granted.as_deref(), Some(granted[0].path.as_path()));
     }
 }

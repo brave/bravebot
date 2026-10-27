@@ -206,7 +206,14 @@ pub struct BridgeReporter {
     /// [`bravebot_agent::roster::Roster`]'s and the terminal uses as well. Shared with the session
     /// so the list lasts across turns (VIEW-35).
     roster: Arc<Mutex<bravebot_agent::roster::Roster>>,
+    /// Where the request the turn last built for the planner is kept, for `request.last`. `None`
+    /// where nothing reads it, so no view is built.
+    last_request: Option<LastRequest>,
 }
+
+/// The request a session's turns last built for the planner, as the agent read it out of the
+/// request itself.
+pub type LastRequest = Arc<Mutex<Option<bravebot_agent::request_view::RequestView>>>;
 
 impl BridgeReporter {
     pub fn new(emitter: Emitter, session: impl Into<String>) -> Self {
@@ -220,12 +227,19 @@ impl BridgeReporter {
             prompt_at: None,
             task_list: Vec::new(),
             roster: Arc::default(),
+            last_request: None,
         }
     }
 
     /// Report into the session's own list of agents and not a fresh one.
     pub fn sharing(mut self, roster: Arc<Mutex<bravebot_agent::roster::Roster>>) -> Self {
         self.roster = roster;
+        self
+    }
+
+    /// Keep each request the turn builds in `last`.
+    pub fn keeping_requests(mut self, last: LastRequest) -> Self {
+        self.last_request = Some(last);
         self
     }
 
@@ -312,6 +326,18 @@ impl BridgeReporter {
 impl Reporter for BridgeReporter {
     fn spent(&mut self, spent: bravebot_agent::Spent) {
         self.spent = Some(spent);
+    }
+
+    fn wants_request_view(&self) -> bool {
+        self.last_request.is_some()
+    }
+
+    fn request_built(&mut self, view: bravebot_agent::request_view::RequestView) {
+        if let Some(last) = &self.last_request
+            && let Ok(mut held) = last.lock()
+        {
+            *held = Some(view);
+        }
     }
 
     fn prompt_recorded(&mut self, at: usize) {

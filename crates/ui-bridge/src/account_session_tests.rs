@@ -55,6 +55,7 @@ fn take_a_turn(state: &Arc<Mutex<State>>, workspace: &Workspace, turn: usize) {
         permission_mode: PermissionMode::Ask.into(),
         mcp_requested: Vec::new(),
         watches: Arc::new(Mutex::new(bravebot_agent::watch::Watches::new())),
+        last_request: Default::default(),
         model: Some(ACCOUNT_MODEL.into()),
         addressing: None,
         prompt: "say hello".into(),

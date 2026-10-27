@@ -90,6 +90,11 @@ struct Open {
     /// (SANDBOX-22), so a resume and a fork start with none. Read when a turn or a run is accepted
     /// and copied into it, so a choice applies from the next turn.
     sandbox: Option<SandboxMode>,
+    /// The permission rules the session opened under, as its state holds them, kept here too so
+    /// `permissions.check` answers while a turn holds the state.
+    rules: bravebot_core::permissions::Permissions,
+    /// The request the session's turns last built for the planner, for `request.last`.
+    last_request: crate::turn::LastRequest,
 }
 
 impl Open {
@@ -114,6 +119,8 @@ impl Open {
             definition: None,
             permission_mode: LiveMode::default(),
             sandbox: None,
+            rules: bravebot_core::permissions::Permissions::default(),
+            last_request: crate::turn::LastRequest::default(),
         }
     }
 
@@ -306,6 +313,18 @@ impl Bridge {
             "trust.reply" => self.reply_trust(request),
             "permissions.list" => self.permissions(request, false),
             "permissions.revoke" => self.permissions(request, true),
+            "permissions.check" => self.check_permission(request),
+            "request.last" => {
+                let open = self
+                    .open
+                    .get(&request.string("session")?)
+                    .ok_or_else(Failure::no_such_session)?;
+                let last = open
+                    .last_request
+                    .lock()
+                    .map_err(|_| Failure::new(ErrorCode::Internal, "Last request unavailable"))?;
+                Ok(last.as_ref().map_or(Value::Null, wire::request_view))
+            }
             "settings.inspect" => {
                 let project = request
                     .optional_string("session")
@@ -492,11 +511,11 @@ impl Bridge {
     /// Read from the settings files once, here, and kept by the session (PERM-12). `inherited`
     /// is a parent's rules, which a fork takes in place of reading the files again.
     fn open_under_rules(
-        &self,
+        &mut self,
         handle: &str,
         inherited: Option<crate::rules::SettingsRules>,
     ) -> Value {
-        let Some(open) = self.open.get(handle) else {
+        let Some(open) = self.open.get_mut(handle) else {
             return Value::Null;
         };
         let rules = inherited.unwrap_or_else(|| {
@@ -506,6 +525,7 @@ impl Bridge {
             )
         });
         let reported = rules.json();
+        open.rules = rules.permissions.clone();
         if let Ok(mut state) = open.state.lock() {
             state.answers.rules = rules;
         }
@@ -1347,6 +1367,7 @@ impl Bridge {
         let project = open.project.clone();
         let state = Arc::clone(&open.state);
         let watches = Arc::clone(&open.watches);
+        let last_request = Arc::clone(&open.last_request);
         let turn_number = state.lock().map(|s| s.turns + 1).unwrap_or(1);
 
         let crate::running::Started {
@@ -1392,6 +1413,7 @@ impl Bridge {
                 model: worker_model,
                 addressing,
                 watches,
+                last_request,
                 emitter,
                 session,
                 project,
@@ -1625,6 +1647,10 @@ impl Bridge {
         }
 
         state.conversation = bravebot_agent::Conversation::restored(snapshot.conversation);
+        // The last request belonged to a turn that is gone.
+        if let Ok(mut last) = open.last_request.lock() {
+            *last = None;
+        }
         state.turns = snapshot.turns;
         state.tokens = snapshot.tokens;
         state.split = snapshot.split;
@@ -2011,6 +2037,38 @@ impl Bridge {
             // cannot be revoked here: editing the file changes them for the next session.
             "settingsRules": state.answers.rules.json(),
         }))
+    }
+
+    /// Which of the rules the session opened under decides a call a person typed (CLI-30). The
+    /// call is only matched: nothing is opened, started or fetched (PERM-1).
+    fn check_permission(&self, request: &Request) -> Result<Value, Failure> {
+        let open = self
+            .open
+            .get(&request.string("session")?)
+            .ok_or_else(Failure::no_such_session)?;
+        let call = bravebot_agent::permissions::Call::typed(
+            &request.string("family")?,
+            &request.string("specifier")?,
+        )
+        .ok_or_else(|| {
+            Failure::bad_request(
+                "Not a call to check. Name a family (Read, Edit, Bash, WebFetch or Mcp) and what it acts on: a path, one command of plain words, a URL or host, or server:tool.",
+            )
+        })?;
+        // Read for where each rule was written. This window grants none of a checkout's
+        // proposed `allow` rules (PERM-14), so nothing was granted from one.
+        let settings = crate::settings::layers(Some(&open.project), self.settings.as_deref());
+        let decided = bravebot_agent::permissions::check(&open.rules, &settings, &[], &call);
+        Ok(match decided {
+            None => json!({ "decision": null }),
+            Some(check) => json!({
+                "decision": check.ruling.as_str(),
+                "rule": check.rule,
+                "file": check.file.map(|file| file.display().to_string()),
+                "grantedFrom": check.granted.map(|file| file.display().to_string()),
+                "reason": check.reason,
+            }),
+        })
     }
 
     fn watches(&mut self, request: &Request) -> Result<Value, Failure> {
@@ -2539,6 +2597,8 @@ struct Work {
     /// Each MCP server the settings request, with the file that requested it.
     mcp_requested: Vec<(PathBuf, String)>,
     watches: Arc<Mutex<bravebot_agent::watch::Watches>>,
+    /// Where the session keeps the request this turn last builds for the planner.
+    last_request: crate::turn::LastRequest,
     model: Option<String>,
     /// The definition this turn is addressed to, where it is a turn in a bot's conversation
     /// (MEMORY-10).
@@ -2652,6 +2712,7 @@ fn work(work: Work) {
         permission_mode,
         mcp_requested,
         watches,
+        last_request,
         model,
         addressing,
         workspace,
@@ -2691,8 +2752,9 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut reporter =
-        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
+    let mut reporter = BridgeReporter::new(emitter.clone(), &session)
+        .sharing(Arc::clone(&state.roster))
+        .keeping_requests(last_request);
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that

@@ -927,6 +927,17 @@ session's map as it is. It returns the updated lists, and refuses `kind: "rememb
 `bad_request` where nothing is kept. These methods refuse with `turn_in_flight` while the
 session is running. Revocation can reduce existing grants; it cannot add trust.
 
+`permissions.check` takes `session`, `family` (`Read`, `Edit`, `Bash`, `WebFetch` or `Mcp`) and
+`specifier`, and says which settings rule decides that call, as `bravebot permissions check` does
+(CLI-30). The call is matched against the rules the session opened under (PERM-12) and nothing is
+read, run or fetched. A `Bash` specifier is split as the planner's commands are and must be one
+command of plain words; a `WebFetch` URL is reduced to its host; an `Mcp` specifier is
+`server:tool`. It returns `{ "decision": null }` where no rule matches, and otherwise
+`{ decision, rule, file, grantedFrom, reason }`, where `decision` is `deny`, `ask` or `allow`,
+`file` is the settings file that wrote the rule, `grantedFrom` is the checkout file a granted rule
+came from (PERM-15), and `reason` is the person's own note on it. A family or specifier that names
+no call is refused with `bad_request`. It is answered while a turn runs.
+
 ### 7.3 Trust and diagnostics
 
 #### Connectors
@@ -996,6 +1007,17 @@ place the bridge needs the CLI installed.
 If the checks are ever exposed as a library upstream, this returns
 `{ "structured": true, "checks": [ { "name": "…", "ok": true, "detail": "…" } ] }`
 instead. The flag exists so the client can be written once against both.
+
+#### `request.last`
+
+Takes `session` and returns the request the session's last turn built for the planner, or `null`
+before the first one. It is `{ model, tools, toolsBytes, spans }`, where `tools` names the tools
+offered, `toolsBytes` is the size of their declarations, and each span is
+`{ role, label, kind, text }`: `label` says where the words came from and `kind` is one of `typed`,
+`typed-with-files`, `driver`, `planner`, `trusted-file`, `trusted`, `setting`, `reference`,
+`released`, `vetted`, `summary` or `unrecorded`. It is read out of the request itself, so content
+held under a reference appears as the reference and never as its body. It is kept on the open
+session, answered while a turn runs, and dropped when the session closes or is rewound.
 
 #### `agent.info`
 

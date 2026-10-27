@@ -87,6 +87,15 @@ names the bridge listed for that folder, matched exactly. The titles it lists ar
 program's text and are drawn as plain text. A copy is this app's record from then on: deleting
 the session in Claude Code does not remove it, and it goes only when deleted here.
 
+The [Diagnostics](interface.md#diagnostics) dialog's last-request view (`request.last`) is built
+from the request the planner was sent, not from the transcript, so it holds only what the planner
+already held: content held under a reference appears as the reference and its body never crosses
+IPC. Each part is drawn as plain text in a `<pre>` under the label naming where it came from,
+never as Markdown or HTML, and is copied only by the person's own click on that part. It is not
+written to a log, a toast or a notice. The permission check (`permissions.check`) matches a typed
+call against the rules the session opened under and reads, runs and fetches nothing. No call the
+window can make reads the diagnostic log ([DIAG-6](../../docs/specs/diagnostic-log.md#DIAG-6)).
+
 ## Decisions and refusal
 
 The transcript presents write, command, command-output, path-vouch, fetch, language-server,
