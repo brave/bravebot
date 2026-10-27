@@ -806,3 +806,71 @@ fn the_last_request_is_the_planners_labelled_and_without_the_fetched_page() {
         "{last}"
     );
 }
+
+/// A rewound turn takes its request with it, so the view does not show what the conversation no
+/// longer holds.
+#[test]
+fn a_rewind_forgets_the_last_request() {
+    let mut run = fetching("bridge-rules-last-request-rewind", |scratch| {
+        scratch.the_person_writes(json!({"deny": [THE_SITE]}));
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    assert_eq!(run.front.ask(&session)["event"], "turn.done");
+    assert_ne!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+
+    run.front
+        .call("session.rewind", json!({"session": session, "steps": 1}));
+    assert_eq!(
+        run.front.call("request.last", json!({"session": session})),
+        Value::Null
+    );
+}
+
+/// The last request and a check are of an open session, and a handle that names none is refused.
+#[test]
+fn a_session_that_is_not_open_has_no_last_request_and_no_check() {
+    let mut run = fetching("bridge-rules-last-request-unknown", |_| {});
+    for (method, params) in [
+        ("request.last", json!({"session": "s-none"})),
+        (
+            "permissions.check",
+            json!({"session": "s-none", "family": "Read", "specifier": ".env"}),
+        ),
+    ] {
+        let answered = run.front.answered(method, params);
+        assert_eq!(
+            answered["error"]["code"], "no_such_session",
+            "{method}: {answered}"
+        );
+    }
+}
+
+/// An Edit is checked against the rules for writes, and an Mcp call by its server and tool.
+#[test]
+fn a_permission_check_covers_an_edit_and_a_tool() {
+    let mut run = fetching("bridge-rules-check-edit-mcp", |scratch| {
+        scratch.the_person_writes(
+            json!({"deny": ["Edit(Cargo.lock)"], "ask": ["Mcp(github:create_issue)"]}),
+        );
+    });
+    let (session, _rules) = run.front.session(&run.scratch);
+    let mut check = |family: &str, specifier: &str| {
+        run.front.call(
+            "permissions.check",
+            json!({"session": session, "family": family, "specifier": specifier}),
+        )
+    };
+    let edit = check("Edit", "Cargo.lock");
+    assert_eq!(edit["decision"], "deny", "{edit}");
+    assert_eq!(edit["rule"], "Edit(Cargo.lock)", "{edit}");
+    assert_eq!(check("Read", "Cargo.lock"), json!({"decision": null}));
+    let tool = check("Mcp", "github:create_issue");
+    assert_eq!(tool["decision"], "ask", "{tool}");
+    assert_eq!(
+        check("Mcp", "github:list_issues"),
+        json!({"decision": null})
+    );
+}
