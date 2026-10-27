@@ -411,8 +411,10 @@ the file. A listing or a search consults the rules for every entry its walk reac
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
 its name is reported. A directory a rule covers is not descended into. Both are decided ahead of
 the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
-does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
-link to a denied file is not a second name a listing or a search hands back. A hard link is a
+does not follow a symbolic link it meets: the entry is neither reported nor descended into, but it
+is counted, and a listing or a search says how many it did not enter
+([LIST-6](tools/list-files.md#LIST-6), [SEARCH-13](tools/search.md#SEARCH-13)). A link to a denied
+file is not a second name a listing or a search hands back, because the count holds no name. A hard link is a
 regular file under another name, so a walk reaches it, and an entry is left out when a rule covers
 any name its file has, found by device and inode as for a call that names it. A hard link to a
 denied file is left out of a listing, a search and a repository map as the file is, whichever

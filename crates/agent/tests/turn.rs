@@ -10338,6 +10338,59 @@ fn a_quarantined_listing_tells_the_model_it_was_capped() {
     );
 }
 
+/// LIST-6: a listing the planner may not read still says how many symbolic links it did not enter,
+/// as a number and with no name. The regression it rejects: a count kept only in the body, which
+/// reaches nobody when the entries are handed over as references, so a directory made of links
+/// reads as empty.
+#[cfg(unix)]
+#[test]
+fn a_quarantined_listing_tells_the_model_how_many_links_it_did_not_enter() {
+    let scratch = Scratch::new("list-links-quarantined");
+    std::fs::create_dir(scratch.path.join("real")).unwrap();
+    std::fs::write(scratch.path.join("real/inside.txt"), "x").unwrap();
+    std::fs::write(scratch.path.join("plain.txt"), "x").unwrap();
+    std::os::unix::fs::symlink(
+        scratch.path.join("real"),
+        scratch.path.join("zz-linked-name"),
+    )
+    .unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request_2("list_files", r#"{"directory":"."}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+
+    let task = Task::new("what is here");
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &task,
+        &mut bravebot_agent::confirm::Unattended,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let _first = received.recv().expect("first request");
+    let second = received.recv().expect("second request");
+    assert!(
+        !second.contains("plain.txt"),
+        "the names reached the model, so this is not the quarantined case: {second}"
+    );
+    assert!(
+        second.contains("1 symbolic link was not entered"),
+        "the link count did not reach the model beside the references: {second}"
+    );
+    assert!(
+        !second.contains("zz-linked-name"),
+        "a link's name reached the model: {second}"
+    );
+}
+
 /// And the ordinary case must stay quiet, or the model learns to ignore the notice.
 ///
 /// Trusted deliberately. Run against an empty trust store the result is quarantined, the model
@@ -21685,6 +21738,81 @@ fn the_skills_overview_is_said_once_per_session_not_once_per_turn() {
         "the second turn of the same session either lost the first turn's message or said it \
          again: {second}"
     );
+}
+
+/// SKILL-19: the overview is pushed as a user message after the prompt, and a block-based wire puts
+/// it in the prompt's turn. Its first block starts on a new paragraph, so the count it begins with
+/// is never read as the end of the prompt before it ("issues/1106" and "1 skill" as 11061).
+#[test]
+fn the_skills_overview_is_a_separate_paragraph_from_the_prompt_on_block_based_wires() {
+    let scratch = Scratch::new("skills-overview-separate-paragraph");
+    write_project_skill(&scratch.path, "aardvark-polish", "aardvark-polish", "BODY");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let egress = bravebot_net::Egress::new();
+
+    let (endpoint, _received) = serve_sequence(vec![reply_with("first answer")]);
+    let config = config_for(&endpoint);
+    let mut sink = RecordingSink::new();
+    let mut conversation = bravebot_agent::Conversation::new();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("see issues/1106"),
+        &mut conversation,
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut bravebot_agent::IgnoreReports,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn finishes");
+
+    let notice = conversation
+        .messages()
+        .iter()
+        .find(|stored| stored.composed == Some(bravebot_agent::conversation::Composed::Notice))
+        .expect("the overview is in the conversation");
+    assert_eq!(notice.message.role, bravebot_aichat::protocol::Role::User);
+
+    let messages = conversation.with_system("be helpful");
+    let bedrock = serde_json::to_value(bravebot_bedrock::protocol::request_from(&messages, None))
+        .expect("serialises");
+    let anthropic = serde_json::to_value(bravebot_aichat::anthropic::protocol::request_from(
+        "claude-test",
+        &messages,
+        None,
+    ))
+    .expect("serialises");
+
+    for (wire, turn) in [
+        ("bedrock", &bedrock["messages"][0]),
+        ("anthropic", &anthropic["messages"][0]),
+    ] {
+        let texts: Vec<&str> = turn["content"]
+            .as_array()
+            .expect("blocks")
+            .iter()
+            .filter_map(|block| block["text"].as_str())
+            .collect();
+        let at = texts
+            .iter()
+            .position(|text| text.contains("not listed above"))
+            .unwrap_or_else(|| panic!("{wire}: no block holds the overview: {texts:?}"));
+        assert!(
+            at > 0 && texts[at - 1].contains("see issues/1106"),
+            "{wire}: the overview is not the block after the prompt: {texts:?}"
+        );
+        assert!(
+            texts[at].starts_with("\n\n1 skill"),
+            "{wire}: the overview does not start on a new paragraph: {:?}",
+            texts[at]
+        );
+    }
 }
 
 /// SKILL-19: the overview is not part of the opening, so a prompt handed back to the box

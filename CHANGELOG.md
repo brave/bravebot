@@ -1,5 +1,7 @@
 ## Unreleased
 
+ - Changed the `spawn_processor` description to say that only later `spawn_processor` calls are refused once the conversation holds private content, and that `run`, `read_output` and the file tools keep working. ([#3333](https://github.com/brave/bravebot/issues/3333))
+ - Changed `list_files` and `search` to say how many symbolic links they did not enter, as a number with no names, so a directory made only of links no longer lists as empty. `load_skill` names the directory a project skill's link lands on inside the project. ([#3334](https://github.com/brave/bravebot/issues/3334))
  - Changed the info panel's Files section so that clicking its heading no longer opens `/diff`. Click the count under it.
 
 ## [0.19.0](https://github.com/brave/bravebot/releases/tag/v0.19.0)

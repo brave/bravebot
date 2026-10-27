@@ -3691,9 +3691,11 @@ where
                 } else {
                     ""
                 };
+                // A count and no names, in the sentence every quarantined walk result shares.
+                let linked = sentences::links_note(&output.tool, output.links);
                 format!(
                     "{TOOL_RESULT_PREFIX}{} could not be shown to you. Its {} entries are \
-             quarantined, one reference each.{capped}\n\n{}",
+             quarantined, one reference each.{capped}{linked}\n\n{}",
                     output.tool,
                     references.len(),
                     described.join("\n")
@@ -4050,6 +4052,7 @@ where
                         // like one that found everything there was.
                         let capped =
                             sentences::capped_note(&output.tool, output.incomplete, output.paging);
+                        let linked = sentences::links_note(&output.tool, output.links);
                         // How to see this one and how to stop being asked, for a run and only for a run:
                         // the reasoning is on `sentences::run_advice`.
                         let advice = sentences::run_advice(
@@ -4073,7 +4076,7 @@ where
                                 .any(|directory| workspace.read_git_opens(policy, directory)),
                         );
                         format!(
-                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{advice}{history}",
+                            "{TOOL_RESULT_PREFIX}{} could not be shown to you.\n\n{ended}{}{capped}{linked}{advice}{history}",
                             output.tool,
                             reference.describe()
                         )

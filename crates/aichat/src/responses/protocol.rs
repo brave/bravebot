@@ -706,6 +706,27 @@ mod tests {
         );
     }
 
+    /// The note the agent writes after the first prompt of a session begins with a count, and a
+    /// prompt ending in a number followed by it would read as one number unless the note's part
+    /// starts on a new paragraph.
+    #[test]
+    fn a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph() {
+        let messages = vec![
+            say(Role::User, "see issues/1106"),
+            say(
+                Role::User,
+                "16 skills, of your own or the project's, are not listed above: a, b.",
+            ),
+        ];
+        let body = serde_json::to_value(request_from("gpt-example", &messages, None, None, None))
+            .expect("encodes");
+        assert_eq!(body["input"].as_array().expect("input").len(), 1);
+        let parts = body["input"][0]["content"].as_array().expect("parts");
+        assert_eq!(parts[0]["text"], "see issues/1106");
+        let note = parts[1]["text"].as_str().expect("a text part");
+        assert!(note.starts_with("\n\n16 skills"), "{note:?}");
+    }
+
     fn calling() -> Vec<Message> {
         let call = call_from("call_1", "add", r#"{"a":2,"b":3}"#)
             .as_request()
