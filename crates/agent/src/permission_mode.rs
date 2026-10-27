@@ -105,6 +105,18 @@ impl PermissionMode {
         self.answers_a_run_unasked() && !request.unconfined
     }
 
+    /// Whether the start of a language server is answered yes without drawing a prompt.
+    ///
+    /// Only where the sandbox mode is `off`. A server runs with no profile (LSP-5), so approving
+    /// one under a mode that confines every other program would give it access no stage of the
+    /// session has, and the permission mode never widens the sandbox mode (SANDBOX-22). Under `off`
+    /// there is no profile for it to be outside of. [`Confining::confirm_server`] asks this, and
+    /// the trail's record of who answered is the name it hands back with the answer, so the record
+    /// cannot credit the mode with a prompt it passed on (TRACE-7).
+    pub fn answers_a_server_start_unasked(self, sandbox: bravebot_sandbox::SandboxMode) -> bool {
+        self == Self::Bypass && sandbox == bravebot_sandbox::SandboxMode::Off
+    }
+
     /// Whether a write the policy would ask about is answered without drawing a prompt.
     ///
     /// A write that would create a credential is the exception in accept-edits: the diff shows the
@@ -285,6 +297,9 @@ pub struct Confining<'a, C: Confirmer> {
     inner: &'a mut C,
     mode: LiveMode,
     auto_vetting: bool,
+    /// The sandbox mode the session's programs run under, which decides with the permission mode
+    /// whether a language server's start is asked about ([`PermissionMode::answers_a_server_start_unasked`]).
+    sandbox: bravebot_sandbox::SandboxMode,
     /// Called before each question that is not answered by the mode, which is the questions that
     /// reach a person (HOOK-2).
     alert: Option<PromptAlert>,
@@ -315,8 +330,19 @@ impl<'a, C: Confirmer> Confining<'a, C> {
             inner,
             mode: mode.into(),
             auto_vetting,
+            sandbox: bravebot_sandbox::SandboxMode::default(),
             alert: None,
         }
+    }
+
+    /// The sandbox mode the session's programs run under, the same value the task carries.
+    ///
+    /// Left off, a confirmer holds the default mode, which confines, so a caller that forgets it
+    /// puts a question that could have been answered and never answers one that should be put.
+    #[must_use]
+    pub fn with_sandbox_mode(mut self, sandbox: bravebot_sandbox::SandboxMode) -> Self {
+        self.sandbox = sandbox;
+        self
     }
 
     /// What bypassing answers where a prompt would have promoted one slot's bytes.
@@ -454,7 +480,7 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
         }
     }
 
-    /// Asked in every mode, bypass, plan mode and accepting edits included.
+    /// Asked in every mode but bypass, and in bypass unless the sandbox mode is `off`.
     ///
     /// Accepting edits does not start servers: what that mode grants is writes to this tree, and a
     /// language server runs the ecosystem's build tooling with the user's own access, which is
@@ -462,11 +488,27 @@ impl<C: Confirmer> Confirmer for Confining<'_, C> {
     /// does: reading the code is how a plan gets written, and a server writes nothing here. What it
     /// does do is execute code out of the dependency tree, which stays the person's to agree to.
     ///
-    /// Bypassing does not answer it, for the reason it does not answer a line that asks to start
-    /// with no sandbox: the server runs with no profile, and it runs the `build.rs`, the project's
-    /// `tsserver.js` or the `.pth` file a confined stage could have written.
+    /// Bypassing answers it only where nothing is confined. The server runs with no profile, and
+    /// it runs the `build.rs`, the project's `tsserver.js` or the `.pth` file a confined stage
+    /// could have written, so under a sandbox mode that confines every other program a yes would
+    /// give it access no stage of the session has. The permission mode never widens the sandbox
+    /// mode (SANDBOX-22), the reason it does not answer a line that asks to start with no
+    /// sandbox. Under `off` no program is confined and the question has nothing to protect.
     fn confirm_server(&mut self, request: &crate::confirm::ServerRequest) -> Decision {
-        self.asking().confirm_server(request)
+        self.confirm_server_noting_the_mode(request).0
+    }
+
+    /// The answer and the mode that gave it, read from one look at the mode, so the trail credits
+    /// the mode the question was answered in (MODE-8, TRACE-7).
+    fn confirm_server_noting_the_mode(
+        &mut self,
+        request: &crate::confirm::ServerRequest,
+    ) -> (Decision, Option<&'static str>) {
+        let mode = self.mode.get();
+        match mode.answers_a_server_start_unasked(self.sandbox) {
+            true => (Decision::Approve, Some(mode.name())),
+            false => (self.asking().confirm_server(request), None),
+        }
     }
 
     /// Approves a whole plan only where every check is being bypassed, and asks in every other mode
@@ -1449,26 +1491,76 @@ mod tests {
         }
     }
 
-    /// LSP-5, MODE-4: starting a language server is put to the person in every mode, bypass
-    /// included, since the server runs with no profile and executes the `build.rs` or `.pth` file a
-    /// confined stage could have written. A run with nobody to ask refuses it. The regression it
-    /// rejects is bypassing approving the server unasked, as it approves a confined line.
+    /// LSP-5, MODE-4, MODE-13: starting a language server is put to the person in every mode and
+    /// under every sandbox mode except one. Bypassing answers it where the sandbox mode is `off`,
+    /// because no program is confined there and the question has nothing to protect. Under a mode
+    /// that confines every other program the server would be given access no stage has, so the
+    /// question is still put, and a run with nobody to ask refuses it. A server the person declared
+    /// is answered the same way. The regressions it rejects are bypassing approving the server
+    /// under a confining sandbox mode, as it approves a confined line, and `off` answering for a
+    /// permission mode that is not bypassing.
     #[test]
-    fn a_language_server_is_put_to_the_person_in_every_mode_bypass_included() {
+    fn a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off() {
+        use bravebot_sandbox::SandboxMode;
+        let declared = crate::confirm::ServerRequest {
+            declared: true,
+            runs_build_tooling: false,
+            ..a_server()
+        };
         for mode in [
             PermissionMode::Ask,
             PermissionMode::AcceptEdits,
             PermissionMode::Plan,
             PermissionMode::Bypass,
         ] {
-            let mut asked = YesToServers::default();
-            let decided = Confining::new(&mut asked, mode, false).confirm_server(&a_server());
-            assert_eq!((decided, asked.0), (Decision::Approve, 1), "{mode:?}");
+            for sandbox in SandboxMode::ALL {
+                let unasked = (mode, sandbox) == (PermissionMode::Bypass, SandboxMode::Off);
+                for request in [a_server(), declared.clone()] {
+                    let mut asked = YesToServers::default();
+                    let decided = Confining::new(&mut asked, mode, false)
+                        .with_sandbox_mode(sandbox)
+                        .confirm_server(&request);
+                    assert_eq!(
+                        (decided, asked.0),
+                        (Decision::Approve, usize::from(!unasked)),
+                        "{mode:?} under {sandbox:?}, declared {}",
+                        request.declared
+                    );
+                    let named = Confining::new(&mut YesToServers::default(), mode, false)
+                        .with_sandbox_mode(sandbox)
+                        .confirm_server_noting_the_mode(&request)
+                        .1;
+                    assert_eq!(
+                        named,
+                        unasked.then_some("bypass"),
+                        "the mode credited with the answer, {mode:?} under {sandbox:?}"
+                    );
+                    let mut nobody = Unattended;
+                    let decided = Confining::new(&mut nobody, mode, false)
+                        .with_sandbox_mode(sandbox)
+                        .confirm_server(&request);
+                    assert_eq!(
+                        decided == Decision::Approve,
+                        unasked,
+                        "a run with nobody to ask, {mode:?} under {sandbox:?}, declared {}",
+                        request.declared
+                    );
+                }
+            }
         }
-        let mut refusing = Unattended;
+    }
+
+    /// LSP-5: a confirmer built without the sandbox mode holds the default, which confines, so a
+    /// caller that leaves it out is asked the question and never answers it by mistake.
+    #[test]
+    fn a_confirmer_given_no_sandbox_mode_still_puts_the_server_question_in_bypass() {
+        let mut asked = YesToServers::default();
+        let decided =
+            Confining::new(&mut asked, PermissionMode::Bypass, false).confirm_server(&a_server());
+        assert_eq!((decided, asked.0), (Decision::Approve, 1));
+        let mut nobody = Unattended;
         assert_eq!(
-            Confining::new(&mut refusing, PermissionMode::Bypass, false)
-                .confirm_server(&a_server()),
+            Confining::new(&mut nobody, PermissionMode::Bypass, false).confirm_server(&a_server()),
             Decision::Reject
         );
     }

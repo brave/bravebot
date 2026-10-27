@@ -29,7 +29,7 @@
 // Run it the way `drive-bot-turn.mjs` is run. It costs two turns. Like the other drivers it
 // perturbs `bravebot-ui.json`, and it puts its own keys back.
 
-import { checker, launch, COMPOSER_INPUT } from './drive-support.mjs'
+import { checker, launch, COMPOSER_INPUT, BOT_OPEN_BUTTON } from './drive-support.mjs'
 import { appState, forgetCheckoutSessions, locateProfile, openBot, scratchCheckout, settle } from './drive-profile.mjs'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -185,7 +185,7 @@ await page2.waitForTimeout(2500)
 await page2
   .locator('.bot')
   .filter({ has: page2.locator('.bot-name', { hasText: /^Archivist$/ }) })
-  .locator('.bot-open-button')
+  .locator(BOT_OPEN_BUTTON)
   .click()
 await page2.locator('[data-test="bot-conversations"] .bot-history-row').first().click()
 await page2.waitForTimeout(2500)

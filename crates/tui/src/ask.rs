@@ -181,16 +181,19 @@ fn converse<B: Backend>(
     events: &mut impl Events,
 ) -> Vec<Answer> {
     let mut quiet_since = events.now();
+    let mut ignored = false;
 
     loop {
         let left = idle
             .map(|idle| idle.saturating_sub(events.now().saturating_duration_since(quiet_since)));
 
         // A terminal that cannot show the question cannot collect a considered answer, so
-        // decline rather than take a keypress against something nobody saw.
-        if terminal.draw(|frame| picker.draw(frame)).is_err() {
+        // decline rather than take a keypress against something nobody saw. Not again for a report
+        // of the mouse, which answers nothing and changes nothing drawn (MOUSE-44).
+        if !ignored && terminal.draw(|frame| picker.draw(frame)).is_err() {
             return Vec::new();
         }
+        ignored = false;
 
         let key = match events.next(left) {
             Ok(Some(taken)) => match input::key_of(&taken) {
@@ -198,7 +201,10 @@ fn converse<B: Backend>(
                 // reports releases too, and a release taken for a press answers the next question
                 // with the key that answered this one.
                 Some(key) if key.kind == event::KeyEventKind::Press => key.code,
-                _ => continue,
+                _ => {
+                    ignored = matches!(taken, Event::Mouse(_));
+                    continue;
+                }
             },
             // Nothing arrived in the time left. With none left, the person was not there: a key
             // pressed before the time was up is still waiting when this loop was late, and a wait

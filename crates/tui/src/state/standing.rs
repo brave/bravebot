@@ -103,16 +103,14 @@ impl Session {
                     number = running.number(),
                     prompt = &crate::render::one_line(running.prompt()),
                     when = &running.when(now)
-                )
-                .to_string(),
+                ),
                 false => t!(
                     loop_active,
                     number = running.number(),
                     prompt = &crate::render::one_line(running.prompt()),
                     pace = &running.pace(),
                     when = &running.when(now)
-                )
-                .to_string(),
+                ),
             })
             .collect();
         for line in lines {
@@ -407,15 +405,13 @@ impl Session {
                         number = delegate.to_string(),
                         command = command,
                         standing = standing
-                    )
-                    .to_string(),
+                    ),
                     None => t!(
                         jobs_listed,
                         name = job.name.clone(),
                         command = command,
                         standing = standing
-                    )
-                    .to_string(),
+                    ),
                 }
             })
             .collect();
@@ -440,8 +436,7 @@ impl Session {
                 job_of_delegate,
                 name = name.to_string(),
                 number = number.to_string()
-            )
-            .to_string(),
+            ),
             None => name.to_string(),
         };
         let turn_is_running = self.a_turn_is_running();
@@ -453,21 +448,21 @@ impl Session {
                 job.name == name && job.delegate.map(|id| id.to_string()).as_deref() == delegate
             });
         let (said, asked) = match job {
-            None => (t!(jobs_no_such, name = label).to_string(), false),
+            None => (t!(jobs_no_such, name = label), false),
             Some(job) => match job.state {
                 JobState::Running => {
                     job.stop.request();
                     job.state = JobState::Stopping;
-                    (t!(job_stop_asked, name = label).to_string(), true)
+                    (t!(job_stop_asked, name = label), true)
                 }
                 // The token is already set. With a turn in flight it reads it; with none, nothing
                 // will, so the stop is carried out below rather than answered with a refusal.
                 JobState::Stopping if !turn_is_running && self.kept_jobs.is_some() => {
-                    (t!(job_stop_asked, name = label).to_string(), true)
+                    (t!(job_stop_asked, name = label), true)
                 }
-                JobState::Stopping => (t!(job_stop_already_asked, name = label).to_string(), false),
+                JobState::Stopping => (t!(job_stop_already_asked, name = label), false),
                 JobState::Ended | JobState::EndedWithTurn => {
-                    (t!(jobs_already_ended, name = label).to_string(), false)
+                    (t!(jobs_already_ended, name = label), false)
                 }
             },
         };

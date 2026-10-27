@@ -349,6 +349,20 @@ impl Claim {
             std::thread::sleep(LOOK_AGAIN_IN);
         }
     }
+
+    /// Make this claim as young as a new one.
+    ///
+    /// A holder whose work under the claim is more than one step that waits on the network calls this
+    /// between the steps, so that each step starts under a claim of the age a new one has and none of
+    /// them is the one the age of abandonment lands in. A claim another process broke and removed is
+    /// not made again by this, and one whose time cannot be set keeps the age it has.
+    pub(crate) fn touch(&self) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&self.path)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()))
+            .ok();
+    }
 }
 
 /// Create the claim file at `path`, failing if it is already there.
@@ -667,7 +681,7 @@ mod acl {
 
     /// Open `path` for writing, creating it if it is not there, asking for `descriptor` as it is
     /// created.
-    #[allow(unsafe_code)]
+    #[allow(unsafe_code, reason = "calls `CreateFileW`")]
     fn open(path: &Path, descriptor: &SecurityDescriptor) -> Result<File> {
         let path = wide(path.as_os_str());
         let attributes = SECURITY_ATTRIBUTES {
@@ -702,7 +716,10 @@ mod acl {
     ///
     /// Taken from the process token rather than from a user name, because a name is not what the list
     /// holds and the same name can belong to two accounts, one on the machine and one in a domain.
-    #[allow(unsafe_code)]
+    #[allow(
+        unsafe_code,
+        reason = "calls `OpenProcessToken`, `GetTokenInformation`, `ConvertSidToStringSidW` and `LocalFree`"
+    )]
     fn current_account() -> Result<String> {
         // Sound because a call that returns nonzero has written an open handle nothing else owns,
         // which is what [`OwnedHandle`] takes responsibility for closing.
@@ -780,7 +797,10 @@ mod acl {
 
     impl SecurityDescriptor {
         /// Parse SDDL into the form a file takes.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "calls `ConvertStringSecurityDescriptorToSecurityDescriptorW`"
+        )]
         fn of(sddl: &str) -> Result<Self> {
             let sddl = wide(OsStr::new(sddl));
             let mut descriptor = std::ptr::null_mut();
@@ -804,7 +824,10 @@ mod acl {
         /// A descriptor that named no list at all would answer nothing here, and a file with no list
         /// grants every account everything, so that answer is an error rather than a token written
         /// out in the open.
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "calls `GetSecurityDescriptorDacl` and `SetSecurityInfo`"
+        )]
         fn apply_to(&self, file: &File) -> Result<()> {
             let mut dacl: *mut ACL = std::ptr::null_mut();
             let mut present = 0;
@@ -842,7 +865,10 @@ mod acl {
     }
 
     impl Drop for SecurityDescriptor {
-        #[allow(unsafe_code)]
+        #[allow(
+            unsafe_code,
+            reason = "calls `LocalFree` on the descriptor this value owns"
+        )]
         fn drop(&mut self) {
             // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
             unsafe { LocalFree(self.0) };

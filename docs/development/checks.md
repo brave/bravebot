@@ -21,7 +21,8 @@ reads; a commit that stages anything else, or nothing, runs both.
 
 The workspace manifest holds a `[workspace.lints.clippy]` table of lints that code in this tree has no
 violation of: `unwrap_used`, `todo`, `unimplemented`, `dbg_macro`, `unused_async`, `large_futures`,
-`future_not_send`, `let_underscore_future`, `rc_mutex` and `mutex_atomic`. Each crate opts in with
+`future_not_send`, `let_underscore_future`, `rc_mutex`, `mutex_atomic` and
+`allow_attributes_without_reason`. Each crate opts in with
 `[lints]` and `workspace = true`, and `crates/cli/tests/workspace_lints.rs` fails a member that does
 not. A lint is added to the table once the tree has none of it. A test target that unwraps starts with
 `#![allow(clippy::unwrap_used, reason = "...")]` (`#![cfg_attr(test, allow(...))]` in a crate root whose
@@ -33,6 +34,24 @@ runs clippy over the libraries and binaries at the merge base and at the branch,
 reports more sites in a crate than it did. Mark a site that is right with
 `#[expect(clippy::lint, reason = "...")]`. `make check` runs it after clippy, CI runs it on pull
 requests, and [contrib/README.md](../../contrib/README.md#check-lint-increasepy) lists the lints.
+
+Every `#[allow]` and `#[expect]` ends its list with `reason = "..."`. clippy reads only the code the
+host compiles, so an `#[allow(unsafe_code)]` with no reason in a `#[cfg(windows)]` function passes
+on macOS and fails the Windows lint after the push. `crates/cli/tests/allow_reasons.rs` reads every
+source file under `crates/` as text, so a missing reason fails `make check` on any host. The code
+the i18n build script writes is not source, and a test in `crates/i18n/src/generate.rs` holds it to
+the same rule.
+
+Clippy is run for one target per operating system the project ships for: the Linux job, the macOS job
+and `cargo clippy --target x86_64-pc-windows-gnu`. Those cover the other shipped architectures
+(`aarch64-unknown-linux-gnu`, `x86_64-apple-darwin`, `aarch64-pc-windows-gnullvm`) as long as no
+condition in `crates/` selects code by anything but the operating system, because the arms for an
+operating system are the same on both of its architectures. `crates/cli/tests/cfg_targets.rs` fails
+any condition listed in its `BEYOND_THE_OPERATING_SYSTEM` constant (`target_arch`, `target_env`,
+`target_family` and `target_pointer_width` among them), and a `target_os` other than `macos`,
+`linux` or `windows`, in a source file or manifest under `crates/`.
+Adding one means adding a clippy target for it to CI and to this page, then listing it in that test.
+`fuzz/` is a package of its own and is linted by `make check-fuzz`.
 
 Clippy also refuses every call the tree starts a program with (`clippy.toml`,
 [SANDBOX-30](../specs/sandboxing.md#SANDBOX-30)), whatever names the program. A program is started
@@ -76,6 +95,11 @@ If you use `check-all-local`, leave the platform checks to CI and say they were 
 locally. You can also run an individual target, such as `make check-reviewdog`, or check
 formatting with `cargo fmt --all -- --check`.
 
+`make check-affected` selects every job a changed path could reach, so it can run far more than a
+narrow change needs. Where a page here names narrower checks for a kind of change, run those and say
+in the pull request that the rest was left to CI.
+[localization.md](localization.md#checking-a-translation) does this for a change to the catalogs.
+
 If the checkout has no backend credentials, use
 `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1 make check-all-local` (or `check-all`) to allow
 the Rust build.
@@ -83,11 +107,12 @@ the Rust build.
 CI runs its heavier jobs only where a change could fail them.
 [contrib/affected-checks.py](../../contrib/affected-checks.py) reads the paths a pull request
 touches and says which of Rust, the desktop app, the cross-builds, the Windows installers, the
-website, the pnpm lockfiles and the dependency policy they could affect. On a pull request the
+website, the pnpm lockfiles, the dependency policy and the fuzz targets they could affect. On a pull request the
 Windows installers are built and installed only for a change to the scripts that make them; main
 and every tag build and install them whatever changed. The specs, security, locales, versions and narration
 jobs take seconds and run on every change, and the narration job also reads the body's `Not covered:` line. A change to a crate needs the desktop jobs when the desktop app
-builds that crate, which is any crate the two bridge crates name, however far down. A job skipped
+builds that crate, which is any crate the two bridge crates name, however far down, and needs the fuzz job when
+the fuzz package builds it, which is any crate its manifest names, however far down. A job skipped
 by its condition reports success, and branch protection counts that as passing, so every doubt runs
 the job: a path no rule names runs everything, and so do a change to the workflows, the Makefile or
 the classifier, any run that is not a pull request, and a run where the classifier itself failed.
@@ -100,7 +125,8 @@ stops on one that is in neither that list nor `NAMED_NOT_READ`.
 `origin/main` where there is no upstream remote, or `BASE=<ref>`, which `check-reviewdog` is
 measured from as well. The branch is its commits, its uncommitted edits and its untracked files. It prints each area and the path that needs it before
 running the checks it names, keeps going past a failed check, and stops without running any when
-the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole.
+the classifier cannot answer. It is for iterating on a branch; `make check-all` is still the whole. For a change the fuzz job
+needs it prints that and runs nothing, since `make check-fuzz` needs a nightly toolchain and cargo-fuzz.
 
 `make check-all` requires Docker for the platform checks. A missing prerequisite fails
 the target; it does not count as a pass. Add `-k`, for example `make -k check-all-local`,
@@ -344,11 +370,22 @@ things in the tree that run clauses of [../specs/releases.md](../specs/releases.
 run this target for a change to the published wrapper as well as to a lockfile. `make check-deps` decides
 `deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, a dependency from anywhere but
-crates.io, and a regex engine. It also fails an exception in `deny.toml` that has no `reason`,
-which [../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
+crates.io, and a regex engine. It reads the graph of the fuzz package as well as the root one,
+since `fuzz/` is a workspace of its own, and that package's lockfile does not follow the root one
+on its own ([fuzzing.md](fuzzing.md#the-lockfile)). It also fails an exception in `deny.toml` that has no
+`reason`, or a licence exception with no comment, since cargo-deny takes no `reason` on one, which
+[../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
 cargo-deny is built. CI runs this same target on a pull request that touches a manifest, the
 lockfile or `deny.toml`, on main, and once a day, since an advisory arrives without a commit.
 `make check-reviewdog` is the [security scan](security-scan.md).
+
+`make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package
+of its own with its own lockfile. It needs a nightly toolchain, whose date is `FUZZ_TOOLCHAIN` in the
+`Makefile`, and cargo-fuzz (`make fuzz-install`), so `make check-all` and `make check-affected` leave it out.
+CI's `Fuzz build and replay` job runs it on a pull request where `fuzz/`, the root manifest or a crate
+the targets build changed, and on every push to `main` and every tag. The Fuzz workflow runs each target for an hour every week
+([fuzzing.md](fuzzing.md#the-weekly-run)). Run it for a change to a function a target reads, or to `fuzz/`. `make fuzz TARGET=<name>` runs one
+target. [fuzzing.md](fuzzing.md) lists the targets and says what to do with a crash.
 
 `make check-windows` lints the target that ships to Windows, `x86_64-pc-windows-gnu`, over every
 target including the tests. Nothing else compiles the `#[cfg(windows)]` arms of this tree for a
@@ -404,11 +441,12 @@ sandbox is the cause. A test that fails under `run` and has no such skip is a bu
 [Test determinism](../../.github/workflows/test-determinism.yml) workflow runs the suite a hundred
 times against one build, on Linux at four threads and at sixteen and on macOS and Windows at cargo's
 default, and names every test whose outcome changed, with the rate, the platform and the panic it
-produced. Each one gets an issue titled `Flaky test: <name>`, filed by a separate job that holds the issue
-grant and compiles nothing, except from the Windows leg, which
-files nothing because the suite is not expected to pass there yet (#88). A test that already has an
-issue gets nothing further, so the list of open flakes is the search rather than
-a job summary somebody has to remember to read. Search the issues before treating a failure as a
+produced. Each one gets an issue titled `Flaky test: <name>` and labelled `flaky-test`
+([labelling-issues.md](labelling-issues.md#flaky-tests)), filed by a separate job that holds the
+issue grant and compiles nothing, except from the Windows leg, which files nothing because the
+suite is not expected to pass there yet (#88). A test that already has an issue gets nothing
+further, so the list of open flakes is the search rather than a job summary somebody has to
+remember to read. Search the issues before treating a failure as a
 known flake, and run `contrib/measure-flakes.py --runs 30` to ask this machine over a shorter sweep.
 Neither fails a build over a rate.
 

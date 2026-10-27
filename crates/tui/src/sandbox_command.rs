@@ -69,17 +69,16 @@ fn names() -> String {
 fn report(held: &Sandboxed) -> String {
     let mode = held.choice.mode.name();
     let detail = match (&held.choice.source, held.typed) {
-        (_, true) => t!(session_sandbox_from_command, mode = mode).to_string(),
-        (Source::Default, false) => t!(doctor_sandbox_default, mode = mode).to_string(),
-        (Source::Flag, false) => t!(session_sandbox_from_flag, mode = mode).to_string(),
+        (_, true) => t!(session_sandbox_from_command, mode = mode),
+        (Source::Default, false) => t!(doctor_sandbox_default, mode = mode),
+        (Source::Flag, false) => t!(session_sandbox_from_flag, mode = mode),
         (Source::File(path) | Source::Managed(path), false) => t!(
             doctor_sandbox_from,
             mode = mode,
             path = path.display().to_string()
-        )
-        .to_string(),
+        ),
     };
-    t!(session_sandbox_report, detail = detail).to_string()
+    t!(session_sandbox_report, detail = detail)
 }
 
 /// The sentence a mode the managed file does not allow is refused with, naming the file.
@@ -99,7 +98,6 @@ fn refusal(refused: &Refused) -> String {
             pinned_in = pinned_in
         ),
     }
-    .to_string()
 }
 
 /// Decide what `word`, the argument after `/sandbox`, comes to.
@@ -111,15 +109,13 @@ pub fn decide(word: &str, held: &Sandboxed, managed: &Managed) -> Step {
         return Step::Say(report(held));
     }
     let Some(mode) = SandboxMode::parse(word) else {
-        return Step::Say(t!(session_sandbox_needs_a_mode, names = names()).to_string());
+        return Step::Say(t!(session_sandbox_needs_a_mode, names = names()));
     };
     if let Err(refused) = allowed_in_session(mode, managed) {
         return Step::Say(refusal(&refused));
     }
     match mode {
-        _ if mode == held.choice.mode => {
-            Step::Say(t!(session_sandbox_already, mode = mode.name()).to_string())
-        }
+        _ if mode == held.choice.mode => Step::Say(t!(session_sandbox_already, mode = mode.name())),
         SandboxMode::Off => Step::Ask,
         _ => Step::Move(mode),
     }
@@ -137,7 +133,7 @@ pub fn question(keeping: SandboxMode) -> Asking {
             rows: vec![
                 Row {
                     index: 0,
-                    label: t!(ask_sandbox_off_no, mode = keeping.name()).to_string(),
+                    label: t!(ask_sandbox_off_no, mode = keeping.name()),
                     detail: None,
                 },
                 Row {
@@ -173,7 +169,7 @@ pub fn run(
         }
         Step::Ask => {
             if !said_yes(&ask(&question(kept))) {
-                session.note(t!(session_sandbox_kept, mode = kept.name()).to_string());
+                session.note(t!(session_sandbox_kept, mode = kept.name()));
                 return;
             }
             SandboxMode::Off
@@ -183,19 +179,16 @@ pub fn run(
     session.set_sandbox_mode(moved);
     session.note(match moved {
         SandboxMode::Off => t!(session_sandbox_set_off).to_string(),
-        mode => t!(session_sandbox_set, mode = mode.name()).to_string(),
+        mode => t!(session_sandbox_set, mode = mode.name()),
     });
     // A job keeps the profile it started under, so a move to `read-only` leaves each running one
     // writing where it did. The names are the driver's own (`job:1`), never a job's output.
     let running = session.running_job_names();
     if moved == SandboxMode::ReadOnly && !running.is_empty() {
-        session.note(
-            t!(
-                session_sandbox_jobs_keep_their_mode,
-                jobs = running.join(", ")
-            )
-            .to_string(),
-        );
+        session.note(t!(
+            session_sandbox_jobs_keep_their_mode,
+            jobs = running.join(", ")
+        ));
     }
 }
 

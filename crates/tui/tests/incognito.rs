@@ -452,3 +452,37 @@ fn the_standing_answer_about_vetting_is_not_read() {
     expected.sort();
     assert_eq!(scratch.contents(), expected);
 }
+
+/// CMD-12: an incognito session neither reads the `/caffeinate` agreement nor writes it.
+///
+/// The sessions persist, so the only thing between them and the file is the mode: a swapped
+/// condition in the read or the write would hand a private session a warning somebody else
+/// acknowledged. The seeded model read back first shows the directory is the one being looked at.
+#[test]
+fn the_caffeinate_agreement_is_neither_read_nor_written() {
+    let scratch = Scratch::incognito("caffeinate");
+    scratch.seed("model", "claude-sonnet-4-5\n");
+    scratch.seed("caffeinate", "confirmed\n");
+    assert_eq!(
+        store::load_model().as_deref(),
+        Some("claude-sonnet-4-5"),
+        "the seeded directory is not the one being read"
+    );
+
+    let mut session = bravebot_tui::state::Session::new("test").with_stored_history();
+    session.adopt_caffeinate();
+    session.toggle_caffeinate();
+    let said = session.transcript.last().expect("a note").text.clone();
+    assert_eq!(
+        said,
+        bravebot_i18n::t!(caffeinate_explained),
+        "an incognito session inherited the agreement"
+    );
+
+    // Agreeing here reaches the file no more than reading it did.
+    std::fs::remove_file(scratch.own_directory().join("caffeinate")).expect("remove the seed");
+    session.toggle_caffeinate();
+    let said = session.transcript.last().expect("a note").text.clone();
+    assert_eq!(said, bravebot_i18n::t!(caffeinate_on));
+    assert_eq!(scratch.contents(), vec!["model".to_string()]);
+}

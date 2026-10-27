@@ -46,8 +46,10 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/goal` | `[<condition> \| clear]` | Keep working until a condition you set is judged met |
 | `/watch` | `[stop <n>]` | List the files this session is watching, and stop one by its number |
 | `/jobs` | `[stop <name> [<delegate>]]` | List this turn's background jobs, and stop one by its name |
+| `/outputs` | | Open what the commands this session ran printed, background jobs included. Alt-L does the same |
 | `/panel` | | Show or hide the info panel beside the transcript |
-| `/files` | | List the files the session wrote and show every edit to the highlighted one |
+| `/diff` | | List the files the session wrote and show every edit to the highlighted one |
+| `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -58,11 +60,13 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/agent` | `<name> <task>` | Run one of your definitions on a task, by its name |
 | `/memory` | | List each definition's memory, where it is kept and whether it is withheld |
 | `/mcp` | `[list \| reconnect [alias] \| disable <alias>]` | List the MCP servers, start one that is not running, or turn one off for the session |
+| `/lsp` | | Say which language servers this session has started |
+| `/open` | `[edit] [n \| address \| path]` | List the links in the latest reply, and open one by its number, or open an address or a file you type |
 | `/init` | | Have the planner draft an `AGENTS.md` for this project |
 | `/review` | `[target] [focus]` | Have the planner review local changes or a pull request |
 | `/commit-message` | `[source] [format]` | Draft a commit message from the staged changes into the box, for you to edit |
 | `/export` | `[path]` | Export the session transcript to a markdown file |
-| `/copy` | `[n]` | Put the last reply on the clipboard, or the one that many replies back |
+| `/copy` | `[n \| block [n] \| text [n]]` | Put a reply on the clipboard; block copies a code block, text the drawn words |
 | `/undo` | | Rewind one turn and put back the files it wrote |
 | `/rewind` | `[turns]` | List the turns a rewind could go back to, or go back that many |
 | `/hunks` | `[number]` | List the hunks the last turn wrote, or put one back as it stood before the turn |
@@ -87,6 +91,8 @@ Reports everything the session knows about itself:
 
 - the working directory, and anything opened with `/add-dir`, and whether a later session started
   there will trust it without asking because a yes was [kept](#forget-trust);
+- under [bypass](../security/permission-modes.md#bypassing), each directory outside the workspace the file
+  tools were taken into, with the tool that first reached it. Nothing is opened or trusted by it;
 - each [checkout](../customize/agents.md#a-checkout-of-its-own) a delegate kept or that could not be
   removed, with its number, the commit it holds and the delegate it was made for, since the
   transcript says one was kept but not where;
@@ -154,6 +160,16 @@ are approximate. Only the last request is broken down, since the cache split and
 per turn. Before anything is measured it says so, and after a compaction it says the conversation was
 compacted. It takes no argument: `/context` followed by words is a prompt.
 
+## `/lsp`
+
+Says which language servers the session has started: how many, and each by the program you approved,
+in name order, with a note that it runs with your own access until the session ends. A server starts
+the first time the model asks about a file it has a server for, after you approve it, so a session
+that has asked nothing about code has none, and `/lsp` says so. It lists the same programs as the
+Language servers section of the [info panel](../using/sessions.md#telling-sessions-apart), which is
+where to look when the panel is open, and clicking one of its rows says the same. Typed while a turn
+runs, it answers at once. It takes no argument: `/lsp` followed by words is a prompt.
+
 ## `/cost`
 
 Reports what the session has spent as a total, and under it **one figure per turn with that turn's
@@ -184,7 +200,7 @@ outlives the session and applies in every directory, except one whose own settin
 `~/.bravebot/settings.json` does not.
 
 Typing narrows the list rather than walking it, and rows are grouped under the service that answers
-them. See [Configuration](../customize/configuration.md#choosing-a-model).
+them. See [Choosing a model](../customize/model.md).
 
 In a session started with [`--agent`](cli.md#--agent-name) under a definition that names a model,
 every turn uses that model, so `/model` opens no picker and says so.
@@ -201,7 +217,7 @@ cursor and Escape restores the one that was in force when the picker opened.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory.
 Themes of your own are JSON files under `~/.bravebot/themes/`, and nothing in a workspace is read. See
-[Choosing a theme](../customize/configuration.md#choosing-a-theme) and
+[Choosing a theme](../customize/theme.md) and
 [Themes](../using/transcript.md#themes).
 
 ## `/advisor [model | off]`
@@ -292,15 +308,16 @@ Opens a picker of the five levels (`low`, `medium`, `high`, `xhigh` and `max`) a
 asking for no level at all, so a first pick is not permanent. With a word, `/effort high` takes it
 directly. Tab finishes a started level, so `/effort h` becomes `/effort high`, and leaves a start that fits more than one level, such as `m`, as typed. A word that names no level changes nothing and says so rather than reaching a request
 field. Typed while a turn runs with nothing waiting, `/effort high` is taken at once and the next turn
-is the first sent at it, since the running one keeps the level it began with. The bare `/effort` waits
-for the turn to end.
+is the first sent at it, since the running one keeps the level it began with. On a model of a ChatGPT
+account the level is fixed for the whole session instead: the account is sent the level the session began
+with, and the choice applies from the next session. The bare `/effort` waits for the turn to end.
 
 The choice is written to `~/.bravebot`, so it outlives the session and applies in every directory,
 except one whose own settings name an [`effort`](../customize/configuration.md#effort): that key
 outranks the choice, and the one in your own `~/.bravebot/settings.json` answers only while no level
 is recorded. Picking the row for none removes the record, so from the next session your own file's
 level answers again. See
-[Choosing how hard to think](../customize/configuration.md#choosing-how-hard-to-think), which is also
+[Choosing how hard to think](../customize/effort.md), which is also
 where the two cases worth knowing are: the models that read no level, and the Brave endpoint, which
 accepts one and discards it.
 
@@ -332,7 +349,7 @@ carried out at once.
 
 The choice is written to `~/.bravebot/language`, so it applies in every directory. A session that records
 nothing, an incognito one for example, says the choice was not saved and keeps none. See
-[Choosing a language](../customize/configuration.md#choosing-a-language) for the order the sources are
+[Choosing a language](../customize/language.md) for the order the sources are
 read in, and for `BRAVEBOT_LOCALE`, which answers over this choice.
 
 ## `/add-dir <path>`
@@ -367,7 +384,7 @@ goes.
 Your permission rules do not come with you. The new directory's rules are read, and anything its
 checkout proposes is put to you in the box a session opening there would show, so a rule you granted
 for the directory you left answers nothing here. See
-[Rules you write down in advance](../security/permissions.md#rules-you-write-down-in-advance).
+[Permission rules](../security/permission-rules.md).
 
 Nor do your answers about reading a file that holds what looks like a credential. Each is kept under
 the file's name from the directory you left, which here can name another file, so such a file is asked
@@ -740,8 +757,17 @@ left to stop. Between turns nothing reads the flag, so a stop kills the job at o
 told at the next turn's first round that you stopped it. A stop still waiting when a turn ends, as when
 the model's last reply made no tool call, is carried out as the turn finishes. If a row still reads
 `being stopped` with no turn running, typing `/jobs stop` for it again carries the stop out. A kept
-job you stopped between turns keeps its own row in the watching display, and does not appear a
+job you stopped between turns keeps its own row in the `/outputs` list, and does not appear a
 second time as a plain command row.
+
+## `/outputs`
+
+Opens what the commands this session ran printed, background jobs included, one row each in the order
+they ran. Alt-L does the same and is one of the [chords you can move](../customize/configuration.md#keybindings). Over the commands, Alt-L closes the view, and over the delegates it switches to the commands. It is the same mode [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
+opens over delegates and asides, with the same keys. Each row opens on what the command printed, says
+how the run ended and whether the model read it, and a running job's row shows the lines it has
+printed since the model last looked. Where no command has run, it says so and opens nothing. Nothing
+it shows is sent to the model or written to the session's record.
 
 ## `/panel`
 
@@ -751,13 +777,41 @@ the plan. It needs a terminal at least 100 columns wide, and says so on a narrow
 open is kept for the next session. [Telling sessions apart](../using/sessions.md#telling-sessions-apart)
 has the rest.
 
-## `/files`
+## `/diff`
 
 Draws the info panel in its files state, opening the panel if it is closed: a list of every file the
 session wrote, with the lines added and removed, and every edit to the highlighted one under it. `q`,
-Escape or `/files` again leave the state and put the panel back as it was. It needs a terminal at
+Escape or Ctrl-C leave the state and put the panel back as it was. Typing `/diff` does not, since no
+character reaches the box while the state is open; a second `/diff` queued earlier, while a compaction
+or an aside ran, does leave it. Clicking the count in the Files section of
+the panel draws it too. It needs a terminal at
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
-nothing. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+nothing. It shows what the session's own write calls changed. A change another program made is not
+in it. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+
+## `/todos`
+
+Prints the session's plan in the transcript: every task, in the plan's order, with its status in
+words beside its mark (`pending`, `in progress`, `completed` or `cancelled`) and its text wrapped
+to the width and never cut. A heading above it says how many tasks are done, and how many are
+cancelled where any are. The info panel draws only the rows it has room for, each cut to its width,
+and this is the whole plan. A session with no plan says so.
+
+The plan is the one the panel draws, and while a turn runs it is the list that turn has reported so
+far. A task that is neither completed nor cancelled is drawn with the mark and ink the panel gives it
+when you type the command: filled while a turn is running, and hollow and dim while none is, when the
+whole row matches the panel's. What is printed is the
+plan as it stood then, so a later report from the planner, or the end of the turn, does not change
+it. It is no part of the conversation: no turn starts, nothing is sent, and it is not saved with the
+session or put in an export. The text of a task is the planner's, so a control character in it is
+drawn as a visible character, and every row of it has a margin of the interface's own that the text
+cannot draw. The word takes no argument: `/todos` followed by words is a prompt. It touches nothing
+a running turn holds, so typed while a turn runs it is carried out at once. A prompt file or skill
+named `todos` is shadowed by the command.
+
+Alt-A does the same and is one of the [chords you can move](../customize/configuration.md#keybindings), the `todos`
+action. It works at the box, and while a turn runs. The info panel's plan ends with a row that names
+the chord in force, where the plan has room for it.
 
 ## `/mcp [list | reconnect [alias] | disable <alias>]`
 
@@ -835,7 +889,7 @@ and `--resume` brings none back.
 
 ## `/plan [task]`
 
-Sets [plan mode](../security/permissions.md#answering-in-advance-modes), as the mode key does when it
+Sets [plan mode](../security/permission-modes.md), as the mode key does when it
 reaches planning. With a task it also starts a turn on that task, which runs in plan mode.
 
 ```
@@ -867,9 +921,9 @@ declined plan leaves the workspace.
 run you stopped is not written down, because there is nothing in it to read. The run is recorded as its
 own record and the session records its name, so the session still resumes as a conversation.
 
-In [plan mode](../security/permissions.md#answering-in-advance-modes) a plan with a write in it does
+In [plan mode](../security/permission-modes.md) a plan with a write in it does
 not run at all, decided from the frozen plan before the plan is put to anybody. See
-[Non-interactive use](../using/headless.md) for the `--mode manifest` form.
+[Plan first, then execute](../using/manifest-mode.md) for the `--mode manifest` form.
 
 ## `/memory`
 
@@ -1113,7 +1167,7 @@ the answer, and no later turn reads either.
 
 The answer opens in the mode
 [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
-opens, as a row of its own before the delegates and the commands, which is the one screen it exists
+opens, as a row of its own before the delegates, which is the one screen it exists
 on. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
 is one a reader takes the planner to have had.
 
@@ -1187,7 +1241,7 @@ left comes with you, and its loop, goal and watches end. The session you left is
 turn left it and stays resumable. Servers started for this process keep running.
 
 It is refused, with a line saying why, for an id that is no session of this directory, for the
-session already open, for a [manifest run](../using/sessions.md#a-manifest-run-is-recorded-but-cannot-be-continued),
+session already open, for a [manifest run](../using/manifest-mode.md#a-manifest-run-is-recorded-but-cannot-be-continued),
 and for a session a running background session holds. Where this directory records no other session
 it says so. Typed while a turn runs it waits for the turn to end. The word takes an id and nothing
 else, and none of what you type after it is sent to the planner.
@@ -1237,7 +1291,7 @@ is working on is marked `**Outcome:** still running when exported`. Without a pa
 session's default name, which an export after the turn then finds taken, so give that one a path of
 its own.
 
-## `/copy [n]`
+## `/copy [n | block [n] | text [n]]`
 
 Puts the latest reply on the clipboard, and `/copy 2` the one before it. What is copied is the
 markdown the model wrote, so it pastes as whole paragraphs, where a sweep with the mouse copies the
@@ -1252,6 +1306,60 @@ than a line break or a tab is left out, as the screen leaves it out, so a pasted
 the sequence that ends a shell's bracketed paste. Its line breaks are kept, so a shell that does not
 use bracketed paste runs each line as it arrives. A number past the oldest reply says how many there
 are and copies nothing.
+
+`/copy block` puts the last code block of the latest reply that has one on the clipboard, and
+`/copy block 2` the one before it, counting the blocks of every reply from the latest. A code block is
+the lines between two fences of backticks or tildes, and what is copied is those lines as the reply
+wrote them, with no fence, the same as clicking `copy` at the right of the block's header. A
+block with nothing in it, or nothing but blank lines, is not counted, as it has no `copy` to click.
+It is counted when the row is too narrow to draw the word. Tab after `/copy b` finishes
+the word. `/copy block` says so and copies nothing where no reply holds a block, where the number is
+not one or is zero, and where it is past the oldest block, which it says how many there are.
+
+`/copy text` puts the latest reply on the clipboard as the screen shows it, and `/copy text 2` the one
+before it. It has none of the marks of the markdown the model wrote it in, such as `**`, backticks and
+the `#` of a heading, none of the `⏺` and the indent the screen draws beside it, and no wrapping, so a
+paragraph is one line. It is what the `copy as text` item of the right-click menu copies, and it is
+refused as `/copy` is. Tab after `/copy t` finishes the word.
+
+## `/open [edit] [n | address | path]`
+
+Lists the web addresses and file paths in the latest reply that has any, one line each, numbered from 1
+in the order they are drawn and as they are drawn. The reply still arriving is the latest where it has
+one, and otherwise it is the newest reply that does. A link is found by the rules a click on it uses,
+so one you can click is in the list, and a reply longer than the screen lists the links above and
+below the view as well. A reply with more than 50 is listed up to the 50th, and a line says how many are
+left out; a link past the 50th is opened by typing it after the command. It says so where no reply has
+one.
+
+`/open 2` opens the second link as a click on it does. An address opens in your browser, as a ctrl-click
+on it does, and does so while a turn is running. A path shows the file at the end of the transcript, as
+a click on it does, with the same refusals and the same notes, and shows nothing while a turn or a
+command runs: it says that a file is shown when nothing is running, and you type it again then. A number
+names the link in the list `/open` printed last, so a reply that arrives afterwards does not change
+which link it opens. `/clear`, the start of another turn, a rewind with `/undo` or `/rewind`, and `/cd` end
+the list, and a number typed before any list, after it ended or past its last link says so and opens
+nothing.
+
+`/open edit 2` does what a click with ctrl on the second link does: a path opens in your editor, at the
+line and column it gave, started as the click starts it, and an address is refused, since the browser
+opens it. The editor takes the terminal, so it is not started while a turn or a command runs, where the
+command says so and you type it again. Tab after `/open e` finishes `edit`.
+
+`/open https://example.test/guide` opens the address you type, and `/open src/main.rs:12` shows the file you
+name, from the line after the colon, and `/open edit src/main.rs:12` opens it in your editor. Typing the
+exact address or name is what asks for it, so it need not be in a reply. An address is checked as a click's
+is: only a web address with a host, as `http` or `https`, in plain ASCII, and one that names a user or holds
+anything else is refused and not opened. Any other text is a file name. It is resolved as a click on a path
+resolves one, so a name outside the directory the session works in, or that is a directory, or that is
+not there, is refused in the same words, and a name with no extension or with a blank in it, which a click
+could not reach, works when the file is there. Digits alone are a number, so a file named by digits is typed
+as `./12`. `edit` with nothing after it says what the command takes.
+
+Typed while a turn runs, the list answers at once, and so does an address, as a click on one opens it
+then. A file name is not queued: it says that a file is shown when nothing is running, and you type it
+again. While a summary or an aside is being written, a line waits like every command, and a number is read
+against the list it was typed beside.
 
 ## `/undo`
 
@@ -1415,7 +1523,7 @@ place of a drop. `/btw`, `/manifest`, `/plan` and `/loop` send their argument, s
 it and the picture or file goes with it.
 
 **While a turn runs the word waits, unless it touches nothing the turn holds.** `/cost`, `/context`, `/limit`, `/copy`,
-`/watch`, `/panel`, `/files`, `/caffeinate`, `/thinking`, `/changelog`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
+`/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
@@ -1434,11 +1542,12 @@ carried out as you type them behind a command line, behind `/add-dir`, `/memory`
 `/model`, `/effort` and `/advisor` choose what a request is built with, so each waits behind a prompt, behind a command that sends a
 request or leaves for another session, and behind the other two. Behind a command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`,
 `/reach`, `/branch`, `/add-dir`, `/cd`, `/mcp`, `/rename`, `/note`, `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox` they are carried
-out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn and behind
-`/clear`, `/cd`, `/add-dir`, `/reach`, `/mcp`, `/branch`, `/handoff`, `/resume`, `/bg`, `/exit`, `/after`, `/undo`, `/rewind` and `/hunks`; behind a command line, `/compact`,
-`/btw`, `/recap`, `/memory` and the settings commands above it is carried out as you type it. `/forget-trust` withdraws the answer kept about the
+out as you type them. `/style` picks what every turn opens its prompt with, so it waits behind a prompt, behind a command that begins a turn, behind `/clear`, `/cd`, `/add-dir`,
+`/reach` and `/branch`, which move or end the paths a style file under `~/.bravebot` may not be read from, and behind `/handoff`, `/resume`, `/bg` and `/exit`, which
+begin another session; behind a command line, `/compact`,
+`/btw`, `/recap`, `/memory`, `/undo`, `/rewind`, `/hunks`, `/mcp`, `/after` and the settings commands above it is carried out as you type it. `/forget-trust` withdraws the answer kept about the
 directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
-commands that start a session here, move the directory or leave the session, and is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory` and the settings commands
+commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after` and the settings commands
 above it. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and

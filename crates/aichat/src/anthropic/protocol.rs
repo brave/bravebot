@@ -819,6 +819,23 @@ mod tests {
         assert!(body["tools"][0].get("eager_input_streaming").is_none());
     }
 
+    /// The note the agent writes after the first prompt of a session begins with a count. A reader
+    /// that lays the blocks of a turn end to end would read a prompt ending in a number and a note
+    /// beginning with one as a single number unless the note's block starts on a new paragraph.
+    #[test]
+    fn a_note_after_the_line_a_person_typed_is_a_block_on_a_new_paragraph() {
+        let body = body_of(&request(&[
+            Message::system("be brief"),
+            Message::user("see issues/1106"),
+            Message::user("16 skills, of your own or the project's, are not listed above: a, b."),
+        ]));
+        let blocks = body["messages"][0]["content"].as_array().expect("blocks");
+        assert_eq!(body["messages"].as_array().expect("messages").len(), 1);
+        assert_eq!(blocks[0]["text"], "see issues/1106");
+        let note = blocks[1]["text"].as_str().expect("a text block");
+        assert!(note.starts_with("\n\n16 skills"), "{note:?}");
+    }
+
     /// The level is a word in `output_config`, the object this API keeps it in, and not the field
     /// the OpenAI-shaped wire names it by.
     #[test]

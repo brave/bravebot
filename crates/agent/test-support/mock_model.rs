@@ -1,6 +1,9 @@
 //! A scripted model service and a scratch directory for the integration tests that drive a whole
 //! turn, shared by the binaries that each need a process of their own.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary that includes this file uses some of it"
+)]
 
 use bravebot_agent::turn::{self, Task};
 use bravebot_agent::{RunDecision, Workspace};

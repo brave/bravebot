@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/delegate.rs
   - crates/agent/src/manifest.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/one_shot.rs
   - crates/cli/src/workspace.rs
@@ -22,7 +23,9 @@ guards:
   - symbol: Session::starting_in_bypass
   - symbol: Session::make_bypass_unreachable
   - symbol: Session::cycle_permission_mode
-documented-by: docs/website/docs/security/permissions.md
+documented-by:
+  - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
 ---
 
 ## Scope
@@ -186,7 +189,10 @@ directory is not put either: the workspace is trusted, which is what answering i
 recorded ([trust-map.md](trust-map.md) is what that record means). A directory a settings file
 asked for is opened and vouched for without being put either, and so is a directory a
 `request_path` is granted for, which is opened for the file tools as `/add-dir` would open it
-([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)). A path outside the workspace that a tool names is
+reachable to the file tools, to `run`'s `directory` and to a redirection with no call and no
+directory opened, wherever the account can reach it and outside the refusals a granted request
+has ([PATHREQ-7](tools/request-path.md#PATHREQ-7)). So are the three questions about a
 server a checkout asks for: whether to start it, whether to offer its list of tools, and whether to
 make a call to one of them ([SERVERS-13](mcp-servers.md#SERVERS-13)). Whether a remote server moved
 where its reply pointed is not answered: a yes would rewrite the person's declaration to a url the
@@ -196,7 +202,7 @@ host is a name a program chose and a yes would open the network to it for every 
 `onUnlisted: ask` behaves as `refuse` here ([SANDBOX-24](sandboxing.md#SANDBOX-24)).
 
 **A program's write is answered in advance.** Under the sandbox mode `workspace-write` on macOS and Linux,
-in a workspace the person has trusted, the stages of the lead session's `run` are given at the start
+in a workspace the person has trusted, the stages of a `run`, a delegate's included, are given at the start
 every path a `request_path` for writing would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), so
 a run does not fail on a sibling directory before the planner can ask. A workspace that is not trusted
 accepts no request ([PATHREQ-5](tools/request-path.md#PATHREQ-5)), so its stages are given none. The
@@ -207,8 +213,11 @@ shell's startup files, a per-user job, git's own configuration) and the person's
 is the one way the permission mode widens a sandbox mode ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
 The mode never changes which sandbox mode is in force, so `strict` keeps the per-path request, and
 bypass does not approve a line that asks to start with no profile
-([SANDBOX-29](sandboxing.md#SANDBOX-29)), nor the start of a language server, which runs with no
-profile either ([LSP-5](tools/lsp.md#LSP-5)). A delegate's programs are not given it. Under
+([SANDBOX-29](sandboxing.md#SANDBOX-29)). Bypass approves
+the start of a language server only where the sandbox mode is `off`, since a server runs with no
+profile and a confining sandbox mode would otherwise be widened for it
+([LSP-5](tools/lsp.md#LSP-5)), and a delegate that holds `lsp` is answered as the lead session is
+([MODE-9](#MODE-9)). Under
 `read-only` the mode answers no write at all: the file tools' writes, a manifest plan that writes
 and a spawn asking for a checkout are refused before there is a question to answer
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)).
@@ -268,7 +277,11 @@ prompts, which in practice means a container with no network and nothing in it w
 the wrong mode everywhere else, and it is named `--dangerously-skip-permissions` for that reason.
 
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
-`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
+`verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
+`verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
+`verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
+`verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 `verified-by: bravebot_agent::turn::a_bypass_run_writes_beside_the_session_without_a_request_and_the_trail_says_so`
 `verified-by: bravebot_agent::turn::in_an_untrusted_workspace_a_bypass_run_is_given_no_write_a_request_would_add`
 `verified-by: bravebot_agent::confine::a_stage_outside_workspace_write_bypass_on_the_lead_session_is_given_no_extra_row`
@@ -441,6 +454,18 @@ must not write through one. The enforcing half holds because a delegate's prompt
 same person; the telling half has to be passed deliberately, and without it a delegate's planner
 reads refusals it cannot account for and retries.
 
+**A delegate of a bypass turn has what the session has.** Its file tools, its redirections and its
+`run` directory reach a path outside the workspace as the session's do
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)), its programs are given what a request for writing
+would be granted ([SANDBOX-28](sandboxing.md#SANDBOX-28)), and a `checker` or `worker` that holds
+`lsp` is answered as the lead session is. It is offered no `request_path` and no way to ask
+([DELEGATE-12](delegation.md#DELEGATE-12)), and needs none. A delegate started restricted keeps every
+restriction it was started with: its kind (a `reader` holds no `run` and writes nothing), a `tools:`
+line, a `writes:` limit ([DELEGATE-28](delegation.md#DELEGATE-28)) that refuses a file its patterns do
+not cover wherever the file is, a checkout that keeps it out of the working directory and every other
+checkout ([CHECKOUT-7](checkouts.md#CHECKOUT-7)), the sandbox mode, and any `denyRead`, `denyWrite` or
+`permissions.readsStayInWorkspace` the person wrote.
+
 **What the mode is read beside travels with it.** Where the spawning turn asked for screening
 ([MODE-4](#MODE-4)), so did the delegate. The confirmer a delegate is lent is that turn's, screening
 by what that turn was asked for, so a delegate left at the default is the one run whose check is not
@@ -451,6 +476,9 @@ said.
 `verified-by: bravebot_agent::turn::a_mode_chosen_while_a_delegate_runs_applies_to_the_rest_of_its_work`
 `verified-by: bravebot_agent::turn::screening_reaches_a_delegate_of_an_unattended_run`
 `verified-by: bravebot_agent::turn::a_delegate_inherits_no_always_for_a_credential_write`
+`verified-by: bravebot_agent::turn::a_worker_of_a_bypass_turn_reaches_a_sibling_directory_and_one_of_an_asking_turn_does_not`
+`verified-by: bravebot_agent::turn::a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover`
+`verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout`
 
 <a id="MODE-10"></a>
 ### MODE-10: a mode belongs to the sitting it was chosen in
@@ -515,7 +543,8 @@ word for bypassing would let a session reach the one mode MODE-5 keeps to the co
 The flag opens the session in bypassing (MODE-5) and settles the sandbox mode as `off`
 ([SANDBOX-22](sandboxing.md#SANDBOX-22)), as `--dangerously-skip-permissions --sandbox off` does. Nothing
 is asked and no program is confined, so a `run` line that asks for `unconfined` is refused by the mode
-and is not put to the person ([SANDBOX-29](sandboxing.md#SANDBOX-29)). It is read from the command
+and is not put to the person ([SANDBOX-29](sandboxing.md#SANDBOX-29)), and the start of a language
+server is answered by the mode ([LSP-5](tools/lsp.md#LSP-5)). It is read from the command
 line only, as the flag in MODE-5 is, so no settings file, recorded session or command inside a session
 turns it on, and a resumed session or a background session must be given it again, or refuses it as
 MODE-5 says.
@@ -538,6 +567,7 @@ says it once, on the command line, where no content can say it for them.
 
 `verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off`
 `verified-by: bravebot_cli::running::the_bypass_and_unconfine_flag_is_refused_where_the_bypass_flag_is_and_beside_a_sandbox_mode`
+`verified-by: bravebot_cli::running::a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_off`
 
 <a id="MODE-14"></a>
 ### MODE-14: a finished plan is put to the person, who chooses the mode the work continues in
@@ -602,7 +632,11 @@ invented (MODE-7), so no mode answers it for the person.
   file holding instructions rather than data is read as instructions. The guarantee that untrusted
   content cannot *decide* what happens is structural and still holds; what goes is the narrower
   protection of not showing the planner bytes nobody vouched for. This is why the mode is for a
-  sandbox rather than for a working machine.
+  sandbox rather than for a working machine. The file tools reach every path outside the workspace
+  the refusals of a granted request leave ([PATHREQ-7](tools/request-path.md#PATHREQ-7)), so a file
+  another account or program wrote, such as one in `/tmp`, is shown to the planner as vouched and
+  instructions in it are read as instructions. A delegate of a bypass session has the same reach with
+  nobody asked ([MODE-9](#MODE-9)), and a `worker`'s programs write every path the lead session's do.
 - **Plan mode constrains writes, not everything a turn can do.** Commands are asked about, or
   answered by a rule written in advance, and an approved command may write whatever it likes: it
   runs with the access the person's own shell has. The mode refuses the write tools rather than

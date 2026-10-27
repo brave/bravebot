@@ -117,7 +117,8 @@ Darwin binaries are codesigned and notarised, Windows binaries are Authenticode-
 `install.sh`, `install.ps1` and the platform package script hold each to that: the Developer ID team
 `KL8N8XSYF4` on macOS, the signer `Brave Software, Inc.` on Windows. A change of certificate or team
 has to be made in `install.sh`, `install.ps1` and `npm/scripts/stage-platform-package.js` before the
-first release signed by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are in the quickstart.
+first release signed by the new one is published, or installs and publishes of it are refused. The commands for checking a download by hand are on the
+[install page](../website/docs/install.md#check-a-download-by-hand).
 
 ## The desktop application
 
@@ -243,10 +244,13 @@ Packages for the CLI, one per architecture under the name `bravebot`, from the s
 releases page publishes; the apt and dnf repositories that will serve them are
 [#1048](https://github.com/brave/bravebot/issues/1048). It reads `dist/bravebot-linux-<arch>` and
 writes `dist/bravebot-linux-<arch>.deb` and `dist/bravebot-linux-<arch>.rpm` for amd64 and arm64,
-on a Linux host and needing no Rust toolchain. The payload is the one binary at
-`/usr/bin/bravebot`; both formats are packed by the same two digest-pinned containers the app's
-packages use, described under [the Linux packages](#the-linux-packages) above; and those four
-names are the ones the publish job uploads.
+on a Linux host and needing no Rust toolchain. The payload is the one binary at `/usr/bin/bravebot`,
+and those four names are the ones the publish job uploads.
+
+A target packs each format where its tool is: `cli-packages-linux-deb` where `dpkg-deb` is, and
+`cli-packages-linux-rpm` where `rpmbuild` is. Neither starts a container of its own, so each can
+run inside one. `cli-packages-linux` runs each in the digest-pinned container the app's packages
+use, described under [the Linux packages](#the-linux-packages) above.
 
 The dependencies declared are the binary's own, from its dynamic section: `libm`, `libc`,
 `libpthread` and `libdl`, all of them `libc6` on Debian and `glibc` on Fedora, required at version

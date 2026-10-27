@@ -67,6 +67,124 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 /// [`Provider::answers_under_the_model_behind_an_alias`].
 const OPENAI_ID: &str = "openai";
 
+/// The models a chat completions route at OpenAI's own API cannot reach, because they take requests
+/// through the Responses API alone ([BACKEND-19]).
+///
+/// OpenAI's own listing states no capability for a model, so this list is the only statement of
+/// which ids that route cannot serve. It is read from two public documents and is not observed at
+/// the API, because no chat completion sent there has answered 200:
+///
+/// - the `ResponsesOnlyModel` list under `ModelIdsResponses` in version 2.3.0 of `openai-openapi`;
+/// - the model pages at `https://developers.openai.com/api/docs/models/<id>`, read on 2026-10-27
+///   for each id of the listing of 2026-10-26. A page's Endpoints block marks an endpoint it does
+///   not support in grey. An id is added where its page marks `v1/chat/completions` unsupported and
+///   `v1/responses` supported, and marks no endpoint supported beyond those two and `v1/batch`, so a
+///   model that the Images or Audio endpoints also serve is not added. A dated snapshot is added
+///   where its alias is added, when the alias page lists the snapshot under Snapshots and the
+///   snapshot has no page of its own.
+///
+/// Both change with a release, and the second is read from the markup of a page.
+///
+/// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+const RESPONSES_ONLY_MODELS: &[&str] = &[
+    "o1-pro",
+    "o1-pro-2025-03-19",
+    "o3-pro",
+    "o3-pro-2025-06-10",
+    "o3-deep-research",
+    "o3-deep-research-2025-06-26",
+    "o4-mini-deep-research",
+    "o4-mini-deep-research-2025-06-26",
+    "computer-use-preview",
+    "computer-use-preview-2025-03-11",
+    "gpt-5.5-pro",
+    "gpt-5.5-pro-2026-04-23",
+    "gpt-5-codex",
+    "gpt-5-pro",
+    "gpt-5-pro-2025-10-06",
+    "gpt-5.1-codex-max",
+    "gpt-daybreak-blue-latest",
+    "gpt-daybreak-red-latest",
+    "gpt-5.6-cyber",
+    "gpt-rosalind-research",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.2-codex",
+    "gpt-5.2-pro",
+    "gpt-5.2-pro-2025-12-11",
+    "gpt-5.3-codex",
+    "gpt-5.4-pro",
+    "gpt-5.4-pro-2026-03-05",
+];
+
+/// The id a model of the ChatGPT account is qualified by
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// Not the id of a gateway: where a `provider` entry has it, the entry keeps the name and no model
+/// is the account's.
+pub const CHATGPT_ID: &str = "chatgpt";
+
+/// Where a ChatGPT account's model requests go
+/// ([CHATGPT-2](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-2)).
+///
+/// A constant of the source. Nothing a settings file, a variable, a page or a reply says names
+/// another, so the account's access token goes to this host and no other.
+const CHATGPT_SERVING_HOST: &str = "https://api.openai.com/v1";
+
+/// The variable that names a stand-in for the serving host, at `<base>/v1`, in a build with the
+/// `test-hosts` feature. It is the one `bravebot_skus::chatgpt::STAND_IN` reads, so one stand-in
+/// answers the sign-in and the requests. A build without the feature holds no code that reads it, and
+/// a release build with it does not compile.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub const CHATGPT_STAND_IN: &str = "BRAVEBOT_TEST_CHATGPT_STAND_IN";
+
+/// Where the account's requests go: [`CHATGPT_SERVING_HOST`], or in a build with the `test-hosts`
+/// feature, a stand-in [`CHATGPT_STAND_IN`] names.
+fn chatgpt_serving_host() -> String {
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    if let Some(base) = std::env::var(CHATGPT_STAND_IN)
+        .ok()
+        .filter(|base| !base.is_empty())
+    {
+        return format!("{base}/v1");
+    }
+    CHATGPT_SERVING_HOST.to_string()
+}
+
+/// The id a model of the xAI account is qualified by
+/// ([XAI-13](../../../docs/specs/xai-sign-in.md#XAI-13)).
+///
+/// Not the id of a gateway: where a `provider` entry has it, the entry keeps the name and no model
+/// is the account's.
+pub const XAI_ID: &str = "xai";
+
+/// Where an xAI account's model requests go
+/// ([XAI-1](../../../docs/specs/xai-sign-in.md#XAI-1)).
+///
+/// A constant of the source. Nothing a settings file, a variable, a page or a reply says names
+/// another, so the account's access token goes to this host and no other.
+const XAI_SERVING_HOST: &str = "https://api.x.ai/v1";
+
+/// The variable that names a stand-in for the xAI serving host, at `<base>/v1`, in a build with the
+/// `test-hosts` feature. It is the one `bravebot_skus::xai::XAI_STAND_IN` reads, so one stand-in
+/// answers the sign-in and the requests. A build without the feature holds no code that reads it, and
+/// a release build with it does not compile.
+#[cfg(all(feature = "test-hosts", debug_assertions))]
+pub const XAI_STAND_IN: &str = "BRAVEBOT_TEST_XAI_STAND_IN";
+
+/// Where the account's requests go: [`XAI_SERVING_HOST`], or in a build with the `test-hosts`
+/// feature, a stand-in [`XAI_STAND_IN`] names.
+fn xai_serving_host() -> String {
+    #[cfg(all(feature = "test-hosts", debug_assertions))]
+    if let Some(base) = std::env::var(XAI_STAND_IN)
+        .ok()
+        .filter(|base| !base.is_empty())
+    {
+        return format!("{base}/v1");
+    }
+    XAI_SERVING_HOST.to_string()
+}
+
 /// The id naming Anthropic, which is reached at the endpoint compiled in for it, in the Messages
 /// protocol rather than the chat completions one: see [`Provider::protocol`].
 pub(crate) const ANTHROPIC_ID: &str = "anthropic";
@@ -100,6 +218,43 @@ pub(crate) fn known_endpoint(id: &str) -> Option<&'static str> {
         .iter()
         .find(|(known, _, _)| *known == id)
         .map(|(_, url, _)| *url)
+}
+
+/// The host and port the requests of `url` reach, in the form two spellings of one place share:
+/// the host in lower case without one trailing dot, and the scheme's default port where none is
+/// written. `None` for a url that is not `http` or `https`, or whose port is not a number.
+///
+/// The authority is read as [`without_userinfo`] reads it, so a `user:token@` is not part of the
+/// host.
+fn reached_at(url: &str) -> Option<(String, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let (host, port) = match authority.rsplit_once(':') {
+        None => (authority, default),
+        Some((host, "")) => (host, default),
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => {
+            (host, port.parse().ok()?)
+        }
+        Some(_) => return None,
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    Some((host.to_ascii_lowercase(), port))
+}
+
+/// Every id [`known_endpoint`] has an endpoint for, in the order the table lists them.
+///
+/// Read from the table itself, so what a caller offers by name and what a session reaches by that
+/// name are one list.
+pub fn known_ids() -> impl Iterator<Item = &'static str> {
+    KNOWN_ENDPOINTS.iter().map(|(id, _, _)| *id)
 }
 
 /// The variable the other tool reads `id`'s token from, where the id is one compiled in.
@@ -341,6 +496,14 @@ pub struct Provider {
     /// Never read out of the block: the store is a file of its own ([`crate::keys`]), and
     /// configuration fills this in by id once the blocks are read.
     pub stored_key: Option<Secret>,
+    /// Whether the block states no endpoint and is reached at the host compiled in for its id, in
+    /// [`KNOWN_ENDPOINTS`].
+    ///
+    /// That service refuses every request without a key, so a block of such an id naming no
+    /// credential is not the person saying none is wanted ([BACKEND-16]).
+    ///
+    /// [BACKEND-16]: ../../../docs/specs/backends.md#BACKEND-16
+    pub(crate) endpoint_compiled_in: bool,
     /// The models this provider offers, in the order the file listed them.
     ///
     /// Possibly empty, because opencode does not require `models`. A provider offering nothing is
@@ -411,6 +574,59 @@ pub enum Protocol {
 }
 
 impl Provider {
+    /// The service a stored ChatGPT sign-in reaches, spoken to in the Responses protocol
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Built by the same reading as an entry that names `@ai-sdk/openai`, from constants, so its
+    /// route, protocol and header are the ones such an entry has. It names no variable, holds no key
+    /// and lists no model: its token is the account's and its models are the account's.
+    pub fn chatgpt_account() -> Self {
+        let entry = serde_json::json!({
+            "name": "ChatGPT",
+            "npm": RESPONSES_SDK,
+            "options": {"baseURL": chatgpt_serving_host()},
+        });
+        let serde_json::Value::Object(entry) = entry else {
+            unreachable!("a JSON object literal");
+        };
+        match Self::one(CHATGPT_ID, &entry) {
+            Some(account) => account,
+            None => unreachable!("an entry that states its endpoint is reachable"),
+        }
+    }
+
+    /// The service a stored xAI sign-in reaches, spoken to in chat completions as every other
+    /// gateway is ([XAI-15](../../../docs/specs/xai-sign-in.md#XAI-15)).
+    ///
+    /// Built by the same reading as an entry that states its endpoint, from constants. It names no
+    /// variable, holds no key and lists no model: its token is the account's and its models are
+    /// the account's.
+    pub fn xai_account() -> Self {
+        let entry = serde_json::json!({
+            "name": "xAI",
+            "options": {"baseURL": xai_serving_host()},
+        });
+        let serde_json::Value::Object(entry) = entry else {
+            unreachable!("a JSON object literal");
+        };
+        match Self::one(XAI_ID, &entry) {
+            Some(account) => account,
+            None => unreachable!("an entry that states its endpoint is reachable"),
+        }
+    }
+
+    /// The service a known id reaches where no block names it, or `None` for an id that is not one
+    /// of [`known_ids`].
+    ///
+    /// The reading of a block that holds no field, so its endpoint is the one a session reaches
+    /// for `{"<id>": {}}` and cannot differ from it. `Self::one` alone would also accept an id such
+    /// as `google-vertex` that has no entry in the table and builds from an empty entry, so the table
+    /// is asked first.
+    pub fn known(id: &str) -> Option<Self> {
+        known_endpoint(id)?;
+        Self::one(id, &serde_json::Map::new())
+    }
+
     /// Every provider in a settings root, in the order the file listed them.
     ///
     /// Empty where the block is absent or shaped differently, on the same footing as the rest of the
@@ -442,11 +658,7 @@ impl Provider {
         if id == AWS_PROVIDER_ID {
             return Self::aws(id, entry, options);
         }
-        let stated = options
-            .and_then(|options| options.get("baseURL"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|url| !url.is_empty());
+        let stated = stated_endpoint(options);
         let npm = string(entry.get("npm"));
         let mut protocol = protocol_of(id, npm.as_deref());
         let project = string(options.and_then(|options| options.get("project")));
@@ -483,6 +695,10 @@ impl Provider {
             names_a_credential,
             Provider::fixed_header_names(protocol),
         );
+        let endpoint_compiled_in = stated.is_none()
+            && id != GOOGLE_VERTEX_ID
+            && id != AWS_PROVIDER_ID
+            && known_endpoint(id).is_some();
         let base_url = match stated {
             Some(url) => url.to_string(),
             None if id == GOOGLE_VERTEX_ID && project.is_none() => {
@@ -507,6 +723,7 @@ impl Provider {
                 .and_then(|options| string(options.get("apiKey")))
                 .map(Secret::new),
             stored_key: None,
+            endpoint_compiled_in,
             models: models(entry.get("models")),
             context_window: options.and_then(|options| positive(options.get("contextWindow"))),
             patience: Patience::from_options(options),
@@ -550,6 +767,7 @@ impl Provider {
             env: vec![crate::env_var::GOOGLE_API_KEY.to_string()],
             api_key: Some(token),
             stored_key: None,
+            endpoint_compiled_in: false,
             models: Vec::new(),
             context_window: None,
             patience: Patience::default(),
@@ -593,6 +811,7 @@ impl Provider {
             env: Vec::new(),
             api_key: None,
             stored_key: None,
+            endpoint_compiled_in: false,
             models,
             context_window: None,
             patience: Patience::default(),
@@ -781,6 +1000,46 @@ impl Provider {
         self.id == GOOGLE_VERTEX_ID
     }
 
+    /// Whether this entry's requests go to OpenAI's own API, from the host and port they are sent
+    /// to compared with the endpoint compiled in for [`OPENAI_ID`].
+    ///
+    /// The entry's id does not matter: an entry keyed `openai` that states a proxy behaves as that
+    /// proxy, and an entry under another id that states OpenAI's endpoint behaves as OpenAI's. Case,
+    /// a trailing dot on the host and a port that is the scheme's default are spellings of the same
+    /// place ([`reached_at`]). A port that is not the default is another service listening on
+    /// OpenAI's name, so it is not OpenAI's own API.
+    fn at_openais_api(&self) -> bool {
+        let own = known_endpoint(OPENAI_ID).and_then(reached_at);
+        own.is_some() && own == reached_at(&self.base_url)
+    }
+
+    /// The ids a listing of this service is not offered, because the models they name take
+    /// requests through the Responses API only.
+    ///
+    /// Empty except for OpenAI's own API reached in the chat completions protocol. An entry that
+    /// names `@ai-sdk/openai` is reached in the Responses protocol, which serves them, and a
+    /// proxy at another host may serve them over chat completions. A block that names `models`
+    /// is offered those and no others, so a Responses-only model is still one somebody can name.
+    pub fn responses_only_models(&self) -> &'static [&'static str] {
+        if self.protocol == Protocol::ChatCompletions && self.at_openais_api() {
+            RESPONSES_ONLY_MODELS
+        } else {
+            &[]
+        }
+    }
+
+    /// Whether a request to this service carries `cache_control` marks on the prefix it will send
+    /// again ([BACKEND-32]).
+    ///
+    /// False for OpenAI's own API, which caches a repeated prefix without being asked and whose
+    /// published request schema has no such mark on a content part. Sending them there could cost
+    /// one refused request for each model in each process.
+    ///
+    /// [BACKEND-32]: ../../../docs/specs/backends.md#BACKEND-32
+    pub fn takes_cache_markers(&self) -> bool {
+        !self.at_openais_api()
+    }
+
     /// Whether a reply names the model behind the name the request carried, not that name.
     ///
     /// OpenAI and Anthropic only: a name such as `gpt-4o` or `claude-haiku-4-5` is an alias, and the
@@ -873,7 +1132,21 @@ impl Provider {
         lookup: impl Fn(&str) -> Option<String>,
     ) -> (Credential, Option<Source>) {
         if !self.names_a_credential() {
-            return (Credential::NotNeeded, None);
+            // A service at the host compiled in for a known id refuses a request with no key, so a
+            // block naming none is a credential missing, not one that is not wanted.
+            // A header named for the credential is how such a block authenticates, so it is one.
+            // `authorization` counts under every protocol: an `anthropic` block written with its
+            // own `Authorization: Bearer ...` header worked before this rule and keeps working.
+            let credential_name = self.credential_header("").0;
+            let authenticates_by_header = self
+                .headers
+                .iter()
+                .any(|held| held.name == credential_name || held.name == "authorization");
+            return if self.endpoint_compiled_in && !authenticates_by_header {
+                (Credential::Absent, None)
+            } else {
+                (Credential::NotNeeded, None)
+            };
         }
         let exported = self
             .env
@@ -918,17 +1191,11 @@ impl Provider {
         if self.stored_key.is_none() {
             return;
         }
-        let credential_name = if self.id == GOOGLE_VERTEX_ID {
-            VERTEX_KEY_HEADER
-        } else if self.protocol == Protocol::Messages {
-            ANTHROPIC_KEY_HEADER
-        } else {
-            "authorization"
-        };
+        let credential_name = self.credential_header("").0;
         if let Some(position) = self
             .headers
             .iter()
-            .position(|held| held.name == credential_name)
+            .position(|held| held.name == credential_name || held.name == "authorization")
         {
             let header = self.headers.remove(position);
             self.headers_refused
@@ -1154,6 +1421,71 @@ fn header_entries(
         refused.extend(entry);
     }
     (kept, refused)
+}
+
+/// The endpoint an entry's `options` state, where they state one.
+fn stated_endpoint(options: Option<&serde_json::Map<String, serde_json::Value>>) -> Option<&str> {
+    options
+        .and_then(|options| options.get("baseURL"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+}
+
+/// One model a `provider` entry with the id [`CHATGPT_ID`] names where it states no endpoint
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// A name and a window and nothing else. A request to the account carries nothing a settings file
+/// says ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)), so the model's `options`
+/// and its output ceiling have no reader and are not kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountModel {
+    /// What a request names, and what follows the identifier in a picker row's key.
+    pub id: String,
+    /// The context window the model's own `limit` states, under the rule a gateway's model follows:
+    /// `context` and `output` both have to be there, though the output is read for nothing. The
+    /// entry's own `options.contextWindow` is not read.
+    ///
+    /// `None` reads as [`CONTEXT_WINDOW`], as it does for a gateway's model.
+    pub context_window: Option<u64>,
+}
+
+/// The models a `provider` entry with the id [`CHATGPT_ID`] names, where it states no endpoint
+/// ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+///
+/// Such an entry is read for its `models` and for nothing else, and it is not a gateway: it names
+/// no endpoint, so [`Provider::all`] drops it and the account stays reachable. An entry that states
+/// an endpoint is a gateway and keeps the id, so none of its models is the account's. A name is
+/// trimmed, as the other strings an entry states are, and one with nothing left is dropped, since a
+/// row for it could not be picked. Two names that trim to the same text make one row, because a row
+/// is chosen by its key.
+pub(crate) fn account_models(
+    root: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<AccountModel> {
+    let Some(serde_json::Value::Object(block)) = root.get("provider") else {
+        return Vec::new();
+    };
+    let Some(serde_json::Value::Object(entry)) = block.get(CHATGPT_ID) else {
+        return Vec::new();
+    };
+    let options = entry.get("options").and_then(serde_json::Value::as_object);
+    if stated_endpoint(options).is_some() {
+        return Vec::new();
+    }
+    let Some(serde_json::Value::Object(named)) = entry.get("models") else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    named
+        .iter()
+        .filter_map(|(id, model)| {
+            let id = id.trim();
+            (!id.is_empty() && seen.insert(id)).then(|| AccountModel {
+                id: id.to_string(),
+                context_window: window(model.get("limit")),
+            })
+        })
+        .collect()
 }
 
 /// The `models` block, in the order the file listed it.
@@ -1930,6 +2262,90 @@ mod tests {
         }
     }
 
+    /// The models of the entry a `chatgpt` block names, whatever else it says.
+    fn account_models_of(text: &str) -> Vec<AccountModel> {
+        let serde_json::Value::Object(root) = serde_json::from_str(text).expect("json") else {
+            panic!("not an object");
+        };
+        account_models(&root)
+    }
+
+    fn named(id: &str, context_window: Option<u64>) -> AccountModel {
+        AccountModel {
+            id: id.to_string(),
+            context_window,
+        }
+    }
+
+    /// CHATGPT-9: an entry with the account's id that states no endpoint is the account's list of
+    /// models and is not a gateway, so a person can pin a short list out of an account that lists
+    /// many and the account stays reachable. A window is read by the rule a gateway's model follows,
+    /// and nothing else in the entry is: not the entry's own `options`, and not a model's `options`,
+    /// which no request to the account carries (CHATGPT-10). A window is the model's own `limit`,
+    /// so the entry's `contextWindow` is not one. A name is trimmed so that a stray space does not
+    /// make a row the service would refuse, a name with nothing left is dropped, and two names that
+    /// trim to the same text are one row, since a row is chosen by its key.
+    #[test]
+    fn a_chatgpt_entry_without_an_endpoint_names_the_accounts_models_and_is_not_a_gateway() {
+        let text = r#"{"provider": {"chatgpt": {
+            "npm": "@ai-sdk/openai",
+            "options": {"contextWindow": 999, "headers": {"x-extra": "1"}},
+            "models": {
+                "gpt-z": {"limit": {"context": 400000, "output": 128000}, "options": {"store": true}},
+                "gpt-a": {},
+                "gpt-half": {"limit": {"context": 200000}},
+                "": {},
+                "  ": {},
+                " gpt-edge ": {"limit": {"context": 300000, "output": 64000}},
+                "gpt-a ": {}
+            }}}}"#;
+        assert!(parsed(text).is_empty(), "the entry was read as a gateway");
+        let mut offered = account_models_of(text);
+        offered.sort_by(|left, right| left.id.cmp(&right.id));
+        assert_eq!(
+            offered,
+            [
+                named("gpt-a", None),
+                named("gpt-edge", Some(300_000)),
+                named("gpt-half", None),
+                named("gpt-z", Some(400_000)),
+            ]
+        );
+    }
+
+    /// CHATGPT-9: an endpoint that is blank states none, as it does for any entry, so the entry is
+    /// still the account's list.
+    #[test]
+    fn a_chatgpt_entry_with_a_blank_endpoint_still_names_the_accounts_models() {
+        let text = r#"{"provider": {"chatgpt": {
+            "options": {"baseURL": "   "}, "models": {"gpt-a": {}}}}}"#;
+        assert!(parsed(text).is_empty());
+        assert_eq!(account_models_of(text), [named("gpt-a", None)]);
+    }
+
+    /// CHATGPT-9: an entry that states an endpoint is a gateway and keeps the id, so none of its
+    /// models is the account's, and an entry with any other id is read for the account never.
+    #[test]
+    fn only_a_chatgpt_entry_that_states_no_endpoint_names_the_accounts_models() {
+        let gateway = r#"{"provider": {"chatgpt": {
+            "options": {"baseURL": "https://gateway.example.invalid/v1"},
+            "models": {"gpt-a": {}}}}}"#;
+        assert_eq!(parsed(gateway).len(), 1, "a gateway keeps its id");
+        assert!(account_models_of(gateway).is_empty());
+
+        for text in [
+            r#"{"provider": {"openai": {"models": {"gpt-a": {}}}}}"#,
+            r#"{"provider": {"chatgpt-mirror": {"models": {"gpt-a": {}}}}}"#,
+            r#"{"provider": {"chatgpt": {"models": ["gpt-a"]}}}"#,
+            r#"{"provider": {"chatgpt": "gpt-a"}}"#,
+            r#"{"provider": {"chatgpt": {}}}"#,
+            r#"{"models": {"gpt-a": {}}}"#,
+            r#"{}"#,
+        ] {
+            assert!(account_models_of(text).is_empty(), "{text}");
+        }
+    }
+
     /// The case the block is copied for. The other tool resolves an endpoint for a name it knows, so
     /// a block that names one and nothing else is complete there and has to be complete here.
     #[test]
@@ -1939,6 +2355,81 @@ mod tests {
             }}}"#);
         assert_eq!(provider.base_url, "https://openrouter.ai/api/v1");
         assert_eq!(token(&provider.credential(|_| None)), Some("a-token"));
+    }
+
+    /// What a caller offers by name has to be what a session reaches by that name, so an id is known
+    /// exactly where an endpoint is compiled in for it. The ids that have a reading of their own and
+    /// no endpoint are the ones a list built from another table, such as the variables, would add:
+    /// Vertex AI builds its endpoint from a project, and neither Bedrock nor the ChatGPT account is a
+    /// gateway reached by a name alone.
+    #[test]
+    fn the_known_ids_are_the_ids_an_endpoint_is_compiled_in_for_and_no_other() {
+        let ids: Vec<&str> = known_ids().collect();
+        let candidates = [
+            "openrouter",
+            "openai",
+            "anthropic",
+            GOOGLE_VERTEX_ID,
+            AWS_PROVIDER_ID,
+            CHATGPT_ID,
+            "work",
+            "",
+        ];
+        let with_an_endpoint: Vec<&str> = candidates
+            .into_iter()
+            .filter(|id| known_endpoint(id).is_some())
+            .collect();
+        let listed: Vec<&str> = candidates
+            .into_iter()
+            .filter(|id| ids.contains(id))
+            .collect();
+        assert_eq!(listed, with_an_endpoint);
+        assert!(!ids.is_empty(), "no id is known");
+        for id in &ids {
+            assert!(known_endpoint(id).is_some(), "{id} has no endpoint");
+        }
+        assert!(
+            known_variable(GOOGLE_VERTEX_ID).is_some(),
+            "the variables name an id the endpoints do not"
+        );
+    }
+
+    /// A known id asked for by name alone is read as `{"<id>": {}}` is, so the host a picker shows
+    /// for it is the host a session sends the key to, whichever protocol the id is spoken in.
+    #[test]
+    fn a_known_id_asked_for_alone_is_read_as_an_entry_that_names_nothing() {
+        for id in known_ids() {
+            let alone = Provider::known(id).unwrap_or_else(|| panic!("{id} is not known"));
+            let entry = one(&format!(r#"{{"provider": {{"{id}": {{}}}}}}"#));
+
+            assert_eq!(alone.id, id);
+            assert_eq!(Some(alone.base_url.as_str()), known_endpoint(id), "{id}");
+            assert_eq!(alone.base_url, entry.base_url, "{id}");
+            assert_eq!(alone.host(), entry.host(), "{id}");
+            assert_eq!(alone.protocol(), entry.protocol(), "{id}");
+            assert!(
+                alone.env.is_empty() && alone.api_key.is_none() && alone.stored_key.is_none(),
+                "{id} names somewhere for a credential to live"
+            );
+            assert!(alone.models.is_empty(), "{id} lists models");
+        }
+        assert_eq!(
+            Provider::known("openai").map(|provider| provider.host().to_string()),
+            Some("api.openai.com".to_string())
+        );
+    }
+
+    /// An id with no row is not a known provider, though the reading of an empty entry would build
+    /// one for some of them: Vertex AI's has an express endpoint, which is not a name's endpoint.
+    #[test]
+    fn an_id_with_no_row_in_the_table_is_not_a_known_provider() {
+        for id in [GOOGLE_VERTEX_ID, AWS_PROVIDER_ID, CHATGPT_ID, "work", ""] {
+            assert!(Provider::known(id).is_none(), "{id:?} was taken as known");
+        }
+        assert!(
+            one(r#"{"provider": {"google-vertex": {}}}"#).base_url == VERTEX_EXPRESS_ENDPOINT,
+            "the empty Vertex entry builds the express endpoint, so `known` has to check the table first"
+        );
     }
 
     /// A known name pointed somewhere else reaches where it was pointed. Otherwise the table would
@@ -1976,6 +2467,54 @@ mod tests {
         assert_eq!(token(&provider.credential(exported)), Some("a-key"));
     }
 
+    /// CHATGPT-2 and CHATGPT-10: the account is reached at the serving host in the Responses
+    /// protocol, and it names no variable to read a key from, so `OPENAI_API_KEY` and a gateway's
+    /// key are never what a request to it carries.
+    #[test]
+    fn the_chatgpt_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own() {
+        let account = Provider::chatgpt_account();
+        assert_eq!(account.id, "chatgpt");
+        assert_eq!(account.display_name(), "ChatGPT");
+        assert_eq!(account.protocol(), Protocol::Responses);
+        assert_eq!(
+            account.completion_url(),
+            "https://api.openai.com/v1/responses"
+        );
+        assert!(account.models.is_empty());
+        assert!(account.headers.is_empty());
+
+        let everything = |name: &str| Some(format!("{name}-value"));
+        assert!(
+            matches!(account.credential(everything), Credential::NotNeeded),
+            "a variable was read for the account"
+        );
+    }
+
+    /// XAI-1 and XAI-15: the account is reached at the serving host in chat completions, and it names
+    /// no variable to read a key from, so `XAI_API_KEY` and a gateway's key are never what a request
+    /// to it carries.
+    #[test]
+    fn the_xai_account_is_reached_at_the_serving_host_and_is_given_no_key_of_its_own() {
+        let account = Provider::xai_account();
+        assert_eq!(account.id, "xai");
+        assert_eq!(account.display_name(), "xAI");
+        assert_eq!(account.protocol(), Protocol::ChatCompletions);
+        assert_eq!(account.host(), "api.x.ai");
+        assert_eq!(
+            account.completion_url(),
+            "https://api.x.ai/v1/chat/completions"
+        );
+        assert_eq!(account.models_url(), "https://api.x.ai/v1/models");
+        assert!(account.models.is_empty());
+        assert!(account.headers.is_empty());
+
+        let everything = |name: &str| Some(format!("{name}-value"));
+        assert!(
+            matches!(account.credential(everything), Credential::NotNeeded),
+            "a variable was read for the account"
+        );
+    }
+
     /// A proxy, or an Azure-style deployment of the same protocol, is reached by stating where it
     /// is; the host compiled in for the name is only what an absent `baseURL` falls back to.
     #[test]
@@ -1986,6 +2525,155 @@ mod tests {
             }}}"#);
         assert_eq!(provider.base_url, "https://proxy.example.invalid/openai/v1");
         assert_eq!(provider.host(), "proxy.example.invalid");
+    }
+
+    /// BACKEND-19 and BACKEND-32 treat OpenAI's own API differently from any other chat
+    /// completions service: its listing leaves out the models only its Responses API takes, and its
+    /// requests carry no cache marks. Both follow the host a request goes to. Keying them by the id
+    /// `openai` would take the marks from a proxy that reads them and the models from a proxy that
+    /// serves them over chat completions, and keying them by a stated `baseURL` alone would miss an
+    /// entry that states OpenAI's host.
+    #[test]
+    fn openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called() {
+        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(own.host(), "api.openai.com");
+        assert!(!own.takes_cache_markers());
+        assert_eq!(own.responses_only_models(), RESPONSES_ONLY_MODELS);
+        assert!(own.responses_only_models().contains(&"o3-pro"));
+        assert!(own.responses_only_models().contains(&"gpt-5-pro"));
+        assert!(!own.responses_only_models().contains(&"gpt-4o-mini"));
+
+        let stated = one(r#"{"provider": {"work": {
+                "options": {"baseURL": "https://API.OpenAI.com/v1"}
+            }}}"#);
+        assert!(!stated.takes_cache_markers(), "{}", stated.host());
+        assert_eq!(stated.responses_only_models(), RESPONSES_ONLY_MODELS);
+
+        let proxy = one(r#"{"provider": {"openai": {
+                "env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/openai/v1"}
+            }}}"#);
+        assert!(proxy.takes_cache_markers());
+        assert!(proxy.responses_only_models().is_empty());
+
+        let responses = one(r#"{"provider": {"openai": {
+                "npm": "@ai-sdk/openai",
+                "env": ["OPENAI_API_KEY"]
+            }}}"#);
+        assert_eq!(responses.protocol(), Protocol::Responses);
+        assert_eq!(responses.host(), "api.openai.com");
+        assert!(
+            responses.responses_only_models().is_empty(),
+            "the Responses route serves those models"
+        );
+
+        let other = one(r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"]}}}"#);
+        assert!(other.takes_cache_markers());
+        assert!(other.responses_only_models().is_empty());
+    }
+
+    /// OpenAI's own API is told from a proxy by the host and port the entry's `baseURL` reaches, so
+    /// the spellings of that place are OpenAI's and any other host or port is not. A comparison with
+    /// the text `api.openai.com` as the entry spells it takes `:443` and a trailing dot for another
+    /// service, and one that drops whatever port is written takes a tunnel on another port for
+    /// OpenAI. The scheme gives the default port, so `http` reaches port 80.
+    #[test]
+    fn the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not() {
+        let at = |url: &str| {
+            one(&format!(
+                r#"{{"provider": {{"work": {{"options": {{"baseURL": "{url}"}}}}}}}}"#
+            ))
+        };
+        for url in [
+            "https://api.openai.com/v1",
+            "https://API.OpenAI.com/v1",
+            "https://api.openai.com:443/v1",
+            "https://api.openai.com./v1",
+            "https://API.OPENAI.COM.:443/v1/",
+            "https://api.openai.com:/v1",
+            "https://api.openai.com",
+            "https://api.openai.com/v1?api-version=1",
+            "https://user:token@api.openai.com/v1",
+        ] {
+            let provider = at(url);
+            assert!(
+                !provider.takes_cache_markers(),
+                "{url} was taken for a proxy"
+            );
+            assert_eq!(
+                provider.responses_only_models(),
+                RESPONSES_ONLY_MODELS,
+                "{url}"
+            );
+        }
+        for url in [
+            "https://api.openai.com:8443/v1",
+            "https://api.openai.com:444/v1",
+            "https://api.openai.com:80/v1",
+            "http://api.openai.com/v1",
+            "https://api.openai.com:abc/v1",
+            "https://api.openai.com:+443/v1",
+            "https://api.openai.com.proxy.example.invalid/v1",
+            "https://notapi.openai.com/v1",
+            "https://proxy.example.invalid/api.openai.com/v1",
+            "https://proxy.example.invalid/v1?host=api.openai.com",
+        ] {
+            let provider = at(url);
+            assert!(provider.takes_cache_markers(), "{url} was taken for OpenAI");
+            assert!(provider.responses_only_models().is_empty(), "{url}");
+        }
+    }
+
+    /// The list is the models that take requests through the Responses API alone. It holds each id
+    /// OpenAI's model pages mark as unsupported by chat completions and supported by the Responses
+    /// API, read on 2026-10-27, beside the ones its OpenAPI description lists. The first loop checks
+    /// that the ids the pages added are present. The second is a spot check, not the whole of the
+    /// rest: it names ids that must stay offered, models a page marks as taking chat completions
+    /// and models that are not Responses-only: `gpt-image-1` is served by the Images endpoints
+    /// beside the Responses API, and `sora-2-pro` and `text-embedding-3-small` are served by the
+    /// Videos and Embeddings endpoints and not by the Responses API. A list that gained any other
+    /// id passes.
+    #[test]
+    fn the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered() {
+        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let listed = own.responses_only_models();
+        for id in [
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-mini",
+            "gpt-5.2-codex",
+            "gpt-5.3-codex",
+            "gpt-5.2-pro",
+            "gpt-5.2-pro-2025-12-11",
+            "gpt-5.4-pro",
+            "gpt-5.4-pro-2026-03-05",
+        ] {
+            assert!(listed.contains(&id), "{id} is Responses-only on its page");
+        }
+        for id in [
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.2",
+            "gpt-5.2-chat-latest",
+            "gpt-4o-mini",
+            "o3",
+            "gpt-image-1",
+            "sora-2-pro",
+            "text-embedding-3-small",
+        ] {
+            assert!(!listed.contains(&id), "{id} takes another route");
+        }
+    }
+
+    /// The list is a set of ids that each name one model once.
+    #[test]
+    fn the_responses_only_list_names_each_model_once() {
+        let mut seen = std::collections::HashSet::new();
+        for id in RESPONSES_ONLY_MODELS {
+            assert!(
+                !id.is_empty() && id.trim() == *id && seen.insert(*id),
+                "{id:?}"
+            );
+        }
     }
 
     /// Anthropic is the one known name reached in another protocol, so everything that differs
@@ -2185,17 +2873,14 @@ mod tests {
         assert_eq!(vertex.protocol(), Protocol::ChatCompletions);
     }
 
-    /// The table supplies an address and nothing else. A block naming no credential is somebody saying
-    /// none is needed, so an exported `ANTHROPIC_API_KEY` meant for another tool is not picked up on
-    /// the strength of the id.
+    /// The table supplies an address and nothing else. A block naming no credential does not have an
+    /// exported `ANTHROPIC_API_KEY` meant for another tool picked up on the strength of the id: its
+    /// key is missing, as BACKEND-16 says of a known id at the host compiled in for it.
     #[test]
     fn an_anthropic_block_naming_no_key_names_no_credential() {
         let provider = one(r#"{"provider": {"anthropic": {}}}"#);
         let exported = |name: &str| (name == "ANTHROPIC_API_KEY").then(|| "a-key".to_string());
-        assert!(matches!(
-            provider.credential(exported),
-            Credential::NotNeeded
-        ));
+        assert!(matches!(provider.credential(exported), Credential::Absent));
     }
 
     /// An exported budget outranks a model's own, which outranks the figure a request assumes. The
@@ -2378,6 +3063,49 @@ mod tests {
             provider.credential(|_| Some("in-the-environment".to_string())),
             Credential::NotNeeded
         ));
+    }
+
+    /// BACKEND-16: a block of a known id that states no endpoint is reached at the host compiled in
+    /// for it, which refuses a request with no key, so naming no credential there is one missing. A
+    /// block stating its own endpoint under the same id keeps the rule, and a stored key is a key.
+    #[test]
+    fn a_known_id_at_its_compiled_in_host_naming_no_credential_is_missing_one() {
+        for id in ["openai", "openrouter", "anthropic"] {
+            let bare = one(&format!(r#"{{"provider": {{"{id}": {{}}}}}}"#));
+            assert!(
+                matches!(bare.credential(|_| None), Credential::Absent),
+                "{id}: a block naming no credential at the compiled-in host was read as needing none"
+            );
+            let mut stored = bare;
+            stored.stored_key = Some(Secret::new("stored-placeholder"));
+            assert_eq!(
+                token(&stored.credential(|_| None)),
+                Some("stored-placeholder"),
+                "{id}"
+            );
+        }
+        // A header carrying the credential is how that block authenticates.
+        let by_header = one(r#"{"provider": {"openai": {
+                "options": {"headers": {"Authorization": "Bearer a-placeholder"}}
+            }}}"#);
+        assert!(matches!(
+            by_header.credential(|_| None),
+            Credential::NotNeeded
+        ));
+        // An anthropic block written before this rule with its own bearer header keeps working.
+        let bearer = one(r#"{"provider": {"anthropic": {
+                "options": {"headers": {"Authorization": "Bearer a-placeholder"}}
+            }}}"#);
+        assert!(matches!(bearer.credential(|_| None), Credential::NotNeeded));
+        let local = one(r#"{"provider": {"openai": {
+                "options": {"baseURL": "http://localhost:8080/v1"}
+            }}}"#);
+        assert!(matches!(local.credential(|_| None), Credential::NotNeeded));
+        // Another id at the same host is not a known id.
+        let other = one(r#"{"provider": {"mine": {
+                "options": {"baseURL": "https://api.openai.com/v1"}
+            }}}"#);
+        assert!(matches!(other.credential(|_| None), Credential::NotNeeded));
     }
 
     /// Two gateways are ordinary. The block being a map is what makes a duplicate id

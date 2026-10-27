@@ -26,6 +26,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+#[path = "../../aichat/test-support/refusal_codes.rs"]
+mod refusal_codes;
+#[path = "../../skus/test-support/stored_sign_in.rs"]
+mod stored_sign_in;
+
 /// A directory handed to a run as its own, removed when the test that made it ends.
 ///
 /// Under this crate's build directory rather than the system temporary one, which is shared
@@ -225,7 +230,7 @@ fn a_configuration_error_exits_non_zero() {
 /// service configured to serve a turn, which is what a released binary arrives as. A run that went
 /// ahead would be answered by whatever that endpoint gives it, and read as the agent being poor.
 ///
-/// So the run stops before it asks anything, and says the three ways to configure a service. Each
+/// So the run stops before it asks anything, and says the five ways to configure a service. Each
 /// is asserted by the words somebody has to type or write, not by the sentence around them: a
 /// refusal that named the problem and no route out is the first-use experience this replaced.
 #[test]
@@ -255,12 +260,232 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         stdout.is_empty(),
         "the reply stream carried the explanation instead: {stdout}"
     );
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for route in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login chatgpt",
+        "bravebot auth login xai",
+        "bravebot auth login leo",
+    ] {
         assert!(
             stderr.contains(route),
             "the run refused without saying that {route} is a way to configure one: {stderr}"
         );
     }
+}
+
+/// The route that signs in with a ChatGPT account is said in the language the interface is in, and
+/// the command in it is the one a person types whatever that is. A catalog that carried the route in
+/// English alone would leave a reader of the French one without it.
+#[test]
+fn a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in() {
+    let scratch = Scratch::new("cli-running-no-service-french");
+    let nothing_configured = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "https://ai-chat.bsg.brave.com"),
+        (
+            "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
+            "https://ai-chat-premium.bsg.brave.com",
+        ),
+    ];
+    let mut in_french = nothing_configured.to_vec();
+    // Applied after the locale the helper sets, so this is the one in force.
+    in_french.push(("BRAVEBOT_LOCALE", "fr"));
+
+    let (_, english) = said(&bravebot(
+        &scratch.path,
+        &nothing_configured,
+        &["-p", "say something"],
+    ));
+    let (_, french) = said(&bravebot(
+        &scratch.path,
+        &in_french,
+        &["-p", "say something"],
+    ));
+
+    assert!(
+        english.contains("A ChatGPT Plus or Pro account"),
+        "the English refusal does not carry the route: {english}"
+    );
+    assert!(
+        french.contains("Un compte ChatGPT Plus ou Pro"),
+        "the French refusal does not carry the route: {french}"
+    );
+    assert!(
+        french.contains("`bravebot auth login chatgpt`"),
+        "the French route does not name the command: {french}"
+    );
+    assert!(
+        !french.contains("A ChatGPT Plus or Pro account"),
+        "the French refusal carries the English route: {french}"
+    );
+}
+
+/// Somebody whose ChatGPT sign-in is stored and whose model in force is still Brave's own is
+/// one key from working, as one who wrote a gateway block is. The first run says to name one of the
+/// account's models in the commands that open a session or run a task on it, and does not show the
+/// routes they have just followed, and with Claude Code set up on the machine it does not name an
+/// import either, since a service is configured. A stored sign-in that cannot be read is said first
+/// and is no service, so the routes stay. Nothing stored shows them, which the first-run tests above
+/// pin.
+#[test]
+fn a_stored_chatgpt_sign_in_is_a_service_configured_for_the_first_run() {
+    let stored = Scratch::new("cli-running-no-service-chatgpt-stored")
+        .with_file(".claude/settings.json", CLAUDE_CODE_ON_BEDROCK)
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let output = bravebot(&stored.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("A ChatGPT sign-in is stored")
+            && stderr.contains(r#"`bravebot -i "<prompt>" --model chatgpt/<model>`"#)
+            && stderr.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
+        "the refusal did not say how to use the sign-in: {stderr}"
+    );
+    assert!(
+        !stderr.contains("`bravebot --model chatgpt/<model>`"),
+        "the refusal named a form that needs a task: {stderr}"
+    );
+    for offered in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login",
+        "bravebot auth login import",
+        "Claude Code",
+    ] {
+        assert!(
+            !stderr.contains(offered),
+            "somebody who signed in was offered {offered}: {stderr}"
+        );
+    }
+    assert!(!stored.settings().exists(), "a one-shot run wrote settings");
+
+    let unreadable = Scratch::new("cli-running-no-service-chatgpt-unreadable").with_state(
+        "chatgpt-account.json",
+        r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+    );
+    let output = bravebot(
+        &unreadable.path,
+        NOTHING_CONFIGURED,
+        &["-p", "say something"],
+    );
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("the stored ChatGPT sign-in is unusable")
+            && stderr.contains("bravebot auth logout chatgpt"),
+        "the unreadable file was not said: {stderr}"
+    );
+    assert!(
+        stderr.contains("amazon-bedrock") && !stderr.contains("A ChatGPT sign-in is stored"),
+        "a sign-in that cannot be read was taken for a service: {stderr}"
+    );
+    assert!(
+        !stderr.contains("placeholder-chatgpt-access-token"),
+        "{stderr}"
+    );
+}
+
+/// A gateway configured while Brave's own model is in force, and a ChatGPT sign-in stored beside
+/// it, is told what somebody with the gateway alone is told: to name a model with the `model` key.
+/// The sign-in file is not read for them, so the line that names the next step for the service
+/// they configured is not replaced by one about the account, and they are shown no routes. The
+/// same holds of `doctor`. A file that cannot be read is not said by the start either, since it
+/// is not read there, and `doctor` has its own line for it.
+#[test]
+fn a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_names_the_model_key() {
+    let settings = r#"{
+        "provider": {
+            "openrouter": {
+                "env": ["OPENROUTER_API_KEY"],
+                "options": {"baseURL": "http://127.0.0.1:1/api/v1"},
+                "models": {"z-ai/glm-4.6": {}}
+            }
+        }
+    }"#;
+    let environment = [NOTHING_CONFIGURED, &[("OPENROUTER_API_KEY", "a-token")]].concat();
+    let stored = Scratch::new("cli-running-gateway-and-chatgpt-stored")
+        .with_settings(settings)
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+
+    let output = bravebot(&stored.path, &environment, &["-p", "say something"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    for replaced in [
+        "A ChatGPT sign-in is stored",
+        "Name one of the account's models",
+        "amazon-bedrock",
+        "bravebot auth login leo",
+    ] {
+        assert!(
+            !stderr.contains(replaced),
+            "the line for the gateway was replaced by {replaced}: {stderr}"
+        );
+    }
+
+    let output = bravebot(&stored.path, &environment, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(stdout.contains("`model` key"), "{stdout}");
+    assert!(
+        !stdout.contains("A ChatGPT sign-in is stored"),
+        "the report replaced the line for the gateway: {stdout}"
+    );
+
+    let unreadable = Scratch::new("cli-running-gateway-and-chatgpt-unreadable")
+        .with_settings(settings)
+        .with_state(
+            "chatgpt-account.json",
+            r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+        );
+    let output = bravebot(&unreadable.path, &environment, &["-p", "say something"]);
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("`model` key"), "{stderr}");
+    assert!(
+        !stderr.contains("sign-in is unusable"),
+        "a file nothing reads was said: {stderr}"
+    );
+}
+
+/// `doctor` says the same as the first run (CLI-7): a stored sign-in is told to name a model and not
+/// shown the routes, and a file that cannot be read is said once, by its own line, with the routes
+/// after it.
+#[test]
+fn doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured() {
+    let stored = Scratch::new("cli-running-doctor-no-service-chatgpt-stored")
+        .with_state("chatgpt-account.json", &a_chatgpt_sign_in(1_792_703_127));
+    let output = bravebot(&stored.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("A ChatGPT sign-in is stored")
+            && stdout.contains(r#"`bravebot -i "<prompt>" --model chatgpt/<model>`"#)
+            && stdout.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
+        "the report did not say how to use the sign-in: {stdout}"
+    );
+    for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+        assert!(
+            !stdout.contains(offered),
+            "the report offered {offered} to somebody who signed in: {stdout}"
+        );
+    }
+
+    let unreadable = Scratch::new("cli-running-doctor-no-service-chatgpt-unreadable").with_state(
+        "chatgpt-account.json",
+        r#"{"access_token": "placeholder-chatgpt-access-token" oops"#,
+    );
+    let output = bravebot(&unreadable.path, NOTHING_CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        stdout.matches("sign-in is unusable").count(),
+        1,
+        "{stdout}{stderr}"
+    );
+    assert!(stdout.contains("amazon-bedrock"), "{stdout}");
 }
 
 /// And a configured gateway is not refused: it is a service that can answer, so the run goes to
@@ -1608,6 +1833,37 @@ fn a_refused_command_line_asking_for_a_result_object_gets_one_instead_of_the_usa
     }
 }
 
+/// CLI-12: a flag that takes the word after it takes `--json` too, and the refusal of `--tools`
+/// that follows is still answered with the object the command line as typed asked for.
+#[test]
+fn a_refused_tools_list_after_a_flag_that_took_json_as_its_value_gets_a_result_object() {
+    let scratch = Scratch::new("cli-running-refused-tools-json");
+    let arguments = [
+        "--sandbox-allow-read",
+        "--json",
+        "--tools",
+        "nonesuch",
+        "-p",
+        "task",
+    ];
+    let output = bravebot(&scratch.path, &[], &arguments);
+    let (stdout, stderr) = said(&output);
+
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "no single result object on stdout: {stdout}"
+    );
+    for field in [r#""ok":false"#, r#""reason":"argument""#] {
+        assert!(stdout.contains(field), "{field} is missing: {stdout}");
+    }
+    assert!(
+        stderr.contains("nonesuch"),
+        "the refusal is not on stderr: {stderr}"
+    );
+}
+
 /// The third failure the clause names, and the one the status matters most for: a turn that could
 /// not run produces no reply, so a script reading stdout sees an empty answer rather than an
 /// error.
@@ -2942,10 +3198,12 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     // And the report still says it, in the section CLI-7 puts it in: a status is what a caller
     // reads and the routes out are what the person in front of the screen reads, so the fix is
     // not the report losing one to gain the other.
-    assert!(
-        stdout.contains("bravebot auth login leo"),
-        "the report stopped saying how to configure a service: {stdout}"
-    );
+    for route in ["bravebot auth login chatgpt", "bravebot auth login leo"] {
+        assert!(
+            stdout.contains(route),
+            "the report stopped saying how to configure a service with {route}: {stdout}"
+        );
+    }
     // The how-to is on stdout, so the identifier of the status has to be said on stderr
     // by something else: a log of the failure is stderr, and has nowhere else to hold it.
     assert!(
@@ -3282,6 +3540,56 @@ fn a_manifest_plan_nobody_could_approve_exits_on_the_refused_status() {
     let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
     assert_eq!(object["status"], 4, "{stdout}");
     assert_eq!(object["refusals"][0]["gate"], "manifest_plan", "{stdout}");
+}
+
+/// CLI-6, CHATGPT-8: a manifest run whose planner is the ChatGPT account with nobody signed in
+/// ends on the status for a credential nobody holds and says why in the account's sentence, in the
+/// language the person chose, as the turn of a one-shot run does. The run plans before it reads
+/// anything, so nothing is read and nothing is written. A run that printed the name of the condition
+/// would show a person an identifier, and one worded in English would ignore the language.
+#[test]
+fn a_manifest_run_whose_planner_is_the_chatgpt_account_with_no_sign_in_says_the_sentence() {
+    for (language, words) in [
+        ("en-US", "not signed in to a ChatGPT account"),
+        ("fr", "pas connecté à un compte ChatGPT"),
+    ] {
+        let scratch = Scratch::new(&format!(
+            "cli-running-manifest-chatgpt-signed-out-{language}"
+        ))
+        .with_file("a.md", "hello");
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push(("BRAVEBOT_LOCALE", language));
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            &environment,
+            &[
+                "--mode",
+                "manifest",
+                "--model",
+                "chatgpt/gpt-5.5",
+                "--trust-workspace",
+                "-p",
+                "read a.md",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{language}: {stdout}{stderr}"
+        );
+        assert!(
+            stderr.contains(words) && stderr.contains("`bravebot auth login chatgpt`"),
+            "{language}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("ChatGPT account:") && !stderr.contains("NotSignedIn"),
+            "{language}: the name of the condition was printed: {stderr}"
+        );
+    }
 }
 
 /// CLI-24: a run that is refused a write writes its events while it goes and ends on the result
@@ -4504,7 +4812,12 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
 
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for route in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login chatgpt",
+        "bravebot auth login leo",
+    ] {
         assert!(
             transcript.contains(route),
             "the run refused without saying that {route} is a way to configure one: {transcript}"
@@ -4541,7 +4854,12 @@ fn a_background_session_with_no_service_configured_says_how_to_configure_one() {
 
     let (transcript, _) = said(&output);
     assert_eq!(output.status.code(), Some(3), "{transcript}");
-    for route in ["amazon-bedrock", "OpenRouter", "bravebot auth login leo"] {
+    for route in [
+        "amazon-bedrock",
+        "OpenRouter",
+        "bravebot auth login chatgpt",
+        "bravebot auth login leo",
+    ] {
         assert!(
             transcript.contains(route),
             "the start refused without saying that {route} is a way to configure one: {transcript}"
@@ -4851,8 +5169,8 @@ fn a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_
         "the session did not draw the rule it ignored as pictures: {report}"
     );
     assert!(
-        report.contains("not granting the allow rule Bash(echo \u{241b}[8mallow-rule)"),
-        "the session did not draw the allow rule it dropped as pictures: {report}"
+        report.contains("not granting the allow rule \"Bash(echo \u{241b}[8mallow-rule)\""),
+        "the session did not draw the allow rule it dropped as pictures, quoted as a spelled rule is: {report}"
     );
 }
 
@@ -5573,6 +5891,41 @@ fn a_closed_network_reaches_the_description_and_the_trail_of_a_run() {
     assert!(
         !stderr.contains("run_network"),
         "a run nobody closed the network for recorded it: {stderr}"
+    );
+}
+
+/// CLI-12: a one-shot run's `--json` result lists an unapproved `run` line once, not twice. The
+/// policy records the line as refused under `approval` (TRACE-1) when nobody is there to approve
+/// it, and the one-shot confirmer used to keep a second record of the same question under `run`,
+/// which the result object listed beside the trail's entry. Marking that record `in_the_trail`,
+/// the way a write's and a fetch's already are, drops the duplicate.
+#[cfg(unix)]
+#[test]
+fn an_unapproved_run_line_is_listed_once_not_twice() {
+    let gateway = a_gateway_asking_for_a_run();
+    let scratch = Scratch::new("cli-running-unapproved-run").with_settings(&settings_for(&gateway));
+    let mut environment = AT_A_GATEWAY.to_vec();
+    environment.push(("PATH", "/usr/bin:/bin"));
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &scratch.path,
+        &environment,
+        &["--json", "-p", "say hello"],
+    );
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(4), "{stdout}{stderr}");
+    let object: serde_json::Value = serde_json::from_str(stdout.trim()).expect(&stdout);
+    let refusals = object["refusals"].as_array().expect(&stdout);
+    assert_eq!(
+        refusals.len(),
+        1,
+        "the run line's refusal was listed twice, or not at all: {stdout}"
+    );
+    assert_eq!(refusals[0]["gate"], "approval", "{stdout}");
+    assert_eq!(
+        refusals[0]["reason"], "run: the line was not approved and did not run",
+        "{stdout}"
     );
 }
 
@@ -8180,23 +8533,39 @@ fn gateway_keys(scratch: &Scratch) -> PathBuf {
     scratch.path.join(".bravebot").join("gateway-keys.json")
 }
 
+/// The ids `auth login gateway` offers where `TWO_GATEWAYS` are configured: those, then each known
+/// service no block of them names, read from the table a session reaches them by.
+fn the_ids_offered_beside_two_gateways() -> String {
+    let known: Vec<&str> = bravebot_config::provider::known_ids()
+        .filter(|id| *id != "openrouter")
+        .collect();
+    format!("openrouter, work, {}", known.join(", "))
+}
+
 /// CLI-18 and INCOG-7: every refusal the gateway way can make without asking anything is made
-/// before the key is asked for, and none of them writes a file of keys. A word that names no
-/// gateway, a word after the id and what follows `--key=` are not repeated, since each is most
-/// likely the key, typed where somebody took it for the argument.
+/// before the key is asked for, and none of them writes a file of keys or a settings file. A word
+/// that names no gateway, a word after the id, which may be of a known service no block names, and
+/// what follows `--key=` are not repeated, since each is most likely the key, typed where somebody
+/// took it for the argument.
 #[test]
 fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
     let scratch = Scratch::new("cli-running-auth-gateway-refused").with_settings(TWO_GATEWAYS);
     let key_as_a_flag = format!("--key={A_STORED_KEY}");
+    let offered = the_ids_offered_beside_two_gateways();
 
     for (arguments, code, said_this) in [
         (
             &["auth", "login", "gateway", A_STORED_KEY][..],
             2,
-            "openrouter, work",
+            offered.as_str(),
         ),
         (
             &["auth", "login", "gateway", "work", A_STORED_KEY][..],
+            2,
+            "never a command-line argument",
+        ),
+        (
+            &["auth", "login", "gateway", "openai", A_STORED_KEY][..],
             2,
             "never a command-line argument",
         ),
@@ -8213,7 +8582,17 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
             "needs a terminal",
         ),
         (
+            &["auth", "login", "gateway", "openai"][..],
+            2,
+            "needs a terminal",
+        ),
+        (
             &["--incognito", "auth", "login", "gateway", "work"][..],
+            1,
+            "incognito",
+        ),
+        (
+            &["--incognito", "auth", "login", "gateway", "openai"][..],
             1,
             "incognito",
         ),
@@ -8233,16 +8612,44 @@ fn auth_login_gateway_is_refused_before_a_key_is_asked_for() {
         !gateway_keys(&scratch).exists(),
         "a refused sign-in stored a key"
     );
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings"),
+        TWO_GATEWAYS,
+        "a refused sign-in recorded a block"
+    );
 
+    // A known service needs no block, so with none written the refusal is the missing terminal and
+    // not a missing gateway.
     let unconfigured = Scratch::new("cli-running-auth-gateway-none");
+    for arguments in [
+        &["auth", "login", "gateway"][..],
+        &["auth", "login", "gateway", "openai"][..],
+    ] {
+        let output = bravebot(&unconfigured.path, NOTHING_CONFIGURED, arguments);
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+        assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+        assert!(
+            stderr.contains("needs a terminal"),
+            "{arguments:?}: {stderr}"
+        );
+    }
+    // A build with no Brave credentials is no reason to turn it away either: a person who holds a key
+    // and nothing else is the one it is for.
     let output = bravebot(
         &unconfigured.path,
-        NOTHING_CONFIGURED,
-        &["auth", "login", "gateway"],
+        &[],
+        &["auth", "login", "gateway", "openai"],
     );
-    let (_, stderr) = said(&output);
-    assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert!(stderr.contains("provider block"), "{stderr}");
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("needs a terminal"), "{stderr}");
+    assert!(!gateway_keys(&unconfigured).exists());
+    assert!(
+        !unconfigured.settings().exists(),
+        "a refused sign-in wrote settings"
+    );
 }
 
 /// CLI-18 and INCOG-7: logout forgets the key named and leaves the rest, says the key is still
@@ -8294,6 +8701,52 @@ fn auth_logout_gateway_forgets_the_key_named_in_an_incognito_session() {
 
     let (code, _, stderr) = logout(&[]);
     assert_eq!(code, Some(2), "{stderr}");
+}
+
+/// CLI-18: a key stored for a known service no block names is forgotten, by name or as the only one
+/// stored, and the line names the host compiled in for it, which it still works at until it is
+/// revoked there. The one left where several are stored is the one not named, and the entry the
+/// sign-in recorded stays in settings.
+#[test]
+fn auth_logout_gateway_forgets_a_key_stored_for_a_known_service_no_block_names() {
+    let recorded = r#"{"provider": {"anthropic": {}}}"#;
+    let scratch = Scratch::new("cli-running-auth-gateway-logout-known")
+        .with_settings(recorded)
+        .with_state("gateway-keys.json", &stored_keys(&["openai", "anthropic"]));
+    let keys = gateway_keys(&scratch);
+    let logout = |more: &[&str]| {
+        let mut arguments = vec!["auth", "logout", "gateway"];
+        arguments.extend(more);
+        let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &arguments);
+        let (stdout, stderr) = said(&output);
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{more:?} printed the key: {stdout}{stderr}"
+        );
+        (output.status.code(), stdout, stderr)
+    };
+
+    let (code, stdout, stderr) = logout(&["openai"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(
+        stdout.contains("api.openai.com") && !stdout.contains("api.anthropic.com"),
+        "{stdout}"
+    );
+    let left = std::fs::read_to_string(&keys).expect("the key left");
+    assert!(
+        left.contains("anthropic") && !left.contains("openai"),
+        "{left}"
+    );
+
+    let (code, stdout, stderr) = logout(&[]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert!(stdout.contains("api.anthropic.com"), "{stdout}");
+    assert!(!keys.exists(), "the last key forgotten left a file");
+    assert_eq!(
+        std::fs::read_to_string(scratch.settings()).expect("the settings"),
+        recorded,
+        "forgetting a key changed the settings"
+    );
 }
 
 /// A batch imported for `environment`, holding one spent and one unspent credential. The tokens are
@@ -8492,6 +8945,23 @@ fn auth_status_gateway_naming_no_credential_is_signed_in() {
     );
 }
 
+/// BACKEND-16: a block of a known id naming no credential and no endpoint is not signed in, since
+/// the host it reaches refuses a request without a key.
+#[test]
+fn auth_status_known_gateway_naming_no_credential_is_not_signed_in() {
+    let scratch = Scratch::new("cli-running-auth-status-known-no-key")
+        .with_settings(r#"{"provider": {"openai": {}}}"#);
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openai"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openai: not signed in: none found")
+            && stdout.contains("bravebot auth login gateway openai"),
+        "{stdout}"
+    );
+}
+
 /// CLI-23: a file of gateway keys that cannot be read is not reported as a missing key, which
 /// storing another would not fix.
 #[test]
@@ -8510,8 +8980,9 @@ fn auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable() {
     );
 }
 
-/// CLI-23: a word naming no gateway is refused without being repeated, since it may be a key, and
-/// so is an id where none is configured.
+/// CLI-23: a word naming no gateway and no known service is refused without being repeated, since
+/// it may be a key, and names the ids that can be asked about. With no key stored and no block
+/// written there is nothing signed in, and the one line says how to sign in.
 #[test]
 fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     let scratch =
@@ -8520,17 +8991,89 @@ fn auth_status_gateway_refuses_an_id_that_names_none_without_repeating_it() {
     let (code, stdout, stderr) =
         status_of(&scratch, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
     assert_eq!(code, Some(2), "{stdout}{stderr}");
-    assert!(stderr.contains("openrouter, work"), "{stderr}");
+    assert!(
+        stderr.contains(&the_ids_offered_beside_two_gateways()),
+        "{stderr}"
+    );
     assert_eq!(stdout, "");
 
     let bare = Scratch::new("cli-running-auth-status-no-gateways");
-    let (code, _, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", "work"]);
-    assert_eq!(code, Some(3), "{stderr}");
+    let known: Vec<&str> = bravebot_config::provider::known_ids().collect();
+    let (code, stdout, stderr) = status_of(&bare, NOTHING_CONFIGURED, &["gateway", A_STORED_KEY]);
+    assert_eq!(code, Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains(&known.join(", ")), "{stderr}");
+    assert_eq!(stdout, "");
     let (code, stdout, _) = status_of(&bare, NOTHING_CONFIGURED, &["gateway"]);
     assert_eq!(code, Some(1), "{stdout}");
     assert!(
-        stdout.contains("gateway: not signed in: no gateway is configured"),
+        stdout.contains("gateway: not signed in: no gateway key is stored"),
         "{stdout}"
+    );
+}
+
+/// CLI-18, CLI-23 and CRED-24: `status` and `logout` refuse a word after a gateway's id as `login`
+/// does, without repeating it, since it is most likely the key. A key stored for the id is left.
+#[test]
+fn auth_status_and_logout_gateway_do_not_repeat_a_word_after_the_id() {
+    let scratch = Scratch::new("cli-running-auth-gateway-extra-word")
+        .with_settings(TWO_GATEWAYS)
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+
+    for verb in ["status", "logout"] {
+        let output = bravebot(
+            &scratch.path,
+            NOTHING_CONFIGURED,
+            &["auth", verb, "gateway", "work", A_STORED_KEY],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(2), "{verb}: {stdout}{stderr}");
+        assert!(stderr.contains("not repeated"), "{verb}: {stderr}");
+        assert!(
+            !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
+            "{verb} repeated the word: {stdout}{stderr}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(gateway_keys(&scratch)).expect("the keys"),
+        stored_keys(&["work"]),
+        "a refused logout rewrote the keys"
+    );
+}
+
+/// CLI-23: a known service no block names is asked about by name. With no key it is not signed in
+/// and the line says how to sign in. With a key stored and no block it is not signed in either,
+/// since a turn sends none, and the line says the block is what is missing. Once a block names it,
+/// as the sign-in records one, the same key is found and the service is signed in.
+#[test]
+fn auth_status_gateway_asks_about_a_known_service_no_block_names() {
+    let scratch = Scratch::new("cli-running-auth-status-known");
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openai"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stdout.contains("gateway openai: not signed in: no key is stored for openai")
+            && stdout.contains("bravebot auth login gateway openai"),
+        "{stdout}"
+    );
+
+    let scratch = scratch.with_state("gateway-keys.json", &stored_keys(&["openai"]));
+    for arguments in [&["gateway", "openai"][..], &["gateway"][..]] {
+        let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, arguments);
+        assert_eq!(code, Some(1), "{arguments:?}: {stdout}{stderr}");
+        assert!(
+            stdout.contains("gateway openai: not signed in: a key is stored for openai")
+                && stdout.contains("no provider block names it"),
+            "{arguments:?}: {stdout}"
+        );
+        assert_eq!(stdout.lines().count(), 1, "{arguments:?}: {stdout}");
+    }
+
+    let scratch = scratch.with_settings(r#"{"provider": {"openai": {}}}"#);
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["gateway", "openai"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "gateway openai: signed in: stored by bravebot auth login gateway (never printed)\n"
     );
 }
 
@@ -8602,8 +9145,22 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt]"),
+        stderr.contains("bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]"),
         "{stderr}"
+    );
+
+    // The refusal for `import` names the ways that can be asked about, ChatGPT and xAI among them, in
+    // the language the interface is in.
+    let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
+    assert!(
+        english.contains("name leo, bedrock, gateway, chatgpt or xai"),
+        "{english}"
+    );
+    let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
+    let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
+    assert!(
+        french.contains("nommez leo, bedrock, gateway, chatgpt ou xai"),
+        "{french}"
     );
 }
 
@@ -8615,8 +9172,12 @@ const A_CHATGPT_HOST: &str = "urn:uuid:placeholder-chatgpt-host";
 /// The file `auth login chatgpt` stores, for an access token that expires `expires_at` seconds after
 /// 1970-01-01.
 fn a_chatgpt_sign_in(expires_at: u64) -> String {
-    format!(
-        r#"{{"version":1,"access_token":"{A_CHATGPT_ACCESS_TOKEN}","refresh_token":"{A_CHATGPT_REFRESH_TOKEN}","expires_at":{expires_at},"client_id":"{A_CHATGPT_CLIENT}","host_id":"{A_CHATGPT_HOST}"}}"#
+    stored_sign_in::stored_sign_in(
+        A_CHATGPT_ACCESS_TOKEN,
+        A_CHATGPT_REFRESH_TOKEN,
+        expires_at,
+        A_CHATGPT_CLIENT,
+        A_CHATGPT_HOST,
     )
 }
 
@@ -8672,9 +9233,10 @@ fn auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request(
 
 /// CHATGPT-11 and CRED-25: `doctor` names a stored ChatGPT sign-in as a held credential at its
 /// tier, with what would end it and the instant the access token expires, and prints nothing the
-/// file holds beyond that instant. Nothing stored is nothing said, a sign-in whose instant has
-/// passed is still signed in, and a file that cannot be used is named with its remedy and ends the
-/// run in failure, since the sign-in it held has stopped being used.
+/// file holds beyond that instant. It says what was seen of a revocation at the endpoint and that
+/// signing out and removing access were not observed. Nothing stored is nothing said, a sign-in
+/// whose instant has passed is still signed in, and a file that cannot be used is named with its
+/// remedy and ends the run in failure, since the sign-in it held has stopped being used.
 #[test]
 fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     // A model keyed by a variable, so a report that finds nothing else wrong ends in success and the
@@ -8728,9 +9290,24 @@ fn doctor_names_a_chatgpt_sign_in_by_its_expiry_and_prints_none_of_it() {
     );
     assert!(account.contains("held: a permanent secret"), "{account}");
     assert!(account.contains("a bearer secret"), "{account}");
+    // What may outlive a revocation is one line that says what was seen, a revocation at the
+    // endpoint, and what was not, signing out and removing access. A report with no such line reads
+    // as nothing surviving, and one that says a token may run to its own expiry ignores the
+    // revocation that ended one.
+    let outlives = account
+        .lines()
+        .find(|line| line.trim_start().starts_with("outlives "))
+        .unwrap_or_else(|| panic!("what may outlive a revocation is not reported: {account}"));
+    for words in [
+        "was refused within seconds after the refresh token was revoked at OpenAI's revocation endpoint",
+        "one account, one revocation, a call this program does not make",
+        "whether signing out of the account or removing this program's access in its settings ends it has not been observed",
+    ] {
+        assert!(outlives.contains(words), "{words}: {outlives}");
+    }
     assert!(
-        account.contains("whether revoking the sign-in reaches it has not been observed"),
-        "{account}"
+        !outlives.contains("may run to its own expiry"),
+        "the sign-in is still said to run to its own expiry: {outlives}"
     );
 
     let lapsed = scratch("cli-running-doctor-chatgpt-lapsed")
@@ -8854,6 +9431,316 @@ fn auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done(
         "{stderr}"
     );
     assert!(!marker.exists(), "a gateway of that name opened a browser");
+}
+
+/// CHATGPT-1 and CHATGPT-8: a turn whose model is `chatgpt/<name>` goes to the account and not to
+/// Brave's endpoint or to a service that is configured, and where nothing is stored it ends with
+/// the sentence that names the command. The run starts under a home of its own with no sign-in,
+/// so nothing it does can reach the account, and the sentence is the account client's: Brave's
+/// endpoint would have said no model service is configured.
+#[test]
+fn a_turn_on_a_chatgpt_model_with_no_sign_in_ends_naming_the_command_and_stores_nothing() {
+    let scratch = Scratch::new("cli-running-chatgpt-model-signed-out");
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-5.5",
+            "--trust-workspace",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("not signed in to a ChatGPT account")
+            && stderr.contains("bravebot auth login chatgpt"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("no model service is configured"),
+        "the name was looked up as a Brave model: {stderr}"
+    );
+    assert!(
+        !scratch.path.join(".bravebot/chatgpt-account.json").exists(),
+        "a refused turn stored a sign-in"
+    );
+}
+
+/// CHATGPT-8, LOCALE-8: a turn that failed on the account is reported in the sentence of the
+/// catalog the person chose, and not in English whatever they chose, with the command that signs in
+/// again left as typed. `--json` carries the same sentence as the run's error. The run is the one-shot
+/// run, which is the layer that prints `BB1001`. A crate that worded the failure itself would print
+/// English in either.
+#[test]
+fn a_turn_that_failed_on_the_chatgpt_account_is_reported_in_the_language_chosen() {
+    let scratch = Scratch::new("cli-running-chatgpt-failure-in-french");
+    let mut environment = NOTHING_CONFIGURED.to_vec();
+    environment.push(("BRAVEBOT_LOCALE", "fr"));
+
+    let output = bravebot(
+        &scratch.path,
+        &environment,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-5.5",
+            "--trust-workspace",
+            "--json",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    for said in [&stderr, &stdout] {
+        assert!(
+            said.contains("pas connecté à un compte ChatGPT")
+                && said.contains("`bravebot auth login chatgpt`"),
+            "{said}"
+        );
+        assert!(!said.contains("not signed in"), "{said}");
+    }
+}
+
+/// CHATGPT-8: a refusal that names the account and came as a 429 with a `Retry-After` is reported by
+/// the one-shot run as the account's sentence with the wait in it, in minutes rounded up, and the
+/// status after it, and with no count of tries, for either refusal. The same refusal at another
+/// status carries the header and does not say a wait, since only a 429 asks for one. The request is
+/// sent once, to a stand-in for the serving host, and nothing the service wrote is repeated.
+///
+/// The regressions it rejects are a refusal reported as the category's line, which said "the service
+/// asked for fewer requests (HTTP 429), after 3 attempts" before the refusal was named, a wait
+/// dropped on the way from the client to the line, a wait said at a status that did not ask for
+/// one, and a count of tries tacked on after the sentence.
+#[test]
+fn a_refusal_that_asked_for_a_wait_is_reported_by_the_one_shot_run_with_the_wait_and_the_status() {
+    use refusal_codes::{NOT_ELIGIBLE, USAGE_LIMIT};
+    let usage_limit = "OpenAI says this ChatGPT account has reached its usage limit";
+    let not_permitted = "OpenAI does not allow this ChatGPT account to be used this way";
+    for (status, code, line) in [
+        (
+            429,
+            USAGE_LIMIT,
+            format!(
+                "{usage_limit}, and the service asked for a wait of about 10 minutes (HTTP 429)"
+            ),
+        ),
+        (
+            429,
+            NOT_ELIGIBLE,
+            format!(
+                "{not_permitted}, and the service asked for a wait of about 10 minutes (HTTP 429)"
+            ),
+        ),
+        (403, USAGE_LIMIT, format!("{usage_limit} (HTTP 403)")),
+    ] {
+        let refusal =
+            serde_json::json!({"error": {"code": code, "message": "WORDS-OF-THE-SERVICE"}})
+                .to_string();
+        let reply = format!(
+            "HTTP/1.1 {status} \r\ncontent-type: application/json\r\nretry-after: 600\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{refusal}",
+            refusal.len()
+        );
+        let service = a_gateway("[]", move |_| reply.clone());
+        let base = format!("http://127.0.0.1:{}", service.port);
+        let scratch = Scratch::new(&format!("cli-running-chatgpt-wait-{status}-{code}"))
+            .with_state("chatgpt-account.json", &a_chatgpt_sign_in(4_102_444_800));
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push((bravebot_skus::chatgpt::STAND_IN, base.as_str()));
+
+        let output = bravebot(
+            &scratch.path,
+            &environment,
+            &[
+                "-p",
+                "say something",
+                "--model",
+                "chatgpt/gpt-5.5",
+                "--trust-workspace",
+            ],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{status} {code}: {stdout}{stderr}"
+        );
+        assert!(
+            stderr
+                .lines()
+                .any(|found| found == format!("BB1001: {line}")),
+            "{status} {code}: {stderr}"
+        );
+        for left_out in ["attempts", "fewer requests", "WORDS-OF-THE-SERVICE"] {
+            assert!(!stderr.contains(left_out), "{status} {code}: {stderr}");
+        }
+        assert_eq!(
+            service.asked.try_iter().count(),
+            1,
+            "{status} {code}: the refusal was sent again"
+        );
+    }
+}
+
+/// CHATGPT-8: a turn on a model the account does not offer is reported by the one-shot run as one
+/// sentence, in text and in `--json`: that OpenAI does not offer that model to the account and that
+/// another can be chosen. The service answers with a 400 whose body names `model_not_found`. The
+/// report says no status, no command to sign in again and no model, and none of the words the
+/// service wrote. The request is sent once and the stored sign-in is as it was, so nothing was
+/// renewed or removed for it.
+///
+/// The regressions it rejects are the report that says only that the service returned HTTP 400, a
+/// sentence that sends the person to sign in again, the service's own words or the model's name in
+/// the report, a second request for the refusal, and a stored sign-in changed by it.
+#[test]
+fn a_model_the_account_does_not_offer_is_reported_by_the_one_shot_run_as_one_sentence() {
+    let sentence = "OpenAI does not offer that model to this ChatGPT account. Choose another model";
+    let refusal = serde_json::json!({
+        "detail": "WORDS-OF-THE-SERVICE about gpt-placeholder",
+        "error": {
+            "type": "invalid_request_error",
+            "code": "model_not_found",
+            "message": "WORDS-OF-THE-SERVICE about gpt-placeholder",
+        },
+    })
+    .to_string();
+    for json in [false, true] {
+        let reply = format!(
+            "HTTP/1.1 400 \r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{refusal}",
+            refusal.len()
+        );
+        let service = a_gateway("[]", move |_| reply.clone());
+        let base = format!("http://127.0.0.1:{}", service.port);
+        let scratch = Scratch::new(&format!("cli-running-chatgpt-model-not-offered-{json}"))
+            .with_state("chatgpt-account.json", &a_chatgpt_sign_in(4_102_444_800));
+        let stored = scratch.path.join(".bravebot/chatgpt-account.json");
+        let before = std::fs::read(&stored).expect("the stored sign-in");
+        let mut environment = NOTHING_CONFIGURED.to_vec();
+        environment.push((bravebot_skus::chatgpt::STAND_IN, base.as_str()));
+        let mut arguments = vec![
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-placeholder",
+            "--trust-workspace",
+        ];
+        if json {
+            arguments.push("--json");
+        }
+
+        let output = bravebot(&scratch.path, &environment, &arguments);
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(output.status.code(), Some(1), "{json}: {stdout}{stderr}");
+        assert!(
+            stderr
+                .lines()
+                .any(|found| found == format!("BB1001: {sentence}")),
+            "{json}: {stderr}"
+        );
+        if json {
+            assert!(stdout.contains(sentence), "{stdout}");
+        }
+        for said in [&stderr, &stdout] {
+            for left_out in [
+                "HTTP 400",
+                "auth login",
+                "WORDS-OF-THE-SERVICE",
+                "gpt-placeholder",
+                "returned HTTP",
+            ] {
+                assert!(!said.contains(left_out), "{json}: {said}");
+            }
+        }
+        assert_eq!(
+            service.asked.try_iter().count(),
+            1,
+            "{json}: the refusal was sent again"
+        );
+        assert_eq!(
+            std::fs::read(&stored).expect("the sign-in is still stored"),
+            before,
+            "{json}: the refusal changed the stored sign-in"
+        );
+    }
+}
+
+/// CHATGPT-9: a gateway of another id that lists a model named `chatgpt/gpt-5.5` does not take the
+/// name from the account. Naming it as the account's row is named goes to the account, which with
+/// no sign-in ends naming the command and sends nothing to the gateway. The gateway's model is
+/// reached as its row is keyed, `openrouter/chatgpt/gpt-5.5`, and the gateway is then sent the name
+/// it lists. A run that matched the gateway's bare listing first would send the first turn to the
+/// gateway, with its key, for a model chosen as the account's.
+#[test]
+fn a_gateway_listing_a_chatgpt_name_does_not_take_a_turn_chosen_as_the_accounts() {
+    let gateway = a_gateway_listing(r#"["tools"]"#);
+    let settings = format!(
+        r#"{{"provider": {{"openrouter": {{
+            "env": ["OPENROUTER_API_KEY"],
+            "options": {{"baseURL": "http://127.0.0.1:{}/api/v1"}},
+            "models": {{"chatgpt/gpt-5.5": {{}}}}
+        }}}}}}"#,
+        gateway.port
+    );
+    let scratch =
+        Scratch::new("cli-running-chatgpt-name-listed-by-a-gateway").with_settings(&settings);
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "chatgpt/gpt-5.5",
+            "--trust-workspace",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("not signed in to a ChatGPT account")
+            && stderr.contains("bravebot auth login chatgpt"),
+        "the turn did not go to the account: {stderr}"
+    );
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a turn chosen as the account's went to the gateway"
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        AT_A_GATEWAY,
+        &[
+            "-p",
+            "say something",
+            "--model",
+            "openrouter/chatgpt/gpt-5.5",
+            "--trust-workspace",
+        ],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(
+        !stderr.contains("ChatGPT account"),
+        "the gateway's own spelling went to the account: {stdout}{stderr}"
+    );
+    let asked = gateway
+        .asked
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the gateway's own spelling reached the gateway");
+    assert!(
+        asked.contains(r#""model":"chatgpt/gpt-5.5""#),
+        "the gateway was not sent the name it lists: {asked}"
+    );
 }
 
 /// CHATGPT-11: logging out removes the one file and says what it leaves, is allowed in an
@@ -9077,6 +9964,107 @@ fn a_run_sends_the_key_stored_for_its_gateway() {
             format!("Bearer {expected}"),
             "{exported:?}: {stderr}"
         );
+    }
+}
+
+/// CRED-14: the bearer key of an `openai` entry is in no file a run writes and in nothing it
+/// prints. The files are the record of the session and its trail (SESSION-1) and whatever else the
+/// run leaves under the state directory. One service answers and the other refuses with a body
+/// that repeats the key, which is what a service that echoes a credential does, so a body copied
+/// into a record or a message would carry it.
+#[test]
+fn an_openai_key_is_in_no_file_a_run_writes_and_nothing_it_prints() {
+    const KEY: &str = "placeholder-openai-key-8e41b7";
+    fn text_under(directory: &Path, found: &mut Vec<(PathBuf, String)>) {
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                text_under(&path, found);
+            } else {
+                let text =
+                    String::from_utf8_lossy(&std::fs::read(&path).unwrap_or_default()).into_owned();
+                found.push((path, text));
+            }
+        }
+    }
+    let environment = [
+        ("SERVICES_KEY_AICHAT", "a-services-key"),
+        ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+        ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+        ("OPENAI_API_KEY", KEY),
+    ];
+    let settings = |port: u16| {
+        format!(
+            r#"{{"provider": {{"openai": {{"env": ["OPENAI_API_KEY"],
+                "options": {{"baseURL": "http://127.0.0.1:{port}/v1"}}}}}},
+                "model": "openai/reasons-only"}}"#
+        )
+    };
+    let (answering, seen) = a_gateway_seeing_bearers();
+    let refusing = a_gateway(r#"["tools"]"#, |_| {
+        http(
+            401,
+            &format!(r#"{{"error": {{"message": "Incorrect API key provided: {KEY}"}}}}"#),
+        )
+    });
+
+    for (case, port) in [("answered", answering), ("refused", refusing.port)] {
+        let scratch =
+            Scratch::new(&format!("cli-running-openai-key-{case}")).with_settings(&settings(port));
+        let output = bravebot(
+            &scratch.path,
+            &environment,
+            &["--json", "-p", "say something"],
+        );
+        let (stdout, stderr) = said(&output);
+        assert_eq!(
+            output.status.success(),
+            case == "answered",
+            "{case}: {stderr}"
+        );
+
+        let mut files = Vec::new();
+        text_under(&scratch.path.join(".bravebot"), &mut files);
+        if case == "answered" {
+            let bearer = seen
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("the run did not reach the gateway: {stderr}"));
+            assert_eq!(bearer, format!("Bearer {KEY}"), "{stderr}");
+            // The files scanned below include the ones this clause is about.
+            let id = session_of(&stdout).unwrap_or_else(|| panic!("no session id in {stdout}"));
+            for ending in [format!("{id}.json"), format!("{id}.audit.jsonl")] {
+                assert!(
+                    files
+                        .iter()
+                        .any(|(path, _)| path.to_string_lossy().ends_with(&ending)),
+                    "no file named {ending}: {:?}",
+                    files.iter().map(|(path, _)| path).collect::<Vec<_>>()
+                );
+            }
+        } else {
+            // The echoing body was served and the run reported the refusal, so a run that failed
+            // before the request was sent does not pass for this half.
+            assert!(
+                refusing.asked.try_recv().is_ok(),
+                "the refused run never asked the gateway: {stderr}"
+            );
+            assert!(
+                stderr.contains("returned HTTP 401"),
+                "the refused run did not report the refusal: {stderr}"
+            );
+        }
+        for (what, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+            assert!(
+                !text.contains(KEY),
+                "the key is in the {what} of the {case} run"
+            );
+        }
+        for (path, text) in &files {
+            assert!(
+                !text.contains(KEY),
+                "the key is in {path:?} after the {case} run"
+            );
+        }
     }
 }
 
@@ -10967,6 +11955,131 @@ fn the_bypass_and_unconfine_flag_opens_a_run_with_the_sandbox_off() {
         assert!(
             asked.contains("\"name\":\"run\""),
             "{name}: the run tool was dropped: {asked}"
+        );
+    }
+}
+
+/// A language server that answers a definition and records each start in `$STARTS`, the least a
+/// session needs of one. The index is reported settled at once, so nothing waits out LSP-7's bound.
+#[cfg(unix)]
+const A_SERVER_THAT_COUNTS_ITS_STARTS: &str = r#"#!/bin/sh
+echo started >> "$STARTS"
+reply() {
+  printf 'Content-Length: %s\r\n\r\n%s' "${#1}" "$1"
+}
+while IFS= read -r header; do
+  case "$header" in
+    Content-Length:*) length=$(printf '%s' "$header" | tr -cd '0-9') ;;
+    *) continue ;;
+  esac
+  IFS= read -r blank
+  body=$(dd bs=1 count="$length" 2>/dev/null)
+  id=$(printf '%s' "$body" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$body" in
+    *'"initialize"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"capabilities\":{}}}"
+      reply '{"jsonrpc":"2.0","method":"$/progress","params":{"token":"rustAnalyzer/cachePriming","value":{"kind":"end"}}}'
+      ;;
+    *'"textDocument/definition"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":[{\"uri\":\"file://$DEFINED_AT\",\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":0,\"character\":14}}}]}"
+      ;;
+    *'"shutdown"'*)
+      reply "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":null}"
+      ;;
+  esac
+done
+"#;
+
+/// A gateway whose model asks where the symbol at `src/a.rs:1:12` is defined and, once that call
+/// has an answer in the conversation, says it is done.
+#[cfg(unix)]
+fn a_gateway_asking_about_a_symbol() -> Gateway {
+    a_gateway(r#"["tools"]"#, |body| {
+        let frame = match body.contains(r#""role":"tool""#) {
+            true => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","content":"all done"},
+                "finish_reason":"stop"}]}),
+            false => serde_json::json!({"model":"reasons-only","choices":[{
+                "index":0,"delta":{"role":"assistant","tool_calls":[{
+                    "index":0,"id":"call-1","type":"function","function":{
+                        "name":"lsp",
+                        "arguments":"{\"operation\":\"goToDefinition\",\"path\":\"src/a.rs\",\"line\":1,\"character\":12}"}}]},
+                "finish_reason":"tool_calls"}]}),
+        };
+        let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+        format!(
+            "HTTP/1.1 200 \r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    })
+}
+
+/// LSP-5, MODE-4, MODE-13: in a one-shot run nobody is there to be asked about starting a language
+/// server, so the server starts only where the command line answered for the person and nothing is
+/// confined: bypassing with the sandbox mode `off`, however the two were asked for. Bypassing under
+/// the default sandbox mode and accepting edits under `off` each leave the question unanswered, so
+/// the server is refused and never starts. The failure this rejects is a front end that builds its
+/// confirmer without the task's sandbox mode, which refuses the server under both flags.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_off() {
+    use std::os::unix::fs::PermissionsExt;
+    if !bravebot_sandbox::confinement_works_here() {
+        eprintln!("skipping the language server start test: confinement is unavailable");
+        return;
+    }
+    let both = ["--dangerously-bypass-approvals-and-sandbox"];
+    let skipping_with_off = ["--dangerously-skip-permissions", "--sandbox", "off"];
+    let skipping = ["--dangerously-skip-permissions"];
+    let accepting_with_off = ["--accept-edits", "--trust-workspace", "--sandbox", "off"];
+    for (name, flags, started) in [
+        ("both-flags", &both[..], true),
+        ("skip-and-off", &skipping_with_off[..], true),
+        ("skip-alone", &skipping[..], false),
+        ("accept-edits-and-off", &accepting_with_off[..], false),
+    ] {
+        let gateway = a_gateway_asking_about_a_symbol();
+        let scratch = Scratch::new(&format!("cli-running-lsp-start-{name}"))
+            .with_settings(&settings_for(&gateway))
+            .with_file("src/a.rs", "pub struct Held;\n");
+        // Outside the home and the working directory, which a confined stage may write: a program
+        // found only in a directory like that is not installed (SANDBOX-30).
+        let installed = Scratch::new(&format!("cli-running-lsp-installed-{name}"));
+        let program = installed.path.join("rust-analyzer");
+        std::fs::write(&program, A_SERVER_THAT_COUNTS_ITS_STARTS).expect("write the server");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        let starts = installed.path.join("starts");
+        let defined_at = scratch.path.join("src/a.rs");
+        let path = format!("{}:/usr/bin:/bin", installed.path.display());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.extend([
+            ("PATH", path.as_str()),
+            ("STARTS", starts.to_str().expect("a utf-8 path")),
+            ("DEFINED_AT", defined_at.to_str().expect("a utf-8 path")),
+        ]);
+        let mut arguments = flags.to_vec();
+        arguments.extend(["-p", "where is Held declared"]);
+        bravebot_started_in(&scratch.path, &scratch.path, &environment, &arguments);
+        let _asked = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the run reached the gateway");
+        let answered = gateway
+            .asked
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the planner was sent the result of its question");
+        let starts =
+            std::fs::read_to_string(&starts).map_or(0, |recorded| recorded.lines().count());
+        let result = answered
+            .find("Result of lsp")
+            .map_or("no result of lsp", |at| {
+                answered[at..].split('"').next().unwrap_or_default()
+            });
+        assert_eq!(starts, usize::from(started), "{name}: {result}");
+        assert_eq!(
+            result.contains("refused"),
+            !started,
+            "{name}: the planner was told the wrong thing about the start: {result}"
         );
     }
 }
@@ -13130,6 +14243,124 @@ fn a_record_a_running_session_holds_is_not_resumed() {
 
     let _ = bravebot(&home.0, &[], &["sessions", "stop", "3f2a9c1e"]);
     let _ = host.wait();
+}
+
+/// SESSION-38, BG-9 and CLI-25: a record a terminal holds, which its process locks as long as it
+/// writes it, is not resumed, continued or started again. `--resume`, `--continue`, a one-shot run
+/// with a task, `attach` and `reply` each say the session is open in another terminal or window and how to
+/// copy it, and no process is started and nothing reaches the gateway.
+#[cfg(unix)]
+#[test]
+fn a_record_a_terminal_holds_is_not_resumed_or_started_again() {
+    let gateway = a_gateway(r#"["tools"]"#, |_| streamed("all done"));
+    let home = ShortHome::new();
+    let work = a_stopped_session_with_one_turn(&home, &gateway);
+
+    // What another terminal's process holds: the lock beside the record it resumed.
+    let sessions = home.0.join(".bravebot/sessions");
+    let record_directory = std::fs::read_dir(&sessions)
+        .expect("the sessions directory")
+        .map(|entry| entry.expect("an entry").path())
+        .find(|project| project.join(format!("{SESSION_ID}.json")).is_file())
+        .expect("the record of the stopped session");
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(record_directory.join(format!("{SESSION_ID}.lock")))
+        .expect("the lock file");
+    holder.try_lock().expect("nothing holds the record yet");
+
+    for arguments in [&["--resume", SESSION_ID][..], &["--continue"][..]] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("is open in another terminal or window"),
+            "{arguments:?}: {err}"
+        );
+        assert!(
+            err.contains(&format!("bravebot --fork {SESSION_ID}")),
+            "{arguments:?}: {err}"
+        );
+    }
+
+    for arguments in [
+        &["-p", "next", "--resume", SESSION_ID][..],
+        &["-p", "next", "--continue"][..],
+    ] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("is open in another terminal or window"),
+            "{arguments:?}: {err}"
+        );
+    }
+
+    for arguments in [
+        &["attach", "3f2a9c1e"][..],
+        &["reply", "3f2a9c1e", "go on"][..],
+    ] {
+        let output = bravebot_started_in(&home.0, &work, AT_A_GATEWAY, arguments);
+        assert!(!output.status.success(), "{arguments:?}");
+        let err = said(&output).1;
+        assert!(
+            err.contains("is open in another terminal or window"),
+            "{arguments:?}: {err}"
+        );
+    }
+    let listed = said(&bravebot(&home.0, &[], &["sessions"])).0;
+    assert!(
+        listed.contains("stopped"),
+        "a process was started for a record a terminal holds: {listed}"
+    );
+
+    // The process `attach` would have started refuses for itself, since the lock is what both
+    // would write under.
+    let job = home.0.join(format!(".bravebot/jobs/{SESSION_ID}"));
+    std::fs::write(job.join("first-prompt"), "").expect("nothing to start with");
+    let _ = std::fs::remove_file(job.join("attach.sock"));
+    let host = Command::new(env!("CARGO_BIN_EXE_bravebot"))
+        .env_clear()
+        .env("HOME", &home.0)
+        .env("BRAVEBOT_LOCALE", "en-US")
+        .env("OLLAMA_HOST", NO_OLLAMA)
+        .env("BRAVEBOT_LM_STUDIO_HOST", NO_OLLAMA)
+        .env("LLAMA_ARG_PORT", NO_LLAMA_SERVER_PORT)
+        .envs(AT_A_GATEWAY.iter().copied())
+        .args(["__bg-host", SESSION_ID])
+        .current_dir(&work)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("the host runs");
+    assert!(!host.status.success(), "a host started on a held record");
+    let refusal = String::from_utf8_lossy(&host.stderr);
+    assert!(
+        refusal.contains("is open in another terminal or window"),
+        "{refusal}"
+    );
+    assert!(
+        gateway.asked.try_recv().is_err(),
+        "a refused task reached the gateway"
+    );
+
+    // Once the holder has ended the record is free, and the same words are not said.
+    drop(holder);
+    let output = bravebot_started_in(
+        &home.0,
+        &work,
+        AT_A_GATEWAY,
+        &["-p", "next", "--resume", SESSION_ID],
+    );
+    assert!(
+        !said(&output)
+            .1
+            .contains("is open in another terminal or window"),
+        "{}",
+        said(&output).1
+    );
 }
 
 /// BG-2 and BG-8: a process started with a mode word, as `/bg` starts one, runs in that mode and
@@ -16227,6 +17458,66 @@ fn a_tool_limit_that_limits_nothing_is_refused_by_name() {
     }
 }
 
+/// CLI-26: the commands that start neither a session nor a task are refused both flags, each with
+/// the argument status and its own name in the refusal. The `doctor` row of the test above is one of
+/// twelve, and a list that lost any other would take the flag and ignore it.
+#[test]
+fn the_tool_limit_is_refused_beside_each_command_that_starts_no_session_or_task() {
+    let scratch = Scratch::new("cli-running-tools-refused-commands");
+    for command in [
+        "doctor",
+        "auth",
+        "mcp",
+        "permissions",
+        "sessions",
+        "stats",
+        "attach",
+        "reply",
+        "import-leo-creds",
+        "import-providers",
+        "completion",
+        "shell-init",
+    ] {
+        for flags in [&["--tools", "read_file"][..], &["--no-shell"][..]] {
+            let mut arguments = flags.to_vec();
+            arguments.push(command);
+            let output = bravebot(&scratch.path, &[], &arguments);
+            let (stdout, stderr) = said(&output);
+            assert_eq!(output.status.code(), Some(2), "{arguments:?}: {stderr}");
+            assert!(stdout.is_empty(), "{arguments:?}: {stdout}");
+            assert!(
+                stderr.contains(command),
+                "{arguments:?} was not refused by name: {stderr}"
+            );
+        }
+    }
+}
+
+/// CLI-26: where `--no-shell` took `run` away, `read_git`'s description does not send the planner
+/// to it, and says instead that nothing on the list reads that history. The run with no flag is the
+/// control that the description does name `run` when it is offered, so a description that stopped
+/// naming it anywhere cannot pass for the limited one.
+#[cfg(unix)]
+#[test]
+fn a_no_shell_run_does_not_send_the_planner_from_read_git_to_run() {
+    let (control, _, _) = a_limited_run_asked_for_a_program("cli-running-git-run-control", &[]);
+    assert!(
+        control.contains("elsewhere it says so and you use run"),
+        "the control run's read_git never names run: {control}"
+    );
+    let (limited, _, _) =
+        a_limited_run_asked_for_a_program("cli-running-git-run-limited", &["--no-shell"]);
+    assert!(
+        !limited.contains("elsewhere it says so and you use run")
+            && !limited.contains("For --follow, blame or anything else use run."),
+        "read_git still sends the planner to run: {limited}"
+    );
+    assert!(
+        limited.contains("no tool on your list reads that history instead"),
+        "read_git does not say nothing on the list reads that history: {limited}"
+    );
+}
+
 /// REFER-3 and REFER-4 for the one-shot run: a directory the home layer names reaches the request
 /// as a listed reference, and the same block in a checkout's own settings file does not. The run
 /// builds its workspace in the entry point, so only the request on the wire says whether the block
@@ -18079,6 +19370,51 @@ fn a_goal_judge_that_cannot_be_reached_ends_the_run_on_the_unreachable_status() 
         1,
         "only the round reached the gateway: {stderr}"
     );
+}
+
+/// CLI-35, CHATGPT-8: a judge that is the ChatGPT account with nobody signed in leaves the goal
+/// unchecked and says why in the account's sentence, which names the command that signs in again, and
+/// not in the name of a category or a sentence in English whatever language was chosen. The rounds
+/// ran against the gateway, so the sentence is the judge's. A run that printed the category would say
+/// the credentials were refused of a sign-in nobody made.
+#[test]
+fn a_goal_run_whose_judge_is_the_chatgpt_account_with_no_sign_in_says_the_sentence() {
+    for (language, words) in [
+        ("en-US", "not signed in to a ChatGPT account"),
+        ("fr", "pas connecté à un compte ChatGPT"),
+    ] {
+        let gateway = a_gateway_for_a_goal(&["MET\nfine"], 0);
+        let mut settings: serde_json::Value =
+            serde_json::from_str(&settings_for(&gateway)).expect("settings are JSON");
+        settings["summaryModel"] = serde_json::json!("chatgpt/gpt-judge");
+        let scratch = Scratch::new(&format!("cli-running-goal-judge-account-{language}"))
+            .with_settings(&settings.to_string());
+        let mut environment = AT_A_GATEWAY.to_vec();
+        environment.push(("BRAVEBOT_LOCALE", language));
+
+        let output = bravebot_started_in(
+            &scratch.path,
+            &scratch.path,
+            &environment,
+            &["--goal", A_CONDITION, "-p", "get the build green"],
+        );
+
+        let (stdout, stderr) = said(&output);
+        assert_eq!(stdout.trim(), "round 1 done", "{language}: {stderr}");
+        assert!(
+            stderr.contains(words) && stderr.contains("`bravebot auth login chatgpt`"),
+            "{language}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("ChatGPT account:") && !stderr.contains("NotSignedIn"),
+            "{language}: the name of the condition was printed: {stderr}"
+        );
+        assert_eq!(
+            checks_among(&gateway.asked.try_iter().collect::<Vec<_>>()),
+            0,
+            "{language}: the judge reached the gateway"
+        );
+    }
 }
 
 /// CLI-35: a round that fails has nothing to judge, so the run ends as a turn that failed does and

@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
 import { oneModelList } from './acceptance-fixture.mjs'
+import { COMPOSER_NAME } from './drive-support.mjs'
 
 // PAGE in components/Sessions.tsx.
 const PAGE = 100
@@ -169,7 +170,7 @@ try {
   await foot.filter({ hasText: /^Show 49 more$/ }).waitFor()
   assert.equal(await drawn.count(), PAGE + 1, 'the open session is drawn past the page')
   assert.equal(await drawn.nth(PAGE).locator('.session-name').textContent(), 'Conversation 140')
-  await page.getByRole('textbox', { name: 'Message the agent' }).fill('Keep going')
+  await page.getByRole('textbox', { name: COMPOSER_NAME }).fill('Keep going')
   await page.getByRole('button', { name: 'Send', exact: true }).click()
   await late.locator('[data-status="working"]').waitFor()
   await drawn.first().locator('button.session').click()

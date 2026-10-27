@@ -10,10 +10,16 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# A test points the ChatGPT sign-in at a server of its own through this, and nothing else does. Only
+# the [dev-dependencies] of a crate whose tests need it enable it, and a release build refuses it.
+[features]
+test-hosts = []
+
 [dependencies]
 challenge-bypass-ristretto = { workspace = true }
 hmac = { workspace = true }
 rand = { workspace = true }
+ring = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 ureq = { workspace = true }

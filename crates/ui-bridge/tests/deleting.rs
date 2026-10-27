@@ -360,7 +360,7 @@ fn a_deleted_session_is_gone_with_its_trail_and_its_neighbour_is_not() {
     let project = scratch.project();
     let doomed = take_turn(&home, &project, &endpoint, None, "first question");
     let kept = take_turn(&home, &project, &endpoint, None, "second question");
-    assert_eq!(stored(&home).len(), 4, "{:?}", stored(&home));
+    assert_eq!(stored(&home).len(), 6, "{:?}", stored(&home));
 
     let mut window = Window::open(&home, &project, &endpoint, None);
     let answered = delete(&mut window, &project, &doomed);
@@ -368,7 +368,11 @@ fn a_deleted_session_is_gone_with_its_trail_and_its_neighbour_is_not() {
     assert_eq!(answered["ok"]["deleted"], true, "{answered}");
     assert_eq!(
         stored(&home),
-        vec![format!("{kept}.audit.jsonl"), format!("{kept}.json")],
+        vec![
+            format!("{kept}.audit.jsonl"),
+            format!("{kept}.json"),
+            format!("{kept}.lock")
+        ],
         "what is left on disk is not exactly the other session"
     );
     let listed = window.call(

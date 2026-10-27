@@ -9,6 +9,7 @@ governs:
   - crates/agent/src/connectors.rs
   - crates/agent/src/mode.rs
   - crates/cli/src/main.rs
+  - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/finish.rs
   - crates/cli/src/one_shot.rs
@@ -18,6 +19,7 @@ governs:
   - crates/tui/src/confirm/grants.rs
   - crates/tui/src/confirm/pinned.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/manifest_run.rs
   - crates/ui-bridge/src/manifest.rs
@@ -29,6 +31,7 @@ guards:
 documented-by:
   - docs/website/docs/using/headless.md
   - docs/website/docs/using/sessions.md
+  - docs/website/docs/using/manifest-mode.md
 ---
 
 ## Scope
@@ -280,8 +283,8 @@ what makes one question about the whole of it worth more than a question per ste
 `verified-by: bravebot_agent::connectors::the_plan_line_shows_the_text_and_title_the_plan_wrote_on_one_line`
 `verified-by: bravebot_agent::manifest::approving_a_plan_is_not_approving_its_writes`
 `verified-by: bravebot_agent::permission_mode::a_plan_is_put_to_a_person_in_every_mode_but_bypass`
-`verified-by: bravebot_tui::confirm::the_plan_prompt_shows_the_task_and_every_step`
-`verified-by: bravebot_tui::confirm::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
+`verified-by: bravebot_tui::confirm::grants::the_plan_prompt_shows_the_task_and_every_step`
+`verified-by: bravebot_tui::confirm::grants::the_plan_prompt_says_what_approving_it_does_and_does_not_do`
 `verified-by: bravebot_tui::remote_confirm::a_plan_crosses_with_every_step_and_the_answer_comes_back`
 `verified-by: bravebot_core::manifest::a_described_step_names_every_routing_field_it_fixes`
 `verified-by: bravebot_core::manifest::a_described_write_names_where_its_content_came_from_unless_that_is_the_workspace`
@@ -363,7 +366,7 @@ anybody ([permission-modes.md](permission-modes.md#MODE-3)).
 `verified-by: bravebot_session::sessions::a_session_that_started_a_run_can_still_be_resumed`
 `verified-by: bravebot_session::sessions::a_cancelled_run_leaves_no_record`
 `verified-by: bravebot_tui::app::a_run_the_person_stopped_is_read_off_the_key_and_not_off_the_error`
-`verified-by: bravebot_tui::confirm::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
+`verified-by: bravebot_tui::confirm::grants::escape_at_the_plan_prompt_stops_the_run_and_n_declines_it`
 `verified-by: bravebot_tui::app::a_manifest_run_is_not_a_prompt`
 
 <a id="MANIFEST-12"></a>

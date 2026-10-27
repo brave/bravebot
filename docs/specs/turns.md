@@ -4,6 +4,8 @@ title: What bounds a turn
 status: normative
 governs:
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/conversation.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
@@ -623,6 +625,7 @@ carries a list forward only from the next `todo_write`.
 `verified-by: bravebot_agent::turn::a_list_the_planner_was_not_shown_ends_the_question_about_the_list_before_it`
 `verified-by: bravebot_agent::turn::a_list_written_in_a_round_with_no_call_ids_is_asked_about`
 `verified-by: bravebot_agent::turn::a_line_typed_as_the_planner_answers_reaches_it_with_the_question_about_the_list`
+`verified-by: bravebot_agent::turn::every_answer_of_a_turn_is_recorded_as_the_planners_own_when_nothing_untrusted_was_met`
 `verified-by: bravebot_agent::turn::a_reply_cut_off_in_its_prose_is_not_asked_about_open_tasks`
 `verified-by: bravebot_agent::turn::a_session_that_has_met_something_untrusted_is_not_asked_about_the_list`
 `verified-by: bravebot_agent::turn::a_turn_not_offered_the_task_list_tool_is_not_asked_about_the_list`

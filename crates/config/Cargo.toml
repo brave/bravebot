@@ -10,6 +10,12 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# A test points the ChatGPT account's requests at a server of its own through this, and nothing else
+# does. Only the [dev-dependencies] of a crate whose tests need it enable it, and a release build
+# refuses it.
+[features]
+test-hosts = []
+
 [dependencies]
 # Holds a credential in pages the kernel keeps out of swap, a platform call this crate forbids
 # itself. It brings libc, landlock and windows-sys with it, and adds no crate to the lockfile:

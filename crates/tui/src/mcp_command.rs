@@ -569,7 +569,11 @@ pub(crate) mod tests {
         })
         .expect("config");
         let egress = bravebot_net::Egress::new();
-        let mut chat = bravebot_agent::processor::Chat::new(&config, &egress);
+        let mut chat = bravebot_agent::processor::Chat::new(
+            &config,
+            &egress,
+            &bravebot_agent::chatgpt::AccountSession::begin(),
+        );
         let holding = CapabilitySet::from_iter([Capability::McpCall(ServerAlias::new("weather"))]);
         let mut routing = Routing::new();
         routing.insert_trusted("task", "reach an MCP server");

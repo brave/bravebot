@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/repo_map.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/results.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
 
@@ -92,3 +93,11 @@ exist when the map was cut off.
 `verified-by: bravebot_agent::repo_map::a_budget_outside_the_range_gives_the_map_of_the_nearest_end`
 `verified-by: bravebot_agent::tools::a_map_says_each_way_it_fell_short_and_a_whole_one_says_nothing`
 `verified-by: bravebot_agent::workspace::a_repo_map_says_when_a_directory_could_not_be_opened`
+
+## Not covered
+
+The walk behind a map does not enter a symbolic link, as a listing does not
+([LIST-6](list-files.md#LIST-6)), and a map reports no count of them. A directory made of links maps
+as one with no source files. A listing of the directory says how many links were not entered. A
+count in the map is tracked in
+[brave/bravebot#3404](https://github.com/brave/bravebot/issues/3404).

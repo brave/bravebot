@@ -313,15 +313,12 @@ impl<W: Write> Reporter for Progress<W> {
             .take(bravebot_agent::messages::ID_SHOWN)
             .collect();
         self.say("");
-        self.say(&printable(
-            &t!(
-                session_message_heading,
-                from = from,
-                name = heard.name,
-                label = heard.label
-            )
-            .to_string(),
-        ));
+        self.say(&printable(&t!(
+            session_message_heading,
+            from = from,
+            name = heard.name,
+            label = heard.label
+        )));
         match heard.body {
             Reported::Said(text) => self.draw_quoted(&text),
             Reported::Kept(shown) => self.draw_quarantined(&shown),
@@ -338,15 +335,12 @@ impl<W: Write> Reporter for Progress<W> {
             .take(bravebot_agent::messages::ID_SHOWN)
             .collect();
         self.say("");
-        self.say(&printable(
-            &t!(
-                session_message_sent_heading,
-                to = to,
-                name = sent.name,
-                label = sent.label
-            )
-            .to_string(),
-        ));
+        self.say(&printable(&t!(
+            session_message_sent_heading,
+            to = to,
+            name = sent.name,
+            label = sent.label
+        )));
         self.draw_quoted(&sent.text);
     }
 }

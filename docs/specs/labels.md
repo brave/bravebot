@@ -19,28 +19,30 @@ guards:
       - crates/agent/src/skills.rs: 1
       - crates/agent/src/tools.rs: 30
       - crates/agent/src/turn.rs: 1
-      - crates/agent/src/workspace.rs: 14
+      - crates/agent/src/workspace.rs: 15
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/workspace.rs: 39
       - crates/aichat/src/anthropic.rs: 8
+      - crates/aichat/src/call.rs: 1
       - crates/aichat/src/generate_content.rs: 7
       - crates/aichat/src/responses.rs: 6
       - crates/aichat/src/lib.rs: 7
       - crates/bedrock/src/lib.rs: 8
       - crates/connector/src/lib.rs: 2
       - crates/core/src/policy.rs: 121
-      - crates/core/src/slot.rs: 5
+      - crates/core/src/slot.rs: 6
       - crates/core/src/value.rs: 9
       - crates/mcp/src/http.rs: 3
       - crates/mcp/src/lib.rs: 1
       - crates/mcp/src/protocol.rs: 3
       - crates/mcp/src/stdio.rs: 3
-      - crates/net/src/lib.rs: 2
+      - crates/net/src/lib.rs: 4
   - symbol: Labelled::declassify
     every-spelling: yes
     sites:
       - crates/agent/src/aside.rs: 3
       - crates/agent/src/commit_message.rs: 2
+      - crates/agent/src/file_preview.rs: 1
       - crates/agent/src/manifest.rs: 5
       - crates/agent/src/mcp.rs: 4
       - crates/agent/src/processor.rs: 1
@@ -49,7 +51,7 @@ guards:
       - crates/agent/src/turn.rs: 6
       - crates/agent/src/vet.rs: 2
       - crates/agent/src/workspace.rs: 1
-      - crates/agent/tests/workspace.rs: 59
+      - crates/agent/tests/workspace.rs: 61
       - crates/aichat/tests/client.rs: 12
       - crates/bedrock/src/lib.rs: 4
       - crates/connector/src/lib.rs: 1
@@ -75,8 +77,8 @@ guards:
       - crates/tui/tests/sessions.rs: 4
       - crates/agent/tests/incognito.rs: 1
       - crates/agent/tests/turn.rs: 2
-      - crates/agent/tests/workspace.rs: 279
-      - crates/core/src/policy.rs: 25
+      - crates/agent/tests/workspace.rs: 285
+      - crates/core/src/policy.rs: 28
       - crates/core/src/value.rs: 3
       - crates/ui-bridge/tests/workspace.rs: 2
   - symbol: Labelled::relabel
@@ -137,12 +139,13 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 16
+      - crates/agent/src/turn.rs: 15
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
       - crates/agent/src/aside.rs: 1
       - crates/agent/src/commit_message.rs: 2
+      - crates/agent/src/file_preview.rs: 1
       - crates/agent/src/manifest.rs: 8
       - crates/agent/src/mcp.rs: 3
       - crates/agent/src/servers.rs: 1
@@ -171,7 +174,7 @@ guards:
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
       - crates/agent/src/tools.rs: 2
-      - crates/agent/src/turn.rs: 3
+      - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
     sites:
@@ -184,14 +187,14 @@ guards:
       - crates/aichat/src/anthropic.rs: 2
       - crates/aichat/src/generate_content.rs: 2
       - crates/aichat/src/responses.rs: 1
-      - crates/aichat/src/lib.rs: 2
+      - crates/aichat/src/lib.rs: 3
       - crates/aichat/src/models.rs: 2
       - crates/aichat/src/ollama.rs: 1
       - crates/bedrock/src/lib.rs: 2
       - crates/core/src/policy.rs: 2
       - crates/mcp/src/http.rs: 1
       - crates/net/src/lib.rs: 1
-      - crates/net/tests/egress.rs: 2
+      - crates/net/tests/egress.rs: 3
       - crates/tui/src/update.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
@@ -213,17 +216,21 @@ L = I × C      I ∈ {T, U}      trusted / untrusted
                C ∈ {pub, priv} public  / private
 ```
 
-Untrusted input degrades integrity; private input raises confidentiality. `(U,priv)` and `(T,pub)`
-are **incomparable**, so this is a lattice rather than a pair of booleans and no total order may be
-imposed on it. Integrity meets pessimistically and confidentiality joins pessimistically.
+Untrusted input degrades integrity; private input raises confidentiality. A label degrades into
+another when the other is no more trusted and no less private than it. `(T,priv)` and `(U,pub)` are
+**incomparable**: neither degrades into the other. So this is a lattice rather than a pair of
+booleans, and no total order may be imposed on it: `Label` implements neither `PartialOrd` nor
+`Ord`. Integrity meets pessimistically and confidentiality joins pessimistically.
 
 `verified-by: bravebot_core::label::middle_elements_are_incomparable`
-`verified-by: bravebot_core::label::bottom_flows_everywhere_and_top_flows_nowhere`
+`verified-by: bravebot_core::label::degradation_has_one_source_and_one_sink`
+`verified-by: bravebot_core::label::degradation_is_reflexive`
+`verified-by: bravebot_core::label::degradation_is_antisymmetric`
+`verified-by: bravebot_core::label::degradation_is_transitive`
 `verified-by: bravebot_core::label::integrity_meet_is_pessimistic`
 `verified-by: bravebot_core::label::confidentiality_join_is_pessimistic`
-`verified-by: bravebot_core::label::ordering_is_reflexive_and_antisymmetric`
-`verified-by: bravebot_core::label::ordering_is_transitive`
 `verified-by: bravebot_core::label::display_matches_the_canonical_notation`
+`verified-by: by-construction (Label implements neither PartialOrd nor Ord, so two labels cannot be ranked with <, <=, > or >=; the compile_fail doctest on Label in crates/core/src/label.rs pins the < case)`
 
 <a id="LABEL-2"></a>
 ### LABEL-2: a derived value is labelled by taint over its inputs
@@ -442,7 +449,7 @@ design is wrong, not the label.
 `verified-by: bravebot_core::value::relabel_may_not_upgrade`
 `verified-by: bravebot_core::value::relabel_refuses_incomparable_labels`
 `verified-by: bravebot_core::value::relabel_may_not_make_private_content_public`
-`verified-by: bravebot_core::label::degradation_is_not_the_lattice_ordering`
+`verified-by: bravebot_core::label::degradation_never_raises_integrity_or_lowers_confidentiality`
 `verified-by: bravebot_core::label::trusted_input_cannot_launder_untrusted`
 `verified-by: bravebot_core::label::top_of_taint_degrades_from_everything`
 
@@ -473,6 +480,7 @@ and the content has no say in it.
 | a listing or a search across several paths | private, and trusted only where every path it visited is | `verified-by: bravebot_core::policy::a_read_over_several_paths_is_trusted_only_where_every_path_is` |
 | the file names a language server reported | private, and trusted only where every path it names is, so one nobody vouched for quarantines the answer; the same road as a listing, and the capability's `(U,priv)` is where it starts | `verified-by: bravebot_agent::lsp::locations_are_labelled_by_the_files_they_name` |
 | the severities and line numbers a language server reported for a file it was asked about | trusted and private, from the capability's own label and not from the queried file's entry, because a severity is a fixed enumeration and a line is an integer and the sentence carries no word the server wrote; the numbers are still computed from bytes nobody may have vouched for, which is the fifth entry of [Known costs](#known-costs) | `verified-by: bravebot_agent::lsp::diagnostics_for_a_file_nobody_vouched_for_report_lines_and_not_messages` |
+| the lines of a file a person clicked a path to see | untrusted and private whatever the trust map says of the path, from the label a write's review reads the file it replaces under, because the lines go to a screen as a quarantined block and a click has not asked for the file to be read by anything that acts on it ([MOUSE-42](mouse.md#MOUSE-42)) | `verified-by: bravebot_agent::file_preview::a_path_the_map_vouches_for_is_still_shown_as_untrusted` |
 | what a connector's authority says about a call besides its payload and detail: the outcome, the standing, reason codes, counts withheld and a link | none, because none of it reaches a model: each field has a fixed form, an outcome or standing from a closed list, a count, a reason in lower-case kebab and one `https://` URL, and a value out of form is replaced or dropped rather than shown. The payload and the detail are the capability's, the first row | `verified-by: bravebot_connector::lib::a_reason_code_is_shown_only_in_the_authoritys_own_form` `verified-by: bravebot_agent::manifest::an_accepted_acts_link_is_shown_only_when_it_is_well_formed` `verified-by: bravebot_agent::manifest::a_refused_connector_call_fails_its_step_without_quoting_the_service` |
 | a file the user named in a prompt or dropped on the window | trusted, because naming a file is vouching for it | `verified-by: bravebot_core::policy::a_file_the_user_named_is_read_as_trusted_though_nothing_else_is` |
 | what a program printed | untrusted and private, since what it did is unknown | `verified-by: bravebot_core::policy::an_opaque_program_always_yields_untrusted_private_output` |
@@ -513,7 +521,12 @@ reads as holding private content. The trail says which of these made the context
 resumed run is not recorded as letting anything out of quarantine. The user's own message is not labelled at all, which is why the
 two carriers that join it take no label either.
 
+The reply that ends a turn and an answer given between calls enter the conversation by the same
+step. In a context that has met something untrusted the reply is labelled untrusted, so the planner
+is told that it answered and given a reference to the reply, and the reply is in no later request.
+
 `verified-by: bravebot_core::policy::adopting_model_output_from_a_fallen_context_stays_untrusted`
+`verified-by: bravebot_agent::turn::the_final_reply_of_a_turn_is_held_under_a_reference_once_something_untrusted_was_met`
 `verified-by: bravebot_core::policy::only_a_value_a_transport_labelled_can_be_adopted_as_model_output`
 `verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
 `verified-by: bravebot_core::policy::the_trail_says_how_the_context_came_to_hold_private_content`

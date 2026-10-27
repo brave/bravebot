@@ -8,6 +8,8 @@ governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -213,9 +215,9 @@ makes possible, is two endorsements.
 that is the plan. Binding to the text would let a change in the working tree change what a prior
 approval covers without the text changing at all.
 
-`verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_plan_it_would_endorse`
-`verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_line_the_model_wrote_as_context`
-`verified-by: bravebot_tui::confirm::a_run_prompt_lists_every_file_the_line_would_write`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_plan_it_would_endorse`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_line_the_model_wrote_as_context`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_lists_every_file_the_line_would_write`
 `verified-by: bravebot_ui_bridge::wire::a_run_prompt_carries_the_line_the_planner_wrote_beside_the_plan_it_compiled_to`
 `verified-by: bravebot_ui_bridge::wire::a_call_that_was_never_spelled_as_a_line_says_so_rather_than_leaving_the_field_out`
 `verified-by: bravebot_core::command::a_plan_shows_its_resolved_binaries_and_argument_boundaries`
@@ -321,6 +323,16 @@ that is outside every opened directory is asked about under the name it was writ
 session that would accept the request, the refusal says that `unconfined` is the argument that
 makes the write possible.
 
+**Where the permission mode reaches a path.** While the mode that answers every permission question
+is in force ([MODE-4](../permission-modes.md#MODE-4)), a destination in a directory outside the
+workspace that the file tools reach ([PATHREQ-7](request-path.md#PATHREQ-7)) is not refused for
+leaving it, so the line needs no `unconfined` argument there. The refusals that hold for a granted
+request still refuse a destination, the check is made again at each open, and a delegate's
+destination is held to its definition's `writes:` limit as a tool's write is
+([DELEGATE-28](../delegation.md#DELEGATE-28)).
+
+`verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
+`verified-by: bravebot_agent::turn::a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`

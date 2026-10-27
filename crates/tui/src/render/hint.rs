@@ -7,8 +7,10 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::state::Session;
+use crate::command_table::OUTPUTS_COMMAND;
+use crate::state::{Footer, Hit, Session, Target, WatchScope};
 use crate::theme;
+use unicode_width::UnicodeWidthStr;
 
 use super::dim;
 
@@ -27,6 +29,11 @@ pub(super) const UNMEASURED_CONTEXT: &str = "context not yet measured";
 /// has no figure to give, and in front of the figure where it has one.
 pub(super) const COMPACTED_CONTEXT: &str = "context compacted";
 
+/// What the parts of the hint line are joined with, in columns.
+const SEPARATOR: usize = 5;
+/// The columns before the first part.
+const INDENT: usize = 2;
+
 /// Which parts of the hint line fit, giving up the expendable ones in the order named.
 ///
 /// Returns indices into `parts`, in their original order, so a caller draws what is left where it
@@ -40,10 +47,6 @@ pub(super) const COMPACTED_CONTEXT: &str = "context compacted";
 /// Widths are counted in characters. Not the width a terminal draws for every script, but much closer
 /// than a count of bytes and it needs nothing to work it out.
 fn fitted(parts: &[String], expendable: &[usize], width: u16) -> Vec<usize> {
-    /// What the parts are joined with, and the indent before the first.
-    const SEPARATOR: usize = 5;
-    const INDENT: usize = 2;
-
     let mut kept: Vec<usize> = (0..parts.len())
         .filter(|index| !parts[*index].is_empty())
         .collect();
@@ -114,7 +117,7 @@ pub(crate) fn cache_hit_rate(session: &Session) -> Option<String> {
         t!(number_decimal_separator),
         tenths % 10
     );
-    Some(t!(hint_cache_hit_rate, rate = rate).to_string())
+    Some(t!(hint_cache_hit_rate, rate = rate))
 }
 
 /// How the context currently stands: unmeasured, compacted, or measured as a percentage.
@@ -151,6 +154,7 @@ struct HintFacts {
     held: String,
     movable: String,
     watchable: String,
+    printed: String,
 }
 
 /// Where each part of the shell line sits in the array `shell_parts` builds.
@@ -162,22 +166,25 @@ mod shell {
     pub const LOOP: usize = 4;
     pub const JOBS: usize = 5;
     pub const WATCHABLE: usize = 6;
-    pub const HELD: usize = 7;
+    pub const PRINTED: usize = 7;
+    pub const HELD: usize = 8;
 }
 
 /// Where each part of the ordinary line sits in the array `ordinary_parts` builds.
 mod ordinary {
-    // 0 is the permission mode and 1 the vi mode, which `MODES` covers.
+    // 1 is the vi mode, which `MODES` covers with the permission mode.
+    pub const MODE: usize = 0;
     pub const TRAIL: usize = 2;
     pub const CONTEXT: usize = 3;
     pub const CACHE: usize = 4;
     pub const LOOP: usize = 5;
     pub const JOBS: usize = 6;
     pub const WATCHABLE: usize = 7;
-    pub const MOVABLE: usize = 8;
-    pub const SHORTCUTS: usize = 9;
-    pub const INFO: usize = 10;
-    pub const HELD: usize = 11;
+    pub const PRINTED: usize = 8;
+    pub const MOVABLE: usize = 9;
+    pub const SHORTCUTS: usize = 10;
+    pub const INFO: usize = 11;
+    pub const HELD: usize = 12;
     /// How many parts lead the line in the accent colour: the permission mode and the vi mode.
     pub const MODES: usize = 2;
 }
@@ -239,29 +246,40 @@ fn hint_facts(session: &Session) -> HintFacts {
             background_hint,
             chord = session.bindings().background_name()
         )
-        .to_string()
     } else {
         String::new()
     };
 
-    // The way into the view, for as long as it holds anything. The row that reports what the turn
-    // is doing names the key too, but that row goes when the turn ends, and what the view holds is
-    // most worth opening afterwards: the transcript keeps one sentence about a delegate and a
-    // preview of what a command printed. The count is there because a key with nothing behind it
-    // does nothing at all, and this line is read at a glance.
+    // The ways into the view, for as long as either list holds anything. The row that reports what
+    // the turn is doing names the key too, but that row goes when the turn ends, and what the view
+    // holds is most worth opening afterwards: the transcript keeps one sentence about a delegate
+    // and a preview of what a command printed. The counts are there because a key with nothing
+    // behind it does nothing at all, and this line is read at a glance.
     //
-    // Everything the view opens, not the delegates alone. A session that ran commands and spawned
-    // no delegate has a key that works and, counted the other way, no line saying so.
+    // One clause per list, each counting only what its own key opens (WATCH-11). The agents and
+    // what commands printed are different lists with different ways in, so a single figure for both
+    // would name a key and count rows it does not open.
     //
     // Read before the shell line as well as the ordinary one (WATCH-11): the view holds the same
     // things whichever mode the box is in, and this is the line that is always drawn.
-    let watchable = match session.watchable().len() {
+    let watchable = match session.watchable_in(WatchScope::Agents).len() {
         0 => String::new(),
         count => t!(
             watching_hint,
             chord = session.bindings().watch_name(),
             count = count
-        ),
+        )
+        .to_string(),
+    };
+    let printed = match session.watchable_in(WatchScope::Outputs).len() {
+        0 => String::new(),
+        count => t!(
+            outputs_hint,
+            chord = session.bindings().outputs_name(),
+            command = OUTPUTS_COMMAND,
+            count = count
+        )
+        .to_string(),
     };
     HintFacts {
         looping,
@@ -270,11 +288,12 @@ fn hint_facts(session: &Session) -> HintFacts {
         held,
         movable,
         watchable,
+        printed,
     }
 }
 
 /// The parts of the shell line, indexed by `shell`.
-fn shell_parts(session: &Session, facts: HintFacts) -> [String; 8] {
+fn shell_parts(session: &Session, facts: HintFacts) -> [String; 9] {
     // Fitted like the ordinary line, so a narrow terminal drops a part whole rather than
     // cutting one at the last column. The shell is the mode and goes last; what it says about
     // the line goes before the things that are spending something unwatched. The way into the
@@ -295,6 +314,7 @@ fn shell_parts(session: &Session, facts: HintFacts) -> [String; 8] {
         facts.looping,
         facts.jobs,
         facts.watchable,
+        facts.printed,
         facts.held,
     ]
 }
@@ -305,7 +325,7 @@ fn ordinary_parts(
     area: Rect,
     screen_height: u16,
     facts: HintFacts,
-) -> [String; 12] {
+) -> [String; 13] {
     // The panel shows the context and the cache while it has the rows for them, so the line drops
     // both rather than saying them twice (PANEL-8). Offered while it is closed and there is room to
     // draw it.
@@ -316,7 +336,7 @@ fn ordinary_parts(
         context_reading(session)
     };
     let info = if !session.panel_open() && crate::panel::fits(area.width) {
-        t!(panel_hint, chord = session.bindings().panel_name()).to_string()
+        t!(panel_hint, chord = session.bindings().panel_name())
     } else {
         String::new()
     };
@@ -374,11 +394,44 @@ fn ordinary_parts(
         facts.looping,
         facts.jobs,
         facts.watchable,
+        facts.printed,
         facts.movable,
         SHORTCUTS_HINT.to_string(),
         info,
         facts.held,
     ]
+}
+
+/// The cells of the parts `fitted` kept that a click acts on, where `target_of` says what a part
+/// stands for. A part with no target describes and is not drawn into the answer (MOUSE-48).
+///
+/// Laid out as [`hint_spans`] lays the text out: the indent, then each part with the separator
+/// between, so a part begins where the parts before it and their separators end.
+fn hints_of(
+    parts: &[String],
+    kept: &[usize],
+    area: Rect,
+    target_of: impl Fn(usize) -> Option<Footer>,
+) -> Vec<Target> {
+    let mut column = usize::from(area.x) + INDENT;
+    let mut hints = Vec::new();
+    for index in kept {
+        let width = parts[*index].width();
+        if let Some(target) = target_of(*index) {
+            hints.push(Target::on_screen(
+                cells(column, width, area),
+                Hit::Footer(target),
+            ));
+        }
+        column = column.saturating_add(width + SEPARATOR);
+    }
+    hints
+}
+
+/// `width` cells of the row `area`, from `column`, cut to what `area` holds.
+fn cells(column: usize, width: usize, area: Rect) -> Rect {
+    let clamp = |value: usize| u16::try_from(value).unwrap_or(u16::MAX);
+    Rect::new(clamp(column), area.y, clamp(width), 1).intersection(area)
 }
 
 /// The spans for the parts `fitted` kept: those below `accented_count` joined into one accented
@@ -413,13 +466,42 @@ pub(super) fn hint_spans(
     spans
 }
 
+/// The parts of the ordinary line in the order they are given up, as indices into `ordinary_parts`.
+/// `draw_hint` says why they stand in this order.
+fn expendable_parts(context_is_unmeasured: bool) -> [usize; 11] {
+    use ordinary::{
+        CACHE, CONTEXT, HELD, INFO, JOBS, LOOP, MOVABLE, PRINTED, SHORTCUTS, TRAIL, WATCHABLE,
+    };
+    if context_is_unmeasured {
+        [
+            INFO, CONTEXT, SHORTCUTS, TRAIL, CACHE, PRINTED, WATCHABLE, MOVABLE, HELD, JOBS, LOOP,
+        ]
+    } else {
+        [
+            INFO, SHORTCUTS, TRAIL, CONTEXT, CACHE, PRINTED, WATCHABLE, MOVABLE, HELD, JOBS, LOOP,
+        ]
+    }
+}
+
 /// The shortcut line. Keeps the bindings discoverable without a help command.
-pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
-    // The files state names its own keys and keeps the figures the panel has no section for
-    // (FILES-4, FILES-9). Every other key does nothing there, so nothing else on the line applies.
+///
+/// Gives the cells of each hint a click acts on: the permission mode (MOUSE-14) and the parts that
+/// name a key (MOUSE-48). What the row only describes is not among them. With them, whether the row
+/// says a message that fills it and leaves no room for anything beside (MOUSE-51).
+pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) -> (Vec<Target>, bool) {
+    // The files state names its keys in the panel and keeps the figures the panel has no section
+    // for (FILES-4, FILES-9). Where the panel is not drawn nothing else shows the keys, so the line
+    // names them, as it keeps a figure the panel does not draw (PANEL-8). Every other key does
+    // nothing there, so nothing else on the line applies.
     if session.files_open() {
+        let panel_drawn = crate::panel::drawn(session, area.width);
+        let keys = if panel_drawn {
+            String::new()
+        } else {
+            t!(files_keys).to_string()
+        };
         let parts = [
-            t!(files_hint).to_string(),
+            keys,
             context_reading(session),
             cache_hit_rate(session).unwrap_or_default(),
         ];
@@ -430,7 +512,8 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             .collect();
         let line = crate::status::cut(&said.join("  ·  "), usize::from(area.width));
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
-        return;
+        // The line of keys fills the row. The figures alone leave room beside them (MOUSE-51).
+        return (Vec::new(), !panel_drawn);
     }
     // Words an outside link put in the box stay named as such until they are sent or cleared, and
     // the line says how long they are, because a long one runs past what the box shows (LINK-4).
@@ -442,7 +525,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         };
         let line = crate::status::cut(&said, usize::from(area.width));
         frame.render_widget(Paragraph::new(Span::styled(line, dim())), area);
-        return;
+        return (Vec::new(), true);
     }
     let facts = hint_facts(session);
 
@@ -455,6 +538,7 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
             &[
                 shell::OUTPUT,
                 shell::CANCEL,
+                shell::PRINTED,
                 shell::WATCHABLE,
                 shell::MOVABLE,
                 shell::HELD,
@@ -465,7 +549,15 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
         );
         let spans = hint_spans(&parts, &kept, shell::NAME + 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
-        return;
+        let hints = hints_of(&parts, &kept, area, |index| match index {
+            shell::CANCEL => Some(Footer::CancelShell),
+            shell::MOVABLE => Some(Footer::Background),
+            shell::WATCHABLE => Some(Footer::Watch),
+            shell::PRINTED => Some(Footer::Outputs),
+            shell::HELD => Some(Footer::Held),
+            _ => None,
+        });
+        return (hints, false);
     }
 
     let parts = ordinary_parts(session, area, frame.area().height, facts);
@@ -490,38 +582,76 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
     // offer is up only while somebody is waiting on that command, which is the moment they are
     // reading this line for a way out of the wait; a job is spending something unwatched, as the
     // loop is.
-    use ordinary::{CACHE, CONTEXT, HELD, INFO, JOBS, LOOP, MOVABLE, SHORTCUTS, TRAIL, WATCHABLE};
-    let expendable: &[usize] = if context_is_unmeasured {
-        &[
-            INFO, CONTEXT, SHORTCUTS, TRAIL, CACHE, WATCHABLE, MOVABLE, HELD, JOBS, LOOP,
-        ]
-    } else {
-        &[
-            INFO, SHORTCUTS, TRAIL, CONTEXT, CACHE, WATCHABLE, MOVABLE, HELD, JOBS, LOOP,
-        ]
-    };
+    let expendable = expendable_parts(context_is_unmeasured);
     // A note is drawn over the right of this same row, so what the parts may occupy is the width
     // less that note. Fitted against the whole width instead, the last part that fits is one the
     // note then writes over the middle of, which is the half a word that dropping a part whole
     // exists to avoid.
-    let note = note_at_the_right(session);
-    let reserved = note.as_deref().map_or(0, |note| {
-        u16::try_from(note.chars().count()).unwrap_or(u16::MAX)
+    //
+    // A note that names a key is a hint, and a hint the width has no room for is not drawn and is not
+    // a target (MOUSE-48): drawn cut, it would be half a sentence with a click on it.
+    let note = note_at_the_right(session)
+        .filter(|note| note.target.is_none() || note.text.width() <= usize::from(area.width));
+    let reserved = note.as_ref().map_or(0, |note| {
+        u16::try_from(note.text.width()).unwrap_or(u16::MAX)
     });
-    let kept = fitted(&parts, expendable, area.width.saturating_sub(reserved));
+    let kept = fitted(&parts, &expendable, area.width.saturating_sub(reserved));
 
     let spans = hint_spans(&parts, &kept, ordinary::MODES);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
+    let mut hints = hints_of(&parts, &kept, area, |index| match index {
+        // The mode leads the line and is never given up, so it is either the first part kept or
+        // the line was cleared whole.
+        ordinary::MODE => Some(Footer::Mode),
+        ordinary::TRAIL => Some(Footer::Trail),
+        ordinary::SHORTCUTS => Some(Footer::Shortcuts),
+        ordinary::INFO => Some(Footer::Info),
+        ordinary::WATCHABLE => Some(Footer::Watch),
+        ordinary::PRINTED => Some(Footer::Outputs),
+        ordinary::MOVABLE => Some(Footer::Background),
+        ordinary::HELD => Some(Footer::Held),
+        _ => None,
+    });
+
     if let Some(note) = note {
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                note,
-                Style::default().fg(theme::brand_primary()),
-            )))
-            .alignment(Alignment::Right),
-            area,
-        );
+        draw_note(frame, area, note, &mut hints);
+    }
+    (hints, false)
+}
+
+/// Draw the note flush right on the row of hints, and record the cells of the hint it names where it
+/// names one.
+fn draw_note(frame: &mut Frame, area: Rect, note: Note, hints: &mut Vec<Target>) {
+    let width = note.text.width();
+    if let Some(target) = note.target {
+        // The note is drawn flush right and ends in blanks that are not part of what it says.
+        let said = note.text.trim_end().width();
+        let column = usize::from(area.right()).saturating_sub(width);
+        hints.push(Target::on_screen(
+            cells(column, said, area),
+            Hit::Footer(target),
+        ));
+    }
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            note.text,
+            Style::default().fg(theme::brand_primary()),
+        )))
+        .alignment(Alignment::Right),
+        area,
+    );
+}
+
+/// What is drawn at the right of the hint row, and what a click on it does where it names a key.
+struct Note {
+    text: String,
+    target: Option<Footer>,
+}
+
+impl Note {
+    fn said(text: String) -> Option<Self> {
+        Some(Self { text, target: None })
     }
 }
 
@@ -529,35 +659,35 @@ pub(super) fn draw_hint(frame: &mut Frame, area: Rect, session: &Session) {
 ///
 /// One note at a time, in this order, since they share the room: the parts of the line are fitted
 /// against the width this leaves.
-fn note_at_the_right(session: &Session) -> Option<String> {
+fn note_at_the_right(session: &Session) -> Option<Note> {
     // The word went to the model as the prompt it is, and a person who typed it to leave is looking
     // at a turn starting. Nothing else on the screen says the line was a prompt or what stops it and
     // leaves, and the turn is when they are looking for one (CMD-2).
     if session.leave_word_sent && session.a_turn_is_running() {
-        return Some(format!("{}  ", t!(leave_word_sent)));
+        return Note::said(format!("{}  ", t!(leave_word_sent)));
     }
 
     // The line the person was writing has just gone, so the press that took it is the one thing
     // worth explaining: without this, a key they pressed to stop something emptied the box and
     // said nothing, and the next press of it ends the session.
     if session.cleared_by_interrupt {
-        return Some("ctrl-c again to exit  ".to_string());
+        return Note::said("ctrl-c again to exit  ".to_string());
     }
 
     // The same sentence for the same reason, on the rung where there was no line to take. Without
     // it the press that offered the way out would have done nothing and said nothing, which reads
     // as an interface that has stopped responding.
     if session.offered_to_leave {
-        return Some("ctrl-c again to exit  ".to_string());
+        return Note::said("ctrl-c again to exit  ".to_string());
     }
 
     // A copy is silent otherwise, and a clipboard that may or may not have taken something is
     // worse than no clipboard: the user pastes to find out. Right-aligned, out of the way of the
     // hints, where the answer to "did that work" belongs.
     if let Some(characters) = session.copied {
-        return Some(format!(
-            "{} to clipboard  ",
-            tally(characters, "char", "chars")
+        return Note::said(format!(
+            "{}  ",
+            copied_notice(characters, session.copied_from())
         ));
     }
 
@@ -566,20 +696,32 @@ fn note_at_the_right(session: &Session) -> Option<String> {
     // has none. So the only way anyone finds out which key does work is being told before they try
     // the one that does not.
     if session.image_on_clipboard {
-        return Some(format!(
-            "image on clipboard  ·  {} to paste  ",
-            session.bindings().paste_name()
-        ));
+        return Some(Note {
+            text: format!(
+                "image on clipboard  ·  {} to paste  ",
+                session.bindings().paste_name()
+            ),
+            target: Some(Footer::Paste),
+        });
     }
 
     None
 }
 
-/// A count with the right noun, so a line does not read "1 chars".
-fn tally(n: usize, one: &str, many: &str) -> String {
-    if n == 1 {
-        format!("1 {one}")
-    } else {
-        format!("{n} {many}")
+/// What a copy took, and where from where that is not the transcript (MOUSE-39).
+///
+/// The transcript is where a drag is expected to be, so a copy from it says only how much went.
+/// The others are named, since a person who dragged across the panel or the box and sees the count
+/// alone has nothing to say that the text on the clipboard is what they pointed at. The scroller and
+/// the views that record no panes are the transcript's as far as the screen goes.
+fn copied_notice(characters: usize, from: Option<crate::select::Pane>) -> String {
+    use crate::select::Pane;
+    match from {
+        Some(Pane::Panel) => t!(copied_from_panel, count = characters),
+        Some(Pane::Input) => t!(copied_from_box, count = characters),
+        Some(Pane::Status) => t!(copied_from_status, count = characters),
+        Some(Pane::Offered) => t!(copied_from_offered, count = characters),
+        Some(Pane::Hint) => t!(copied_from_footer, count = characters),
+        Some(Pane::Transcript | Pane::Screen) | None => t!(copied_to_clipboard, count = characters),
     }
 }

@@ -1,0 +1,49 @@
+[package]
+name = "bravebot-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+serde_json = "1"
+bravebot-agent = { path = "../crates/agent" }
+bravebot-aichat = { path = "../crates/aichat" }
+bravebot-bedrock = { path = "../crates/bedrock" }
+
+# Its own workspace, so the root workspace never compiles libFuzzer's C++ and `cargo clippy
+# --workspace`, nextest and the cross-builds are unchanged.
+[workspace]
+
+[[bin]]
+name = "regex"
+path = "fuzz_targets/regex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "diff"
+path = "fuzz_targets/diff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "event_stream"
+path = "fuzz_targets/event_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sse"
+path = "fuzz_targets/sse.rs"
+test = false
+doc = false
+bench = false

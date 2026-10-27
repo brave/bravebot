@@ -105,15 +105,18 @@ export const Context = memo(function Context({ live, audit, details }: {
           <Empty icon="list-checks">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</Empty>
         ) : (
           <ul className="todos">
-            {live.todos.map((row, index) => (
-              <li key={index} className={row.status}>
-                <span className="marker" aria-hidden="true">
-                  {row.status === 'done' ? <Icon name="check-circle-filled" /> : row.status === 'cancelled' ? <Icon name="close" /> : row.status === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
-                </span>
-                <span className="todo-text">{row.content}</span>
-                <span className="visually-hidden">{row.status === 'done' ? ', done' : row.status === 'cancelled' ? ', cancelled' : row.status === 'active' ? ', in progress' : ''}</span>
-              </li>
-            ))}
+            {live.todos.map((row, index) => {
+              const { rowClass, marker, hiddenSuffix } = todoRowLook(row, live.running)
+              return (
+                <li key={index} className={rowClass}>
+                  <span className="marker" aria-hidden="true">
+                    {marker === 'done' ? <Icon name="check-circle-filled" /> : marker === 'cancelled' ? <Icon name="close" /> : marker === 'active' ? <ProgressRing mode="indeterminate" /> : <Icon name="radio-unchecked" />}
+                  </span>
+                  <span className="todo-text">{row.content}</span>
+                  <span className="visually-hidden">{hiddenSuffix}</span>
+                </li>
+              )
+            })}
           </ul>
         )}
       </Section>
@@ -159,7 +162,7 @@ export const Context = memo(function Context({ live, audit, details }: {
           <ul className="files">
             {files.map((file) => (
               <li key={file.target} className={`file-row${file.confined ? ' confined' : ''}`}>
-                <FileLink path={file.target} onReveal={reveal} />
+                <FileLink path={file.target} shown={file.shown} onReveal={reveal} />
                 {file.confined && <Label mode="outline" className="tag" color="blue">confined</Label>}
               </li>
             ))}
@@ -179,7 +182,7 @@ export const Context = memo(function Context({ live, audit, details }: {
           <ul className="files">
             {writes.map((write) => (
               <li key={write.target} className={`file-row ${write.state}`}>
-                <FileLink path={write.target} onReveal={reveal} />
+                <FileLink path={write.target} shown={write.shown} onReveal={reveal} />
                 <Label mode="outline" className="tag" color={stateColor(write.state)}>{write.state}</Label>
               </li>
             ))}
@@ -238,6 +241,26 @@ export const Context = memo(function Context({ live, audit, details }: {
   )
 })
 
+/**
+ * How a plan row draws, given whether a turn is running.
+ *
+ * `done` and `cancelled` are settled and draw the same whether or not a turn is running. `active`
+ * only means "the model is working on this right now" while a turn is running: once the turn ends
+ * with the row still `active` or `pending`, nothing is working on it, so both draw as left open —
+ * the row the planner has not settled, shown with the same hollow mark and dimmed ink as a row
+ * that was never started, and no ring that would read as work still going.
+ */
+export function todoRowLook(
+  row: TodoRow,
+  running: boolean,
+): { rowClass: string; marker: 'done' | 'cancelled' | 'active' | 'open'; hiddenSuffix: string } {
+  if (row.status === 'done') return { rowClass: 'done', marker: 'done', hiddenSuffix: ', done' }
+  if (row.status === 'cancelled') return { rowClass: 'cancelled', marker: 'cancelled', hiddenSuffix: ', cancelled' }
+  if (row.status === 'active' && running) return { rowClass: 'active', marker: 'active', hiddenSuffix: ', in progress' }
+  if (running) return { rowClass: 'pending', marker: 'open', hiddenSuffix: '' }
+  return { rowClass: 'left-open', marker: 'open', hiddenSuffix: ', left open' }
+}
+
 /** What a write's state means at a glance: done, refused or failed, or still moving. */
 function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
   if (state === 'applied') return 'green'
@@ -249,14 +272,19 @@ function stateColor(state: string): 'green' | 'red' | 'yellow' | 'neutral' {
 /** How many characters of a path fit a row of this column before the middle gives way. */
 const PATH_WIDTH = 40
 
-/** A path in one of the lists, which takes the transcript to where it was touched. */
-function FileLink({ path, onReveal }: { path: string; onReveal: (path: string) => void }): React.JSX.Element {
-  const shown = middleTruncate(path, PATH_WIDTH)
+/**
+ * A path in one of the lists, which takes the transcript to where it was touched.
+ *
+ * `path` is what the call named and what the transcript is searched for; `shown` is the same name
+ * spelled so a blank or whitespace-ended one is visible (PROMPT-1), and is all that is drawn.
+ */
+function FileLink({ path, shown, onReveal }: { path: string; shown: string; onReveal: (path: string) => void }): React.JSX.Element {
+  const cut = middleTruncate(shown, PATH_WIDTH)
   return (
     <button type="button" className="context-link" onClick={() => onReveal(path)}
-      data-tooltip={shown === path ? `Show ${path} in the conversation` : path}>
+      data-tooltip={cut === shown ? `Show ${shown} in the conversation` : shown}>
       <FileGlyph name={path} />
-      <span className="file-path">{shown}</span>
+      <span className="file-path">{cut}</span>
     </button>
   )
 }
@@ -310,8 +338,8 @@ function Section({
  * The distinction is the whole point of the tool, so it is carried into the list rather
  * than flattened into "files". A name here does not mean the model saw the contents.
  */
-function touched(entries: Entry[]): { target: string; confined: boolean }[] {
-  const seen = new Map<string, boolean>()
+function touched(entries: Entry[]): { target: string; shown: string; confined: boolean }[] {
+  const seen = new Map<string, { shown: string; confined: boolean }>()
   for (const entry of entries) {
     if (entry.kind !== 'tool' || !entry.activity.target) continue
     if (entry.activity.failed) continue
@@ -322,9 +350,9 @@ function touched(entries: Entry[]): { target: string; confined: boolean }[] {
     const confined = entry.landing !== null && isConfined(entry.landing)
     // Once confined, always shown as confined: a file read into quarantine and later
     // named again should not lose the mark.
-    seen.set(entry.activity.target, (seen.get(entry.activity.target) ?? false) || confined)
+    seen.set(entry.activity.target, { shown: entry.activity.shownTarget, confined: (seen.get(entry.activity.target)?.confined ?? false) || confined })
   }
-  return [...seen].map(([target, confined]) => ({ target, confined }))
+  return [...seen].map(([target, { shown, confined }]) => ({ target, shown, confined }))
 }
 
 /** The agent decorates reference targets with a slot and label; match their underlying path. */
@@ -335,6 +363,8 @@ function fileTarget(target: string): string {
 /** One file the turn wrote, and how far that write got. */
 interface Write {
   target: string
+  /** `target` as the bridge spelled it, so a blank or whitespace-ended name is visible (PROMPT-1). */
+  shown: string
   state: 'approved' | 'applying' | 'applied' | 'failed' | 'refused' | 'waiting' | 'cancelled'
 }
 
@@ -355,6 +385,7 @@ export function written(entries: Entry[]): Write[] {
       const call = calls.get(entry.request.path)
       rows.set(entry.request.path, {
         target: entry.request.path,
+        shown: entry.request.shownPath,
         state:
           entry.interrupted ? 'cancelled' : entry.decision === 'approve'
             ? call ? outcome(call) : 'approved'
@@ -369,7 +400,7 @@ export function written(entries: Entry[]): Write[] {
     calls.set(target, entry.activity)
     // An outcome already recorded for this path — a decision, or the finish of the same
     // call — outranks a line that has not finished, so a pending row cannot overwrite it.
-    rows.set(target, { target, state: outcome(entry.activity) })
+    rows.set(target, { target, shown: entry.activity.shownFile, state: outcome(entry.activity) })
   }
   return [...rows.values()]
 }

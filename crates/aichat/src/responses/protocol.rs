@@ -357,6 +357,9 @@ pub enum Event {
     },
     /// The service says it could not write the reply.
     Failed(Failure),
+    /// The service says what it says to an account that may not be used this way, in a code of
+    /// [`REFUSAL_CODES`].
+    Refused(Refusal),
 }
 
 /// What reading one payload of the stream came to.
@@ -440,21 +443,30 @@ pub fn stream_event(value: &Value) -> Decoded {
         }
         "response.completed" => ended(value, Ending::Completed),
         "response.incomplete" => ended(value, Ending::Incomplete),
-        "response.failed" => Decoded::Event(Event::Failed(
+        "response.failed" => failed(
             value
                 .pointer("/response/error/code")
-                .and_then(Value::as_str)
-                .map_or(Failure::Unknown, failure_named),
-        )),
+                .and_then(Value::as_str),
+        ),
         // An error the service raised on the stream itself, outside any response.
-        "error" => Decoded::Event(Event::Failed(
-            value
-                .get("code")
-                .and_then(Value::as_str)
-                .map_or(Failure::Unknown, failure_named),
-        )),
+        "error" => failed(error_event_code(value)),
         _ => Decoded::Ignored,
     }
+}
+
+/// The code an `error` event names, as a string where it holds one.
+///
+/// OpenAI's OpenAPI description states it as the event's own `code`. The service was seen to send it
+/// inside an `error` object, with the status beside that object, over its websocket, and the readers
+/// of OpenAI's SDK and of Codex take it from there. Where both are strings the object's wins, as it
+/// does for those readers, and where the object holds none, or one that is not a string, the event's
+/// own is the code. The comparison is made on the whole string, against closed lists
+/// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+fn error_event_code(value: &Value) -> Option<&str> {
+    value
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("code").and_then(Value::as_str))
 }
 
 /// A final event: the model that answered and the usage, where the response states them.
@@ -481,6 +493,125 @@ fn ended(value: &Value, ending: Ending) -> Decoded {
             .and_then(Value::as_str)
             == Some("content_filter"),
     })
+}
+
+/// What a refusal of the ChatGPT account says about it
+/// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The account has reached its usage limit.
+    UsageLimit,
+    /// The account may not be used this way: it is not eligible, what the request uses or the route
+    /// it takes is not allowed, or the connection is not valid or not authorized for the request.
+    NotPermitted,
+}
+
+impl Refusal {
+    /// The fixed name of what the refusal says, which a front end words from and a log may print.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::UsageLimit => "usage-limit",
+            Self::NotPermitted => "not-permitted",
+        }
+    }
+}
+
+/// The name of what the refusal says and no sentence, for a log or an assertion. The sentence for
+/// each is in the message catalog and is chosen by the layer that shows it
+/// ([CHATGPT-8](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The codes of a refusal that says something about the account, each with what it says.
+///
+/// Seven are read from another program's source and listed in OpenAI's documentation. One of the
+/// seven, `subscription_sharing_unsupported_capability`, was seen from the service, as the
+/// `error.code` of a 400, and the other six were not. The eighth,
+/// `subscription_sharing_workplace_individual_usage_limit_exceeded`, is stated by other programs'
+/// sources and a pull request of theirs, is not in the OpenAI pages and API description that were
+/// read ([Known costs]), and was not seen. A code that is not listed, whatever it says, is not one
+/// of these: the two codes that service uses for a condition that passes are left out on purpose.
+///
+/// [Known costs]: ../../../../docs/specs/chatgpt-sign-in.md#known-costs
+pub(crate) const REFUSAL_CODES: &[(&str, Refusal)] = &[
+    (
+        "subscription_sharing_usage_limit_exceeded",
+        Refusal::UsageLimit,
+    ),
+    (
+        "subscription_sharing_user_not_eligible",
+        Refusal::NotPermitted,
+    ),
+    (
+        "subscription_sharing_unsupported_capability",
+        Refusal::NotPermitted,
+    ),
+    (
+        "subscription_sharing_route_not_supported",
+        Refusal::NotPermitted,
+    ),
+    ("subscription_sharing_invalid_user", Refusal::NotPermitted),
+    ("chatpass_v2_scope_not_authorized", Refusal::NotPermitted),
+    (
+        "chatpass_v2_invalid_authorization_context",
+        Refusal::NotPermitted,
+    ),
+    // The limit a workspace administrator sets for a user of a ChatGPT Business plan.
+    (
+        "subscription_sharing_workplace_individual_usage_limit_exceeded",
+        Refusal::UsageLimit,
+    ),
+];
+
+/// What `code` says, where it is one of [`REFUSAL_CODES`], compared as a whole.
+pub(crate) fn refusal_named(code: &str) -> Option<Refusal> {
+    REFUSAL_CODES
+        .iter()
+        .find(|(listed, _)| *listed == code)
+        .map(|(_, refusal)| *refusal)
+}
+
+/// The code the service gives a model the account does not offer, in the `error.code` of the
+/// refusal's body.
+pub(crate) const MODEL_NOT_OFFERED: &str = "model_not_found";
+
+/// The `error.code` of the body of a refusal: an object whose `error` holds a string `code`.
+///
+/// A body of another shape has none. The refusals that carry only a `detail` sentence, and the ones
+/// that hold `error` as a string, are such bodies, and what they say is left to their status.
+fn error_code_in(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body)
+        .ok()?
+        .pointer("/error/code")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// What the body of a refusal says: the `error.code` of an object, where it is a string and is one of
+/// [`REFUSAL_CODES`].
+///
+/// A comparison made on a refusal's body, with [`model_not_offered_in`]. Nothing else in the body
+/// is read, and nothing of it is kept.
+pub(crate) fn refusal_in(body: &[u8]) -> Option<Refusal> {
+    error_code_in(body).as_deref().and_then(refusal_named)
+}
+
+/// Whether the body of a refusal says the model is one the account does not offer: its
+/// `error.code`, compared as a whole with [`MODEL_NOT_OFFERED`].
+pub(crate) fn model_not_offered_in(body: &[u8]) -> bool {
+    error_code_in(body).as_deref() == Some(MODEL_NOT_OFFERED)
+}
+
+/// What a failure event says, from the `code` the service wrote in it: the account's refusal where it
+/// is one of [`REFUSAL_CODES`], and otherwise the failure the code stands for.
+fn failed(code: Option<&str>) -> Decoded {
+    match code.and_then(refusal_named) {
+        Some(refusal) => Decoded::Event(Event::Refused(refusal)),
+        None => Decoded::Event(Event::Failed(code.map_or(Failure::Unknown, failure_named))),
+    }
 }
 
 /// The failure a code the service sent stands for.
@@ -519,6 +650,10 @@ pub fn call_from(id: &str, name: &str, arguments: &str) -> ToolCall {
         extra_content: None,
     }
 }
+
+#[cfg(test)]
+#[path = "../../test-support/refusal_codes.rs"]
+mod refusal_codes;
 
 #[cfg(test)]
 mod tests {
@@ -569,6 +704,27 @@ mod tests {
                 "store": false,
             })
         );
+    }
+
+    /// The note the agent writes after the first prompt of a session begins with a count, and a
+    /// prompt ending in a number followed by it would read as one number unless the note's part
+    /// starts on a new paragraph.
+    #[test]
+    fn a_note_after_the_line_a_person_typed_is_a_part_on_a_new_paragraph() {
+        let messages = vec![
+            say(Role::User, "see issues/1106"),
+            say(
+                Role::User,
+                "16 skills, of your own or the project's, are not listed above: a, b.",
+            ),
+        ];
+        let body = serde_json::to_value(request_from("gpt-example", &messages, None, None, None))
+            .expect("encodes");
+        assert_eq!(body["input"].as_array().expect("input").len(), 1);
+        let parts = body["input"][0]["content"].as_array().expect("parts");
+        assert_eq!(parts[0]["text"], "see issues/1106");
+        let note = parts[1]["text"].as_str().expect("a text part");
+        assert!(note.starts_with("\n\n16 skills"), "{note:?}");
     }
 
     fn calling() -> Vec<Message> {
@@ -842,6 +998,250 @@ mod tests {
             event(json!({"type": "response.failed", "response": {}})),
             Decoded::Event(Event::Failed(Failure::Unknown))
         );
+    }
+
+    use super::refusal_codes::{INVALID_USER, NOT_ELIGIBLE, USAGE_LIMIT, WORKPLACE_USAGE_LIMIT};
+
+    /// CHATGPT-8: the codes that say something about the account are these eight, and the two usage
+    /// limits are told apart from the six that say it may not be used this way. The two codes the
+    /// same service uses for a condition that passes are not among them. A list that gave the
+    /// workplace limit the sentence for an account that may not be used this way would not say the
+    /// limit was reached, and one that left it out would have a 429 that names it waited out and
+    /// asked for again.
+    #[test]
+    fn the_listed_codes_are_the_eight_the_clause_names_and_the_usage_limits_are_told_apart() {
+        assert_eq!(
+            REFUSAL_CODES,
+            [
+                (USAGE_LIMIT, Refusal::UsageLimit),
+                (NOT_ELIGIBLE, Refusal::NotPermitted),
+                (
+                    "subscription_sharing_unsupported_capability",
+                    Refusal::NotPermitted
+                ),
+                (
+                    "subscription_sharing_route_not_supported",
+                    Refusal::NotPermitted
+                ),
+                (INVALID_USER, Refusal::NotPermitted),
+                ("chatpass_v2_scope_not_authorized", Refusal::NotPermitted),
+                (
+                    "chatpass_v2_invalid_authorization_context",
+                    Refusal::NotPermitted
+                ),
+                (WORKPLACE_USAGE_LIMIT, Refusal::UsageLimit),
+            ]
+        );
+    }
+
+    /// CHATGPT-8: a refusal says something about the account only by its `error.code` being, as a
+    /// whole, one of the listed codes, and what it says is what the code says. A code that merely
+    /// resembles a listed one, a listed code written anywhere else in the body and a body that is not
+    /// an object are not that.
+    #[test]
+    fn only_a_refusals_error_code_that_is_a_listed_code_says_something_of_the_account() {
+        let coded = |code: &str| json!({"error": {"code": code}}).to_string();
+        for (code, refusal) in REFUSAL_CODES {
+            assert_eq!(refusal_in(coded(code).as_bytes()), Some(*refusal), "{code}");
+        }
+        let among_others = json!({"error": {"code": INVALID_USER, "message": "words", "type": "t"},
+                                  "other": 1});
+        assert_eq!(
+            refusal_in(among_others.to_string().as_bytes()),
+            Some(Refusal::NotPermitted)
+        );
+
+        for code in [
+            "subscription_sharing_usage_unavailable",
+            "subscription_sharing_user_unavailable",
+            "subscription_sharing",
+            "subscription_sharing_invalid_user_",
+            " subscription_sharing_invalid_user",
+            "Subscription_Sharing_Invalid_User",
+            "subscription_sharing_workplace_usage_limit_exceeded",
+            "subscription_sharing_workplace_individual_usage_limit",
+            "subscription_sharing_workplace_individual_usage_limit_exceeded_",
+            "rate_limit_exceeded",
+            "",
+        ] {
+            assert_eq!(
+                refusal_in(coded(code).as_bytes()),
+                None,
+                "{code:?} is not a listed code"
+            );
+        }
+
+        for elsewhere in [
+            json!({"code": INVALID_USER}),
+            json!({"error": {"message": INVALID_USER}}),
+            json!({"error": {"type": INVALID_USER}}),
+            json!({"error": INVALID_USER}),
+            json!({"detail": INVALID_USER}),
+            json!({"error": {"code": [INVALID_USER]}}),
+            json!({"error": {"code": 7}}),
+            json!({"errors": [{"code": INVALID_USER}]}),
+            json!({"response": {"error": {"code": INVALID_USER}}}),
+            json!([{"error": {"code": INVALID_USER}}]),
+            json!(INVALID_USER),
+            json!(null),
+        ] {
+            assert_eq!(
+                refusal_in(elsewhere.to_string().as_bytes()),
+                None,
+                "{elsewhere}"
+            );
+        }
+        for body in [
+            "",
+            "not json",
+            "{",
+            "{\"error\":{\"code\":\"subscription_sharing_invalid_user",
+        ] {
+            assert_eq!(refusal_in(body.as_bytes()), None, "{body:?}");
+        }
+    }
+
+    /// CHATGPT-8: the code of a model the account does not offer is `model_not_found`, as the clause
+    /// writes it. It is read from `error.code` as a whole and says the model is refused, and it is not
+    /// one of the codes that say something of the account, so the two are not mistaken for each other
+    /// by a client that reads both. It is not read on a stream, where it has not been seen.
+    #[test]
+    fn the_code_of_a_model_the_account_does_not_offer_is_read_apart_from_the_accounts_refusals() {
+        let coded = |code: &str| json!({"error": {"code": code}}).to_string();
+        assert!(model_not_offered_in(coded("model_not_found").as_bytes()));
+        assert_eq!(refusal_in(coded("model_not_found").as_bytes()), None);
+        for (code, _) in REFUSAL_CODES {
+            assert!(!model_not_offered_in(coded(code).as_bytes()), "{code}");
+        }
+        for code in [
+            "model_not_found_",
+            "Model_Not_Found",
+            " model_not_found",
+            "",
+        ] {
+            assert!(!model_not_offered_in(coded(code).as_bytes()), "{code:?}");
+        }
+        assert!(!model_not_offered_in(
+            json!({"detail": "model_not_found"}).to_string().as_bytes()
+        ));
+        assert!(!model_not_offered_in(b"not json"));
+        assert_eq!(
+            event(json!({"type": "response.failed",
+                         "response": {"error": {"code": "model_not_found"}}})),
+            Decoded::Event(Event::Failed(Failure::Unknown))
+        );
+    }
+
+    /// CHATGPT-8: a listed code reported on the stream is the account's refusal and no other failure,
+    /// whichever event carries it, and the codes beside it that the same service uses for a condition
+    /// that passes are failures it did not name.
+    #[test]
+    fn a_listed_code_reported_on_the_stream_is_a_refusal_and_no_other_failure() {
+        for (code, refusal) in REFUSAL_CODES {
+            assert_eq!(
+                event(json!({"type": "response.failed",
+                             "response": {"error": {"code": code, "message": "x"}}})),
+                Decoded::Event(Event::Refused(*refusal)),
+                "{code}"
+            );
+            assert_eq!(
+                event(json!({"type": "error", "code": code, "message": "x"})),
+                Decoded::Event(Event::Refused(*refusal)),
+                "{code}"
+            );
+        }
+        for code in [
+            "subscription_sharing_usage_unavailable",
+            "subscription_sharing_user_unavailable",
+        ] {
+            assert_eq!(
+                event(json!({"type": "response.failed", "response": {"error": {"code": code}}})),
+                Decoded::Event(Event::Failed(Failure::Unknown)),
+                "{code}"
+            );
+        }
+    }
+
+    /// CHATGPT-8: an `error` event names its code in the event itself, which is the form OpenAI's
+    /// OpenAPI description states, or in an `error` object inside it, which is the form the service
+    /// sent over its websocket and the one the readers of OpenAI's SDK and of Codex take. Where both
+    /// are strings the object's is the code, as it is for those readers, and where the object holds
+    /// none the event's own is. A reader of the event's own `code` alone reads no code in the form
+    /// the service sent and reports an account's refusal as an unknown failure, one that preferred
+    /// the event's own would read a different code for an event that holds both, and one that read
+    /// the object's `type` where it has no code would report the frame the service sent with a null
+    /// code as an invalid request.
+    #[test]
+    fn an_error_event_names_its_code_in_the_event_or_in_its_error_object_and_the_object_wins() {
+        let nested = |code: Value| {
+            event(json!({"type": "error", "status": 400,
+                         "error": {"type": "invalid_request_error", "message": "x",
+                                   "code": code, "param": null}}))
+        };
+        assert_eq!(
+            nested(json!("insufficient_quota")),
+            Decoded::Event(Event::Failed(Failure::Billing))
+        );
+        for (code, refusal) in REFUSAL_CODES {
+            assert_eq!(
+                nested(json!(code)),
+                Decoded::Event(Event::Refused(*refusal)),
+                "{code}"
+            );
+        }
+        // What the service sent over its websocket for a request that named a listed model and no
+        // input: an `error` object whose `type` is `invalid_request_error` and whose `code` is null,
+        // and no code in the event. The `type` is a code this reader maps to a failure of its own,
+        // so a reader that took it for the code where the object holds none would report an invalid
+        // request.
+        assert_eq!(
+            nested(Value::Null),
+            Decoded::Event(Event::Failed(Failure::Unknown))
+        );
+
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT, "message": "x"})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "the form the OpenAPI description states is still read"
+        );
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT, "error": {"code": null}})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "an `error` object with no code leaves the event's own"
+        );
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT, "error": {"code": 7}})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "an `error` object whose code is not a string leaves the event's own"
+        );
+
+        assert_eq!(
+            event(json!({"type": "error", "code": "rate_limit_exceeded",
+                         "error": {"code": USAGE_LIMIT}})),
+            Decoded::Event(Event::Refused(Refusal::UsageLimit)),
+            "the object's code wins over the event's"
+        );
+        assert_eq!(
+            event(json!({"type": "error", "code": USAGE_LIMIT,
+                         "error": {"code": "rate_limit_exceeded"}})),
+            Decoded::Event(Event::Failed(Failure::RateLimit)),
+            "the object's code wins over the event's, listed or not"
+        );
+
+        for none in [
+            json!({"type": "error"}),
+            json!({"type": "error", "error": "a string"}),
+            json!({"type": "error", "error": {"message": USAGE_LIMIT}}),
+            json!({"type": "error", "error": [{"code": USAGE_LIMIT}]}),
+            json!({"type": "error", "response": {"error": {"code": USAGE_LIMIT}}}),
+            json!({"type": "error", "detail": {"code": USAGE_LIMIT}}),
+        ] {
+            assert_eq!(
+                event(none.clone()),
+                Decoded::Event(Event::Failed(Failure::Unknown)),
+                "{none}"
+            );
+        }
     }
 
     /// BACKEND-61: an event this does not know is ignored, and one it knows in a shape it cannot

@@ -727,6 +727,9 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
         "tool.started" => {
             let verb = data["verb"].as_str().unwrap_or_default().to_string();
             let target = data["target"].as_str().unwrap_or_default().to_string();
+            // What the editor is shown, spelled so a file name that is blank or ends in whitespace
+            // is visible. Calls are matched on `target`, as the finished event carries it.
+            let shown = data["shownTarget"].as_str().unwrap_or(&target).to_string();
             let Some(held) = shared.sessions.get_mut(&session) else {
                 return;
             };
@@ -742,7 +745,7 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 json!({
                     "sessionUpdate": "tool_call",
                     "toolCallId": id,
-                    "title": plain(&format!("{verb} {target}")),
+                    "title": plain(&format!("{verb} {shown}")),
                     "kind": "other",
                     "status": "in_progress",
                 }),
@@ -793,6 +796,10 @@ fn on_event(shared: &Arc<Mutex<Shared>>, event: Event) {
                 return;
             }
             let why = data["message"].as_str().unwrap_or("the turn failed");
+            // The window's own sentence where there is one, which is a failure of the ChatGPT
+            // account's and names the command that signs in again. It quotes nothing a service
+            // wrote, as the category's name does not.
+            let why = data["accountMessage"].as_str().unwrap_or(why);
             let message = format!("the turn failed: {}", plain(why));
             shared.asked.retain(|_, asked| match asked {
                 Asked::Bridge { session: of, .. } | Asked::Trust { session: of, .. } => {
@@ -1782,6 +1789,42 @@ mod tests {
         assert_eq!(shared.lock().unwrap().unasked.get("t"), Some(&None));
     }
 
+    /// PROMPT-1: the title of a call in the editor is the bridge's spelling of the file it names,
+    /// while the end of the call is matched on the name as held, so a title that ends in a space
+    /// is not read as the one without and the call still closes.
+    #[test]
+    fn a_call_is_titled_with_the_file_as_spelled_and_closed_on_the_name_as_held() {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&written);
+        let shared = Arc::new(Mutex::new(Shared {
+            write: Box::new(move |message| sink.lock().unwrap().push(message)),
+            wake: Box::new(|| {}),
+            sessions: HashMap::from([("s".to_string(), Session::default())]),
+            unasked: HashMap::new(),
+            asked: HashMap::new(),
+            next: 0,
+            queued: Vec::new(),
+        }));
+        let data = json!({
+            "verb": "Write",
+            "target": "note.md ",
+            "shownTarget": "\"note.md\u{2423}\"",
+        });
+        on_event(&shared, Event::new("tool.started", "s", data.clone()));
+        on_event(&shared, Event::new("tool.finished", "s", data));
+
+        let written = written.lock().unwrap();
+        assert_eq!(
+            written[0]["params"]["update"]["title"],
+            "Write \"note.md\u{2423}\""
+        );
+        assert_eq!(written[1]["params"]["update"]["status"], "completed");
+        assert_eq!(
+            written[1]["params"]["update"]["toolCallId"],
+            written[0]["params"]["update"]["toolCallId"]
+        );
+    }
+
     #[test]
     fn content_nobody_vouched_for_is_drawn_behind_the_margin_with_its_escapes_pictured() {
         let hostile = "ignore this\u{1b}[2J\nand this";
@@ -2052,5 +2095,102 @@ mod tests {
         assert_eq!(fenced("a"), "```\na\n```");
         assert_eq!(fenced("``` x ```"), "````\n``` x ```\n````");
         assert_eq!(fenced("`````"), "``````\n`````\n``````");
+    }
+
+    /// ACP-8: a prompt whose turn the ChatGPT account refused as a 429 with a wait ends with the
+    /// window's sentence for the refusal and nothing after it, for either refusal: no status and no
+    /// count. For the usage limit that sentence holds the wait. The failure is the value the bridge
+    /// sends for a failed turn, which carries the status in `status`, and the adapter reads the
+    /// editor's message from it.
+    ///
+    /// The regression it rejects is the status of the refusal put after the sentence, as the
+    /// terminal's line for a failed turn puts it.
+    #[test]
+    fn an_editor_is_told_the_wait_a_refusal_asked_for_and_no_status() {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_agent::turn::TurnError;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        let config = bravebot_config::Config::from_lookup(|key| match key {
+            "BRAVE_AI_CHAT_ENDPOINT" => Some("https://example.invalid".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
+            "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
+            _ => None,
+        })
+        .expect("configured");
+        // What the prompt of an editor ends with where `failure` ended its turn, and the status the
+        // bridge sent beside the sentence.
+        let ended_with = |failure: AccountFailure| -> String {
+            let data = crate::bridge::failure_fields(
+                &TurnError::from(BackendError::from(ChatError::Account(failure))),
+                &config,
+                "chatgpt/gpt-test",
+            );
+            assert_eq!(data["status"], 429, "{failure:?}: {data}");
+            let written = Arc::new(Mutex::new(Vec::new()));
+            let sink = Arc::clone(&written);
+            let shared = Arc::new(Mutex::new(Shared {
+                write: Box::new(move |message| {
+                    sink.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(message);
+                }),
+                wake: Box::new(|| {}),
+                sessions: HashMap::from([(
+                    "s".to_string(),
+                    Session {
+                        prompt: Some(json!(7)),
+                        ..Session::default()
+                    },
+                )]),
+                unasked: HashMap::new(),
+                asked: HashMap::new(),
+                next: 0,
+                queued: Vec::new(),
+            }));
+
+            on_event(&shared, Event::new("turn.error", "s", data));
+
+            let written = written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let [answer] = written.as_slice() else {
+                panic!("{failure:?}: {written:?}");
+            };
+            answer["error"]["message"]
+                .as_str()
+                .expect("a failure")
+                .to_string()
+        };
+        let refused = |refusal| AccountFailure::Named {
+            refusal,
+            status: Some(429),
+            retry_after: Some(std::time::Duration::from_secs(600)),
+        };
+
+        let limit = ended_with(refused(Refusal::UsageLimit));
+        assert_eq!(
+            limit,
+            format!(
+                "the turn failed: {}",
+                crate::account_words::of_failure(refused(Refusal::UsageLimit)).sentence
+            )
+        );
+        assert!(limit.contains("about 10 minutes"), "{limit}");
+        assert!(!limit.contains("HTTP") && !limit.contains("429"), "{limit}");
+
+        let not_permitted = ended_with(refused(Refusal::NotPermitted));
+        assert_eq!(
+            not_permitted,
+            format!(
+                "the turn failed: {}",
+                crate::account_words::of_failure(refused(Refusal::NotPermitted)).sentence
+            )
+        );
+        assert!(
+            !not_permitted.contains("HTTP") && !not_permitted.contains("429"),
+            "{not_permitted}"
+        );
     }
 }

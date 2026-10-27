@@ -10,11 +10,17 @@
 //! The property belongs to the workspace rather than to any one crate, and it lives here for the
 //! reason the unsafe declarations do: this is the crate the shipped binary is built from.
 //!
+//! The guards of the `test-hosts` seam are in `test_hosts_seam.rs`, and the scanner of the source a
+//! release compiles, which both files and `account_sessions.rs` read it with, is in
+//! `shipped/mod.rs`.
+//!
 //! [LAYER-1]: ../../../docs/specs/layering.md
 //! [LAYER-3]: ../../../docs/specs/layering.md
 
+mod shipped;
+
+use shipped::{clause, rust_files, workspace};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
 /// Every crate in this workspace is named `bravebot-<member directory>`, which is what lets a row
 /// write `` `core` `` in a dependency list and a manifest write `bravebot-core`.
@@ -102,35 +108,6 @@ struct Row {
     depends_on: BTreeSet<String>,
     /// The constraint cell, verbatim.
     constraint: String,
-}
-
-/// The workspace root, two levels above this crate's manifest.
-fn workspace() -> PathBuf {
-    // CARGO_MANIFEST_DIR is `<workspace>/crates/cli`, so two pops reach the root.
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path
-}
-
-/// The body of one clause: everything from its anchor to the next anchor or the next heading.
-///
-/// Reading to the end of the file instead would take LAYER-4's mention of three crates for a
-/// statement LAYER-3 makes, so the bound matters rather than being tidiness.
-fn clause(spec: &str, id: &str) -> String {
-    let anchor = format!("<a id=\"{id}\"></a>");
-    let (_, rest) = spec
-        .split_once(&anchor)
-        .unwrap_or_else(|| panic!("{id} has no anchor in layering.md"));
-    let mut body = String::new();
-    for line in rest.lines().skip(1) {
-        if line.starts_with("<a id=") || line.starts_with("## ") {
-            break;
-        }
-        body.push_str(line);
-        body.push('\n');
-    }
-    body
 }
 
 /// The cells of a markdown table row, or nothing if the line is not one.
@@ -569,29 +546,7 @@ const PRINTS: [&str; 5] = ["println!", "print!", "eprintln!", "eprint!", "dbg!"]
 /// `use std::{\n    fs,\n}` are read as the paths they are, so grouping the import is not a way past
 /// it. Comments are skipped, because the crates say in prose what they do not do.
 fn reaching_out(source: &str) -> Vec<String> {
-    let mut code = String::new();
-    let mut lines = source.lines().peekable();
-    while let Some(line) = lines.next() {
-        let trimmed = line.trim();
-        if trimmed == "#[cfg(test)]"
-            && lines
-                .peek()
-                .is_some_and(|next| next.starts_with("mod ") || next.starts_with("pub mod "))
-        {
-            // rustfmt closes a module at column 0, so the first bare brace ends it.
-            for inner in lines.by_ref() {
-                if inner == "}" {
-                    break;
-                }
-            }
-            continue;
-        }
-        if !trimmed.starts_with("//") {
-            code.push_str(line);
-            code.push('\n');
-        }
-    }
-
+    let code = shipped::code_of(source).without_test_modules;
     let mut found = Vec::new();
     for print in PRINTS {
         if code.contains(print) {
@@ -616,20 +571,6 @@ fn reaching_out(source: &str) -> Vec<String> {
         }
     }
     found
-}
-
-/// The files under `directory`, depth first, in no particular order.
-fn rust_files(directory: &std::path::Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for entry in std::fs::read_dir(directory).expect("a source directory") {
-        let path = entry.expect("a directory entry").path();
-        if path.is_dir() {
-            files.extend(rust_files(&path));
-        } else if path.extension().is_some_and(|extension| extension == "rs") {
-            files.push(path);
-        }
-    }
-    files
 }
 
 /// LAYER-1 says the kernel does no I/O and prints nothing, and the file-type crate does no I/O. A
@@ -657,40 +598,127 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
     }
 }
 
+/// Whether `text` names the ChatGPT flow's `sign_in`.
+///
+/// Read as text, so it holds what a file has to write to reach the function and nothing about what
+/// it resolves to: the module path and the function in one file, the module's path ahead of the
+/// call whatever the crate is called (`use bravebot_skus as skus;` leaves `skus::chatgpt::sign_in(`
+/// with no `bravebot_skus::chatgpt` in it), a glob or a group imported from the module under that
+/// alias, and the module renamed. What it does not see is `sign_in` reached through a re-export in
+/// another crate, which no crate has, and a file that builds the call from a name it computes.
+/// `needs_sign_in` and the other functions of the same spelling in other modules are not the flow, so
+/// a file naming `sign_in` alone is not a caller.
+fn names_the_chatgpt_sign_in(text: &str) -> bool {
+    (text.contains("bravebot_skus::chatgpt") && text.contains("sign_in"))
+        || text.contains("chatgpt::sign_in")
+        || (text.contains("chatgpt::*") && text.contains("sign_in("))
+        || (text.contains("chatgpt::{") && text.contains("sign_in"))
+        || (text.contains("chatgpt as ") && text.contains("sign_in("))
+}
+
 /// CHATGPT-1 says only a command a person types signs in. The flow is `bravebot_skus::chatgpt`'s
 /// `sign_in`, which opens a browser, holds a port and ends with a credential on disk, so a tool, a
 /// hook, a slash command or a background host that called it would start that on content's say. The
 /// one caller is the command's own file, and a file that names the module and `sign_in` together is
-/// a second.
+/// a second, as is one that names the module and calls `sign_in` through the crate's alias. A file a
+/// test module declares is a test, and is not read. A file that only reads the sign-in file, as the
+/// agent's does to tell a first run what is configured, names neither.
 #[test]
 fn the_chatgpt_sign_in_is_started_by_the_command_and_nothing_else() {
-    let crates = workspace().join("crates");
-    let mut callers = Vec::new();
-    let mut scanned = 0;
-    for krate in std::fs::read_dir(&crates).expect("the crates directory") {
-        let source = krate.expect("a crate").path().join("src");
-        if !source.is_dir() {
-            continue;
-        }
-        for file in rust_files(&source) {
-            scanned += 1;
-            let text = std::fs::read_to_string(&file).expect("a source file");
-            if text.contains("bravebot_skus::chatgpt") && text.contains("sign_in") {
-                callers.push(
-                    file.strip_prefix(workspace())
-                        .expect("a path under the workspace")
-                        .to_string_lossy()
-                        .replace('\\', "/"),
-                );
-            }
-        }
-    }
-
-    assert!(
-        scanned > 100,
-        "{scanned} source files, so this test would pass by scanning almost nothing"
-    );
+    let callers: Vec<String> = shipped::sources()
+        .iter()
+        .filter(|source| names_the_chatgpt_sign_in(&source.without_test_modules))
+        .map(|source| source.name.clone())
+        .collect();
     assert_eq!(callers, ["crates/cli/src/chatgpt.rs"]);
+}
+
+/// The scan above reads the way a file names the flow, so the ways it can be named are held here:
+/// each form that starts the sign-in is found, and the read of the sign-in file is not.
+#[test]
+fn the_scan_for_the_chatgpt_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file() {
+    for starts in [
+        "bravebot_skus::chatgpt::sign_in(&hosts)",
+        "use bravebot_skus::chatgpt;\nchatgpt::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nskus::chatgpt::sign_in(&hosts)",
+        "use bravebot_skus::chatgpt::sign_in as start;\nstart(&hosts)",
+        "use bravebot_skus::chatgpt::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::{Hosts, sign_in};\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt as flow;\nflow::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::sign_in as start;\nstart(&hosts)",
+    ] {
+        assert!(names_the_chatgpt_sign_in(starts), "{starts}");
+    }
+    for reads in [
+        "use bravebot_skus::chatgpt::Account;\nAccount::load()",
+        "use bravebot_skus as skus;\nskus::chatgpt::Account::load()",
+        "fn needs_sign_in(model: &str) -> bool { false }",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::{Account, Hosts};\nAccount::load()",
+        "use bravebot_skus as skus;\nuse skus::chatgpt::*;\nlet _ = Account::load();",
+    ] {
+        assert!(!names_the_chatgpt_sign_in(reads), "{reads}");
+    }
+}
+
+/// Whether `text` names the xAI flow's `sign_in`.
+///
+/// Read as text, as [`names_the_chatgpt_sign_in`] is: the module path and the function in one file,
+/// the module's path ahead of the call whatever the crate is called, a glob or a group imported from
+/// the module under that alias, and the module renamed. A file naming `sign_in` alone is not a
+/// caller, and neither is one that names the module and not the function.
+fn names_the_xai_sign_in(text: &str) -> bool {
+    (text.contains("bravebot_skus::xai") && text.contains("sign_in"))
+        || text.contains("xai::sign_in")
+        || (text.contains("xai::*") && text.contains("sign_in("))
+        || (text.contains("xai::{") && text.contains("sign_in"))
+        || (text.contains("xai as ") && text.contains("sign_in("))
+}
+
+/// XAI-7 says only a command a person types signs in. The flow is `bravebot_skus::xai`'s `sign_in`,
+/// which shows a code, waits for it to be used for as long as it lasts and ends with a credential on
+/// disk, so a tool, a hook, a slash command or a background host that called it would start that on
+/// content's say. The one caller is the command's own file, and a file that names the module and
+/// `sign_in` together is a second. A file a test module declares is a test, and is not read. A file
+/// that only reads the sign-in file or words its failures names the module and not `sign_in`.
+#[test]
+fn the_xai_sign_in_is_started_by_the_command_and_nothing_else() {
+    let callers: Vec<String> = shipped::sources()
+        .iter()
+        .filter(|source| names_the_xai_sign_in(&source.without_test_modules))
+        .map(|source| source.name.clone())
+        .collect();
+    assert_eq!(callers, ["crates/cli/src/xai.rs"]);
+}
+
+/// The scan above reads the way a file names the flow, so the ways it can be named are held here:
+/// each form that starts the sign-in is found, and the read of the sign-in file is not.
+#[test]
+fn the_scan_for_the_xai_sign_in_finds_each_way_to_name_it_and_not_a_read_of_the_file() {
+    for starts in [
+        "bravebot_skus::xai::sign_in(&hosts)",
+        "use bravebot_skus::xai;\nxai::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nskus::xai::sign_in(&hosts)",
+        "use bravebot_skus::xai::sign_in as start;\nstart(&hosts)",
+        "use bravebot_skus::xai::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai::*;\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai::{Hosts, sign_in};\nsign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai as flow;\nflow::sign_in(&hosts)",
+        "use bravebot_skus as skus;\nuse skus::xai::sign_in as start;\nstart(&hosts)",
+    ] {
+        assert!(names_the_xai_sign_in(starts), "{starts}");
+    }
+    for reads in [
+        "use bravebot_skus::xai::Account;\nAccount::load()",
+        "use bravebot_skus as skus;\nskus::xai::Account::load()",
+        "fn needs_sign_in(model: &str) -> bool { false }",
+        "use bravebot_skus as skus;\nuse skus::xai::{Account, Hosts};\nAccount::load()",
+        "use bravebot_skus as skus;\nuse skus::xai::*;\nlet _ = Account::load();",
+        "use bravebot_skus::xai::{Class, TokenError};\nsaid_of_renewal(&failure)",
+        "use bravebot_skus::chatgpt::sign_in;\nsign_in(&hosts)",
+    ] {
+        assert!(!names_the_xai_sign_in(reads), "{reads}");
+    }
 }
 
 /// The scan that holds the kernel to no I/O has to see each way of reaching out, or the test

@@ -3,7 +3,7 @@
 
 use bravebot_i18n::t;
 
-use crate::state::{Bound, Session};
+use crate::state::{Bound, Session, Status};
 
 /// The line that opens the model picker instead of starting a turn.
 pub(crate) const MODEL_COMMAND: &str = "/model";
@@ -64,6 +64,15 @@ pub(crate) const REACH_COMMAND: &str = "/reach";
 /// The line that lists the MCP servers, starts one that is not running, or turns one off for the
 /// session (SERVERS-19).
 pub(crate) const MCP_COMMAND: &str = "/mcp";
+
+/// The line that says which language servers the session has started (CMD-29).
+pub(crate) const LSP_COMMAND: &str = "/lsp";
+
+/// The line that lists the web addresses and file paths of the latest reply that has any, which is
+/// the keyboard's way to what a click on one does (CMD-30).
+pub(crate) const OPEN_COMMAND: &str = "/open";
+/// The word after `/open` that opens a path in the person's editor in place of showing the file.
+pub(crate) const OPEN_EDIT: &str = crate::open_command::EDIT;
 
 /// The word after `/mcp` that lists the servers, as the bare command does.
 pub(crate) const MCP_LIST: &str = "list";
@@ -156,11 +165,22 @@ pub(crate) const WATCH_COMMAND: &str = "/watch";
 /// job while the turn goes on with everything else.
 pub(crate) const JOBS_COMMAND: &str = "/jobs";
 
+/// The line that opens the view over what commands printed, background jobs included.
+///
+/// The agents have a key of their own, and what a program printed is a different thing to look at,
+/// so it is opened from here rather than from that key (WATCH-7).
+pub(crate) const OUTPUTS_COMMAND: &str = "/outputs";
+
 /// The line that opens or closes the info panel, as its key does.
 pub(crate) const PANEL_COMMAND: &str = "/panel";
 
 /// The line that puts the info panel in its files state, or ends it.
-pub(crate) const FILES_COMMAND: &str = "/files";
+pub(crate) const DIFF_COMMAND: &str = "/diff";
+
+/// The line that prints the whole plan in the transcript, as its key does.
+///
+/// Carried out by the driver from the plan the session holds and starts no turn (CMD-28).
+pub(crate) const TODOS_COMMAND: &str = "/todos";
 
 /// The line that turns holding off system sleep on or off.
 pub(crate) const CAFFEINATE_COMMAND: &str = "/caffeinate";
@@ -201,6 +221,11 @@ pub(crate) const EXPORT_COMMAND: &str = "/export";
 /// A sweep with the mouse copies what was drawn, so it carries the marker and indent beside every
 /// row and breaks a paragraph where the terminal wrapped it (CMD-11).
 pub(crate) const COPY_COMMAND: &str = "/copy";
+/// The word after `/copy` that asks for a fenced block of a reply and not the reply (MOUSE-27).
+pub(crate) const COPY_BLOCK: &str = "block";
+/// The word after `/copy` that asks for a reply as the screen shows it, with none of the marks of the
+/// markdown it was written in (MOUSE-52).
+pub(crate) const COPY_TEXT: &str = "text";
 
 /// The line that rewinds the conversation and restores files changed in the last turn.
 pub(crate) const UNDO_COMMAND: &str = "/undo";
@@ -370,7 +395,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 56] {
+pub fn commands() -> [Command; 60] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -577,15 +602,27 @@ pub fn commands() -> [Command; 56] {
             mid_turn: MidTurn::Runs,
         },
         Command {
+            name: OUTPUTS_COMMAND,
+            argument: "",
+            description: t!(command_outputs),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
             name: PANEL_COMMAND,
             argument: "",
             description: t!(command_panel),
             mid_turn: MidTurn::Runs,
         },
         Command {
-            name: FILES_COMMAND,
+            name: DIFF_COMMAND,
             argument: "",
-            description: t!(command_files),
+            description: t!(command_diff),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: TODOS_COMMAND,
+            argument: "",
+            description: t!(command_todos),
             mid_turn: MidTurn::Runs,
         },
         Command {
@@ -668,7 +705,7 @@ pub fn commands() -> [Command; 56] {
         },
         Command {
             name: COPY_COMMAND,
-            argument: "[n]",
+            argument: "[n | block [n] | text [n]]",
             description: t!(command_copy),
             mid_turn: MidTurn::Runs,
         },
@@ -708,6 +745,18 @@ pub fn commands() -> [Command; 56] {
             description: t!(command_mcp),
             mid_turn: MidTurn::Waits,
         },
+        Command {
+            name: LSP_COMMAND,
+            argument: "",
+            description: t!(command_lsp),
+            mid_turn: MidTurn::Runs,
+        },
+        Command {
+            name: OPEN_COMMAND,
+            argument: "[edit] [n | address | path]",
+            description: t!(command_open),
+            mid_turn: MidTurn::Runs,
+        },
     ]
 }
 
@@ -746,6 +795,12 @@ pub(crate) fn complete_argument(line: &str, skills: &[&str]) -> Option<String> {
     let line = line.trim_start();
     if let Some(typed) = line.strip_prefix(MODE_COMMAND) {
         return complete_exact_word(MODE_COMMAND, typed, skills);
+    }
+    if let Some(typed) = line.strip_prefix(COPY_COMMAND) {
+        return complete_word(COPY_COMMAND, typed, &[COPY_BLOCK, COPY_TEXT]);
+    }
+    if let Some(typed) = line.strip_prefix(OPEN_COMMAND) {
+        return complete_word(OPEN_COMMAND, typed, &[OPEN_EDIT]);
     }
     if let Some(typed) = line.strip_prefix(EFFORT_COMMAND) {
         let levels: Vec<&str> = bravebot_aichat::protocol::Effort::ALL
@@ -884,15 +939,18 @@ enum Acts {
     /// point back or starts, switches to or leaves a record changes what these act on.
     NotesAndName,
     /// The output style `/style` picks and the person's own style files its name is looked up among.
-    /// A turn reads the style when it is built, and a line that replaces the session starts the next
-    /// one from the style settings name. Nothing a command line does changes either: a program cannot
-    /// write `~/.bravebot`, and a name is looked up in no file of the working directory.
+    /// A turn reads the style when it is built, and a line that leaves for another session starts
+    /// the next one from the style settings name. A file is read only where its path does not land
+    /// in the workspace's reach, so a line that moves or ends the reach changes which names are
+    /// styles. Nothing a command line does changes either: a program cannot write `~/.bravebot`,
+    /// and the project's names are the list held when the line was typed, not its files.
     Style,
     /// The answer kept about the working directory and about the root of the git worktree around it,
     /// which `/forget-trust` withdraws (TRUST-24). A line that starts a session here reads the
     /// answer, and one that moves the directory or leaves the session changes what is withdrawn. So
     /// does a prompt or a command line, which can run a program that makes the `.git` entry that
-    /// moves the root around the directory.
+    /// moves the root around the directory, and a command that starts a server or puts files back,
+    /// which has not been shown unable to.
     KeptAnswer,
     /// The sandbox mode: `/sandbox`. Every waiting line could change it but a waiting `/sandbox`,
     /// which moves the mode the next turn is built with and writes nothing else (SANDBOX-22). The
@@ -995,24 +1053,86 @@ const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
 ];
 
 /// The commands that neither start a turn, start, switch to or leave a session, move the working
-/// directory nor write what `/style` and `/forget-trust` act on: the pick, the style files and the
-/// file the kept answer is in. A command not named here holds both back.
+/// directory nor reopen the directories the session is made of, and that write neither the pick
+/// `/style` makes nor the style files its name is looked up among. A command not named here holds
+/// `/style` back.
 ///
-/// Each command named was read against what the two act on. Only a turn reads the style
+/// Each command named was read against what `/style` acts on. Only a turn reads the style
 /// (`task.style`), so `/compact`, `/btw` and `/recap`, which send a request and run no program,
-/// leave it alone, and none of the three touches the file the answer is kept in. `/memory` lists what
-/// it finds. `/rename`, `/note`, `/issue` and `/pr` write the record, `/model`, `/effort`, `/advisor`
-/// and `/sandbox` the session's own choices. `/style` writes the pick and `/forget-trust` the file
-/// the answer is kept in, and the other leaves each alone: a withdrawn answer leaves this session's
-/// own trust map as it is, and a pick is looked up in no file the answer is kept in. `/clear`, `/branch`, `/undo`, `/rewind`, `/hunks`, `/add-dir`, `/cd`, `/reach` and
-/// `/mcp` are not named: each replaces or reopens part of what the session's directories are made
-/// of, and none has been read against either. A command added to the table is placed against this
-/// list by `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
-const LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE: &[&str] = &[
+/// leave it alone. A name is taken from the styles the build ships, from the files under
+/// `~/.bravebot/styles` and from the project's names the session held when the line was typed, and
+/// a file under `~/.bravebot` is read only where its path does not land in the workspace's reach:
+/// the root, the directories added, the checkouts the session kept and the paths programs were let
+/// reach. The project's names are not read again where the line is carried out, and the turn that
+/// begins next reads the pick under its own trust map, so a command that changes the map or the
+/// files under the root leaves the pick as it is. `/memory` lists what it finds. `/rename`,
+/// `/note`, `/issue` and `/pr` write the record, `/model`, `/effort`, `/advisor`, `/forget-trust`
+/// and `/sandbox` the session's own choices and the file the kept answer is in. `/undo`, `/rewind`
+/// and `/hunks` put back files the workspace resolves and restore the trust map and the record.
+/// They move no reach and touch neither the pick nor the held names, and a file under `~/.bravebot`
+/// that the reach covers is refused by the lookup whatever its bytes. `/mcp` starts or ends a
+/// server the session holds, confined so that it cannot write under `~/.bravebot`, and is handed
+/// the root rather than the workspace. `/after` arms a prompt that goes out when its delay is up
+/// and sends nothing now: a style typed after it is the one the turn it sends is built with,
+/// whichever of the two is carried out first. `/clear` and `/branch` are not named: the first
+/// closes the directories added and the checkouts kept, and each ends the reach programs were let,
+/// so a file that landed in the reach before it is read after it. `/cd`, `/add-dir` and `/reach`
+/// move the reach itself. A command added to the table is placed against this list by
+/// `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_THE_STYLE_ALONE: &[&str] = &[
     COMPACT_COMMAND,
     BTW_COMMAND,
     RECAP_COMMAND,
     MEMORY_COMMAND,
+    UNDO_COMMAND,
+    REWIND_COMMAND,
+    HUNKS_COMMAND,
+    MCP_COMMAND,
+    AFTER_COMMAND,
+    RENAME_COMMAND,
+    NOTE_COMMAND,
+    STYLE_COMMAND,
+    FORGET_TRUST_COMMAND,
+    ISSUE_COMMAND,
+    PR_COMMAND,
+    SANDBOX_COMMAND,
+    MODEL_COMMAND,
+    EFFORT_COMMAND,
+    ADVISOR_COMMAND,
+];
+
+/// The commands that neither start a turn, start, switch to or leave a session, move the working
+/// directory, write the file the kept answer is in, start a server nor put files back. A command
+/// not named here holds `/forget-trust` back, as does a command line.
+///
+/// Each command named was read against what `/forget-trust` acts on. `/compact`, `/btw` and
+/// `/recap` send a request and run no program, and none of the three touches the file the answer is
+/// kept in. `/memory` lists what it finds. `/rename`, `/note`, `/issue` and `/pr` write the record,
+/// `/model`, `/effort`, `/advisor` and `/sandbox` the session's own choices. `/style` writes the
+/// pick and `/forget-trust` the file the answer is kept in, and the other leaves each alone: a
+/// withdrawn answer leaves this session's own trust map as it is, and a pick is looked up in no
+/// file the answer is kept in. `/after` arms a prompt that goes out later, after the lines waiting
+/// have been carried out, so what it starts runs under the answer as `/forget-trust` left it either
+/// way. `/add-dir` opens a directory and records a rule in the session's own trust map, and closing
+/// one withdraws the rule. It starts no program, leaves the working directory where it is and writes
+/// neither the answer nor a `.git` entry. `/reach` writes `reach.jsonl` or changes the workspace's
+/// list of paths programs may reach, and compiles the line it is given without running it. `/clear`
+/// and `/branch` are not named: `/clear` starts a session here and reads the answer, and `/branch`
+/// replaces the session's record and its reach and has not been read against the answer. `/cd` moves
+/// the directory the answer is about. `/undo`, `/rewind` and `/hunks` put back files a file tool wrote,
+/// and a write the person approved into an added directory that holds the working directory may have
+/// made the `.git` entry there, which a rewind removes. `/mcp` starts a server that may write the
+/// directory its declaration names. Neither has been shown unable to make or remove the `.git`
+/// entry that moves the root around the directory. A command added to the table is placed against
+/// this list by `every_command_that_can_wait_is_placed_against_what_a_waiting_line_could_change`.
+const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
+    COMPACT_COMMAND,
+    BTW_COMMAND,
+    RECAP_COMMAND,
+    MEMORY_COMMAND,
+    ADD_DIR_COMMAND,
+    REACH_COMMAND,
+    AFTER_COMMAND,
     RENAME_COMMAND,
     NOTE_COMMAND,
     STYLE_COMMAND,
@@ -1042,14 +1162,11 @@ fn could_change(goes: Bound, waiting: Option<&str>, acts: Acts) -> bool {
     match acts {
         Acts::Other => waiting != Some(SANDBOX_COMMAND),
         Acts::NotesAndName => held_unless_listed(goes, waiting, LEAVES_NOTES_AND_NAME_ALONE),
-        Acts::Style => {
-            held_unless_listed(goes, waiting, LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE)
-        }
+        Acts::Style => held_unless_listed(goes, waiting, LEAVES_THE_STYLE_ALONE),
         // A command line is held back too: a program it runs can make the `.git` entry that moves
         // the root around the directory.
         Acts::KeptAnswer => {
-            goes == Bound::Run
-                || held_unless_listed(goes, waiting, LEAVES_THE_STYLE_AND_THE_KEPT_ANSWER_ALONE)
+            goes == Bound::Run || held_unless_listed(goes, waiting, LEAVES_THE_KEPT_ANSWER_ALONE)
         }
         Acts::Link => waiting.is_some_and(|word| REPLACES_THE_RECORD.contains(&word)),
         Acts::Choice => held_unless_listed(goes, waiting, LEAVES_THE_CHOICE_ALONE),
@@ -1094,6 +1211,17 @@ pub(crate) fn waits_behind_the_queue(session: &Session, line: &str) -> bool {
     held_back_by(session, session.queued.len(), line).is_some()
 }
 
+/// Whether the command a line is, typed or clicked for while the session works, is carried out at
+/// once and not queued: a turn is running, the table says the command runs mid-turn, and no line
+/// waiting ahead of it could change what it acts on (CMD-8).
+///
+/// The one decision the typed line and the click on a row of the info panel share (MOUSE-29).
+pub(crate) fn is_carried_out_at_once(session: &Session, line: &str) -> bool {
+    session.a_turn_is_running()
+        && runs_while_working(line)
+        && !waits_behind_the_queue(session, line)
+}
+
 /// A waiting line as the words that say a command waits behind it name it.
 ///
 /// A command by the line that was typed, so a person can find it in the queue. A prompt and a shell
@@ -1115,6 +1243,10 @@ pub(crate) fn named(goes: Bound, line: &str) -> String {
 pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
     let command = row_typed(line)?;
     let word = command.name;
+    // A command the person typed is running and no turn is, so the line waits for that.
+    if session.status == Status::Running {
+        return Some(t!(command_waits_for_the_command, command = word).to_string());
+    }
     Some(if runs_while_working(line) {
         let (goes, ahead) = held_back_by(session, session.queued.len(), line)?;
         t!(
@@ -1122,11 +1254,10 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
             command = word,
             line = named(goes, ahead)
         )
-        .to_string()
     } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
-        t!(command_waits_to_ask, command = word).to_string()
+        t!(command_waits_to_ask, command = word)
     } else {
-        t!(command_waits_for_the_turn, command = word).to_string()
+        t!(command_waits_for_the_turn, command = word)
     })
 }
 
@@ -1147,49 +1278,50 @@ mod tests {
         // whether it sends a request, reads or changes the model, the level or the advisor, or
         // leaves for another session, whether it could change the notes or the name the record
         // holds: begin a turn, change the turn count, put a rewind point back, or move or replace
-        // the record, and whether it could change the style `/style` picks or the answer
-        // `/forget-trust` withdraws: begin a turn, replace the session, or touch the directories
-        // it is made of, without being read against either.
-        const PLACED: &[(&str, bool, bool, bool, bool)] = &[
-            (ADD_DIR_COMMAND, false, false, false, true),
-            (CD_COMMAND, false, false, true, true),
-            (COMPACT_COMMAND, false, true, true, false),
-            (BTW_COMMAND, false, true, true, false),
-            (RECAP_COMMAND, false, true, true, false),
-            (CLEAR_COMMAND, true, false, true, true),
-            (HANDOFF_COMMAND, true, true, true, true),
-            (BRANCH_COMMAND, true, false, true, true),
-            (RESUME_COMMAND, true, true, true, true),
-            (BACKGROUND_COMMAND, true, true, true, true),
-            (REACH_COMMAND, false, false, false, true),
-            (CHECKOUTS_COMMAND, false, true, true, true),
-            (PLAN_COMMAND, false, true, true, true),
-            (MANIFEST_COMMAND, false, true, true, true),
-            (AGENT_COMMAND, false, true, true, true),
-            (MEMORY_COMMAND, false, false, false, false),
-            (INIT_COMMAND, false, true, true, true),
-            (REVIEW_COMMAND, false, true, true, true),
-            (COMMIT_MESSAGE_COMMAND, false, true, true, true),
-            (HELP_COMMAND, false, true, true, true),
-            (UNDO_COMMAND, false, false, true, true),
-            (REWIND_COMMAND, false, false, true, true),
-            (HUNKS_COMMAND, false, false, true, true),
-            (EXIT_COMMAND, true, true, true, true),
-            (MCP_COMMAND, false, false, false, true),
-            (LOOP_COMMAND, false, true, true, true),
-            (AFTER_COMMAND, false, false, true, true),
-            (GOAL_COMMAND, false, true, true, true),
-            (MODEL_COMMAND, false, true, false, false),
-            (EFFORT_COMMAND, false, true, false, false),
-            (ADVISOR_COMMAND, false, true, false, false),
-            (RENAME_COMMAND, false, false, false, false),
-            (NOTE_COMMAND, false, false, false, false),
-            (STYLE_COMMAND, false, false, false, false),
-            (MODE_COMMAND, false, true, true, true),
-            (FORGET_TRUST_COMMAND, false, false, false, false),
-            (ISSUE_COMMAND, false, false, false, false),
-            (PR_COMMAND, false, false, false, false),
-            (SANDBOX_COMMAND, false, false, false, false),
+        // the record, whether it could change the style `/style` picks: begin a turn, replace the
+        // session, or move or end the reach, and whether it could change the answer
+        // `/forget-trust` withdraws: begin a turn, replace the session, move the directory, put
+        // files back or start a server, without being read against it.
+        const PLACED: &[(&str, bool, bool, bool, bool, bool)] = &[
+            (ADD_DIR_COMMAND, false, false, false, true, false),
+            (CD_COMMAND, false, false, true, true, true),
+            (COMPACT_COMMAND, false, true, true, false, false),
+            (BTW_COMMAND, false, true, true, false, false),
+            (RECAP_COMMAND, false, true, true, false, false),
+            (CLEAR_COMMAND, true, false, true, true, true),
+            (HANDOFF_COMMAND, true, true, true, true, true),
+            (BRANCH_COMMAND, true, false, true, true, true),
+            (RESUME_COMMAND, true, true, true, true, true),
+            (BACKGROUND_COMMAND, true, true, true, true, true),
+            (REACH_COMMAND, false, false, false, true, false),
+            (CHECKOUTS_COMMAND, false, true, true, true, true),
+            (PLAN_COMMAND, false, true, true, true, true),
+            (MANIFEST_COMMAND, false, true, true, true, true),
+            (AGENT_COMMAND, false, true, true, true, true),
+            (MEMORY_COMMAND, false, false, false, false, false),
+            (INIT_COMMAND, false, true, true, true, true),
+            (REVIEW_COMMAND, false, true, true, true, true),
+            (COMMIT_MESSAGE_COMMAND, false, true, true, true, true),
+            (HELP_COMMAND, false, true, true, true, true),
+            (UNDO_COMMAND, false, false, true, false, true),
+            (REWIND_COMMAND, false, false, true, false, true),
+            (HUNKS_COMMAND, false, false, true, false, true),
+            (EXIT_COMMAND, true, true, true, true, true),
+            (MCP_COMMAND, false, false, false, false, true),
+            (LOOP_COMMAND, false, true, true, true, true),
+            (AFTER_COMMAND, false, false, true, false, false),
+            (GOAL_COMMAND, false, true, true, true, true),
+            (MODEL_COMMAND, false, true, false, false, false),
+            (EFFORT_COMMAND, false, true, false, false, false),
+            (ADVISOR_COMMAND, false, true, false, false, false),
+            (RENAME_COMMAND, false, false, false, false, false),
+            (NOTE_COMMAND, false, false, false, false, false),
+            (STYLE_COMMAND, false, false, false, false, false),
+            (MODE_COMMAND, false, true, true, true, true),
+            (FORGET_TRUST_COMMAND, false, false, false, false, false),
+            (ISSUE_COMMAND, false, false, false, false, false),
+            (PR_COMMAND, false, false, false, false, false),
+            (SANDBOX_COMMAND, false, false, false, false, false),
         ];
         for command in commands() {
             // A command that is carried out as it is typed waits only behind a line of its own.
@@ -1207,7 +1339,8 @@ mod tests {
             replaces_the_record,
             builds_a_request,
             changes_the_record,
-            holds_style_and_answer,
+            could_change_the_style,
+            could_change_the_answer,
         ) in PLACED
         {
             assert!(
@@ -1231,12 +1364,12 @@ mod tests {
             );
             assert_eq!(
                 could_change(Bound::CarriedOut, Some(name), Acts::Style),
-                holds_style_and_answer,
+                could_change_the_style,
                 "{name} and the style"
             );
             assert_eq!(
                 could_change(Bound::CarriedOut, Some(name), Acts::KeptAnswer),
-                holds_style_and_answer,
+                could_change_the_answer,
                 "{name} and the kept answer"
             );
             // Where the two differ: a command line, which never changes the style and always could

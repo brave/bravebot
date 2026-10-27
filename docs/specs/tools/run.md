@@ -20,10 +20,17 @@ guards:
 reads_a_step_without_keying:
   - crates/core/src/policy.rs::plan_words
   - crates/core/src/policy.rs::read_proven
+  - crates/agent/src/confine.rs::scope_of
+  - crates/agent/src/confine.rs::holds
+  - crates/agent/src/confine.rs::hands_over_a_file_the_plan_could_write
+  - crates/agent/src/confine.rs::identified
 documented-by:
   - docs/website/docs/reference/tools.md
   - docs/website/docs/reference/run-tool.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
+  - docs/website/docs/security/permission-rules.md
+  - docs/website/docs/security/sandbox.md
 ---
 
 ## Scope
@@ -106,7 +113,7 @@ in it.
 `verified-by: bravebot_agent::turn::a_result_names_a_program_started_through_a_link_by_the_link_and_its_file`
 `verified-by: bravebot_agent::turn::a_job_names_a_program_started_through_a_link_by_the_link_and_its_file`
 `verified-by: bravebot_ui_bridge::wire::a_stage_started_through_a_link_sends_the_link`
-`verified-by: bravebot_tui::confirm::a_run_prompt_shows_the_link_a_program_is_started_by`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_link_a_program_is_started_by`
 `verified-by: bravebot_cli::plain::a_run_started_through_a_link_is_asked_about_with_the_link`
 
 <a id="RUN-3"></a>
@@ -150,7 +157,7 @@ only the routing part has to be trustworthy.
 `verified-by: bravebot_core::policy::a_vouched_line_fed_a_reference_is_asked_about_anyway`
 `verified-by: bravebot_agent::turn::a_background_line_cannot_be_fed_a_reference`
 `verified-by: bravebot_agent::turn::a_line_naming_a_file_for_standard_input_cannot_also_name_a_reference`
-`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_reference_it_would_be_fed`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_reference_it_would_be_fed`
 
 <a id="RUN-4"></a>
 ### RUN-4: output is untrusted and private by default, and nothing inferred changes that
@@ -368,11 +375,11 @@ source; what they did not read is the line that entry covers. The refusal is mad
 `verified-by: bravebot_agent::turn::a_line_that_writes_is_not_remembered_however_it_is_answered`
 `verified-by: bravebot_agent::turn::always_at_a_prompt_for_a_fed_page_does_not_cover_the_next_page`
 `verified-by: bravebot_core::policy::no_standing_answer_is_offered_for_a_line_fed_a_reference`
-`verified-by: bravebot_tui::confirm::a_run_fed_a_reference_offers_no_standing_permission`
-`verified-by: bravebot_tui::confirm::a_run_reading_a_file_offers_no_standing_permission`
-`verified-by: bravebot_tui::confirm::a_run_that_releases_private_data_offers_no_standing_permission`
-`verified-by: bravebot_tui::confirm::a_run_writing_a_file_offers_no_standing_permission`
-`verified-by: bravebot_tui::confirm::pressing_always_at_a_private_input_prompt_grants_nothing`
+`verified-by: bravebot_tui::confirm::run::a_run_fed_a_reference_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::run::a_run_reading_a_file_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::run::a_run_that_releases_private_data_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::run::a_run_writing_a_file_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::run::pressing_always_at_a_private_input_prompt_grants_nothing`
 
 <a id="RUN-7"></a>
 ### RUN-7: vouching grants two things together, and the prompt asks for both
@@ -396,7 +403,7 @@ commit messages whoever contributed wrote. It is trusted for exactly the reason 
 trust map is trusted, which is that the user said so. Do not reach for a stronger justification,
 and do not let anything else mint an entry.
 
-`verified-by: bravebot_tui::confirm::a_run_prompt_asks_for_the_side_effects_and_the_output_together`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_asks_for_the_side_effects_and_the_output_together`
 `verified-by: bravebot_core::policy::a_turn_inherits_what_the_session_vouched_for`
 
 <a id="RUN-8"></a>
@@ -492,13 +499,19 @@ A compiler reports the field added to the step, and `make check-security` report
 written to read one field at a time, which is the half a compiler cannot see. Neither is a habit
 somebody has to hold, and the second fails the same pull request that introduces the function.
 
-A function may read a step field by field for something that is not a key, and the two that do are
+A function may read a step field by field for something that is not a key, and the six that do are
 named under `reads_a_step_without_keying` above rather than left to be recognised. `plan_words` builds
 the words a rule is matched against, which are the program and its arguments and deliberately not the
 whole step. `read_proven` first refuses a step that carries an assignment or
 a route, is started from inside the project, or is started by a name other than its file's. The
 fields it reads after that are the only ones such a step has that can change what it does. A
 third one is an edit to this list, which is the point: admitting one is something somebody reviews.
+The four in `confine.rs` each answer a question about one step and build nothing that is stored,
+compared or approved. `scope_of` names the scope the program and its arguments ask for, `identified`
+whether a git stage names a remote an identity was chosen for, `hands_over_a_file_the_plan_could_write`
+whether an argument names a file the plan could have written, and `holds` whether every stage of a
+line is held by the sandbox. Each reads only the fields its question is about, and a field added to
+the step changes what a person approved for none of them.
 
 **A known cost.** `NO_COLOR=1 cargo test` and `RUST_LOG=debug ./demo` are ordinary work, and they are
 asked about every time, in this session and in the next. The answer is the spelling that puts the
@@ -522,11 +535,11 @@ meaning is not in its argv, not the setting of a variable.
 `verified-by: bravebot_agent::turn::a_line_vouched_for_outside_the_root_is_asked_about_again_at_the_root`
 `verified-by: bravebot_agent::turn::a_symlinked_spelling_of_the_vouched_tree_is_the_same_entry`
 `verified-by: bravebot_agent::turn::a_second_spelling_of_the_vouched_tree_is_the_same_entry`
-`verified-by: bravebot_tui::confirm::a_run_prompt_names_the_tree_the_entry_would_be_given_in`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_names_the_tree_the_entry_would_be_given_in`
 `verified-by: bravebot_core::policy::a_vouched_line_carrying_an_environment_assignment_is_asked_about`
 `verified-by: bravebot_core::policy::output_of_a_vouched_line_carrying_an_environment_assignment_is_untrusted`
-`verified-by: bravebot_tui::confirm::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
-`verified-by: bravebot_tui::confirm::a_run_that_is_private_and_carries_an_assignment_gives_both_reasons`
+`verified-by: bravebot_tui::confirm::run::a_run_carrying_an_environment_assignment_offers_no_standing_permission`
+`verified-by: bravebot_tui::confirm::run::a_run_that_is_private_and_carries_an_assignment_gives_both_reasons`
 `verified-by: bravebot_agent::turn::a_line_carrying_an_environment_assignment_is_not_remembered_however_it_is_answered`
 `verified-by: bravebot_core::programs::two_binaries_differing_only_in_unrenderable_bytes_are_different_programs`
 `verified-by: bravebot_core::programs::two_trees_differing_only_in_unrenderable_bytes_are_different_trees`
@@ -1438,13 +1451,13 @@ begun in either. And a line whose arguments differ every time is not helped at a
 `verified-by: bravebot_agent::permission_mode::bypassing_answers_every_permission_question`
 `verified-by: bravebot_agent::incognito::no_remembered_line_is_written_down`
 `verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
-`verified-by: bravebot_tui::confirm::the_run_keys_separate_this_session_from_every_session`
-`verified-by: bravebot_tui::confirm::a_prompt_that_offers_no_record_binds_no_key_to_one`
-`verified-by: bravebot_tui::confirm::enter_does_not_record_a_run_past_the_session`
-`verified-by: bravebot_tui::confirm::refusing_a_run_records_nothing_past_the_session`
-`verified-by: bravebot_tui::confirm::a_prompt_offering_to_remember_says_where_the_record_goes`
-`verified-by: bravebot_tui::confirm::the_row_says_which_lifetime_the_always_key_grants`
-`verified-by: bravebot_tui::confirm::a_prompt_with_no_record_to_offer_draws_no_key_for_one`
+`verified-by: bravebot_tui::confirm::run::the_run_keys_separate_this_session_from_every_session`
+`verified-by: bravebot_tui::confirm::run::a_prompt_that_offers_no_record_binds_no_key_to_one`
+`verified-by: bravebot_tui::confirm::run::enter_does_not_record_a_run_past_the_session`
+`verified-by: bravebot_tui::confirm::run::refusing_a_run_records_nothing_past_the_session`
+`verified-by: bravebot_tui::confirm::run::a_prompt_offering_to_remember_says_where_the_record_goes`
+`verified-by: bravebot_tui::confirm::run::the_row_says_which_lifetime_the_always_key_grants`
+`verified-by: bravebot_tui::confirm::run::a_prompt_with_no_record_to_offer_draws_no_key_for_one`
 `verified-by: bravebot_tui::status::the_report_names_the_lines_remembered_past_a_session_and_who_answered_them`
 `verified-by: bravebot_tui::status::a_shortened_list_of_remembered_lines_says_how_many_came_from_an_earlier_session`
 `verified-by: bravebot_tui::status::a_directory_with_nothing_remembered_does_not_mention_the_record`
@@ -1627,10 +1640,10 @@ the alternative of withholding it from the case it exists for.
 `verified-by: bravebot_core::remembered::no_entry_reaches_a_second_argument_list`
 `verified-by: bravebot_agent::turn::a_binary_asked_about_under_two_argument_lists_is_advised_to_a_settings_file`
 `verified-by: bravebot_agent::turn::a_line_asked_about_again_unchanged_is_advised_no_pattern`
-`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file`
-`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
-`verified-by: bravebot_tui::confirm::advising_a_pattern_offers_no_key_that_grants_one`
-`verified-by: bravebot_tui::confirm::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
+`verified-by: bravebot_tui::confirm::run::a_prompt_for_a_line_whose_arguments_vary_names_the_settings_file`
+`verified-by: bravebot_tui::confirm::run::a_prompt_for_a_line_whose_arguments_vary_says_what_a_pattern_costs`
+`verified-by: bravebot_tui::confirm::run::advising_a_pattern_offers_no_key_that_grants_one`
+`verified-by: bravebot_tui::confirm::run::a_prompt_for_a_line_nothing_has_varied_says_nothing_about_a_pattern`
 `verified-by: bravebot_core::remembered::a_scope_covers_every_sub_command_of_its_group_with_any_number`
 `verified-by: bravebot_core::remembered::the_scope_is_the_same_whichever_sub_command_was_asked_about`
 `verified-by: bravebot_core::remembered::a_scope_frees_the_number_and_nothing_else`
@@ -1656,13 +1669,13 @@ the alternative of withholding it from the case it exists for.
 `verified-by: bravebot_agent::confirm::the_prompt_offers_the_scope_key_for_a_listed_line_it_may_record`
 `verified-by: bravebot_agent::turn::the_scope_answer_for_a_program_the_table_does_not_list_records_nothing`
 `verified-by: bravebot_agent::run_scope::a_scope_remembered_in_one_session_covers_its_group_in_the_next`
-`verified-by: bravebot_tui::confirm::the_scope_key_approves_and_records_the_scope_only`
-`verified-by: bravebot_tui::confirm::the_old_any_number_key_answers_nothing`
-`verified-by: bravebot_tui::confirm::the_scope_key_is_unbound_where_the_prompt_does_not_offer_it`
-`verified-by: bravebot_tui::confirm::refusing_a_run_records_no_scope`
-`verified-by: bravebot_tui::confirm::the_scope_key_waits_for_the_rows_saying_what_it_grants`
-`verified-by: bravebot_tui::confirm::a_prompt_offering_a_scope_asks_in_words`
-`verified-by: bravebot_tui::confirm::the_scope_prompt_names_the_repository_the_line_named`
+`verified-by: bravebot_tui::confirm::run::the_scope_key_approves_and_records_the_scope_only`
+`verified-by: bravebot_tui::confirm::run::the_old_any_number_key_answers_nothing`
+`verified-by: bravebot_tui::confirm::run::the_scope_key_is_unbound_where_the_prompt_does_not_offer_it`
+`verified-by: bravebot_tui::confirm::run::refusing_a_run_records_no_scope`
+`verified-by: bravebot_tui::confirm::run::the_scope_key_waits_for_the_rows_saying_what_it_grants`
+`verified-by: bravebot_tui::confirm::run::a_prompt_offering_a_scope_asks_in_words`
+`verified-by: bravebot_tui::confirm::run::the_scope_prompt_names_the_repository_the_line_named`
 `verified-by: bravebot_tui::status::the_report_lists_a_remembered_scope_as_one_item_in_words`
 
 <a id="RUN-21"></a>

@@ -885,7 +885,18 @@ mod tests {
             h.repo
                 .ask(Query::Log, Some("worktrees/other/HEAD"), None)
                 .map(|a| a.text),
-            Err(Declined::Unknown("worktrees/other/HEAD".to_owned()))
+            Err(Declined::AnotherWorktree("worktrees/other/HEAD".to_owned()))
+        );
+        assert_eq!(
+            Declined::AnotherWorktree("worktrees/other/HEAD".to_owned()).instead(),
+            Some("Use run to read it with git instead.")
+        );
+
+        assert_eq!(
+            h.repo
+                .ask(Query::Log, Some("main-worktree/HEAD"), None)
+                .map(|a| a.text),
+            Err(Declined::AnotherWorktree("main-worktree/HEAD".to_owned()))
         );
 
         h.repo.put("HEAD", "ref: worktrees/other/HEAD\n");

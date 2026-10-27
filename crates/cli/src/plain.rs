@@ -77,7 +77,7 @@ pub fn session(
 /// settings file answers nothing: a rule is a decision about a session somebody is sitting in
 /// front of (BG-8). A question about starting a server is held for whoever attaches, so nothing a
 /// person did not see is started (BG-7).
-#[cfg_attr(not(unix), allow(dead_code))]
+#[cfg_attr(not(unix), allow(dead_code, reason = "only the unix host calls it"))]
 pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
     run(
         false,
@@ -171,7 +171,7 @@ fn run(
     // Where nothing is configured at all, what Claude Code or opencode configured is offered first,
     // in lines, the way this session asks everything (IMPORT-1).
     if hosting.is_none()
-        && let Some(ended) = crate::import::before_the_session(&mut config)
+        && let Some(ended) = crate::import::before_the_session(&mut config, None)
     {
         return ended;
     }
@@ -279,8 +279,8 @@ fn run(
     for rule in bravebot_agent::permissions::proposed(&settings, profile.as_deref()) {
         asking.say(&t!(
             session_permission_allow_ignored,
-            rule = shown(&rule.rule),
-            path = crate::progress::printable_path(&rule.path)
+            rule = bravebot_agent::confirm::shown_text(&rule.rule),
+            path = bravebot_agent::confirm::shown_path(&rule.path)
         ));
     }
 
@@ -293,6 +293,16 @@ fn run(
     let resumed = hosted_as
         .as_deref()
         .and_then(|id| bravebot_session::sessions::load(workspace.root(), id));
+    // The record is held from here for as long as the session runs, before anything is asked or
+    // any server is reached: a session started again for a record a terminal holds is refused,
+    // since two processes would write one record (SESSION-38).
+    let mut kept = match hosted_as.as_deref() {
+        Some(id) => match Kept::opening(workspace.root(), id, resumed.as_ref()) {
+            Ok(kept) => Some(kept),
+            Err(held) => return fail(Ending::Failed, held.refusal()),
+        },
+        None => None,
+    };
     // A session started again, and the index of its workspace, are what the sweep of what has
     // outlived the retention period must leave whatever their age (STATE-4).
     bravebot_session::retention::at_startup(
@@ -428,6 +438,11 @@ fn run(
     // one or the configured one, and this is the only place either can be looked up.
     //
     let under = agent.as_ref().map(|definition| definition.name.clone());
+    // What this session's turns are addressed to, not what the record it resumed was under: a
+    // session that does not work under that definition must not claim it.
+    if let Some(kept) = kept.as_mut() {
+        kept.work_under(under.as_deref());
+    }
     // The definition's model where it names one, since that is the one every turn will ask for.
     let named = agent
         .as_ref()
@@ -490,6 +505,9 @@ fn run(
         agent,
         reads_effort,
         effort,
+        // At the level the session opened with, which is the one the ChatGPT account is sent for all
+        // of it. This mode has no command that changes the level, so the two never differ here.
+        account: bravebot_agent::chatgpt::AccountSession::begin_with(effort),
         complained: None,
         home,
         profile,
@@ -513,9 +531,7 @@ fn run(
             },
             (),
         ),
-        kept: hosted_as
-            .as_deref()
-            .map(|id| Kept::opening(workspace.root(), id, resumed.as_ref(), under.as_deref())),
+        kept,
         mcp: reached.session(),
         beside: beside_turns,
         inbox,
@@ -668,6 +684,14 @@ struct Running<'a> {
     /// Resolved once where the session is assembled, for the reason the attribution is: a file
     /// edited mid-session describes the next one, and this mode has no command that changes it.
     effort: Option<bravebot_session::store::Effort>,
+    /// What this session carries into its requests to the ChatGPT account: the identifier they carry
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Begun where the session is assembled, at the level it opened with, and given to every turn it
+    /// takes, so a background session's turns are one session to the account, and another background
+    /// session or a one-shot run is another. A session resumed from a record begins its own: the
+    /// record keeps none.
+    account: bravebot_agent::chatgpt::AccountSession,
     /// The last substitution said, so the same complaint is not repeated every turn.
     ///
     /// A session asks the same model over and over, so a substitution said once per turn is one
@@ -739,16 +763,16 @@ struct Kept {
 }
 
 impl Kept {
+    /// `Err` where another process holds the record being resumed (SESSION-38).
     fn opening(
         root: &std::path::Path,
         id: &str,
         resumed: Option<&bravebot_session::sessions::Record>,
-        under: Option<&str>,
-    ) -> Self {
+    ) -> Result<Self, bravebot_session::sessions::Held> {
         use bravebot_session::sessions::{Front, Handle};
-        let mut kept = match resumed {
+        Ok(match resumed {
             Some(record) => Self {
-                handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD),
+                handle: Handle::resuming(root, record, Front::Terminal, bravebot_stamp::BUILD)?,
                 turns: record.turns,
                 tokens: record.tokens,
                 split: record.split,
@@ -770,11 +794,13 @@ impl Kept {
                 timing: std::collections::BTreeMap::new(),
                 model: None,
             },
-        };
-        // What this session's turns are addressed to, not what the record it resumed was under:
-        // a session that does not work under that definition must not claim it.
-        kept.handle.set_agent(under.map(str::to_string));
-        kept
+        })
+    }
+
+    /// Say which definition this session's turns are addressed to, which is not the one the record
+    /// it resumed was under unless the session works under that one too.
+    fn work_under(&mut self, definition: Option<&str>) {
+        self.handle.set_agent(definition.map(str::to_string));
     }
 
     fn after_a_turn(
@@ -867,9 +893,11 @@ impl Kept {
     }
 }
 
-impl<C: Confirmer + Send> Turns<C> for Running<'_> {
-    fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
-        let task = Task::new(prompt.to_string())
+impl Running<'_> {
+    /// The task one prompt of this session is run as: built from what the session holds, and in the
+    /// session, so every prompt of it carries the same identifier to the ChatGPT account.
+    fn task(&self, prompt: &str) -> Task {
+        Task::new(prompt.to_string())
             .with_mcp(self.mcp.clone())
             .with_home(self.home.clone())
             .with_profile(self.profile.clone())
@@ -883,6 +911,7 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             // itself is left on disk, so it applies again under a model that reads one
             // (BACKEND-22).
             .with_effort(self.effort.filter(|_| self.reads_effort))
+            .in_account_session(self.account.clone())
             .with_permissions(self.permissions.clone())
             .with_permission_mode(self.mode)
             .with_attribution(self.attribution.clone())
@@ -898,12 +927,19 @@ impl<C: Confirmer + Send> Turns<C> for Running<'_> {
             .already_exposed(self.answers.exposed.clone())
             .with_inbox(self.inbox.clone())
             .with_courier(self.courier.clone())
-            .addressing(self.agent.as_ref().map(|agent| agent.name.clone()));
+            .addressing(self.agent.as_ref().map(|agent| agent.name.clone()))
+    }
+}
+
+impl<C: Confirmer + Send> Turns<C> for Running<'_> {
+    fn take(&mut self, prompt: &str, asking: &mut C) -> Said {
+        let task = self.task(prompt);
 
         // The mode as the session holds it. The confirmer below is what enforces it, and the task
         // above is the half the planner is told about; both are set from the one value, and
         // screening is threaded the same way for the reason the mode is.
-        let mut confirmer = bravebot_agent::Confining::new(asking, self.mode, task.auto_vetting);
+        let mut confirmer = bravebot_agent::Confining::new(asking, self.mode, task.auto_vetting)
+            .with_sandbox_mode(task.sandbox);
         let mut sink = RecordingSink::new();
         // One per turn. It holds every call the turn made, for a result object a session has no
         // way of asking for, so one kept for the session would be a list nothing reads growing for
@@ -1198,6 +1234,16 @@ impl<R: BufRead, W: Write> bravebot_agent::servers::Asker for Attached<'_, R, W>
     }
 }
 
+/// The row a typed answer numbers, counting from one, or `None` where the answer is not a whole number
+/// in range: digits and nothing else, so a sign, a fraction or a second word names no row.
+///
+/// What the questions that list rows and take a number read an answer with.
+pub(crate) fn numbered_row<'a, T>(answer: &str, rows: &'a [T]) -> Option<&'a T> {
+    let digits = !answer.is_empty() && answer.bytes().all(|byte| byte.is_ascii_digit());
+    let number = answer.parse::<usize>().ok().filter(|_| digits)?;
+    rows.get(number.checked_sub(1)?)
+}
+
 /// What a line is being waited for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Waiting {
@@ -1213,7 +1259,7 @@ pub(crate) trait Watcher: Send {
     /// Called before the first line of a question is written, so that what is written from here
     /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
     fn asking(&mut self);
-    /// Called before the read, which blocks.
+    /// Called before the read, which blocks, and before what asks for the line is written.
     fn waiting(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
     fn received(&mut self, on: Waiting, line: Option<&str>);
@@ -1268,10 +1314,8 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// The end of the input is how a session in lines is left, this one having no key to press:
     /// the terminal is not in raw mode, so Ctrl-D is the terminal's own end of file and arrives
     /// here as one.
-    fn prompt(&mut self) -> Option<String> {
-        let _ = write!(self.output, "{MARKER}");
-        let _ = self.output.flush();
-        self.line(Waiting::Prompt)
+    pub(crate) fn prompt(&mut self) -> Option<String> {
+        self.line(Waiting::Prompt, MARKER)
     }
 
     /// What a read that is not the prompt is waiting for.
@@ -1281,16 +1325,23 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
 
     /// One line, with its newline taken off, or `None` at the end of the input.
     ///
+    /// `invitation` is what asks for the line, the marker or the end of a question. The watcher is
+    /// told a line is being waited for before it is written, because a terminal attached to a
+    /// background session answers as soon as it has drawn it, and a line that arrives before the
+    /// session has said it is waiting is refused and never read (BG-9).
+    ///
     /// A newline is written either way, because everything that asks for a line wrote a marker or
     /// a question and left the cursor after it. On a terminal the person's own Enter is echoed
     /// there and this is the blank line between what they typed and the answer; where the stream is
     /// a file there is no echo, and without this the progress that follows would be appended to a
     /// question nobody can see the end of. The end of the input needs it most: there is no echo for
     /// Ctrl-D at all, so without this the shell's own prompt comes back on the marker's line.
-    fn line(&mut self, on: Waiting) -> Option<String> {
+    fn line(&mut self, on: Waiting, invitation: &str) -> Option<String> {
         if let Some(watch) = &mut self.watch {
             watch.waiting(on);
         }
+        let _ = write!(self.output, "{invitation}");
+        let _ = self.output.flush();
         let mut line = String::new();
         let read = self.input.read_line(&mut line);
         let _ = writeln!(self.output);
@@ -1312,13 +1363,11 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// said yes to.
     fn put(&mut self, lines: &[String], question: &str) -> Option<Decision> {
         self.say_question(lines);
-        let _ = write!(self.output, "{question} {} ", t!(line_answer));
-        let _ = self.output.flush();
 
         // Only the affirmative approves. Any other line is a person who typed something that was
         // not yes, and the end of the input is nobody answering at all.
         let on = self.answering();
-        let typed = self.line(on)?;
+        let typed = self.line(on, &format!("{question} {} ", t!(line_answer)))?;
         Some(match typed.trim().to_lowercase() == t!(line_answer_yes) {
             true => Decision::Approve,
             false => Decision::Reject,
@@ -1334,10 +1383,9 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
     /// `None` at the end of the input.
     pub(crate) fn answer(&mut self, question: &str) -> Option<String> {
         self.say_question(&[]);
-        let _ = write!(self.output, "{question} ");
-        let _ = self.output.flush();
         let on = self.answering();
-        self.line(on).map(|typed| typed.trim().to_string())
+        self.line(on, &format!("{question} "))
+            .map(|typed| typed.trim().to_string())
     }
 }
 
@@ -1569,10 +1617,10 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
         let shown_path = bravebot_agent::confirm::shown_path(&request.path);
         let lines = [
             match request.write {
-                true => t!(path_writes, path = shown_path.as_str()).to_string(),
-                false => t!(path_reads, path = shown_path.as_str()).to_string(),
+                true => t!(path_writes, path = shown_path.as_str()),
+                false => t!(path_reads, path = shown_path.as_str()),
             },
-            t!(path_why, why = shown(&request.why).as_str()).to_string(),
+            t!(path_why, why = shown(&request.why).as_str()),
             t!(path_explained).to_string(),
             t!(path_not_trusted).to_string(),
         ];
@@ -1605,13 +1653,12 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             text: &request.text,
             label: &label,
         });
-        lines.push(t!(message_explained_turn, key = t!(message_answer_turn)).to_string());
+        lines.push(t!(message_explained_turn, key = t!(message_answer_turn)));
         self.say_question(&lines);
-        let _ = write!(self.output, "{} {} ", t!(message_title), t!(message_answer));
-        let _ = self.output.flush();
         self.about(Held::Message);
         let on = self.answering();
-        let Some(typed) = self.line(on) else {
+        let invitation = format!("{} {} ", t!(message_title), t!(message_answer));
+        let Some(typed) = self.line(on, &invitation) else {
             return MessageDecision::Decline;
         };
         let typed = typed.trim().to_lowercase();
@@ -1677,11 +1724,9 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
                 }
             }
             self.say_question(&lines);
-            let _ = write!(self.output, "{} ", t!(ask_own_words));
-            let _ = self.output.flush();
             self.about(Held::Question);
             let on = self.answering();
-            fresh.push(match self.line(on) {
+            fresh.push(match self.line(on, &format!("{} ", t!(ask_own_words))) {
                 Some(typed) if !typed.trim().is_empty() => Answer::Typed(typed),
                 _ => Answer::Declined,
             });
@@ -1700,6 +1745,43 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
 
 #[cfg(test)]
 mod tests {
+    /// CLI-14: a typed number picks the row it numbers, counting from one, and nothing else picks one.
+    /// The questions that list rows and take a number read an answer through it. The regressions it
+    /// rejects are a count from zero, a number past the last row clamped to it, zero or a negative
+    /// number wrapped round to a row, and a sign, a fraction or a second word read as part of a number.
+    #[test]
+    fn a_typed_number_picks_the_row_it_numbers_and_nothing_else() {
+        let rows = ["first", "second", "third"];
+
+        for (answer, picked) in [
+            ("1", "first"),
+            ("2", "second"),
+            ("3", "third"),
+            ("03", "third"),
+        ] {
+            assert_eq!(numbered_row(answer, &rows), Some(&picked), "{answer:?}");
+        }
+        for answer in [
+            "",
+            " ",
+            "0",
+            "4",
+            "-1",
+            "+1",
+            "1 2",
+            "1.0",
+            "one",
+            "99999999999999999999999",
+        ] {
+            assert_eq!(numbered_row(answer, &rows), None, "{answer:?}");
+        }
+        assert_eq!(
+            numbered_row("1", &Vec::<&str>::new()),
+            None,
+            "a row of no rows"
+        );
+    }
+
     use super::*;
 
     #[test]
@@ -1725,7 +1807,7 @@ mod tests {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/test-scratch")
             .join(format!("plain-failed-{}", std::process::id()));
-        let mut kept = Kept::opening(&root, "id", None, None);
+        let mut kept = Kept::opening(&root, "id", None).expect("a new session holds nothing");
         let spent = bravebot_agent::Spent {
             tokens: 107,
             output_tokens: 40,
@@ -2502,11 +2584,14 @@ mod tests {
             .expect("a record");
         let root = std::path::Path::new("/tmp/x");
 
-        let unnamed = Kept::opening(root, "1-2", Some(&record), None);
+        let mut unnamed = Kept::opening(root, "1-2", Some(&record)).expect("nothing holds it");
+        unnamed.work_under(None);
         assert_eq!(unnamed.handle.agent(), None);
-        let named = Kept::opening(root, "1-2", Some(&record), Some("another"));
+        let mut named = Kept::opening(root, "1-2", Some(&record)).expect("nothing holds it");
+        named.work_under(Some("another"));
         assert_eq!(named.handle.agent(), Some("another"));
-        let fresh = Kept::opening(root, "3-4", None, Some("another"));
+        let mut fresh = Kept::opening(root, "3-4", None).expect("a new session holds nothing");
+        fresh.work_under(Some("another"));
         assert_eq!(fresh.handle.agent(), Some("another"));
     }
 
@@ -3337,6 +3422,120 @@ mod tests {
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {
             self.announced = false;
         }
+    }
+
+    /// The screen of a session, which a test and its watcher both read.
+    #[derive(Clone, Default)]
+    struct Screen(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Screen {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().expect("the screen").clone()).expect("text")
+        }
+    }
+
+    impl Write for Screen {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("the screen").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A watcher that keeps what the screen held each time it was told a line is being waited for.
+    struct SeesTheScreen {
+        screen: Screen,
+        at_each_wait: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Watcher for SeesTheScreen {
+        fn asking(&mut self) {}
+
+        fn waiting(&mut self, _on: Waiting) {
+            let text = self.screen.text();
+            self.at_each_wait.lock().expect("the record").push(text);
+        }
+
+        fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
+    }
+
+    /// BG-9: the watcher is told a line is being waited for before what asks for the line is
+    /// written. A terminal attached to a background session answers as soon as it has drawn the
+    /// marker or the question, so a session that said it was waiting only afterwards would refuse
+    /// that line.
+    #[test]
+    fn a_line_is_waited_for_before_what_asks_for_it_is_written() {
+        type Asked = Prompting<std::io::BufReader<std::io::Cursor<Vec<u8>>>, Screen>;
+        // What a way of asking is called, what it draws to ask for the line, and the call that asks.
+        type Case = (&'static str, String, Box<dyn Fn(&mut Asked)>);
+        let cases: Vec<Case> = vec![
+            (
+                "the prompt",
+                MARKER.to_string(),
+                Box::new(|asking| {
+                    let _ = asking.prompt();
+                }),
+            ),
+            (
+                "a yes or no question",
+                "Run it?".to_string(),
+                Box::new(|asking| {
+                    let _ = asking.ask(&[], "Run it?");
+                }),
+            ),
+            (
+                "a question answered with a word",
+                "Name it?".to_string(),
+                Box::new(|asking| {
+                    let _ = asking.answer("Name it?");
+                }),
+            ),
+            (
+                "a message to send",
+                t!(message_title).to_string(),
+                Box::new(|asking| {
+                    let _ = asking.confirm_message(&a_message_to_ask_about());
+                }),
+            ),
+            (
+                "a question from the planner",
+                t!(ask_own_words).to_string(),
+                Box::new(|asking| {
+                    let _ = asking.ask_user(&series_of(&[("Region", "Which?")]));
+                }),
+            ),
+        ];
+        let mut problems = Vec::new();
+        for (what, invitation, act) in cases {
+            let screen = Screen::default();
+            let at_each_wait = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut asking = Prompting::watched(
+                std::io::BufReader::new(std::io::Cursor::new(b"y\n".to_vec())),
+                screen.clone(),
+                Box::new(SeesTheScreen {
+                    screen: screen.clone(),
+                    at_each_wait: at_each_wait.clone(),
+                }),
+            );
+            act(&mut asking);
+
+            let waits = at_each_wait.lock().expect("the record");
+            if waits.len() != 1 {
+                problems.push(format!("{what} waited {} times, not once", waits.len()));
+            } else if waits[0].contains(&invitation) {
+                problems.push(format!(
+                    "{what} was drawn before the session said it was waiting: {}",
+                    waits[0]
+                ));
+            }
+            if !screen.text().contains(&invitation) {
+                problems.push(format!("{what} never drew {invitation:?}"));
+            }
+        }
+        assert!(problems.is_empty(), "{problems:#?}");
     }
 
     /// BG-7, CLI-14: a server question is put to whoever attaches as a held question of its own

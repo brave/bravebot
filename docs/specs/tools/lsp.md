@@ -9,6 +9,8 @@ governs:
   - crates/lsp/src/server.rs
   - crates/agent/src/lsp.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -16,10 +18,15 @@ governs:
   - crates/agent/src/turn/task.rs
   - crates/agent/src/turn/sentences.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/actions.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/turns.rs
 guards:
   - symbol: Operation::parse
   - symbol: locations_in
-documented-by: docs/website/docs/reference/tools.md
+documented-by:
+  - docs/website/docs/reference/tools.md
+  - docs/website/docs/reference/lsp-tool.md
 ---
 
 ## Scope
@@ -262,16 +269,22 @@ outside the tree.
 <a id="LSP-5"></a>
 ### LSP-5: a server is a program a person approved, and runs with their own access
 
-Starting one is put to the user, and what they approve is a process that runs for the session with
-the access their own shell would give it. Not confined, and the record of what was approved belongs
+Starting one is put to the user unless the permission mode answers it, as bypass does where the
+sandbox mode is `off` (below). What is approved is a process that runs for the session with the
+access their own shell would give it. Not confined, and the record of what was approved belongs
 to the session in the way [RUN-9](run.md#RUN-9) describes.
 Before an approved launch, record a language-server coverage gap under
 [SESSION-19](../sessions.md#SESSION-19). Undo remains available and stops tracked servers before
 restoring files. Coverage warnings persist because server children may outlive shutdown.
 A declined launch leaves undo coverage unchanged.
-The question is put in every permission mode, bypass included: bypassing answers a confined line
-and not this, as it does not answer a line that asks to start with no sandbox
-([MODE-4](../permission-modes.md#MODE-4)), and a run with nobody to ask refuses the server.
+Only bypassing answers it, and only where the sandbox mode is `off`: the server runs with no profile, so approving it under a sandbox mode that
+confines every other program would give it access no stage of the session has, and a permission
+mode does not widen a sandbox mode ([SANDBOX-22](../sandboxing.md#SANDBOX-22)). Under `off` no
+program is confined ([MODE-13](../permission-modes.md#MODE-13)) and the question protects nothing.
+The trail names the mode as the one that answered ([TRACE-7](../trace.md#TRACE-7)), before the
+launch as the coverage gap above is recorded. A run with nobody to ask refuses the server
+wherever the mode does not answer it, which includes a one-shot run in bypass under a confining
+sandbox mode.
 
 **Why not confined, when a stdio MCP server is.** [sandboxing.md](../sandboxing.md) says what
 confinement is for: code nobody vouched for. It says in the same breath that "a program the user
@@ -320,7 +333,11 @@ assigns. The server's sentence is not carried at all.
 `verified-by: bravebot_lsp::server::a_server_failure_reports_a_code_and_not_the_servers_words`
 `verified-by: bravebot_lsp::server::the_prompt_says_which_servers_run_build_tooling`
 `verified-by: bravebot_lsp::server::typescript_and_python_servers_are_put_to_a_person_as_running_the_projects_code`
-`verified-by: bravebot_agent::permission_mode::a_language_server_is_put_to_the_person_in_every_mode_bypass_included`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
+`verified-by: bravebot_agent::permission_mode::a_confirmer_given_no_sandbox_mode_still_puts_the_server_question_in_bypass`
+`verified-by: bravebot_agent::lsp::bypass_with_the_sandbox_off_starts_a_language_server_and_the_trail_names_the_mode`
+`verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
+`verified-by: bravebot_cli::running::a_one_shot_run_starts_a_language_server_only_under_bypass_with_the_sandbox_off`
 
 <a id="LSP-6"></a>
 ### LSP-6: no server means no answer, and says which
@@ -531,7 +548,8 @@ to decide any of it ([LSP-2](#LSP-2)). An extension nothing names is unconfigure
 **Starting one is put to the person under [LSP-5](#LSP-5), in terms that fit what is known.** The
 prompt names the resolved program and every argument, an argument holding a space or a control
 character quoted so that two lists starting different commands never read alike, and the name the
-person gave the declaration.
+person gave the declaration. Where [LSP-5](#LSP-5) has the mode answer, the prompt is not drawn for a
+declared server either.
 What starting it runs is not known for a program this repository did not choose, and the prompt says
 that it is unknown, never that it runs nothing and never that it runs the dependency tree's code.
 The server runs with the person's own access and is not confined.
@@ -565,8 +583,9 @@ table server ([RUN-12](run.md#RUN-12)); a value is never repeated by a log line 
 `verified-by: bravebot_agent::declared_lsp::an_unreadable_declaration_file_leaves_the_approved_server_running`
 `verified-by: bravebot_agent::declared_lsp::a_prompt_shows_an_argument_with_a_space_as_one_argument`
 `verified-by: bravebot_config::lsp::an_extension_with_a_dot_inside_it_is_a_problem`
-`verified-by: bravebot_tui::confirm::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
+`verified-by: bravebot_tui::confirm::mcp::a_declared_server_is_asked_about_with_its_arguments_and_as_unknown`
 `verified-by: bravebot_ui_bridge::wire::a_server_prompt_carries_what_would_run_and_whether_it_builds`
+`verified-by: bravebot_agent::permission_mode::a_language_server_is_answered_unasked_only_by_bypass_with_the_sandbox_off`
 
 <a id="LSP-12"></a>
 ### LSP-12: a write or an edit is checked by a server that is already running, and reports lines, never prose

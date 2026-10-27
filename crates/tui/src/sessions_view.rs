@@ -6,23 +6,27 @@
 //! field for anything else.
 
 use crate::input;
+use crate::select::{self, Click};
 use crate::theme;
 use bravebot_i18n::t;
 use bravebot_session::jobs::State;
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event as TermEvent, KeyCode, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 use std::cell::Cell;
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -105,6 +109,16 @@ impl List {
         self.rows.is_empty()
     }
 
+    /// Which row is drawn on line `line` of the list as it is laid out at `width`, if one is: a
+    /// heading and the space between two groups are no row.
+    fn row_on(&self, line: usize, width: usize) -> Option<usize> {
+        list_lines(self, width)
+            .row_of_line
+            .get(line)
+            .copied()
+            .flatten()
+    }
+
     fn down(&mut self) {
         self.selected = (self.selected + 1).min(self.rows.len().saturating_sub(1));
     }
@@ -150,25 +164,114 @@ pub fn handle_key(list: &mut List, code: KeyCode, modifiers: KeyModifiers) -> Op
     }
 }
 
+/// What a mouse event settles, or `None` where the list goes on.
+///
+/// A left press on a session puts the cursor on it, and a second on the same session within
+/// [`select::MULTI_CLICK`] attaches to it, as Enter does (MOUSE-15). A turn of the wheel moves the
+/// cursor `wheel` sessions, over the headings, and stops at the first and the last (MOUSE-46). A
+/// press on a heading, on the space between two groups, below the last session or on any other part
+/// of the screen does nothing, and nor does another button, a drag or a release. `area` is where
+/// [`draw`] drew the list, and `last` the press answered before this one.
+pub fn handle_mouse(
+    list: &mut List,
+    area: Rect,
+    mouse: MouseEvent,
+    last: &mut Option<Click>,
+    now: Instant,
+    wheel: u16,
+) -> Option<Choice> {
+    match mouse.kind {
+        MouseEventKind::ScrollDown => {
+            for _ in 0..wheel {
+                list.down();
+            }
+            return None;
+        }
+        MouseEventKind::ScrollUp => {
+            for _ in 0..wheel {
+                list.up();
+            }
+            return None;
+        }
+        MouseEventKind::Down(MouseButton::Left) => {}
+        _ => return None,
+    }
+    let cell = Position::new(mouse.column, mouse.row);
+    let line = list.top.get() + usize::from(mouse.row.saturating_sub(area.y));
+    let Some(row) = area
+        .contains(cell)
+        .then(|| list.row_on(line, usize::from(area.width)))
+        .flatten()
+    else {
+        *last = None;
+        return None;
+    };
+    list.selected = row;
+    let session = list.rows.get(row).map(|row| row.id.clone());
+    let (click, count) = select::count_press_on(*last, now, (mouse.row, mouse.column), &session);
+    *last = Some(click);
+    if count == 2 {
+        *last = None;
+        return list.chosen().map(|row| Choice::Attach(row.id.clone()));
+    }
+    None
+}
+
+/// Where [`draw`] draws the list in a frame of `frame`.
+pub fn list_area(frame: Rect) -> Rect {
+    layout(frame)[1]
+}
+
+/// The heading, the list, the directory and prompt of the session under the cursor, and the keys.
+fn layout(area: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(2), // directory and last prompt of the row under the cursor
+            Constraint::Length(1),
+        ])
+        .split(area)
+}
+
 /// Take the terminal, show `rows`, and give the terminal back before returning.
 ///
 /// `refresh` reads the roster again; it is called about once a second while no key arrives.
 pub fn run(rows: Vec<Row>, mut refresh: impl FnMut() -> Vec<Row>) -> io::Result<Choice> {
     theme::sense_no_color();
-    let _screen = Screen::take()?;
+    // Read here, as the interface reads them at its start: whether the mouse is reported and how
+    // far a turn of the wheel moves the list.
+    let settings = bravebot_config::Settings::load();
+    let mouse = settings.tui_mouse() != Some(false);
+    let wheel = crate::state::wheel_rows_named(settings.wheel_rows());
+    let _screen = Screen::take(mouse)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     let mut list = List::new(rows);
     let mut next_refresh = Instant::now() + REFRESH;
+    let mut area = Rect::default();
+    let mut last = None;
     loop {
         if Instant::now() >= next_refresh {
             list.replace(refresh());
             next_refresh = Instant::now() + REFRESH;
         }
-        terminal.draw(|frame| draw(frame, &list))?;
+        terminal.draw(|frame| {
+            draw(frame, &list);
+            area = list_area(frame.area());
+        })?;
         if !input::poll(next_refresh.saturating_duration_since(Instant::now()))? {
             continue;
         }
         let event = input::read()?;
+        if let TermEvent::Mouse(pointer) = event {
+            if let Some(choice) =
+                handle_mouse(&mut list, area, pointer, &mut last, Instant::now(), wheel)
+            {
+                return Ok(choice);
+            }
+            continue;
+        }
         let Some(key) = input::key_of(&event) else {
             continue;
         };
@@ -182,28 +285,64 @@ pub fn run(rows: Vec<Row>, mut refresh: impl FnMut() -> Vec<Row>) -> io::Result<
     }
 }
 
-/// Raw mode and the alternate screen for as long as this is held.
-struct Screen;
+/// The alternate screen and the mouse where it is reported, and raw mode where the guard took it,
+/// for as long as this is held. What it took is given back when it is dropped, wherever the view
+/// returns.
+struct Screen<W: Write> {
+    out: W,
+    mouse: bool,
+    raw: bool,
+}
 
-impl Screen {
-    fn take() -> io::Result<Self> {
+impl Screen<io::Stdout> {
+    fn take(mouse: bool) -> io::Result<Self> {
         enable_raw_mode()?;
         let mut out = io::stdout();
         // After raw mode, so the reply arrives as bytes, and before the alternate screen.
         theme::sense(&mut out);
         theme::restore_saved();
-        if let Err(failure) = execute!(out, EnterAlternateScreen) {
-            let _ = disable_raw_mode();
-            return Err(failure);
-        }
-        Ok(Self)
+        Self::on(out, mouse, true)
     }
 }
 
-impl Drop for Screen {
+impl<W: Write> Screen<W> {
+    /// Hold `out` on the alternate screen, with the mouse asked for where `mouse` says, and raw mode
+    /// given back with it where `raw` says it was taken.
+    fn on(out: W, mouse: bool, raw: bool) -> io::Result<Self> {
+        // From here the guard gives back what was taken wherever this returns, in the reverse order.
+        let mut screen = Self { out, mouse, raw };
+        execute!(screen.out, EnterAlternateScreen)?;
+        if mouse {
+            ask_for_the_mouse(&mut screen.out)?;
+        }
+        Ok(screen)
+    }
+}
+
+/// Ask the terminal to report the buttons and the pointer while a button is held, which is the
+/// motion a drag over a list reads. The pointer crossing the window with no button held is turned
+/// off, since this view draws nothing for a pointer to be over, and the interface's own screen
+/// asks for it ([MOUSE-51](../../../docs/specs/mouse.md#MOUSE-51)).
+fn ask_for_the_mouse<W: Write>(out: &mut W) -> io::Result<()> {
+    execute!(out, EnableMouseCapture)?;
+    write!(out, "{}", crate::app::TRACK_MOTION_ONLY_WHILE_DRAGGING)?;
+    out.flush()
+}
+
+/// Stop the terminal reporting the mouse.
+fn give_back_the_mouse<W: Write>(out: &mut W) -> io::Result<()> {
+    execute!(out, DisableMouseCapture)
+}
+
+impl<W: Write> Drop for Screen<W> {
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
-        let _ = disable_raw_mode();
+        if self.mouse {
+            let _ = give_back_the_mouse(&mut self.out);
+        }
+        let _ = execute!(self.out, LeaveAlternateScreen);
+        if self.raw {
+            let _ = disable_raw_mode();
+        }
     }
 }
 
@@ -227,15 +366,7 @@ pub fn draw(frame: &mut Frame, list: &List) {
             area,
         );
     }
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(2), // directory and last prompt of the row under the cursor
-            Constraint::Length(1),
-        ])
-        .split(area);
+    let layout = layout(area);
 
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -296,6 +427,9 @@ struct Laid {
     /// The line to scroll to when the cursor moves above the screen: the heading of its group
     /// where the cursor is on the group's first row, and the cursor's line otherwise.
     anchor: usize,
+    /// Which row of the list each line holds, or `None` for a heading and the space between two
+    /// groups. What a press on a line is read against.
+    row_of_line: Vec<Option<usize>>,
 }
 
 /// Every line of the list, headings included.
@@ -309,6 +443,7 @@ fn list_lines(list: &List, width: usize) -> Laid {
             lines: vec![none],
             cursor_line: 0,
             anchor: 0,
+            row_of_line: vec![None],
         };
     }
     let widest = |text: fn(&Row) -> &str| {
@@ -327,6 +462,7 @@ fn list_lines(list: &List, width: usize) -> Laid {
         .min(width.saturating_sub(others).max(NAME_NARROWEST));
 
     let mut lines = Vec::new();
+    let mut row_of_line = Vec::new();
     let mut cursor_line = 0;
     let mut anchor = 0;
     let mut group = None;
@@ -338,6 +474,7 @@ fn list_lines(list: &List, width: usize) -> Laid {
             let count = list.rows.iter().filter(|r| r.state == row.state).count();
             if !lines.is_empty() {
                 lines.push(Line::default());
+                row_of_line.push(None);
             }
             heading_line = lines.len();
             lines.push(Line::from(Span::styled(
@@ -346,6 +483,7 @@ fn list_lines(list: &List, width: usize) -> Laid {
                     .fg(theme::text())
                     .add_modifier(Modifier::BOLD),
             )));
+            row_of_line.push(None);
         }
         let chosen = index == list.selected;
         if chosen {
@@ -379,11 +517,13 @@ fn list_lines(list: &List, width: usize) -> Laid {
             ),
             Span::styled(row.state_words.clone(), Style::default().fg(theme::text())),
         ]));
+        row_of_line.push(Some(index));
     }
     Laid {
         lines,
         cursor_line,
         anchor,
+        row_of_line,
     }
 }
 
@@ -874,6 +1014,230 @@ mod tests {
         assert!(
             narrowest.contains("abcdefg\u{2026}  just now"),
             "{narrowest}"
+        );
+    }
+
+    fn pressed(row: u16, column: u16) -> MouseEvent {
+        mouse(MouseEventKind::Down(MouseButton::Left), row, column)
+    }
+
+    fn mouse(kind: MouseEventKind, row: u16, column: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// The row of a frame `height` tall that a text is drawn on.
+    fn row_of(list: &List, text: &str, height: u16) -> u16 {
+        screen(list, 80, height)
+            .iter()
+            .position(|line| line.contains(text))
+            .unwrap_or_else(|| panic!("{text} is not on the screen")) as u16
+    }
+
+    fn chosen_id(list: &List) -> Option<&str> {
+        list.chosen().map(|row| row.id.as_str())
+    }
+
+    /// MOUSE-15. Rejects: a press that moves nothing or takes at once, a second press that does not
+    /// attach, and a session found from the line it is not on, with a heading above each group.
+    #[test]
+    fn a_press_on_a_session_moves_the_cursor_and_a_second_attaches() {
+        let mut list = List::new(roster());
+        let (now, mut last) = (Instant::now(), None);
+        let area = list_area(Rect::new(0, 0, 80, 24));
+        let at = row_of(&list, "intr0001", 24);
+
+        let outcome = handle_mouse(&mut list, area, pressed(at, 6), &mut last, now, 3);
+        assert_eq!(outcome, None);
+        assert_eq!(chosen_id(&list), Some("intr0001"));
+
+        let outcome = handle_mouse(&mut list, area, pressed(at, 6), &mut last, now, 3);
+        assert_eq!(outcome, Some(Choice::Attach("intr0001".to_string())));
+    }
+
+    /// MOUSE-15. Rejects: a second press counted with the first because it landed on the same cell
+    /// when the roster was read again between them and put another session there, which attaches the
+    /// session that moved under the pointer and not the one pressed first. A roster read again that
+    /// leaves the sessions where they were is not in the way of a double click.
+    #[test]
+    fn a_roster_read_again_between_two_presses_does_not_attach_the_session_that_moved_under_them() {
+        let (now, mut last) = (Instant::now(), None);
+        let area = list_area(Rect::new(0, 0, 80, 24));
+        let pair = || vec![row("idle0001", State::Idle), row("idle0002", State::Idle)];
+        let mut list = List::new(pair());
+        let at = row_of(&list, "idle0001", 24);
+
+        let first = handle_mouse(&mut list, area, pressed(at, 6), &mut last, now, 3);
+        assert_eq!(first, None);
+        assert_eq!(chosen_id(&list), Some("idle0001"));
+        list.replace(vec![
+            row("idle0002", State::Idle),
+            row("idle0001", State::Idle),
+        ]);
+        assert_eq!(
+            row_of(&list, "idle0002", 24),
+            at,
+            "the roster did not reorder"
+        );
+
+        let second = handle_mouse(&mut list, area, pressed(at, 6), &mut last, now, 3);
+        assert_eq!(
+            second, None,
+            "the session that moved under the pointer was attached"
+        );
+        assert_eq!(chosen_id(&list), Some("idle0002"));
+
+        let mut list = List::new(pair());
+        let mut last = None;
+        let at = row_of(&list, "idle0001", 24);
+        handle_mouse(&mut list, area, pressed(at, 6), &mut last, now, 3);
+        list.replace(pair());
+        let attached = handle_mouse(&mut list, area, pressed(at, 6), &mut last, now, 3);
+        assert_eq!(attached, Some(Choice::Attach("idle0001".to_string())));
+    }
+
+    /// MOUSE-15. Rejects: a press on a state's heading, on the space between two groups, below the
+    /// last session, or off the list, choosing or moving the cursor, even twice, and another button,
+    /// a drag or a release acting.
+    #[test]
+    fn a_press_on_no_session_and_any_other_mouse_event_leave_the_list_alone() {
+        let mut list = List::new(roster());
+        let area = list_area(Rect::new(0, 0, 80, 24));
+        let heading = row_of(
+            &list,
+            &format!("{} (1)", super::heading(State::Working)),
+            24,
+        );
+        let (now, mut last) = (Instant::now(), None);
+        let before = chosen_id(&list).map(str::to_string);
+        for row in [0, heading, heading - 1, area.bottom() - 1, 23] {
+            for _ in 0..2 {
+                let outcome = handle_mouse(&mut list, area, pressed(row, 4), &mut last, now, 3);
+                assert_eq!(outcome, None, "row {row}");
+            }
+        }
+        for kind in [
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Down(MouseButton::Middle),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Moved,
+        ] {
+            let at = row_of(&list, "idle0001", 24);
+            let outcome = handle_mouse(&mut list, area, mouse(kind, at, 6), &mut last, now, 3);
+            assert_eq!(outcome, None, "{kind:?}");
+        }
+        assert_eq!(chosen_id(&list).map(str::to_string), before);
+    }
+
+    /// MOUSE-15. Rejects: counting lines from the top of the list when it has scrolled, so that a
+    /// press lands on the session the heading above it pushed down: in a frame that holds six lines
+    /// of the list with the cursor near the end, each id drawn is the session a press on its line
+    /// picks.
+    #[test]
+    fn each_session_drawn_is_the_one_a_press_on_it_picks_in_a_list_that_has_scrolled() {
+        let many = || {
+            List::new(
+                (1..=12)
+                    .map(|n| row(&format!("idle{n:04}"), State::Idle))
+                    .collect(),
+            )
+        };
+        let height = 10;
+        let area = list_area(Rect::new(0, 0, 80, height));
+        let mut list = many();
+        for _ in 0..10 {
+            list.down();
+        }
+        let lines = screen(&list, 80, height);
+        let mut drawn = 0;
+        for (row, line) in lines.iter().enumerate() {
+            let Some(id) = line
+                .split_whitespace()
+                .find(|word| word.starts_with("idle"))
+            else {
+                continue;
+            };
+            let mut fresh = many();
+            for _ in 0..10 {
+                fresh.down();
+            }
+            screen(&fresh, 80, height);
+            let (now, mut last) = (Instant::now(), None);
+            handle_mouse(&mut fresh, area, pressed(row as u16, 4), &mut last, now, 3);
+            assert_eq!(chosen_id(&fresh), Some(id), "row {row}: {line}");
+            drawn += 1;
+        }
+        assert!(drawn >= 4, "the list drew {drawn} sessions: {lines:#?}");
+    }
+
+    /// MOUSE-46. Rejects: a wheel turn that counts headings as sessions, moves the wrong way, goes
+    /// past either end, or attaches.
+    #[test]
+    fn the_wheel_moves_the_cursor_by_the_sessions_asked_over_the_headings() {
+        let mut list = List::new(roster());
+        let area = list_area(Rect::new(0, 0, 80, 24));
+        let (now, mut last) = (Instant::now(), None);
+        let mut turn = |list: &mut List, kind, wheel| {
+            let outcome = handle_mouse(list, area, mouse(kind, 0, 0), &mut last, now, wheel);
+            assert_eq!(outcome, None, "{kind:?}");
+            chosen_id(list).map(str::to_string)
+        };
+        // Grouped by state: needs-input, working, idle twice, interrupted, stopped.
+        assert_eq!(
+            turn(&mut list, MouseEventKind::ScrollDown, 2).as_deref(),
+            Some("idle0001")
+        );
+        assert_eq!(
+            turn(&mut list, MouseEventKind::ScrollUp, 1).as_deref(),
+            Some("work0001")
+        );
+        assert_eq!(
+            turn(&mut list, MouseEventKind::ScrollDown, 50).as_deref(),
+            Some("stop0001")
+        );
+        assert_eq!(
+            turn(&mut list, MouseEventKind::ScrollUp, 50).as_deref(),
+            Some("need0001")
+        );
+    }
+
+    /// MOUSE-15. Rejects: a view drawn without the mouse being asked for, the mouse never given back
+    /// when the view's screen is dropped, and a view that was told not to report the mouse asking for
+    /// it anyway. The buttons and the pointer held down are asked for, the pointer crossing the window
+    /// is turned off again, and the screen is given back in the reverse order it was taken in.
+    #[test]
+    fn the_view_asks_for_the_buttons_and_a_held_pointer_and_gives_the_mouse_and_screen_back() {
+        let mut written = Vec::new();
+        drop(Screen::on(&mut written, true, false).expect("taken"));
+        let written = String::from_utf8(written).expect("text");
+        let at = |sequence: &str| {
+            written
+                .find(sequence)
+                .unwrap_or_else(|| panic!("{sequence:?} was not written: {written:?}"))
+        };
+        let screen = at("\x1b[?1049h");
+        let asked = at("\x1b[?1000h");
+        assert!(screen < asked, "{written:?}");
+        assert!(
+            written[asked..].contains(crate::app::TRACK_MOTION_ONLY_WHILE_DRAGGING),
+            "{written:?}"
+        );
+        let given = at("\x1b[?1000l");
+        let left = at("\x1b[?1049l");
+        assert!(asked < given && given < left, "{written:?}");
+
+        let mut written = Vec::new();
+        drop(Screen::on(&mut written, false, false).expect("taken"));
+        let written = String::from_utf8(written).expect("text");
+        assert!(written.contains("\x1b[?1049h") && written.contains("\x1b[?1049l"));
+        assert!(
+            !written.contains("\x1b[?1000"),
+            "the mouse was asked for or given back with it off: {written:?}"
         );
     }
 }

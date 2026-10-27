@@ -424,6 +424,11 @@ pub struct Skill {
     /// sorted. Found when the catalogue was resolved and never again, so the set is fixed before
     /// the turn begins (LOAD-4).
     pub files: Vec<String>,
+    /// Where `directory` lands in the workspace when it is a symbolic link to another directory
+    /// inside it, spelled as a read spells it. `None` where `directory` is not a link, or lands
+    /// outside the workspace, or lands somewhere the trust map or a rule does not allow a name for:
+    /// nothing outside the workspace is named (LOAD-4).
+    pub landed: Option<String>,
     /// The directory on disk where a read may reach it once the skill is loaded, which is set only
     /// for the user's own skills: they are trusted by provenance (SKILL-3), so a read there takes
     /// its label from that and not from a map that has nothing to say about it. A project's skill
@@ -472,6 +477,7 @@ impl Skill {
             origin: "SKILL.md".to_string(),
             directory: None,
             files: Vec::new(),
+            landed: None,
             reach: None,
             source: Source::Home,
             runs_as: RunsAs::default(),
@@ -908,6 +914,7 @@ fn built_in_skill(name: &str, description: &str, body: &str) -> Skill {
         origin: "built-in".to_string(),
         directory: None,
         files: Vec::new(),
+        landed: None,
         reach: None,
         source: Source::BuiltIn,
         // A built-in is this program's own text, so there is no file to have named a model or
@@ -1197,6 +1204,7 @@ fn discover_home<S: Sink>(
                     origin,
                     directory: Some(format!("~/.bravebot/{SKILLS}/{name}")),
                     files,
+                    landed: None,
                     reach: Some(directory),
                     source: Source::Home,
                     runs_as,
@@ -1419,12 +1427,21 @@ fn discover_workspace_root<S: Sink>(
                 let runs_as = runs_as(&front, &relative, notices);
                 let person_only = keeps_from_the_planner(&front, &relative, notices);
                 let directory = format!("{skills_root}/{name}");
+                // Where a link at that name lands inside the workspace, so a planner told where the
+                // files are kept is told a path a listing can show (LOAD-4).
+                let landed =
+                    landing_in_the_workspace(policy, workspace, &root.join(&name), &directory);
                 // A file name is content, so each is asked of the rules and of the trust map as the
-                // file itself would be before it is named (SKILL-4).
+                // file itself would be before it is named (SKILL-4), under the name it is reached
+                // by and under the one it lands on.
                 let files = if list_files {
                     files_beside(&root.join(&name), |beside| {
-                        let named = format!("{directory}/{beside}");
-                        !workspace.rule_denies_reading(policy, &named) && policy.trusts_path(&named)
+                        let allowed = |directory: &str| {
+                            let named = format!("{directory}/{beside}");
+                            !workspace.rule_denies_reading(policy, &named)
+                                && policy.trusts_path(&named)
+                        };
+                        allowed(&directory) && landed.as_deref().is_none_or(allowed)
                     })
                 } else {
                     Vec::new()
@@ -1437,6 +1454,7 @@ fn discover_workspace_root<S: Sink>(
                     origin: relative,
                     directory: Some(directory),
                     files,
+                    landed,
                     reach: None,
                     source: Source::Workspace,
                     runs_as,
@@ -1462,6 +1480,37 @@ fn discover_workspace_root<S: Sink>(
         }
     }
     None
+}
+
+/// The workspace-relative path a skill directory lands on when the name it is found under is a
+/// link, or has a link above it, to another directory inside the workspace. `None` where it is
+/// not reached through a link, lands outside the workspace, or lands where a rule or the trust map
+/// does not let the planner read: a path is named only where a read of it would be allowed, and
+/// nothing outside the workspace is named at all (LOAD-4).
+///
+/// The rules and the trust map decide first. Only a path they let the planner read is examined
+/// further, for being the name the skill is already found under and for a control character, which
+/// is the filter [`files_beside`] applies to the name of each file (SKILL-4). A path they refuse is
+/// never compared or searched for a character.
+fn landing_in_the_workspace<S: Sink>(
+    policy: &Policy<'_, S>,
+    workspace: &Workspace,
+    found_at: &Path,
+    named: &str,
+) -> Option<String> {
+    let landed = found_at.canonicalize().ok()?;
+    // A landing whose name is not text is refused before the rules or the map are asked, because
+    // both take text and a lossy rendering would give two different directories one string.
+    // What follows is the rendering of a path that is text, so it loses nothing (PATH-001).
+    landed.strip_prefix(workspace.root()).ok()?.to_str()?;
+    let relative = workspace.relative_display(&landed);
+    if workspace.rule_denies_reading(policy, &relative) || !policy.trusts_path(&relative) {
+        return None;
+    }
+    if relative.is_empty() || relative == named || relative.chars().any(char::is_control) {
+        return None;
+    }
+    Some(relative)
 }
 
 /// The most files a skill's listing names, and the deepest a directory under it is searched.
@@ -1809,6 +1858,7 @@ mod tests {
             origin: "SKILL.md".to_string(),
             directory: None,
             files: Vec::new(),
+            landed: None,
             reach: None,
             source: Source::Home,
             runs_as: RunsAs::default(),

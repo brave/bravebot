@@ -64,7 +64,7 @@ pub fn without(text: &str) -> (String, usize) {
 
 /// The sentence drawn under text that had colour codes taken out, or nothing where none were.
 pub fn note(dropped: usize) -> Option<String> {
-    (dropped > 0).then(|| t!(colour_codes_not_drawn, count = dropped).to_string())
+    (dropped > 0).then(|| t!(colour_codes_not_drawn, count = dropped))
 }
 
 #[cfg(test)]

@@ -23,6 +23,8 @@ export type Waiting = Phase | 'starting-servers'
 /** A hook holding the turn open: the moment's word and the program as the person's file spells it. */
 export type Hook = { moment: string; program: string }
 export type Checking = { lines: number } | { file: 'picture' | 'pdf' }
+/** One agent in the `agents` event. `id` is the driver's spelling of the delegate's number (VIEW-35). */
+export type AgentEntry = { id: string; kind: string; task: string; state: 'working' | 'finished' | 'failed' }
 export type Reach = 'not_the_planner' | 'no_model'
 export type Landing = 'context' | 'quarantined' | 'reserved'
 export type TodoStatus = 'pending' | 'active' | 'done' | 'cancelled'
@@ -36,6 +38,10 @@ export type Change =
 export interface Activity {
   verb: string
   target: string
+  /** `target` spelled so a file's name that is blank or ends in whitespace is visible (PROMPT-1). Draw this and not `target`; match a call to its confirmation on `target`. */
+  shownTarget: string
+  /** `shownTarget` of the file a call names without the slot a reference was drawn under or a leading `./`, which is what the lists of files draw. */
+  shownFile: string
   /** Why the planner made the call, in its own words. Empty where it gave no reason. */
   why: string
   /** `null` while the call is still running. Absent-vs-null matters: see the Rust doc. */
@@ -217,7 +223,35 @@ export interface RewindPoint {
   gaps: string[]
 }
 
-export interface OpenedSession {
+/**
+ * What a bridge answer says about a session just opened, made or forked, beyond its transcript.
+ *
+ * The same eight fields in all three answers, so a window reads them one way (`settledBy`).
+ */
+export interface SessionSettled {
+  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
+  remembered?: KeptTrust | null
+  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
+  keeping?: string | null
+  shownKeeping?: string | null
+  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
+  confinedLines?: string | null
+  /**
+   * Whether a check that finds nothing reads quarantined content to the model with nobody asked.
+   *
+   * Settled by the agent when the session opened and not changed while it is open, so a window
+   * says it once at the top of the transcript and goes on showing it (CHECK-11).
+   */
+  autoVetting: boolean
+  /** Always `ask`: a mode is not read from the record (MODE-10), and a fork opens as any session does (MODE-11). */
+  permissionMode: PermissionMode
+  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
+  sandboxMode: SandboxMode
+  /** Absent from an older bridge, which read no rules. */
+  settingsRules?: SettingsRules | null
+}
+
+export interface OpenedSession extends SessionSettled {
   /** Absent from an older bridge, which kept no rewind points. Newest first. */
   rewind?: RewindPoint[]
   contextTokens?: number
@@ -228,15 +262,8 @@ export interface OpenedSession {
   context: string
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  /** The yes that was kept about this directory, where it and not `trust` settled the question (TRUST-23). */
-  remembered?: KeptTrust | null
-  /** Where a yes would be kept, where the question is asked and the answer may be kept. */
-  keeping?: string | null
   /** `record.directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
-  shownKeeping?: string | null
-  /** What a yes also grants beyond the files, to show on the question (RUN-5); null where the question is not asked. */
-  confinedLines?: string | null
   branchNote: string | null
   buildNote: string | null
   /** Said when the other front end wrote the transcript above: it drew it, and this one will not draw it the same way. */
@@ -249,19 +276,6 @@ export interface OpenedSession {
    * said again when this has gone up since it last looked.
    */
   archived: number
-  /**
-   * Whether a check that finds nothing reads quarantined content to the model with nobody asked.
-   *
-   * Settled by the agent when the session opened and not changed while it is open, so a window
-   * says it once at the top of the transcript and goes on showing it (CHECK-11).
-   */
-  autoVetting: boolean
-  /** Always `ask`: a mode is not read from the record (MODE-10). */
-  permissionMode: PermissionMode
-  /** What the settings give a session before its window has chosen: never `off` (SANDBOX-22). */
-  sandboxMode: SandboxMode
-  /** Absent from an older bridge, which read no rules. */
-  settingsRules?: SettingsRules | null
 }
 
 /**
@@ -327,6 +341,11 @@ export interface ModelCatalogue {
   defaultModel: string
   models: ModelOption[]
   warnings: string[]
+  /**
+   * The command each warning names, drawn as code, in the order of `warnings` and `null` for a
+   * warning that names none. Absent from a bridge that sends none.
+   */
+  warningCommands?: (string | null)[]
 }
 
 /**
@@ -337,7 +356,7 @@ export interface ModelCatalogue {
  * `prefill` is the prompt it was cut in front of — handed back rather than kept, because the
  * point of forking is to ask it differently.
  */
-export interface ForkedSession {
+export interface ForkedSession extends SessionSettled {
   contextTokens?: number
   session: string
   /** The child's durable id. Real from here, though its record waits for the first turn. */
@@ -350,20 +369,8 @@ export interface ForkedSession {
   turns: number
   todos: Record<string, TodoRow[]>
   trust: { known: boolean; rules: { path: string; integrity: string }[] | null }
-  remembered?: KeptTrust | null
-  keeping?: string | null
   /** `directory` and `keeping` spelled as `ConfirmRequest.shownPath` is (PROMPT-1). The question draws these. */
   shownDirectory: string
-  shownKeeping?: string | null
-  confinedLines?: string | null
-  /** The parent's, as it opened: the child carries on its conversation. */
-  autoVetting: boolean
-  /** Always `ask`, whatever the parent was in: a fork opens as any session does (MODE-11). */
-  permissionMode: PermissionMode
-  /** What the settings give, whatever the parent chose: a fork opens as any session does. */
-  sandboxMode: SandboxMode
-  /** Absent from an older bridge, which read no rules. */
-  settingsRules?: SettingsRules | null
   parent: {
     id: string
     directory: string
@@ -484,6 +491,22 @@ export interface TurnError {
   /** As on `TurnDone`. */
   rewind?: RewindPoint[]
   category?: string | null
+  /**
+   * Which failure of a ChatGPT or an xAI account it was, by a fixed name from a closed set, and `null` for a
+   * failure that did not come from the account. Look it up and never draw it.
+   */
+  account?: string | null
+  /**
+   * The bridge's sentence for that failure, and `null` where `account` is: one sentence in sentence
+   * case that says what happened and what to do, chosen from the closed name and holding nothing a
+   * reply said. Drawn as sent, as text.
+   */
+  accountMessage?: string | null
+  /**
+   * The words of `accountMessage` that are a command to run, drawn as code, and `null` where it
+   * names none. Beside the sentence so nothing reads the sentence to find them.
+   */
+  accountCommand?: string | null
   attempts?: number | null
   status?: number | null
   /** Where the output ceiling ended the turn, and `null` otherwise. */
@@ -639,6 +662,12 @@ export interface ManifestError {
   kind: string
   message: string
   category: string | null
+  /** As on `TurnError`. */
+  account?: string | null
+  /** As on `TurnError`. */
+  accountMessage?: string | null
+  /** As on `TurnError`. */
+  accountCommand?: string | null
   attempts?: number | null
   status?: number | null
   /** Whether the person stopped it. A stopped run is not recorded. */
@@ -937,13 +966,21 @@ export interface EventMap {
   composing: { call: string | null }
   /** What the model has thought since the last one, never empty. A delegate's is not sent (VIEW-34). */
   thinking: { text: string }
-  narration: { text: string }
+  /** `command` is the words of `text` that are a command to run, drawn as code, where the notice names one. */
+  narration: { text: string; command?: string | null }
   'tool.started': Activity
   'tool.finished': Activity
   'check.started': Checking
   'check.finished': Record<string, never>
   'hook.started': Hook
   'hook.finished': Record<string, never>
+  /**
+   * Every agent the session has started, in the order started, sent whenever a delegate starts or
+   * ends and when a turn or run ends with one still working. `id` is the driver's spelling of the
+   * delegate's number and may repeat. `started` and `working` are the counts. Nothing the delegate
+   * printed, its note or its report is sent (VIEW-35).
+   */
+  agents: { agents: AgentEntry[]; started: number; working: number }
   landed: { landing: Landing }
   quarantined: Shown
   todos: { rows: TodoRow[] }

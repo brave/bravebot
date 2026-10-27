@@ -101,6 +101,9 @@ pub struct Confinement {
     /// Whether the session gives the stages it starts every path a `request_path` for writing would
     /// be granted, without the planner asking (SANDBOX-28). Set only for the lead session in bypass.
     unasked_writes: bool,
+    /// Directories no stage of this confinement is given a row for, which a delegate in a checkout
+    /// holds: the working directory and every other checkout (CHECKOUT-7, SANDBOX-28).
+    withheld_writes: Vec<PathBuf>,
     /// The hosts the person let programs reach for this session beyond `allowedHosts`
     /// (SANDBOX-24), added to the allowed set of every stage that is held to a proxy.
     host_grants: Vec<String>,
@@ -211,6 +214,7 @@ impl Confinement {
             path_reach: Rules::none(),
             path_reach_read_only: Rules::none(),
             unasked_writes: false,
+            withheld_writes: Vec::new(),
             host_grants: Vec::new(),
             requested: Vec::new(),
             requests_offered: false,
@@ -375,14 +379,25 @@ impl Confinement {
     /// This confinement given, where [`Confinement::writes_without_a_request`] allows it, every path
     /// a `request_path` for writing would be granted when a stage starts (SANDBOX-28).
     ///
-    /// `bypass` is whether the permission mode answers a request in the person's place, the caller
-    /// is the lead session, which is the only one offered the tool, and the session accepts a
-    /// request at all. A workspace the person has not trusted accepts none (PATHREQ-5), so its
+    /// `bypass` is whether the permission mode answers a request in the person's place and the
+    /// session accepts a request at all. A delegate is given them as the lead session is, since it
+    /// is lent the mode and is offered no way to ask. A workspace the person has not trusted accepts none (PATHREQ-5), so its
     /// stages are given no row a request would have added. Nothing a program wrote or printed is
     /// among its inputs.
     #[must_use]
     pub fn with_unasked_writes(mut self, bypass: bool) -> Self {
         self.unasked_writes = bypass;
+        self
+    }
+
+    /// This confinement with no row for `directories`, which the rows
+    /// [`Confinement::with_unasked_writes`] gives would otherwise cover. A delegate in a checkout
+    /// reaches the working directory and the other checkouts by no path (CHECKOUT-7), and its
+    /// programs are given no write there. Taken from the workspace's own record of where the
+    /// checkouts are, which no file or program output decides.
+    #[must_use]
+    pub fn with_withheld_writes(mut self, directories: Vec<PathBuf>) -> Self {
+        self.withheld_writes = directories;
         self
     }
 
@@ -1337,6 +1352,13 @@ impl Confinement {
         let held: Vec<PathBuf> = policy.writable.iter().map(|row| row.path.clone()).collect();
         for row in &unasked {
             policy = policy.allow_write_listed(row);
+        }
+        if !unasked.is_empty() {
+            for withheld in &self.withheld_writes {
+                if !policy.unwritable.contains(withheld) {
+                    policy = policy.deny_write(withheld.clone());
+                }
+            }
         }
         let mut policy = self.filesystem.apply(policy);
         // The rows bypass gives are every path the account can write, which the temporary
@@ -4338,6 +4360,7 @@ mod tests {
                 format!("{HOME}/.bravebot/gateway-keys.json"),
                 format!("{HOME}/.bravebot/leo-premium.json"),
                 format!("{HOME}/.bravebot/chatgpt-account.json"),
+                format!("{HOME}/.bravebot/xai-account.json"),
                 format!("{HOME}/.bravebot/mcp.json"),
                 format!("{HOME}/.bravebot-browser/secret"),
                 format!("{HOME}/.ssh/id_ed25519"),
@@ -8757,6 +8780,50 @@ mod tests {
             ] {
                 assert!(!covered(&refused), "{prelude:?}: {}", refused.display());
             }
+        }
+    }
+
+    /// SANDBOX-28, CHECKOUT-7: the stages of a delegate in a checkout are given no write in the
+    /// working directory or in another checkout, though the rows a bypass stage holds cover the
+    /// machine. The regression it rejects is a delegate whose programs write the person's tree
+    /// because the rows were given whole. The same confinement without the directories withheld is
+    /// the control that those paths are rows to begin with, and a sibling directory stays written.
+    #[test]
+    fn a_bypass_stage_of_a_delegate_in_a_checkout_is_given_no_row_for_the_working_directory() {
+        let (home, beside) = unasked_places("withheld");
+        let root = beside.join("checkout");
+        let working = beside.join("working");
+        let other = beside.join("other-checkout");
+        for prelude in [Prelude::Linux, Prelude::MacOs] {
+            let step = step("/bin/cat", &["f"]);
+            let written = |policy: &SandboxPolicy, path: &Path| {
+                let held = policy
+                    .writable
+                    .iter()
+                    .any(|row| path.starts_with(&row.path));
+                let refused = policy.unwritable.iter().any(|held| path.starts_with(held));
+                held && !refused
+            };
+            let control = bypass_confinement(prelude, &home, &root).policy(&step, &root, &[]);
+            let policy = bypass_confinement(prelude, &home, &root)
+                .with_withheld_writes(vec![working.clone(), other.clone()])
+                .policy(&step, &root, &[]);
+            for path in [&working, &other] {
+                assert!(
+                    written(&control, &path.join("f")),
+                    "{prelude:?}: the control is not given {}",
+                    path.display()
+                );
+                assert!(
+                    !written(&policy, &path.join("f")),
+                    "{prelude:?}: {} is written",
+                    path.display()
+                );
+            }
+            assert!(
+                written(&policy, &beside.join("sibling/f")),
+                "{prelude:?}: a sibling directory lost its row"
+            );
         }
     }
 

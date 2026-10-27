@@ -6,6 +6,8 @@ governs:
   - crates/filetype/src/by_name.rs
   - crates/tui/src/dropped.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/turns.rs
+  - crates/tui/src/app/side_requests.rs
   - crates/agent/src/attached.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/attached.rs
@@ -239,6 +241,7 @@ as its own turn it carries its files and pictures the way any prompt does.
 
 `verified-by: bravebot_tui::drop::a_file_dropped_into_a_queued_line_is_named_to_the_planner`
 `verified-by: bravebot_tui::drop::resolving_a_queued_line_does_not_rewrite_what_the_person_sees`
+`verified-by: bravebot_tui::state::a_picture_pasted_into_a_line_sent_mid_turn_reaches_the_planner_as_a_sentence`
 
 <a id="DROP-9"></a>
 ### DROP-9: a recalled prompt names the file rather than the marker

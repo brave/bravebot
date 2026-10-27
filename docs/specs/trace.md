@@ -39,6 +39,11 @@ sandbox mode `read-only` ([SANDBOX-22](sandboxing.md#SANDBOX-22)) is recorded th
 `sandbox`, for a write call it refuses before the tool runs, a planned run it refuses for a step
 that writes, and a `run` line it refuses for redirecting output into a file.
 
+The first reach of the file tools into a directory outside the workspace that the permission mode
+gave ([PATHREQ-7](tools/request-path.md#PATHREQ-7)) is recorded as a `path_reach` permission naming
+the mode, the directory, the tool and the argument that named the path. It records no trust and no
+opened directory, since nothing was either, and a later call into the same directory adds none.
+
 A `run` call that asks for no sandbox (`unconfined`, [SANDBOX-29](sandboxing.md#SANDBOX-29)) or for
 credential scopes (`scopes`, [SANDBOX-26](sandboxing.md#SANDBOX-26)) and is refused is recorded as a
 refusal under `sandbox`. The entry names the argument and each cause that held: the sandbox mode by
@@ -84,6 +89,7 @@ put to a person and is recorded under `mcp_call` alone.
 asked", which is most of what anyone asks it.
 
 `verified-by: bravebot_core::policy::a_read_and_a_write_leave_different_trails`
+`verified-by: bravebot_core::policy::the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing`
 `verified-by: bravebot_core::policy::promotion_appears_in_the_audit_trail`
 `verified-by: bravebot_core::policy::the_audit_trail_records_the_precommit_first`
 `verified-by: bravebot_core::policy::a_turn_cannot_begin_without_routing`
@@ -274,7 +280,10 @@ leaves it to whatever confirms (a person, or nothing that can ask). The entries 
 in "asking" say what the policy decided, and they read as a person having been asked. A write that
 is then not approved is recorded as a refusal ([TRACE-1](#TRACE-1)).
 
-Other prompts a mode answers, such as a fetch or a server start, are not named here.
+A language server's start that the mode answers ([LSP-5](tools/lsp.md#LSP-5)) is one entry under
+`approval` that names the mode and says nobody was asked, written before the server starts. No entry before it says the start was
+being asked about, since the policy decides nothing about one. Other prompts a mode answers, such
+as a fetch, are not named here.
 
 Answers that were never a prompt already say so in their own entry: a rule in the settings file, a
 command the user vouched for, and the audited table.
@@ -288,6 +297,8 @@ The names are the modes' own text, so the entry holds no content (TRACE-2).
 `verified-by: bravebot_agent::turn::an_approval_names_what_answered_it`
 `verified-by: bravebot_agent::manifest::a_manifest_run_records_the_mode_it_began_with`
 `verified-by: bravebot_agent::manifest::a_planned_write_names_what_answered_it`
+`verified-by: bravebot_agent::lsp::bypass_with_the_sandbox_off_starts_a_language_server_and_the_trail_names_the_mode`
+`verified-by: bravebot_agent::lsp::a_language_server_start_is_still_asked_about_outside_bypass_with_the_sandbox_off`
 
 <a id="TRACE-8"></a>
 ### TRACE-8: the trail says how each delegate ended and why

@@ -21,7 +21,9 @@ use std::sync::{Mutex, OnceLock};
 /// two of them, and for the inks that change with the terminal's background.
 pub type Rgb = (u8, u8, u8);
 
-/// Brave orange, which opens the wordmark and draws every note the session makes under `brave`.
+/// Brave orange, which opens the wordmark and draws the notes the session makes under `brave`,
+/// except those of `/add-dir`, `/add-dir close` and the opening of a settings file's directories,
+/// which are drawn in the inks for finished and failed (VIEW-8).
 ///
 /// A literal because the sixteen named colours have nothing near it.
 pub const BRAND: Rgb = (255, 86, 1);
@@ -359,7 +361,7 @@ pub fn paints_background() -> bool {
 /// Distinctions this interface draws in colour alone are lost here, and that is the request. The
 /// margin down a block of untrusted content, the bar, the glyphs and the words are all still
 /// drawn, because none of them is a colour.
-fn plain_palette() -> Palette {
+pub(crate) fn plain_palette() -> Palette {
     Palette {
         background: Color::Reset,
         text: Color::Reset,
@@ -1510,6 +1512,58 @@ mod tests {
         .expect("valid");
         assert_eq!(theme.palette.background, Color::Rgb(0xfb, 0xf1, 0xc7));
         assert_eq!(theme.palette.ok, Color::Rgb(0xfb, 0xf1, 0xc7));
+    }
+
+    /// A pair composes with `none` as a lone value does: the arm sensed as `none`, spelled out or
+    /// through a def, leaves the terminal's own background showing, and the other arm still paints.
+    /// The test above only senses the arm that is a colour, so an arm of `none` would never be
+    /// resolved by it.
+    #[test]
+    fn a_pair_arm_of_none_leaves_the_terminals_background_showing() {
+        let _held = exclusive();
+        let spelled = concat!(
+            "{",
+            "\"defs\": { \"clear\": \"none\", \"pale\": \"#fbf1c7\" },",
+            "\"background\": { \"dark\": \"none\", \"light\": \"pale\" },",
+            "\"text\": { \"dark\": \"#ebdbb2\", \"light\": \"clear\" }",
+            "}"
+        );
+        for (light, background, paints, text) in [
+            (false, Color::Reset, false, Color::Rgb(0xeb, 0xdb, 0xb2)),
+            (true, Color::Rgb(0xfb, 0xf1, 0xc7), true, Color::Reset),
+        ] {
+            let _background = Background::sensed_as_light(light);
+            let theme = parse_user_theme("mine", spelled).expect("valid");
+
+            assert_eq!(theme.palette.background, background, "light: {light}");
+            assert_eq!(theme.palette.paints_background, paints, "light: {light}");
+            assert_eq!(theme.palette.text, text, "light: {light}");
+        }
+    }
+
+    /// VIEW-8: the ink a note is drawn in belongs to no other meaning, on either background. The
+    /// render test only compares a note with the running ink, so a note ink that the palette shares
+    /// with the background, text, muted, accent, ok, fail or primary ink would pass it.
+    #[test]
+    fn the_note_ink_is_shared_with_no_other_ink_of_the_brave_palette() {
+        for light in [false, true] {
+            let palette = brave_palette(light);
+            for (name, other) in [
+                ("background", palette.background),
+                ("text", palette.text),
+                ("muted", palette.muted),
+                ("ok", palette.ok),
+                ("fail", palette.fail),
+                ("running", palette.running),
+                ("accent", palette.accent),
+                ("primary", palette.primary),
+            ] {
+                assert_ne!(
+                    palette.note, other,
+                    "the note ink is also the {name} ink (light background: {light})"
+                );
+            }
+        }
     }
 
     /// Guessing the missing arm would paint half a palette from a typo, and the half that is wrong

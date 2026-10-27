@@ -72,7 +72,8 @@ class CheckTargets(unittest.TestCase):
         ) + '\ncheck-ui-build check-extension check-all-selftest check-reviewdog-selftest'
           ' check-rebase-selftest'
           ' check-affected-selftest check-peer-advisories-selftest check-peer-features-selftest check-pr-fix-selftest check-pr-worktree-selftest check-release-preflight-selftest check-package-manifests-selftest'
-          ' check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest:\n\t@true\n')
+          ' check-maintenance-selftest check-session-review-selftest check-lint-increase-selftest'
+          ' check-implement-issues-selftest:\n\t@true\n')
         for target, expected in (("check-all-local", local), ("check-all", gates)):
             for failing in ("", *sorted(expected)):
                 with self.subTest(target=target, failing=failing):
@@ -95,7 +96,8 @@ class CheckTargets(unittest.TestCase):
                     "python3 contrib/package-manifests.py --selftest",
                     "python3 agents/skills/maintenance/selftest.py",
                     "python3 agents/skills/session-review/selftest.py",
-                    "python3 contrib/check-lint-increase.py --selftest"]
+                    "python3 contrib/check-lint-increase.py --selftest",
+                    "python3 agents/skills/implement-issues/selftest.py"]
         for failing in ("", *commands):
             with self.subTest(failing=failing):
                 result = self.run_make("-k", "check-scripts", FAIL_COMMAND=failing)
@@ -258,7 +260,7 @@ class CheckTargets(unittest.TestCase):
         cargo = self.bin / "cargo"
         cargo.write_text('#!/bin/sh\n'
                          'if [ "$BRAVEBOT_BUILD_UNCONFIGURED" = 1 ]; then\n'
-                         '  [ -z "$SERVICES_KEY_AICHAT$BRAVE_SERVICES_KEY_ID$BRAVE_AI_CHAT_ENDPOINT$BRAVE_AI_CHAT_PREMIUM_ENDPOINT$BRAVEBOT_DEFAULT_MODEL" ] || exit 7\n'
+                         '  [ -z "$SERVICES_KEY_AICHAT$BRAVE_SERVICES_KEY_ID$BRAVE_AI_CHAT_ENDPOINT$BRAVE_AI_CHAT_PREMIUM_ENDPOINT$BRAVEBOT_DEFAULT_MODEL$BACKTRACE_SUBMIT_URL" ] || exit 7\n'
                          '  [ "$BRAVEBOT_ALLOW_UNCONFIGURED_BUILD" = 1 ]\n'
                          'else\n  [ "$SERVICES_KEY_AICHAT" = fixture-key ]\nfi\n')
         cargo.chmod(0o755)
@@ -272,7 +274,8 @@ class CheckTargets(unittest.TestCase):
                              SERVICES_KEY_AICHAT="fixture-key", BRAVE_SERVICES_KEY_ID="fixture-id",
                              BRAVE_AI_CHAT_ENDPOINT="https://example.invalid",
                              BRAVE_AI_CHAT_PREMIUM_ENDPOINT="https://example.invalid",
-                             BRAVEBOT_DEFAULT_MODEL="fixture-model"),
+                             BRAVEBOT_DEFAULT_MODEL="fixture-model",
+                             BACKTRACE_SUBMIT_URL="https://fixture.invalid/universe/token/json"),
                     capture_output=True, text=True, timeout=20)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

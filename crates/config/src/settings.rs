@@ -140,6 +140,12 @@ const REFERENCES_BLOCK: &str = "references";
 /// of the home layer's value and the list of keys this build reads all spell it here.
 const RETENTION_KEY: &str = "retentionDays";
 
+/// The key that turns crash reports off, which only the person's own settings file is asked.
+///
+/// Named as a constant because the read of the home layer's value and the list of keys this build
+/// reads both spell it here.
+const CRASH_REPORTS_KEY: &str = "crashReports";
+
 /// The number of days a record is kept when no `retentionDays` is stated.
 ///
 /// Thirty, which is what Claude Code and Gemini CLI keep a transcript for. The floor is one day,
@@ -164,6 +170,7 @@ const READ_KEYS: &[&str] = &[
     "attribution",
     "awaySummaryEnabled",
     "awaySummaryIdleSeconds",
+    CRASH_REPORTS_KEY,
     "deepLinks",
     "deferMcpToolsAbove",
     "download",
@@ -642,10 +649,16 @@ pub struct Settings {
     /// What `tui.mouse` said, if it said a boolean. `Some(false)` is the interface leaving the
     /// mouse to the terminal.
     tui_mouse: Option<bool>,
+    /// What `tui.contextMenu` said, if it said a boolean. `Some(false)` is a right click opening no
+    /// menu, for a terminal that keeps it for its own.
+    tui_context_menu: Option<bool>,
     /// What `deepLinks` said, if it said a boolean. `Some(false)` is a `bravebot://` link being
     /// refused by the handler (LINK-6).
     deep_links: Option<bool>,
     providers: Vec<crate::provider::Provider>,
+    /// The models a `provider` entry named `chatgpt` names where it states no endpoint, which is
+    /// the ChatGPT account's roster rather than a gateway's.
+    chatgpt_models: Vec<crate::provider::AccountModel>,
     layers: Vec<PathBuf>,
     contested: BTreeMap<String, PathBuf>,
 }
@@ -930,6 +943,26 @@ impl Settings {
     fn language_in(home: Option<PathBuf>) -> Option<String> {
         let document = read(&user_settings_file(&home?))?;
         word(&document.root, "language")
+    }
+
+    /// What the person's own settings file says about crash reports, and nothing else the files say.
+    ///
+    /// A boolean and nothing else: the key exists to turn reports off, so a quoted `"false"` is
+    /// absence and reports stay on. Only the home layer is read. A checkout's file is a thing a
+    /// person did not write, so it can neither turn reports off for them nor turn them back on
+    /// after they did (CRASH-4). Read before the first panic could happen, which is before the
+    /// merged layers exist.
+    pub fn written_crash_reports() -> Option<bool> {
+        Self::crash_reports_in(home())
+    }
+
+    /// As [`Settings::written_crash_reports`], for a named home, so a test needs no ambient one.
+    fn crash_reports_in(home: Option<PathBuf>) -> Option<bool> {
+        let document = read(&user_settings_file(&home?))?;
+        match document.root.get(CRASH_REPORTS_KEY) {
+            Some(serde_json::Value::Bool(on)) => Some(*on),
+            _ => None,
+        }
     }
 
     /// As [`Settings::load`], for a named home, working directory and command line, so a test needs
@@ -1574,6 +1607,7 @@ impl Settings {
             run_deadlines: run_deadlines(root),
             wheel_rows: wheel_rows(root),
             tui_mouse: tui_mouse(root),
+            tui_context_menu: tui_context_menu(root),
             deep_links: root.get("deepLinks").and_then(serde_json::Value::as_bool),
             // The word one root states, there being no file to name. [`Settings::layered`]
             // overwrites it with what the layers come to.
@@ -1606,6 +1640,7 @@ impl Settings {
             git_identities_ignored: Vec::new(),
             git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
+            chatgpt_models: crate::provider::account_models(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
             provider_ignored: Vec::new(),
@@ -2231,6 +2266,15 @@ impl Settings {
         self.tui_mouse
     }
 
+    /// Whether `tui.contextMenu` said anything: `Some(false)` asks the interface not to open the
+    /// small menu a right click opens over a reply, a delegate's block or a held selection.
+    ///
+    /// A boolean and nothing else, as [`Settings::tui_mouse`] is, for the same reason: the key exists
+    /// to turn something off, so only a real `false` may do it.
+    pub fn tui_context_menu(&self) -> Option<bool> {
+        self.tui_context_menu
+    }
+
     /// Whether `deepLinks` said anything: `Some(false)` is a person who does not want a link to
     /// open a session (LINK-6), and absent is on.
     pub fn deep_links(&self) -> Option<bool> {
@@ -2280,6 +2324,7 @@ impl Settings {
             && self.run_deadlines.is_empty()
             && self.wheel_rows.is_none()
             && self.tui_mouse.is_none()
+            && self.tui_context_menu.is_none()
             && self.deep_links.is_none()
             && self.run_network.is_none()
             && self.run_network_ignored.is_empty()
@@ -2294,6 +2339,7 @@ impl Settings {
             && self.git_identities_ignored.is_empty()
             && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
+            && self.chatgpt_models.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
             // settings.json" one line above the path of the file that holds it.
@@ -2328,6 +2374,17 @@ impl Settings {
             && self.ask_idle_seconds.is_none()
             && self.references_ignored.is_empty()
             && self.attribution_ignored.is_empty()
+            // A file that holds only a reference, or only a name `doctor` reports as ignored, is
+            // listed as a settings layer a few lines under this answer, so it cannot be absence.
+            && self.references.is_empty()
+            && self.references_unread.is_empty()
+            && self.network_ignored.is_empty()
+            && self.advisor_model.is_none()
+            && self.fallback_model.is_none()
+            && self.summary_model.is_none()
+            && self.plan_model.is_none()
+            && self.processor_model.is_none()
+            && self.agent.is_none()
     }
 
     /// The rule text and added directories the `permissions` block carried.
@@ -2338,6 +2395,14 @@ impl Settings {
     /// The gateways these settings configured, in the order they were listed.
     pub fn providers(&self) -> &[crate::provider::Provider] {
         &self.providers
+    }
+
+    /// The models the ChatGPT account is offered as, where a `provider` entry named `chatgpt`
+    /// states no endpoint and names some ([CHATGPT-9](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-9)).
+    ///
+    /// Read from the layers a `provider` block is read from, since it is the same block.
+    pub fn chatgpt_models(&self) -> &[crate::provider::AccountModel] {
+        &self.chatgpt_models
     }
 
     /// The files that named a `provider` block from a layer not entitled to, weakest first.
@@ -2595,6 +2660,7 @@ impl Settings {
             .chain(self.sandbox_hosts.keys())
             .chain(self.wheel_rows.is_some().then_some("tui.wheelRows"))
             .chain(self.tui_mouse.is_some().then_some("tui.mouse"))
+            .chain(self.tui_context_menu.is_some().then_some("tui.contextMenu"))
             .chain(self.deep_links.is_some().then_some("deepLinks"))
             .chain(self.env.keys().map(String::as_str))
     }
@@ -3636,6 +3702,14 @@ fn tui_mouse(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> 
     tui.get("mouse").and_then(serde_json::Value::as_bool)
 }
 
+/// The `tui.contextMenu` switch, read as `tui.mouse` is: only a real boolean counts.
+fn tui_context_menu(root: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    let serde_json::Value::Object(tui) = root.get("tui")? else {
+        return None;
+    };
+    tui.get("contextMenu").and_then(serde_json::Value::as_bool)
+}
+
 /// Whether `character` separates one segment of a path from the next on this host.
 fn separates(character: char) -> bool {
     character == '/' || (std::path::MAIN_SEPARATOR == '\\' && character == '\\')
@@ -4515,6 +4589,36 @@ mod tests {
         assert!(settings.is_empty());
     }
 
+    /// A file whose only content is a reference, a reference that could not be read, or one of the
+    /// model and agent keys is still a file that said something, and `doctor` lists it as a layer.
+    /// The regression it rejects is `is_empty` drifting from the fields of `Settings`.
+    #[test]
+    fn a_file_holding_only_one_of_these_keys_is_not_empty() {
+        for text in [
+            r#"{"references": {"docs": "/tmp"}}"#,
+            r#"{"references": {"bad alias!": "/tmp"}}"#,
+            r#"{"advisorModel": "a"}"#,
+            r#"{"fallbackModel": "a"}"#,
+            r#"{"summaryModel": "a"}"#,
+            r#"{"planModel": "a"}"#,
+            r#"{"processorModel": "a"}"#,
+            r#"{"agent": "a"}"#,
+        ] {
+            assert!(!Settings::parse(text).is_empty(), "{text}");
+        }
+    }
+
+    /// A checkout's file that states only a proxy name has it removed from `env`, so the name is
+    /// recorded as ignored and nothing else is left to say the file was read.
+    #[test]
+    fn a_checkout_stating_only_a_proxy_is_not_empty() {
+        let settings = Layers::new("proxy-only-not-empty")
+            .project(r#"{"env": {"HTTPS_PROXY": "http://attacker.invalid:1"}}"#)
+            .read();
+        assert!(settings.network_ignored().count() > 0);
+        assert!(!settings.is_empty());
+    }
+
     /// Every other shape is absence, on the same footing as the rest of this file: a half-typed
     /// settings file leaves the built-in cap in force rather than stopping a session.
     #[test]
@@ -4761,6 +4865,50 @@ mod tests {
             .project(r#"{"tui": {"mouse": false}}"#)
             .read();
         assert_eq!(layered.tui_mouse(), Some(false));
+        assert_eq!(layered.unread_keys().count(), 0);
+    }
+
+    /// MOUSE-52: only a real `false` turns the context menu off, so a quoted `"false"` or a misplaced
+    /// key leaves the right click opening it, and the nearest layer that named it wins.
+    #[test]
+    fn only_a_boolean_turns_the_context_menu_off() {
+        let settings = Settings::parse(r#"{"tui": {"contextMenu": false}}"#);
+        assert_eq!(settings.tui_context_menu(), Some(false));
+        assert!(!settings.is_empty());
+        assert_eq!(settings.names().collect::<Vec<_>>(), ["tui.contextMenu"]);
+        // The menu and the mouse are two settings, and one does not say the other.
+        assert_eq!(settings.tui_mouse(), None);
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"mouse": false}}"#).tui_context_menu(),
+            None
+        );
+
+        assert_eq!(
+            Settings::parse(r#"{"tui": {"contextMenu": true}}"#).tui_context_menu(),
+            Some(true)
+        );
+        for text in [
+            r#"{"tui": {"contextMenu": "false"}}"#,
+            r#"{"tui": {"contextMenu": 0}}"#,
+            r#"{"tui": {"contextMenu": null}}"#,
+            r#"{"tui": {}}"#,
+            r#"{"tui": false}"#,
+            r#"{"contextMenu": false}"#,
+            r#"{"tui": {"context_menu": false}}"#,
+            "{}",
+        ] {
+            assert_eq!(
+                Settings::parse(text).tui_context_menu(),
+                None,
+                "{text:?} turned the menu off"
+            );
+        }
+
+        let layered = Layers::new("tui-context-menu-layers")
+            .global(r#"{"tui": {"contextMenu": true}}"#)
+            .project(r#"{"tui": {"contextMenu": false}}"#)
+            .read();
+        assert_eq!(layered.tui_context_menu(), Some(false));
         assert_eq!(layered.unread_keys().count(), 0);
     }
 
@@ -6085,6 +6233,36 @@ mod tests {
             "a checkout picked a backend and a credential with it"
         );
         assert_eq!(settings.providers_ignored().count(), 1);
+    }
+
+    /// CHATGPT-9: the models an entry named `chatgpt` offers the account are read from the layers a
+    /// `provider` block is read from and no others, since it is the same block. A checkout arrives
+    /// with its files, so it does not choose which of the account's models a person is offered.
+    #[test]
+    fn only_the_layers_a_provider_block_is_read_from_choose_the_accounts_models() {
+        let block = r#"{"provider": {"chatgpt": {"models": {"gpt-5": {}}}}}"#;
+        let settings = Layers::new("provider-chatgpt-project")
+            .project(block)
+            .local(block)
+            .read();
+        assert!(
+            settings.chatgpt_models().is_empty(),
+            "a checkout chose the account's models"
+        );
+        assert_eq!(settings.providers_ignored().count(), 2);
+
+        for settings in [
+            Layers::new("provider-chatgpt-home").global(block).read(),
+            Layers::new("provider-chatgpt-named").named(block).read(),
+        ] {
+            let ids: Vec<&str> = settings
+                .chatgpt_models()
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect();
+            assert_eq!(ids, ["gpt-5"]);
+            assert_eq!(settings.providers_ignored().count(), 0);
+        }
     }
 
     /// The home layer may name a provider and the variables read as its credential, which is the
@@ -8337,6 +8515,57 @@ mod tests {
             Layers::new("language-ahead-project-only").project(r#"{"language": "ja"}"#);
         assert_eq!(Settings::language_in(Some(only_project.home.clone())), None);
         assert_eq!(Settings::language_in(None), None);
+    }
+
+    /// CRASH-4: only the person's own file is asked, so a checkout can neither turn reports off for
+    /// them nor turn them back on after they turned them off.
+    #[test]
+    fn only_the_persons_own_file_says_whether_crash_reports_go() {
+        let layers = Layers::new("crash-reports-layers")
+            .global(r#"{"crashReports": false}"#)
+            .project(r#"{"crashReports": true}"#)
+            .local(r#"{"crashReports": true}"#);
+        assert_eq!(
+            Settings::crash_reports_in(Some(layers.home.clone())),
+            Some(false)
+        );
+
+        let only_project =
+            Layers::new("crash-reports-project-only").project(r#"{"crashReports": false}"#);
+        assert_eq!(
+            Settings::crash_reports_in(Some(only_project.home.clone())),
+            None
+        );
+        assert_eq!(Settings::crash_reports_in(None), None);
+    }
+
+    /// CRASH-4: a value that is not a boolean is no answer, so reports stay as they were.
+    #[test]
+    fn only_a_boolean_turns_crash_reports_off() {
+        for (text, wanted) in [
+            (r#"{"crashReports": false}"#, Some(false)),
+            (r#"{"crashReports": true}"#, Some(true)),
+            (r#"{"crashReports": "false"}"#, None),
+            (r#"{"crashReports": 0}"#, None),
+            (r#"{"crashReports": null}"#, None),
+            (r#"{"model": "m"}"#, None),
+        ] {
+            let layers = Layers::new("crash-reports-values").global(text);
+            assert_eq!(
+                Settings::crash_reports_in(Some(layers.home.clone())),
+                wanted,
+                "{text}"
+            );
+        }
+    }
+
+    /// The key is one this build reads, so the person who wrote it is not told it does nothing.
+    #[test]
+    fn the_crash_reports_key_is_not_reported_as_unread() {
+        let settings = Layers::new("crash-reports-read")
+            .global(r#"{"crashReports": false}"#)
+            .read();
+        assert_eq!(settings.unread_keys().count(), 0);
     }
 
     /// LOCALE-8: a blank or non-string `language` names nothing, so the environment answers.

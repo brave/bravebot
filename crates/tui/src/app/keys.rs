@@ -2,9 +2,10 @@
 //! to a turn or a command in flight.
 
 use crate::command_table::{
-    command_typed, runs_while_working, waits_behind_the_queue, why_it_waits,
+    BRANCH_COMMAND, CONTEXT_COMMAND, DIFF_COMMAND, EFFORT_COMMAND, LSP_COMMAND, MCP_COMMAND,
+    MODEL_COMMAND, command_typed, is_carried_out_at_once, why_it_waits,
 };
-use crate::state::{Session, Status, Unenhanceable};
+use crate::state::{Hit, Session, Status, Target, Unenhanceable, WatchScope};
 use crate::{input, render};
 use bravebot_core::cancel::Cancel;
 use bravebot_i18n::t;
@@ -33,6 +34,18 @@ pub enum Action {
     /// Put this reply's text on the clipboard. Runs the platform's clipboard tools, so the loop
     /// does it rather than the command.
     CopyReply(String),
+    /// Open this web address in the person's browser: a click with ctrl held on an address drawn
+    /// in the assistant's words (MOUSE-40). Starts a program, so the loop does it rather than the
+    /// mouse handler.
+    OpenUrl(String),
+    /// Open the file a click with ctrl held on this path named in the person's editor, at the line
+    /// the path gave (MOUSE-43). Needs the workspace to resolve the name in and the terminal, which
+    /// the loop hands to the editor and takes back afterwards.
+    EditFile(crate::text_links::PathRef),
+    /// Show the lines of the file a click on this path named, under a call in the transcript
+    /// (MOUSE-42). Needs the workspace, the trust map and the permission rules, which the loop owns,
+    /// and is asked for once the click is known not to be the first of a double click.
+    Preview(crate::text_links::PathRef),
     /// Write the prompt somewhere with room to think. Needs the terminal, which the loop hands
     /// over to the editor and takes back afterwards.
     Edit,
@@ -353,7 +366,8 @@ pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
         && !session.searching_history()
         && !session.files_open()
         && session.picking().is_none()
-        && (is_ctrl_c(key) || is_escape(session, key))
+        && !session.menu_open()
+        && (is_ctrl_c(key) || (is_escape(session, key) && !session.holds_a_selection()))
 }
 
 /// Whether a press is Escape, in either spelling the box's style answers.
@@ -470,11 +484,11 @@ pub(super) fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
             // neither is read as typing, and leaving both to do nothing left a mode whose only
             // way out was Escape.
             KeyCode::Char('c') if is_ctrl_c(key) => {
-                session.close_scroller();
+                session.close_the_scroller(render::top_of_view);
                 Action::Redraw
             }
             _ if session.bindings().is_scroller(&key) => {
-                session.close_scroller();
+                session.close_the_scroller(render::top_of_view);
                 Action::Redraw
             }
             KeyCode::Char(c) if !ctrl => {
@@ -507,17 +521,29 @@ pub(super) fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
         // the mode holding it, so each press takes off one and the last closes the scroller.
         KeyCode::Esc => {
             if counted.is_none() && !session.clear_search() {
-                session.close_scroller();
+                session.close_the_scroller(render::top_of_view);
             }
             Action::Redraw
         }
         KeyCode::Char('c') if is_ctrl_c(key) => {
-            session.close_scroller();
+            session.close_the_scroller(render::top_of_view);
             Action::Redraw
         }
         _ if session.bindings().is_scroller(&key) => {
-            session.close_scroller();
+            session.close_the_scroller(render::top_of_view);
             Action::Redraw
+        }
+
+        // What the delegates did, opened from here as at the prompt (WATCH-7): the way to a
+        // delegate's view that a click on its block is a shortcut for (MOUSE-10), and the key that
+        // closes the view returns to the scroller. Read off the bindings, since the chord is the
+        // person's to move, and before the arm that refuses every chord the file does not name.
+        _ if session.bindings().is_watch(&key) => {
+            if session.watch() {
+                Action::Redraw
+            } else {
+                Action::None
+            }
         }
 
         // A character pressed with Ctrl, Alt or Super held is the chord and not the letter. The
@@ -526,7 +552,7 @@ pub(super) fn scroller_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::Char(c) if !names_the_chord(key.modifiers, c) => Action::None,
 
         KeyCode::Char('q') => {
-            session.close_scroller();
+            session.close_the_scroller(render::top_of_view);
             Action::Redraw
         }
 
@@ -747,6 +773,20 @@ pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
             session.stop_watching();
             Action::Redraw
         }
+        // The outputs chord, read off the bindings and before the arm that refuses chords. Over the
+        // command output it closes, as the watch chord does. Over the agents it moves to the
+        // command output, or says there is none and stays (WATCH-7).
+        _ if session.bindings().is_outputs(&key) => {
+            if session
+                .watching()
+                .is_some_and(|watching| watching.scope == WatchScope::Outputs)
+            {
+                session.stop_watching();
+                Action::Redraw
+            } else {
+                super::open_outputs(session)
+            }
+        }
 
         // Half a screen, and a whole one back, in the scroller's chords (SCROLL-3). They are the
         // view's own, so they are read before the arm that refuses every other chord.
@@ -931,8 +971,8 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
         KeyCode::End | KeyCode::Char('G') => session.files_to_end(true),
         KeyCode::PageUp => session.files_scroll(-session.files_page()),
         KeyCode::PageDown => session.files_scroll(session.files_page()),
-        KeyCode::Char('[') => session.files_to_edit(false),
-        KeyCode::Char(']') => session.files_to_edit(true),
+        KeyCode::Left | KeyCode::Char('h') => session.files_to_edit(false),
+        KeyCode::Right | KeyCode::Char('l') => session.files_to_edit(true),
         _ => return Action::None,
     }
     Action::Redraw
@@ -944,9 +984,20 @@ fn files_key(session: &mut Session, key: KeyEvent) -> Action {
 /// A mode owns every key before anything edits the line: while a picker is open, a delegate is
 /// being watched, the scroller is open or a history search is, there is no line being edited, and a
 /// letter belongs to the mode rather than to a box nobody can see. Checked in that order.
-fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
+pub(super) fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<Action> {
+    // The menu a right click opened is over everything else, the scroller included.
+    if session.menu_open() {
+        return Some(menu_key(session, key));
+    }
     if session.picking().is_some() {
         session.press_in_picking(key.code, key.modifiers);
+        return Some(Action::Redraw);
+    }
+    // A selection held is nearer than any of the modes below, and than the box and the turn after
+    // them: Escape puts it away and does nothing else, so the press after it is the one that does
+    // what Escape does for them (MOUSE-38).
+    if is_escape(session, key) && session.holds_a_selection() {
+        session.clear_selection();
         return Some(Action::Redraw);
     }
     if session.files_open() {
@@ -1121,7 +1172,7 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
         // scrolls; what needs a mode is everything a person does once they are reading, since the
         // keys for it are letters and the box takes letters.
         _ if session.bindings().is_scroller(&key) => {
-            session.open_scroller();
+            session.open_the_scroller(render::top_of_view, render::place_top_of_view);
             Action::Redraw
         }
         // The other way into the history, and the one that scales: Up walks a prompt at a time,
@@ -1375,6 +1426,17 @@ fn navigate(session: &mut Session, key: KeyEvent) -> Action {
                 Action::None
             }
         }
+        // The same view over what commands printed, by the path `/outputs` takes, so an empty
+        // list is said rather than silent (WATCH-7). In the shared ladder for the watch chord's
+        // reason: it sends nothing.
+        _ if session.bindings().is_outputs(&key) => super::open_outputs(session),
+        // The whole plan, printed as `/todos` prints it and said into the transcript as that is
+        // (CMD-28). In the shared ladder for the same reason: it sends nothing, and a plan is most
+        // worth reading in full while the turn works through it.
+        _ if session.bindings().is_todos(&key) => {
+            session.answer_while_working(|session| session.report_plan());
+            Action::Redraw
+        }
         // Before the Tab arm below, since a terminal that has been asked to disambiguate reports
         // this as Tab with a modifier rather than as its own code, and it would otherwise be taken
         // for a completion. Both spellings, because which one arrives is the terminal's choice.
@@ -1557,7 +1619,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // Before the modifier guard for the same reason, and mid-turn is when it is wanted most: a
     // person reading back through a turn that is going wrong is reading because it is going wrong.
     if session.bindings().is_scroller(&key) {
-        session.open_scroller();
+        session.open_the_scroller(render::top_of_view, render::place_top_of_view);
         return Action::Redraw;
     }
 
@@ -1635,9 +1697,7 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     // out, and stopping the turn would send prompts waiting behind it that nobody asked to hurry.
     if key.code == KeyCode::Enter
         && !session.shell
-        && session.a_turn_is_running()
-        && runs_while_working(session.input())
-        && !waits_behind_the_queue(session, session.input())
+        && is_carried_out_at_once(session, session.input())
     {
         let commanded = session.take_command();
         return session.answer_while_working(|session| dispatch_command(session, commanded));
@@ -1730,6 +1790,38 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
     Action::Redraw
 }
 
+/// What a report of the mouse ends before it is read, whatever it then asks for.
+fn end_what_a_report_ends(session: &mut Session, mouse: MouseEvent) {
+    // A drag goes on through the wheel and its own reports. A press, a release, a move with no button
+    // and the other buttons each end it: a pointer held outside the transcript scrolls it only for
+    // as long as the left button is down and has moved (MOUSE-37).
+    if !matches!(
+        mouse.kind,
+        MouseEventKind::Drag(MouseButton::Left)
+            | MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight
+    ) {
+        session.stop_sweeping();
+    }
+    // A press is either the second of a double click or somewhere else, and in both a click on a
+    // path that was waiting is not the one the person meant (MOUSE-42). It is not the end of a drag
+    // that was held either, which a press on a thumb or a border begins again below.
+    if matches!(mouse.kind, MouseEventKind::Down(_)) {
+        session.drop_the_click_put_off();
+        session.end_the_drags();
+    }
+    // A button going down, or held while the pointer moves, is no longer a pointer crossing the
+    // screen. The wheel is not: it moves what is under the pointer, which is read again (MOUSE-51).
+    if matches!(
+        mouse.kind,
+        MouseEventKind::Down(_) | MouseEventKind::Drag(_)
+    ) {
+        session.end_hover();
+    }
+}
+
 /// Interpret a mouse event.
 ///
 /// The wheel is what most people reach for first, so it scrolls without any modifier.
@@ -1739,29 +1831,29 @@ fn queued(session: &mut Session, key: KeyEvent) -> Action {
 /// is the only way a user gets to copy anything.
 pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
     session.note_pointer(mouse.row, mouse.column);
+    session.settle_the_view();
+    end_what_a_report_ends(session, mouse);
+    // Before any arm, so that nothing drawn beneath a panel over the frame answers a press that
+    // lands on it (MOUSE-45). The two above only forget what a press or a release ends, and a press
+    // on a panel ends a drag and a waiting click as a press anywhere does. A target added to the
+    // arms below is covered without being named here.
+    if session.popup_claims(mouse) {
+        return match mouse.kind {
+            // A press on an item of the menu is the item's: what it asks for is carried out as the
+            // key that takes it carries it out (MOUSE-52).
+            MouseEventKind::Down(_) => match session.take_the_menu_choice() {
+                Some(choice) => carry_out_choice(session, choice),
+                None => Action::Redraw,
+            },
+            // A turn of the wheel walks the cursor of the panel, and the frame that shows it is
+            // asked for as for any other report that changed what is drawn (MOUSE-46).
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Action::Redraw,
+            _ => Action::None,
+        };
+    }
     match mouse.kind {
-        // While the scroller is open the wheel is one of its keys, so it stops at the first row
-        // and the last the way every other movement in that mode does. It takes no count, so it
-        // drops one, as any other key would. How far it goes is what `tui.wheelRows` named, which
-        // is the same distance it moves at rest.
-        MouseEventKind::ScrollUp if session.scrolling() => {
-            session.take_the_scroller_count();
-            session.scroller_back(session.wheel_rows());
-            Action::Redraw
-        }
-        MouseEventKind::ScrollDown if session.scrolling() => {
-            session.take_the_scroller_count();
-            session.scroller_on(session.wheel_rows());
-            Action::Redraw
-        }
-        MouseEventKind::ScrollUp => {
-            session.scroll_up(session.wheel_rows());
-            Action::Redraw
-        }
-        MouseEventKind::ScrollDown => {
-            session.scroll_down(session.wheel_rows());
-            Action::Redraw
-        }
+        MouseEventKind::ScrollUp => wheel(session, mouse, false),
+        MouseEventKind::ScrollDown => wheel(session, mouse, true),
         // The border between the transcript and the panel is the panel's handle, and a press on
         // it starts neither a selection nor a copy (PANEL-6).
         MouseEventKind::Down(MouseButton::Left)
@@ -1775,6 +1867,21 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
         }
         MouseEventKind::Up(MouseButton::Left) if session.dragging_panel() => {
             session.end_panel_drag();
+            Action::Redraw
+        }
+        // The scrollbar beside the transcript: a press puts the view there or takes hold of the
+        // thumb, a drag carries it, and none of them starts a selection or a copy (MOUSE-49).
+        MouseEventKind::Down(MouseButton::Left)
+            if session.begin_bar_drag(mouse.row, mouse.column) =>
+        {
+            Action::Redraw
+        }
+        MouseEventKind::Drag(MouseButton::Left) if session.dragging_bar() => {
+            session.drag_bar_to(mouse.row);
+            Action::Redraw
+        }
+        MouseEventKind::Up(MouseButton::Left) if session.dragging_bar() => {
+            session.end_bar_drag();
             Action::Redraw
         }
         // Shift-click moves the loose end of the selection held, when the press is in the pane
@@ -1795,6 +1902,14 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
                 mouse.column,
             );
             session.last_click = Some(click);
+            session.note_the_press(mouse.row, mouse.column);
+            // The second press of a double click whose first click acted on a target begins nothing:
+            // a terminal reports the first release as a click, and what the second press would
+            // select is the words of whatever the click left under the pointer (MOUSE-50).
+            if count > 1 && session.click_acted {
+                return Action::None;
+            }
+            session.click_acted = false;
             session.begin_selection_by(
                 mouse.row,
                 mouse.column,
@@ -1803,46 +1918,410 @@ pub fn handle_mouse(session: &mut Session, mouse: MouseEvent) -> Action {
             Action::Redraw
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            session.extend_selection(mouse.row, mouse.column);
+            session.sweep_to(mouse.row, mouse.column);
             Action::Redraw
         }
-        // A click in the scroller that swept over nothing is a click on whatever is there: a
-        // call opens or closes as `x` does (MOUSE-9), and a delegate's block opens that
-        // delegate's view as the watch key does (MOUSE-10). Anything swept, or a word or row taken by
-        // a double or triple click, is a selection and is copied as before.
-        MouseEventKind::Up(MouseButton::Left)
-            if session.scrolling()
-                && session
-                    .selection
-                    .is_none_or(|selection| selection.is_empty())
-                && session.last_click.is_some_and(|click| click.count() == 1)
-                && (session.toggle_expanded_at(mouse.row, render::as_last_drawn)
-                    || session.watch_delegate_at(mouse.row)) =>
-        {
-            session.clear_selection();
+        MouseEventKind::Up(MouseButton::Left) => release(session, mouse),
+        // A right press on a reply, a delegate's block or a selection held opens the small menu
+        // there (MOUSE-52). Anywhere else it is no press anything acts on.
+        MouseEventKind::Down(MouseButton::Right) => {
+            match session.open_the_menu(mouse.row, mouse.column) {
+                true => Action::Redraw,
+                false => Action::None,
+            }
+        }
+        // The pointer moved with no button held. A frame is wanted only when the target under it is
+        // not the one that was (MOUSE-51).
+        MouseEventKind::Moved => match session.hover_at(mouse.row, mouse.column) {
+            true => Action::Redraw,
+            false => Action::None,
+        },
+        _ => Action::None,
+    }
+}
+
+/// What a key does while the menu a right click opened is up: it is the menu's, and none reaches the
+/// box. Up and Down, and `k` and `j` as in the other lists, move the cursor and stop at the first item
+/// and the last, Enter takes the item the cursor is on, and Escape or Ctrl-C closes the menu with no
+/// effect. Every other key does nothing, so a key typed with the menu up is not taken for text
+/// (MOUSE-52).
+fn menu_key(session: &mut Session, key: KeyEvent) -> Action {
+    if key.kind == KeyEventKind::Release {
+        return Action::None;
+    }
+    if is_ctrl_c(key) {
+        session.close_the_menu();
+        return Action::Redraw;
+    }
+    if key.modifiers.contains(KeyModifiers::CONTROL) || key.modifiers.contains(KeyModifiers::ALT) {
+        return Action::None;
+    }
+    match key.code {
+        KeyCode::Esc => session.close_the_menu(),
+        KeyCode::Up | KeyCode::Char('k') => session.walk_the_menu(1, false),
+        KeyCode::Down | KeyCode::Char('j') => session.walk_the_menu(1, true),
+        KeyCode::Enter => {
+            return match session.take_from_the_menu() {
+                Some(choice) => carry_out_choice(session, choice),
+                None => Action::Redraw,
+            };
+        }
+        _ => return Action::None,
+    }
+    Action::Redraw
+}
+
+/// What an item of the menu asks for, which is what the command or the click it stands for asks for,
+/// through the same functions and so with the same notes and the same refusals (MOUSE-52).
+///
+/// A copy is handed to the loop that holds the terminal as a click's is, and carried out with the same
+/// notice. `/branch` is the command as it would be typed here: carried out at the plain prompt, and
+/// while a turn runs queued behind it with the note a typed line gets, since it waits for the turn
+/// (CMD-8). An item whose reply or delegate is no longer there, as when a turn ended since the menu
+/// opened, asks for nothing.
+fn carry_out_choice(session: &mut Session, choice: crate::state::Choice) -> Action {
+    use crate::state::Choice;
+    match choice {
+        Choice::Copy(index) => match session.reply_to_copy(index) {
+            Some(words) => {
+                session.clear_selection();
+                Action::CopyReply(super::copyable(&words))
+            }
+            None => Action::Redraw,
+        },
+        Choice::CopyAsText(index) => match session.reply_to_copy(index) {
+            Some(words) => {
+                session.clear_selection();
+                Action::CopyReply(super::copyable_as_text(&words))
+            }
+            None => Action::Redraw,
+        },
+        Choice::Branch => click_command(session, BRANCH_COMMAND),
+        Choice::OpenDelegate(index) => {
+            session.watch_delegate(index);
             Action::Redraw
         }
-        // A click on the panel's model or effort row asks what `/model` or `/effort` asks
-        // (MOUSE-11). The press and the release are on one cell and the press is a single click,
-        // so a drag, a double click and a triple click stay selections.
-        MouseEventKind::Up(MouseButton::Left)
-            if !session.scrolling()
-                && !session.searching_history()
-                && session.last_click.is_some_and(|click| {
-                    click.count() == 1 && click.cell() == (mouse.row, mouse.column)
-                })
-                && session.panel_target_at(mouse.row, mouse.column).is_some() =>
+        Choice::CopySelection => Action::Copy,
+    }
+}
+
+/// What a turn of the wheel does, up or down (MOUSE-46).
+///
+/// While the scroller is open it is one of the scroller's keys, so it stops at the first row and the
+/// last the way every other movement in that mode does. It takes no count, so it drops one, as any
+/// other key would. Over the rows of a list of what could be typed it walks the list and not the
+/// transcript beneath it. Over the panel in the files state it scrolls the pane under the pointer
+/// (MOUSE-19). Elsewhere it scrolls the transcript. How far it goes is what `tui.wheelRows` named,
+/// which is the same distance in each.
+fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
+    let rows = session.wheel_rows();
+    if session.scrolling() {
+        session.take_the_scroller_count();
+        match down {
+            true => session.scroller_on(rows),
+            false => session.scroller_back(rows),
+        }
+    } else if session.files_wheel(mouse.row, mouse.column, !down) {
+        // The pane of the files state under the pointer was scrolled.
+    } else if session.completion_at(mouse.row, mouse.column).is_some() {
+        session.walk_completions(rows, down);
+    } else {
+        match down {
+            true => session.scroll_down(rows),
+            false => session.scroll_up(rows),
+        }
+    }
+    Action::Redraw
+}
+
+/// What the release of the left button does: it ends the click the press began on the target under it,
+/// or it ends a selection.
+///
+/// The target is the one the last frame drew there that stands in the state the session is in now
+/// ([`Session::target_at`]), and what a click on each kind is is what its clause says. A release that
+/// ends no click, because the pointer left the cell it pressed or swept something, or that finds no
+/// target, or one that does nothing where it is, ends the selection and asks for the copy of it.
+///
+/// The rest of a double or triple click whose first click acted does nothing at all, and what each
+/// click that acts leaves is remembered for it ([`Session::click_acted`], MOUSE-50).
+fn release(session: &mut Session, mouse: MouseEvent) -> Action {
+    let Some(presses) = click_ended_by(session, mouse) else {
+        return Action::Copy;
+    };
+    if presses > 1 && session.click_acted {
+        return Action::None;
+    }
+    let Some(target) = session.target_at(mouse.row, mouse.column).copied() else {
+        return Action::Copy;
+    };
+    // What a frame drawn since the press put under the cell is not what was pressed on.
+    if !session.press_stood_on(target.hit) {
+        return Action::Copy;
+    }
+    let action = click_on(session, target, presses, mouse);
+    session.click_acted = presses == 1 && click_acted_on(session, target.hit, &action);
+    action
+}
+
+/// Whether a click that asked for `action` of the target `hit` acted, so that the presses that follow
+/// it on the cell begin nothing (MOUSE-50). Three kinds do not. The text of the box has a caret to
+/// put and a word to select when it is double clicked, as any text has. A row of the list under the
+/// box takes a second click as its own (MOUSE-15). A path waits for the second press to say whether
+/// the first was a click on it or the start of a double click (MOUSE-42).
+fn click_acted_on(session: &Session, hit: Hit, action: &Action) -> bool {
+    *action != Action::Copy
+        && !matches!(hit, Hit::Text { .. } | Hit::Item(_))
+        && session.pending_click.is_none()
+}
+
+/// What a release that ends a click on `target` does, the click being the `presses`th press of its
+/// run.
+fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEvent) -> Action {
+    let (row, column) = (mouse.row, mouse.column);
+    // The first click of a double click puts the cursor on a row of the list under the box and the
+    // second takes it, so the list answers two presses and every other kind one (MOUSE-15). A double
+    // or triple click anywhere else is the selection it made.
+    if let Hit::Item(index) = target.hit {
+        return match presses {
+            1 | 2 => click_an_item(session, index, presses == 2),
+            _ => Action::Copy,
+        };
+    }
+    if presses != 1 {
+        return Action::Copy;
+    }
+    let acted = match target.hit {
+        // The way back out of a delegate's view leaves it as the key that opened it does (MOUSE-24).
+        Hit::Back => session.stop_watching(),
+        // In the scroller a call opens or closes as `x` does (MOUSE-9), and at rest a call with more
+        // to show opens the scroller on it expanded (MOUSE-25).
+        Hit::Call(index) if session.scrolling() => {
+            session.flip_call(index, target.area.y, render::as_last_drawn);
+            true
+        }
+        Hit::Call(index) => {
+            session.open_the_scroller_on_the_call(index, target.area.y, render::as_drawn_at)
+        }
+        // A delegate's block opens that delegate's view as the watch key does (MOUSE-10, MOUSE-23).
+        Hit::Delegate(index) => session.watch_delegate(index),
+        // A prompt waiting behind the turn comes back into the box, with the ones typed after it, as
+        // Up takes them all (MOUSE-28).
+        Hit::Queued(place) => session.unqueue_from(place),
+        // The marker that leads a finished reply copies that reply, as `/copy` does (MOUSE-26), and
+        // the word at the right of a fenced block's header copies the block alone (MOUSE-27). What
+        // is copied is the entry's own words, so a reply the screen cut across rows copies as the
+        // one it was.
+        Hit::Reply(_) | Hit::Block(..) => match session.words_to_copy(target.hit) {
+            Some(words) => {
+                session.clear_selection();
+                return Action::CopyReply(super::copyable(&words));
+            }
+            None => false,
+        },
+        Hit::Link(index) => return click_a_link(session, index, mouse.modifiers),
+        Hit::Panel(_) | Hit::Footer(_) => return click_shortcut(session, target.hit),
+        // A click in the prompt box puts the caret where it landed (MOUSE-16).
+        Hit::Text { .. } => session.click_in_the_box(row, column),
+        // A press on the scrollbar acts on the press, and a panel that holds the input has taken the
+        // press before this is asked (MOUSE-45, MOUSE-49).
+        // A pane the wheel scrolls is no click: what a click acts on is drawn over it.
+        Hit::Scrollbar
+        | Hit::Popup(_)
+        | Hit::PopupRows(_)
+        | Hit::Match(_)
+        | Hit::Item(_)
+        | Hit::Words(_)
+        | Hit::Wheel(_) => false,
+    };
+    if !acted {
+        return Action::Copy;
+    }
+    session.clear_selection();
+    Action::Redraw
+}
+
+/// What a release does that ends the first or the second click of a double click on a row of a list
+/// of what could be typed: the first puts the cursor on the row and the second takes it as Tab does.
+fn click_an_item(session: &mut Session, index: usize, second: bool) -> Action {
+    session.clear_selection();
+    session.select_completion(index);
+    if second {
+        session.accept_completion();
+    }
+    Action::Redraw
+}
+
+/// What a click with the keys `held` on the link at `index` asks for. With ctrl held an address asks
+/// for the browser (MOUSE-40) and a path for the editor, at the place the path gave (MOUSE-43). With
+/// nothing held a path waits to see whether a second press follows, and then shows the file
+/// (MOUSE-42), which the scroller is not the place for since the file is added at the end of the
+/// transcript. Any other click on a link is the selection start it always was.
+fn click_a_link(session: &mut Session, index: usize, held: KeyModifiers) -> Action {
+    use crate::text_links::Target;
+    let ctrl = held.contains(KeyModifiers::CONTROL);
+    let asks = match session.laid.links.get(index).cloned() {
+        Some(Target::Address(address)) if ctrl => Action::OpenUrl(address),
+        Some(Target::Path(path)) if ctrl => Action::EditFile(path),
+        Some(Target::Path(path))
+            if held == KeyModifiers::NONE && session.answers_a_plain_click_on_a_path() =>
         {
-            session.clear_selection();
-            match session.panel_target_at(mouse.row, mouse.column) {
-                Some(crate::panel::Target::Model) => super::ask_which_model(session),
-                Some(crate::panel::Target::Effort) => Action::ChooseEffort,
+            session.put_off_a_click(path, std::time::Instant::now());
+            Action::Redraw
+        }
+        _ => return Action::Copy,
+    };
+    session.clear_selection();
+    asks
+}
+
+/// How many presses the click is that a release at `mouse` ends, where it ends one: the press and the
+/// release are on one cell and nothing was swept between them, so a drag and a word or row taken by a
+/// double or triple click stay selections. `None` where the release ends no click.
+fn click_ended_by(session: &Session, mouse: MouseEvent) -> Option<u8> {
+    if !session
+        .selection
+        .is_none_or(|selection| selection.held_still())
+    {
+        return None;
+    }
+    let click = session.last_click?;
+    (click.cell() == (mouse.row, mouse.column)).then(|| click.count())
+}
+
+/// What a click on a row of the info panel, a control of its files state or a hint under the box
+/// does.
+fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
+    session.clear_selection();
+    match hit {
+        Hit::Footer(footer) => click_footer(session, footer),
+        Hit::Panel(crate::panel::Target::Model) => click_command(session, MODEL_COMMAND),
+        Hit::Panel(crate::panel::Target::Effort) => click_command(session, EFFORT_COMMAND),
+        Hit::Panel(crate::panel::Target::Context) => click_command(session, CONTEXT_COMMAND),
+        Hit::Panel(crate::panel::Target::Servers) => click_command(session, MCP_COMMAND),
+        Hit::Panel(crate::panel::Target::Languages) => click_command(session, LSP_COMMAND),
+        Hit::Panel(crate::panel::Target::File(index)) => {
+            session.files_select(index);
+            Action::Redraw
+        }
+        Hit::Panel(crate::panel::Target::CloseFiles) => {
+            session.close_files();
+            Action::Redraw
+        }
+        Hit::Panel(crate::panel::Target::PreviousEdit) => {
+            session.files_to_edit(false);
+            Action::Redraw
+        }
+        Hit::Panel(crate::panel::Target::NextEdit) => {
+            session.files_to_edit(true);
+            Action::Redraw
+        }
+        Hit::Panel(crate::panel::Target::Files) => click_command(session, DIFF_COMMAND),
+        // The key that hides the panel does this, and the choice is kept the way the key keeps it
+        // (MOUSE-21).
+        Hit::Panel(crate::panel::Target::Hide) => {
+            session.toggle_panel();
+            Action::Redraw
+        }
+        // The name goes into the box behind the command that renames, for the person to edit and
+        // send, and nothing is renamed by the click (MOUSE-30).
+        Hit::Panel(crate::panel::Target::Name) => {
+            session.offer_to_rename();
+            Action::Redraw
+        }
+        // The mark of a finished task opens the whole of its words, or closes them (MOUSE-32).
+        Hit::Panel(crate::panel::Target::Detail(task)) => {
+            session.toggle_plan_detail(task);
+            Action::Redraw
+        }
+        // The view goes to the turn that wrote the task (MOUSE-31).
+        Hit::Panel(crate::panel::Target::Task(task)) => {
+            session.go_to_task(task, render::plan_item_row);
+            Action::Redraw
+        }
+        // The address `/pr` or `/issue` set, as it was set (MOUSE-41).
+        Hit::Panel(link @ (crate::panel::Target::PullRequest | crate::panel::Target::Issue)) => {
+            match session.panel_link(link) {
+                Some(address) => Action::OpenUrl(address.to_string()),
                 None => Action::Redraw,
             }
         }
-        MouseEventKind::Up(MouseButton::Left) => Action::Copy,
-        _ => Action::None,
+        // Not rows of the panel or hints, which are all this is asked about. Named, so that a kind of
+        // target added to the record has to be given its place here and is not taken for nothing.
+        Hit::Back
+        | Hit::Reply(_)
+        | Hit::Block(..)
+        | Hit::Queued(_)
+        | Hit::Popup(_)
+        | Hit::PopupRows(_)
+        | Hit::Match(_)
+        | Hit::Words(_)
+        | Hit::Wheel(_)
+        | Hit::Scrollbar
+        | Hit::Item(_)
+        | Hit::Text { .. }
+        | Hit::Link(_)
+        | Hit::Call(_)
+        | Hit::Delegate(_) => Action::None,
     }
+}
+
+/// Carry out the command `line` as Enter on it would where the session is now, for a click that
+/// stands for it (MOUSE-29).
+///
+/// The line is never in the box, which a click leaves as it is, and is handed to the same places a
+/// typed one goes. At the plain prompt that is [`dispatch_command`], and what it asks for comes back
+/// as an action the loop carries out. While a turn runs it is carried out as typed where the table
+/// says the command runs mid-turn and nothing waiting ahead of it could change what it acts on, with
+/// what it says written as a command's answer is (CMD-8); anywhere else it waits in the queue, with
+/// the note a typed line gets. The loops that are not a turn queue every command, as they do a typed
+/// one, and so does the loop that runs a command the person typed, where no line can be typed to
+/// wait. So a click is never dropped: it does what the typed line does, or says why it waits.
+fn click_command(session: &mut Session, line: &str) -> Action {
+    let commanded = crate::state::Commanded {
+        line: line.to_string(),
+        pasted: Vec::new(),
+        attached: Vec::new(),
+    };
+    if !matches!(session.status, Status::Working | Status::Running) {
+        return dispatch_command(session, commanded);
+    }
+    if is_carried_out_at_once(session, line) {
+        return session.answer_while_working(|session| dispatch_command(session, commanded));
+    }
+    let why = why_it_waits(session, line);
+    if session.queue_command_line(line)
+        && let Some(why) = why
+    {
+        session.answer_while_working(|session| session.note(why));
+    }
+    Action::Redraw
+}
+
+/// What a click on a hint of the row under the box does: what the key it names does (MOUSE-14,
+/// MOUSE-48). [`Session::target_at`] has already said the key does something now.
+fn click_footer(session: &mut Session, target: crate::state::Footer) -> Action {
+    use crate::state::Footer;
+    match target {
+        // The ladder short of bypassing: a click never grants what stops every later question
+        // being asked (MOUSE-14).
+        Footer::Mode => session.cycle_permission_mode_short_of_bypass(),
+        Footer::Trail => session.toggle_trail(),
+        Footer::Shortcuts => session.toggle_shortcuts(),
+        Footer::Info => session.toggle_panel(),
+        Footer::Watch => {
+            session.watch();
+        }
+        Footer::Outputs => {
+            session.watch_outputs();
+        }
+        Footer::Background => {
+            session.move_to_background();
+        }
+        Footer::Held => session.scroll_down(u16::MAX),
+        Footer::CancelShell => session.clear_input(),
+        Footer::Paste => return Action::Paste,
+    }
+    Action::Redraw
 }
 
 /// Whether a key press asks for whatever is in flight to stop, and nothing more.
@@ -1876,8 +2355,27 @@ pub(super) fn took_input(session: &mut Session, taken: &TermEvent) {
     // Every loop that reads an event comes through here, so a terminal left or returned to while a
     // turn, a command or a picker is running is recorded as it is while at rest (CMD-20).
     match taken {
-        TermEvent::FocusLost => session.away.focus(false),
+        // The terminal does not say where the button went while the window had no focus, so a drag
+        // that was held is over (MOUSE-37), and so is the pointer's being over a target, which it
+        // may have left unreported (MOUSE-51).
+        TermEvent::FocusLost => {
+            session.away.focus(false);
+            session.end_the_drags();
+            session.end_hover();
+        }
         TermEvent::FocusGained => session.away.focus(true),
+        // A key is what a person looks at the screen for the result of, and a size makes what the
+        // pointer was over another place (MOUSE-51).
+        TermEvent::Key(_) => {
+            session.end_hover();
+        }
+        // The menu was put where the pointer was, and the cells it names are other cells now
+        // (MOUSE-52).
+        TermEvent::Resize(..) => {
+            session.end_the_drags();
+            session.end_hover();
+            session.close_the_menu();
+        }
         _ => {}
     }
 

@@ -111,7 +111,7 @@ import { app } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Bot, botFolders, botOf, isBotModel, isSlug, slugFor, withBot } from '../shared/bots'
+import { type Bot, type BotServers, botFolders, botOf, isBotModel, isSlug, parseBotServers, slugFor, withBot } from '../shared/bots'
 import { newAvatarSeed } from '../shared/avatar'
 import { isOpenedDirectory } from './opened'
 import { botHome, putBots, readState } from './state'
@@ -325,6 +325,38 @@ export async function saveBotModel(held: Bot, model: string | null, define: Defi
   }
   saveBot(next)
   return next
+}
+
+/** The agent requests that read and rewrite a bot's `mcpServers:` line. */
+export type ServersRequest = (method: 'bot.servers.read' | 'bot.servers.write', params: Record<string, unknown>) => Promise<unknown>
+
+/**
+ * The servers a bot's definition lets it use. The definition is named from the row, never by a
+ * window, so a window can only ask about a bot's own file.
+ */
+export async function readBotServers(held: Bot, request: ServersRequest | null): Promise<BotServers> {
+  if (held.definition === null) throw new Error('This bot has no definition yet. Open it once, then try again.')
+  if (!request) throw new Error('The agent is not running, so this bot’s servers cannot be read.')
+  const answer = parseBotServers(await request('bot.servers.read', { name: held.definition }))
+  if (!answer) throw new Error('The agent did not say which servers this bot may use.')
+  return answer
+}
+
+/**
+ * Rewrite a bot's `mcpServers:` line, one save at a time with the form's saves, so it never races
+ * a rewrite of the same file's purpose or model. `null` removes the line.
+ */
+export function saveBotServers(held: Bot, servers: string[] | null, request: ServersRequest | null): Promise<BotServers> {
+  const run = saving.then(async () => {
+    const definition = bot(held.slug)?.definition ?? null
+    if (definition === null) throw new Error('This bot has no definition yet. Open it once, then try again.')
+    if (!request) throw new Error('The agent is not running, so this bot cannot be edited.')
+    const answer = (await request('bot.servers.write', { name: definition, servers })) as { name?: unknown } | null
+    if (answer?.name !== definition) throw new Error('The agent did not rewrite the bot’s definition.')
+    return readBotServers({ ...held, definition }, request)
+  })
+  saving = run.catch(() => undefined)
+  return run
 }
 
 async function redefine(name: string, bot: Bot, define: DefineRequest): Promise<void> {

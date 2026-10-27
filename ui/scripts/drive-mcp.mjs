@@ -12,7 +12,7 @@ import { createServer } from 'node:http'
 import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { launchWorld, listening, makeWorld, openProject, startModelService } from './drive-world.mjs'
-import { COMPOSER_INPUT } from './drive-support.mjs'
+import { COMPOSER_INPUT, COMPOSER_SEND } from './drive-support.mjs'
 
 const WIRE = 'mcp__weather__get_forecast'
 
@@ -59,7 +59,7 @@ try {
   const stop = page.locator('.composer .stop')
   const ask = async (prompt) => {
     await composer.fill(prompt)
-    await page.locator('.composer .send').click()
+    await page.locator(COMPOSER_SEND).click()
     await stop.waitFor({ state: 'visible' })
   }
   const ended = () => stop.waitFor({ state: 'hidden' })

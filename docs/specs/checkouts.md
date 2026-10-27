@@ -26,8 +26,11 @@ governs:
   - crates/agent/src/workspace.rs
   - crates/agent/src/workspace/carry.rs
   - crates/agent/src/workspace/checkouts.rs
+  - crates/agent/src/workspace/error.rs
   - crates/agent/src/workspace/reach.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/hooked.rs
+  - crates/agent/src/turn/result.rs
   - crates/agent/src/turn/delegate_end.rs
   - crates/agent/src/turn/setup.rs
   - crates/agent/src/turn/round_steps.rs
@@ -39,6 +42,7 @@ governs:
   - crates/core/src/policy.rs
   - crates/core/src/trust.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
   - crates/tui/src/app/actions.rs
   - crates/tui/src/checkouts_command.rs
   - crates/tui/src/status.rs
@@ -509,7 +513,11 @@ A delegate in a checkout works in a workspace whose root is the checkout. The di
 parent had opened beside its working directory, and the session's own directory, stay reachable
 as they were, and so does the rule holding the file tools to the workspace
 ([PERM-16](permissions.md#PERM-16)). The working directory is not reachable from it, and the
-checkout is reachable from no run but that delegate and the delegates it starts.
+checkout is reachable from no run but that delegate and the delegates it starts. Where the
+permission mode reaches a path outside the workspace for the delegate
+([PATHREQ-7](tools/request-path.md#PATHREQ-7)), the working directory and every checkout the session
+made are left out of that reach, and the delegate's programs are given no write row for either
+([SANDBOX-28](sandboxing.md#SANDBOX-28)).
 
 Where that cannot hold, a checkout is refused and no delegate starts: where a directory the parent
 opened ([TRUST-9](trust-map.md#TRUST-9)) holds the working directory or the checkout, or where the
@@ -576,6 +584,8 @@ does the description of `isolation`.
 `verified-by: bravebot_cli::main::a_directory_holding_the_working_directory_is_said_to_end_checkouts`
 `verified-by: bravebot_agent::turn::the_answer_to_a_spawn_in_a_checkout_says_the_checkouts_share_the_repositorys_refs`
 `verified-by: bravebot_agent::tools::the_isolation_field_says_checkouts_share_refs_and_who_fetches_once`
+`verified-by: bravebot_agent::workspace::a_delegate_in_a_checkout_is_not_reached_into_the_working_directory_or_another_checkout`
+`verified-by: bravebot_agent::confine::a_bypass_stage_of_a_delegate_in_a_checkout_is_given_no_row_for_the_working_directory`
 
 <a id="CHECKOUT-8"></a>
 ### CHECKOUT-8: a file in a checkout is labelled as the same path in the working directory is
@@ -833,7 +843,7 @@ Not built: removing a file, and a file written through a reference. A file over 
 not text, is named and left.
 
 `verified-by: bravebot_agent::turn::the_question_says_the_working_directory_was_written_since_the_checkout`
-`verified-by: bravebot_tui::confirm::a_write_since_the_checkout_is_said_in_the_question`
+`verified-by: bravebot_tui::confirm::write::a_write_since_the_checkout_is_said_in_the_question`
 
 `verified-by: bravebot_agent::turn::a_kept_checkouts_file_comes_back_through_a_question_the_table_would_not_ask`
 `verified-by: bravebot_agent::turn::declining_the_question_brings_nothing_back`
@@ -940,8 +950,8 @@ stays until a person deletes it and runs `git worktree prune`.
 `verified-by: bravebot_tui::app::a_checkout_worked_in_is_removed_only_when_the_person_says_so`
 `verified-by: bravebot_tui::app::a_checkout_nothing_was_done_in_is_removed_without_asking`
 `verified-by: bravebot_tui::app::a_checkout_not_kept_or_not_removable_is_said_so`
-`verified-by: bravebot_tui::confirm::the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes`
-`verified-by: bravebot_tui::confirm::a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes`
+`verified-by: bravebot_tui::confirm::grants::the_remove_checkout_question_names_the_checkout_and_what_removing_it_deletes`
+`verified-by: bravebot_tui::confirm::grants::a_remove_checkout_question_takes_a_yes_only_from_a_draw_showing_what_it_removes`
 
 <a id="CHECKOUT-16"></a>
 ### CHECKOUT-16: a resume brings kept checkouts back, a fork does not, and an opening session removes what no session lists

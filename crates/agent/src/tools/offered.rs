@@ -300,7 +300,11 @@ fn table(
                  it contains. A listing does not enter a directory with one of these names, at \
                  any depth, and does not report it, so its absence from a result does not mean \
                  the project has none: {}, and .claude/worktrees. Name one as directory to list \
-                 it. In a directory you may not read, the names are quarantined and you get one \
+                 it. A listing does not enter a symbolic link, to a file or to a directory, and \
+                 does not name it: it says how many it did not enter, so a directory made of \
+                 links lists as that count and not as empty. List the directory a link points \
+                 to, by its own name, to see what is behind it. In a directory you may not \
+                 read, the names are quarantined and you get one \
                  reference per entry instead, saying of each whether it is a file or a directory \
                  the walk stopped at: use a file's as path_ref to read it, process it, and write \
                  it back, without ever being told what it is called.",
@@ -527,7 +531,9 @@ fn table(
             "search",
             "Find regular expressions in workspace files. Returns matching lines. Give every \
              spelling you would otherwise search for one at a time: a list of patterns costs \
-             one call and matches a line matching any of them.",
+             one call and matches a line matching any of them. A search does not enter a \
+             symbolic link, to a file or to a directory: it says how many it did not enter, \
+             and files behind a link are searched by naming the directory it points to.",
             json!({
                 "type": "object",
                 "properties": {
@@ -794,9 +800,10 @@ fn table(
              whole document, so it can work out what is wrong and where the fix goes, and leave \
              a file alone if it turns out not to be the one you are after. Once your context holds \
              private content, as it does after read_output or vet_content shows you some, after \
-             a delegate reports some, and in a conversation resumed with some, every call is \
-             refused for the rest of the conversation: what you write is private from then on, \
-             and a processor takes no private instruction.",
+             a delegate reports some, and in a conversation resumed with some, every later \
+             spawn_processor call is refused for the rest of the conversation: what you write \
+             is private from then on, and a processor takes no private instruction. run, \
+             read_output and the file tools keep working.",
             json!({
                 "type": "object",
                 "properties": {
@@ -1310,7 +1317,13 @@ fn table(
                     },
                     "task": {
                         "type": "string",
-                        "description": "What it has to do, in your own words, as the whole of                                         what it will know. It cannot see this conversation, your                                         references, the user's prompt or anything you have read,                                         and it cannot come back for more, so name the paths, the                                         commands, the symptom and what a finished answer has to                                         contain. Say what you want reported, not just what you                                         want done."
+                        "description": "What it has to do, in your own words, as the whole of what \
+                                        it will know. It cannot see this conversation, your \
+                                        references, the user's prompt or anything you have read, \
+                                        and it cannot come back for more, so name the paths, the \
+                                        commands, the symptom and what a finished answer has to \
+                                        contain. Say what you want reported, not just what you \
+                                        want done."
                     },
                     "each": {
                         "type": "array",
@@ -1426,9 +1439,11 @@ fn table(
              the user turned the sandbox off or the workspace is not trusted. It does not widen \
              read_file, write_file, edit_file or the other file tools, which stay inside the \
              workspace and the directories the user added with /add-dir, unless the user has \
-             turned permission prompts off: there a request is granted without a question, also \
-             opens the directory to those tools and trusts it, as /add-dir does, and the result \
-             says whether they now reach it.",
+             turned permission prompts off: there those tools reach a path outside the workspace \
+             with no request, except the places a request is refused too, so call this for the \
+             programs you start with run; a request is granted without a question, also opens \
+             the directory to those tools and trusts it, as /add-dir does, and the result says \
+             whether they now reach it.",
             json!({
                 "type": "object",
                 "properties": {

@@ -90,6 +90,36 @@ pub fn show(text: &str) -> Result<(), Failure> {
     show_through(text, open_in_an_editor)
 }
 
+/// Put the file at `path` in front of the user in their editor, at `line` and `column` where they
+/// are given and the editor takes a place, and wait for it.
+///
+/// Nothing is copied and nothing is read back. The editor is handed the file itself, which is the
+/// user's own, and what it does to it is theirs to do. The program is the one a prompt is edited
+/// in, looked up and started the same way (SANDBOX-30): through [`run`], which [`start`] shares, so
+/// `an_editor_found_only_in_a_directory_a_stage_may_write_is_not_started` and
+/// `an_editor_that_runs_another_program_by_name_never_runs_one_a_stage_may_have_written` show that no
+/// file a stage wrote is the program that runs here either.
+///
+/// The file is one the workspace holds, which a checkout may have written, and an editor acts on
+/// what is in a file it opens (a modeline, a project's configuration). So it is started without this
+/// agent's own credentials, as the browser is
+/// ([CRED-14](../../../docs/specs/credential-protection.md#CRED-14)); the editor a prompt is edited in is
+/// started with all of the environment, since nothing but the person's own line goes to it. The
+/// command is built by [`file_command`], and
+/// `the_editor_a_click_opens_is_started_without_this_agents_own_credentials` reads it.
+pub fn open_file(path: &Path, line: Option<u32>, column: Option<u32>) -> Result<(), Failure> {
+    let (program, arguments) = which_editor(configured())?;
+    let (arguments, file) = at_a_place(&program, arguments, path, line, column);
+    run(
+        &program,
+        file_command(&program, &arguments, file.as_os_str()),
+        |editor, code| match code {
+            Some(code) => t!(editor_file_exited_badly, editor = editor, code = code),
+            None => t!(editor_file_was_stopped, editor = editor),
+        },
+    )
+}
+
 /// The file half of [`show`], with opening it left to the caller so it can be tested.
 fn show_through(
     text: &str,
@@ -372,6 +402,101 @@ fn same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
+/// How an editor is told which line of a file to open at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// `+LINE` before the file, as vim and the editors that follow it take it.
+    Plus,
+    /// `+LINE,COLUMN` before the file.
+    PlusComma,
+    /// `+LINE:COLUMN` before the file.
+    PlusColon,
+    /// `--goto FILE:LINE:COLUMN`, as Visual Studio Code and what is built on it take it.
+    Goto,
+    /// `FILE:LINE:COLUMN`, as Sublime Text, Zed and Helix take it.
+    Suffix,
+}
+
+/// The editors that take a place, by the name of the program, and how each takes it.
+///
+/// Only those whose way is known. An editor that is not here is handed the file alone, which opens
+/// it at the top: a guess at another editor's flag is a flag it may read as something else.
+const PLACES: &[(&str, Place)] = &[
+    ("vim", Place::Plus),
+    ("vi", Place::Plus),
+    ("nvim", Place::Plus),
+    ("view", Place::Plus),
+    ("gvim", Place::Plus),
+    ("mvim", Place::Plus),
+    ("joe", Place::Plus),
+    ("mg", Place::Plus),
+    ("nano", Place::PlusComma),
+    ("ne", Place::PlusComma),
+    ("emacs", Place::PlusColon),
+    ("emacsclient", Place::PlusColon),
+    ("micro", Place::PlusColon),
+    ("kak", Place::PlusColon),
+    ("code", Place::Goto),
+    ("codium", Place::Goto),
+    ("cursor", Place::Goto),
+    ("windsurf", Place::Goto),
+    ("subl", Place::Suffix),
+    ("zed", Place::Suffix),
+    ("hx", Place::Suffix),
+];
+
+/// The arguments that open `path` at `line` and `column` in `program`: the ones it already has, with
+/// whatever tells it the place, and the argument that names the file.
+///
+/// A line and a column are numbers, so nothing here is text for an editor to read as an option. The
+/// file is handed over as it is, an absolute path, which no editor reads as one either.
+fn at_a_place(
+    program: &Path,
+    mut arguments: Vec<String>,
+    path: &Path,
+    line: Option<u32>,
+    column: Option<u32>,
+) -> (Vec<String>, OsString) {
+    let named = program
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned());
+    let place = named
+        .as_deref()
+        .and_then(|stem| PLACES.iter().find(|(name, _)| *name == stem))
+        .map(|(_, place)| *place);
+    let (Some(place), Some(line)) = (place, line) else {
+        return (arguments, path.as_os_str().to_os_string());
+    };
+    let with_column = |separator: &str| match column {
+        Some(column) => format!("{line}{separator}{column}"),
+        None => line.to_string(),
+    };
+    let suffixed = || {
+        let mut file = path.as_os_str().to_os_string();
+        file.push(format!(":{}", with_column(":")));
+        file
+    };
+    match place {
+        Place::Plus => {
+            arguments.push(format!("+{line}"));
+            (arguments, path.as_os_str().to_os_string())
+        }
+        Place::PlusComma => {
+            arguments.push(format!("+{}", with_column(",")));
+            (arguments, path.as_os_str().to_os_string())
+        }
+        Place::PlusColon => {
+            arguments.push(format!("+{}", with_column(":")));
+            (arguments, path.as_os_str().to_os_string())
+        }
+        Place::Goto => {
+            arguments.push("--goto".to_string());
+            (arguments, suffixed())
+        }
+        Place::Suffix => (arguments, suffixed()),
+    }
+}
+
 /// The flag that makes `program` wait, if it is one of the ones that needs telling.
 fn waiting_flag(program: &Path) -> Option<String> {
     let stem = program.file_stem()?.to_string_lossy().into_owned();
@@ -391,23 +516,65 @@ fn waiting_flag(program: &Path) -> Option<String> {
 /// `$EDITOR` of `env vim`) search only the `PATH` entries the lookup that found it searches
 /// (SANDBOX-30).
 fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failure> {
+    run(
+        program,
+        command_for(
+            program,
+            arguments,
+            &[path.as_os_str()],
+            bravebot_sandbox::programs::Inherits::All,
+        ),
+        |editor, code| match code {
+            Some(code) => t!(editor_exited_badly, editor = editor, code = code),
+            None => t!(editor_was_stopped, editor = editor),
+        },
+    )
+}
+
+/// The command that opens `file` for a click: the editor's own arguments, then the file, started
+/// without this agent's own credentials.
+fn file_command(program: &Path, arguments: &[String], file: &OsStr) -> std::process::Command {
+    let withheld = bravebot_config::scrub::own_credentials();
+    command_for(
+        program,
+        arguments,
+        &[file],
+        bravebot_sandbox::programs::Inherits::Without(&withheld),
+    )
+}
+
+/// The command that starts `program`, given the arguments after the editor's own as they are.
+fn command_for(
+    program: &Path,
+    arguments: &[String],
+    trailing: &[&OsStr],
+    inherits: bravebot_sandbox::programs::Inherits<'_>,
+) -> std::process::Command {
+    let mut command = bravebot_sandbox::programs::start(
+        &bravebot_sandbox::programs::Resolved::named_by_person(program),
+        inherits,
+        bravebot_sandbox::programs::SearchPath::Reduced,
+    );
+    command.args(arguments).args(trailing);
+    command
+}
+
+/// Run `command` and wait for it, saying what a run that did not end well says as the caller gives
+/// it, who knows what the run was for.
+fn run(
+    program: &Path,
+    mut command: std::process::Command,
+    exited_badly: impl FnOnce(String, Option<i32>) -> String,
+) -> Result<(), Failure> {
     let name = program
         .file_name()
         .unwrap_or(program.as_os_str())
         .to_string_lossy()
         .into_owned();
 
-    let mut command = bravebot_sandbox::programs::start(
-        &bravebot_sandbox::programs::Resolved::named_by_person(program),
-        bravebot_sandbox::programs::Inherits::All,
-        bravebot_sandbox::programs::SearchPath::Reduced,
-    );
-    match command.args(arguments).arg(path).status() {
+    match command.status() {
         Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(Failure::Editor(match status.code() {
-            Some(code) => t!(editor_exited_badly, editor = name, code = code),
-            None => t!(editor_was_stopped, editor = name),
-        })),
+        Ok(status) => Err(Failure::Editor(exited_badly(name, status.code()))),
         Err(error) => Err(Failure::Editor(t!(
             editor_would_not_start,
             editor = name,
@@ -419,6 +586,82 @@ fn start(program: &Path, arguments: &[String], path: &Path) -> Result<(), Failur
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What an editor is handed to open `/work/a.rs` at line 12, column 5 (or with some of that
+    /// left out), as the arguments it is started with and the file argument last.
+    fn handed(
+        program: &str,
+        arguments: &[&str],
+        line: Option<u32>,
+        column: Option<u32>,
+    ) -> Vec<String> {
+        let (mut all, file) = at_a_place(
+            Path::new(program),
+            arguments
+                .iter()
+                .map(|argument| argument.to_string())
+                .collect(),
+            Path::new("/work/a.rs"),
+            line,
+            column,
+        );
+        all.push(file.to_string_lossy().into_owned());
+        all
+    }
+
+    /// Each editor that takes a place is told it in its own words, and any other is handed the file
+    /// alone, since a flag guessed for it is one it may read as something else. A column with no line
+    /// says nothing, and a line alone is a line.
+    #[test]
+    fn each_editor_is_told_the_line_in_its_own_words() {
+        let at = |program: &str| handed(program, &[], Some(12), Some(5));
+        assert_eq!(at("/usr/bin/vim"), ["+12", "/work/a.rs"]);
+        assert_eq!(at("nvim"), ["+12", "/work/a.rs"]);
+        assert_eq!(at("vi"), ["+12", "/work/a.rs"]);
+        assert_eq!(at("nano"), ["+12,5", "/work/a.rs"]);
+        assert_eq!(at("emacs"), ["+12:5", "/work/a.rs"]);
+        assert_eq!(at("micro"), ["+12:5", "/work/a.rs"]);
+        assert_eq!(at("kak"), ["+12:5", "/work/a.rs"]);
+        assert_eq!(at("code"), ["--goto", "/work/a.rs:12:5"]);
+        assert_eq!(at("cursor"), ["--goto", "/work/a.rs:12:5"]);
+        assert_eq!(at("subl"), ["/work/a.rs:12:5"]);
+        assert_eq!(at("hx"), ["/work/a.rs:12:5"]);
+        for unknown in ["ed", "bbedit", "my-editor", "sed-vim", "vimm"] {
+            assert_eq!(at(unknown), ["/work/a.rs"], "{unknown}");
+        }
+
+        let line_only = |program: &str| handed(program, &[], Some(12), None);
+        assert_eq!(line_only("nano"), ["+12", "/work/a.rs"]);
+        assert_eq!(line_only("emacs"), ["+12", "/work/a.rs"]);
+        assert_eq!(line_only("code"), ["--goto", "/work/a.rs:12"]);
+        assert_eq!(line_only("subl"), ["/work/a.rs:12"]);
+        for program in ["vim", "nano", "code", "subl", "emacs"] {
+            assert_eq!(
+                handed(program, &[], None, Some(5)),
+                ["/work/a.rs"],
+                "{program}: a column with no line"
+            );
+            assert_eq!(
+                handed(program, &[], None, None),
+                ["/work/a.rs"],
+                "{program}"
+            );
+        }
+    }
+
+    /// What a person wrote after the program is kept, in front of what places the file, so a
+    /// configured `vim -u NONE` and the `--wait` a window editor needs are not lost to the line.
+    #[test]
+    fn the_arguments_an_editor_already_has_come_first() {
+        assert_eq!(
+            handed("vim", &["-u", "NONE"], Some(3), None),
+            ["-u", "NONE", "+3", "/work/a.rs"]
+        );
+        assert_eq!(
+            handed("code", &["--wait"], Some(3), Some(1)),
+            ["--wait", "--goto", "/work/a.rs:3:1"]
+        );
+    }
 
     /// A name already taken is refused rather than reused, so two names that are the same name
     /// cost whichever prompt asked second its editor.
@@ -628,6 +871,50 @@ mod tests {
         assert_eq!(
             relative, emacs,
             "a relative name that no longer resolves was started under its name"
+        );
+    }
+
+    /// CRED-14: the editor a click opens is started without the variables this agent's own
+    /// credentials arrive in, and with the editor's arguments then the file, while the editor a
+    /// prompt is edited in withholds none. A start that inherited everything would hand those
+    /// credentials to whatever a workspace file makes the editor run.
+    #[test]
+    fn the_editor_a_click_opens_is_started_without_this_agents_own_credentials() {
+        fn withheld_from(command: &std::process::Command) -> Vec<String> {
+            let mut names: Vec<String> = command
+                .get_envs()
+                .filter(|(_, value)| value.is_none())
+                .map(|(name, _)| name.to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        }
+        let program = Path::new("/usr/bin/vim");
+        let arguments = vec!["+3".to_string()];
+
+        let click = file_command(program, &arguments, OsStr::new("/work/a.rs"));
+        let mut expected = bravebot_config::scrub::own_credentials();
+        expected.sort();
+        assert!(
+            !expected.is_empty(),
+            "no credential is withheld to be found"
+        );
+        assert_eq!(withheld_from(&click), expected);
+        assert_eq!(
+            click.get_args().collect::<Vec<_>>(),
+            ["+3", "/work/a.rs"],
+            "the file is not the last argument, after the editor's own"
+        );
+
+        let prompt = command_for(
+            program,
+            &arguments,
+            &[OsStr::new("/work/prompt.md")],
+            bravebot_sandbox::programs::Inherits::All,
+        );
+        assert!(
+            withheld_from(&prompt).is_empty(),
+            "the editor a prompt is edited in is not given all of the environment"
         );
     }
 

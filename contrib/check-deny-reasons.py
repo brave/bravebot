@@ -6,10 +6,14 @@ ban, and accepts a bare string in place of the table. An exception with no reaso
 nothing to agree to, and an ignored advisory is one this binary ships with anyway. Whether a reason
 is good is judged in review (DEP-001); that one is written is decided here.
 
+cargo-deny takes no `reason` on a licence exception and rejects the key, so the reason there is a
+comment on the entry's line or on the line above it.
+
 Standard library only, like the other checks CI runs without a toolchain.
 """
 
 import argparse
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -33,6 +37,30 @@ def name_of(entry):
     return "unnamed"
 
 
+def commented(lines, index):
+    """Whether line `index` has a comment of its own, or the line above it is one."""
+    code = re.sub(r"\"[^\"]*\"|'[^']*'", '""', lines[index])
+    return "#" in code or (index > 0 and lines[index - 1].lstrip().startswith("#"))
+
+
+def exception_starts(lines, name):
+    """The line each licence exception for `name` starts on: its own line where it is an inline
+    table, or the `[[licenses.exceptions]]` header above where it is a table of its own. Only the
+    licence tables are read, since the same crate can be banned or skipped elsewhere."""
+    section, starts = "", []
+    for number, line in enumerate(lines):
+        if line.strip().startswith("["):
+            section = line.split("#")[0].strip()
+        if section not in ("[licenses]", "[[licenses.exceptions]]"):
+            continue
+        if re.search(rf"""\bcrate\s*=\s*["']{re.escape(name)}["']""", line):
+            start = number
+            while section == "[[licenses.exceptions]]" and not lines[start].lstrip().startswith("[["):
+                start -= 1
+            starts.append(start)
+    return starts
+
+
 def problems(text):
     """One line for each exception in `text` with no reason."""
     config = tomllib.loads(text)
@@ -41,6 +69,12 @@ def problems(text):
             reason = entry.get("reason") if isinstance(entry, dict) else None
             if not isinstance(reason, str) or not reason.strip():
                 yield f"[{section}] {key}[{index}] ({name_of(entry)}) has no reason"
+    lines = text.splitlines()
+    for index, entry in enumerate(config.get("licenses", {}).get("exceptions", [])):
+        name = name_of(entry)
+        starts = exception_starts(lines, name)
+        if not starts or not all(commented(lines, start) for start in starts):
+            yield f"[licenses] exceptions[{index}] ({name}) has no comment saying why"
 
 
 def selftest():
@@ -91,6 +125,69 @@ def selftest():
             ["[bans] skip-tree[0] (t) has no reason"],
         ),
         (
+            "a licence exception with a comment above it",
+            '[licenses]\nexceptions = [\n    # vendored, permissive\n    { crate = "x", allow = ["NCSA"] },\n]\n',
+            [],
+        ),
+        (
+            "a licence exception with a comment after it",
+            '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },  # vendored\n]\n',
+            [],
+        ),
+        (
+            "a licence exception with no comment",
+            '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },\n]\n',
+            ["[licenses] exceptions[0] (x) has no comment saying why"],
+        ),
+        (
+            "a licence exception whose only # is inside its crate name",
+            '[licenses]\nexceptions = [\n    { crate = "x#1", allow = ["NCSA"] },\n]\n',
+            ["[licenses] exceptions[0] (x#1) has no comment saying why"],
+        ),
+        (
+            "a comment above one licence exception does not cover the next",
+            '[licenses]\nexceptions = [\n    # vendored\n    { crate = "x", allow = ["NCSA"] },\n'
+            '    { crate = "y", allow = ["NCSA"] },\n]\n',
+            ["[licenses] exceptions[1] (y) has no comment saying why"],
+        ),
+        (
+            "a licence exception in a table of its own, with a comment above its header",
+            '# vendored, permissive\n[[licenses.exceptions]]\ncrate = "x"\nallow = ["NCSA"]\n',
+            [],
+        ),
+        (
+            "a licence exception in a table of its own, with no comment",
+            '[[licenses.exceptions]]\ncrate = "x"\nallow = ["NCSA"]\n',
+            ["[licenses] exceptions[0] (x) has no comment saying why"],
+        ),
+        (
+            "a licence exception whose crate is single-quoted, with a comment above it",
+            "[licenses]\nexceptions = [\n    # vendored\n    { crate = 'x', allow = ['NCSA'] },\n]\n",
+            [],
+        ),
+        (
+            "a licence exception whose only # is inside a single-quoted string",
+            "[licenses]\nexceptions = [\n    { crate = \"x\", allow = ['N#'] },\n]\n",
+            ["[licenses] exceptions[0] (x) has no comment saying why"],
+        ),
+        (
+            "a crate that is banned with a comment does not explain its licence exception",
+            '[licenses]\nexceptions = [\n    { crate = "x", allow = ["NCSA"] },\n]\n'
+            '[bans]\ndeny = [\n    # banned\n    { crate = "x", reason = "r" },\n]\n',
+            ["[licenses] exceptions[0] (x) has no comment saying why"],
+        ),
+        (
+            "a ban of the same crate does not make a commented licence exception fail",
+            '[licenses]\nexceptions = [\n    # vendored\n    { crate = "x", allow = ["NCSA"] },\n]\n'
+            '[bans]\ndeny = [\n    { crate = "x", reason = "r" },\n]\n',
+            [],
+        ),
+        (
+            "a licence allowance with no exceptions",
+            '[licenses]\nallow = ["MIT"]\n',
+            [],
+        ),
+        (
             "only the entry without a reason",
             f'[bans]\nskip = [{with_reason}, {{ crate = "c:2" }}]\n',
             ["[bans] skip[1] (c:2) has no reason"],
@@ -124,7 +221,8 @@ def main():
         print(f"{args.file}: {line}", file=sys.stderr)
     if found:
         print(
-            "deny.toml: write what ships anyway, or why the duplicate cannot be unified, in `reason`",
+            "deny.toml: write what ships anyway, or why the duplicate cannot be unified, in `reason`, "
+            "and why a licence exception is allowed in a comment on its line or above it",
             file=sys.stderr,
         )
     return 1 if found else 0

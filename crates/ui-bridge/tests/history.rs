@@ -66,7 +66,16 @@ enum Chat {
     PlansThenRefuses,
     /// Writes a task list in its first round, using 107 tokens, then never answers the next.
     PlansThenHolds,
+    /// Answers "done", saying the prompt it was sent was far past any window, so the next turn has a
+    /// conversation to summarise.
+    AnswersAtLength,
+    /// Says it is overloaded (529, which a client does not send again) to every request naming
+    /// [`STUB_MODEL`], and answers "done" to a request naming any other model.
+    OverloadedForTheStubModel,
 }
+
+/// The model the stub service lists and the front end is configured to use.
+const STUB_MODEL: &str = "stub-model";
 
 /// What the refusing service says, which is the backend's words and not the interface's.
 const BACKEND_WORDS: &str = "BACKEND-WORDS-1176: key a-key-id revoked";
@@ -145,18 +154,30 @@ fn answer(mut stream: std::net::TcpStream, chat: Chat, held: &mpsc::Sender<()>) 
             "application/json",
             json!({"error": BACKEND_WORDS}).to_string(),
         )
+    } else if matches!(chat, Chat::OverloadedForTheStubModel)
+        && String::from_utf8_lossy(&body).contains(&format!("\"model\":\"{STUB_MODEL}\""))
+    {
+        (
+            "529 Overloaded",
+            "application/json",
+            json!({"error": BACKEND_WORDS}).to_string(),
+        )
     } else if matches!(chat, Chat::Holds) && String::from_utf8_lossy(&body).contains(HELD) {
         let _ = held.send(());
         // Held until the front end is gone, which closes the connection.
         let _ = stream.read(&mut [0u8; 1]);
         return;
     } else {
+        let prompt_tokens = match chat {
+            Chat::AnswersAtLength => 5_000_000,
+            _ => 10,
+        };
         let delta = json!({"role": "assistant", "content": "done"});
         let finish = "stop";
         let chunk = json!({"id": "c1", "object": "chat.completion.chunk",
             "model": "stub-model",
             "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 1}});
+            "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 1}});
         (
             "200 OK",
             "text/event-stream",
@@ -171,15 +192,31 @@ fn answer(mut stream: std::net::TcpStream, chat: Chat, held: &mpsc::Sender<()>) 
     let _ = stream.flush();
 }
 
+/// The language the machine the binary runs on says it is set to.
+#[derive(Clone, Copy)]
+enum Machine {
+    /// Names `en-US` for the program, and nothing else.
+    English,
+    /// Names French for the program and for the shell. The window is in English whatever the
+    /// machine says (LOCALE-7), so the binary has to leave all three unread.
+    French,
+}
+
 /// The binary, in an environment the test wrote rather than the one it inherited.
 ///
 /// Nothing is inherited: a developer's own exports name a real service, and a turn that reached
 /// one would answer out of a model rather than out of this test.
-fn front_end(home: &Path, endpoint: &str) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"))
-        .env_clear()
-        .env("HOME", home)
-        .env("BRAVEBOT_LOCALE", "en-US")
+fn front_end(home: &Path, endpoint: &str, machine: Machine) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bravebot-rpc"));
+    command.env_clear().env("HOME", home);
+    match machine {
+        Machine::English => command.env("BRAVEBOT_LOCALE", "en-US"),
+        Machine::French => command
+            .env("BRAVEBOT_LOCALE", "fr")
+            .env("LC_ALL", "fr_FR.UTF-8")
+            .env("LANG", "fr_FR.UTF-8"),
+    };
+    command
         .env("SERVICES_KEY_AICHAT", "a-services-key")
         .env("BRAVE_SERVICES_KEY_ID", "a-key-id")
         .env("BRAVE_AI_CHAT_ENDPOINT", endpoint)
@@ -249,9 +286,20 @@ struct Window {
 }
 
 impl Window {
-    /// A new session in `project`, or the one `resume` names.
+    /// A new session in `project`, or the one `resume` names, on a machine set to English.
     fn open(home: &Path, project: &Path, endpoint: &str, resume: Option<&str>) -> Self {
-        let mut child = front_end(home, endpoint);
+        Self::open_on(Machine::English, home, project, endpoint, resume)
+    }
+
+    /// [`Window::open`] on the machine named.
+    fn open_on(
+        machine: Machine,
+        home: &Path,
+        project: &Path,
+        endpoint: &str,
+        resume: Option<&str>,
+    ) -> Self {
+        let mut child = front_end(home, endpoint, machine);
         let said = lines(child.stdout.take().expect("the front end answers"));
         let mut window = Self {
             child,
@@ -315,6 +363,16 @@ impl Window {
     /// A whole turn, which is its ending event.
     fn turn(&mut self, prompt: &str) -> Value {
         self.start(prompt);
+        self.ended()
+    }
+
+    /// A whole turn on `model`, which is its ending event.
+    fn turn_on(&mut self, model: &str, prompt: &str) -> Value {
+        let session = self.session.clone();
+        self.call(
+            "turn.send",
+            json!({"session": session, "prompt": prompt, "model": model}),
+        );
         self.ended()
     }
 }
@@ -490,6 +548,242 @@ fn a_failed_turn_is_recorded_with_the_reason_the_interface_composed() {
         !saved.to_string().contains("BACKEND-WORDS"),
         "the record repeats the backend's words: {saved}"
     );
+}
+
+/// CHATGPT-8: a turn on the ChatGPT account where nobody signed in fails in the window naming the
+/// step, beside the category, with the window's own sentence for it and the command it names, which
+/// the window draws as sent.
+///
+/// The faults this rejects: a failure of the account that arrives as its category alone, the
+/// terminal's lower case two-sentence wording sent to the window, and a sentence composed from
+/// anything but the closed name.
+#[test]
+fn a_turn_on_the_account_with_no_sign_in_reaches_the_window_as_not_signed_in() {
+    let scratch = Scratch::new("bridge-account-not-signed-in");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let ended = Window::open(&scratch.home(), &scratch.project(), &endpoint, None)
+        .turn_on("chatgpt/gpt-test", "first question");
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["kind"], "chat", "{ended}");
+    assert_eq!(ended["data"]["category"], "unauthorized", "{ended}");
+    assert_eq!(ended["data"]["account"], "not-signed-in", "{ended}");
+    assert_eq!(
+        ended["data"]["accountMessage"],
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{ended}"
+    );
+    assert_eq!(
+        ended["data"]["accountCommand"], "bravebot auth login chatgpt",
+        "{ended}"
+    );
+    assert_eq!(ended["data"]["status"], Value::Null, "{ended}");
+}
+
+/// LOCALE-7, CHATGPT-8: the window is in English only, so a turn on the ChatGPT account that fails
+/// on a machine set to French is sent the English sentence, with the command beside it, as it is on
+/// any other machine.
+///
+/// The fault this rejects: the bridge choosing its catalog from the machine's language, which sends
+/// the French sentence of the catalog to a window that draws it as it is.
+#[test]
+fn a_failed_turn_on_the_account_is_sent_in_english_on_a_machine_set_to_french() {
+    let scratch = Scratch::new("bridge-account-english-failure");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let ended = Window::open_on(
+        Machine::French,
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        None,
+    )
+    .turn_on("chatgpt/gpt-test", "first question");
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["account"], "not-signed-in", "{ended}");
+    assert_eq!(
+        ended["data"]["accountMessage"],
+        "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+        "{ended}"
+    );
+    assert_eq!(
+        ended["data"]["accountCommand"], "bravebot auth login chatgpt",
+        "{ended}"
+    );
+}
+
+/// CHATGPT-8: a turn on the ChatGPT account where nobody signed in is recorded as failed with the
+/// sentence of that step, the one a terminal says for it, so a session reopened in either front
+/// end reads the command to run and not the words of the category.
+///
+/// The fault this rejects: recording the category's line, which says the service would not accept
+/// the credentials.
+#[test]
+fn a_turn_on_the_account_with_no_sign_in_is_recorded_in_the_sentence_of_its_step() {
+    let scratch = Scratch::new("bridge-account-recorded");
+    let (endpoint, _) = stub_service(Chat::Answers);
+
+    let ended = Window::open(&scratch.home(), &scratch.project(), &endpoint, None)
+        .turn_on("chatgpt/gpt-test", "first question");
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+
+    let saved = record(&scratch.home());
+    assert_eq!(
+        saved["history"][0]["outcome"],
+        json!({"kind": "failed",
+               "reason": "error: not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in"}),
+        "{saved}"
+    );
+}
+
+/// The narrations a window on `machine` is sent for a summary of the conversation that could not be
+/// made because the account's sign-in is not there. The summary model is the account, and the service
+/// said each earlier prompt filled its window, so the fourth turn has exchanges to cut, and it still
+/// ends as an answered turn.
+fn narrations_of_a_summary_the_account_could_not_make(machine: Machine) -> Vec<Value> {
+    // A directory of its own for each machine, since the two tests that call this run together.
+    let scratch = Scratch::new(match machine {
+        Machine::English => "bridge-account-summary",
+        Machine::French => "bridge-account-summary-french",
+    });
+    std::fs::write(
+        scratch.home().join(".bravebot/settings.json"),
+        r#"{"summaryModel": "chatgpt/gpt-6-sol"}"#,
+    )
+    .expect("a settings file");
+    let (endpoint, _) = stub_service(Chat::AnswersAtLength);
+    let mut window = Window::open_on(
+        machine,
+        &scratch.home(),
+        &scratch.project(),
+        &endpoint,
+        None,
+    );
+    for prompt in ["one", "two", "three"] {
+        assert_eq!(window.turn(prompt)["event"], "turn.done");
+    }
+    let narrations = |window: &Window| -> Vec<Value> {
+        window
+            .passed
+            .iter()
+            .filter(|message| message["event"] == "narration")
+            .map(|message| message["data"].clone())
+            .collect()
+    };
+    assert_eq!(
+        narrations(&window).len(),
+        0,
+        "a turn with nothing to cut narrated"
+    );
+
+    let ended = window.turn("four");
+
+    assert_eq!(
+        ended["event"], "turn.done",
+        "the turn stopped for its summary: {ended}"
+    );
+    narrations(&window)
+}
+
+/// The two narrations, in the window's own words, for a summary the account could not make because
+/// nobody signed in: that the turn goes on with the messages it has, and the account's sentence with
+/// the command it names beside it.
+fn the_windows_narrations_of_a_missing_sign_in() -> [Value; 2] {
+    [
+        json!({"text": "The conversation could not be summarised, so the turn goes on with the messages it has.",
+               "command": null}),
+        json!({"text": "You are not signed in to ChatGPT, so run bravebot auth login chatgpt in a terminal to sign in.",
+               "command": "bravebot auth login chatgpt"}),
+    ]
+}
+
+/// CHATGPT-8: a summary of the conversation that could not be made because the account's sign-in
+/// is not there reaches the window as two narrations in the window's own words, one sentence each,
+/// the second naming the command that signs in again beside it for the window to draw as code, and
+/// the turn goes on with the model that was asked.
+///
+/// The faults this rejects: the terminal's lower case two-sentence line with its backticks reaching
+/// the window, the category's name, a turn that stops because its summary did not come, and a
+/// command that is not sent beside the sentence.
+#[test]
+fn a_summary_that_failed_on_the_account_reaches_the_window_in_the_windows_words() {
+    assert_eq!(
+        narrations_of_a_summary_the_account_could_not_make(Machine::English),
+        the_windows_narrations_of_a_missing_sign_in(),
+    );
+}
+
+/// LOCALE-7, CHATGPT-8: the window is in English only, so the narrations it is sent for a summary the
+/// account could not make are the same on a machine set to French as on one set to English.
+///
+/// The fault this rejects: the bridge choosing its catalog from the machine's language, which
+/// narrates these sentences in French to a window that has no French to show them in.
+#[test]
+fn the_narrations_for_a_summary_the_account_could_not_make_are_in_english_on_a_machine_set_to_french()
+ {
+    assert_eq!(
+        narrations_of_a_summary_the_account_could_not_make(Machine::French),
+        the_windows_narrations_of_a_missing_sign_in(),
+    );
+}
+
+/// BACKEND-53: a turn whose model the service keeps refusing as overloaded moves to the person's
+/// fallback model, and the window is told so in a narration that names both models and the
+/// category, in the terminal's words because no account failed, with no `command` field, and the
+/// turn is answered by the fallback. The fallback is named in the person's own settings.
+///
+/// What this establishes is that the turn's own move reaches the bridge's reporter and the window.
+/// What the window is told where it was the ChatGPT account that failed is held at the reporter by
+/// `notice_tests`, since no service here can be made to fail that renewal.
+#[test]
+fn a_move_to_the_fallback_model_reaches_the_window_as_a_narration() {
+    let scratch = Scratch::new("bridge-fallback-narration");
+    std::fs::write(
+        scratch.home().join(".bravebot/settings.json"),
+        r#"{"fallbackModel": "fallback-model"}"#,
+    )
+    .expect("a settings file");
+    let (endpoint, _) = stub_service(Chat::OverloadedForTheStubModel);
+    let mut window = Window::open(&scratch.home(), &scratch.project(), &endpoint, None);
+
+    let ended = window.turn("first question");
+
+    assert_eq!(
+        ended["event"], "turn.done",
+        "the fallback did not answer: {ended}"
+    );
+    let narrations: Vec<Value> = window
+        .passed
+        .iter()
+        .filter(|message| message["event"] == "narration")
+        .map(|message| message["data"].clone())
+        .collect();
+    assert_eq!(
+        narrations,
+        [json!({"text": "stub-model failed as unavailable; this turn moves to fallback-model"})],
+        "{narrations:?}"
+    );
+}
+
+/// CHATGPT-8: a key a gateway refused is not the sign-in failing, so the window is sent no name of
+/// the account's, only the category and the status it carries.
+///
+/// The fault this rejects: a name sent for every failed turn, or for every failure of the
+/// `unauthorized` category.
+#[test]
+fn a_refused_key_in_the_window_is_sent_with_no_account_name() {
+    let scratch = Scratch::new("bridge-account-not-involved");
+    let (endpoint, _) = stub_service(Chat::Refuses);
+
+    let ended =
+        Window::open(&scratch.home(), &scratch.project(), &endpoint, None).turn("first question");
+
+    assert_eq!(ended["event"], "turn.error", "{ended}");
+    assert_eq!(ended["data"]["category"], "unauthorized", "{ended}");
+    assert_eq!(ended["data"]["status"], 401, "{ended}");
+    assert_eq!(ended["data"]["account"], Value::Null, "{ended}");
 }
 
 /// A turn that failed after a tool call in the desktop leaves the planner a note that it failed,

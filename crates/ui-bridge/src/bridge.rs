@@ -24,6 +24,7 @@ use bravebot_agent::trusted;
 use bravebot_agent::turn::{self as agent_turn, Task, TurnError};
 use bravebot_agent::workspace::WorkspaceError;
 use bravebot_agent::{Confining, LiveMode, PermissionMode, Workspace};
+use bravebot_aichat::AccountFailure;
 use bravebot_config::{Config, Settings};
 use bravebot_core::cancel::Cancel;
 use bravebot_core::trust::TrustStore;
@@ -34,9 +35,20 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::Duration;
+
+/// How long `session.open` waits for what still works for a session this bridge closed, when the
+/// record it was asked for is held or changed (SESSION-38).
+const CLOSED_SESSIONS_WAIT: Duration = Duration::from_secs(2);
+
+/// What opening a stored session came to.
+enum Stored {
+    Opened(Value),
+    /// Another process holds the record, or wrote it after it was read.
+    Refused(bravebot_session::sessions::Held),
+}
 
 /// A session this process has open.
 struct Open {
@@ -233,7 +245,7 @@ impl Bridge {
                     || {
                         let settings =
                             crate::settings::layers(Some(&open.project), self.settings.as_deref());
-                        Ok(session_workspace(open, &settings)?.reference_sources())
+                        Ok(session_workspace_unless_running(open, &settings)?.reference_sources())
                     },
                 )
             }
@@ -244,7 +256,7 @@ impl Bridge {
                     .ok_or_else(Failure::no_such_session)?;
                 let settings =
                     crate::settings::layers(Some(&open.project), self.settings.as_deref());
-                let workspace = session_workspace(open, &settings)?;
+                let workspace = session_workspace_unless_running(open, &settings)?;
                 let files = crate::mentions::named(&workspace, &request.string("prompt")?)?;
                 Ok(json!({ "files": files }))
             }
@@ -316,6 +328,8 @@ impl Bridge {
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),
+            "bot.servers.read" => crate::definitions::servers_read(request),
+            "bot.servers.write" => crate::definitions::servers_write(request),
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
@@ -368,7 +382,26 @@ impl Bridge {
         Ok(json!({ "sessions": sessions }))
     }
 
+    /// Open a stored session. A record another process holds, or one written after it was read, is
+    /// refused after a bounded wait for what is still working for sessions this bridge closed: that
+    /// work may be writing the record, and a session opened again as it closed is its person's own
+    /// and not another process's. The record is then read afresh, so nothing in the session comes
+    /// from the older copy (SESSION-38).
     fn open_session(&mut self, request: &Request) -> Result<Value, Failure> {
+        if let Stored::Opened(opened) = self.open_stored(request)? {
+            return Ok(opened);
+        }
+        self.closing.retain(|closing| !closing.is_idle());
+        if !self.closing.is_empty() {
+            crate::workers::Workers::all_end_within(&self.closing, CLOSED_SESSIONS_WAIT);
+        }
+        match self.open_stored(request)? {
+            Stored::Opened(opened) => Ok(opened),
+            Stored::Refused(held) => Err(Failure::bad_request(held.refusal())),
+        }
+    }
+
+    fn open_stored(&mut self, request: &Request) -> Result<Stored, Failure> {
         let directory = PathBuf::from(request.string("directory")?);
         let id = request.string("id")?;
 
@@ -408,7 +441,12 @@ impl Bridge {
             .remembered
             .is_some()
             .then(|| json!({ "known": true, "rules": rules_json(&opening.trust) }));
-        let state = State::resumed(&directory, &record, opening.trust);
+        // Held from here for as long as the session stays open, so a record a terminal holds is
+        // refused in the words the terminal uses (SESSION-38).
+        let state = match State::resumed(&directory, &record, opening.trust) {
+            Ok(state) => state,
+            Err(held) => return Ok(Stored::Refused(held)),
+        };
 
         let auto_vetting = self.auto_vetting(&directory);
         let handle = self.mint(Open::opened(
@@ -441,7 +479,7 @@ impl Bridge {
             opened["trust"] = settled;
         }
         merge(&mut opened, reported);
-        Ok(opened)
+        Ok(Stored::Opened(opened))
     }
 
     /// Settle the permission rules the session opened as `handle` runs under, and return them
@@ -2086,7 +2124,10 @@ impl Bridge {
             open.project == project
                 && open
                     .state
-                    .lock()
+                    // A worker holds the lock for the whole of its turn and dispatch is one
+                    // thread, so a session mid-turn is skipped rather than waited for. It was
+                    // opened before this request, so its id is not the one just minted.
+                    .try_lock()
                     .ok()
                     .and_then(|state| state.handle.as_ref().map(|held| held.id() == id))
                     .unwrap_or(false)
@@ -2193,15 +2234,33 @@ pub fn turn_workspace(
 /// The session's own directory outside the project, made as the session opened, is set by the
 /// code that holds it, so a turn cannot widen its own reach (TRUST-14).
 fn session_workspace(open: &Open, settings: &Settings) -> Result<Workspace, Failure> {
+    workspace_of(open, settings, |state| state.lock().ok())
+}
+
+/// `session_workspace` for a request answered while a turn may be running, which never waits for
+/// the session's state. The worker holds it for the length of a turn, dispatch is one thread, and
+/// a request that waited would stop the bridge reading the `confirm.reply` or `turn.cancel` the
+/// turn is blocked on. A turn holding it leaves out the directories the session added and its
+/// scratch directory, the same fallback a poisoned lock gets.
+fn session_workspace_unless_running(
+    open: &Open,
+    settings: &Settings,
+) -> Result<Workspace, Failure> {
+    workspace_of(open, settings, |state| state.try_lock().ok())
+}
+
+fn workspace_of(
+    open: &Open,
+    settings: &Settings,
+    take: impl for<'a> FnOnce(&'a Mutex<State>) -> Option<MutexGuard<'a, State>>,
+) -> Result<Workspace, Failure> {
     let mut workspace = turn_workspace(
         open.project.clone(),
         settings,
         &bravebot_config::Managed::load(),
     )
     .map_err(|error| Failure::new(ErrorCode::Internal, error.to_string()))?;
-    let (directories, scratch) = open
-        .state
-        .lock()
+    let (directories, scratch) = take(&open.state)
         .map(|s| (s.directories.clone(), s.scratch.directory()))
         .unwrap_or((Vec::new(), None));
     workspace.open_scratch(scratch);
@@ -2414,7 +2473,8 @@ fn work(work: Work) {
 
     let history =
         bravebot_session::store::Entry::sent(&prompt, Some(project.display().to_string()));
-    let mut reporter = BridgeReporter::new(emitter.clone(), &session);
+    let mut reporter =
+        BridgeReporter::new(emitter.clone(), &session).sharing(Arc::clone(&state.roster));
 
     // The session begins with its first turn (HOOK-10), here on the worker so the request that
     // sent the turn is answered at once, and before anything else the turn does, so a hook that
@@ -2478,6 +2538,7 @@ fn work(work: Work) {
         // number would only interrupt work that was going fine (TURN-2).
         .with_rounds(None)
         .with_model(model)
+        .in_account_session(state.account.clone())
         .with_attribution(attribution)
         .with_output_cap(output_cap)
         .with_download_cap(download_cap)
@@ -2542,6 +2603,8 @@ fn work(work: Work) {
     // in a verdict read the same answer.
     let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
+    #[cfg(test)]
+    crate::running::built_in::record("turn", task.account_session().identifier());
     let began_at = std::time::Instant::now();
     let completed = agent_turn::resume(
         &config,
@@ -2727,6 +2790,9 @@ fn work(work: Work) {
     if let Ok(mut watches) = watches.lock() {
         watches.turn_ended(std::time::Instant::now());
     }
+    // An agent does not outlive its turn (DELEGATE-17). Said before the event that ends the turn,
+    // so the window has the list it is to draw when it hears the end (VIEW-35).
+    reporter.turn_ended();
     drop(state);
     emitter.finish(event, &finished);
 }
@@ -2807,10 +2873,16 @@ fn start_mcp(
     Some(reached.session())
 }
 
-/// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`.
+/// How a failure is reported to a front end: `kind`, `message`, `category`, `attempts`, `status`,
+/// `account`, `accountMessage`, `accountCommand`.
 ///
-/// The category and the counts come from the agent's diagnosis. Raw backend text is not sent.
-/// `chosen` is the model that was asked for, which decides one category below.
+/// The category, the counts and the account's failure come from the agent's diagnosis. Raw backend
+/// text is not sent. `account` is the fixed name of which failure of a ChatGPT account it was, or
+/// `null` where the account was not involved (CHATGPT-8). `accountMessage` is the window's own
+/// sentence for that failure, one sentence in sentence case chosen from the failure alone, and
+/// `accountCommand` the words of it that are a command to run, so the window draws the words and
+/// keeps no table of them, and draws the command as code without reading the sentence for it. Both
+/// are `null` otherwise. `chosen` is the model that was asked for, which decides one category below.
 pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -> Value {
     let ending = error.ending();
     let diagnosis = ending.diagnosis();
@@ -2842,8 +2914,13 @@ pub(crate) fn failure_fields(error: &TurnError, config: &Config, chosen: &str) -
         // it, so a turn never sends this kind.
         TurnError::Manifest { .. } => "manifest",
     };
+    let account = diagnosis.and_then(|d| d.account);
+    let said = account.map(crate::account_words::of_failure);
     json!({ "kind": kind, "message": category.unwrap_or("cancelled"), "category": category,
-        "attempts": attempts, "status": diagnosis.and_then(|d| d.status) })
+        "attempts": attempts, "status": diagnosis.and_then(|d| d.status),
+        "account": account.map(AccountFailure::name),
+        "accountMessage": said.as_ref().map(|said| &said.sentence),
+        "accountCommand": said.as_ref().and_then(|said| said.command) })
 }
 
 /// Open the point the turn about to run can be rewound to (SESSION-19), as the terminal does.
@@ -3324,12 +3401,13 @@ mod coverage_tests {
         let key = root.join("deploy/key.pem");
         let mut trust = TrustStore::new(root);
         trust.trust("notes.md");
-        let mut parent_state = State::resumed(root, &record, trust);
+        let mut parent_state = State::resumed(root, &record, trust).expect("the record is free");
         parent_state.answers.programs.trust(command.clone());
         parent_state.answers.asked_about.record(command.clone());
         parent_state.answers.exposed.allow(".env");
         parent_state.answers.exposed.allow_creating(&key);
         parent_state.answers.servers = Some(bravebot_agent::lsp::LanguageServers::new(root, None));
+        let parents_account_session = parent_state.account.identifier().to_string();
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let parent = bridge.mint(Open::opened(
             root.to_path_buf(),
@@ -3353,6 +3431,12 @@ mod coverage_tests {
             .get(forked["session"].as_str().unwrap())
             .unwrap();
         let state = child.state.lock().unwrap();
+        // CHATGPT-10: two sessions open in the process, so they are two sessions to the account.
+        assert_ne!(
+            state.account.identifier(),
+            parents_account_session,
+            "the fork shares the parent's cache affinity"
+        );
         assert!(
             state.answers.trust.is_trusted("notes.md"),
             "the fork lost the map"
@@ -3423,6 +3507,75 @@ mod coverage_tests {
         );
     }
 
+    /// A second session of the project that is mid-turn holds its state for the whole turn, and
+    /// dispatch is one thread: a fork that waited for that lock would leave the bridge unable to
+    /// read the answer the turn is blocked on.
+    #[test]
+    fn a_fork_does_not_wait_for_another_session_that_is_running_a_turn() {
+        if !test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = test_profile::project("fork-busy-sibling");
+        std::fs::create_dir_all(&directory).unwrap();
+        let root = directory.as_path();
+        let mut conversation = bravebot_agent::Conversation::new();
+        conversation.push(bravebot_aichat::protocol::Message::user("work"));
+        let record: Record = serde_json::from_value(json!({
+            "id": "busy-parent", "directory": root, "title": "work",
+            "started": 1, "updated": 1,
+            "conversation": conversation.snapshot()
+        }))
+        .unwrap();
+        let mut bridge = Bridge::new(Box::new(|_| {}));
+        let parent = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
+            true,
+            None,
+            false,
+        ));
+        let sibling = bridge.mint(Open::opened(
+            root.to_path_buf(),
+            State::fresh(TrustStore::new(root)),
+            true,
+            None,
+            false,
+        ));
+        let busy = Arc::clone(&bridge.open[&sibling].state);
+        let held = busy.lock().unwrap();
+        let request = Request::parse(
+            &json!({"id": 1, "method": "session.fork", "params": {
+                "session": parent, "prompt": 0, "text": "work"
+            }})
+            .to_string(),
+        )
+        .unwrap();
+
+        let (done, answered) = mpsc::channel();
+        let dispatcher = thread::spawn(move || {
+            let reply = bridge.dispatch(&request);
+            let _ = done.send(reply.is_ok());
+            bridge
+        });
+        let outcome = answered.recv_timeout(Duration::from_secs(10));
+        // Released before anything can fail, so a hung dispatch still ends and the test reports it.
+        drop(held);
+        assert_eq!(
+            outcome,
+            Ok(true),
+            "the fork waited on a session that was running a turn"
+        );
+        let mut bridge = dispatcher.join().unwrap();
+        for child in bridge.open.values() {
+            if let Ok(mut state) = child.state.try_lock()
+                && let Some(handle) = state.handle.as_mut()
+            {
+                handle.discard_unwritten("");
+            }
+        }
+        drop(bridge.stop_all());
+    }
+
     /// A fork cannot prove that server descendants from the parent stopped writing.
     #[test]
     fn a_desktop_fork_keeps_the_server_warning_without_checkpoints() {
@@ -3443,7 +3596,7 @@ mod coverage_tests {
         let mut bridge = Bridge::new(Box::new(|_| {}));
         let parent = bridge.mint(Open::opened(
             root.to_path_buf(),
-            State::resumed(root, &record, TrustStore::new(root)),
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free"),
             true,
             None,
             false,
@@ -3490,7 +3643,8 @@ mod coverage_tests {
             "conversation": bravebot_agent::Conversation::new().snapshot()
         }))
         .unwrap();
-        let mut state = State::resumed(root, &record, TrustStore::new(root));
+        let mut state =
+            State::resumed(root, &record, TrustStore::new(root)).expect("the record is free");
         assert!(state.rewind.is_empty());
         save(
             root,
@@ -3930,6 +4084,10 @@ mod completion_tests;
 #[path = "closing_tests.rs"]
 mod closing_tests;
 
+#[cfg(test)]
+#[path = "mentions_running_tests.rs"]
+mod mentions_running_tests;
+
 #[cfg(all(test, unix))]
 #[path = "../tests/ending/worker.rs"]
 mod ending_tests;
@@ -3953,3 +4111,11 @@ mod control_tests;
 #[cfg(test)]
 #[path = "opening_tests.rs"]
 mod opening_tests;
+
+#[cfg(test)]
+#[path = "failure_tests.rs"]
+mod failure_tests;
+
+#[cfg(test)]
+#[path = "account_session_tests.rs"]
+mod account_session_tests;

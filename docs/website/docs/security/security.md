@@ -121,7 +121,7 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   gateway keys, the Leo Premium token and the MCP server list are, which no
   `allowRead` entry, scope or `/reach` grant lifts, except that a program reads, and never writes,
   the session records in `~/.bravebot/sessions`) and can write only the directories the session
-  was opened on, its scratch directory, the system temporary directory (unless you [hold it back](../customize/configuration.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
+  was opened on, its scratch directory, the system temporary directory (unless you [hold it back](sandbox.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
   command that names `aws`, `kubectl` or `docker` is lent that tool's directory, and a `git push` the
   agent socket, never a private key. The files a tool reads by name to do its job, such as the `gh`
   login, `~/.npmrc` and `~/.netrc`, are readable. So are the shell startup files, `~/.gitconfig`,
@@ -380,7 +380,7 @@ cannot write the places it cannot read, nor the shell startup files (`~/.zshenv`
 `~/Library/LaunchAgents`, because what is written there runs later outside the sandbox. They stay
 readable.
 
-In bypass mode, and for a path a `request_path` call asks to write, a stage is also refused writes to
+In bypass mode, a delegate's stages included, and for a path a `request_path` call asks to write, a stage is also refused writes to
 the persistence locations: the shell startup and logout files (`~/.zshenv`, `~/.zprofile`,
 `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`,
 `~/.bash_aliases`, `~/.bash_logout` and `~/.profile`), `~/.config/fish`, `~/.xprofile`,
@@ -522,6 +522,14 @@ Brave does not use your data and does not store it. Prompts and used file conten
 endpoint to produce a reply and are discarded once it has been produced. Nothing is retained and
 nothing is used for training.
 
+That describes Brave's endpoint. If you configure another provider (Anthropic, OpenAI, Google
+Vertex AI, AWS Bedrock or a gateway), your prompts and file contents go to that provider instead,
+and its terms govern what it retains and whether it trains on them. A model server on your own
+machine, such as Ollama, keeps them on your machine.
+
+Crash reports are separate from that and are described under [Crash reports](#crash-reports). They
+hold no prompt or file content.
+
 :::caution[Six lines about your machine go out with every request]
 The system prompt states your working directory, whether it is a git repository, the platform, the OS
 version, the shell and today's date. The working directory is an absolute path, so on most machines it
@@ -555,6 +563,35 @@ memory. Three things are not covered: swap for the buffers a credential passes t
 the copy in the process's environment when you exported it as a variable, and the one-shot
 presentation a premium request carries, which is derived from a credential rather than being one and
 lives only as long as the request.
+
+## Crash reports
+
+When bravebot panics it writes one small file to `~/.bravebot/crash-reports`, and the next launch
+sends it to a Backtrace project Brave owns and deletes it. The process that panics sends nothing: it
+may be holding a lock or out of memory, and a request made there could hang the process you are
+watching fail.
+
+A report is numbers, words fixed in the source and one source location, by what each field can be
+rather than by each call site's care. It holds the version and build, the operating system and
+architecture, which executable panicked and how it was installed, and the file, line and column of
+the panic. A panic's message is included only when the source wrote it as a fixed string, because a
+message built at run time may have been built from your prompt, a path or a key. Paths are cut so that
+a directory named for the account that built the binary is not in one. There is no call stack,
+environment, working directory, host name or account name, and no identifier that is the same in two
+reports.
+
+It leaves through the same single call as every other request. The destination is the one address the
+build was given, which an environment variable or a settings file cannot change, and a redirect from it
+is not followed. The body of the reply is never read: its status says only whether the file is
+deleted. The service sees the network address a request came from, as any server does.
+
+Reports are on in a released build and off in a build from source that was not given an address.
+`BRAVEBOT_CRASH_REPORTS=0` or `"crashReports": false` in your own `~/.bravebot/settings.json` turns
+them off, a checkout's settings file is not consulted, and an incognito session leaves and sends none.
+See [`crashReports`](../customize/configuration.md#crashreports).
+
+Only a panic is reported. A process that dies without one leaves nothing, and a minidump to cover that
+case would hold the memory of a process that holds credentials.
 
 ## Reporting a problem
 

@@ -221,11 +221,14 @@ fn bridge_ordinary_endings_keep_decisions_live_and_resumed() {
                 );
                 assert_eq!(record.trusted_programs(workspace.root()).len(), 1);
                 if resumed {
+                    // The session that wrote the record ends before the record is resumed.
+                    held.handle = None;
                     *held = State::resumed(
                         workspace.root(),
                         &record,
                         record.trust_map(workspace.root()).unwrap(),
-                    );
+                    )
+                    .expect("the record is free");
                     assert_eq!(held.answers.asked_about, AskedAbout::new());
                 }
             }

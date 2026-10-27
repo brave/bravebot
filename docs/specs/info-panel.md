@@ -99,6 +99,7 @@ is back on its default until the file moves the panel too.
 `verified-by: bravebot_session::store::only_the_two_panel_words_are_a_choice`
 `verified-by: bravebot_session::store::only_a_positive_whole_number_is_a_panel_width`
 `verified-by: bravebot_tui::persist::the_dragged_width_is_read_back_next_session_and_a_corrupt_one_leaves_36`
+`verified-by: bravebot_tui::persist::a_press_that_closes_the_panel_is_read_back_next_session`
 
 <a id="PANEL-6"></a>
 ### PANEL-6: the panel takes its columns from the transcript, and only where the rest still fits
@@ -119,16 +120,19 @@ the panel to the columns right of the pointer, and the release ends it and keeps
 the 100-column threshold holds at the default width. A terminal resized while the panel is open
 draws it at the stored width clamped to the new size, and the stored width is left as it was. A
 press on the border starts no selection in either pane ([MOUSE-2](mouse.md#MOUSE-2)), and the
-release of a drag that began there copies nothing.
+release of a drag that began there copies nothing. A drag that the button does not end, because the
+window lost focus, the terminal was resized or another press landed, ends as the release ends it,
+and keeps the width ([MOUSE-49](mouse.md#MOUSE-49)). The drag has no key: the width is a choice about
+where the room goes and nothing else changes with it, and a person for whom the panel does not fit
+hides it with the chord ([PANEL-5](#PANEL-5)).
 
 In a terminal that draws a pointer shape on request, the pointer is the resize one while it is over
 the border column, from the panel's first row to its last, and while a drag of the border is held.
 It is asked for with OSC 22 when the shape changes and not for each report of the pointer, and it is
 given back when the pointer leaves the border, when the panel closes, and before the terminal is
 handed back. Kitty, Ghostty and foot are asked, with the name `ew-resize`. Any other terminal is
-written nothing and keeps its own pointer. The terminals asked are also told of motion with no
-button held ([INPUT-33](terminal-input.md#INPUT-33)), which is how the pointer is found over the
-border.
+written nothing and keeps its own pointer. Every terminal is told of motion with no button held
+([INPUT-33](terminal-input.md#INPUT-33)), which is how the pointer is found over the border.
 
 `verified-by: bravebot_tui::panel::the_panel_is_drawn_from_a_hundred_columns_and_not_below`
 `verified-by: bravebot_tui::panel::a_press_on_a_narrow_terminal_does_not_open_the_panel_and_does_close_it`
@@ -137,6 +141,7 @@ border.
 `verified-by: bravebot_tui::panel::the_width_is_clamped_at_both_ends`
 `verified-by: bravebot_tui::panel::a_narrowed_terminal_reclamps_without_forgetting_the_choice`
 `verified-by: bravebot_tui::panel::a_drag_from_the_border_never_selects_or_copies`
+`verified-by: bravebot_tui::app::tests::scrollbar::a_drag_of_the_panels_border_ends_when_focus_is_lost_the_terminal_resizes_or_another_press_lands`
 `verified-by: bravebot_tui::panel::the_hint_line_runs_under_the_panel_to_the_right_edge`
 `verified-by: bravebot_tui::panel::the_resize_pointer_is_over_the_border_column_and_nowhere_else`
 `verified-by: bravebot_tui::panel::a_drag_holds_the_resize_pointer_and_its_end_follows_the_border`
@@ -148,12 +153,14 @@ border.
 <a id="PANEL-7"></a>
 ### PANEL-7: the panel ends with the key that hides it
 
-The panel's last row is `{chord} hide panel`, naming the chord in force. While the panel is closed
+The panel's last row is `{chord} hide panel`, naming the chord in force, and in the files state the
+keys of that state instead ([FILES-4](files-mode.md#FILES-4)). While the panel is closed
 on a terminal wide enough for it, the hint line has a `{chord} info` part, and that part is the
 first the line drops when the row is short ([INPUT-13](terminal-input.md#INPUT-13)). With the panel
 open, or on a terminal too narrow for it, the line has no such part.
 
 `verified-by: bravebot_tui::panel::the_last_row_names_the_chord_in_force`
+`verified-by: bravebot_tui::files_mode::the_last_row_of_the_panel_names_the_keys_of_the_state`
 `verified-by: bravebot_tui::panel::the_hint_line_offers_the_panel_only_while_it_is_closed_and_would_fit`
 `verified-by: bravebot_tui::panel::the_info_part_is_the_first_the_hint_line_gives_up`
 
@@ -199,7 +206,8 @@ narrow for it.
    nothing. It is there once the session has a record on disk, as the line printed when the
    session ends is ([SESSION-8](sessions.md#SESSION-8)), and follows a resume, `/branch` and
    `/clear`. A new
-   name reaches an open panel on the next frame, not at the next key.
+   name reaches an open panel on the next frame, not at the next key. A click on a row of the name
+   puts `/rename` and the name in the box ([MOUSE-30](mouse.md#MOUSE-30)).
 2. **Model.** The model the person chose, one row cut from the left with an ellipsis where it is
    longer, and the effort level in force below it, as `effort high`. A model the configuration
    names is drawn by the name the `/model` picker gives its row, with the service after a tier's
@@ -219,10 +227,10 @@ narrow for it.
    they complete, and left out until a token has been spent.
 6. **Language servers.** PANEL-13.
 7. **MCP servers.** PANEL-14.
-8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote,
-   and a row naming `/files`, the command that opens the files state ([FILES-3](files-mode.md#FILES-3)).
-   It is left out until a file has been written. The Plan takes the rows it leaves, as PANEL-13
-   says of the server sections.
+8. **Files.** A `{n} files` row with the lines added and removed over every file the session wrote.
+   A click on that row opens the files state ([MOUSE-20](mouse.md#MOUSE-20)), as `/diff` does
+   ([FILES-3](files-mode.md#FILES-3)). It is left out until a file has been written. The Plan takes
+   the rows it leaves, as PANEL-13 says of the server sections.
 9. **Plan.** PANEL-10.
 
 A section with nothing to show has no heading. Control characters in any row are drawn as visible
@@ -248,20 +256,57 @@ whatever whoever made it chose.
 `verified-by: bravebot_tui::panel::the_token_total_is_a_context_row_that_sums_the_session`
 `verified-by: bravebot_agent::turn::the_token_total_moves_while_a_delegate_works_and_counts_it_once`
 `verified-by: bravebot_tui::panel::a_new_name_redraws_an_open_panel_and_nothing_else_does`
-`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_the_command_and_leaves_the_plan_its_rows`
+`verified-by: bravebot_tui::panel::the_files_section_has_the_totals_and_leaves_the_plan_its_rows`
 
 <a id="PANEL-10"></a>
 ### PANEL-10: the plan stays after the turn that wrote it
 
 The plan is the session's last `todo_write` list ([TODO-1](tools/todo-write.md#TODO-1)), each row
-with the mark [TODO-2](tools/todo-write.md#TODO-2) gives it, and a finished row struck through. It
+with a mark for its status, and a finished row struck through. It
 stays after the turn that wrote it ends, is replaced by the next report that has rows, and is
 emptied by `/clear`. A report with no rows leaves it as it was, since the session record does not
 tell a turn that emptied its list from one that kept none. It is the last section and has the rows
-the others leave, the language servers and MCP servers included. A plan longer than that shows the rows that fit less one. Where the task in
-progress would fall below the cut, the rows shown move down the list until it is among them. The
-last row counts the rows left out above the ones shown apart from those below them (`+12 earlier`,
-`+15 earlier, +7 more`, `+3 more`).
+the others leave, the language servers and MCP servers included.
+
+A plan longer than that shows the rows that fit less the row after them that says what was left out,
+and less the key row where that is drawn. The rows shown are chosen from each row's status and from
+nothing else, and a status that is not recognised reads as outstanding
+([TODO-2](tools/todo-write.md#TODO-2)). The task in progress comes first, then the pending rows,
+each in the plan's order, and then, where room is left, the finished rows (completed or cancelled)
+nearest the first row still outstanding, or nearest the end of a plan with none. The rows shown are
+drawn in the plan's order. The row after them counts each kind of row left out in words of its own,
+the rows still to do first and a kind with none left out not named (`+6 done`,
+`+3 to do, +40 done, +2 cancelled`), so a count of finished work is not read as work still to come
+and a cancelled row is not counted as done. Where the panel is too narrow for every count the row
+is cut with an ellipsis, and the count of the rows still to do is the last to be cut.
+
+A finished row whose words a click opened ([MOUSE-32](mouse.md#MOUSE-32)) takes the rows its words
+take, and counts as that many rows of the room. It is chosen after the rows still to do and before
+the other finished rows, so what a person asked to read stays drawn, and where the room is less than
+its rows it is given what is left. The model writes a plan of any length, so the work of laying the
+rows out grows with the number of tasks and not with its square, with every task open or not.
+
+The row that counts keeps its place however little room there is, and a row still to do gives up
+its place to it. A plan of ten rows with two still to do, in a section of two rows, draws the first
+of the two and counts the other (`+1 to do, +8 done`), and in a section of one row draws the count
+alone (`+2 to do, +8 done`). Drawing both of the two and counting the eight finished rows takes
+three rows.
+
+**Why.** What somebody glancing at the panel looks for is what is still to do. A window that starts
+at the top of a long plan fills with finished rows and leaves the unfinished ones behind a count
+that does not say they are there. Dropping the count to draw one more row still to do would leave
+the finished rows out without saying so, and the count is the one row that says rows still to do
+are not drawn.
+
+The section's last row names the key that prints the whole plan, the chord in force
+([INPUT-32](terminal-input.md#INPUT-32)), as the panel's last row names the key that hides it. It
+reads `alt-a whole plan` by default and is cut with an ellipsis to the width of the panel, so a plan
+the panel cannot draw whole, or draws with its text cut, can be read in full. The row is drawn where
+the section has three rows of room or more, the plan does not fill them exactly, and every row still
+to do is drawn beside it: the plan is shorter than the room, or the room less the key row and the
+row that counts what was left out holds every row still to do. So the row takes the place of no row
+still to do and of no task of a plan that fits the room, and only of finished rows in a plan too
+long for it. The `?` list names the key whatever the plan holds.
 
 A row that is neither completed nor cancelled is drawn as work being done only while a turn is
 running. While none is, as after the turn that wrote the list has ended and in a resumed session,
@@ -270,6 +315,11 @@ two differ under `NO_COLOR`, and its text is dim. A compaction or another workin
 not a turn leaves it open too. Rows that are completed or cancelled are drawn as they are in any
 other plan.
 
+A click on a task moves the view to the turn that wrote it, as the keys that move the view to a
+prompt do ([MOUSE-31](mouse.md#MOUSE-31), [SCROLL-3](scroller.md#SCROLL-3)), and one on the mark of a
+finished task opens the whole of its words, which the transcript holds whole
+([MOUSE-32](mouse.md#MOUSE-32)).
+
 **Why.** Nothing is working on a row once the turn has ended. A filled mark beside an answer that
 says the work is finished reads as work still going.
 
@@ -277,7 +327,19 @@ says the work is finished reads as work still going.
 `verified-by: bravebot_tui::panel::an_empty_report_after_one_with_rows_keeps_that_plan`
 `verified-by: bravebot_tui::state::a_failed_or_stopped_turn_after_an_empty_report_keeps_its_plan`
 `verified-by: bravebot_tui::state::a_rewind_or_an_unsent_prompt_leaves_no_plan_after_an_empty_report`
-`verified-by: bravebot_tui::panel::a_plan_longer_than_the_room_keeps_the_task_in_progress_and_counts_each_side_of_it`
+`verified-by: bravebot_tui::panel::a_long_plan_shows_the_rows_still_to_do_before_the_finished_ones`
+`verified-by: bravebot_tui::panel::the_rows_shown_keep_the_order_of_the_plan`
+`verified-by: bravebot_tui::panel::the_task_in_progress_is_kept_when_there_are_more_rows_still_to_do_than_room`
+`verified-by: bravebot_tui::panel::room_left_over_goes_to_the_finished_rows_nearest_the_first_one_still_to_do`
+`verified-by: bravebot_tui::panel::the_row_that_counts_what_was_left_out_names_each_kind_in_words_of_its_own`
+`verified-by: bravebot_tui::panel::the_panel_draws_a_plan_of_none_one_twelve_and_fifty_rows_and_at_the_least_height`
+`verified-by: bravebot_tui::panel::the_rows_drawn_and_counted_follow_the_status_and_never_the_text`
+`verified-by: bravebot_tui::panel::the_last_row_of_the_plan_names_the_key_that_prints_it_whole`
+`verified-by: bravebot_tui::panel::the_key_row_never_takes_the_place_of_a_row_still_to_do`
+`verified-by: bravebot_tui::panel::the_row_naming_the_key_is_cut_to_the_width_of_a_narrow_panel`
+`verified-by: bravebot_tui::panel::the_whole_plan_is_printed_with_every_task_its_status_and_none_of_its_text_cut`
+`verified-by: bravebot_tui::panel::the_key_and_the_command_print_the_same_whole_plan_and_cut_none_of_it`
+`verified-by: bravebot_tui::panel::the_work_of_laying_out_a_long_plan_grows_with_its_length`
 `verified-by: bravebot_tui::panel::a_row_a_turn_left_open_is_drawn_apart_from_work_being_done`
 `verified-by: bravebot_tui::panel::a_working_session_that_is_not_in_a_turn_draws_open_rows_as_left_open`
 `verified-by: bravebot_tui::sessions::a_resumed_session_draws_the_plan_it_was_left_with_as_left_open`
@@ -305,7 +367,10 @@ sections are not drawn beside them, so the reason for the rule still holds.
 ([SCROLL-5](scroller.md#SCROLL-5)). Text from any of those drawn in it would read as the interface's
 own sentence, and it would be in front of the person on every frame.
 
+No click on the panel changes this ([MOUSE-33](mouse.md#MOUSE-33)).
+
 `verified-by: bravebot_tui::panel::nothing_a_turn_returned_reaches_the_panel`
+`verified-by: bravebot_tui::app::a_click_on_any_target_of_the_panel_never_draws_what_a_tool_returned`
 
 <a id="PANEL-12"></a>
 ### PANEL-12: the person says which issue and pull request the session is for
@@ -333,7 +398,9 @@ since the number at its end is what tells two apart. A link that is a GitHub pul
 address of the shape [PANEL-9](#PANEL-9) gives is drawn as `{owner}/{repo}#{n}` instead, cut from
 the left in the same way. The cells drawn are a terminal link (OSC 8) to the address, and a
 selection over them copies the shorthand. An address of any other shape is drawn as written and is
-not a link. A new link reaches an open panel on the next frame.
+not a link. A new link reaches an open panel on the next frame. A click on either row opens the
+address that was set in the person's browser, as `/open` followed by that address does
+([MOUSE-41](mouse.md#MOUSE-41), [CMD-30](commands.md#CMD-30)).
 
 `verified-by: bravebot_tui::app::the_issue_and_pr_commands_show_set_and_clear_their_own_link`
 `verified-by: bravebot_tui::app::a_link_with_a_newline_an_escape_or_another_scheme_sets_nothing`
@@ -362,6 +429,9 @@ the server's own reply, so a server cannot put its own words into the interface.
 while a question waits on an approval or a server's answer, since the panel reads a list kept
 beside the set rather than the set, and the section empties when the set is dropped, as `/cd` and
 `/clear` drop it.
+
+A click on a row says which language servers the session has started, as `/lsp` does
+([MOUSE-22](mouse.md#MOUSE-22), [CMD-29](commands.md#CMD-29)).
 
 `verified-by: bravebot_tui::panel::each_started_language_server_has_a_row_and_none_leaves_no_heading`
 `verified-by: bravebot_tui::panel::the_plan_gets_the_rows_the_server_sections_leave`
@@ -407,8 +477,9 @@ produced ([PANEL-11](#PANEL-11)). [PANEL-4](#PANEL-4) holds: no marker is writte
   ([PANEL-6](#PANEL-6)) but take other names for the shape, a subset of X11's that iTerm2 does not
   list and X11's own for xterm, and each is asked once the name it takes for this shape is confirmed
   in that terminal. VTE-based terminals and Alacritty do not read the sequence. A terminal not asked
-  is also not told of motion with no button held ([INPUT-33](terminal-input.md#INPUT-33)), so it
-  pays nothing for a pointer shape it cannot draw.
+  still sends the position of the pointer with no button held ([INPUT-33](terminal-input.md#INPUT-33)),
+  which is read as the last of a burst ([INPUT-49](terminal-input.md#INPUT-49)) and draws a frame only
+  when the target under the pointer changes.
 
 - **A prompt or a picker opened under the pointer leaves the resize pointer in place.** The prompts
   and pickers read their own events and none of them reads the pointer, so a pointer on the border

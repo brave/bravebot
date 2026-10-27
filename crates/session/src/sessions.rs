@@ -6,12 +6,16 @@
 //! segment, and the real path is written inside the record as well, since the mangling is not
 //! reversible.
 //!
-//! Two files per session. The **record** holds what the picker shows and what a resume needs:
+//! Two files per session, and a third that holds no data. The **record** holds what the picker shows and what a resume needs:
 //! the conversation, and what the transcript showed beside it, which is the plan each turn worked
 //! to and what the whole session has spent. The **audit** holds every gate decision the session
 //! made, one JSON object per line, which is the file to read when the question is what the agent
 //! was allowed to do and why. It is also read back on a resume, since a trail under the turns
 //! from this process and nothing under the earlier ones is a worse account than either.
+//!
+//! A third file, the **lock**, is empty. The process that writes a record holds a lock on it for as
+//! long as the session lives, so a second process cannot resume a record the first is writing
+//! ([SESSION-38](../../../docs/specs/sessions.md)).
 //!
 //! The trust map is in the record too, and belongs there rather than to the directory: a map kept
 //! per directory would answer the startup question for a user who was never asked. A fresh session
@@ -224,6 +228,10 @@ pub struct RewindPoint {
 /// Where sessions live inside the state directory.
 const SESSIONS: &str = "sessions";
 
+/// The extension of the file beside a record whose lock says a process is writing the record
+/// ([SESSION-38](sessions.md#SESSION-38)).
+pub(crate) const LOCK_EXTENSION: &str = "lock";
+
 /// Where this process keeps session records instead of inside the state directory, if it was told.
 static CHOSEN_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
@@ -326,6 +334,13 @@ pub struct Record {
     /// When it began and when it was last written, in seconds since the epoch.
     pub started: u64,
     pub updated: u64,
+    /// How many times the record has been written, so that a writer can tell the file it is about
+    /// to replace from the one it read ([SESSION-38](sessions.md#SESSION-38)).
+    ///
+    /// Zero for a record written before this was kept, which any writer may replace: nothing says
+    /// whose copy it is.
+    #[serde(default)]
+    pub revision: u64,
     /// How many turns it has had, for a reader of the file.
     #[serde(default)]
     pub turns: usize,
@@ -680,6 +695,16 @@ pub fn failure_reason(
 ) -> String {
     use bravebot_agent::Category;
     use bravebot_aichat::OpenCall;
+    // A failure of a ChatGPT account is said in the sentence of its own step (CHATGPT-8), with the
+    // status of a refusal that came with one after it, as the one-shot run says it: from the one
+    // function both call. No count of tries follows, since the sentence says what to do and the
+    // category beside it says only what class the failure was.
+    if let Some(account) = diagnosis.account {
+        return t!(
+            session_error,
+            problem = bravebot_agent::chatgpt::told_of_failure(account)
+        );
+    }
     let what: std::borrow::Cow<'_, str> = match diagnosis.category {
         Category::Unauthorized => t!(failure_unauthorized).into(),
         // The wait is a bounded number the network layer parsed, said in minutes rounded up so a
@@ -687,7 +712,7 @@ pub fn failure_reason(
         Category::RateLimited => match diagnosis.retry_after {
             Some(wait) => t!(
                 failure_rate_limited_for,
-                minutes = wait.as_secs().div_ceil(60).max(1)
+                minutes = bravebot_agent::outcome::minutes_to_wait(wait)
             )
             .into(),
             None => t!(failure_rate_limited).into(),
@@ -1858,6 +1883,116 @@ pub struct Handle {
     /// save so a state directory that is out of reach for one session does not erase them for the
     /// next (CHECKOUT-16).
     unplaced: Vec<StoredCheckout>,
+    /// The lock on the record, held for as long as this session writes it ([SESSION-38]).
+    ///
+    /// Taken when a record is resumed and at the first write of a session that began here. `None`
+    /// before that, and where the filesystem keeps no lock, in which case `revision` is what stops
+    /// this session replacing a record somebody else wrote.
+    ///
+    /// [SESSION-38]: ../../../docs/specs/sessions.md
+    claim: Option<Claim>,
+    /// The revision of the record this session last read or wrote ([`Record::revision`]).
+    revision: u64,
+}
+
+/// Why a record cannot be resumed here ([SESSION-38]).
+///
+/// [SESSION-38]: ../../../docs/specs/sessions.md
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// Another process holds the record, so this one must not write it as well.
+    Open {
+        /// What `--fork` is given to copy the session instead.
+        id: String,
+    },
+    /// Another process wrote the record after this one read it, so what this one read is out of
+    /// date. The process that wrote it has ended, since the lock was free.
+    Changed { id: String },
+}
+
+impl Held {
+    /// The id of the session that was refused.
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Open { id } | Self::Changed { id } => id,
+        }
+    }
+
+    /// What to say to the person who tried to resume the record: why it was not, and what to do.
+    pub fn refusal(&self) -> String {
+        match self {
+            Self::Open { id } => t!(resume_held_by_another_process, id = id.as_str()),
+            Self::Changed { id } => t!(resume_changed_while_opening, id = id.as_str()),
+        }
+    }
+}
+
+/// The lock a process holds on a record for as long as it writes it.
+///
+/// Held on the file `<id>.lock` beside the record, because the record is replaced by a rename and
+/// a lock on it would stay with the file that was replaced. Shared by the clones of a handle, so it
+/// ends with the last of them. The kernel drops it when the process ends however it ends, so a
+/// session that was killed holds nothing.
+#[derive(Debug, Clone)]
+struct Claim {
+    _file: std::sync::Arc<std::fs::File>,
+}
+
+/// The file beside a record whose lock says that a process is writing it.
+fn lock_path(directory: &Path, id: &str) -> PathBuf {
+    directory.join(format!("{id}.{LOCK_EXTENSION}"))
+}
+
+/// Take the lock on the record `id` in `directory`.
+///
+/// `Err` where another process holds it. `Ok(None)` where no lock can be had, because the file
+/// cannot be made or the filesystem keeps none: the record is then guarded only by its revision.
+fn claim(directory: &Path, id: &str) -> Result<Option<Claim>, Held> {
+    let Ok(file) = bravebot_agent::home::append_to_file(&lock_path(directory, id)) else {
+        return Ok(None);
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(Claim {
+            _file: std::sync::Arc::new(file),
+        })),
+        Err(std::fs::TryLockError::WouldBlock) => Err(Held::Open { id: id.to_string() }),
+        Err(std::fs::TryLockError::Error(_)) => Ok(None),
+    }
+}
+
+/// Whether a process holds the record `id` of `project`, this one included.
+///
+/// Asked before a record is picked up so that a refusal can be said where the person chose it. The
+/// answer can be out of date by the time the record is resumed, so the resume asks again.
+pub fn is_open_elsewhere(project: &Path, id: &str) -> bool {
+    let Some(directory) = project_directory(project) else {
+        return false;
+    };
+    let Ok(file) = std::fs::File::open(lock_path(&directory, id)) else {
+        return false;
+    };
+    // A lock this takes is dropped with `file`, when the function returns.
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
+}
+
+/// Whether the record at `path` was written by a writer that is not the one that last wrote
+/// revision `mine`.
+///
+/// A file that is not there, cannot be read or says no revision is replaceable: nothing says whose
+/// copy it is, which is also what a record from before revisions was written as.
+fn superseded(path: &Path, mine: u64) -> bool {
+    #[derive(Deserialize)]
+    struct Stamp {
+        #[serde(default)]
+        revision: u64,
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(stamp) = serde_json::from_slice::<Stamp>(&bytes) else {
+        return false;
+    };
+    stamp.revision != 0 && stamp.revision != mine
 }
 
 impl Handle {
@@ -1898,6 +2033,8 @@ impl Handle {
             build: build.to_string(),
             front,
             unplaced: Vec::new(),
+            claim: None,
+            revision: 0,
         }
     }
 
@@ -1906,7 +2043,50 @@ impl Handle {
     /// Stamped with the build and the front end now running rather than the ones in the record:
     /// what the rest of this session writes is written by this program, and what wrote the turns
     /// before it is the caveat the record it came from already carries.
-    pub fn resuming(project: &Path, record: &Record, front: Front, build: &str) -> Self {
+    ///
+    /// Takes the lock on the record and keeps it for as long as the handle lives, so that one
+    /// process writes a record at a time ([SESSION-38](sessions.md#SESSION-38)). `Err` names the
+    /// session where another process holds it, and nothing has been read or written.
+    ///
+    /// A record that is not on disk has nothing to hold yet, so its lock is taken with its first
+    /// write. Nor is anything taken in a session that writes no records, which an incognito one
+    /// does not.
+    pub fn resuming(
+        project: &Path,
+        record: &Record,
+        front: Front,
+        build: &str,
+    ) -> Result<Self, Held> {
+        let on_disk = project_directory(project)
+            .is_some_and(|directory| directory.join(format!("{}.json", record.id)).is_file());
+        let directory = on_disk
+            .then(|| writable_project_directory(project))
+            .flatten();
+        let claim = match &directory {
+            Some(directory) => claim(directory, &record.id)?,
+            None => None,
+        };
+        // Held now, so nothing writes the record from here. One written since it was read, by a
+        // process that ended before the lock was free, is not the record this session is made from.
+        if let Some(directory) = &directory
+            && superseded(
+                &directory.join(format!("{}.json", record.id)),
+                record.revision,
+            )
+        {
+            return Err(Held::Changed {
+                id: record.id.clone(),
+            });
+        }
+        Ok(Self {
+            claim,
+            revision: record.revision,
+            ..Self::resumed_unlocked(project, record, front, build)
+        })
+    }
+
+    /// The handle [`Handle::resuming`] makes, before it holds the record.
+    fn resumed_unlocked(project: &Path, record: &Record, front: Front, build: &str) -> Self {
         Self {
             id: record.id.clone(),
             project: project.to_path_buf(),
@@ -1928,6 +2108,8 @@ impl Handle {
             // restores them says which it took back, so one that restores none does not write
             // them away (CHECKOUT-16).
             unplaced: record.checkouts.clone(),
+            claim: None,
+            revision: record.revision,
         }
     }
 
@@ -1955,6 +2137,9 @@ impl Handle {
         self.project = project.to_path_buf();
         self.branch = branch_of(project);
         self.wrote = false;
+        // The record is written under the new directory, where the lock is taken with the write.
+        // What was written under the old one is left there and is not held.
+        self.claim = None;
 
         if !written && standing.turns == 0 {
             return;
@@ -1986,7 +2171,12 @@ impl Handle {
         if !directory.join(format!("{}.json", record.id)).is_file() {
             return Err(Unbranched::Unwritable);
         }
-        *self = Self::resuming(&self.project, &record, self.front, &self.build);
+        // The copy has an id nobody else has, so the lock is there to be had. The original's is
+        // released when `self` is replaced.
+        let Ok(copy) = Self::resuming(&self.project, &record, self.front, &self.build) else {
+            return Err(Unbranched::Unwritable);
+        };
+        *self = copy;
         self.rename(name);
         Ok(original)
     }
@@ -2148,7 +2338,7 @@ impl Handle {
     ///
     /// Read, amended and written rather than rebuilt, because everything else in the record belongs
     /// to the turns that produced it and this knows none of it.
-    fn rewrite(&self, amend: impl FnOnce(&mut Record)) {
+    fn rewrite(&mut self, amend: impl FnOnce(&mut Record)) {
         let Some(directory) = self.directory() else {
             return;
         };
@@ -2156,8 +2346,14 @@ impl Handle {
         let Some(mut record) = read(&path) else {
             return;
         };
+        // A record another writer has replaced is not this session's to amend: what it holds is
+        // that writer's, and writing it back under this session's revision would claim it.
+        if record.revision != 0 && record.revision != self.revision {
+            return;
+        }
         amend(&mut record);
         record.updated = now();
+        record.revision = self.revision + 1;
         record.server_children_may_run = record.server_children_may_run();
 
         let Ok(body) = serde_json::to_vec_pretty(&record) else {
@@ -2165,8 +2361,10 @@ impl Handle {
         };
         // Beside and renamed, as `save` does, so an interrupted rename leaves the record it had.
         let temporary = directory.join(format!("{}.tmp", self.id));
-        if bravebot_agent::home::write_file(&temporary, &body).is_ok() {
-            let _ = std::fs::rename(&temporary, path);
+        if bravebot_agent::home::write_file(&temporary, &body).is_ok()
+            && std::fs::rename(&temporary, path).is_ok()
+        {
+            self.revision = record.revision;
         }
     }
 
@@ -2210,7 +2408,7 @@ impl Handle {
             false => self.title.clone(),
         };
 
-        let record = Record {
+        let mut record = Record {
             server_children_may_run: self.server_children_may_run,
             id: self.id.clone(),
             directory: self.project.display().to_string(),
@@ -2222,6 +2420,8 @@ impl Handle {
             title,
             started: self.started,
             updated: now(),
+            // Counted by `write`, which knows the revision this session last wrote.
+            revision: 0,
             turns: standing.turns,
             tokens: standing.tokens,
             split: standing.split,
@@ -2267,11 +2467,28 @@ impl Handle {
             skill_mode: self.skill_mode.clone(),
         };
 
-        self.write(&directory, &record);
+        self.write(&directory, &mut record);
     }
 
     /// Write `record` under `directory`, and remember that this session now has one on disk.
-    fn write(&mut self, directory: &Path, record: &Record) -> bool {
+    ///
+    /// Written only by the process that holds the record ([SESSION-38](sessions.md#SESSION-38)): a
+    /// session that began here takes the lock with its first write, and a write is refused where
+    /// another process holds the record or has written it since this session last did. Refused is
+    /// `false`, which a save treats as it treats a record it cannot write, and the record on disk
+    /// is left as it is.
+    fn write(&mut self, directory: &Path, record: &mut Record) -> bool {
+        if self.claim.is_none() {
+            match claim(directory, &self.id) {
+                Ok(claim) => self.claim = claim,
+                Err(_) => return false,
+            }
+        }
+        let path = directory.join(format!("{}.json", self.id));
+        if superseded(&path, self.revision) {
+            return false;
+        }
+        record.revision = self.revision + 1;
         let Ok(body) = serde_json::to_vec_pretty(record) else {
             return false;
         };
@@ -2280,9 +2497,10 @@ impl Handle {
         // rather than half of a new one.
         let temporary = directory.join(format!("{}.tmp", self.id));
         let written = bravebot_agent::home::write_file(&temporary, &body).is_ok()
-            && std::fs::rename(&temporary, directory.join(format!("{}.json", self.id))).is_ok();
+            && std::fs::rename(&temporary, path).is_ok();
         if written {
             self.wrote = true;
+            self.revision = record.revision;
         }
         written
     }
@@ -2344,7 +2562,7 @@ impl Handle {
         // The handle holds every note typed on this session, including ones added after the record
         // this continuation was read from.
         record.notes = self.notes.clone();
-        self.write(&directory, &record)
+        self.write(&directory, &mut record)
     }
 
     /// Append what one turn's gates decided.
@@ -2587,8 +2805,8 @@ pub fn is_a_session_name(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Remove one session from disk: its record, the trail beside it and the index of what it said
-/// (SESSION-30).
+/// Remove one session from disk: its record, the trail beside it, the index of what it said and the
+/// lock beside it where no process holds it (SESSION-30).
 ///
 /// Keyed on the directory and the id alone. The trail goes first, so a failure part way leaves a
 /// record that still opens rather than a trail with nothing to belong to. A link standing where one
@@ -2620,11 +2838,26 @@ pub(crate) fn delete_in(directory: &Path, id: &str) -> Result<(), Deletion> {
             Err(error) => return Err(Deletion::Failed(error)),
         }
     }
+    remove_lock(directory, id);
     std::fs::remove_file(&record).map_err(Deletion::Failed)
 }
 
-/// Remove the records under `root` that have not been written since `cutoff`, with the trail and the
-/// search index beside each, returning how many records went (STATE-4).
+/// Remove the lock beside the record `id` of `directory`, unless a process holds it.
+///
+/// Taken before it is removed, because a lock that is unlinked while a process holds it stays with
+/// that process and leaves the next one to lock a new file at the same name, so two processes would
+/// hold one record. A lock that is held stays until its process ends.
+fn remove_lock(directory: &Path, id: &str) -> bool {
+    let path = lock_path(directory, id);
+    let Ok(file) = std::fs::File::open(&path) else {
+        return false;
+    };
+    file.try_lock().is_ok() && std::fs::remove_file(&path).is_ok()
+}
+
+/// Remove the records under `root` that have not been written since `cutoff`, with the trail, the
+/// search index and the lock beside each, returning how many records went (STATE-4). A lock a process
+/// holds stays, and a lock with no record goes by its own age.
 ///
 /// `root` is the directory holding one directory per project. A record's age is the modification
 /// time of its file and nothing it says, so no byte of a conversation decides whether it is kept,
@@ -2683,6 +2916,14 @@ fn remove_project_records_unwritten_since(
             if is_a_session_name(id) && !kept(id) && delete_in(directory, id).is_ok() {
                 removed += 1;
                 removed_any = true;
+            }
+        } else if let Some(id) = name.strip_suffix(&format!(".{LOCK_EXTENSION}")) {
+            // What a record leaves behind when it is removed while its process held it, or a
+            // process that was killed left. Held, it stays.
+            let no_record = std::fs::symlink_metadata(directory.join(format!("{id}.json")))
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if is_a_session_name(id) && !kept(id) && no_record {
+                removed_any |= remove_lock(directory, id);
             }
         } else if let Some(id) = name
             .strip_suffix(".audit.jsonl")
@@ -3406,6 +3647,269 @@ mod tests {
         assert!(said(Some(Duration::from_secs(121))).contains("about 3 minutes"));
         assert!(said(Some(Duration::from_secs(5))).contains("about 1 minute"));
         assert!(said(Some(Duration::from_secs(5))).contains("(HTTP 429)"));
+    }
+
+    /// A refusal that names the account, with neither a status nor a wait.
+    fn refused(
+        refusal: bravebot_aichat::responses::protocol::Refusal,
+    ) -> bravebot_aichat::AccountFailure {
+        bravebot_aichat::AccountFailure::Named {
+            refusal,
+            status: None,
+            retry_after: None,
+        }
+    }
+
+    /// CHATGPT-8: a failure of a ChatGPT account is said in the sentence of its own step, the one a
+    /// one-shot run reports for it, and in no sentence of another. Each of the twelve is a line of
+    /// its own, whatever category it belongs to, and none is given the status or the count of tries
+    /// that end a line for any other failure.
+    ///
+    /// The faults this rejects: the line of the category, which says a usage limit, a sign-in that
+    /// has ended and a request the service rejected in the same words, and a count of tries tacked
+    /// on after a remedy.
+    #[test]
+    fn a_failure_of_the_account_is_said_in_the_sentence_of_its_own_step() {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure, XaiFailure};
+
+        let sentences = [
+            (
+                AccountFailure::Xai(XaiFailure::NotSignedIn),
+                "not signed in to xAI. Run `bravebot auth login xai` to sign in",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Ended),
+                "the xAI sign-in has ended. Run `bravebot auth login xai` to sign in again",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Rejected),
+                "xAI refused the xAI sign-in's access token, and a new one as well. Run `bravebot auth login xai` to sign in again",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::NotPermitted),
+                "xAI refused the request for this account, and signing in again will not change that. Check the plan at xAI, or choose another model",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Unusable),
+                "the stored xAI sign-in could not be read. Run `bravebot auth status xai` to see why",
+            ),
+            (
+                AccountFailure::Xai(XaiFailure::Renewal(RenewalFailure::RateLimited)),
+                "the xAI sign-in could not be renewed: xAI is limiting requests; try again later",
+            ),
+            (
+                AccountFailure::NotSignedIn,
+                "not signed in to a ChatGPT account. Run `bravebot auth login chatgpt` to sign in",
+            ),
+            (
+                AccountFailure::Ended,
+                "the ChatGPT sign-in has ended. Run `bravebot auth login chatgpt` to sign in again",
+            ),
+            (
+                AccountFailure::Refused,
+                "OpenAI refused the ChatGPT sign-in's access token. Run `bravebot auth login chatgpt` to sign in again",
+            ),
+            (
+                AccountFailure::Unusable,
+                "the stored ChatGPT sign-in could not be read. Run `bravebot auth status chatgpt` to see why",
+            ),
+            (
+                refused(Refusal::UsageLimit),
+                "OpenAI says this ChatGPT account has reached its usage limit",
+            ),
+            (
+                refused(Refusal::NotPermitted),
+                "OpenAI does not allow this ChatGPT account to be used this way",
+            ),
+            (
+                AccountFailure::ModelNotOffered,
+                "OpenAI does not offer that model to this ChatGPT account. Choose another model",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Refused),
+                "the ChatGPT sign-in could not be renewed: the request was refused",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::RateLimited),
+                "the ChatGPT sign-in could not be renewed: the request was rate-limited",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Unavailable),
+                "the ChatGPT sign-in could not be renewed: the request was met with an unavailable service",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Incomplete),
+                "the ChatGPT sign-in could not be renewed: the request was answered in a shape that could not be read",
+            ),
+            (
+                AccountFailure::Renewal(RenewalFailure::Transport),
+                "the ChatGPT sign-in could not be renewed: the request was not completed",
+            ),
+        ];
+        let mut said = Vec::new();
+        for (failure, sentence) in sentences {
+            let error = BackendError::from(ChatError::Account(failure));
+            // The line a one-shot run reports is the same sentence, so the two places say one thing.
+            assert_eq!(error.to_string(), sentence, "{failure:?}");
+            let line = failure_reason(error.diagnosis(), None);
+            assert_eq!(line, format!("error: {sentence}"), "{failure:?}");
+            said.push(line);
+
+            // A status or a count a caller put on the diagnosis is not added to it.
+            let counted = Diagnosis::of(Category::Unauthorized)
+                .with_status(401)
+                .after(3)
+                .with_account(failure);
+            assert_eq!(
+                failure_reason(counted, None),
+                format!("error: {sentence}"),
+                "{failure:?} with a status and a count"
+            );
+        }
+        said.sort_unstable();
+        said.dedup();
+        assert_eq!(said.len(), sentences.len(), "two failures share a line");
+    }
+
+    /// CHATGPT-8: a usage limit that arrived as a 429 with a wait says the wait in its sentence, and
+    /// then the status, as any other refusal says its status. No count of tries follows it. The same
+    /// limit reported on a stream came with neither status nor wait and is the sentence alone, and a
+    /// wait that came with another status is carried and not said, since only a 429 asks for one.
+    ///
+    /// The regressions it rejects are a refusal that says only that it was refused, as the category
+    /// line of one that named the account did, a wait said for a refusal that did not ask for one,
+    /// the count of tries tacked on after a remedy, and the order of the parts.
+    #[test]
+    fn a_refusal_that_named_the_account_says_its_wait_and_its_status_and_no_count() {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+        use std::time::Duration;
+
+        let named = |refusal, status, retry_after| AccountFailure::Named {
+            refusal,
+            status,
+            retry_after,
+        };
+        let said = |failure, attempts| {
+            let error = BackendError::Attempted {
+                attempts,
+                usage: None,
+                context_tokens: None,
+                cause: Box::new(BackendError::from(ChatError::Account(failure))),
+            };
+            failure_reason(error.diagnosis(), None)
+        };
+
+        let limit = named(
+            Refusal::UsageLimit,
+            Some(429),
+            Some(Duration::from_secs(601)),
+        );
+        assert_eq!(
+            said(limit, 3),
+            "error: OpenAI says this ChatGPT account has reached its usage limit, and the service \
+             asked for a wait of about 11 minutes (HTTP 429)"
+        );
+        // A few seconds are one minute, in the singular.
+        assert_eq!(
+            said(
+                named(Refusal::UsageLimit, Some(429), Some(Duration::from_secs(5))),
+                1
+            ),
+            "error: OpenAI says this ChatGPT account has reached its usage limit, and the service \
+             asked for a wait of about 1 minute (HTTP 429)"
+        );
+        // The wait is said for either refusal, and only where the refusal came as a 429.
+        assert!(
+            said(
+                named(
+                    Refusal::NotPermitted,
+                    Some(429),
+                    Some(Duration::from_secs(60))
+                ),
+                1
+            )
+            .contains("a wait of about 1 minute (HTTP 429)")
+        );
+        assert_eq!(
+            said(
+                named(
+                    Refusal::NotPermitted,
+                    Some(403),
+                    Some(Duration::from_secs(600))
+                ),
+                1
+            ),
+            "error: OpenAI does not allow this ChatGPT account to be used this way (HTTP 403)"
+        );
+        // Reported on a stream, which was answered 200: neither.
+        assert_eq!(
+            said(named(Refusal::UsageLimit, None, None), 1),
+            "error: OpenAI says this ChatGPT account has reached its usage limit"
+        );
+    }
+
+    /// CHATGPT-8: a refusal that names the account says which of the two it was, the usage limit or
+    /// the account not being usable this way, and neither is the line of the `refused` category,
+    /// which says the service rejected the request. Neither sends the person to sign in again, since
+    /// signing in does not change either.
+    #[test]
+    fn a_refusal_naming_the_account_says_usage_limit_or_not_permitted_and_never_a_rejected_request()
+    {
+        use bravebot_agent::backend::BackendError;
+        use bravebot_agent::{Category, Diagnosis};
+        use bravebot_aichat::ChatError;
+        use bravebot_aichat::responses::protocol::Refusal;
+
+        let said = |refusal| {
+            let error = BackendError::from(ChatError::Account(refused(refusal)));
+            let diagnosis = error.diagnosis();
+            assert_eq!(diagnosis.category, Category::Refused, "{refusal:?}");
+            failure_reason(diagnosis, None)
+        };
+        let limit = said(Refusal::UsageLimit);
+        let not_permitted = said(Refusal::NotPermitted);
+
+        assert!(limit.contains("usage limit"), "{limit}");
+        assert!(!not_permitted.contains("usage limit"), "{not_permitted}");
+        assert!(not_permitted.contains("does not allow"), "{not_permitted}");
+        let rejected = failure_reason(Diagnosis::of(Category::Refused), None);
+        assert!(rejected.contains("rejected the request"), "{rejected}");
+        for line in [&limit, &not_permitted] {
+            assert_ne!(line, &rejected);
+            assert!(!line.contains("rejected the request"), "{line}");
+            assert!(!line.contains("auth login"), "{line}");
+        }
+    }
+
+    /// CHATGPT-8: a failure that did not come from the account keeps the line of its category, with
+    /// the status and the count of tries after it, so a gateway's refused key is not read as the
+    /// sign-in failing.
+    #[test]
+    fn a_failure_with_no_account_in_it_keeps_its_category_line_its_status_and_its_count() {
+        use bravebot_agent::{Category, Diagnosis};
+
+        assert_eq!(
+            failure_reason(
+                Diagnosis::of(Category::Unauthorized)
+                    .with_status(401)
+                    .after(3),
+                None
+            ),
+            "error: the service would not accept the credentials (HTTP 401), after 3 attempts"
+        );
+        assert_eq!(
+            failure_reason(Diagnosis::of(Category::Refused), None),
+            "error: the service rejected the request"
+        );
+        assert_eq!(
+            failure_reason(Diagnosis::of(Category::Transport).after(0), None),
+            "error: the request did not get through"
+        );
     }
 
     /// A reply stopped part way through a call and one stopped while it was thinking want
@@ -4502,7 +5006,10 @@ mod tests {
             "the record does not say which build wrote it"
         );
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, LATER);
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, LATER).expect("the record is free");
         save_a_turn_session(&mut resumed);
         let again = load(&root, resumed.id()).expect("the record was not written back");
         assert_eq!(
@@ -4533,9 +5040,12 @@ mod tests {
         assert_eq!(record.issue.as_deref(), Some(ISSUE));
         assert_eq!(record.pull_request.as_deref(), Some(PULL));
 
-        let resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
-        assert_eq!(resumed.link(Link::Issue), Some(ISSUE));
-        assert_eq!(resumed.link(Link::PullRequest), Some(PULL));
+        // The session that wrote the record has ended, and the one resumed from it carries on.
+        drop(handle);
+        let mut handle =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(handle.link(Link::Issue), Some(ISSUE));
+        assert_eq!(handle.link(Link::PullRequest), Some(PULL));
 
         let forked = fork(&root, handle.id()).expect("the session forks");
         assert_eq!(forked.issue.as_deref(), Some(ISSUE));
@@ -4572,7 +5082,12 @@ mod tests {
         let record = load(&root, handle.id()).expect("the record was not written");
         assert_eq!(record.skill_mode.as_deref(), Some("tdd-playbook"));
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert_eq!(resumed.skill_mode(), Some("tdd-playbook"));
         save_a_turn_session(&mut resumed);
         let again = load(&root, resumed.id()).expect("the record is still there");
@@ -4581,7 +5096,7 @@ mod tests {
             Some("tdd-playbook"),
             "the next turn's save dropped the mode"
         );
-        let forked = fork(&root, handle.id()).expect("the session forks");
+        let forked = fork(&root, &id).expect("the session forks");
         assert_eq!(forked.skill_mode.as_deref(), Some("tdd-playbook"));
 
         resumed.set_skill_mode(None);
@@ -4615,7 +5130,12 @@ mod tests {
         let record = load(&root, handle.id()).expect("the record was not written");
         assert_eq!(record.agent.as_deref(), Some("rule-reviewer"));
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert_eq!(resumed.agent(), Some("rule-reviewer"));
         save_a_turn_session(&mut resumed);
         let again = load(&root, resumed.id()).expect("the record is still there");
@@ -4625,10 +5145,14 @@ mod tests {
             "the next turn's save dropped the name"
         );
 
-        let forked = fork(&root, handle.id()).expect("the session forks");
+        let forked = fork(&root, &id).expect("the session forks");
         assert_eq!(forked.agent.as_deref(), Some("rule-reviewer"));
 
-        let mut moved = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        drop(resumed);
+        // Read again: the record the resume above wrote is the one this session continues.
+        let record = load(&root, &id).expect("the record is still there");
+        let mut moved =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         moved.set_agent(None);
         save_a_turn_session(&mut moved);
         let cleared = load(&root, moved.id()).expect("the record is still there");
@@ -4665,7 +5189,12 @@ mod tests {
         save_a_turn_session(&mut handle);
         let record = load(&root, handle.id()).expect("written");
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         let trust = TrustStore::new(&root);
         let snapshot = a_record().conversation;
         let next = || Continuation {
@@ -4683,14 +5212,14 @@ mod tests {
         };
         assert!(resumed.save_continuation(record.clone(), next()));
         assert_eq!(
-            load(&root, handle.id()).expect("written").agent.as_deref(),
+            load(&root, &id).expect("written").agent.as_deref(),
             Some("rule-reviewer")
         );
 
         resumed.set_agent(Some("another".to_string()));
         assert!(resumed.save_continuation(record, next()));
         assert_eq!(
-            load(&root, handle.id()).expect("written").agent.as_deref(),
+            load(&root, &id).expect("written").agent.as_deref(),
             Some("another")
         );
     }
@@ -4974,7 +5503,10 @@ mod tests {
             record.handed_off_from.as_deref(),
             Some("0a1b2c3d-0000-4000-8000-000000000000")
         );
-        let resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handed);
+        let resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert_eq!(
             resumed.handed_off_from(),
             Some("0a1b2c3d-0000-4000-8000-000000000000")
@@ -5053,7 +5585,10 @@ mod tests {
             "the record does not say which front end wrote it"
         );
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Desktop, A_BUILD);
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Desktop, A_BUILD).expect("the record is free");
         save_a_turn_session(&mut resumed);
         let again = load(&root, resumed.id()).expect("the record was not written back");
         assert_eq!(
@@ -5344,6 +5879,7 @@ mod tests {
             title: "a session".to_string(),
             started: 1,
             updated: 1,
+            revision: 0,
             turns: 0,
             tokens: 0,
             split: Default::default(),
@@ -5974,7 +6510,8 @@ mod tests {
             serde_json::to_vec_pretty(&record).unwrap(),
         )
         .unwrap();
-        let mut handle = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let mut handle =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
 
         assert_eq!(handle.branch_off(""), Err(Unbranched::Refused));
         assert_eq!(handle.id(), "branch-manifest");
@@ -6617,7 +7154,12 @@ mod tests {
         );
         let record = load(&root, handle.id()).expect("the record was written");
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         let written = resumed.save_continuation(
             record.clone(),
             Continuation {
@@ -6639,7 +7181,7 @@ mod tests {
         );
 
         assert!(written);
-        let after = load(&root, handle.id()).expect("the record is still there");
+        let after = load(&root, &id).expect("the record is still there");
         assert_eq!(after.id, record.id);
         assert_eq!(after.title, "first question");
         assert_eq!(after.started, record.started);
@@ -6682,7 +7224,12 @@ mod tests {
         assert!(record.history.is_none());
 
         let snapshot = bravebot_agent::Conversation::new().snapshot();
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert!(resumed.save_continuation(
             record,
             Continuation {
@@ -6700,7 +7247,7 @@ mod tests {
             },
         ));
 
-        let after = load(&root, handle.id()).expect("the record is still there");
+        let after = load(&root, &id).expect("the record is still there");
         assert_eq!(after.turns, 2);
         assert!(after.history.is_none());
     }
@@ -6727,13 +7274,17 @@ mod tests {
         record.rewind = vec![warned];
         record.server_children_may_run = false;
         let directory = handle.directory().expect("a sessions directory");
-        assert!(handle.write(&directory, &record));
+        assert!(handle.write(&directory, &mut record));
         let record = load(&root, handle.id()).expect("the record is still there");
         assert!(!record.server_children_may_run && record.server_children_may_run());
 
         let snapshot = bravebot_agent::Conversation::new().snapshot();
         let replacing = [a_stored_point(vec![]).into_point(&root)];
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert!(resumed.save_continuation(
             record,
             Continuation {
@@ -6751,7 +7302,7 @@ mod tests {
             },
         ));
 
-        let after = load(&root, handle.id()).expect("the record is still there");
+        let after = load(&root, &id).expect("the record is still there");
         assert_eq!(after.rewind.len(), 1);
         assert!(
             !after.rewind[0]
@@ -6943,14 +7494,19 @@ mod tests {
         assert_eq!(handle.add_note(1, "first note"), Noted::Kept);
         let record = load(&root, handle.id()).expect("the record");
 
-        let mut resumed = Handle::resuming(&root, &record, Front::Terminal, A_BUILD);
+        let id = handle.id().to_string();
+        // The session that wrote the record has ended, so nothing holds it.
+        drop(handle);
+
+        let mut resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert_eq!(resumed.notes(), record.notes.as_slice());
         assert_eq!(resumed.add_note(2, "second note"), Noted::Kept);
 
         // The record the turn was started from, read before the second note was typed.
         assert!(continue_with_a_turn(&mut resumed, record));
 
-        let after = load(&root, handle.id()).expect("the record");
+        let after = load(&root, &id).expect("the record");
         let kept: Vec<_> = after
             .notes
             .iter()
@@ -7009,5 +7565,359 @@ mod tests {
         let record: Record = serde_json::from_value(written).expect("an older record reads");
 
         assert!(record.notes.is_empty());
+    }
+
+    /// Save turn `turns` of `handle` with the trust map `trust`, as a turn of a resumed session does.
+    fn save_a_turn_with(handle: &mut Handle, turns: usize, prompt: &str, trust: &TrustStore) {
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        handle.save(
+            prompt,
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns,
+                tokens: 0,
+                split: Default::default(),
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust,
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+    }
+
+    /// A trust map that vouches for the project and nothing else.
+    fn a_vouched_root(root: &Path) -> TrustStore {
+        let mut trust = TrustStore::new(root);
+        trust.trust(".");
+        trust
+    }
+
+    /// The record a session left once it ended, so that nothing holds it.
+    fn a_record_left_by_a_session(root: &Path) -> Record {
+        let mut session = Handle::begin(root, Front::Terminal, A_BUILD);
+        save_a_turn_with(&mut session, 1, "seed", &a_vouched_root(root));
+        load(root, session.id()).expect("the record was not written")
+    }
+
+    /// Make the lock of the record `id` impossible to take, by putting a directory where its file
+    /// is, as on a filesystem that keeps no locks. A session that opens the record then holds
+    /// nothing, and only the revision stands between it and another writer.
+    fn where_no_lock_can_be_had(root: &Path, id: &str) {
+        let directory = project_directory(root).expect("a sessions directory");
+        let lock = lock_path(&directory, id);
+        std::fs::remove_file(&lock).expect("the lock of an ended session");
+        std::fs::create_dir(&lock).expect("a directory in the lock's place");
+    }
+
+    /// Whether the map in the record on disk trusts `path`.
+    fn trusts_on_disk(root: &Path, id: &str, path: &str) -> bool {
+        load(root, id)
+            .expect("the record is there")
+            .trust_map(root)
+            .expect("a map was recorded")
+            .is_trusted(path)
+    }
+
+    /// SESSION-38. A record is written by one process at a time: a second resume of a record a
+    /// process holds is refused, names the session, and goes through once the first has ended.
+    #[test]
+    fn a_record_a_process_holds_is_not_resumed_by_a_second() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-held-record");
+        let record = a_record_left_by_a_session(&root);
+        assert!(
+            !is_open_elsewhere(&root, &record.id),
+            "an ended session holds nothing"
+        );
+
+        let first = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("nothing holds the record");
+        assert!(is_open_elsewhere(&root, &record.id));
+
+        let held = Handle::resuming(&root, &record, Front::Desktop, A_BUILD)
+            .expect_err("a second process resumed a record the first holds");
+        assert_eq!(
+            held,
+            Held::Open {
+                id: record.id.clone()
+            }
+        );
+        let said = held.refusal();
+        assert!(
+            said.contains(&record.id) && said.contains("--fork"),
+            "the refusal does not name the session and how to copy it: {said}"
+        );
+
+        drop(first);
+        assert!(!is_open_elsewhere(&root, &record.id));
+        Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("the record is free once its holder has ended");
+    }
+
+    /// SESSION-38. A session that began here holds its record from the first write, so a record
+    /// that exists is never one nobody holds while its session is alive.
+    #[test]
+    fn a_session_that_began_here_holds_its_record_from_its_first_write() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-begun-record");
+        let mut session = Handle::begin(&root, Front::Terminal, A_BUILD);
+        assert!(
+            !is_open_elsewhere(&root, session.id()),
+            "a session that wrote nothing holds nothing"
+        );
+
+        save_a_turn_with(&mut session, 1, "seed", &a_vouched_root(&root));
+        let record = load(&root, session.id()).expect("the record was not written");
+        assert!(is_open_elsewhere(&root, session.id()));
+        Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect_err("a record whose session is alive was resumed by another process");
+
+        drop(session);
+        Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("the record is free once its session has ended");
+    }
+
+    /// TRUST-6, TRUST-4, SESSION-38. Two terminals on one session: the second cannot open it, a
+    /// process that read the record before the first saved cannot resume it afterwards, and the
+    /// next resume from the record as it is still reads the written file as untrusted.
+    #[test]
+    fn a_second_resume_cannot_erase_the_distrust_the_first_recorded() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-distrust-kept");
+        let record = a_record_left_by_a_session(&root);
+        let id = record.id.clone();
+
+        let mut first = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("nothing holds the record");
+        assert!(
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).is_err(),
+            "a second terminal opened the held record"
+        );
+
+        // The first process writes fetched bytes into a file of the vouched-for project, and TRUST-4
+        // records that exact path as untrusted.
+        let mut trust = record.trust_map(&root).expect("a map was recorded");
+        trust.distrust("trusted-marker.txt");
+        save_a_turn_with(&mut first, 2, "fetch and write", &trust);
+        assert!(!trusts_on_disk(&root, &id, "trusted-marker.txt"));
+
+        // A process that read the record before that save resumes it once the first has ended. Its
+        // copy is older than the one on disk, so it is not resumed, and says why.
+        drop(first);
+        let late = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect_err("a copy older than the record was resumed");
+        assert_eq!(late, Held::Changed { id: id.clone() });
+        assert!(
+            late.refusal().contains("Resume it again"),
+            "{}",
+            late.refusal()
+        );
+        assert!(!trusts_on_disk(&root, &id, "trusted-marker.txt"));
+
+        // Resumed again from the record as it is, the session holds it and carries the rule on.
+        let current = load(&root, &id).expect("the record is there");
+        assert_eq!(
+            current.turns, 2,
+            "the first process's turn is in the record"
+        );
+        let mut again = Handle::resuming(&root, &current, Front::Terminal, A_BUILD)
+            .expect("the record is free once its holder has ended");
+        save_a_turn_with(
+            &mut again,
+            3,
+            "carry on",
+            &current.trust_map(&root).expect("a map was recorded"),
+        );
+        assert!(
+            !trusts_on_disk(&root, &id, "trusted-marker.txt"),
+            "a session resumed from the current record lost the distrust of the written file"
+        );
+        assert_eq!(load(&root, &id).expect("the record is there").turns, 3);
+    }
+
+    /// SESSION-38. Where no lock can be had, a save refuses to replace a record another writer
+    /// wrote since this session last did, and the record is left as that writer wrote it.
+    #[test]
+    fn a_save_over_a_record_another_writer_wrote_is_refused() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-stale-save");
+        let record = a_record_left_by_a_session(&root);
+        let id = record.id.clone();
+
+        // Both handles open the record, and only the revision stands between them.
+        where_no_lock_can_be_had(&root, &id);
+        let mut newer = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("no lock is held where none can be had");
+        let mut stale = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("no lock is held where none can be had");
+
+        let mut trust = record.trust_map(&root).expect("a map was recorded");
+        trust.distrust("trusted-marker.txt");
+        save_a_turn_with(&mut newer, 2, "fetch and write", &trust);
+        save_a_turn_with(&mut stale, 2, "hello", &a_vouched_root(&root));
+
+        assert!(
+            !trusts_on_disk(&root, &id, "trusted-marker.txt"),
+            "a save from a copy older than the record replaced it"
+        );
+        // The writer that wrote last can go on: its own revision is the one on disk.
+        save_a_turn_with(&mut newer, 3, "carry on", &trust);
+        assert_eq!(load(&root, &id).expect("the record").turns, 3);
+    }
+
+    /// SESSION-38. A record from before revisions says none, and any writer may replace it.
+    #[test]
+    fn a_record_written_before_revisions_is_replaced_by_a_save() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-legacy-revision");
+        let record = a_record_left_by_a_session(&root);
+        let directory = project_directory(&root).expect("a sessions directory");
+        let path = directory.join(format!("{}.json", record.id));
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("read")).expect("json");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .remove("revision")
+            .expect("the revision is written");
+        std::fs::write(&path, serde_json::to_vec(&value).expect("json")).expect("write");
+
+        let legacy = load(&root, &record.id).expect("an older record reads");
+        assert_eq!(legacy.revision, 0);
+        let mut resumed = Handle::resuming(&root, &legacy, Front::Terminal, A_BUILD)
+            .expect("nothing holds the record");
+        save_a_turn_with(&mut resumed, 2, "carry on", &a_vouched_root(&root));
+        let written = load(&root, &record.id).expect("the record is there");
+        assert_eq!(written.turns, 2);
+        assert!(written.revision > 0, "the save did not count itself");
+    }
+
+    /// SESSION-38. A session that moves with `/cd` is written, and held, under the directory it
+    /// moved to.
+    #[test]
+    fn a_session_that_moves_holds_its_record_in_the_new_directory() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let from = an_empty_project("bravebot-session-move-from");
+        let to = an_empty_project("bravebot-session-move-to");
+        let mut session = Handle::begin(&from, Front::Terminal, A_BUILD);
+        save_a_turn_with(&mut session, 1, "seed", &a_vouched_root(&from));
+        assert!(is_open_elsewhere(&from, session.id()));
+
+        let snapshot = bravebot_agent::Conversation::new().snapshot();
+        let trust = a_vouched_root(&to);
+        session.move_to(
+            &to,
+            Standing {
+                history: None,
+                conversation: &snapshot,
+                turns: 1,
+                tokens: 0,
+                split: Default::default(),
+                spend: &BTreeMap::new(),
+                timing: &BTreeMap::new(),
+                model: None,
+                todos: &BTreeMap::new(),
+                asides: &[],
+                trust: &trust,
+                programs: &TrustedPrograms::default(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+
+        assert!(
+            is_open_elsewhere(&to, session.id()),
+            "the moved session does not hold the record it wrote in the new directory"
+        );
+        assert!(
+            !is_open_elsewhere(&from, session.id()),
+            "the moved session still holds the record it left behind"
+        );
+    }
+
+    /// SESSION-38, SESSION-30. Deleting a session removes the lock beside its record when nothing
+    /// holds it, and leaves a lock a process holds, so that a record it writes again is still held.
+    #[test]
+    fn deleting_a_session_removes_its_lock_unless_a_process_holds_it() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-delete-lock");
+        let directory = project_directory(&root).expect("a sessions directory");
+
+        let ended = a_record_left_by_a_session(&root);
+        let lock = directory.join(format!("{}.{LOCK_EXTENSION}", ended.id));
+        assert!(
+            lock.is_file(),
+            "a session that wrote left no lock to remove"
+        );
+        delete(&root, &ended.id).expect("delete");
+        assert!(!lock.exists(), "the lock outlived the record");
+
+        let mut running = Handle::begin(&root, Front::Terminal, A_BUILD);
+        save_a_turn_with(&mut running, 1, "seed", &a_vouched_root(&root));
+        let held = directory.join(format!("{}.{LOCK_EXTENSION}", running.id()));
+        delete(&root, running.id()).expect("delete");
+        assert!(held.is_file(), "a lock a process holds was removed");
+        assert!(is_open_elsewhere(&root, running.id()));
+    }
+
+    /// SESSION-38. A name, a link or a note amends the record on disk, and does not where another
+    /// writer has written the record since this session last did.
+    #[test]
+    fn an_amendment_is_not_written_over_a_record_another_writer_wrote() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-stale-amendment");
+        let record = a_record_left_by_a_session(&root);
+        let id = record.id.clone();
+        where_no_lock_can_be_had(&root, &id);
+        let mut newer = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("no lock is held where none can be had");
+        let mut stale = Handle::resuming(&root, &record, Front::Terminal, A_BUILD)
+            .expect("no lock is held where none can be had");
+
+        let mut trust = record.trust_map(&root).expect("a map was recorded");
+        trust.distrust("trusted-marker.txt");
+        save_a_turn_with(&mut newer, 2, "fetch and write", &trust);
+
+        assert!(stale.rename("a name from a stale copy"));
+        assert_eq!(stale.add_note(1, "a note from a stale copy"), Noted::Kept);
+        let after = load(&root, &id).expect("the record is there");
+        assert_ne!(after.title, "a name from a stale copy");
+        assert!(
+            after.notes.is_empty(),
+            "a note was written over a newer record"
+        );
+        assert!(!trusts_on_disk(&root, &id, "trusted-marker.txt"));
+
+        // The writer that wrote last amends it, and counts the write.
+        assert!(newer.rename("a name from the current copy"));
+        let renamed = load(&root, &id).expect("the record is there");
+        assert_eq!(renamed.title, "a name from the current copy");
+        assert!(renamed.revision > after.revision);
     }
 }

@@ -19,6 +19,10 @@
 //! three above, where it costs one key and says so, rather than by this module, where it would cost
 //! text nobody gets back.
 //!
+//! The one thing not handed out is a position of the pointer, reported with no button held, that a
+//! later one already waiting behind it supersedes. It decides nothing and the next says where the
+//! pointer is, so a burst of them is read as the last of it (INPUT-49).
+//!
 //! What that leaves is a narrower version of the same mistake, said plainly rather than denied: a
 //! keystroke of a person's own that a terminal delivered alongside something else is refused by
 //! those three, and over an intermediary that coalesces, an Enter can be one. The refusal is one key
@@ -146,6 +150,10 @@ pub fn text_of(key: &KeyEvent) -> Option<char> {
 /// asking this to decide whether to redraw or to keep reading would otherwise be told the terminal
 /// is quiet while gathered events sit unread.
 pub fn poll(timeout: Duration) -> io::Result<bool> {
+    #[cfg(test)]
+    if script::installed() {
+        return Ok(true);
+    }
     if !pending().is_empty() {
         return Ok(true);
     }
@@ -178,6 +186,32 @@ fn is_a_stream(event: &TermEvent) -> bool {
     matches!(event, TermEvent::Mouse(_) | TermEvent::Resize(..))
 }
 
+/// The next event of the queue, with a pointer position that is followed by another one taken to be
+/// that one (INPUT-49).
+///
+/// Only a report of the pointer with no button held is dropped, and only for another of the same kind
+/// directly behind it: a drag, a press, a release and the wheel each decide something, and any event
+/// between two positions is delivered with both of them left as they were. Reading on past the
+/// dropped ones costs nothing and leaves the queue as it would have been had each been handled.
+fn take_next(queue: &mut VecDeque<(TermEvent, bool)>) -> Option<(TermEvent, bool)> {
+    let mut taken = queue.pop_front()?;
+    while is_a_move(&taken.0) && queue.front().is_some_and(|(next, _)| is_a_move(next)) {
+        taken = queue.pop_front()?;
+    }
+    Some(taken)
+}
+
+/// Whether an event is the pointer reported at a position with no button held.
+///
+/// A prompt that reads nothing from the pointer asks this to leave a position out of what it draws
+/// again for, since a pointer crossing the window sends one for each cell (MOUSE-44).
+pub fn is_a_move(event: &TermEvent) -> bool {
+    matches!(
+        event,
+        TermEvent::Mouse(mouse) if mouse.kind == ratatui::crossterm::event::MouseEventKind::Moved
+    )
+}
+
 /// The next event, blocking until there is one.
 ///
 /// Hands out what is buffered before reading the terminal again, so the order the terminal wrote
@@ -185,7 +219,12 @@ fn is_a_stream(event: &TermEvent) -> bool {
 /// never answers with nothing, which is what lets a caller call it after [`poll`] has said an event
 /// is waiting and be sure of getting one.
 pub fn read() -> io::Result<TermEvent> {
-    if let Some((event, on_its_own)) = pending().pop_front() {
+    #[cfg(test)]
+    if let Some(scripted) = script::next() {
+        alone().store(true, Ordering::Relaxed);
+        return scripted;
+    }
+    if let Some((event, on_its_own)) = take_next(&mut pending()) {
         alone().store(on_its_own, Ordering::Relaxed);
         note_focus(&event);
         return Ok(event);
@@ -194,7 +233,7 @@ pub fn read() -> io::Result<TermEvent> {
     gather()?;
 
     // Non-empty by construction: `gather` queues at least the event it blocked for.
-    let (event, on_its_own) = pending().pop_front().ok_or_else(|| {
+    let (event, on_its_own) = take_next(&mut pending()).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "the terminal was read and nothing was queued",
@@ -203,6 +242,68 @@ pub fn read() -> io::Result<TermEvent> {
     alone().store(on_its_own, Ordering::Relaxed);
     note_focus(&event);
     Ok(event)
+}
+
+/// What a test says the terminal reports, in place of a terminal.
+///
+/// Held for one thread, so tests that each drive a prompt run side by side without sharing events.
+/// While a script is held every [`read`] on the thread answers from it, each event arriving alone
+/// as a person's does, and a read past the end is the stream being lost, which every prompt
+/// refuses on rather than waiting for.
+#[cfg(test)]
+pub(crate) mod script {
+    use super::{TermEvent, io};
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+
+    thread_local! {
+        static EVENTS: RefCell<Option<VecDeque<TermEvent>>> = const { RefCell::new(None) };
+        static RAN_DRY: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The script, until it is dropped.
+    pub(crate) struct Held;
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            EVENTS.with(|events| *events.borrow_mut() = None);
+        }
+    }
+
+    /// Make `events` what this thread reads.
+    pub(crate) fn hold(events: impl IntoIterator<Item = TermEvent>) -> Held {
+        EVENTS.with(|held| *held.borrow_mut() = Some(events.into_iter().collect()));
+        RAN_DRY.with(|dry| dry.set(false));
+        Held
+    }
+
+    /// Whether a read found the script empty.
+    pub(crate) fn ran_dry() -> bool {
+        RAN_DRY.with(Cell::get)
+    }
+
+    /// How many events have not been read.
+    pub(crate) fn unread() -> usize {
+        EVENTS.with(|events| events.borrow().as_ref().map_or(0, VecDeque::len))
+    }
+
+    pub(super) fn installed() -> bool {
+        EVENTS.with(|events| events.borrow().is_some())
+    }
+
+    pub(super) fn next() -> Option<io::Result<TermEvent>> {
+        EVENTS.with(|events| {
+            let mut events = events.borrow_mut();
+            let events = events.as_mut()?;
+            Some(events.pop_front().ok_or_else(|| {
+                RAN_DRY.with(|dry| dry.set(true));
+                io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "the script has no more events",
+                )
+            }))
+        })
+    }
 }
 
 /// Read everything the terminal has waiting and queue it, noting whether it was one event.
@@ -222,8 +323,9 @@ fn gather() -> io::Result<()> {
 /// What a read of the terminal becomes: each event, and whether it was the whole of the read.
 ///
 /// One thing to answer means it was all that was waiting, which is what a person pressing a key looks
-/// like. Two or more were available together, whatever they are: a key beside a resize is no more a
-/// separate press than two keys.
+/// like. Two or more were available together, whatever they are but a report of the mouse: a key
+/// beside a resize is no more a separate press than two keys. A pointer crossing the window sends
+/// positions all the time, so the one that lands in the read of a key is no evidence about the key.
 ///
 /// Separated from the reading so both halves of the promise can be tested without a terminal. The
 /// halves are that every event is handed back, which is what lets [`read`] be called after [`poll`]
@@ -235,17 +337,27 @@ fn tagged(taken: Vec<TermEvent>) -> Vec<(TermEvent, bool)> {
 
 /// Whether an event is one anything downstream could answer.
 ///
-/// Everything except a key release. A release is the tail of a press that has already been answered
-/// rather than a second thing arriving, and counting it as one would make a keystroke look like two.
-/// That matters because a terminal is free to report releases and some do: Windows sends a key-up for
-/// every keystroke, so there a press and its own release land in one read whenever the interface was
-/// busy longer than somebody held the key down, and every guard that asks whether a key arrived alone
-/// would refuse a press nobody shared with anything.
+/// Everything except a key release and a report of the mouse. A release is the tail of a press that
+/// has already been answered rather than a second thing arriving, and counting it as one would make a
+/// keystroke look like two. That matters because a terminal is free to report releases and some do:
+/// Windows sends a key-up for every keystroke, so there a press and its own release land in one read
+/// whenever the interface was busy longer than somebody held the key down, and every guard that asks
+/// whether a key arrived alone would refuse a press nobody shared with anything.
 ///
-/// Nothing is withheld by this: the release is still handed out, exactly as the terminal reported it.
-/// It is only not counted, which it can afford to be because no reader in this crate answers one.
+/// A report of the mouse is not counted either, whatever button it names. The interface asks for the
+/// position of the pointer with no button held (INPUT-33), so a person moving the mouse while they
+/// press a key shares the read with a position, and counting it would refuse that key. The guards ask whether keys arrived as a run, as a paste or a program's write
+/// does, and a position, a click or a turn of the wheel is not a key that a run of keys could
+/// consist of.
+///
+/// Nothing is withheld by this: both are still handed out, exactly as the terminal reported them. They
+/// are only not counted, which they can afford to be because no guard that asks is answered by one.
 fn answerable(event: &TermEvent) -> bool {
-    !matches!(event, TermEvent::Key(key) if key.kind == KeyEventKind::Release)
+    match event {
+        TermEvent::Key(key) => key.kind != KeyEventKind::Release,
+        TermEvent::Mouse(_) => false,
+        _ => true,
+    }
 }
 
 #[cfg(test)]
@@ -263,6 +375,120 @@ mod tests {
 
     fn key(code: KeyCode) -> TermEvent {
         TermEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn pointer(kind: ratatui::crossterm::event::MouseEventKind, column: u16) -> TermEvent {
+        TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+            kind,
+            column,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn moved_to(column: u16) -> TermEvent {
+        pointer(ratatui::crossterm::event::MouseEventKind::Moved, column)
+    }
+
+    /// What reading the whole of `waiting` hands out, one event at a time.
+    fn handed_out(waiting: Vec<TermEvent>) -> Vec<TermEvent> {
+        let mut queue: VecDeque<(TermEvent, bool)> =
+            waiting.into_iter().map(|event| (event, true)).collect();
+        let mut handed = Vec::new();
+        while let Some((event, _)) = take_next(&mut queue) {
+            handed.push(event);
+        }
+        handed
+    }
+
+    /// INPUT-49. Rejects: every position of a burst being handed out, which is a lookup of what is
+    /// under the pointer and a decision about a redraw for each of a thousand reports of a pointer
+    /// crossing the window, where the last of them says where the pointer is.
+    #[test]
+    fn a_burst_of_pointer_positions_is_read_as_the_last_of_it() {
+        let burst: Vec<TermEvent> = (0..1000).map(moved_to).collect();
+        assert_eq!(handed_out(burst), vec![moved_to(999)]);
+    }
+
+    /// INPUT-49. Rejects: a position dropped across an event that decides something, so that a press
+    /// is read at a place the pointer had left, and a drag, a press, a release or a turn of the wheel
+    /// taken for a position and dropped with the rest: only a position directly behind another goes.
+    #[test]
+    fn only_a_position_directly_behind_another_is_not_handed_out() {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        let press = pointer(MouseEventKind::Down(MouseButton::Left), 2);
+        assert_eq!(
+            handed_out(vec![moved_to(1), press.clone(), moved_to(3)]),
+            vec![moved_to(1), press, moved_to(3)]
+        );
+        assert_eq!(
+            handed_out(vec![
+                moved_to(1),
+                moved_to(2),
+                key(KeyCode::Char('a')),
+                moved_to(3),
+                moved_to(4)
+            ]),
+            vec![moved_to(2), key(KeyCode::Char('a')), moved_to(4)]
+        );
+        for kind in [
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Down(MouseButton::Right),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+        ] {
+            let held = vec![pointer(kind, 1), pointer(kind, 2), pointer(kind, 3)];
+            assert_eq!(handed_out(held.clone()), held, "{kind:?} was coalesced");
+        }
+    }
+
+    /// The events a terminal reports for `ESC[<0;300;120M` and the three that go with it: the press,
+    /// the drag (button 32), the release (the final `m`) and the two turns of the wheel (64 and 65).
+    /// The parser counts from 0, so each is at column 299 and row 119.
+    fn reports_past_223() -> Vec<TermEvent> {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::ScrollUp,
+            MouseEventKind::ScrollDown,
+        ]
+        .into_iter()
+        .map(|kind| {
+            TermEvent::Mouse(ratatui::crossterm::event::MouseEvent {
+                kind,
+                column: 299,
+                row: 119,
+                modifiers: KeyModifiers::NONE,
+            })
+        })
+        .collect()
+    }
+
+    /// MOUSE-53. The bytes are read by crossterm, which a test cannot give a terminal to read from, so
+    /// what is held here is what this crate's reader does with the events it gets back: it hands every
+    /// one out whole, at the column and row it was reported at, and a position is superseded by the
+    /// one behind it at a column past 223 as at any other. Rejects: a reader that keeps a position
+    /// in a byte, or holds it to the range the older reports have, so that the last of a burst past
+    /// the edge of that range, or a press, drag, release or turn of the wheel there, is another cell.
+    #[test]
+    fn a_report_past_column_223_is_handed_out_as_the_cell_it_names() {
+        let reports = reports_past_223();
+        assert_eq!(handed_out(reports.clone()), reports);
+
+        let burst: Vec<TermEvent> = (200..320).map(moved_to).collect();
+        assert_eq!(handed_out(burst), vec![moved_to(319)]);
+        assert_eq!(
+            handed_out(vec![moved_to(299), moved_to(43)]),
+            vec![moved_to(43)],
+            "the last of two positions is the one the second names"
+        );
+        assert_eq!(
+            handed_out(vec![moved_to(43), moved_to(299)]),
+            vec![moved_to(299)],
+            "a position past 223 was taken for one before it"
+        );
     }
 
     /// A frame may wait out a drag or a resize and nothing else. A key waiting behind another key is a person
@@ -351,6 +577,75 @@ mod tests {
             .map(|(_, alone)| alone)
             .collect();
         assert_eq!(tags, vec![false, false]);
+    }
+
+    /// The tags of the events a read held, in order.
+    fn arrived_alone(read: Vec<TermEvent>) -> Vec<bool> {
+        tagged(read).into_iter().map(|(_, alone)| alone).collect()
+    }
+
+    /// INPUT-34. The interface asks for the pointer's position with no button held, so a person
+    /// moving the mouse as they press Return shares the read with a position. Rejects: counting a
+    /// report of the mouse as another arrival, which refuses the Return, the answer to the question a
+    /// session opens with and the Ctrl-C that leaves, for a key nobody shared with a program.
+    #[test]
+    fn a_report_of_the_mouse_in_the_read_of_a_key_is_not_another_arrival() {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        let enter = key(KeyCode::Enter);
+        assert_eq!(
+            arrived_alone(vec![moved_to(3), enter.clone()]),
+            vec![true, true],
+            "a position before the key"
+        );
+        assert_eq!(
+            arrived_alone(vec![enter.clone(), moved_to(3)]),
+            vec![true, true],
+            "a position after the key"
+        );
+        assert_eq!(
+            arrived_alone(vec![moved_to(1), enter.clone(), moved_to(2)]),
+            vec![true, true, true],
+            "a position on each side of the key"
+        );
+        for kind in [
+            MouseEventKind::Down(MouseButton::Left),
+            MouseEventKind::Up(MouseButton::Left),
+            MouseEventKind::Drag(MouseButton::Left),
+            MouseEventKind::ScrollDown,
+        ] {
+            assert_eq!(
+                arrived_alone(vec![pointer(kind, 1), enter.clone()]),
+                vec![true, true],
+                "{kind:?} before the key"
+            );
+        }
+    }
+
+    /// INPUT-34. Reports of the mouse among keys take nothing from what makes a run of keys one: two
+    /// presses are still two, and a position between them does not make either of them alone.
+    /// Rejects: taking a read that holds a report of the mouse as alone whatever else it holds, so
+    /// that `\x03\x03` with a position written between the two bytes arms the offer and takes it.
+    #[test]
+    fn keys_with_reports_of_the_mouse_among_them_are_still_a_run() {
+        let interrupt = TermEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert_eq!(
+            arrived_alone(vec![interrupt.clone(), moved_to(3), interrupt.clone()]),
+            vec![false, false, false]
+        );
+        assert_eq!(
+            arrived_alone(vec![
+                moved_to(1),
+                key(KeyCode::Char('y')),
+                moved_to(2),
+                key(KeyCode::Char('y')),
+            ]),
+            vec![false, false, false, false]
+        );
+        assert_eq!(
+            arrived_alone(vec![moved_to(1), moved_to(2)]),
+            vec![true, true],
+            "positions with no key in the read"
+        );
     }
 
     /// Every event is handed back, which is what lets [`read`] be called after [`poll`] has said one
@@ -461,5 +756,25 @@ mod tests {
                 "{reported:?} left the focus wrong"
             );
         }
+
+        // A burst of pointer positions waiting in the queue comes out of `read` as the last of them,
+        // with the key behind it left where it was.
+        for column in [3, 4, 5] {
+            pending().push_back((moved_to(column), false));
+        }
+        pending().push_back((key(KeyCode::Enter), false));
+        assert_eq!(read().expect("positions were queued"), moved_to(5));
+        assert_eq!(pending().len(), 1, "the burst was not taken whole");
+        assert_eq!(read().expect("a key was queued"), key(KeyCode::Enter));
+        assert!(pending().is_empty());
+
+        // The reports at column 300 and row 120 come out of `read` as the cell they name (MOUSE-53).
+        for report in reports_past_223() {
+            pending().push_back((report, false));
+        }
+        for expected in reports_past_223() {
+            assert_eq!(read().expect("a report was queued"), expected);
+        }
+        assert!(pending().is_empty());
     }
 }

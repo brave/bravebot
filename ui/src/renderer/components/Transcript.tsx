@@ -28,6 +28,7 @@ import { conversationPreferences, setConversation } from '../experience'
 import { ErrorCard } from './ErrorCard'
 import { RunRecord } from './RunRecord'
 import { failureSummary } from '../failure'
+import { FailureSentence } from './FailureSentence'
 import { FilePreview } from './FilePreview'
 import { ThinkingTail } from './ThinkingTail'
 import { TurnFooter, TurnNotices, type OpenAudit } from './TurnDetails'
@@ -1707,17 +1708,19 @@ function PlanEnded({ ended }: { ended: ManifestError }): React.JSX.Element {
       ? 'The plan was declined, so nothing ran'
       : ended.problem
         ? 'The run stopped'
-        : failureSummary(ended.category ?? ended.kind).title
-  const detail = ended.stopped
+        : failureSummary(ended.category ?? ended.kind, null, ended.accountMessage).title
+  const detail: React.ReactNode = ended.stopped
     ? 'Steps that finished before the stop remain in the project. The run was not saved.'
     : declined
       ? 'Nothing was read or written.'
-      : ended.problem ?? failureSummary(ended.category ?? ended.kind).description
+      : ended.problem ?? (ended.accountMessage
+        ? <FailureSentence text={ended.accountMessage} command={ended.accountCommand} />
+        : failureSummary(ended.category ?? ended.kind).description)
   const attempt = ended.attempt
   return (
     <div className={`plan-ended ${ended.stopped || declined ? 'quiet' : 'failed'}`}>
       <strong>{title}</strong>
-      <p>{detail}</p>
+      <p className="plan-detail">{detail}</p>
       {attempt?.plan && (
         <details>
           <summary>The plan</summary>
@@ -1890,7 +1893,7 @@ function Card({
       )
 
     case 'narration':
-      return <div className="narration"><Icon name="file-text" />{entry.text}</div>
+      return <div className="narration"><Icon name="file-text" /><span><FailureSentence text={entry.text} command={entry.command} /></span></div>
 
     case 'attached':
       // A line rather than a bubble, and the path rather than the contents. This is the same
@@ -1925,7 +1928,7 @@ function Card({
     case 'watch':
       return <div className="watch-turn"><Icon name="eye-on" /><strong>{entry.text}</strong><span>Automatic turn · file contents still follow normal read permissions</span></div>
     case 'error':
-      return <ErrorCard category={entry.category} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
+      return <ErrorCard category={entry.category} accountMessage={entry.accountMessage} accountCommand={entry.accountCommand} attempts={entry.attempts} status={entry.status} cutOff={entry.cutOff} detail={entry.text} onRetry={onRecover} onModel={onChooseModel} />
 
     case 'replayed-tool':
       // No outcome, because the record does not keep one. Drawn quietly for the same
@@ -1952,7 +1955,7 @@ function Card({
           <span className="tool-body">
             <span className="call">
               <span className="verb">{activity.verb}</span>
-              {activity.target && <span className="target" data-tooltip={activity.target.length > TARGET_WIDTH ? activity.target : undefined}>{middleTruncate(activity.target, TARGET_WIDTH)}</span>}
+              {activity.shownTarget && <span className="target" data-tooltip={activity.shownTarget.length > TARGET_WIDTH ? activity.shownTarget : undefined}>{middleTruncate(activity.shownTarget, TARGET_WIDTH)}</span>}
             </span>
             {activity.why && <span className="why" data-tooltip={activity.why.length > WHY_WIDTH ? activity.why : undefined}>{activity.why}</span>}
           </span>

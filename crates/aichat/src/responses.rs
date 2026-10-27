@@ -18,11 +18,12 @@ pub mod protocol;
 
 use crate::anthropic::protocol::Failure;
 use crate::anthropic::what_was_written;
-use crate::protocol::{ChatRequest, SseDecoder, ToolCall, Usage};
+use crate::call::{Concession, Driven, Pace, Plan, Spent, drive};
+use crate::protocol::{ChatRequest, Effort, SseDecoder, ToolCall, Usage};
 use crate::{
-    ATTEMPTS, BACKOFF, CHUNKS_AHEAD, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
-    WAKE, learned_key, log_retry, pause_before_retry, refuses_the_body, remember, remembered,
-    reply_bound, worth_another_attempt,
+    ATTEMPTS, AccountAccess, BACKOFF, ChatError, Completion, CutOff, OpenCall, Progress, Refusals,
+    WAKE, learned_key, log_retry, pause_before_retry, read_in_background, refuses_the_body,
+    remember, remembered, reply_bound, worth_another_attempt_or_report,
 };
 use bravebot_config::Secret;
 use bravebot_config::provider::Provider;
@@ -36,21 +37,32 @@ use protocol::{Decoded, Ending, Event, WireUsage};
 use serde_json::Value;
 use std::time::Duration;
 
-/// Whether a failed attempt should be repeated, when `allowed` requests may be sent in all.
+/// `body` as one zstd frame, the form the account's serving host takes a body in.
 ///
-/// What the other clients ask, and a failure the service reports part way through a reply that a
-/// second attempt could get past.
-fn worth_asking_again(allowed: u32, attempt: u32, error: &ChatError) -> bool {
-    worth_another_attempt(allowed, attempt, error)
-        || (attempt < allowed
-            && matches!(error, ChatError::Reported { failure } if failure.is_transient()))
+/// Level `Fastest`, the one level `ruzstd` implements, with the frame's checksum. The frame goes to
+/// egress as it is.
+fn zstd_frame(body: &[u8]) -> Vec<u8> {
+    ruzstd::encoding::compress_to_vec(body, ruzstd::encoding::CompressionLevel::Fastest)
+}
+
+/// What a request to a ChatGPT account's serving host carries beyond a gateway's, and the token it
+/// is sent with.
+struct AccountRequests<'a> {
+    access: &'a mut dyn AccountAccess,
+    /// The identifier of the session, which is the value of each of the three session headers.
+    session: String,
+    /// The level the session began with, where it is held to it: sent in place of the one a request
+    /// asks for, and only to a request that asks for one. `None` leaves each request its own.
+    level: Option<Option<Effort>>,
+    /// The token the last attempt was sent with, which is what a refusal of it replaces.
+    sent: Option<Secret>,
+    /// Whether this call has already replaced a token the host refused. A second refusal ends it.
+    replaced: bool,
 }
 
 /// One client for one request, to a service that takes the Responses protocol.
 pub struct ResponsesClient<'a> {
-    attempts: u32,
-    completed_usage: Option<Usage>,
-    retried_usage: Option<Usage>,
+    spent: Spent,
     egress: &'a Egress,
     provider: &'a Provider,
     /// What the service calls the model, which is the name the body carries.
@@ -60,19 +72,88 @@ pub struct ResponsesClient<'a> {
     /// service has never heard of.
     model: String,
     token: Option<Secret>,
+    /// Set where the service is a ChatGPT account, whose token is asked for before each request.
+    account: Option<AccountRequests<'a>>,
     /// The headers the block's `options.headers` asked for, resolved by the caller (BACKEND-60).
     headers: Vec<(String, Secret)>,
-    cancel: Option<Cancel>,
-    /// Whether requests still carry the level a turn asks for.
-    ///
-    /// True until a model refuses it, which is the only way to find out that it reads none:
-    /// nothing in a roster says which models do.
-    effort: bool,
-    /// What that model was known to refuse before this request, which a probe that settled nothing
-    /// puts back.
-    recalled: Refusals,
-    /// How long to wait before the first retry. Doubled for each retry after that.
-    backoff: Duration,
+    /// What this model has refused so far in the call in progress, loaded and settled by
+    /// [`call::drive`](crate::call::drive). Requests carry the level a turn asks for until the
+    /// model refuses it, which is the only way to find out that it reads none.
+    refusals: Refusals,
+    /// The stop to watch for and how long to wait before the first retry, which is [`BACKOFF`]
+    /// unless a test shortens it.
+    pace: Pace,
+}
+
+impl Driven for ResponsesClient<'_> {
+    type Error = ChatError;
+
+    fn cancelled() -> ChatError {
+        ChatError::Cancelled
+    }
+
+    fn spent_mut(&mut self) -> &mut Spent {
+        &mut self.spent
+    }
+
+    fn pace(&self) -> &Pace {
+        &self.pace
+    }
+
+    fn refusals(&self) -> &Refusals {
+        &self.refusals
+    }
+
+    fn refusals_mut(&mut self) -> &mut Refusals {
+        &mut self.refusals
+    }
+
+    fn recall(&self, key: &str) -> Refusals {
+        remembered(key)
+    }
+
+    fn remember(&self, key: &str, found: Refusals) {
+        remember(key, found);
+    }
+
+    /// Only a refusal of the body is answered by giving something up, and only the level, and only
+    /// where the request still carries one: a request held to the level its session began with
+    /// is given up only if that level is one, and a request without a level was not refused for
+    /// it.
+    fn refused(&self, request: &ChatRequest, concession: Concession, error: &ChatError) -> bool {
+        refuses_the_body(error)
+            && match concession {
+                Concession::Effort => self.level_for(request).is_some(),
+                Concession::CacheTtl
+                | Concession::Breakpoints
+                | Concession::Ceiling
+                | Concession::ArgumentsAsWritten
+                | Concession::ThinkingShown => false,
+            }
+    }
+
+    fn asks_again(&self, attempt: u32, error: &ChatError) -> bool {
+        worth_another_attempt_or_report(self.attempts_allowed(), attempt, error)
+    }
+
+    fn pause(&self, failures: u32, error: &ChatError) -> Duration {
+        pause_before_retry(self.pace.backoff, failures, error)
+    }
+
+    fn log_retry(&self, attempt: u32, pause: Duration) {
+        log_retry(attempt, pause);
+    }
+
+    /// A token the host refused is replaced once and the request sent again at once: the token may
+    /// have been revoked early or this clock may run behind, and a new one is what the host is
+    /// asking for.
+    fn mend(&mut self, error: &ChatError) -> Result<bool, ChatError> {
+        if !self.refused_the_token(error) {
+            return Ok(false);
+        }
+        self.replace_the_token()?;
+        Ok(true)
+    }
 }
 
 impl<'a> ResponsesClient<'a> {
@@ -85,46 +166,91 @@ impl<'a> ResponsesClient<'a> {
         token: Option<Secret>,
     ) -> Self {
         Self {
-            attempts: 0,
-            completed_usage: None,
-            retried_usage: None,
+            spent: Spent::default(),
             egress,
             provider,
             model: model.into(),
             token,
+            account: None,
             headers: Vec::new(),
-            cancel: None,
-            effort: true,
-            recalled: Refusals::default(),
-            backoff: BACKOFF,
+            refusals: Refusals::default(),
+            pace: Pace::new(BACKOFF),
+        }
+    }
+
+    /// A client for a ChatGPT account, whose `provider` is the one
+    /// [`Provider::chatgpt_account`] builds and whose token `access` hands out one request at a
+    /// time ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Each request carries the token and the three session headers with `session` as the value of
+    /// each, sends its body as a zstd frame of whatever size, and refuses a redirect. A token the host
+    /// refuses is replaced once and the request sent again.
+    pub fn for_account(
+        egress: &'a Egress,
+        provider: &'a Provider,
+        model: impl Into<String>,
+        access: &'a mut dyn AccountAccess,
+        session: impl Into<String>,
+    ) -> Self {
+        let mut client = Self::new(egress, provider, model, None);
+        client.account = Some(AccountRequests {
+            access,
+            session: session.into(),
+            level: None,
+            sent: None,
+            replaced: false,
+        });
+        client
+    }
+
+    /// Hold the requests of this account client to the level its session began with, which is
+    /// `level` where the session began with one and `None` where it began with none
+    /// ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// A request that asks for a level then carries `level` in its place, so a level chosen later in
+    /// the session, or asked for by a skill, changes nothing that is sent: the service's prompt cache
+    /// was seen to miss once at each change of level inside a session. A request that asks for none,
+    /// as a summary does, carries none. Without this call every request carries the level it asks
+    /// for. A model that refuses the level is sent none whatever it was held to, as
+    /// [BACKEND-22](../../../docs/specs/backends.md#BACKEND-22) has it for any model. Ignored by a
+    /// client that is not an account's.
+    pub fn holding_the_level(mut self, level: Option<Effort>) -> Self {
+        if let Some(account) = self.account.as_mut() {
+            account.level = Some(level);
+        }
+        self
+    }
+
+    /// The level `request` is sent with.
+    ///
+    /// What it asks for, except where an account client is held to the level its session began with
+    /// ([`ResponsesClient::holding_the_level`]).
+    pub fn level_for(&self, request: &ChatRequest) -> Option<Effort> {
+        match self.account.as_ref().and_then(|account| account.level) {
+            Some(held) => request.effort.and(held),
+            None => request.effort,
         }
     }
 
     /// Requests handed to egress in the last call, including capability probes.
     pub fn attempts(&self) -> u32 {
-        self.attempts
+        self.spent.attempts
     }
 
     /// Total reported usage of completed attempts in the last call, including retries.
     /// Incomplete attempts add nothing. Returns `None` if no completed usage was reported.
     pub fn completed_usage(&self) -> Option<Usage> {
-        match (self.retried_usage, self.completed_usage) {
-            (Some(mut earlier), Some(current)) => {
-                earlier.add(current);
-                Some(earlier)
-            }
-            (earlier, current) => earlier.or(current),
-        }
+        self.spent.total()
     }
 
     /// The final attempt's measured prompt size, separate from the cost of earlier attempts.
     pub fn last_request_tokens(&self) -> Option<u64> {
-        self.completed_usage.map(|usage| usage.prompt_tokens)
+        self.spent.last_prompt_tokens()
     }
 
     /// Stop reading a streamed reply as soon as this says to.
     pub fn with_cancel(mut self, cancel: Cancel) -> Self {
-        self.cancel = Some(cancel);
+        self.pace.cancel = Some(cancel);
         self
     }
 
@@ -143,7 +269,7 @@ impl<'a> ResponsesClient<'a> {
     ///
     /// Used by tests, which would otherwise spend real seconds on every retry they exercise.
     pub fn with_backoff(mut self, backoff: Duration) -> Self {
-        self.backoff = backoff;
+        self.pace.backoff = backoff;
         self
     }
 
@@ -156,44 +282,6 @@ impl<'a> ResponsesClient<'a> {
     /// What a refusal is remembered against: the service, and the name the model goes out under.
     fn refusal_key(&self) -> String {
         learned_key(&self.provider.completion_url(), &self.model)
-    }
-
-    /// Start a request from what this model has already been found to refuse.
-    fn recall(&mut self) {
-        let refusals = remembered(&self.refusal_key());
-        self.effort = !refusals.effort;
-        self.recalled = refusals;
-    }
-
-    /// Settle what a probe found, once the request it was part of has finished one way or the other.
-    ///
-    /// A probe that answered leaves what it gave up dropped, which is the model saying it does not
-    /// read it. A probe that failed as well says the level was not what the service refused, so it
-    /// goes back to what was known before the request: a request can be refused on its contents
-    /// for reasons that have nothing to do with it.
-    fn probe_settled(&mut self, probed: bool, failed: bool) {
-        if !probed {
-            return;
-        }
-        if failed {
-            self.effort = !self.recalled.effort;
-            return;
-        }
-        remember(
-            &self.refusal_key(),
-            Refusals {
-                effort: !self.effort,
-                ..Refusals::default()
-            },
-        );
-    }
-
-    /// Whether this failure is worth sending the same request again without its level.
-    ///
-    /// Only where the request carried one: a request without a level was not refused for it, and
-    /// giving it up there would record a refusal nobody saw.
-    fn worth_dropping_effort(&self, request: &ChatRequest, error: &ChatError) -> bool {
-        self.effort && request.effort.is_some() && refuses_the_body(error)
     }
 
     /// The ceiling somebody stated for this model, exported or in its block.
@@ -210,19 +298,19 @@ impl<'a> ResponsesClient<'a> {
             &self.model,
             &request.messages,
             request.tools.as_deref(),
-            request.effort.filter(|_| self.effort),
+            self.level_for(request).filter(|_| !self.refusals.effort),
             self.stated_ceiling(),
         )
     }
 
-    /// The request for one attempt, addressed and authenticated.
+    /// The encoded body of one request.
     ///
     /// The options a model's block carries are merged into the body and never interpreted. They come
     /// from the settings file, which is the person's own configuration surface, so they are trusted
     /// exactly as far as a variable they exported would be. A key the request already set wins,
     /// because a configuration must not rewrite the conversation a turn built, and the fields in
     /// [`protocol::OWNED`] are the request's whether or not the turn set them.
-    fn build(&self, request: &ChatRequest) -> Result<Request, ChatError> {
+    fn encode(&self, request: &ChatRequest) -> Result<Vec<u8>, ChatError> {
         let mut body = serde_json::to_value(self.body_for(request))
             .map_err(|error| ChatError::Encode(error.to_string()))?;
         if let (Some(object), Some(options)) = (
@@ -237,25 +325,51 @@ impl<'a> ResponsesClient<'a> {
                 }
             }
         }
-        let body =
-            serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))?;
+        serde_json::to_vec(&body).map_err(|error| ChatError::Encode(error.to_string()))
+    }
 
+    /// The body of one request as it is sent: as it was encoded for a gateway, and for the account
+    /// as the zstd frame that host decodes ([CHATGPT-10](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-10)).
+    ///
+    /// Every account body is a frame, whatever its size. This program sets no size above which a
+    /// body is not sent: the service decides what it takes and refuses what it does not.
+    fn on_the_wire(&self, encoded: Vec<u8>) -> Vec<u8> {
+        if self.account.is_none() {
+            return encoded;
+        }
+        zstd_frame(&encoded)
+    }
+
+    /// The request for one attempt, addressed and authenticated.
+    fn build(&self, body: Vec<u8>, token: Option<&Secret>) -> Request {
         let mut http = Request::post(self.provider.completion_url(), body)
             .header("content-type", "application/json")
             .header("accept", "text/event-stream");
         for (name, value) in self.provider.fixed_headers() {
             http = http.header(*name, *value);
         }
-        if let Some(token) = self.token.as_ref().map(Secret::expose) {
+        if let Some(token) = token.map(Secret::expose) {
             // Kept on the socket the request was addressed to, so a redirect to another host does
             // not carry the key along, which is the footing a bearer token has everywhere here.
             let (name, value) = self.provider.credential_header(token);
             http = http.socket_header(name, value);
         }
-        // After the credential, and never over it: a name this request already set is refused
-        // where the block is read.
-        for (name, value) in &self.headers {
-            http = http.header(name.clone(), value.expose());
+        if let Some(account) = &self.account {
+            // Constants and a value generated here, so none can carry a line break or a length a
+            // reply chose. Nothing else is added: a gateway's headers are not carried to the
+            // account, and a redirect is a failure whatever host it names.
+            for name in ["session-id", "thread-id", "x-client-request-id"] {
+                http = http.header(name, account.session.as_str());
+            }
+            // The body is the frame `on_the_wire` made, and this is the one header that says so.
+            http = http.header("content-encoding", "zstd");
+            http = http.refusing_redirects().reading_a_refusal();
+        } else {
+            // After the credential, and never over it: a name this request already set is refused
+            // where the block is read.
+            for (name, value) in &self.headers {
+                http = http.header(name.clone(), value.expose());
+            }
         }
         // A stream's headers come at once and the model writes after them. Where nobody stated a
         // ceiling the reply is bounded as a gateway's is, since nothing says how long it may run.
@@ -266,30 +380,47 @@ impl<'a> ResponsesClient<'a> {
         if let Some(gap) = self.provider.patience.idle_timeout {
             http = http.idle_within(gap);
         }
-        Ok(http)
+        http
     }
 
-    fn cancelled(&self) -> bool {
-        self.cancel.as_ref().is_some_and(Cancel::is_cancelled)
+    /// Whether `error` is the serving host turning away the token the last attempt was sent with,
+    /// where this call has not yet replaced one.
+    fn refused_the_token(&self, error: &ChatError) -> bool {
+        self.account
+            .as_ref()
+            .is_some_and(|account| !account.replaced && account.sent.is_some())
+            && matches!(
+                error,
+                ChatError::Egress(EgressError::Status { status: 401, .. })
+            )
     }
 
-    /// Wait out a backoff, or give up on it when the caller says to stop.
-    ///
-    /// Slept in slices, because a stop landing in the middle of a seconds-long pause would otherwise
-    /// wait the rest of it out with nothing to stop but a sleep.
-    fn wait(&self, how_long: Duration) -> bool {
-        const SLICE: Duration = Duration::from_millis(50);
+    /// Ask for a token other than the one the host refused. The next attempt asks for its token
+    /// again and is sent the one this made.
+    fn replace_the_token(&mut self) -> Result<(), ChatError> {
+        let Some(account) = self.account.as_mut() else {
+            return Ok(());
+        };
+        account.replaced = true;
+        if let Some(refused) = account.sent.take() {
+            account
+                .access
+                .replace_refused(&refused)
+                .map_err(ChatError::Account)?;
+        }
+        Ok(())
+    }
 
-        let until = std::time::Instant::now() + how_long;
-        loop {
-            if self.cancelled() {
-                return false;
+    /// A refusal of the token after it was replaced is the sign-in failing, which the person is
+    /// told in the words of the sign-in. Any other failure is reported as it came.
+    fn as_the_accounts(&self, error: ChatError) -> ChatError {
+        match error {
+            ChatError::Egress(EgressError::Status { status: 401, .. })
+                if self.account.is_some() =>
+            {
+                ChatError::Account(crate::AccountFailure::Refused)
             }
-            let left = until.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() {
-                return true;
-            }
-            std::thread::sleep(left.min(SLICE));
+            other => other,
         }
     }
 
@@ -338,49 +469,40 @@ impl<'a> ResponsesClient<'a> {
         request: &ChatRequest,
         mut progress: impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        self.attempts = 0;
-        self.completed_usage = None;
-        self.retried_usage = None;
-        self.recall();
-        let mut attempt = 1;
-        let mut probed = false;
-        loop {
-            match self.stream_once(policy, request, attempt, &mut progress) {
-                // Sent again immediately rather than after a wait: nothing is busy, the request was
-                // simply carrying something this model does not take.
-                Err(error) if self.worth_dropping_effort(request, &error) => {
-                    self.effort = false;
-                    probed = true;
-                }
-                Err(error) if worth_asking_again(self.attempts_allowed(), attempt, &error) => {
-                    attempt += 1;
-                    let pause = pause_before_retry(self.backoff, attempt - 1, &error);
-                    log_retry(attempt, pause);
-                    // Announced before the wait rather than after it, so the pause is explained
-                    // while it is happening. Reply progress resets; completed costs remain charged.
-                    progress(Progress {
-                        written: Labelled::new("", Label::untrusted_public()),
-                        output_tokens: 0,
-                        calling: None,
-                        thinking: Labelled::new("", Label::untrusted_public()),
-                        counted_by_server: false,
-                        attempt,
-                    });
-                    if !self.wait(pause) {
-                        return Err(ChatError::Cancelled);
-                    }
-                }
-                result => {
-                    self.probe_settled(probed, result.is_err());
-                    return result.map(|mut completion| {
-                        if let Some(usage) = self.retried_usage {
-                            completion.usage.add(usage);
-                        }
-                        completion
-                    });
-                }
-            }
+        self.spent.begin_call();
+        if let Some(account) = self.account.as_mut() {
+            account.sent = None;
+            account.replaced = false;
         }
+        let key = self.refusal_key();
+        let plan = Plan {
+            key: &key,
+            order: &[Concession::Effort],
+        };
+        let result = drive(
+            self,
+            request,
+            plan,
+            &mut progress,
+            |client, progress, attempt| client.stream_once(policy, request, attempt, progress),
+            |progress, attempt| {
+                // Announced before the wait rather than after it, so the pause is explained
+                // while it is happening. Reply progress resets; completed costs remain charged.
+                progress(Progress {
+                    written: Labelled::new("", Label::untrusted_public()),
+                    output_tokens: 0,
+                    calling: None,
+                    thinking: Labelled::new("", Label::untrusted_public()),
+                    counted_by_server: false,
+                    attempt,
+                });
+            },
+        );
+        // No copy of the token outlives the call that was sent with it.
+        if let Some(account) = self.account.as_mut() {
+            account.sent = None;
+        }
+        result.map_err(|error| self.as_the_accounts(error))
     }
 
     fn stream_once<S: Sink>(
@@ -390,47 +512,31 @@ impl<'a> ResponsesClient<'a> {
         attempt: u32,
         progress: &mut impl FnMut(Progress),
     ) -> Result<Completion, ChatError> {
-        // `completed_usage` holds only the attempt that just ended and the next one replaces it, so
-        // what the call has been billed so far is kept apart from it.
-        self.retried_usage = self.completed_usage();
-        self.completed_usage = None;
-        // Before the request is built, let alone sent. A stop that landed while the last attempt was
-        // failing is still a stop.
-        if self.cancelled() {
-            return Err(ChatError::Cancelled);
-        }
-
-        let http = self.build(request)?;
-        self.attempts += 1;
-        let stream = self.egress.fetch_streaming(
+        // Before a token is asked for, which can mean a renewal: a body that cannot be encoded
+        // spends nothing.
+        let body = self.on_the_wire(self.encode(request)?);
+        let token = match self.account.as_mut() {
+            Some(account) => {
+                let token = account.access.access_token().map_err(ChatError::Account)?;
+                account.sent = Some(token.clone());
+                Some(token)
+            }
+            None => self.token.clone(),
+        };
+        let http = self.build(body, token.as_ref());
+        self.spent.sent();
+        let stream = match self.egress.fetch_streaming(
             policy,
             http,
             Label::untrusted_public(),
-            self.cancel.as_ref(),
-        )?;
+            self.pace.cancel.as_ref(),
+        ) {
+            Ok(stream) => stream,
+            Err(error) => return Err(crate::failure_of_refusal(policy, error)),
+        };
         let label = stream.label();
 
-        // Read on a thread this one can walk away from, for the same reason the other backends do:
-        // a read blocks for as long as the service is quiet, and the longest quiet in a turn is the
-        // one before the model's first word. Nothing on this thread holds a policy, a workspace or
-        // a tool, so a request walked away from leaves only a socket to be dropped.
-        let (chunks, arriving) = std::sync::mpsc::sync_channel(CHUNKS_AHEAD);
-        std::thread::spawn(move || {
-            let mut stream = stream;
-            loop {
-                match stream.next_chunk() {
-                    Ok(Some(piece)) => {
-                        if chunks.send(Ok(Some(piece))).is_err() {
-                            return;
-                        }
-                    }
-                    end => {
-                        let _ = chunks.send(end);
-                        return;
-                    }
-                }
-            }
-        });
+        let arriving = read_in_background(stream);
 
         let mut decoder = SseDecoder::new();
         let mut reply = Reply::default();
@@ -452,7 +558,7 @@ impl<'a> ResponsesClient<'a> {
                 // Nothing has arrived yet, which is the only chance to look at anything while a
                 // reply is still being waited for.
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if self.cancelled() {
+                    if self.pace.cancelled() {
                         return Err(ChatError::Cancelled);
                     }
                     continue;
@@ -463,7 +569,7 @@ impl<'a> ResponsesClient<'a> {
             };
             began = true;
 
-            if self.cancelled() {
+            if self.pace.cancelled() {
                 return Err(ChatError::Cancelled);
             }
 
@@ -488,12 +594,30 @@ impl<'a> ResponsesClient<'a> {
                     Decoded::Event(Event::Failed(failure)) => {
                         return Err(ChatError::Reported { failure });
                     }
+                    // The account's own words for a refusal, told as a refusal that came with a status
+                    // is. Any other service has no such words, and a code it writes that is one of them is
+                    // a failure it did not name.
+                    Decoded::Event(Event::Refused(refusal)) => {
+                        return Err(if self.account.is_some() {
+                            ChatError::Account(crate::AccountFailure::Named {
+                                refusal,
+                                // The stream was answered 200 before the event came, so it
+                                // carries no status and asked for no wait.
+                                status: None,
+                                retry_after: None,
+                            })
+                        } else {
+                            ChatError::Reported {
+                                failure: Failure::Unknown,
+                            }
+                        });
+                    }
                     Decoded::Event(event) => reply.absorb(event),
                     Decoded::Unreadable => reply.unreadable = true,
                     Decoded::Ignored => {}
                 }
                 if reply.ending.is_some() && reply.reported.is_some() {
-                    self.completed_usage = Some(reply.usage());
+                    self.spent.record(Some(reply.usage()));
                 }
             }
 
@@ -669,7 +793,9 @@ impl Reply {
                 self.reported = usage;
                 self.model = model;
             }
-            Event::Failed(_) => {}
+            // A failure and a refusal end the stream where they arrive, in `stream_once`, before a
+            // reply is built from anything after them.
+            Event::Failed(_) | Event::Refused(_) => {}
         }
     }
 

@@ -5,6 +5,9 @@ status: normative
 governs:
   - crates/tui/src/app.rs
   - crates/tui/src/app/keys.rs
+  - crates/tui/src/app/side_requests.rs
+  - crates/tui/src/app/terminal.rs
+  - crates/tui/src/app/turns.rs
   - crates/tui/src/render.rs
   - crates/tui/src/render/scroller.rs
   - crates/tui/src/render/transcript.rs
@@ -41,9 +44,18 @@ shape underneath it, since the box comes off and the transcript is given its row
 the top of the view is held across that: what is gained appears below what is already drawn, and
 what is given back when the scroller closes is covered by the box coming home.
 
+The scroller draws the transcript across the whole width of the screen, where the plain view wraps it
+to the columns the info panel and the scrollbar leave ([VIEW-39](terminal-transcript.md#VIEW-39)), so
+a row of one is not the same words as the same row of the other. What is held is the words at the top
+of the view: the entry that holds the first row on the screen and how many rows into its rows that
+row is, found in the layout the last frame drew. The same words are put at the top of the scroller,
+and again at the top of the first frame of the plain view when the scroller closes. A row that is
+past the end of an entry that takes fewer rows in the other layout is the entry's last.
+
 `q`, Escape and Ctrl-O each close it, and the view stays where the scroller left it. Escape
 abandons a count still waiting for its key first (SCROLL-3) and clears a standing search after
-that, since each is nearer.
+that, since each is nearer. A selection made by the mouse and still marked is put away before
+either ([MOUSE-38](mouse.md#MOUSE-38)).
 
 Ctrl-C closes it as well, and does nothing else. The scroller is the nearest thing there is to
 stop, so a turn in flight goes on running and the press that reaches it is the next one. Each
@@ -60,6 +72,8 @@ one.
 `verified-by: bravebot_tui::app::q_escape_and_ctrl_o_each_close_the_scroller`
 `verified-by: bravebot_tui::app::closing_the_scroller_leaves_the_view_where_it_was`
 `verified-by: bravebot_tui::state::the_row_at_the_top_of_the_view_survives_the_screen_changing_shape`
+`verified-by: bravebot_tui::app::tests::scrollbar::opening_the_scroller_with_the_view_scrolled_back_beside_a_bar_leaves_the_same_words_at_the_top`
+`verified-by: bravebot_tui::app::tests::scrollbar::opening_the_scroller_beside_the_info_panel_and_while_a_turn_runs_holds_the_words_too`
 `verified-by: bravebot_tui::app::ctrl_c_closes_the_scroller_before_it_reaches_anything_else`
 `verified-by: bravebot_tui::app::the_scroller_answers_the_stop_keys_before_the_turn_does`
 `verified-by: bravebot_tui::app::a_turn_goes_on_running_while_the_scroller_is_open`
@@ -75,7 +89,11 @@ one.
 
 Every key in this file is answered here, and a key this file does not name does nothing at all. A
 character does not reach the box, Enter sends nothing, and nothing typed while the scroller is open
-becomes part of a prompt.
+becomes part of a prompt. The one key this file does not name that is answered here is the watch key
+([WATCH-7](watching.md#WATCH-7)), which opens from the scroller what it opens at the prompt: the
+list of the delegates where there are several, the view of the one where there is one, and nothing
+where the session has started none. The key that closes the view returns to the scroller
+([MOUSE-10](mouse.md#MOUSE-10)), and the key list names the chord as it is bound.
 
 The line keeps its text, its caret and whatever is attached to it, and comes back exactly as it was
 the moment the scroller closes.
@@ -92,6 +110,8 @@ the person opened with a key and closes with any of four.
 `verified-by: bravebot_tui::app::enter_sends_nothing_from_inside_the_scroller`
 `verified-by: bravebot_tui::app::a_key_the_scroller_does_not_take_does_nothing`
 `verified-by: bravebot_tui::app::a_chord_the_scroller_does_not_name_does_nothing`
+`verified-by: bravebot_tui::app::the_watch_key_opens_the_delegates_from_the_scroller_and_closing_returns_to_it`
+`verified-by: bravebot_tui::render::the_help_names_the_watch_chord_as_it_is_bound`
 `verified-by: bravebot_tui::app::the_line_comes_back_untouched_when_the_scroller_closes`
 `verified-by: bravebot_tui::app::a_paste_and_a_drop_do_not_reach_the_line_while_the_scroller_is_open`
 
@@ -114,9 +134,9 @@ Each end is a stop rather than a count that keeps going: neither direction moves
 or the last, so a held key comes to rest somewhere the next press can move away from.
 
 One wheel event moves the number of rows `tui.wheelRows` names, and three where no settings file
-names one. The same distance at rest and in the scroller, the wheel being one of the keys here: a
-transcript that moved by one figure and a scroller by another would be two movements under one
-gesture.
+names one. The same distance at rest, in the scroller (the wheel being one of the keys here) and in the
+two panes of the info panel's files state ([MOUSE-19](mouse.md#MOUSE-19)): a transcript that moved
+by one figure and a scroller by another would be two movements under one gesture.
 
 The count is read once when the session opens, from the settings files as any other key of its kind
 is read: the home layer, a checkout's `.bravebot/settings.json` and `settings.local.json`, and a
@@ -188,6 +208,8 @@ that the Known costs below do not already admit.
 `verified-by: bravebot_tui::app::the_wheel_moves_three_rows_where_nothing_names_a_number`
 `verified-by: bravebot_tui::app::a_wheel_count_outside_the_range_is_held_to_it`
 `verified-by: bravebot_tui::app::a_configured_wheel_still_stops_at_the_ends_and_still_drops_a_count`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_edits_scrolls_them_by_the_rows_a_wheel_event_moves`
+`verified-by: bravebot_tui::files_mode::the_wheel_over_the_list_scrolls_its_rows_and_moves_nothing_else`
 `verified-by: bravebot_config::settings::a_settings_file_names_how_far_the_wheel_moves_the_view`
 `verified-by: bravebot_tui::app::a_count_moves_the_view_that_many_times_as_far`
 `verified-by: bravebot_tui::app::a_count_stops_at_the_ends_of_the_transcript`
@@ -269,7 +291,10 @@ under Known costs rather than left to be found.
 ### SCROLL-6: `v` opens the transcript in the user's editor, and reads nothing back
 
 What goes is the rows as they are drawn, margins and all, so untrusted content is marked in the
-file the way it is marked on the screen. It goes to a temporary file outside the workspace, opened
+file the way it is marked on the screen. The cells the interface draws for a click, the word that
+copies a fenced block and the blanks that put it at the right of its row, are not text of the
+transcript and are left out, as they are from a copy ([MOUSE-27](mouse.md#MOUSE-27)). It goes to a
+temporary file outside the workspace, opened
 with `$VISUAL` or `$EDITOR` the same way a prompt is, and the file goes when the editor exits. It
 does nothing while a turn runs, which is the answer the key that edits a prompt already gives: an
 editor needs the screen, and a running turn is drawing it.
@@ -285,6 +310,7 @@ side, keeping a copy, or grepping the lot, is a text editor's job, and the user 
 `verified-by: bravebot_tui::app::v_asks_for_the_editor`
 `verified-by: bravebot_tui::app::the_transcript_editor_key_does_nothing_while_a_turn_runs`
 `verified-by: bravebot_tui::render::what_goes_to_the_editor_is_marked_the_way_the_screen_is`
+`verified-by: bravebot_tui::render::what_goes_to_the_editor_leaves_out_the_word_that_copies_a_block`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_written_outside_the_workspace`
 `verified-by: bravebot_tui::editor::a_transcript_opened_in_the_editor_is_never_read_back`
 `verified-by: bravebot_tui::editor::the_file_goes_when_the_editor_exits`
@@ -358,6 +384,7 @@ somebody opened a pager to look at.
 
 `verified-by: bravebot_tui::render::the_scroller_takes_the_whole_screen_but_its_own_footer`
 `verified-by: bravebot_tui::render::the_usual_hint_comes_back_when_the_scroller_closes`
+`verified-by: bravebot_tui::render::the_scroller_draws_nothing_offered_beneath_the_box`
 
 <a id="SCROLL-10"></a>
 ### SCROLL-10: `x` expands the call the view is on past its glimpse, and collapses it again
@@ -368,7 +395,8 @@ write shows every change instead of the first twelve. A second press collapses i
 the twelve lines drawn by [terminal-transcript.md](terminal-transcript.md), and the transcript is
 drawn collapsed again once the scroller closes. Expansion is a key the person pressed and is never
 decided by what a result contains. The key does nothing in a delegate's view and on a call with
-nothing more to show.
+nothing more to show. A click on such a call at the plain prompt opens the scroller on it expanded
+([MOUSE-25](mouse.md#MOUSE-25)).
 
 Expanded lines are released through the same display gate as the glimpse, with control characters
 replaced by visible glyphs, and drawn behind the plain margin with each line cut to one row. A

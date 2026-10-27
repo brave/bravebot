@@ -418,12 +418,6 @@ pub struct Policy<'sink, S: Sink> {
     /// ([`crate::spelling::to_key`]). Supplied by the caller, since this crate asks the host
     /// nothing.
     backslash_separates: bool,
-    /// Whether a `request_path` is granted here without a question and opens its directory to the
-    /// file tools, as of the tool call being answered.
-    ///
-    /// Said by the caller before each call, since the permission mode can change between two of
-    /// them, and read only to word a refusal ([`Policy::path_requests_are_granted_unasked`]).
-    path_requests_unasked: bool,
     /// Which programs the user has stopped being asked about, by resolved path.
     programs: crate::programs::TrustedPrograms,
     /// Which command lines this session has already put to the user at a run prompt.
@@ -611,7 +605,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
-            path_requests_unasked: false,
             // Empty, so nothing is trusted until a caller installs the person's own map with
             // `with_trust`. The filesystem root is the working directory a map with no project
             // behind it has to read a relative name under, and an empty map answers `None` about
@@ -685,6 +678,27 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             None => format!("the user let programs {access} {path} for this session"),
         };
         self.allow("path_reach", detail);
+    }
+
+    /// Record that the permission mode reached `directory` for the file tools the first time this
+    /// session, without opening it (MODE-4, PATHREQ-7).
+    ///
+    /// `directory` is where the workspace resolved the path, `tool` and `field` are the call and the
+    /// argument that named it, and nothing is marked trusted or opened by it. Nobody was asked.
+    pub fn record_bypass_reach(
+        &mut self,
+        directory: &str,
+        mode: &'static str,
+        tool: &str,
+        field: &str,
+    ) {
+        self.allow(
+            "path_reach",
+            format!(
+                "{mode} mode let the file tools reach {directory}, named in the {field} of \
+                 {tool}, nobody was asked and nothing was opened"
+            ),
+        );
     }
 
     /// Record that a mode that answers in the person's place opened `path` for the file tools and
@@ -1339,7 +1353,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             unrecovered: std::collections::BTreeMap::new(),
             recovered: std::collections::BTreeSet::new(),
             answered_by_directory_trust: false,
-            path_requests_unasked: self.path_requests_unasked,
             trust: self.trust.clone(),
             root: self.root.clone(),
             scratch: self.scratch.clone(),
@@ -1827,19 +1840,13 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.permissions.denies_any_read()
     }
 
-    /// Refuse a write a `deny` rule covers, and one outside the files this run's definition lets it
-    /// write (DELEGATE-28).
+    /// Refuse a write a `deny` rule covers, for a caller that asks the rules about each spelling
+    /// of a file and the definition's limit ([`Policy::refuse_write_outside_limits`]) about the
+    /// one it lands on.
     ///
     /// Both families of rule are consulted: a path nothing may read is a path nothing may replace
     /// either, so a `Read` deny rule stops a write to it. Claude Code does the same, and the reason
     /// is that a file whose contents are off limits is not protected if it can be overwritten.
-    pub fn before_write(&mut self, path: &str) -> Gated<()> {
-        self.refuse_denied_write(path)?;
-        self.refuse_write_outside_limits(path)
-    }
-
-    /// The `deny` half of [`Policy::before_write`], for a caller that asks the rules about each
-    /// spelling of a file and the definition's limit about the one it lands on.
     pub fn refuse_denied_write(&mut self, path: &str) -> Gated<()> {
         for subject in [
             crate::permissions::Subject::Edit,
@@ -3382,13 +3389,16 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         let current = self.observe_path(Capability::FileRead, &path)?;
         let label = crate::label::taint_all([promised, current]);
 
+        // The path's revision before the bytes are taken, so that a write landing while the file
+        // is read leaves the slot older than the file and not the other way round.
+        let revision = self.trust.stamp_of(&path);
         let text = read(&path).map_err(|detail| Denial {
             principle: Principle::Confinement,
             message: format!("{tool}: {slot} could not be read: {detail}"),
         })?;
 
         let measured = slots
-            .fill(slot, Labelled::new(text, label))
+            .fill(slot, Labelled::new(text, label), revision)
             .map_err(|e| Denial {
                 principle: Principle::Confinement,
                 message: format!("{tool}: {slot} could not be filled: {e}"),
@@ -4270,20 +4280,11 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// A delegate that reached its bound answers like one that did not, so the bound is what tells
     /// the two apart: a run at its bound was told it had no rounds left.
-    pub fn record_delegate_end(
-        &mut self,
-        id: crate::delegate::DelegateId,
-        bound: usize,
-        finish: crate::delegate::Finish,
-    ) {
-        self.record_delegate_end_within(id, bound, None, finish);
-    }
-
-    /// [`Policy::record_delegate_end`] for a delegate that also carried a token budget.
     ///
-    /// `spent` is that budget and the tokens the run reported, both counts the driver holds. A
-    /// run that reached it says so, beside the round limit where it reached that too, so the
-    /// trail names which bound ended the run (DELEGATE-29).
+    /// `spent` is the delegate's token budget and the tokens the run reported, both counts the
+    /// driver holds, or `None` for a delegate that carried no budget. A run that reached the budget
+    /// says so, beside the round limit where it reached that too, so the trail names which bound
+    /// ended the run (DELEGATE-29).
     pub fn record_delegate_end_within(
         &mut self,
         id: crate::delegate::DelegateId,
@@ -5712,8 +5713,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether writing this slot to this path would change the file.
     ///
     /// `false` only where the kernel filled the slot from that very path and nothing has
-    /// rewritten it since. No byte of either side is read: what decides is which file the slot
-    /// was filled from, which is the kernel's own record, and the destination, which is routing.
+    /// rewritten it since, which also requires that no `run` line has started since. No byte of
+    /// either side is read: what decides is which file the slot was filled from, which is the
+    /// kernel's own record, the destination, which is routing, and two numbers.
     ///
     /// A write that changes nothing is worth recognising because the alternative is asking a
     /// person to approve a diff with nothing in it, once per file that turned out not to need
@@ -5725,7 +5727,9 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         slot: &SlotId,
         slots: &crate::slot::SlotStore,
     ) -> bool {
-        let unchanged = slots.verbatim_of(slot, &PathAuthority::mint()) == Some(path);
+        let unchanged = slots
+            .verbatim_of(slot, &PathAuthority::mint())
+            .is_some_and(|(read_from, at)| read_from == path && self.trust.stamp_of(path) == at);
         if unchanged {
             self.allow(
                 "write",
@@ -5765,8 +5769,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// confidentiality that stops content crossing a bridge is not in play here.
     ///
     /// Integrity is untouched, and integrity is what decides what the write means afterwards:
-    /// [`Policy::reconcile_after_write`] records a path holding untrusted bytes as untrusted,
-    /// so nothing written this way can be read back as trusted.
+    /// completing the file effect that writes them records a path holding untrusted bytes as
+    /// untrusted, so nothing written this way can be read back as trusted.
     ///
     /// Never for a network body, a command line, or a message to someone. Those leave, and
     /// [`Policy::before_action`] refusing them is exactly right.
@@ -5866,8 +5870,8 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The bytes were read out of the workspace's own repository and go back into it, so the
     /// confidentiality that stops content crossing a bridge is not in play. Integrity is untouched:
-    /// the label is the one the checkout's path has, and [`Policy::reconcile_after_write`] records
-    /// the destination as untrusted where the bytes are.
+    /// the label is the one the checkout's path has, and completing the file effect that
+    /// writes them records the destination as untrusted where the bytes are.
     pub fn declassify_checkout_into_workspace(
         &mut self,
         checkout_path: &str,
@@ -6271,46 +6275,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
                 "{}: the user agreed to writes creating a credential in it for this session",
                 file.display()
             ),
-        );
-    }
-
-    /// Reconcile a completed write in a non-overlapping snapshot.
-    ///
-    /// Live filesystem callers must use `FileAuthority::capture` and its effect reservation
-    /// before writing. Calling this after I/O cannot order reads against that write.
-    ///
-    /// The invariant: a path's effective trust equals the integrity of the data in it. A rule
-    /// is recorded only when the write disagrees with the rule already covering the path, so a
-    /// write that agrees with it leaves the map alone.
-    ///
-    /// Untrusted data landing in a trusted tree *must* mark that path untrusted, or reading it
-    /// back would return it as trusted and launder it. That is the loop this closes.
-    ///
-    /// Always the exact path, never its parent: one untrusted file must not distrust its
-    /// siblings. Most-specific-wins then resolves the two rules correctly.
-    pub fn reconcile_after_write(&mut self, path: &str, written: Label) {
-        let effective = self.integrity_in_force(path);
-        let actual = written.integrity;
-
-        if effective == Some(actual) {
-            return;
-        }
-
-        let recorded = match actual {
-            Integrity::Trusted => "trusted",
-            Integrity::Untrusted => "untrusted",
-        };
-        if !self.trust.publish(path, actual) {
-            self.allow(
-                "trust",
-                format!("{path} left as it was: a file effect on it is still active"),
-            );
-            return;
-        }
-
-        self.allow(
-            "trust",
-            format!("{path} recorded as {recorded} to match what was written"),
         );
     }
 
@@ -7089,18 +7053,6 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.allow("requested_scopes", detail);
     }
 
-    /// Say whether a `request_path` is granted without a question for the call about to be
-    /// answered (PATHREQ-7).
-    pub fn grant_path_requests_unasked(&mut self, unasked: bool) {
-        self.path_requests_unasked = unasked;
-    }
-
-    /// Whether a `request_path` is granted without a question and opens its directory to the file
-    /// tools, which is what a refusal of a file tool tells the planner to rely on (PATHREQ-7).
-    pub fn path_requests_are_granted_unasked(&self) -> bool {
-        self.path_requests_unasked
-    }
-
     /// Record the permission mode a turn begins with, by its name.
     ///
     /// The mode decides whether the next prompt is drawn, and it is the one thing that changes
@@ -7199,6 +7151,19 @@ impl<'sink, S: Sink> Policy<'sink, S> {
             None => "no mode answered, left to the confirmer".to_string(),
         };
         self.allow("approval", detail);
+    }
+
+    /// Record that a mode that answers in the person's place approved the start of a language
+    /// server, so nobody was asked (LSP-5, TRACE-7).
+    ///
+    /// The policy decides nothing about a server start, so no entry before this one says it was
+    /// being asked about, and this one says what it is about. The text is fixed and names neither
+    /// the language nor the program.
+    pub fn record_server_start_answer(&mut self, mode: &'static str) {
+        self.allow(
+            "approval",
+            format!("start a language server: answered by {mode} mode, nobody was asked"),
+        );
     }
 
     /// Record that a `run` line was put to the confirmer and not approved, so it did not start
@@ -9311,6 +9276,197 @@ five
         assert_eq!(err.principle, Principle::IntegrityGate);
     }
 
+    /// Writing a slot back to the file the kernel filled it from is the one write that needs no
+    /// question. Every other spelling of that file, every other path and a slot that was never
+    /// read from a file change something as far as the kernel's record can tell, so each is put
+    /// to the person. A comparison that normalised the spelling, or that treated an answer from a
+    /// processor as the file it was about, would skip a question the person has to be asked.
+    #[test]
+    fn only_the_path_a_slot_was_read_from_is_a_write_that_changes_nothing() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                read.clone(),
+                "vendor/x.txt",
+                &Labelled::trusted("vendor/x.txt".to_string()),
+                10,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+
+        // Reserved and not yet read: nothing was filled from the file, so nothing is the same.
+        assert!(
+            policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot still waiting on its file was taken for the file"
+        );
+
+        policy
+            .materialise("write_file", &read, &mut slots, |_| {
+                Ok("payload".to_string())
+            })
+            .expect("the file is readable");
+
+        // The answer a processor gave about that file: it names the file it was about as its
+        // origin, but nothing filled it from the file.
+        let answer = SlotId::new("ref:1");
+        slots
+            .writer_for(answer.clone(), Label::untrusted_private())
+            .unwrap()
+            .write("payload")
+            .unwrap();
+
+        let asked_about = |sink: &RecordingSink| {
+            sink.events()
+                .iter()
+                .filter(|event| format!("{event:?}").contains("already holds what"))
+                .count()
+        };
+
+        for (path, slot) in [
+            ("vendor/y.txt", &read),
+            ("./vendor/x.txt", &read),
+            ("/work/vendor/x.txt", &read),
+            ("vendor/x.txt", &answer),
+        ] {
+            assert!(
+                policy.write_would_change(path, slot, &slots),
+                "{slot} written to {path} was taken for a write that changes nothing"
+            );
+        }
+        drop(policy);
+        assert_eq!(
+            asked_about(&sink),
+            0,
+            "a write that changes something was recorded as one that changes nothing"
+        );
+
+        let mut policy = open_policy(&mut sink);
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back to the file it was read from was put to the person"
+        );
+        drop(policy);
+        assert_eq!(
+            asked_about(&sink),
+            1,
+            "the write that changes nothing left no line in the trail"
+        );
+    }
+
+    /// A slot is a copy of its file only until something writes the file. Writing the slot back
+    /// to its file changes nothing while the file's revision is the one it had when the slot was
+    /// read, changes the file once the revision has moved, and changes a different path always.
+    /// A comparison of paths alone would skip the question after the file was rewritten, and the
+    /// file would keep the rewrite.
+    #[test]
+    fn a_slot_is_not_a_copy_of_its_file_once_the_file_was_written() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read = SlotId::new("ref:0");
+        policy
+            .defer(
+                "read_file",
+                read.clone(),
+                "vendor/x.txt",
+                &Labelled::trusted("vendor/x.txt".to_string()),
+                10,
+                &mut slots,
+            )
+            .expect("a file may be reserved");
+        policy
+            .materialise("write_file", &read, &mut slots, |_| {
+                Ok("payload".to_string())
+            })
+            .expect("the file is readable");
+
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back to an untouched file was put to the person"
+        );
+
+        // A write to some other file does not move this file's revision.
+        policy
+            .file_authority()
+            .publish("vendor/other.txt", Integrity::Untrusted);
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a write to another file made the slot stale"
+        );
+        assert!(
+            policy.write_would_change("vendor/other.txt", &read, &slots),
+            "the slot written to a path it was not read from was taken for no change"
+        );
+
+        policy
+            .file_authority()
+            .publish("vendor/x.txt", Integrity::Untrusted);
+        assert!(
+            policy.write_would_change("vendor/x.txt", &read, &slots),
+            "a slot written back after its file was rewritten was taken for no change"
+        );
+    }
+
+    /// A program rewrites files the line never names, so the authority is told of no write to
+    /// them. A slot read before such a line started is no longer taken for a copy of its file
+    /// once one has, and one read after it is.
+    ///
+    /// Fails if a path alone, or the path's revision alone, decides, since a program's write
+    /// moves neither.
+    #[test]
+    fn a_slot_is_not_a_copy_of_its_file_once_a_program_started_after_it_was_read() {
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+        let mut slots = SlotStore::new();
+
+        let read_a_file = |policy: &mut Policy<'_, RecordingSink>, slots: &mut SlotStore, id| {
+            let slot = SlotId::new(id);
+            policy
+                .defer(
+                    "read_file",
+                    slot.clone(),
+                    "vendor/x.txt",
+                    &Labelled::trusted("vendor/x.txt".to_string()),
+                    10,
+                    slots,
+                )
+                .expect("a file may be reserved");
+            policy
+                .materialise("write_file", &slot, slots, |_| Ok("payload".to_string()))
+                .expect("the file is readable");
+            slot
+        };
+        let before = read_a_file(&mut policy, &mut slots, "ref:0");
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &before, &slots),
+            "a slot written back to an untouched file was put to the person"
+        );
+
+        let authority = policy.file_authority();
+        authority.note_program_started();
+        assert!(
+            policy.write_would_change("vendor/x.txt", &before, &slots),
+            "a slot read before a program started was taken for a copy of the file"
+        );
+        assert_eq!(
+            authority.revision_of("vendor/x.txt"),
+            0,
+            "starting a program moved a path's revision, which would quarantine its neighbours"
+        );
+
+        let after = read_a_file(&mut policy, &mut slots, "ref:1");
+        assert!(
+            !policy.write_would_change("vendor/x.txt", &after, &slots),
+            "a slot read after the last program started was put to the person"
+        );
+    }
+
     /// A path that stopped being trusted between the promise and the reading is read as
     /// untrusted. Anything else would launder bytes through a reference made earlier.
     #[test]
@@ -9344,9 +9500,9 @@ five
             "it was reserved from a trusted path"
         );
 
-        // Something wrote untrusted data there in the meantime, which is what
-        // `reconcile_after_write` records.
-        policy.reconcile_after_write("src/main.rs", Label::untrusted_private());
+        // Something wrote untrusted data there in the meantime, which is what completing
+        // the write's file effect records.
+        record_write(&mut policy, "src/main.rs", Label::untrusted_private());
 
         policy
             .materialise("process", &slot, &mut slots, |_| Ok("payload".to_string()))
@@ -9832,10 +9988,7 @@ five
         )
         .unwrap();
 
-        let reader = store
-            .reader_for([slot.clone()], Label::untrusted_public())
-            .unwrap();
-        let content = reader.read(&slot).unwrap();
+        let content = store.take_for_effect(&slot).unwrap();
 
         // The body is accepted as content.
         assert!(
@@ -15111,9 +15264,19 @@ five
         .with_trust(store)
     }
 
-    /// Row 1: trusted data to a trusted path. Silent, and the map is untouched.
+    /// A write recorded the way the workspace records one: the path is reserved under the file
+    /// authority, and completing the effect publishes the trust of what was written.
+    fn record_write(policy: &mut Policy<'_, RecordingSink>, path: &str, written: Label) {
+        policy
+            .capture_files(|_, capture| capture.begin(path))
+            .expect("the path is free")
+            .complete(written.integrity);
+    }
+
+    /// Row 1: trusted data to a trusted path. Silent, and the effective trust is unchanged. The
+    /// write is recorded all the same: a rule at the exact path, which a write always leaves.
     #[test]
-    fn trusted_data_into_a_trusted_path_is_silent_and_changes_nothing() {
+    fn trusted_data_into_a_trusted_path_is_silent_and_records_the_path_as_it_was() {
         let mut sink = RecordingSink::new();
         let mut policy = policy_trusting(&mut sink, &["."]);
 
@@ -15124,8 +15287,12 @@ five
         ));
 
         let before = policy.trust().rules().count();
-        policy.reconcile_after_write("src/a.rs", Label::trusted_public());
-        assert_eq!(policy.trust().rules().count(), before, "the map changed");
+        record_write(&mut policy, "src/a.rs", Label::trusted_public());
+        assert_eq!(
+            policy.trust().rules().count(),
+            before + 1,
+            "a started write was not recorded at its exact path"
+        );
         assert!(policy.trust().is_trusted("src/a.rs"));
     }
 
@@ -15141,7 +15308,7 @@ five
             Destination::Named
         ));
 
-        policy.reconcile_after_write("src/a.rs", Label::untrusted_public());
+        record_write(&mut policy, "src/a.rs", Label::untrusted_public());
         assert!(!policy.trust().is_trusted("src/a.rs"));
         // Only that path: its siblings keep the directory's trust.
         assert!(policy.trust().is_trusted("src/b.rs"));
@@ -15169,15 +15336,15 @@ five
             Destination::Named
         ));
 
-        policy.reconcile_after_write("vendor/ours.js", Label::trusted_public());
+        record_write(&mut policy, "vendor/ours.js", Label::trusted_public());
         assert!(policy.trust().is_trusted("vendor/ours.js"));
         assert!(!policy.trust().is_trusted("vendor/theirs.js"));
     }
 
-    /// Untrusted data into an already untrusted path: silent, map unchanged. The path is
-    /// already untrusted, so nothing is lost and nothing changes.
+    /// Untrusted data into an already untrusted path: silent, and the effective trust is
+    /// unchanged. The write is recorded as a rule at the exact path.
     #[test]
-    fn untrusted_data_into_an_untrusted_path_is_silent_and_changes_nothing() {
+    fn untrusted_data_into_an_untrusted_path_is_silent_and_records_the_path_as_it_was() {
         let mut sink = RecordingSink::new();
         let mut store = TrustStore::new("/work");
         store.distrust("vendor");
@@ -15197,8 +15364,13 @@ five
         ));
 
         let before = policy.trust().rules().count();
-        policy.reconcile_after_write("vendor/x.js", Label::untrusted_public());
-        assert_eq!(policy.trust().rules().count(), before);
+        record_write(&mut policy, "vendor/x.js", Label::untrusted_public());
+        assert_eq!(
+            policy.trust().rules().count(),
+            before + 1,
+            "a started write was not recorded at its exact path"
+        );
+        assert!(!policy.trust().is_trusted("vendor/x.js"));
     }
 
     /// A path nobody has mentioned is not the same as one deliberately marked untrusted: there
@@ -15318,7 +15490,7 @@ five
             .with_scratch(Some(std::path::Path::new("/tmp/bravebot-scratch-1")));
 
         let fetched = "/tmp/bravebot-scratch-1/fetched.json";
-        policy.reconcile_after_write(fetched, Label::untrusted_public());
+        record_write(&mut policy, fetched, Label::untrusted_public());
 
         assert!(
             policy.read_is_quarantined(fetched),
@@ -15789,7 +15961,7 @@ five
         let mut sink = RecordingSink::new();
         let mut policy = policy_trusting(&mut sink, &["."]);
 
-        policy.reconcile_after_write("src/fetched.json", Label::untrusted_public());
+        record_write(&mut policy, "src/fetched.json", Label::untrusted_public());
 
         let label = policy
             .observe_path(Capability::FileRead, "src/fetched.json")
@@ -15810,7 +15982,7 @@ five
         let mut sink = RecordingSink::new();
         let mut policy = policy_trusting(&mut sink, &["."]);
 
-        policy.reconcile_after_write("src/fetched.json", Label::untrusted_public());
+        record_write(&mut policy, "src/fetched.json", Label::untrusted_public());
 
         let label = policy
             .observe_path(Capability::FileRead, "src/./fetched.json")
@@ -17136,6 +17308,13 @@ five
             Labelled::new(text.to_string(), Label::untrusted_public())
         }
 
+        /// A write the way a tool asks for one: refused where a `deny` rule covers the path, and
+        /// where the definition's limit on the files it may write (DELEGATE-28) does not.
+        fn before_write(policy: &mut Policy<'_, RecordingSink>, path: &str) -> Gated<()> {
+            policy.refuse_denied_write(path)?;
+            policy.refuse_write_outside_limits(path)
+        }
+
         /// A turn whose settings named `bound` as the most delegates it may have running at once.
         fn bounded_policy(sink: &mut RecordingSink, bound: u32) -> Policy<'_, RecordingSink> {
             open_policy(sink).with_delegate_bound(Some(bound))
@@ -18107,15 +18286,15 @@ five
 
             let mut sink = RecordingSink::new();
             let mut scribe = open_policy(&mut sink).within(&spec);
-            assert!(scribe.before_write("docs/guide/a.md").is_ok());
+            assert!(before_write(&mut scribe, "docs/guide/a.md").is_ok());
             for outside in ["src/main.rs", "docs-old/a.md", "docs/../src/main.rs"] {
                 assert!(
-                    scribe.before_write(outside).is_err(),
+                    before_write(&mut scribe, outside).is_err(),
                     "{outside} was written outside the limit"
                 );
             }
             assert!(
-                turn.before_write("src/main.rs").is_ok(),
+                before_write(&mut turn, "src/main.rs").is_ok(),
                 "the limit reached the turn that started the delegate"
             );
         }
@@ -18140,11 +18319,10 @@ five
             let mut scribe = open_policy(&mut sink)
                 .with_permissions(denying)
                 .within(&spec);
-            let err = scribe
-                .before_write("docs/private/key.md")
+            let err = before_write(&mut scribe, "docs/private/key.md")
                 .expect_err("a deny rule was lifted by the key");
             assert!(format!("{err}").contains("deny rule"), "{err}");
-            assert!(scribe.before_write("docs/public.md").is_ok());
+            assert!(before_write(&mut scribe, "docs/public.md").is_ok());
         }
 
         /// DELEGATE-28. A pattern nobody can read covers no file, and a line left with none leaves
@@ -18161,7 +18339,7 @@ five
             let mut scribe = open_policy(&mut sink).within(&spec);
             for path in ["docs/a.md", "src/main.rs", "a.md"] {
                 assert!(
-                    scribe.before_write(path).is_err(),
+                    before_write(&mut scribe, path).is_err(),
                     "{path} was written under a line with no readable pattern"
                 );
             }
@@ -18181,8 +18359,8 @@ five
                 .expect("a clean context may delegate");
             let mut sink = RecordingSink::new();
             let mut scribe = open_policy(&mut sink).within(&spec);
-            assert!(scribe.before_write("docs/a.md").is_ok());
-            assert!(scribe.before_write("src/main.rs").is_err());
+            assert!(before_write(&mut scribe, "docs/a.md").is_ok());
+            assert!(before_write(&mut scribe, "src/main.rs").is_err());
         }
 
         /// DELEGATE-28. A delegate that starts one of its own passes its limit down: the child's
@@ -18203,9 +18381,9 @@ five
 
             let mut child_sink = RecordingSink::new();
             let mut helper = open_policy(&mut child_sink).within(&child);
-            assert!(helper.before_write("docs/a.md").is_ok());
+            assert!(before_write(&mut helper, "docs/a.md").is_ok());
             assert!(
-                helper.before_write("src/main.rs").is_err(),
+                before_write(&mut helper, "src/main.rs").is_err(),
                 "a delegate's own delegate wrote where the delegate may not"
             );
         }
@@ -18460,6 +18638,46 @@ five
             );
         }
 
+        /// TRACE-1, PATHREQ-7: the reach the permission mode gave the file tools into a directory is a
+        /// permission under `path_reach` that names the mode, the directory, the tool and its
+        /// argument, and records no trust. The regression it rejects is a record that credits nobody
+        /// or the wrong tool, or one that marks the directory trusted as an opened one is.
+        #[test]
+        fn the_mode_reaching_a_directory_is_recorded_with_the_tool_and_the_field_and_trusts_nothing()
+         {
+            let mut sink = RecordingSink::new();
+            let mut turn = open_policy(&mut sink);
+            turn.record_bypass_reach("/srv/out", "bypass", "write_file", "path");
+            drop(turn);
+            let said: Vec<_> = sink
+                .events()
+                .iter()
+                .filter_map(|event| match event {
+                    Event::GatePassed { gate, detail } if *gate == "path_reach" => {
+                        Some(detail.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(said.len(), 1, "{said:?}");
+            for part in [
+                "bypass mode",
+                "/srv/out",
+                "write_file",
+                "path",
+                "nobody was asked",
+            ] {
+                assert!(said[0].contains(part), "{part}: {}", said[0]);
+            }
+            assert!(
+                !sink
+                    .events()
+                    .iter()
+                    .any(|event| matches!(event, Event::GatePassed { gate: "trust", .. })),
+                "a reach was recorded as trust"
+            );
+        }
+
         /// TRACE-1: a delegate withdrawn for its checkout is a refusal in the trail, with the
         /// fixed cause, the directory a person opened where that was it, and how many of the
         /// call's delegates were not started.
@@ -18672,19 +18890,20 @@ five
             let mut sink = RecordingSink::new();
             let mut turn = open_policy(&mut sink);
             let id = DelegateId::nth(1);
-            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 7 });
-            turn.record_delegate_end(id, 120, Finish::Answered { took, rounds: 120 });
-            turn.record_delegate_end(id, 120, Finish::Stopped { took, rounds: 12 });
-            turn.record_delegate_end(
+            turn.record_delegate_end_within(id, 120, None, Finish::Answered { took, rounds: 7 });
+            turn.record_delegate_end_within(id, 120, None, Finish::Answered { took, rounds: 120 });
+            turn.record_delegate_end_within(id, 120, None, Finish::Stopped { took, rounds: 12 });
+            turn.record_delegate_end_within(
                 id,
                 120,
+                None,
                 Finish::Failed {
                     took,
                     rounds: 37,
                     why: "unavailable",
                 },
             );
-            turn.record_delegate_end(id, 120, Finish::Lost);
+            turn.record_delegate_end_within(id, 120, None, Finish::Lost);
             drop(turn);
             let recorded: Vec<&str> = sink
                 .events()
@@ -19150,7 +19369,10 @@ five
             let mut child_sink = RecordingSink::new();
             let mut child =
                 open_policy(&mut child_sink).with_file_authority(policy.file_authority());
-            child.reconcile_after_write("vendor/generated", Label::untrusted_public());
+            child
+                .capture_files(|_, capture| capture.begin("vendor/generated"))
+                .expect("the path is free")
+                .complete(Label::untrusted_public().integrity);
             let answered = child.vouched();
             policy.adopt_from_delegate(&seeded, &answered);
             assert_eq!(
@@ -20102,25 +20324,6 @@ five
             assert!(branch.before_capability(Capability::ShellExec).is_err());
             assert!(branch.read_is_denied("/work/secret.txt"));
             assert!(!branch.read_is_denied("/work/other.txt"));
-        }
-    }
-
-    /// A branch words a refusal as the policy it came from would. One that began with the grant of
-    /// an unasked `request_path` unset would tell the planner to ask when the policy grants it
-    /// without a question.
-    #[test]
-    fn a_branch_keeps_whether_path_requests_are_granted_unasked() {
-        for unasked in [true, false] {
-            let mut sink = RecordingSink::new();
-            let mut policy = open_policy(&mut sink);
-            policy.grant_path_requests_unasked(unasked);
-            let mut record = RecordingSink::new();
-            let branch = policy.branch(&mut record);
-            assert_eq!(
-                branch.path_requests_are_granted_unasked(),
-                unasked,
-                "policy granting unasked: {unasked}"
-            );
         }
     }
 

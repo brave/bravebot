@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/agent", "crates/approval", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
+members = ["crates/agent", "crates/approval", "crates/backtrace", "crates/bedrock", "crates/browser", "crates/i18n", "crates/session", "crates/diag", "crates/stamp", "crates/tui", "crates/aichat", "crates/cli", "crates/config", "crates/connector", "crates/core", "crates/filetype", "crates/lsp", "crates/mcp", "crates/mentions", "crates/net", "crates/sandbox", "crates/signing", "crates/skus", "crates/ui-bridge", "crates/ui-files"]
 
 [workspace.package]
-version = "0.18.0"
+version = "0.19.0"
 edition = "2024"
 # Matches the pinned cross-build container, so `cargo build` fails on a feature the
 # release build could not compile rather than deferring that to CI.
@@ -25,6 +25,9 @@ future_not_send = "deny"
 let_underscore_future = "deny"
 rc_mutex = "deny"
 mutex_atomic = "deny"
+# An `#[allow]` or `#[expect]` ends its list with `reason = "..."`. The lint reads only code the host
+# compiles, so `crates/cli/tests/allow_reasons.rs` holds every source file to the same rule.
+allow_attributes_without_reason = "deny"
 
 [workspace.dependencies]
 base64 = "0.22"
@@ -41,7 +44,20 @@ libc = "0.2"
 # Pinned to the major version challenge-bypass-ristretto takes its RNG traits from, so
 # OsRng is the same type both crates expect.
 rand = "0.8"
+# RSA PKCS#1 v1.5 with SHA-256, which verifies the ID token of a ChatGPT sign-in against the
+# authorization server's key set. Already in Cargo.lock at this version with these features
+# (alloc, dev_urandom_fallback), through rustls-webpki, so the lock gains the one line saying
+# bravebot-skus uses it and nothing is built twice.
+ring = "0.17.14"
 rustix = "1"
+# The zstd encoder for the body of a request to a ChatGPT account (CHATGPT-10). Pure Rust with no
+# build script and no native code, where the `zstd` crate compiles the C library for every
+# cross-build target. It encodes at one level, `Fastest`, which is roughly zstd level 1. `hash`
+# writes the frame's checksum, which libzstd verifies, so a decoder that checks it refuses a frame
+# this encoder got wrong where it would otherwise read other text. `std` is the crate's default
+# I/O, which the decoder the tests read frames back with needs. The one crate it brings is `twox-hash`,
+# for the checksum, with only its `xxhash64`.
+ruzstd = { version = "0.9", default-features = false, features = ["hash", "std"] }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `unstable-rendered-line-info` is `Paragraph::line_count`, which is how the transcript knows
 # how tall it will be once wrapped. Counting logical lines instead loses the bottom of any reply

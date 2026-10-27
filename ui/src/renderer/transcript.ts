@@ -50,7 +50,8 @@ export type Entry = (
    */
   | { kind: 'user'; id: string; text: string; prompt?: number }
   | { kind: 'assistant'; id: string; text: string }
-  | { kind: 'narration'; id: string; text: string }
+  /** `command` is the words of `text` that are a command to run, where a notice names one. */
+  | { kind: 'narration'; id: string; text: string; command?: string | null }
   /**
    * A file that was put in front of the planner because somebody named it.
    *
@@ -189,7 +190,7 @@ export type Entry = (
   /** A manifest run that stopped: declined, stopped by the person, or failed. */
   | { kind: 'plan-ended'; id: string; ended: ManifestError }
   | { kind: 'ask'; id: string; request: AskRequest; answers: AskAnswer[] | null }
-  | { kind: 'error'; id: string; text: string; category?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
+  | { kind: 'error'; id: string; text: string; category?: string | null; accountMessage?: string | null; accountCommand?: string | null; attempts?: number | null; status?: number | null; cutOff?: CutOff | null }
   | { kind: 'watch'; id: string; text: string }
   /** A message between two background sessions, drawn apart from the prompts (MSG-11). */
   | { kind: 'session-message'; id: string; direction: 'from' | 'to'; heading: string; kept: string | null; session: string; name: string; label: string; text: string | null }
@@ -262,7 +263,7 @@ export function fromSaid(said: Said[]): Entry[] {
 
 export const userSaid = (text: string): Entry => ({ kind: 'user', id: nextId(), text })
 export const consolidating = (): Entry => ({ kind: 'consolidation', id: nextId() })
-export const narrated = (text: string): Entry => ({ kind: 'narration', id: nextId(), text })
+export const narrated = (text: string, command?: string | null): Entry => ({ kind: 'narration', id: nextId(), text, command })
 export const watchFired = (number: number, path: string): Entry => ({ kind: 'watch', id: nextId(), text: `File watch ${number}: ${path}` })
 export const errored = (text: string): Entry => ({ kind: 'error', id: nextId(), text })
 export const quarantined = (shown: Shown): Entry => ({ kind: 'quarantined', id: nextId(), shown })
@@ -576,8 +577,8 @@ export function conversation(entries: Entry[], tools = false): ExportTurn[] {
     }
     if (!tools) continue
     if (entry.kind === 'tool') {
-      const { verb, target, note, failed } = entry.activity
-      turns.push({ role: 'tool', verb, target, note, failed })
+      const { verb, shownTarget, note, failed } = entry.activity
+      turns.push({ role: 'tool', verb, target: shownTarget, note, failed })
     } else if (entry.kind === 'replayed-tool') {
       turns.push({ role: 'tool', verb: entry.text, target: '', note: null, failed: false })
     }
@@ -594,7 +595,7 @@ export function searchableText(entry: Entry): string {
     case 'turn-start': return ''
     case 'attached': return entry.path
     case 'consolidation': return 'Updating persistent memory'
-    case 'tool': return [entry.activity.verb, entry.activity.target, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
+    case 'tool': return [entry.activity.verb, entry.activity.shownTarget, entry.activity.why, entry.activity.note, ...entry.activity.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'quarantined': return [entry.shown.origin, entry.shown.label, ...entry.shown.preview].join(' ')
     case 'confirm': return [entry.request.path, entry.request.intent, ...entry.request.changes.map((change) => 'text' in change ? change.text : '')].join(' ')
     case 'run': return [entry.request.summary, entry.request.directory, entry.request.line ?? '', ...entry.request.stages.map((stage) => stage.display)].join(' ')

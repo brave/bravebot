@@ -15,6 +15,12 @@ Every request this process makes to the network: what has to be true before one 
 comes back. What the returned bytes are labelled, and what may then be done with them, is
 [labels.md](labels.md).
 
+The listener of the ChatGPT sign-in ([CHATGPT-4](chatgpt-sign-in.md#CHATGPT-4)) makes no request, so
+no clause here applies to it. It binds `127.0.0.1` and accepts a connection from any program on this
+machine, and each answer is a fixed status and a fixed page that repeats nothing from the request.
+[NET-10](#NET-10) lets a stream to a server on this machine be waited on without a bound, and says
+nothing about a port this process listens on. What the listener accepts is the ChatGPT spec's.
+
 A crate that drives a turn for a surface elsewhere is under these clauses without being named by
 them. It builds no client of its own, so it is not a second egress and needs no clause here; what it
 does instead is [layering.md](layering.md)'s, and it is narrower than "reaches the network through
@@ -61,14 +67,23 @@ capability and nothing more, for the reason that clause gives. Whichever it is, 
 to the transport the hop before it used, by [NET-9](#NET-9), and for a `fetch_url` call to the
 address its host resolves to, by [FETCH-8](tools/fetch-url.md#FETCH-8).
 
+A request may instead refuse redirects (`Request::refusing_redirects`). A redirect in answer to it is
+returned as the failure it is, with the status it came with, and nothing is sent to the address it names,
+so there is no hop to revalidate. It is for a request that carries a credential to a destination compiled
+into the program, such as the serving host of a ChatGPT account ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)) and of
+an xAI account ([XAI-16](xai-sign-in.md#XAI-16)).
+
 `verified-by: bravebot_net::egress::every_redirect_hop_is_revalidated`
 `verified-by: bravebot_core::policy::a_fetch_cannot_be_redirected_to_a_host_nobody_approved`
 `verified-by: bravebot_net::egress::a_redirect_loop_is_bounded`
 `verified-by: bravebot_net::lib::redirect_status_codes_are_recognised`
 `verified-by: bravebot_net::lib::absolute_redirects_are_used_as_given`
 `verified-by: bravebot_net::lib::path_absolute_redirects_keep_the_authority`
+`verified-by: bravebot_aichat::client::a_gateway_client_refusing_redirects_goes_nowhere_a_reply_names`
+`verified-by: bravebot_aichat::client::a_redirect_in_answer_to_the_xai_listing_is_a_failure_and_goes_nowhere`
 `verified-by: bravebot_net::lib::relative_redirects_resolve_against_the_parent_path`
 `verified-by: bravebot_net::lib::scheme_relative_redirects_keep_the_scheme`
+`verified-by: bravebot_net::lib::a_request_refusing_redirects_is_answered_with_the_redirects_status_and_goes_no_further`
 
 <a id="NET-3"></a>
 ### NET-3: only http and https ever reach the network
@@ -412,26 +427,101 @@ encrypted key needs is not read; see Known costs.
 `verified-by: bravebot_cli::doctor::the_network_section_names_a_client_certificate_that_loaded_and_never_its_key`
 `verified-by: bravebot_cli::doctor::the_network_section_names_each_client_file_that_cannot_be_used`
 
+<a id="NET-12"></a>
+### NET-12: a request may ask for the whole body of a refusal, and nothing here reads it
+
+A request that asks (`Request::reading_a_refusal`) is answered a non-success status with the body as well,
+where the body is no longer than 16 KiB: all of it, labelled as the call labels its replies, in the failure
+beside the status and the wait the server asked for. A longer body is not handed over cut, since half of it
+would be read as if it were whole, and neither is one that could not be read because the connection broke or
+went quiet past [NET-5](#NET-5)'s gap. The failure is then the status alone. A request that does not ask is
+answered a non-success status with no body, and a success is answered the same whatever the request asked.
+
+The body is read with the reply, under the bounds of NET-5. A body that goes quiet is given up on at the gap.
+Where the request is made with a way to stop it, the read is on the thread a stop abandons, so the caller is
+answered at once. A read that fails is written to the diagnostic log as the body failing, beside the status
+that is the failure, unless the request was stopped.
+
+This crate does not look at the body. What decides anything from it is the caller, which compares one field
+of it with a list of its own, as [CHATGPT-8](chatgpt-sign-in.md#CHATGPT-8) does, and no text made from the
+failure (its words, its debug form, the diagnostic log) holds any of it. Only the body of the URL the caller
+asked for is handed over. A refusal after a redirect is reported against the URL that was asked for, as
+[NET-2](#NET-2) says of a status, and carries no body, so a server's redirect cannot speak for the host the
+caller asked. A request that waits on its reply without bound (`Request::patient_on_this_machine`) is handed
+none either, since a stop would leave the read blocked with no bound to end it.
+
+**Why.** The status alone cannot say whether asking again will help. A service may refuse a request with
+the same 401 for a token that a replacement fixes and for an account that no token reaches, and writes
+which in the body. The body is untrusted bytes, so it is handed back under the label the request's call
+gave, like any other body, and the one place that reads it states its comparison. It is a request's
+choice because a caller that decides nothing from the body has no use for a read of up to 16 KiB on every
+failed request.
+
+`verified-by: bravebot_net::egress::a_request_that_asks_is_handed_a_refusals_body_and_one_that_does_not_is_told_the_status_alone`
+`verified-by: bravebot_net::egress::a_streamed_request_that_asks_is_handed_a_refusals_body`
+`verified-by: bravebot_net::egress::a_refusals_body_is_handed_over_whole_up_to_the_cap_and_not_at_all_past_it`
+`verified-by: bravebot_net::egress::a_success_is_not_changed_by_asking_for_a_refusals_body`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_stops_partway_is_the_status_alone`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_goes_quiet_is_the_status_alone_after_the_gap_bound`
+`verified-by: bravebot_net::egress::a_stop_while_a_refusals_body_is_awaited_is_acted_on`
+`verified-by: bravebot_net::egress::a_refusal_whose_body_fails_while_it_is_read_is_written_to_the_diagnostic_log`
+`verified-by: bravebot_net::egress::a_refusal_after_a_redirect_carries_no_body_and_names_the_url_that_was_asked_for`
+`verified-by: bravebot_net::egress::a_request_that_waits_without_bound_is_not_handed_a_refusals_body`
+`verified-by: bravebot_net::lib::a_refusals_body_is_in_no_text_made_from_the_failure`
+
 ## Known costs
 
-- **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds its own
-  HTTP client for the subscription service. That traffic carries credentials and an order id,
-  never workspace content or model output, so no labelled value escapes the gate. NET-1 is about
-  everything carrying labelled content. A second egress in this process that ever carried content
-  would be a violation. Its client is its own; its transport is not. `register` is handed the
-  transport configuration this module resolved, by a caller that depends on both crates, so NET-7
-  and NET-8 hold of it too and a machine whose authority or route off it is stated in the
-  environment reaches the subscription service on the terms it reaches everything else. What stays
-  separate is the policy gate, which that client has nothing to put to, and the redirect loop, so
-  NET-9 does not reach it either: that client follows its hops through its library's default, which
-  refuses nothing, so the subscription service can redirect its own traffic into cleartext and put an
-  order id and a credential on the wire. Holding it to the same rule means either following its
-  redirects here or configuring that client to follow none, and neither is decided in this document.
+- **A refusal's body is read before its failure is returned** ([NET-12](#NET-12)). A server that sends the
+  headers of a refusal and then goes quiet holds the failure for [NET-5](#NET-5)'s gap, two minutes by
+  default, and a token replacement or a backoff waits behind it. A stop ends the wait where the request was
+  made with a way to stop it, and a request made without one waits it out.
+- **`bravebot-net` is not the only crate that opens a socket.** `bravebot-skus` builds HTTP clients
+  of its own: one for the subscription service and one for each of the ChatGPT and xAI sign-ins. That traffic carries
+  credentials, an order id, an authorization code and tokens, never workspace content or model
+  output, so no labelled value escapes the gate. NET-1 is about everything carrying labelled
+  content. A second egress in this process that ever carried content would be a violation. Its
+  clients are its own; its transport is not. `register`, the ChatGPT and xAI sign-ins and the renewal of an
+  access token are handed the transport configuration this module resolved, by a caller that
+  depends on both crates, so NET-7, NET-8 and NET-11 hold of them too and a machine whose authority
+  or route off it is stated in the environment reaches each service on the terms it reaches
+  everything else. What stays separate is the policy gate, which those clients have nothing to put
+  to, and the redirect loop, so NET-9 does not reach them either. What each does with a redirect
+  differs:
+  - The ChatGPT clients follow none. A redirect in answer to a request that carries an
+    authorization code, a verifier or a token is a failure, and nothing is sent to the address it
+    names ([CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)). The xAI client follows none either, for a
+    request that carries a device code or a refresh token ([XAI-1](xai-sign-in.md#XAI-1)).
+  - The subscription client follows its hops through its library's default, which refuses nothing,
+    so the subscription service can redirect its own traffic into cleartext and put an order id and
+    a credential on the wire. Holding it to the same rule means either following its redirects here
+    or configuring that client to follow none, and neither is decided in this document.
 
   This bullet is the register, and it is read rather than only written: `make check-security` takes
   the crates it names out of it and fails on any manifest under `crates/` that declares a network
   client and is not one of them. So a third client is a red build rather than a paragraph in the
   gate crate assuring a reviewer that it cannot exist, which is what it used to be.
+
+- **A ChatGPT sign-in reaches OpenAI's hosts, each a constant of the source, and
+  [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2) names them.** This spec holds no copy of the addresses. What
+  this layer does differs by request. The browser is opened at the authorization page by the sign-in
+  command, and this process makes no request to that page. The code exchange, the fetch of the key set
+  and the renewal of an access token are made by the `bravebot-skus` clients above, over the shared
+  transport, with no redirect followed. A turn's request and the listing of the account's models go
+  through the one way out of NET-1 as any model request does, and each refuses redirects
+  ([NET-2](#NET-2)) and is handed the body of a refusal ([NET-12](#NET-12)). Which destination takes
+  which credential is [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2)'s, and so is the seam by which a
+  debug build with the `test-hosts` feature sends the flow to a stand-in, which a build that ships
+  cannot.
+
+- **An xAI sign-in reaches xAI's hosts, each a constant of the source, and [XAI-1](xai-sign-in.md#XAI-1)
+  names them.** The code request, the poll and the renewal of an access token are made by the
+  `bravebot-skus` clients above, over the shared transport, with no redirect followed. A turn's request
+  and the listing of the account's models go through the one way out of NET-1 as any model request does,
+  and each refuses redirects ([NET-2](#NET-2)): the request carries the access token and a conversation,
+  and a person did not choose the host. Neither asks for the body of a refusal, so none of it is read
+  ([XAI-18](xai-sign-in.md#XAI-18)). Which destination takes which token is
+  [XAI-1](xai-sign-in.md#XAI-1)'s and [XAI-16](xai-sign-in.md#XAI-16)'s, and so is the seam by which a debug
+  build with the `test-hosts` feature sends the flow to a stand-in, which a build that ships cannot.
 
 - **The machine's own trust store is not read.** `SSL_CERT_FILE` and `SSL_CERT_DIR` are, so on a
   machine where neither is set an authority installed into the platform store is invisible here.
@@ -473,7 +563,10 @@ encrypted key needs is not read; see Known costs.
   bounds what a downgrade costs, not where a hop may land. What stands in front of this is that the
   endpoint is one a person chose and already sends every request to; what would bound it is holding
   those chains to a host as well, which is a decision about which hosts a configured endpoint may
-  redirect to and is not made here.
+  redirect to and is not made here. A request to the serving host of a ChatGPT account or of an xAI
+  account is the exception: it carries the access token, and a person did not choose that host, so it
+  refuses redirects ([NET-2](#NET-2), [CHATGPT-2](chatgpt-sign-in.md#CHATGPT-2),
+  [XAI-16](xai-sign-in.md#XAI-16)).
 
 - **Two pairs of phases share a bound rather than having one each.** The transport gives a phase
   the earliest of its own deadline and those of the phases before it, so a bound tight enough to
@@ -516,11 +609,12 @@ encrypted key needs is not read; see Known costs.
   that does.** The TLS library presents it to whichever server requests a certificate during a
   handshake, and nothing records the host it was configured for, so an endpoint that redirects to
   another host ([NET-2](#NET-2) revalidates the hop and no more) is offered it there too. The
-  subscription client built by `bravebot-skus` is handed the same configuration and presents it
-  alike. What would bound it is a setting naming the hosts, which is not decided here. Pinning that
-  a server demanding a certificate receives this one needs a TLS server in the test, and `bravebot-net`
-  has no dependency that is one; the tests pin what is handed to the client's configuration, and
-  the change was observed against `openssl s_server -Verify`.
+  clients built by `bravebot-skus`, for the subscription service and for the ChatGPT sign-in, are
+  handed the same configuration and present it alike. What would bound it is a setting naming the
+  hosts, which is not decided here. Pinning that a server demanding a certificate receives this one
+  needs a TLS server in the test, and `bravebot-net` has no dependency that is one; the tests pin what
+  is handed to the client's configuration, and the change was observed against
+  `openssl s_server -Verify`.
 
 - **An encrypted key is refused, not decrypted.** Decrypting a key means a dependency this build
   does not have, so no passphrase is read from the environment or the credential store either. A key that needs one is reported by path as encrypted, and the file has to be

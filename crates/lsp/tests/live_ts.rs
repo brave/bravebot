@@ -94,7 +94,7 @@ fn ask(root: &Path, question: &Question<'_>) -> Option<Answer> {
 
     // LSP-5 asks before a server starts. A test is not a person, so it says yes explicitly rather
     // than having the answer inferred: what is being exercised is the protocol, not the prompt.
-    match servers.ask(&mut policy, question, &mut |_| true) {
+    match servers.ask(&mut policy, question, &mut |_, _| true) {
         Ok(answer) => Some(answer),
         Err(error) => {
             // This server drives `tsserver.js` out of a TypeScript installation, and TypeScript 7

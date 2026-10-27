@@ -37,13 +37,27 @@
 
 #![deny(unsafe_code)]
 
+// The seam that points the ChatGPT and xAI sign-ins at a stand-in exists for tests, and a release build
+// that turned it on, by `--all-features` or a manifest, would let a variable choose where a token goes.
+// Rust has no `cfg` for the release profile, so the refusal reads the two settings that profile has
+// and a test build does not: no debug assertions, and a panic that aborts. A release with
+// `debug-assertions = true` aborts on a panic, and `cargo test --release` unwinds and has no assertions,
+// so each is refused by one of the two. `crates/cli/tests/layering.rs` compiles this line under each
+// combination and reads the root manifest for the release profile's `panic = "abort"`.
+#[cfg(all(feature = "test-hosts", any(not(debug_assertions), panic = "abort")))]
+compile_error!(
+    "the test-hosts feature is for tests: it is refused where debug assertions are off or a panic aborts, as in a release build"
+);
+
 pub mod chatgpt;
 pub mod device;
+pub mod oauth;
 pub mod profile;
 pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod testutil;
+pub mod xai;
 
 pub use device::{DeviceError, Registration};
 pub use profile::{Channel, LeoOrder, ProfileError, find_leo_order};

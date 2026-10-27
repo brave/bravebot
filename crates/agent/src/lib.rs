@@ -17,6 +17,7 @@ pub mod aside;
 pub mod attached;
 pub mod backend;
 mod calendar;
+pub mod chatgpt;
 pub mod cmdline;
 pub mod commit_message;
 pub mod compact;
@@ -27,6 +28,7 @@ pub mod conversation;
 pub mod delegate;
 pub mod diff;
 pub mod exec;
+pub mod file_preview;
 pub mod findings;
 pub mod git;
 pub mod glob;
@@ -37,6 +39,7 @@ pub mod home;
 pub mod hooks;
 pub mod host_proxy;
 pub mod hunks;
+pub mod interjections;
 #[cfg(test)]
 mod kept_answers;
 pub mod lsp;
@@ -63,6 +66,7 @@ pub mod repo_map;
 pub mod report;
 pub mod request_view;
 pub mod rewind;
+pub mod roster;
 pub mod rules;
 pub mod sandbox_reason;
 pub mod scratch;
@@ -89,6 +93,7 @@ pub mod usability;
 pub mod vet;
 pub mod watch;
 pub mod workspace;
+pub mod xai;
 
 /// What a crash of this process may leave behind, re-exported for the front ends.
 ///

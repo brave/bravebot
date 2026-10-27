@@ -5,8 +5,8 @@
 //! a model or a page.
 
 use super::Hosts;
-use super::encoding::{base64url, percent_encode, random_value};
 use crate::Secret;
+use crate::oauth::encoding::{base64url, percent_encode, random_value};
 use sha2::{Digest, Sha256};
 
 /// The client a first sign-in presents, which asks OpenAI to register one for this program.
@@ -67,6 +67,11 @@ impl Request {
         &self.verifier
     }
 
+    /// The `nonce` the URL carries, which the ID token has to name.
+    pub(super) fn nonce(&self) -> &Secret {
+        &self.nonce
+    }
+
     pub(super) fn client(&self) -> Option<&str> {
         self.client.as_deref()
     }
@@ -111,8 +116,8 @@ impl Request {
 
 #[cfg(test)]
 mod tests {
-    use super::super::stand_in::{named, parameters};
     use super::*;
+    use crate::oauth::stand_in::{named, parameters};
 
     const REDIRECT: &str = "http://127.0.0.1:40000/auth/callback";
 

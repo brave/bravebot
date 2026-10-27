@@ -5,6 +5,7 @@ status: normative
 governs:
   - crates/agent/src/tools.rs
   - crates/agent/src/tools/offered.rs
+  - crates/agent/src/workspace/bypass.rs
 guards:
   - symbol: Policy::record_path_reach
 documented-by: docs/website/docs/reference/tools.md
@@ -44,8 +45,8 @@ project file or permission rule grants one in advance.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not`
 `verified-by: bravebot_agent::turn::a_path_needs_a_yes_from_the_person_or_the_mode_that_asks_nothing`
-`verified-by: bravebot_tui::confirm::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
-`verified-by: bravebot_tui::confirm::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
+`verified-by: bravebot_tui::confirm::grants::a_path_prompt_shows_the_path_the_access_the_reason_and_what_a_yes_does_not_do`
+`verified-by: bravebot_tui::confirm::grants::a_path_longer_than_the_box_takes_no_yes_until_the_end_of_it_has_been_drawn`
 
 <a id="PATHREQ-3"></a>
 ### PATHREQ-3: a path an `allowWrite` row refuses is refused, and not asked about
@@ -113,7 +114,7 @@ unknown name ([DELEGATE-12](../delegation.md#DELEGATE-12)).
 `verified-by: bravebot_agent::tools::a_delegate_that_names_request_path_is_told_no_such_tool_and_nobody_is_asked`
 
 <a id="PATHREQ-7"></a>
-### PATHREQ-7: a yes does not reach the file tools, except where the mode that answers every question gave it
+### PATHREQ-7: a yes does not reach the file tools, and the mode that answers every question reaches them with no request
 
 A person's yes lets a program reach the path. `read_file`, `write_file`, `edit_file`, `list_files`
 and `search` stay confined to the working directory and the directories opened with `/add-dir`
@@ -122,46 +123,100 @@ says to open the directory with `/add-dir`, which also marks it trusted ([TRUST-
 `request_path` does not do that, since the path is a string the planner chose and a trust decision
 over it would be one made on its say-so ([TRUST-8](../trust-map.md#TRUST-8)).
 
-**Bypass.** Where the mode that answers every permission question
-([MODE-4](../permission-modes.md#MODE-4)) grants the request, no person is there to run `/add-dir`
-and none is asked, so the grant also opens the directory as `/add-dir` does: reachable by the file
-tools, trusted, closed by `/add-dir close` and `/clear`, and carried by `--resume`
-([TRUST-9](../trust-map.md#TRUST-9)). It is opened only where `/add-dir` would open it. A path
-refused unasked ([PATHREQ-3](#PATHREQ-3)) is refused here too, and a directory inside the project,
-a file, a directory whose name is not text, or one `permissions.readsStayInWorkspace` keeps the
-tools out of is not opened, with the
-grant for programs left standing and the result saying the file tools were not given it. A directory
-that holds the project is opened, and the result says that no delegate is given a checkout while it
-is open ([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now
-reach the path, so it does not ask the person to run `/add-dir`.
+**The file tools in bypass.** While the permission mode is the one that answers every permission
+question ([MODE-4](../permission-modes.md#MODE-4)), a path outside the workspace is reachable to a
+tool that names one, wherever the account can reach it, with no call to `request_path` and no
+directory opened. `read_file`, `write_file`, `edit_file`, `list_files`, `search`, `repo_map`,
+`read_git` and `download_url`, `run`'s `directory` and the target of a redirection follow one
+rule, which is decided where each resolves a path (`Workspace::resolve` and
+`Workspace::confines`), and the tools that name a path are one list a test reads, so a tool added
+later is covered or fails it. The refusals are the ones that hold for a granted request, judged
+where the path leads through links:
+
+- for a read, the paths [PATHREQ-3](#PATHREQ-3) refuses: a filesystem root, a drive root, the home
+  directory and the directories above it, `~/.ssh`, `~/.bravebot` (a read of its `sessions`
+  directory excepted), credential locations and the directories that hold one, and a path with a
+  control character or a wildcard;
+- for a write, the paths [SANDBOX-28](../sandboxing.md#SANDBOX-28) gives a bypass stage no write row
+  for: the same, and persistence locations and the directories that hold one. A new entry is judged
+  by the directory it lands in, so an entry already inside the home directory or a directory above
+  it stays writable and no new entry is made directly in one;
+- everything the person's `denyRead` and `denyWrite` cover ([MODE-6](../permission-modes.md#MODE-6)),
+  and every path where `permissions.readsStayInWorkspace` is set ([PERM-16](../permissions.md#PERM-16));
+- a write under the sandbox mode `read-only`, in every permission mode
+  ([SANDBOX-22](../sandboxing.md#SANDBOX-22));
+- every path in a workspace the person has not trusted (see PATHREQ-5).
+
+`read_git` reaches a repository outside the workspace and then reads its history only where the
+whole of its `.git` is vouched for ([GIT-1](read-git.md#GIT-1)), as it does for a repository in the
+workspace nobody vouched for, so its answer there is that refusal. `watch_file` is not given the
+reach: a watch is looked at later with no call in progress, so one armed outside the workspace
+would end at its first look, and the refusal for a path outside the workspace stands for it.
+
+A refused path gets the refusal it always had and reaches nothing. The sandbox mode does not change
+the file tools' reach: it holds under `workspace-write`, `strict` and `off` and on every platform.
+The reach is the live mode's and is read at each call, so it ends when the mode changes
+([MODE-8](../permission-modes.md#MODE-8)). Nothing is opened or recorded for the directory: no trust
+rule is written, the list `/add-dir` keeps is unchanged, and `--resume` and `/add-dir close` have
+nothing to carry or close. A file nobody vouched for is put to the vouch question as in the
+workspace ([TRUST-8](../trust-map.md#TRUST-8)) and bypass answers it. The trace records the first
+reach into each directory as a `path_reach` record, naming the mode, the tool and the argument that
+named the path, and `/status` lists the directories. The decision reads the path argument, which is
+routing, the live mode, the sandbox mode, the person's rules and facts about the path. It reads no
+byte of a file and no program output.
+
+A redirection into a reachable directory needs no `unconfined` argument. `unconfined` is unchanged:
+it is asked about every time, since the permission mode does not widen the sandbox mode
+([SANDBOX-22](../sandboxing.md#SANDBOX-22), [SANDBOX-29](../sandboxing.md#SANDBOX-29)).
+
+**`request_path` in bypass.** Where the mode that answers every permission question grants the
+request, no person is there to run `/add-dir` and none is asked, so the grant also opens the
+directory as `/add-dir` does: reachable by the file tools, trusted, closed by `/add-dir close` and
+`/clear`, and carried by `--resume` ([TRUST-9](../trust-map.md#TRUST-9)). It is opened only where
+`/add-dir` would open it. A path refused unasked ([PATHREQ-3](#PATHREQ-3)) is refused here too, and
+a directory inside the project, a file, a directory whose name is not text, or one
+`permissions.readsStayInWorkspace` keeps the tools out of is not opened, with the grant for programs
+left standing and the result saying the file tools were not given it. A directory that holds the
+project is opened, and the result says that no delegate is given a checkout while it is open
+([CHECKOUT-7](../checkouts.md#CHECKOUT-7)). The result tells the planner which tools now reach the
+path. It remains the way programs get a path under `strict` and on Windows.
 
 The planner cannot see the permission mode and is not told it. The tool's description states the
-exception as applying where the person has turned permission prompts off. A file tool's refusal for
-a path outside the workspace says that a `request_path` for the directory is granted without a
-question and opens it to the file tools, and says it only where the session does grant one unasked,
-which a session that accepts no request for a path ([PATHREQ-5](#PATHREQ-5)) does not. The planner
-then makes the call when it would succeed and does not put the person a question that opens
-nothing. Elsewhere, which includes the sandbox mode `off` and a workspace that is not trusted, the
-refusal names `/add-dir` alone. A skill that depends on the exception says the same and does not
-branch on the mode.
+exception as applying where the person has turned permission prompts off, and says the file tools
+reach a path outside the workspace there with no request. A file tool's refusal names `/add-dir`
+alone and does not send the planner to `request_path`: where the mode reaches a path the refusal is
+not given, and where it does not, a request for the path is refused as well. A skill that depends on
+the exception says the same and does not branch on the mode.
 
 The same mode needs no request for programs either, under the sandbox mode `workspace-write` on macOS and
-Linux, in a workspace the person has trusted: the lead session's stages are given at the start what a
-request for writing would be granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not
-refused before the planner asks. The file tools are not given that reach, and the request is still
-how they are.
+Linux, in a workspace the person has trusted: the stages are given at the start what a request for
+writing would be granted ([SANDBOX-28](../sandboxing.md#SANDBOX-28)), so a `run` is not refused
+before the planner asks.
 
 **Why.** The text a planner chose is the only thing that decides the path, which is the reason a
 person's yes does not vouch for it. In bypass the person has already declared that nothing a session
 does needs their word, and a session that stops on a question nobody is there to answer is the one
 failure the mode exists to avoid: `pr-fix` makes a worktree outside the project when
-`BRAVEBOT_PR_WORKTREES` names a directory there, and its edits stop at the first file tool.
+`BRAVEBOT_PR_WORKTREES` names a directory there, and its edits stop at the first file tool. Opening
+a directory when a file tool first meets it was rejected: it opens one directory per file, writes a
+trust rule per directory that outlives bypass and `--resume`, and needs a second mechanism for a
+delegate, which has a workspace of its own under `isolation: checkout`.
 
 `verified-by: bravebot_agent::turn::a_yes_to_a_path_does_not_let_the_file_tools_touch_it`
 `verified-by: bravebot_agent::turn::outside_bypass_a_yes_to_a_path_opens_nothing_for_the_file_tools`
 `verified-by: bravebot_agent::turn::under_bypass_a_granted_path_is_open_to_the_file_tools`
-`verified-by: bravebot_agent::turn::a_file_tool_refusal_names_request_path_only_where_a_grant_is_unasked`
-`verified-by: bravebot_agent::turn::a_file_tool_refusal_names_request_path_only_where_the_session_accepts_one`
+`verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
+`verified-by: bravebot_agent::turn::outside_bypass_a_sibling_directory_is_refused_and_no_refusal_names_request_path`
+`verified-by: bravebot_agent::turn::leaving_bypass_with_the_key_ends_the_reach_to_a_sibling_directory`
+`verified-by: bravebot_agent::turn::under_bypass_a_path_in_each_refusal_category_is_still_refused_and_reaches_nothing`
+`verified-by: bravebot_agent::turn::under_bypass_with_read_only_a_sibling_directory_is_read_and_not_written`
+`verified-by: bravebot_agent::workspace::a_call_holding_the_reach_reads_and_writes_a_sibling_directory_and_opens_nothing`
+`verified-by: bravebot_agent::workspace::a_path_a_request_would_be_refused_is_not_reached_under_bypass`
+`verified-by: bravebot_agent::workspace::a_new_entry_directly_in_the_home_directory_or_a_persistence_location_is_refused`
+`verified-by: bravebot_agent::workspace::the_persons_deny_lists_and_the_kept_inside_setting_hold_under_bypass`
+`verified-by: bravebot_agent::tools::every_tool_that_names_a_path_is_given_the_reach_or_says_why_not`
+`verified-by: bravebot_agent::tools::reads_taken_beforehand_hold_the_reach_the_mode_gives_them`
+`verified-by: bravebot_tui::status::the_report_lists_the_directories_bypass_took_the_file_tools_into`
 `verified-by: bravebot_agent::tools::request_path_says_a_grant_opens_the_file_tools_only_where_prompts_are_off`
 `verified-by: bravebot_agent::turn::under_bypass_a_path_that_is_refused_is_still_refused_and_opens_nothing`
 `verified-by: bravebot_agent::turn::under_bypass_a_directory_inside_the_project_is_not_opened`

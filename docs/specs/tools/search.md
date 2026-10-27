@@ -6,6 +6,7 @@ governs:
   - crates/agent/src/glob.rs
   - crates/agent/src/regex.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/results.rs
   - crates/config/src/settings.rs
 documented-by: docs/website/docs/reference/tools.md
 ---
@@ -132,6 +133,8 @@ a second run of the same call. The planner is told the search is incomplete eith
 `verified-by: bravebot_agent::turn::a_truncated_search_tells_the_model_it_is_incomplete`
 `verified-by: bravebot_agent::turn::a_complete_search_makes_no_truncation_claim`
 `verified-by: bravebot_agent::turn::a_quarantined_search_still_tells_the_model_it_is_incomplete`
+`verified-by: bravebot_agent::turn::a_search_that_ran_out_of_time_tells_the_model_it_did_not_read_the_rest`
+`verified-by: bravebot_agent::turn::a_quarantined_search_that_ran_out_of_time_still_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_search_that_could_not_reach_every_file_says_so`
 `verified-by: bravebot_agent::workspace::a_search_that_ran_out_of_time_says_so`
 `verified-by: bravebot_agent::workspace::a_search_that_reached_every_file_makes_no_claim`
@@ -250,6 +253,9 @@ The project's own `.gitignore` would generalise better and is deliberately not u
 decide what to walk from the contents of a file in the tree being walked, and a tree that can hide
 its own files from a search is a tree that can hide them from review. The names on the list are
 ones no project uses for its own sources, so skipping them needs nobody's word for it.
+
+A symbolic link is not a name on that list and is not skipped for size: it is not entered, and
+[SEARCH-13](#SEARCH-13) says how many were not.
 
 `verified-by: bravebot_agent::workspace::a_search_skips_vendored_dependencies`
 `verified-by: bravebot_agent::workspace::a_search_skips_a_linked_worktree_under_claude_worktrees`
@@ -433,3 +439,26 @@ and not left to be inferred.
 `verified-by: bravebot_agent::turn::a_search_output_off_the_list_is_refused`
 `verified-by: bravebot_agent::turn::a_quarantined_capped_files_result_still_says_it_is_incomplete`
 `verified-by: bravebot_agent::workspace::a_files_or_count_result_is_not_cut_by_an_offset_or_context`
+
+<a id="SEARCH-13"></a>
+### SEARCH-13: a search says how many symbolic links it did not enter, as a number
+
+A search does not enter a symbolic link, to a file or to a directory, at any depth
+([permissions.md](../permissions.md)), so a file behind a link is not read. It counts the links it
+meets, and every result says how many were not entered and that the files behind them were not
+searched, whether it found matches or none. The count is a number and never a name, because a
+link's name is a filename ([LIST-2](list-files.md#LIST-2)). It is taken from the file type of each
+directory entry and not from any file's bytes, it is released the way the cap and the offset of
+[SEARCH-8](#SEARCH-8) are, and it travels beside the reference when the result is quarantined. The
+tool description says that a link is not entered and that a directory a link points to is searched
+by naming it.
+
+**Why.** A search whose files sit behind a link reads nothing there. Without the count that is
+indistinguishable from the pattern being absent, or, with an `include`, from a glob that is wrong
+([SEARCH-5](#SEARCH-5)), and the planner rewrites a pattern or a glob that was right. A note on a
+result that found matches says the answer may be partial. `repo_map` does not report the count:
+[repo-map.md](repo-map.md).
+
+`verified-by: bravebot_agent::tools::a_search_counts_the_links_it_did_not_enter_and_does_not_name_them`
+`verified-by: bravebot_agent::turn::sentences::links_not_entered_are_counted_beside_the_reference_and_no_note_means_none`
+`verified-by: bravebot_agent::tools::list_files_names_every_directory_its_walk_skips`

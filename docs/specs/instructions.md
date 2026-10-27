@@ -8,6 +8,7 @@ governs:
   - crates/agent/src/agents.rs
   - crates/agent/src/home.rs
   - crates/agent/src/styles.rs
+  - crates/agent/src/workspace/touched.rs
 documented-by: docs/website/docs/customize/instructions.md
 ---
 

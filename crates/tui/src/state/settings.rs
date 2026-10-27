@@ -93,6 +93,18 @@ impl Session {
             .set(self.permission_mode.get().cycle(self.bypass_reachable));
     }
 
+    /// Move to the next mode the ladder has short of bypassing, which is what a click on the mode
+    /// under the box does (MOUSE-14).
+    ///
+    /// Bypassing answers every later question without asking, and a click is the one input a stray
+    /// press or a terminal that reports a position wrongly can make, so a click never grants it. The
+    /// key does, from the line that names the mode, and from bypassing both come back to the
+    /// first mode.
+    pub fn cycle_permission_mode_short_of_bypass(&mut self) {
+        self.permission_mode
+            .set(self.permission_mode.get().cycle(false));
+    }
+
     /// Set plan mode, from whichever mode the session is in, and say nothing for the reason
     /// [`Session::cycle_permission_mode`] gives.
     ///
@@ -170,7 +182,7 @@ impl Session {
     pub fn choose_model(&mut self, model: impl Into<String>, config: &bravebot_config::Config) {
         let model = model.into();
         if self.persist {
-            bravebot_session::store::save_model(config.name_to_record(&model));
+            bravebot_session::store::record_model(config, &model);
         }
         self.model = Some(model);
     }
@@ -275,9 +287,47 @@ impl Session {
     /// The level a turn will actually send, which is nothing where the model does not read one.
     ///
     /// Sending a level to a model whose roster row says it reads none is a field that is dropped at
-    /// the far end, so the choice is kept and the request is not given it.
+    /// the far end, so the choice is kept and the request is not given it. A ChatGPT model is sent
+    /// the level the session began with and not the one chosen since, so the choice applies to the
+    /// next session and to every other model (CHATGPT-10).
     pub fn effort_in_force(&self) -> Option<Effort> {
-        self.effort.filter(|_| self.model_reads_effort)
+        let level = match self.model_is_account {
+            true => self.account.effort(),
+            false => self.effort,
+        };
+        level.filter(|_| self.model_reads_effort)
+    }
+
+    /// Begin the session the ChatGPT account sees, at the level in force now.
+    ///
+    /// Called once the level is settled, where the session starts, and where `/clear` and a handoff
+    /// begin another. A level chosen after that is not this session's for the account.
+    pub fn begin_account_session(&mut self) {
+        self.account = bravebot_agent::chatgpt::AccountSession::begin_with(self.effort);
+    }
+
+    /// Whether the model in force is one of the ChatGPT account's.
+    pub fn model_is_account(&self) -> bool {
+        self.model_is_account
+    }
+
+    /// The level the session began with, where the model in force is the account's, which is the
+    /// level that account is sent. `None` for any other model, and `Some(None)` where the session
+    /// began with no level.
+    pub fn account_level(&self) -> Option<Option<Effort>> {
+        self.model_is_account.then(|| self.account.effort())
+    }
+
+    /// Record whether the model now in force is one of the ChatGPT account's.
+    pub fn note_model_is_account(&mut self, account: bool) {
+        self.model_is_account = account;
+    }
+
+    /// What this session carries into its requests to the ChatGPT account, which every request it
+    /// makes is made in: a turn, a summary, a question beside the work, a goal check, a commit
+    /// message and an MCP server's prompt.
+    pub fn account_session(&self) -> &bravebot_agent::chatgpt::AccountSession {
+        &self.account
     }
 
     /// Whether the model in force reads a level at all.
@@ -476,11 +526,9 @@ impl Session {
     /// wheel is turned, so a count held to the range says so on the screen. A count nobody named
     /// leaves [`WHEEL_ROWS`] in force.
     pub fn adopt_wheel_rows(&mut self, configured: Option<usize>) {
-        let Some(rows) = configured else {
-            return;
-        };
-        let rows = u16::try_from(rows).unwrap_or(WHEEL_ROWS_CEILING);
-        self.wheel_rows = rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING);
+        if configured.is_some() {
+            self.wheel_rows = wheel_rows_named(configured);
+        }
     }
 
     /// Record how long a planner's question waits for a key before it is closed, from
@@ -503,6 +551,17 @@ impl Session {
     /// off, so an absent key leaves the capture on.
     pub fn adopt_mouse(&mut self, configured: Option<bool>) {
         self.mouse = configured != Some(false);
+    }
+
+    /// Record whether a right click opens the small menu, from `tui.contextMenu`. Only a `false`
+    /// turns it off, so an absent key leaves it on (MOUSE-52).
+    pub fn adopt_context_menu(&mut self, configured: Option<bool>) {
+        self.context_menu = configured != Some(false);
+    }
+
+    /// Whether a right click opens the small menu where there is one to open.
+    pub fn context_menu_on(&self) -> bool {
+        self.context_menu
     }
 
     /// Whether the interface asks the terminal to report the mouse. Where it does not, the
@@ -587,27 +646,67 @@ impl Session {
     /// Whether a press here is on the panel's border, the column a drag resizes it by.
     fn on_panel_border(&self, row: u16, column: u16) -> bool {
         // The files state is half the terminal, which dragging does not change (FILES-4).
-        self.files.is_none()
-            && self.laid.panes.iter().any(|(pane, rect)| {
-                *pane == crate::select::Pane::Panel
-                    && rect.x == column
-                    && rect.y <= row
-                    && row < rect.bottom()
-            })
+        self.files.is_none() && self.on_the_panel_border_column(row, column)
     }
 
-    /// What a release at this cell acts on in the info panel, if the panel drew a row there. Read
-    /// against the panel's rectangle as the last frame recorded it.
+    /// Whether a cell is in the column the panel draws its border in, in every state of the panel.
+    /// The border is no text, so a press on it begins no selection (MOUSE-2).
+    pub(super) fn on_the_panel_border_column(&self, row: u16, column: u16) -> bool {
+        self.laid.panes.iter().any(|(pane, rect)| {
+            *pane == crate::select::Pane::Panel
+                && rect.x == column
+                && rect.y <= row
+                && row < rect.bottom()
+        })
+    }
+
+    /// What a click at this cell acts on in the info panel, if the panel drew a row there, as the
+    /// last frame recorded it: the question the tests of the panel put to the registry a click is
+    /// answered from.
+    #[cfg(test)]
     pub fn panel_target_at(&self, row: u16, column: u16) -> Option<crate::panel::Target> {
-        if self.files.is_some() {
-            return None;
+        match self.target_at(row, column)?.hit {
+            crate::state::Hit::Panel(target) => Some(target),
+            _ => None,
         }
-        let (_, area) = self
-            .laid
-            .panes
-            .iter()
-            .find(|(pane, _)| *pane == crate::select::Pane::Panel)?;
-        crate::panel::target_at(self, *area, row, column)
+    }
+
+    /// The address the row `target` of the info panel opens, if it is the pull request or issue row.
+    ///
+    /// The one the person gave with `/pr` or `/issue` (PANEL-12), as it was set and not the text the
+    /// row draws for it, which may be the shorthand or cut. A row is a target only for an address the
+    /// opener takes, which the panel decides where it lays the rows out.
+    pub fn panel_link(&self, target: crate::panel::Target) -> Option<&str> {
+        use crate::panel::Target;
+        match target {
+            Target::PullRequest => self.identity.pull_request.as_deref(),
+            Target::Issue => self.identity.issue.as_deref(),
+            Target::Name
+            | Target::Model
+            | Target::Effort
+            | Target::Context
+            | Target::Servers
+            | Target::Languages
+            | Target::File(_)
+            | Target::CloseFiles
+            | Target::PreviousEdit
+            | Target::NextEdit
+            | Target::Files
+            | Target::Hide
+            | Target::Task(_)
+            | Target::Detail(_) => None,
+        }
+    }
+
+    /// What the hint drawn at this cell of the row under the box stands for, as the last frame drew
+    /// it, where the key it names does something now (MOUSE-14, MOUSE-48): the question the tests of
+    /// the hints put to the registry a click is answered from.
+    #[cfg(test)]
+    pub fn footer_at(&self, row: u16, column: u16) -> Option<crate::state::Footer> {
+        match self.target_at(row, column)?.hit {
+            crate::state::Hit::Footer(footer) => Some(footer),
+            _ => None,
+        }
     }
 
     /// Begin dragging the panel's border where the button went down, and say whether it was
@@ -861,4 +960,15 @@ impl Session {
         self.charge(usage.total());
         self.charged_split(usage.total(), usage.completion_tokens);
     }
+}
+
+/// How many rows one wheel event moves a list by, given what `tui.wheelRows` said: the count held
+/// to the range, and [`WHEEL_ROWS`] where nobody named one. For the lists that run before a session
+/// exists, which read the setting themselves.
+pub fn wheel_rows_named(configured: Option<usize>) -> u16 {
+    let Some(rows) = configured else {
+        return WHEEL_ROWS;
+    };
+    let rows = u16::try_from(rows).unwrap_or(WHEEL_ROWS_CEILING);
+    rows.clamp(WHEEL_ROWS_FLOOR, WHEEL_ROWS_CEILING)
 }

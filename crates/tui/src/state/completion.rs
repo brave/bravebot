@@ -336,6 +336,32 @@ impl Session {
         self.completion = self.completion.saturating_sub(1);
     }
 
+    /// Put the cursor on the item at `index` of what is offered, stopping at the last (MOUSE-15).
+    pub fn select_completion(&mut self, index: usize) {
+        self.completion = index.min(self.offered_count().saturating_sub(1));
+    }
+
+    /// Move the cursor `rows` items down what is offered, or up, stopping at the last and the first
+    /// (MOUSE-46).
+    pub fn walk_completions(&mut self, rows: u16, down: bool) {
+        for _ in 0..rows {
+            if down {
+                self.next_completion();
+            } else {
+                self.previous_completion();
+            }
+        }
+    }
+
+    /// Which item of what is offered is drawn at a cell, as the last frame drew the list, where
+    /// there is a list to choose from and the cell is on a row of it.
+    pub fn completion_at(&self, row: u16, column: u16) -> Option<usize> {
+        match self.target_at(row, column)?.hit {
+            Hit::Item(index) => Some(index),
+            _ => None,
+        }
+    }
+
     /// Take what is under the cursor.
     ///
     /// A command replaces the whole line, since a command *is* the line. A skill or a file

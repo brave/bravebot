@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import importlib.util  # noqa: E402
 
 import reviewed  # noqa: E402
-from specs import TestIndex, crate_directories, load_specs  # noqa: E402
+from specs import TestIndex, load_specs  # noqa: E402
 
 spec = importlib.util.spec_from_file_location(
     "check_spec", Path(__file__).resolve().parent / "check-spec.py"
@@ -179,7 +179,6 @@ def git(root, *arguments):
 def run_checks():
     specs = load_specs()
     sources = check.load_sources()
-    crates = crate_directories()
     index = TestIndex()
     prefixes = {s.id for s in specs if s.id}
     declared, findings = check.declared_renumbers()
@@ -187,7 +186,7 @@ def run_checks():
         findings.extend(check.check_front_matter(one))
         findings.extend(check.check_clause_numbering(one))
         findings.extend(check.check_clause_history(one, declared))
-        findings.extend(check.check_coverage(one, index, crates))
+        findings.extend(check.check_coverage(one, index))
         findings.extend(check.check_anchors(one))
         findings.extend(check.check_governs(one))
         findings.extend(check.check_guards(one, sources))
@@ -196,7 +195,7 @@ def run_checks():
         findings.extend(check.check_documentation(one))
     findings.extend(check.check_reviewed_file())
     findings.extend(check.check_readme(specs))
-    findings.extend(check.check_unverified_file(specs, index, crates))
+    findings.extend(check.check_unverified_file(specs, index))
     findings.extend(check.check_renumbered_file(specs, declared))
     return findings
 
@@ -1422,10 +1421,8 @@ def plan_of(record, threshold=check.DIFF_BELOW):
             check.Repo(Path.cwd()),
             record,
             check.load_sources(),
-            crate_directories(),
             TestIndex(),
-            6,
-            threshold,
+            check.Limits(6, threshold),
         )
         texts = {}
         for entry in entries:
@@ -1438,11 +1435,11 @@ def plan_of(record, threshold=check.DIFF_BELOW):
 
 def digests():
     """Each clause's hash, as `prepare_review` takes it: with the guarded uses and the instructions."""
-    sources, index, crates = check.load_sources(), TestIndex(), crate_directories()
+    sources, index = check.load_sources(), TestIndex()
     repo = check.Repo(Path.cwd())
     found = {}
     for one in load_specs():
-        patterns = check.inputs(one, index, crates)
+        patterns = check.inputs(one, index)
         found.update(check.clause_hashes(one, one.clauses, sources, repo, patterns)[1])
     return found
 
@@ -1720,6 +1717,17 @@ def incremental_checks():
         "and is told to keep the earlier verdict by saying so",
         '"holds": true' in text and "Mark a clause `\"holds\": true` only when you have read the diff" in text,
     )
+    full_prompt = unrecorded.prompts[0] if len(unrecorded.prompts) == 1 else {}
+    full_text = unrecorded.texts.get(full_prompt.get("prompt_file"), "")
+    fields = check.CLAUSE_FIELDS.splitlines()
+    case(
+        "the full prompt and the diff prompt each show the reviewer every field of a clause's entry",
+        len(fields) == 8
+        and full_prompt.get("mode") == "full"
+        and prompt.get("mode") == "diff"
+        and all(line in full_text.splitlines() for line in fields)
+        and all(line in text.splitlines() for line in fields),
+    )
     git(root, "config", "color.ui", "always")
     git(root, "config", "diff.external", "false")
     coloured = plan_of(record)
@@ -1829,14 +1837,14 @@ def incremental_checks():
     case("a tree that is a commit is clean", check.Repo(root).dirty(["crates/demo/src/other/*.rs"]) == [])
     scratch = root / "crates" / "demo" / "src" / "scratch.rs"
     scratch.write_text("fn scratch() {}\n", encoding="utf-8")
-    paths = check.review_paths(load_specs(), TestIndex(), crate_directories())
+    paths = check.review_paths(load_specs(), TestIndex())
     case(
         "a source git does not know is a difference, since the guarded uses are counted in every source",
         check.Repo(root).dirty(paths) == ["crates/demo/src/scratch.rs"],
     )
     scratch.unlink()
     both = load_specs()
-    twice = check.review_paths(both + both, TestIndex(), crate_directories())
+    twice = check.review_paths(both + both, TestIndex())
     case("a path two specs watch is listed once", len(twice) == len(set(twice)))
     lib.write_text(original + "\nfn added() {}\n", encoding="utf-8")
     case(
@@ -2242,7 +2250,7 @@ def in_fixture(break_it, ask):
 
 
 def generated_list():
-    return check.unverified_clauses(load_specs(), TestIndex(), crate_directories())
+    return check.unverified_clauses(load_specs(), TestIndex())
 
 
 def main():

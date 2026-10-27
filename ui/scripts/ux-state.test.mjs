@@ -187,8 +187,8 @@ test('memory edits use compare-and-replace and preserve recoverable history', ()
 
 test('write status follows execution outcome even when its tool row precedes the approval', () => {
   const { written } = load('src/renderer/components/Context.tsx')
-  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts' }, decision: 'approve' }
-  const tool = (note, failed = false) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', note, failed, changes: [] } })
+  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts', shownPath: 'a.ts' }, decision: 'approve' }
+  const tool = (note, failed = false) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', shownTarget: 'a.ts', shownFile: 'a.ts', note, failed, changes: [] } })
   assert.equal(written([approval])[0].state, 'approved')
   assert.equal(written([tool(null), approval])[0].state, 'applying')
   assert.equal(written([tool('done'), approval])[0].state, 'applied')
@@ -198,8 +198,8 @@ test('write status follows execution outcome even when its tool row precedes the
 
 test('a write the agent refused is listed as refused, and one that broke as failed', () => {
   const { written } = load('src/renderer/components/Context.tsx')
-  const tool = (note) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', note, failed: true, changes: [] } })
-  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts' }, decision: 'approve' }
+  const tool = (note) => ({ kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'a.ts', shownTarget: 'a.ts', shownFile: 'a.ts', note, failed: true, changes: [] } })
+  const approval = { kind: 'confirm', id: 'approval', request: { path: 'a.ts', shownPath: 'a.ts' }, decision: 'approve' }
   assert.equal(written([tool('refused: the session is in plan mode, so writing is refused')])[0].state, 'refused')
   assert.equal(written([tool('refused: a deny rule in the user\'s settings covers a.ts')])[0].state, 'refused')
   assert.equal(written([tool('refused: writing a.ts would put a credential in the tree'), approval])[0].state, 'refused')
@@ -309,9 +309,9 @@ test('appearance parsing accepts system/light/dark and maps legacy names to syst
 
 test('reference-backed writes and approval paths share one execution outcome', () => {
   const { written } = load('src/renderer/components/Context.tsx')
-  const tool = { kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'ref:3(U,priv):src/sample.txt', note: 'done', failed: false, changes: [] } }
-  const approval = { kind: 'confirm', id: 'approval', request: { path: 'src/sample.txt' }, decision: 'approve' }
-  assert.deepEqual(written([tool, approval]), [{ target: 'src/sample.txt', state: 'applied' }])
+  const tool = { kind: 'tool', id: 'tool', activity: { verb: 'Write', target: 'ref:3(U,priv):src/sample.txt', shownTarget: 'ref:3(U,priv):src/sample.txt', shownFile: 'src/sample.txt', note: 'done', failed: false, changes: [] } }
+  const approval = { kind: 'confirm', id: 'approval', request: { path: 'src/sample.txt', shownPath: 'src/sample.txt' }, decision: 'approve' }
+  assert.deepEqual(written([tool, approval]), [{ target: 'src/sample.txt', shown: 'src/sample.txt', state: 'applied' }])
   assert.equal(written([{ ...approval, decision: null, interrupted: true }])[0].state, 'cancelled')
 })
 
@@ -367,7 +367,7 @@ function liveSession() {
   const { apply } = load('src/renderer/apply.ts')
   const { workingWord } = load('src/renderer/components/Transcript.tsx')
   const session = {
-    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null },
+    live: { handle: 's-1', summary: { title: '', project: '', branch: null, directory: '/', id: 'a' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, checking: null, hook: null, composing: null, thinking: '', tokens: 0, running: false, archived: 0, awaitingOrdinal: null, bot: null, agents: [] },
   }
   session.send = (event, data) => apply({ event, data }, (update) => { session.live = update(session.live) }, () => {}, () => {})
   session.word = () => workingWord(session.live.phase, session.live.checking, session.live.composing, session.live.hook)
@@ -535,7 +535,7 @@ test('a call that waited on a model of its own says how long, and one that asked
   new Function('require', 'module', 'exports', source)(require, module, module.exports)
   const { Row } = module.exports
 
-  const read = { verb: 'Read output', target: 'ref:1', note: '3 lines, read', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  const read = { verb: 'Read output', target: 'ref:1', shownTarget: 'ref:1', note: '3 lines, read', failed: false, untrusted: false, changes: [], waitedSeconds: null }
   const draw = (activity) => renderToStaticMarkup(React.createElement(Row, { entry: { kind: 'tool', id: 'row', activity, landing: null }, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
 
   assert.match(draw({ ...read, waitedSeconds: 8 }), /3 lines, read · 8s at the model/)
@@ -565,7 +565,7 @@ test('a call is drawn with the reason the planner gave for it, after the call', 
     return markup.includes(`>${call}<`) && reason > markup.indexOf(`>${call}<`)
   }
 
-  const read = { verb: 'Read', target: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
+  const read = { verb: 'Read', target: 'src/main.rs', shownTarget: 'src/main.rs', why: 'see the entry point', note: '3 lines', failed: false, untrusted: false, changes: [], waitedSeconds: null }
   assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: read, landing: null }), 'src/main.rs'), 'a finished call lost its reason or drew it ahead of the call')
   assert.ok(afterTheCall(draw({ kind: 'tool', id: 'row', activity: { ...read, note: null }, landing: null }), 'src/main.rs'), 'a running call lost its reason or drew it ahead of the call')
   assert.doesNotMatch(draw({ kind: 'tool', id: 'row', activity: { ...read, why: '' }, landing: null }), /class="why"/)
@@ -626,6 +626,91 @@ test('a turn the output limit ended says the limit and what the reply was writin
   assert.doesNotMatch(failed('unavailable', { ceiling: 8192, call: null, thought: false }), /tokens/)
 })
 
+// CHATGPT-8: a turn the ChatGPT account failed arrives with the bridge's sentence for it beside the
+// category and the command it names. Folded by the window's reducer and drawn through the real row,
+// because the sentence arriving on `turn.error` and going undrawn is the fault, and the card saying
+// "Authentication failed" to a person who never signed in has no command for them to run.
+test('a turn the ChatGPT account failed draws the sentence the bridge sent', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const session = liveSession()
+  let turn = 0
+  const failed = (category, accountMessage, accountCommand) => {
+    turn += 1
+    session.send('turn.started', { turn })
+    session.send('turn.error', { kind: 'chat', message: category, category, accountMessage, accountCommand, turn, prompt: 0, contextTokens: 0 })
+    const entry = session.live.entries.at(-1)
+    return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  }
+
+  const command = 'bravebot auth login chatgpt'
+  const signedOut = failed('unauthorized', `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, command)
+  assert.match(signedOut, /You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\./)
+  assert.doesNotMatch(signedOut, /Authentication failed/)
+  assert.doesNotMatch(signedOut, /`/)
+
+  // Two refusals that name the account arrive in the same category and are drawn apart.
+  const limit = failed('refused', 'OpenAI says this ChatGPT account has reached its usage limit, so try again later.', null)
+  const barred = failed('refused', "OpenAI does not allow this ChatGPT account to be used this way, so use another account or another service's model.", null)
+  assert.match(limit, /reached its usage limit/)
+  assert.match(barred, /does not allow this ChatGPT account/)
+  assert.doesNotMatch(barred, /usage limit/)
+  assert.doesNotMatch(limit + barred, /The provider refused this request/)
+  assert.doesNotMatch(limit + barred, /<code>/)
+
+  // A failure with no sentence is drawn from its category, and a command with no sentence is not drawn.
+  assert.match(failed('unauthorized', null, command), /<span slot="title">Authentication failed<\/span>/)
+  assert.match(failed('refused', undefined), /<span slot="title">The provider refused this request<\/span>/)
+  assert.doesNotMatch(failed('unauthorized', null, command), /<code>/)
+
+  // The sentence is text and not markup.
+  const hostile = '<b>sk-live-123</b>'
+  assert.doesNotMatch(failed('refused', hostile), /<b>sk-live-123/)
+})
+
+// CHATGPT-8: a summary the ChatGPT account could not make arrives as narrations in the bridge's own
+// words, the second with the command it names beside it. Folded by the window's reducer and drawn
+// through the real row: the command is code and not backticks, a narration that names none is a
+// plain line, and what the model itself said between calls is text whatever it looks like.
+test('a narration that names a command draws it as code', () => {
+  const React = require('react')
+  const { renderToStaticMarkup } = require('react-dom/server')
+  const source = buildSync({ entryPoints: ['src/renderer/components/Transcript.tsx'], bundle: true, write: false, platform: 'node', format: 'cjs', jsx: 'automatic', external: ['react', 'react-dom', 'react/jsx-runtime'] }).outputFiles[0].text
+  const module = { exports: {} }
+  new Function('require', 'module', 'exports', source)(require, module, module.exports)
+  const { Row } = module.exports
+
+  const session = liveSession()
+  session.send('turn.started', { turn: 1 })
+  const narrated = (data) => {
+    session.send('narration', data)
+    const entry = session.live.entries.at(-1)
+    return renderToStaticMarkup(React.createElement(Row, { entry, onDecide() {}, onAnswer() {}, onFork() {}, forkable: false }))
+  }
+
+  const command = 'bravebot auth login chatgpt'
+  const named = narrated({ text: `You are not signed in to ChatGPT, so run ${command} in a terminal to sign in.`, command })
+  assert.match(named, /<div class="narration">.*<span>You are not signed in to ChatGPT, so run <code>bravebot auth login chatgpt<\/code> in a terminal to sign in\.<\/span><\/div>/)
+  assert.doesNotMatch(named, /`/)
+
+  const plain = narrated({ text: 'The conversation could not be summarised, so the turn goes on with the messages it has.', command: null })
+  assert.match(plain, /summarised, so the turn goes on with the messages it has\.<\/span>/)
+  assert.doesNotMatch(plain, /<code>/)
+
+  // What the model wrote between two calls arrives with no command, and a command-looking word in it
+  // is not drawn as code.
+  const said = narrated({ text: `I will run ${command} next` })
+  assert.doesNotMatch(said, /<code>/)
+
+  // Text is drawn as text.
+  assert.doesNotMatch(narrated({ text: '<b>x</b>', command: '<b>x</b>' }), /<b>x/)
+})
+
 test('Send is allowed once the trust question has been answered', () => {
   const { canSend } = load('src/renderer/can-send.ts')
   const asking = { running: false, askingTrust: '/work/project' }
@@ -640,7 +725,7 @@ test('Send is allowed once the trust question has been answered', () => {
 })
 
 test('submit and the run-plan callback list every field they test', () => {
-  const source = readFileSync('src/renderer/App.tsx', 'utf8')
+  const source = readFileSync('src/renderer/use-turn.ts', 'utf8')
   for (const name of ['submit', 'submitPlan']) {
     const body = source.slice(source.indexOf(`const ${name} = useCallback(`))
     const deps = body.slice(0, body.indexOf('\n  }, [')+ 200).match(/\n  \}, \[([^\]]*)\]/)[1]
@@ -671,6 +756,20 @@ test('a new session starts with the nine starting values and keeps every field i
   for (const [key, value] of Object.entries(fields)) assert.deepEqual(live[key], value, `${key} lands unchanged`)
   assert.notEqual(newLive(fields).turns, live.turns, 'two sessions do not share one turns object')
   assert.notEqual(newLive(fields).quarantine, live.quarantine, 'or one quarantine list')
+})
+
+test('settledBy lands each field the bridge settled unchanged, and gives null for an absent optional', () => {
+  const { settledBy } = load('src/renderer/live.ts')
+  const kept = { at: 5, path: '/d', shownPath: '/d' }
+  const rules = [{ path: '/d', integrity: 'high' }]
+  assert.deepEqual(
+    settledBy({ remembered: kept, keeping: '/k', shownKeeping: '~/k', confinedLines: 'also', autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', settingsRules: rules }),
+    { keepingTrust: '/k', shownKeepingTrust: '~/k', confinedLinesNotice: 'also', trustRemembered: kept, autoVetting: true, permissionMode: 'plan', sandboxMode: 'off', rules },
+  )
+  assert.deepEqual(
+    settledBy({ autoVetting: false, permissionMode: 'ask', sandboxMode: 'on' }),
+    { keepingTrust: null, shownKeepingTrust: null, confinedLinesNotice: null, trustRemembered: null, autoVetting: false, permissionMode: 'ask', sandboxMode: 'on', rules: null },
+  )
 })
 
 test('a session is keyed by its record id once it has one, and by its draft or handle before', () => {

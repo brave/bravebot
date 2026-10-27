@@ -10,19 +10,27 @@ governs:
   - crates/config/src/managed.rs
   - crates/agent/src/permissions.rs
   - crates/agent/src/workspace.rs
+  - crates/agent/src/workspace/error.rs
+  - crates/agent/src/workspace/other_names.rs
   - crates/agent/src/workspace/reach.rs
+  - crates/agent/src/workspace/resolve.rs
   - crates/tui/src/trust_prompt.rs
   - crates/tui/src/app.rs
+  - crates/tui/src/app/directories.rs
+  - crates/tui/src/app/opening.rs
   - crates/tui/src/app/actions.rs
 guards:
   - symbol: Policy::with_permissions
   - symbol: Policy::before_read
   - symbol: Policy::read_is_denied
-  - symbol: Policy::before_write
+  - symbol: Policy::refuse_denied_write
   - symbol: Policy::before_plan_rules
 documented-by:
   - docs/website/docs/customize/configuration.md
   - docs/website/docs/security/permissions.md
+  - docs/website/docs/security/permission-modes.md
+  - docs/website/docs/security/permission-rules.md
+  - docs/website/docs/customize/managed-settings.md
 ---
 
 ## Scope
@@ -403,8 +411,10 @@ the file. A listing or a search consults the rules for every entry its walk reac
 the directory it was asked for, and an entry a rule covers is left out before the file is opened or
 its name is reported. A directory a rule covers is not descended into. Both are decided ahead of
 the walk's own caps, so a rule never costs a listing or a search the files it was asked about. A walk
-does not follow a symbolic link it meets: the entry is neither reported nor descended into, so a
-link to a denied file is not a second name a listing or a search hands back. A hard link is a
+does not follow a symbolic link it meets: the entry is neither reported nor descended into, but it
+is counted, and a listing or a search says how many it did not enter
+([LIST-6](tools/list-files.md#LIST-6), [SEARCH-13](tools/search.md#SEARCH-13)). A link to a denied
+file is not a second name a listing or a search hands back, because the count holds no name. A hard link is a
 regular file under another name, so a walk reaches it, and an entry is left out when a rule covers
 any name its file has, found by device and inode as for a call that names it. A hard link to a
 denied file is left out of a listing, a search and a repository map as the file is, whichever
@@ -695,7 +705,9 @@ altered a session nobody had configured would be a change to every session.
 
 A name in `additionalDirectories` is resolved before it is put to anybody, and the question shows
 what it resolved to. A name that cannot be opened whatever the answer is reported instead of asked
-about, and a directory two layers both named is one question.
+about, and a directory two layers both named is one question. A relative name is taken against the
+working directory as `/add-dir` takes one ([TRUST-9](trust-map.md#TRUST-9)), so it is reported where
+that directory's name is not text.
 
 **Why.** Opening a directory follows a name wherever it leads, so a question about the spelling
 collects an answer about a different tree: a link inside a checkout resolves somewhere else
@@ -706,6 +718,7 @@ train the habit of answering without reading, which is the whole of what asking 
 `verified-by: bravebot_tui::app::a_named_directory_is_resolved_before_it_is_asked_about`
 `verified-by: bravebot_tui::app::a_directory_two_layers_both_named_is_asked_about_once`
 `verified-by: bravebot_tui::app::a_name_that_cannot_be_opened_is_said_so_rather_than_asked_about`
+`verified-by: bravebot_tui::app::a_relative_name_is_refused_against_a_working_directory_whose_name_is_not_text`
 
 ## Which file a rule may be written in
 

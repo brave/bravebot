@@ -738,6 +738,7 @@ fn run_accounted<S: Sink, C: Confirmer, R: Reporter>(
     let result = execute(
         config,
         egress,
+        task.account_session(),
         workspace,
         crate::findings::Recording {
             home: task.home.as_deref(),
@@ -941,6 +942,7 @@ fn plan<S: Sink, R: Reporter>(
     let shape_wire = ask(
         config,
         egress,
+        task.account_session(),
         &mut policy,
         reporter,
         subscription.as_deref_mut(),
@@ -982,6 +984,7 @@ fn plan<S: Sink, R: Reporter>(
         let proposal_wire = ask(
             config,
             egress,
+            task.account_session(),
             &mut policy,
             reporter,
             subscription.as_deref_mut(),
@@ -1120,6 +1123,7 @@ fn plan<S: Sink, R: Reporter>(
 fn ask<S: Sink, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     policy: &mut Policy<'_, S>,
     reporter: &mut R,
     subscription: Option<&mut crate::ImportedSubscription>,
@@ -1147,8 +1151,9 @@ fn ask<S: Sink, R: Reporter>(
     let written_before = accounting.spent.output_tokens;
     let asked_at = std::time::Instant::now();
     let completion = {
-        let mut client =
-            crate::backend::Backend::select(config, egress, chosen).with_cancel(cancel.clone());
+        let mut client = crate::backend::Backend::select(config, egress, chosen)
+            .with_cancel(cancel.clone())
+            .in_session(session);
         if let Some(subscription) = subscription {
             client = client.with_subscription(subscription);
         }
@@ -1190,6 +1195,7 @@ fn ask<S: Sink, R: Reporter>(
 fn execute<S: Sink, C: Confirmer, R: Reporter>(
     config: &Config,
     egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
     workspace: &Workspace,
     recording: crate::findings::Recording<'_>,
     planned: Planned,
@@ -1302,7 +1308,7 @@ fn execute<S: Sink, C: Confirmer, R: Reporter>(
     let mut filled = false;
     let mut answer: Option<Labelled<String>> = None;
     let mut shown = String::new();
-    let mut chat = Chat::new(config, egress)
+    let mut chat = Chat::new(config, egress, session)
         .spending(subscription)
         .on(chosen_model)
         .stoppable_by(cancel);

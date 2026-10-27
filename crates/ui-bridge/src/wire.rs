@@ -214,6 +214,12 @@ pub fn change(change: &Change) -> Value {
 /// null rather than an absent key: a client reading an absent key as "finished, no note"
 /// would draw every in-flight call as complete.
 ///
+/// `shownTarget` is `target` spelled as [`Activity::shown_target`] spells it, so a file's name that
+/// is blank or ends in whitespace is visible where a window draws the line (PROMPT-1). `target`
+/// stays what a window matches a call to its confirmation on. `shownFile` is the same name for a
+/// list of files, with the slot a reference was drawn under and a leading `./` taken off and then
+/// spelled, so a window lists a file once and draws it as the confirmation for it does.
+///
 /// `waitedSeconds` is what the call spent at a model of its own, null for the nearly all of
 /// them that asked none. Whole seconds, as `remainingSeconds` is: what it answers is whether a
 /// slow call was slow because a model was, and that question is not decided in milliseconds.
@@ -221,6 +227,8 @@ pub fn activity(activity: &Activity) -> Value {
     json!({
         "verb": activity.verb,
         "target": activity.target,
+        "shownTarget": activity.shown_target(),
+        "shownFile": activity.shown_file(),
         "why": activity.why,
         "note": activity.note,
         "failed": activity.failed,
@@ -508,7 +516,7 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         .map(|stage| {
             json!({
                 "program": stage.program,
-                "resolved": stage.resolved,
+                "resolved": stage.resolved.display().to_string(),
                 // The file the step runs after the path that starts it, which is what the
                 // terminal shows under the step.
                 "binary": stage.binary(),
@@ -516,7 +524,7 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
                 // or holding a byte that is not text is not drawn as another. The window draws
                 // this and never `binary`, `resolved` or `startedAs`.
                 "shownBinary": bravebot_agent::confirm::shown_binary(stage),
-                "startedAs": stage.started_as,
+                "startedAs": stage.started_as.display().to_string(),
                 "args": stage.args,
                 "display": stage.as_written(),
             })
@@ -538,7 +546,12 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         // with no line from a build that does not send the field at all.
         "line": request.plan.line,
         "plan": request.plan.steps.display(),
-        "writes": request.plan.writes,
+        "writes": request
+            .plan
+            .writes
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
         // Each path spelled as the other front ends draw it, so a path ending in whitespace or
         // holding a character that draws as nothing is not drawn as another. The window draws
         // this and never `writes`, as it draws `shownPath` and never `path`.
@@ -575,7 +588,7 @@ pub fn run_request(id: u64, request: &RunRequest) -> Value {
         "vouches": request
             .would_vouch_for()
             .iter()
-            .map(|command| json!({ "program": command.program, "args": command.args, "display": command.display() }))
+            .map(|command| json!({ "program": command.program.display().to_string(), "args": command.args, "display": command.display() }))
             .collect::<Vec<_>>(),
         // What the stages are confined to, in the sentences the agent worded for it, or null where
         // the turn does not confine them. Worded once in the agent so no front end carries its own

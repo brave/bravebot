@@ -1256,6 +1256,102 @@ fn a_run_request_carries_a_directory_that_is_not_text_spelled_as_the_bytes_it_ho
     );
 }
 
+/// A written file under a directory that is not UTF-8 reaches the desktop as text instead of
+/// panicking while the run prompt is built. `writes` goes through `Path::display`, as
+/// `confinement.directories` already does, rather than being handed to `json!` as a raw path,
+/// which `serde_json` refuses to serialize once it is not valid UTF-8.
+///
+/// `shownWrites` is checked against a lookalike path spelled with an actual U+FFFD, the way
+/// `shownDirectories` is above: a byte that is not part of a character is escaped rather than
+/// replaced, so the two paths are drawn apart and a reviewer vouching for one is not shown the
+/// other's name.
+#[cfg(unix)]
+#[test]
+fn a_run_request_carries_a_written_file_that_is_not_text_without_panicking() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let value = |component: &OsStr| {
+        let pipeline = Pipeline::new(vec![Stage::new("tee", vec![])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/tee".into()], "/work");
+        let mut written = std::path::PathBuf::from("/work");
+        written.push(component);
+        written.push("note.md");
+        request.plan.writes = vec![written];
+        wire::run_request(1, &request)
+    };
+    let invalid = value(OsStr::from_bytes(b"a\xffb"));
+    let lookalike = value(OsStr::new("a\u{fffd}b"));
+
+    for (value, label) in [(&invalid, "invalid"), (&lookalike, "lookalike")] {
+        let writes = value["writes"].as_array().expect("writes");
+        assert_eq!(writes.len(), 1, "{label}");
+        assert!(
+            writes[0].is_string(),
+            "a path that is not UTF-8 still reaches the desktop as text: {label}"
+        );
+    }
+    assert_ne!(
+        invalid["shownWrites"], lookalike["shownWrites"],
+        "an unspelled byte and an actual replacement character were drawn the same"
+    );
+}
+
+/// A resolved program path that is not UTF-8 reaches the desktop as text instead of panicking
+/// while the run prompt is built. `resolved` and `startedAs` carry a `Step`'s own `PathBuf`
+/// fields, and `vouches[].program` carries the same path through `Command::program`, all three
+/// handed to `json!` directly, which `serde_json` refuses to serialize once the path is not valid
+/// UTF-8, the same way an unspelled `writes` entry did.
+///
+/// `shownBinary` is checked against a lookalike path spelled with an actual U+FFFD, the way
+/// `shownDirectories` is checked above: it has to draw an unspelled byte apart from a character
+/// that already draws as the replacement glyph, or the two reach the window looking the same.
+#[cfg(unix)]
+#[test]
+fn a_run_request_carries_a_resolved_program_path_that_is_not_text_without_panicking() {
+    use bravebot_agent::confirm::RunRequest;
+    use bravebot_core::command::{Pipeline, Stage, Steps};
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let value = |component: &OsStr| {
+        let pipeline = Pipeline::new(vec![Stage::new("python", vec!["-V".into()])]);
+        let mut request = RunRequest::from_pipeline(&pipeline, &["/usr/bin/python3".into()], "/w");
+        let mut resolved = std::path::PathBuf::from("/usr");
+        resolved.push(component);
+        resolved.push("python3");
+        if let Steps::Pipeline(steps) = &mut request.plan.steps {
+            steps[0].resolved = resolved.clone();
+            steps[0].started_as = resolved;
+        }
+        wire::run_request(1, &request)
+    };
+    let invalid = value(OsStr::from_bytes(b"a\xffb"));
+    let lookalike = value(OsStr::new("a\u{fffd}b"));
+
+    for (value, label) in [(&invalid, "invalid"), (&lookalike, "lookalike")] {
+        let stage = &value["stages"][0];
+        assert!(
+            stage["resolved"].is_string(),
+            "a resolved program path that is not UTF-8 still reaches the desktop as text: {label}"
+        );
+        assert!(
+            stage["startedAs"].is_string(),
+            "a path the program was started by that is not UTF-8 still reaches the desktop as text: {label}"
+        );
+        let vouches = value["vouches"].as_array().expect("vouches");
+        assert_eq!(vouches.len(), 1, "{label}");
+        assert!(
+            vouches[0]["program"].is_string(),
+            "a vouched program path that is not UTF-8 still reaches the desktop as text: {label}"
+        );
+    }
+    assert_ne!(
+        invalid["stages"][0]["shownBinary"], lookalike["stages"][0]["shownBinary"],
+        "an unspelled byte and an actual replacement character were drawn the same"
+    );
+}
+
 /// SANDBOX-26: the desktop draws no `confined`, so the names a line asked for cross as their own
 /// field, or the desktop would approve a grant it never showed. Empty is sent for a line that
 /// asked for nothing, in the test above, so a missing field means an old build.

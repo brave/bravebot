@@ -36,6 +36,8 @@ import {
   retireBot,
   forgetBotConversation,
   saveBotModel,
+  readBotServers,
+  saveBotServers,
   saveForm,
   migrateBot,
   owesCarryOver,
@@ -43,7 +45,7 @@ import {
   consolidationPrompt,
   AFTER_COMPACTION,
 } from './bots'
-import { botFolders, isBotModel, withoutBot, type Bot } from '../shared/bots'
+import { botFolders, isBotModel, isServerSelection, withoutBot, type Bot } from '../shared/bots'
 import { isSessionId, parseForkResult } from '../shared/forks'
 import { conversationKey } from '../shared/experience'
 import { rootForSession, forgetRoot, list, noteRoot, open as openInApp, preview, search, chooseAttachments, attachmentPaths } from './files'
@@ -180,14 +182,17 @@ async function sendBotTurn(
   session: string,
   held: Bot,
   prompt: string,
-  grounded: boolean,
-  nudge = false,
-  recall = true,
-  model?: string | null,
-  attachments?: unknown,
-  composed?: 'consolidation',
-  staged?: { drops?: unknown; pastes?: unknown },
+  options: {
+    grounded: boolean
+    nudge?: boolean
+    recall?: boolean
+    model?: string | null
+    attachments?: unknown
+    composed?: 'consolidation'
+    staged?: { drops?: unknown; pastes?: unknown }
+  },
 ): Promise<{ ok?: unknown; error?: BotFailure }> {
+  const { grounded, nudge = false, recall = true, model, attachments, composed, staged } = options
   if (!bridge) return { error: { code: 'no_bridge', message: 'the agent is not running' } }
 
   // The folder the agent confirmed this session runs in, never one the window named. A bot only
@@ -297,22 +302,16 @@ async function consolidate(
   // resumes and a flag set late is a flag that was never set.
   consolidating.add(session)
   tell('bravebot:bots:consolidating', { session, slug })
-  const answer = await sendBotTurn(
-    session,
-    held,
-    compose(held),
-    true,
-    false,
+  const answer = await sendBotTurn(session, held, compose(held), {
+    grounded: true,
     // Nobody typed this, so it is not something anybody should find by pressing up — in this
     // window or in the terminal front-end, which shares the same history file. It does not name
     // the session either. See `recall` in `bridge.rs`.
-    false,
-    undefined,
-    undefined,
+    recall: false,
     // And the record says so, which is what a transcript reopened later reads. The two are
     // separate answers: `recall` is about the history file, this is about what the message is.
-    'consolidation',
-  ).catch(() => ({ error: { code: 'internal', message: 'consolidation failed' } }))
+    composed: 'consolidation',
+  }).catch(() => ({ error: { code: 'internal', message: 'consolidation failed' } }))
   if (answer.error) {
     consolidating.delete(session)
     ended(session, slug, false)
@@ -756,6 +755,20 @@ app.whenReady().then(() => {
     return saveBotModel(held, model, bridge ? (method, params) => bridge!.request(method, params) : null)
   })
 
+  // The window names a bot and a selection; the definition is the row's, so no window chooses which
+  // file is read or rewritten.
+  ipcMain.handle('bravebot:bots:servers:read', async (_event, slug: unknown) => {
+    const held = bot(slug)
+    if (!held) return null
+    return readBotServers(held, bridge ? (method, params) => bridge!.request(method, params) : null)
+  })
+
+  ipcMain.handle('bravebot:bots:servers:write', async (_event, slug: unknown, servers: unknown) => {
+    const held = bot(slug)
+    if (!held || !isServerSelection(servers)) return null
+    return saveBotServers(held, servers, bridge ? (method, params) => bridge!.request(method, params) : null)
+  })
+
   ipcMain.handle('bravebot:bots:write', async (_event, value: unknown) => {
     // Composed in `bots.ts` and not here, because the folder a new bot is pinned to is the one
     // field on this channel that decides where files land, and the check that it is a folder
@@ -849,7 +862,13 @@ app.whenReady().then(() => {
       // question about *its* session, which this process cannot see, so that answer stands.
       const nudge = grounded !== true && nudgeDue(held)
       if (nudge) noteBotNudged(held.slug)
-      return sendBotTurn(session, held, prompt, grounded === true || nudge, nudge, true, model as string | null | undefined, attachments, undefined, { drops, pastes })
+      return sendBotTurn(session, held, prompt, {
+        grounded: grounded === true || nudge,
+        nudge,
+        model: model as string | null | undefined,
+        attachments,
+        staged: { drops, pastes },
+      })
     },
   )
 

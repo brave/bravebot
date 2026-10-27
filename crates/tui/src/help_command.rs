@@ -158,14 +158,13 @@ fn link_at(text: &str) -> Option<(&str, usize)> {
 /// says so, so a person is not told these are the notes of the version they run.
 pub fn shown(release: &Release<'_>, running: &str) -> (String, String) {
     let heading = if release.version == running {
-        bravebot_i18n::t!(changelog_heading, version = release.version).to_string()
+        bravebot_i18n::t!(changelog_heading, version = release.version)
     } else {
         bravebot_i18n::t!(
             changelog_newest,
             running = running,
             version = release.version
         )
-        .to_string()
     };
     (heading, plain(release.notes))
 }

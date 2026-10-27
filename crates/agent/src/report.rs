@@ -18,15 +18,94 @@ pub fn summary_model_refusal(refusal: &crate::compact::SideModelRefusal) -> Stri
     use crate::compact::SideModelRefusal;
     match refusal {
         SideModelRefusal::NeedsSignIn(model) => {
-            bravebot_i18n::t!(summary_model_needs_sign_in, model = model).to_string()
+            bravebot_i18n::t!(summary_model_needs_sign_in, model = model)
         }
         SideModelRefusal::Refused(model) => {
-            bravebot_i18n::t!(summary_model_refused, model = model).to_string()
+            bravebot_i18n::t!(summary_model_refused, model = model)
         }
         SideModelRefusal::NotServed(model) => {
-            bravebot_i18n::t!(summary_model_not_served, model = model).to_string()
+            bravebot_i18n::t!(summary_model_not_served, model = model)
         }
     }
+}
+
+/// Why a request a turn made on its way failed, as a closed value a front end words in its own
+/// way ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)).
+///
+/// Handed to [`Reporter::summary_failed`] and [`Reporter::fell_back`] rather than a sentence, so the
+/// terminal says the account's failure in the terminal's catalog sentence and the window says it in
+/// its own, with the command it names drawn as code. Nothing a service wrote is in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    /// The ChatGPT account failed in one of its own ways.
+    Account(bravebot_aichat::AccountFailure),
+    /// Any other failure, by its category.
+    Category(crate::outcome::Category),
+}
+
+impl Why {
+    /// The reason a diagnosis carries.
+    pub(crate) fn of(diagnosis: crate::outcome::Diagnosis) -> Self {
+        match diagnosis.account {
+            Some(account) => Self::Account(account),
+            None => Self::Category(diagnosis.category),
+        }
+    }
+
+    /// The reason a summary could not be made.
+    pub(crate) fn of_summary(error: &crate::compact::CompactError) -> Self {
+        match error {
+            crate::compact::CompactError::Chat(backend) => Self::of(backend.diagnosis()),
+            other => Self::Category(other.category()),
+        }
+    }
+
+    /// The terminal's words for it: the account's catalog sentence, with no status or count after
+    /// it, and the name of the category for every other failure. The wait a refusal asked for is
+    /// part of the sentence.
+    pub fn told(self) -> String {
+        match self {
+            Self::Account(failure) => crate::chatgpt::said_of_failure(failure),
+            Self::Category(category) => category.name().to_string(),
+        }
+    }
+}
+
+/// The line the terminal narrates for a summary that could not be made, which a front end that has
+/// no words of its own for the reason says as well.
+pub fn summary_failed_in_the_terminals_words(why: Why) -> String {
+    t!(compact_failed_and_continuing, problem = why.told())
+}
+
+/// The line the terminal narrates for a move to the fallback model, which a front end that has no
+/// words of its own for the reason says as well.
+pub fn fell_back_in_the_terminals_words(from: &str, to: &str, why: Why) -> String {
+    match why {
+        Why::Account(failure) => t!(
+            fallback_model_in_use_account,
+            from = from,
+            to = to,
+            problem = crate::chatgpt::said_of_failure(failure)
+        ),
+        Why::Category(category) => t!(
+            fallback_model_in_use,
+            from = from,
+            to = to,
+            category = category.name()
+        ),
+    }
+}
+
+/// What a person is told of a summary that could not be made: the sentence for the failure of the
+/// ChatGPT account where it was the account that failed
+/// ([CHATGPT-8](../../../docs/specs/chatgpt-sign-in.md#CHATGPT-8)), and the name of the failure's
+/// category for every other failure.
+///
+/// Here for the reason [`summary_model_refusal`] is: the sentence is looked up in a catalog, and
+/// every string in `compact.rs` is read by the planner. A summary that failed on the account says
+/// which command to type where signing in again is the remedy, which the category's name does not.
+pub fn why_a_summary_failed(error: &crate::compact::CompactError) -> String {
+    Why::of_summary(error).told()
 }
 
 /// What a person is told when `processorModel` or `--processor-model` names a model a processor
@@ -38,13 +117,13 @@ pub fn processor_model_refusal(refusal: &crate::compact::SideModelRefusal) -> St
     use crate::compact::SideModelRefusal;
     match refusal {
         SideModelRefusal::NeedsSignIn(model) => {
-            bravebot_i18n::t!(processor_model_needs_sign_in, model = model).to_string()
+            bravebot_i18n::t!(processor_model_needs_sign_in, model = model)
         }
         SideModelRefusal::Refused(model) => {
-            bravebot_i18n::t!(processor_model_refused, model = model).to_string()
+            bravebot_i18n::t!(processor_model_refused, model = model)
         }
         SideModelRefusal::NotServed(model) => {
-            bravebot_i18n::t!(processor_model_not_served, model = model).to_string()
+            bravebot_i18n::t!(processor_model_not_served, model = model)
         }
     }
 }
@@ -69,6 +148,13 @@ pub struct Activity {
     pub verb: &'static str,
     /// What is being acted on, as the model named it. Empty where there is nothing to name.
     pub target: String,
+    /// Whether [`Activity::target`] is a file's name or path, which a screen spells with
+    /// [`Activity::shown_target`] so a blank or whitespace-ended name is visible (PROMPT-1).
+    ///
+    /// Set by dispatch from the tool's own name, a literal of this program, and never read out of
+    /// the target: a line that decided how to draw a name by looking at the name would be a
+    /// branch on content nobody vouched for.
+    pub names_a_file: bool,
     /// Why the planner made the call, in its own words. Empty where it gave no reason.
     ///
     /// Carried to a screen and nowhere else: the call runs the same with or without it, and
@@ -119,6 +205,7 @@ impl Activity {
         Self {
             verb,
             target: target.into(),
+            names_a_file: false,
             why: String::new(),
             tool: String::new(),
             note: None,
@@ -133,6 +220,13 @@ impl Activity {
     /// Say which tool this is, by the name dispatch matched rather than the word shown.
     pub fn of_tool(mut self, tool: &str) -> Self {
         self.tool = tool.to_string();
+        self
+    }
+
+    /// Say that the target is a file's name or path, where the tool's own name says it is
+    /// ([`crate::tools::names_a_file`]).
+    pub fn naming_a_file(mut self, names_a_file: bool) -> Self {
+        self.names_a_file = names_a_file;
         self
     }
 
@@ -184,14 +278,62 @@ impl Activity {
         self.note.is_none()
     }
 
+    /// The target as a person is shown it: a file's name spelled as
+    /// [`crate::confirm::shown_name`] spells it, anything else as it is.
+    ///
+    /// For a screen only. A name that needs no spelling comes back as it was, so the plain case
+    /// reads as it always did, and [`Activity::target`] stays what programs and the files view
+    /// match on. A call with nothing to name has no target, and it is not drawn as the empty name.
+    pub fn shown_target(&self) -> String {
+        match self.names_a_file && !self.target.is_empty() {
+            true => crate::confirm::shown_name(&self.target),
+            false => self.target.clone(),
+        }
+    }
+
+    /// The file this call is about as a list of files names it: [`Activity::shown_target`] of the
+    /// target with the slot a reference was drawn under and a leading `./` taken off, so a file
+    /// the planner named two ways is one row, spelled as the confirmation for it is.
+    ///
+    /// For a screen only, as [`Activity::shown_target`] is. A call that names no file comes back
+    /// as it is.
+    pub fn shown_file(&self) -> String {
+        match self.names_a_file && !self.target.is_empty() {
+            true => crate::confirm::shown_name(without_reference_slot(&self.target)),
+            false => self.target.clone(),
+        }
+    }
+
     /// The line as one string, for a display with nowhere to put the parts separately.
     pub fn line(&self) -> String {
         if self.target.is_empty() {
             self.verb.to_string()
         } else {
-            format!("{}({})", self.verb, self.target)
+            format!("{}({})", self.verb, self.shown_target())
         }
     }
+}
+
+/// A target without the `ref:N(label):` a reference is drawn under, and without a leading `./`.
+///
+/// Both come off one time, the slot first, as a list of files has always matched a call to the
+/// path it was confirmed for. Only the way the name is drawn is decided here, on text already
+/// released to a screen.
+fn without_reference_slot(target: &str) -> &str {
+    let after_slot = || -> Option<&str> {
+        let rest = target.strip_prefix("ref:")?;
+        let after_digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        if after_digits.len() == rest.len() {
+            return None;
+        }
+        let rest = after_digits.strip_prefix('(')?;
+        let rest = rest.strip_prefix(['T', 'U'])?.strip_prefix(',')?;
+        rest.strip_prefix("pub")
+            .or_else(|| rest.strip_prefix("priv"))?
+            .strip_prefix("):")
+    };
+    let target = after_slot().unwrap_or(target);
+    target.strip_prefix("./").unwrap_or(target)
 }
 
 /// What the kernel counted when it made the diff behind a write's [`Activity::changes`].
@@ -734,6 +876,23 @@ pub trait Reporter {
     /// driver taking a decision from untrusted bytes, and an empty line is the interface's to
     /// leave undrawn.
     fn narration(&mut self, _text: String) {}
+
+    /// A summary of the conversation could not be made, so the turn goes on with the history it has.
+    ///
+    /// The reason is the closed value and not a sentence, so a front end words it in its own way. The
+    /// default says it as a narration in the terminal's words.
+    fn summary_failed(&mut self, why: Why) {
+        self.narration(summary_failed_in_the_terminals_words(why));
+    }
+
+    /// The turn's model kept failing and the person's `fallbackModel` takes over for the rest of the
+    /// turn (BACKEND-53).
+    ///
+    /// The reason is the closed value, for the reason [`Reporter::summary_failed`] takes one. The
+    /// default says it as a narration in the terminal's words.
+    fn fell_back(&mut self, from: &str, to: &str, why: Why) {
+        self.narration(fell_back_in_the_terminals_words(from, to, why));
+    }
 
     /// The reply as the model writes it, in the words added since the last call.
     ///
@@ -1353,6 +1512,200 @@ mod tests {
             Activity::running("Read", "src/main.rs").line(),
             "Read(src/main.rs)"
         );
+    }
+
+    /// A line that names a file spells a name a person could not otherwise tell from another
+    /// (PROMPT-1), and one that names anything else draws it as written. The target itself is
+    /// left as it was, since a window matches a call to its confirmation on it.
+    #[test]
+    fn a_line_spells_the_name_of_a_file_and_nothing_else() {
+        let read = |target: &str| Activity::running("Read", target).naming_a_file(true);
+
+        assert_eq!(read("src/main.rs").line(), "Read(src/main.rs)");
+        assert_eq!(read("note.md ").line(), "Read(\"note.md\u{2423}\")");
+        assert_eq!(read(" ").line(), "Read(\"\u{2423}\")");
+        assert_eq!(read("a\u{200b}b").line(), "Read(\"a\\u{200b}b\")");
+        assert_eq!(read("note.md ").target, "note.md ");
+        assert_eq!(read("note.md ").shown_target(), "\"note.md\u{2423}\"");
+
+        // A search for `todo ` looks for the space too, and a line saying otherwise is wrong.
+        let search = Activity::running("Search", "todo ");
+        assert_eq!(search.line(), "Search(todo )");
+        assert_eq!(search.shown_target(), "todo ");
+
+        // A call that named nothing has no target to spell, so nothing is drawn for it.
+        assert_eq!(read("").shown_target(), "");
+        assert_eq!(read("").line(), "Read");
+    }
+
+    /// A list of files names a file once however the planner named it, and spells the name as a
+    /// prompt about it does (PROMPT-1): the slot a reference was drawn under and a leading `./`
+    /// come off, once each and in that order, and what is left is spelled. Anything that is not
+    /// a file's name keeps its target whole.
+    #[test]
+    fn a_list_of_files_names_a_file_without_its_slot_and_spelled() {
+        let file = |target: &str| Activity::running("Write", target).naming_a_file(true);
+
+        assert_eq!(file("src/main.rs").shown_file(), "src/main.rs");
+        assert_eq!(
+            file("ref:3(U,priv):note.md ").shown_file(),
+            "\"note.md\u{2423}\""
+        );
+        assert_eq!(file("ref:12(T,pub):note.md").shown_file(), "note.md");
+        assert_eq!(file("./other.md ").shown_file(), "\"other.md\u{2423}\"");
+        assert_eq!(file("ref:1(U,priv):./a.md").shown_file(), "a.md");
+        // Once each: a second `./` is part of the name, and so is a slot that is not one.
+        assert_eq!(file(".//a.md").shown_file(), "/a.md");
+        assert_eq!(file("ref:(U,priv):a.md").shown_file(), "ref:(U,priv):a.md");
+        assert_eq!(
+            file("ref:1(X,priv):a.md").shown_file(),
+            "ref:1(X,priv):a.md"
+        );
+        assert_eq!(
+            file("ref:1(U,secret):a.md").shown_file(),
+            "ref:1(U,secret):a.md"
+        );
+        // Taking the slot off a name that is nothing but one leaves nothing to draw as a name.
+        assert_eq!(file("ref:1(U,priv):").shown_file(), "\"\"");
+        assert_eq!(file("").shown_file(), "");
+
+        let search = Activity::running("Search", "./todo ");
+        assert_eq!(search.shown_file(), "./todo ");
+    }
+
+    /// CHATGPT-8: a summary that failed on the ChatGPT account is told in that failure's sentence,
+    /// which holds the wait a refusal asked for and has no status after it, and every other failure
+    /// keeps the name of its category, since nothing in a reply may be put in the line. The
+    /// regressions it rejects are the category's name for a failure of the account, a sentence for a
+    /// failure that is not the account's, such as a gateway's refused key, and the status of a
+    /// refusal put after the sentence, which `/compact` and the narrated line leave out.
+    #[test]
+    fn a_failed_summary_says_the_accounts_sentence_where_it_was_the_account_and_the_category_otherwise()
+     {
+        use crate::backend::BackendError;
+        use crate::compact::{CompactError, SideModelRefusal};
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        let chat = |error: ChatError| CompactError::Chat(BackendError::from(error));
+        for failure in [AccountFailure::Ended, AccountFailure::NotSignedIn] {
+            assert_eq!(
+                why_a_summary_failed(&chat(ChatError::Account(failure))),
+                crate::chatgpt::said_of_failure(failure),
+                "{failure:?}"
+            );
+        }
+        // A refusal that came as a 429 with a wait has the wait in its sentence and no status after it.
+        for refusal in [
+            bravebot_aichat::responses::protocol::Refusal::UsageLimit,
+            bravebot_aichat::responses::protocol::Refusal::NotPermitted,
+        ] {
+            let failure = AccountFailure::Named {
+                refusal,
+                status: Some(429),
+                retry_after: Some(std::time::Duration::from_secs(600)),
+            };
+            let told = why_a_summary_failed(&chat(ChatError::Account(failure)));
+            assert_eq!(
+                told,
+                crate::chatgpt::said_of_failure(failure),
+                "{refusal:?}"
+            );
+            assert!(told.contains("a wait of about 10 minutes"), "{told}");
+            assert!(!told.contains("HTTP") && !told.contains("429"), "{told}");
+        }
+        let status = |status: u16| {
+            chat(ChatError::Egress(bravebot_net::EgressError::Status {
+                url: "https://api.example.invalid/v1/responses".to_string(),
+                status,
+                retry_after: None,
+                body: None,
+            }))
+        };
+        assert_eq!(why_a_summary_failed(&status(401)), "unauthorized");
+        assert_eq!(why_a_summary_failed(&status(503)), "unavailable");
+        assert_eq!(
+            why_a_summary_failed(&CompactError::SummaryModel(SideModelRefusal::NeedsSignIn(
+                "a-model".to_string()
+            ))),
+            "unconfigured"
+        );
+    }
+
+    /// CHATGPT-8: the line a turn narrates for a summary the account could not make is the account's
+    /// sentence, and for a refusal that came as a 429 with a wait it holds the wait and has no status
+    /// after it. The failure is handed to the reporter as the closed value the turn makes from the
+    /// error, as `round_steps` hands it. The regression it rejects is the status of the refusal put
+    /// after the sentence, as the terminal's line for a failed turn puts it.
+    #[test]
+    fn the_line_for_a_summary_the_account_refused_has_the_wait_and_no_status() {
+        use crate::backend::BackendError;
+        use crate::compact::CompactError;
+        use bravebot_aichat::responses::protocol::Refusal;
+        use bravebot_aichat::{AccountFailure, ChatError};
+
+        for refusal in [Refusal::UsageLimit, Refusal::NotPermitted] {
+            let failure = AccountFailure::Named {
+                refusal,
+                status: Some(429),
+                retry_after: Some(std::time::Duration::from_secs(600)),
+            };
+            let error = CompactError::Chat(BackendError::from(ChatError::Account(failure)));
+            let mut reporter = RecordingReporter::default();
+            reporter.summary_failed(Why::of_summary(&error));
+
+            let [line] = reporter.narration.as_slice() else {
+                panic!("{refusal:?}: {:?}", reporter.narration);
+            };
+            assert_eq!(
+                *line,
+                t!(
+                    compact_failed_and_continuing,
+                    problem = crate::chatgpt::said_of_failure(failure)
+                ),
+                "{refusal:?}"
+            );
+            assert!(line.contains("a wait of about 10 minutes"), "{line}");
+            assert!(!line.contains("HTTP") && !line.contains("429"), "{line}");
+        }
+    }
+
+    /// XAI-15: a summary the xAI account could not make, and a move to the fallback model off it, are
+    /// told in the sentence of the xAI failure and not in the category's name, and not in ChatGPT's. A
+    /// reporter that fell back to `Why::Category` for the xAI value would say "unauthorized", which names
+    /// no command, and one that used ChatGPT's wording would send a person to sign in to ChatGPT.
+    #[test]
+    fn a_failure_of_the_xai_account_is_told_in_its_own_sentence_in_a_summary_and_a_fallback() {
+        use crate::backend::BackendError;
+        use crate::compact::CompactError;
+        use bravebot_aichat::{AccountFailure, ChatError, RenewalFailure, XaiFailure};
+
+        for failure in [
+            XaiFailure::NotSignedIn,
+            XaiFailure::Rejected,
+            XaiFailure::NotPermitted,
+            XaiFailure::Renewal(RenewalFailure::RateLimited),
+        ] {
+            let said = crate::xai::said_of_failure(failure);
+            let error = CompactError::Chat(BackendError::from(ChatError::Account(
+                AccountFailure::Xai(failure),
+            )));
+            assert_eq!(why_a_summary_failed(&error), said, "{failure:?}");
+
+            let mut reporter = RecordingReporter::default();
+            reporter.summary_failed(Why::of_summary(&error));
+            assert_eq!(
+                reporter.narration,
+                [t!(compact_failed_and_continuing, problem = said.clone())],
+                "{failure:?}"
+            );
+            let moved = fell_back_in_the_terminals_words(
+                "xai/grok-4.5",
+                "xai/grok-4.6",
+                Why::Account(AccountFailure::Xai(failure)),
+            );
+            assert!(moved.contains(&said), "{failure:?}: {moved}");
+            assert!(!moved.contains("ChatGPT"), "{failure:?}: {moved}");
+        }
     }
 
     /// Some work has nothing to name, and an empty pair of brackets reads as a bug rather than

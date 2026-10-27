@@ -40,6 +40,24 @@ pub(super) fn capped_note(tool: &str, incomplete: bool, paging: Option<Paging>) 
     }
 }
 
+/// What a result says about the symbolic links its walk did not enter, written beside the reference
+/// for the reason `capped_note` is: the body that would carry it reaches nobody. A number and never a
+/// name, from the count the walk kept while it read file types.
+pub(super) fn links_note(tool: &str, links: usize) -> String {
+    if links == 0 {
+        return String::new();
+    }
+    match tool {
+        // The entries of a listing follow on the same paragraph.
+        "list_files" => format!(
+            " {} not entered and {} not among them.",
+            crate::tools::tally(links, "symbolic link was", "symbolic links were"),
+            if links == 1 { "is" } else { "are" }
+        ),
+        _ => format!("\n\n{}.", crate::tools::search_links_clause(links)),
+    }
+}
+
 /// How to see this one and how to stop being asked, for a run and
 /// only for a run.
 /// Without it the quarantine reads as a fact about running programs,
@@ -211,6 +229,22 @@ mod tests {
         assert!(
             capped_note("search", true, Some(Paging::PastTheEnd { found: 3 }))
                 .contains("stopped at a cap")
+        );
+    }
+
+    /// The regression it rejects: the link count dropped for a result the planner may not read,
+    /// or the note naming something other than a count.
+    #[test]
+    fn links_not_entered_are_counted_beside_the_reference_and_no_note_means_none() {
+        assert_eq!(links_note("search", 0), "");
+        assert_eq!(links_note("list_files", 0), "");
+        assert_eq!(
+            links_note("list_files", 1),
+            " 1 symbolic link was not entered and is not among them."
+        );
+        assert_eq!(
+            links_note("search", 2),
+            "\n\n2 symbolic links were not entered, so files behind them were not searched."
         );
     }
 

@@ -96,6 +96,10 @@
 .todos li.cancelled { color: var(--ink-tertiary); }
 .todos li.cancelled .todo-text { text-decoration: line-through; }
 .todos li.active { color: var(--ink-primary); font: var(--type-meta-strong); }
+/* A row the turn left neither done nor cancelled, once the turn has ended: dimmed like a settled
+   row, but its hollow mark (the marker's own default ink) keeps it apart from `done` and
+   `cancelled`, since nobody struck it. */
+.todos li.left-open { color: var(--ink-tertiary); }
 
 .file-row, .confined-row {
   display: flex;
@@ -368,6 +372,11 @@
 .bot-details-face .bot-avatar-refresh { position: absolute; right: calc(-1 * var(--leo-spacing-xs)); bottom: calc(-1 * var(--leo-spacing-xs)); }
 .bot-details .bot-memory-panel { gap: var(--leo-spacing-m); }
 .bot-field-label { font: var(--type-meta-strong); color: var(--ink-primary); }
+.bot-servers { display: flex; flex-direction: column; gap: var(--leo-spacing-m); }
+.bot-servers-list { display: flex; flex-direction: column; gap: var(--leo-spacing-s); margin: 0; padding: 0; list-style: none; }
+.bot-server { display: flex; align-items: center; justify-content: space-between; gap: var(--leo-spacing-m); }
+.bot-servers-note { margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+.bot-servers-loading { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
 /* The top of the memory as the bot wrote it, in the outlined box a text field draws. The rest is in the dialog. */
 .bot-details .bot-memory {
   margin: 0;
