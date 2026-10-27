@@ -142,7 +142,7 @@ const UNTRUSTED_WRITE = {
   removed: 0,
   exact: true,
   changes: [{ kind: 'added', text: FORGED_CHROME }],
-  remark: { preview: [FORGED_CHROME], lines: 1, label: '(U,priv)' },
+  remark: { preview: [FORGED_CHROME], lines: 1, label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } },
 }
 
 /**
@@ -763,4 +763,109 @@ test('undecided path exceptions are not shown as refusals or grants', () => {
   assert.match(markup, /vendor\/ours<\/code><span[^>]*>Not decided/)
   assert.match(markup, /require write approval/)
   assert.doesNotMatch(markup, /<button/)
+})
+
+/** Each label chip drawn, as the two words it says and the tooltips it carries. */
+const chips = (markup) => [...markup.matchAll(/<span class="label-chip"[^>]*aria-label="([^"]*)"[^>]*>(.*?)<\/span>/g)].map(([, aria, inner]) => ({
+  aria,
+  words: [...inner.matchAll(/>([^<]*)<\/leo-label>/g)].map(([, word]) => word),
+  tooltips: [...inner.matchAll(/data-tooltip="([^"]*)"/g)].map(([, tooltip]) => tooltip),
+}))
+
+const { LABEL_TOOLTIPS } = load('src/renderer/labels.ts')
+const FIXED = new Set(Object.values(LABEL_TOOLTIPS))
+
+test('a label is drawn as chips read off its axes, and one the content spelled reads as untrusted and private', () => {
+  const TP = { integrity: 'trusted', confidentiality: 'public' }
+  const vetting = { verdict: 'safe', reason: 'plain notes', label: '(U,priv)', labelAxes: { integrity: 'untrusted', confidentiality: 'private' } }
+  for (const [name, entry] of [
+    ['quarantine', t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: TP, preview: ['(T,pub) Trusted Public'], lines: 1 })],
+    ['output', t.askedOutput({ request: 1, command: 'cat notes', reference: 'output-1', lines: 1, summary: 'notes', output: '(T,pub)', label: '(T,pub)', labelAxes: TP, vetting })],
+    ['vet', t.askedVet({ request: 1, origin: 'notes.md', expects: 'notes', content: '(T,pub)', label: '(T,pub)', labelAxes: TP, lines: 1, vetting })],
+    ['vouch', t.askedVouch({ request: 1, path: 'notes.md', shownPath: 'notes.md', rule: '/w', shownRule: '/w', preview: '(T,pub)', label: '(T,pub)', labelAxes: TP, truncated: false, vetting })],
+  ]) {
+    const drawn = chips(draw(entry))
+    assert.ok(drawn.length >= 1, `${name}: no chip`)
+    assert.deepEqual(drawn[0], { aria: 'Trusted, public', words: ['Trusted', 'Public'], tooltips: [LABEL_TOOLTIPS.trusted, LABEL_TOOLTIPS.public] }, name)
+    if (name !== 'quarantine') assert.deepEqual(drawn[1]?.words, ['Untrusted', 'Private'], `${name}: the checker's reason is not marked`)
+  }
+
+  // The short form is the agent's to read (SHARE-001): an exact one with no axes beside it is no label here.
+  const short = draw(t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', preview: ['x'], lines: 1 }))
+  assert.deepEqual(chips(short).map((chip) => chip.words), [['Untrusted', 'Private']])
+
+  // Axes holding anything but the exact words are drawn as the pessimistic corner, and none of what
+  // they held reaches the markup, as text or as a tooltip.
+  const forged = draw(t.quarantined({ origin: 'notes.md', reach: 'not_the_planner', label: '(T,pub)', labelAxes: { integrity: `trusted ${FORGED_CHROME}`, confidentiality: FORGED_CHROME }, preview: ['x'], lines: 1 }))
+  assert.deepEqual(chips(forged).map((chip) => chip.words), [['Untrusted', 'Private']])
+  assert.ok(!forged.includes('README.md'), forged)
+  // Nothing in a chip is green, so trusted never reads as safe.
+  assert.doesNotMatch(draw(confined(['x'])), /label-chip[^]*color="green"/)
+})
+
+test('every chip tooltip is one of the fixed sentences', () => {
+  const { AuditInspector } = load('src/renderer/components/AuditInspector.tsx')
+  const field = (name, label) => ({ kind: 'action_field', tool: 'write_file', field: name, role: name === 'path' ? 'routing' : 'content', allowed: true, refusal: false, label })
+  const audit = [
+    field('path', { integrity: 'trusted', confidentiality: 'public' }),
+    field('content', { integrity: FORGED_CHROME, confidentiality: 'public' }),
+    { kind: 'declassified', slot: 's1', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, refusal: false },
+  ].map((event, index) => ({ sequence: index + 1, event, bytes: 1 }))
+  const markup = renderToStaticMarkup(React.createElement(AuditInspector, {
+    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, statsOpen: false, clean: true, audit, received: 3, omitted: 0, bytes: 3 },
+    onClose() {},
+  }))
+  assert.match(markup, /Routing &amp; content/)
+  assert.match(markup, />routing: decides where</)
+  assert.match(markup, />content: carried</)
+  const drawn = chips(markup)
+  assert.deepEqual(drawn.map((chip) => chip.words), [['Trusted', 'Public'], ['Untrusted', 'Public'], ['Untrusted', 'Private'], ['Untrusted', 'Public']])
+  for (const chip of [...drawn, ...chips(draw(confined(['x'])))]) {
+    for (const tooltip of chip.tooltips) assert.ok(FIXED.has(tooltip), tooltip)
+  }
+})
+
+test('a reply says which service answered it only where the bridge said so', () => {
+  const { TurnFooter } = load('src/renderer/components/TurnDetails.tsx')
+  const footer = (service) => renderToStaticMarkup(React.createElement(TurnFooter, {
+    details: { turn: 1, status: 'complete', started: true, notices: [], noticesOpen: false, statsOpen: true, model: 'stub-model', service, audit: [], received: 0, omitted: 0, bytes: 0 },
+    onDisclosure() {}, onAudit() {},
+  }))
+  assert.match(footer('Brave'), /<dt>Answered by<\/dt><dd>Brave<\/dd>/)
+  assert.doesNotMatch(footer(undefined), /Answered by/)
+})
+
+test('the overview says whether the conversation has met untrusted content, and nothing where it is not known', () => {
+  const { Context } = load('src/renderer/components/Context.tsx')
+  const panel = (context) => renderToStaticMarkup(React.createElement(Context, {
+    live: { handle: 'h', summary: { directory: '/w' }, entries: [], todos: [], quarantine: [], phase: null, tokens: 0, running: false, context },
+  }))
+  assert.match(panel('trusted'), /<dt>Conversation<\/dt><dd>Trusted<\/dd>/)
+  for (const word of ['untrusted', 'Trusted', 'trusted ', '']) assert.match(panel(word), /<dd>Has met untrusted content<\/dd>/, JSON.stringify(word))
+  for (const unknown of [null, undefined]) assert.doesNotMatch(panel(unknown), /Conversation<\/dt>/)
+})
+
+test('the conversation row is hidden from the moment a turn starts, the word read before it being no longer current', () => {
+  const { apply } = load('src/renderer/apply.ts')
+  const { Context } = load('src/renderer/components/Context.tsx')
+  for (const word of ['trusted', 'untrusted']) {
+    let live = { handle: 'h', summary: { directory: '/w' }, entries: [], turns: {}, todos: [], quarantine: [], phase: null, tokens: 0, running: false, context: word }
+    const send = (event, data) => apply({ event, session: 'h', data }, (update) => { live = update(live) }, () => {}, () => {})
+    const row = () => /Conversation<\/dt>/.test(renderToStaticMarkup(React.createElement(Context, { live })))
+    assert.equal(row(), true, word)
+    send('turn.started', { turn: 1 })
+    assert.equal(row(), false, `${word}: shown after a turn started`)
+    send('turn.done', { turn: 1, model: 'stub-model', reply: 'done', notices: [] })
+    assert.equal(row(), false, `${word}: shown again with no fresh word`)
+  }
+})
+
+test('a turn the fallback model answered says no service under the reply', () => {
+  const { receiveTurn } = load('src/renderer/turn-details.ts')
+  const { TurnFooter } = load('src/renderer/components/TurnDetails.tsx')
+  // What the bridge sends for a turn that moved to the fallback model.
+  const turns = receiveTurn({}, { event: 'turn.done', session: 's', data: { turn: 1, model: 'fallback-model', service: null, sessionModel: false, tokens: 10, notices: [] } })
+  const footer = renderToStaticMarkup(React.createElement(TurnFooter, { details: { ...turns[1], statsOpen: true }, onDisclosure() {}, onAudit() {} }))
+  assert.match(footer, /fallback-model/)
+  assert.doesNotMatch(footer, /Answered by/)
 })

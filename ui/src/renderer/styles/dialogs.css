@@ -33,6 +33,7 @@
 .modal-header-action { display: inline-flex; margin-left: auto; font: var(--type-body); }
 .modal-subtitle { display: block; margin-top: var(--leo-spacing-s); font: var(--type-body); color: var(--ink-secondary); }
 .confirm-archive p { margin: 0; }
+.confirm-archive p + p { margin-top: var(--leo-spacing-m); }
 .confirm-delete { --leo-button-color: var(--status-error-ink); }
 .confirm-archive-name { color: var(--ink-primary); font: var(--type-body-strong); overflow-wrap: anywhere; }
 
@@ -40,6 +41,20 @@
 .modal h3 { margin: var(--leo-spacing-2xl) 0 var(--leo-spacing-s); font: var(--type-body-strong); color: var(--ink-primary); }
 .modal h4 { margin: var(--leo-spacing-l) 0 var(--leo-spacing-s); font: var(--type-meta-strong); color: var(--ink-primary); }
 .modal code { font: var(--type-code); }
+/* A message naming a long path has no break in it, and an alert that will not wrap widens the body
+   past the dialog, which clips the footer and its Close button off the right-hand edge. */
+.modal leo-alert { display: block; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.modal .dialog-busy { display: flex; align-items: center; gap: var(--leo-spacing-s); margin: 0; font: var(--type-meta); color: var(--ink-secondary); }
+
+/* ---------------------------------------------------------------- import
+
+   Another program's sessions, one checkbox each. The titles are that program's text, so a row is
+   one line cut with an ellipsis and the whole title is its tooltip. */
+.import-sessions { display: flex; flex-direction: column; gap: var(--leo-spacing-s); max-height: 50vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.import-session { display: flex; align-items: center; gap: var(--leo-spacing-m); min-height: var(--hit); }
+.import-session leo-checkbox { flex: 1; min-width: 0; }
+.import-session-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--type-body); color: var(--ink-primary); }
+.import-session-time { flex: none; font: var(--type-meta); color: var(--ink-tertiary); font-variant-numeric: tabular-nums; }
 
 /* The primary action at the right-hand end; a secondary one that should stand apart from it
    carries `modal-leading` and goes to the other end. */
@@ -224,8 +239,56 @@
 .bot-form-identity { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: end; gap: var(--leo-spacing-xl); }
 .bot-form-identity leo-input { width: 100%; min-width: 0; }
 .bot-form-avatar { position: relative; display: grid; place-items: center; width: 80px; height: 80px; }
-.bot-avatar-refresh { position: absolute; right: 0; bottom: 0; }
-.icon-button.bot-avatar-refresh { border-radius: var(--radius-pill); --leo-button-radius: var(--radius-pill); }
+.bot-avatar-edit { position: absolute; right: 0; bottom: 0; }
+.icon-button.bot-avatar-edit { border-radius: var(--radius-pill); --leo-button-radius: var(--radius-pill); }
+
+/* The avatar editor: a popover in the top layer, placed under the face by `AvatarEditor`. The
+   option cells keep a transparent border so choosing one does not move the grid. */
+.avatar-editor {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: var(--leo-spacing-xl);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-field);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-floating);
+  color: var(--ink-primary);
+  user-select: none;
+}
+.avatar-editor:popover-open {
+  display: flex;
+  flex-direction: column;
+  gap: var(--leo-spacing-xl);
+  animation: avatar-editor-rise var(--motion-fast);
+}
+@keyframes avatar-editor-rise {
+  from { opacity: 0; transform: translateY(var(--leo-spacing-xs)); }
+}
+.avatar-editor-head { display: flex; align-items: center; gap: var(--leo-spacing-m); }
+.avatar-editor-head strong { flex: 1; font: var(--type-body-strong); }
+.avatar-editor-shapes,
+.avatar-editor-colors { display: grid; grid-template-columns: repeat(8, max-content); gap: var(--leo-spacing-s); }
+.avatar-editor-option {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: var(--leo-spacing-xs);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: inherit;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
+}
+.avatar-editor-option:hover { background: var(--surface-hover); }
+.avatar-editor-option:active { background: var(--surface-selected); }
+.avatar-editor-option[aria-pressed='true'] { border-color: var(--border-selected); }
+.avatar-editor-swatch { display: block; width: 32px; height: 32px; overflow: hidden; border-radius: var(--radius-swatch); }
+.avatar-editor-swatch .pixel-swatch { display: block; }
+
+@media (forced-colors: active) {
+  .avatar-editor-option[aria-pressed='true'] { border: 2px solid Highlight; }
+}
 
 .bot-field { display: flex; flex-direction: column; gap: var(--leo-spacing-s); min-width: 0; }
 .bot-field > span { font: var(--type-meta-strong); color: var(--ink-primary); }

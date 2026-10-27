@@ -59,7 +59,9 @@ export interface Activity {
 export interface Shown {
   origin: string
   reach: Reach
+  /** As the trail writes it. Draw `labelAxes`, never this. */
   label: string
+  labelAxes: LabelAxes
   /** Already trimmed by the kernel to 12 lines of at most 160 characters. */
   preview: string[]
   /** The true total, so a preview can say what it left out. */
@@ -381,7 +383,13 @@ export interface ForkedSession extends SessionSettled {
   }
 }
 
-export interface Vetting { verdict: string; reason?: string | null; label?: string | null; detail?: string | null }
+/**
+ * A label with both axes named, read from the agent's own label by the bridge (SHARE-001). The
+ * renderer draws chips from this alone and reads a missing or unknown word as untrusted or private.
+ */
+export interface LabelAxes { integrity: 'trusted' | 'untrusted'; confidentiality: 'public' | 'private' }
+
+export interface Vetting { verdict: string; reason?: string | null; label?: string | null; labelAxes?: LabelAxes | null; detail?: string | null }
 /**
  * A picture or a PDF put to the person as a copy to open, since a transcript row cannot show what
  * the model would be shown. The copy is deleted once the question is answered.
@@ -396,6 +404,7 @@ export interface VetRequest {
   /** The content with each character that draws as nothing written out as `‹U+XXXX›`, as the agent spelled it. */
   content: string
   label?: string | null
+  labelAxes?: LabelAxes | null
   lines: number
   /** How many characters of `content` drew as nothing before the agent wrote them out. Counted by the agent. */
   hidden?: number
@@ -406,7 +415,7 @@ export interface VetRequest {
 }
 
 export interface ConfirmRequest {
-  remark?: { preview: string[]; lines: number; label: string } | null
+  remark?: { preview: string[]; lines: number; label: string; labelAxes: LabelAxes } | null
   /**
    * What the credential scan inferred about this body, where it inferred anything: the reason a
    * write the path's own rule would have let through unasked is being asked about. Each entry is
@@ -454,6 +463,10 @@ export interface TurnDone {
   turn: number
   reply: string
   model: string
+  /** The service configuration routes the session's model to, by its display name; `null` where the turn ran on another model. */
+  service?: string | null
+  /** Whether the turn's last round was asked of the session's own model. */
+  sessionModel?: boolean
   steps: number
   clean: boolean
   tokens: number
@@ -879,6 +892,8 @@ export interface OutputRequest {
   output: string
   /** The label the output was released under, as the trail writes it. */
   label: string
+  /** The same label with both axes named. Draw this. */
+  labelAxes: LabelAxes
   summary: string
 }
 
@@ -897,6 +912,8 @@ export interface VouchRequest {
   preview: string
   /** The label the preview was released under, as the trail writes it. */
   label: string
+  /** The same label with both axes named. Draw this. */
+  labelAxes: LabelAxes
   /** Whether the preview is only part of the file. Load-bearing: a preview that stops
    *  without saying so reads as the whole thing. */
   truncated: boolean

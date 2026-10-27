@@ -1233,7 +1233,9 @@ The command line removes the same files with `bravebot sessions delete <id>` and
 
 The bridge deletes any session it is given, whether or not it is archived. The desktop app offers
 the delete on archived conversations only, and its main process forwards `session.delete` only for
-a `directory` it offered, as it does for `session.new` and `session.open`.
+a `directory` it offered, as it does for `session.new` and `session.open`. It also offers
+`session.purge`, the bridge's `sessions purge`, from a project's heading, under the same rule; the
+purge names the ids it deletes, and a conversation the window has open is closed first.
 
 A fork is a complete copy made when it was forked and shares no file with the session it came from,
 so deleting either leaves the other openable with its own history and trail. The trail goes before

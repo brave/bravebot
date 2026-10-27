@@ -371,7 +371,7 @@ fn shaped(event: &Event) -> Value {
 }
 
 /// A label, with both axes named.
-fn label_json(label: Label) -> Value {
+pub fn label_json(label: Label) -> Value {
     json!({
         "integrity": match label.integrity {
             Integrity::Trusted => "trusted",

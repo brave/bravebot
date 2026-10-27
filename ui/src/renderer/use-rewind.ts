@@ -1,10 +1,9 @@
 import { useCallback, useState, type MutableRefObject, type SetStateAction } from 'react'
 import type { RewoundSession } from '../shared/protocol'
 import type { Live } from './live'
-import { pointForPrompt, rewindFailure } from './rewind'
+import { pointForPrompt, rewindFailure, rewoundLive } from './rewind'
 import { call } from './rpc'
 import { showToast } from './toasts'
-import * as t from './transcript'
 
 interface Rewinding {
   handle: string
@@ -41,33 +40,14 @@ export function useRewind({ liveRef, updateSession, refresh, draft, setDraft, se
     if (point) askRewind(point.steps)
   }, [askRewind, liveRef])
 
-  /**
-   * Put the session back and draw it again from what the agent says it now holds.
-   *
-   * Redrawn rather than patched, as opening a saved session is: what is on screen afterwards is
-   * what the next turn will be working from.
-   */
+  /** Put the session back and draw it again from what the agent says it now holds. */
   const confirmRewind = useCallback(async () => {
     if (!rewinding || rewinding.busy) return
     const { handle, steps } = rewinding
     setRewinding({ ...rewinding, busy: true })
     try {
       const rewound = await call<RewoundSession>('session.rewind', { session: handle, steps })
-      updateSession(handle, (old) => old ? {
-        ...old,
-        entries: t.fromSaid(rewound.said),
-        turns: Object.fromEntries(Object.entries(old.turns).filter(([turn]) => Number(turn) < rewound.turn)),
-        todos: Object.values(rewound.todos).flat(),
-        contextTokens: rewound.contextTokens,
-        archived: rewound.archived,
-        rewind: rewound.rewind,
-        awaitingOrdinal: null,
-        focus: null,
-        // Held, so the prompt going back in the composer is not overtaken by one queued before it.
-        queuePaused: old.queued?.length ? true : old.queuePaused,
-        // The turn that carried the briefing may be one of those undone.
-        bot: old.bot ? { ...old.bot, grounded: false } : null,
-      } : old)
+      updateSession(handle, (old) => old ? rewoundLive(old, rewound) : old)
       const draftNow = liveRef.current?.handle === handle ? draft : ''
       setDraft(rewound.text + (draftNow.trim() ? `\n\n${draftNow}` : ''))
       showToast(`Back to before turn ${rewound.turn}`)

@@ -41,6 +41,10 @@ interface Props {
   /** Remove an archived conversation from disk. */
   onDelete: (summary: SessionSummary) => void
   onNew: (directory?: string) => void
+  /** Ask to delete every conversation kept for one project. */
+  onPurge: (directory: string, project: string) => void
+  /** Offer the project's Claude Code sessions for copying here. */
+  onImport: (directory: string, project: string) => void
   /** Start a chat in the project used last. */
   onNewChat: () => void
   /**
@@ -128,6 +132,8 @@ export function Sessions({
   onOpen,
   onDelete,
   onNew,
+  onPurge,
+  onImport,
   onNewChat,
   grouped,
   onGroup,
@@ -267,6 +273,8 @@ export function Sessions({
               onOpen={onOpen}
               onDelete={onDelete}
               onNew={onNew}
+              onPurge={onPurge}
+              onImport={onImport}
             />
           ))}
         {archivedShown && (
@@ -327,8 +335,8 @@ function ShowMore({ page: { hidden, coming, first }, onMore }: { page: Page; onM
  * the biggest thing in reach, and a group that can be folded should not ask for a 10px arrow
  * to be hit. `aria-expanded` carries the state and the name stays put.
  *
- * The heading is a row of two buttons rather than one, because the second one starts a
- * session here and a button cannot be nested inside a button.
+ * The heading is a row of buttons rather than one, because the others start a session here and
+ * open the project's actions, and a button cannot be nested inside a button.
  *
  * The rows stay mounted while shut, because that is how [`Fold`] has something to animate
  * away from; it hides them from the reader and from the tab order once the collapse has
@@ -346,6 +354,8 @@ function Group({
   onOpen,
   onDelete,
   onNew,
+  onPurge,
+  onImport,
 }: {
   group: Group
   shown: number
@@ -358,6 +368,8 @@ function Group({
   onOpen: (summary: SessionSummary) => void
   onDelete: (summary: SessionSummary) => void
   onNew: (directory: string) => void
+  onPurge: (directory: string, project: string) => void
+  onImport: (directory: string, project: string) => void
 }): React.JSX.Element {
   const drawn = page(group.sessions, shown, keep)
   return (
@@ -387,6 +399,15 @@ function Group({
           tooltip={`New chat in ${group.directory}`}
           onClick={() => onNew(group.directory)}
         />
+        <IconMenu icon="more-vertical" size="tiny" className="session-group-menu" label={`Actions for ${group.project}`}
+          tooltip={false} data-test="session-group-menu">
+          <leo-menu-item onClick={() => onImport(group.directory, group.project)}>
+            <span className="menu-icon-row"><Icon name="import-arrow" />Import from Claude Code…</span>
+          </leo-menu-item>
+          <leo-menu-item className="session-delete" onClick={() => onPurge(group.directory, group.project)}>
+            <span className="menu-icon-row"><Icon name="trash" />Delete all chats in {group.project}…</span>
+          </leo-menu-item>
+        </IconMenu>
       </div>
       <Fold open={open}>
         {drawn.rows.map((session) => (

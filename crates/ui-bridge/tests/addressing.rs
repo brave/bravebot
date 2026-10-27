@@ -302,6 +302,32 @@ fn a_turn_naming_a_bots_definition_runs_under_it() {
     );
 }
 
+/// A turn on the session's model says which service answered it, and one on a definition's own
+/// model says nothing, the service of that model being one the window was not asked about.
+#[test]
+fn a_turn_names_its_service_only_when_it_ran_on_the_sessions_model() {
+    let scratch = Scratch::new("bridge-addressing-service");
+    std::fs::write(
+        scratch.home().join(".bravebot/agents/keeper.md"),
+        format!(
+            "---\nname: keeper\ndescription: Keeps the lights.\nkind: reader\nmodel: other-model\n---\n\n{PURPOSE}\n"
+        ),
+    )
+    .expect("a definition");
+    let (endpoint, _received) = stub_service();
+    let mut window = Window::open(&scratch, &endpoint);
+
+    let plain = window.turn(json!({"prompt": "PLAIN-TURN"}));
+    assert_eq!(plain["event"], "turn.done", "{plain}");
+    assert_eq!(plain["data"]["service"], "Brave", "{plain}");
+    assert_eq!(plain["data"]["sessionModel"], true, "{plain}");
+
+    let addressed = window.turn(json!({"prompt": "BOT-TURN", "definition": "keeper"}));
+    assert_eq!(addressed["event"], "turn.done", "{addressed}");
+    assert_eq!(addressed["data"]["sessionModel"], false, "{addressed}");
+    assert!(addressed["data"]["service"].is_null(), "{addressed}");
+}
+
 /// MEMORY-10: the session remembers the name, so the turn that follows with no name in its request
 /// is addressed too. The desktop's own turns go out that way when its row is not consulted again,
 /// and a turn sent unaddressed would hold the session's whole reach.

@@ -5,6 +5,7 @@ import { isConfined, type Activity, type Waiting, type Shown, type TodoRow } fro
 import type { Entry } from '../transcript'
 import { Collapse, Icon, Label, ProgressRing, TabItem, Tabs, type IconName } from '../nala'
 import { FileGlyph } from './FileGlyph'
+import { LabelChip } from './LabelChip'
 import { middleTruncate } from '../truncate'
 
 interface Live {
@@ -17,6 +18,8 @@ interface Live {
   phase: Waiting | null
   tokens: number
   running: boolean
+  /** The conversation's integrity word, where it is known since the last turn began. */
+  context?: string | null
 }
 
 /**
@@ -99,7 +102,7 @@ export const Context = memo(function Context({ live, audit, details }: {
         </Tabs>
       </div>
 
-      <Section id="plan" title="Plan" count={live.todos.length} off={off.has('plan')}
+      <Section id="plan" title="Plan"count={live.todos.length} off={off.has('plan')}
         about="The steps the agent has set itself, and which it has done.">
         {live.todos.length === 0 ? (
           <Empty icon="list-checks">{onlyReplayed ? 'No plan was recorded.' : 'No plan yet.'}</Empty>
@@ -197,6 +200,10 @@ export const Context = memo(function Context({ live, audit, details }: {
         off={off.has('confined')}
         about="Content held apart from the planner: shown to you, and to no model unless you let it through."
       >
+        {typeof live.context === 'string' && <dl className="context-facts" data-test="conversation-integrity">
+          <dt>Conversation</dt>
+          <dd>{live.context === 'trusted' ? 'Trusted' : 'Has met untrusted content'}</dd>
+        </dl>}
         {live.quarantine.length === 0 ? (
           <Empty icon="shield-done">
             {onlyReplayed
@@ -210,7 +217,7 @@ export const Context = memo(function Context({ live, audit, details }: {
                 <Icon name="shield-done" className="row-icon" />
                 <span className="confined-text">
                   <code className="origin" data-tooltip={shown.origin}>{middleTruncate(shown.origin, PATH_WIDTH)}</code>
-                  <span className="detail">{shown.lines} line{shown.lines === 1 ? '' : 's'} · {shown.label}</span>
+                  <span className="detail">{shown.lines} line{shown.lines === 1 ? '' : 's'}<LabelChip label={shown.labelAxes} /></span>
                 </span>
               </li>
             ))}
