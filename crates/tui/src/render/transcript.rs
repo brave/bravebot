@@ -533,8 +533,9 @@ fn entry_extras(
         lines.extend(quarantined_lines(shown, width as usize));
     }
 
-    // The plan the turn worked to, kept next to what it produced.
-    lines.extend(todo_lines(&entry.todos));
+    // The plan the turn worked to, kept next to what it produced. The turn that reported it has
+    // already ended, so a row still outstanding is drawn left open rather than as work going on.
+    lines.extend(todo_lines(&entry.todos, true));
 
     // The whole plan, where the person asked for it to be printed (VIEW-37).
     lines.extend(plan_lines(
@@ -1764,7 +1765,7 @@ pub(crate) fn plan_item_row(session: &Session, item: usize) -> Option<u16> {
         &mut Vec::new(),
         at,
     );
-    lines.extend(todo_lines(&entry.todos[..item]));
+    lines.extend(todo_lines(&entry.todos[..item], true));
     let within = lines
         .iter()
         .map(|line| rows_of(line, width))
@@ -2207,6 +2208,7 @@ mod tests {
     }
 
     use super::*;
+    use crate::panel::LEFT_OPEN_MARKER;
     use crate::render::QUARANTINE_BAR;
     use bravebot_agent::diff::Change;
     use bravebot_agent::report::{Activity, Landing, Reach, Returned, Shown};
@@ -2938,6 +2940,44 @@ mod tests {
                 .map(|(_, at_blank)| *at_blank)
                 .collect::<Vec<_>>(),
             whole[..height - 1]
+        );
+    }
+
+    /// A finished entry's open tasks are drawn through `entry_extras`, the transcript's own call
+    /// site for `todo_lines`, not through `todo_lines` directly. A row the model left pending or
+    /// in progress has to be drawn hollow and dim there, not filled, running and bold, or the
+    /// wiring at that call site could revert without any test here catching it (#2897).
+    #[test]
+    fn a_finished_entrys_open_task_is_drawn_left_open_at_its_call_site() {
+        let _held = crate::theme::exclusive();
+        let mut session = Session::new("kernel-enforced");
+        session.transcript.push(Entry::user("run it"));
+
+        let mut call = Entry::tool(Activity::running("Run", "make").done("ok"));
+        call.todos = vec![Row {
+            content: "still to do".to_string(),
+            marker: "■",
+            status: Status::Active,
+        }];
+        session.transcript.push(call);
+
+        let Drawn { lines, .. } = with_prompts(&session, 90, 24);
+        let row = &lines[position(&lines, "still to do")];
+
+        assert_eq!(
+            row.spans[1].content,
+            format!("{LEFT_OPEN_MARKER} "),
+            "the row kept the filled mark of work being done: {row:?}"
+        );
+        assert_eq!(
+            row.spans[1].style,
+            dim(),
+            "the marker kept the running colour: {row:?}"
+        );
+        assert_eq!(
+            row.spans[2].style,
+            dim(),
+            "the text kept the bold a row being worked on is drawn with: {row:?}"
         );
     }
 }
