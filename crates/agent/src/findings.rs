@@ -693,6 +693,35 @@ mod tests {
         assert_eq!(scratch.store("/work").recorded(), [finding]);
     }
 
+    /// CRED-19: an OpenAI key is recorded under the spelling `openai-key` and read back as that
+    /// kind, not as another kind or as one spelled after the variant. The key is built here from
+    /// a run of letters and digits, so this file holds no value a secret scanner would take for
+    /// one.
+    #[test]
+    fn an_openai_key_is_read_back_as_an_openai_key() {
+        let scratch = Scratch::new("findings-openai-key");
+        let run: String = ('a'..='z').chain('0'..='9').cycle().take(74).collect();
+        let text = format!("OPENAI_API_KEY=sk-proj-{run}T3BlbkFJ{run}\n");
+        let finding = bravebot_core::credentials::scan(".env", &text, 17)
+            .into_iter()
+            .next()
+            .expect("a finding over the key");
+        assert_eq!(finding.kind, Kind::OpenAiKey);
+        let store = scratch.store("/work");
+        store.record(&[&finding], Some("a-session"));
+
+        let written = std::fs::read_to_string(store.path()).expect("the record");
+        assert!(
+            written.contains(r#""kind":"openai-key""#),
+            "the record spelled the kind another way: {written}"
+        );
+        assert_eq!(
+            store.recorded(),
+            [finding],
+            "the key was read back as another kind"
+        );
+    }
+
     /// CRED-19: and it holds no credential value. The kind, the location, the fingerprint and the
     /// masked preview are the whole of an entry, so the file a scan leaves behind is not itself
     /// the map of secrets the scan exists to describe.
