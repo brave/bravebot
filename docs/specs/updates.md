@@ -3,7 +3,7 @@ id: UPDATE
 title: Telling somebody their bravebot is out of date
 status: normative
 governs:
-  - crates/tui/src/update.rs
+  - crates/update/src/lib.rs
   - crates/tui/src/app.rs
   - crates/tui/src/app/opening.rs
   - crates/config/src/install.rs
@@ -48,7 +48,9 @@ by the install script, which is the binary that script recorded, an install made
 install script, which is the binary that script recorded in a file of its own, and the Homebrew
 cask and the WinGet package, which are a binary that resolves into a directory only that package
 manager makes: `Caskroom/bravebot/` for the cask, `WinGet/Packages/Brave.Bravebot_*/` for WinGet.
-Any other copy, one built from source above all, is told nothing and asks nothing.
+Any other copy, one built from source above all, is told nothing and asks nothing. The desktop
+app is none of the five: no shell command updates it, and it is told through a link instead
+([UPDATE-12](#UPDATE-12)).
 
 **Why.** The line exists for the command in it. Telling somebody a release is out without a line
 that would install it is noise, and a build from source is updated by the tree it was built from.
@@ -86,10 +88,10 @@ the installation they are chosen by sit in the configuration surface rather than
 startup line: a presentation crate may not reach another one
 ([LAYER-1](layering.md#LAYER-1)), and two copies of the five would be five commands to keep in step.
 
-`verified-by: bravebot_tui::update::a_newer_version_is_announced_along_with_the_command_that_installs_it`
-`verified-by: bravebot_tui::update::a_script_install_is_given_the_script_again`
-`verified-by: bravebot_tui::update::a_powershell_install_is_given_the_powershell_script_again`
-`verified-by: bravebot_tui::update::a_package_manager_install_is_given_its_managers_upgrade_command`
+`verified-by: bravebot_update::lib::a_newer_version_is_announced_along_with_the_command_that_installs_it`
+`verified-by: bravebot_update::lib::a_script_install_is_given_the_script_again`
+`verified-by: bravebot_update::lib::a_powershell_install_is_given_the_powershell_script_again`
+`verified-by: bravebot_update::lib::a_package_manager_install_is_given_its_managers_upgrade_command`
 `verified-by: by-construction (each command is one of five literals chosen by matching on the installation, so no value composes one)`
 
 <a id="UPDATE-4"></a>
@@ -103,13 +105,13 @@ numbering stays in that decade. A prerelease is not three numbers, so a startup 
 anybody to a release candidate, and a registry answering with something older, which is what a
 withdrawn release looks like, does not send them backwards.
 
-`verified-by: bravebot_tui::update::a_tag_is_read_with_or_without_the_v_it_is_published_under`
-`verified-by: bravebot_tui::update::a_version_that_is_not_three_numbers_is_no_answer`
-`verified-by: bravebot_tui::update::a_prerelease_is_not_a_version_to_offer`
-`verified-by: bravebot_tui::update::versions_are_ordered_by_number_rather_than_by_spelling`
-`verified-by: bravebot_tui::update::the_version_in_hand_is_not_an_update`
-`verified-by: bravebot_tui::update::an_older_published_version_says_nothing`
-`verified-by: bravebot_tui::update::the_version_this_was_built_as_is_three_numbers`
+`verified-by: bravebot_update::lib::a_tag_is_read_with_or_without_the_v_it_is_published_under`
+`verified-by: bravebot_update::lib::a_version_that_is_not_three_numbers_is_no_answer`
+`verified-by: bravebot_update::lib::a_prerelease_is_not_a_version_to_offer`
+`verified-by: bravebot_update::lib::versions_are_ordered_by_number_rather_than_by_spelling`
+`verified-by: bravebot_update::lib::the_version_in_hand_is_not_an_update`
+`verified-by: bravebot_update::lib::an_older_published_version_says_nothing`
+`verified-by: bravebot_update::lib::the_version_this_was_built_as_is_three_numbers`
 
 <a id="UPDATE-5"></a>
 ### UPDATE-5: what comes back decides one line and is not part of it
@@ -131,9 +133,9 @@ last asked, and by UPDATE-1 that can be as long ago as the last session, which c
 the command installs whatever is newest when it runs. Naming it told somebody on 0.9.0 that 0.10.0
 was out, and the update they ran installed 0.11.0.
 
-`verified-by: bravebot_tui::update::the_line_names_the_running_version_and_not_the_recorded_one`
-`verified-by: bravebot_tui::update::nothing_a_registry_answered_reaches_the_line`
-`verified-by: bravebot_tui::update::the_registry_states_a_version_and_the_release_listing_states_a_tag`
+`verified-by: bravebot_update::lib::the_line_names_the_running_version_and_not_the_recorded_one`
+`verified-by: bravebot_update::lib::nothing_a_registry_answered_reaches_the_line`
+`verified-by: bravebot_update::lib::the_registry_states_a_version_and_the_release_listing_states_a_tag`
 `verified-by: by-construction (the request is made outside any turn, and the only value returned from it is a version of three numbers)`
 
 <a id="UPDATE-6"></a>
@@ -156,12 +158,12 @@ until the date catches up with the file. An ask with no stamp holds no later lau
 state directory this user cannot write to would make every launch a request, and its answer would
 be thrown away too.
 
-`verified-by: bravebot_tui::update::a_fresh_answer_is_not_asked_for_again`
-`verified-by: bravebot_tui::update::a_registry_is_asked_again_once_an_hour_has_passed`
-`verified-by: bravebot_tui::update::an_answer_stamped_in_the_future_is_asked_again`
-`verified-by: bravebot_tui::update::an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day`
-`verified-by: bravebot_tui::update::recording_one_registrys_ask_keeps_the_others`
-`verified-by: bravebot_tui::update::a_registry_has_one_record_however_often_it_is_asked`
+`verified-by: bravebot_update::lib::a_fresh_answer_is_not_asked_for_again`
+`verified-by: bravebot_update::lib::a_registry_is_asked_again_once_an_hour_has_passed`
+`verified-by: bravebot_update::lib::an_answer_stamped_in_the_future_is_asked_again`
+`verified-by: bravebot_update::lib::an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day`
+`verified-by: bravebot_update::lib::recording_one_registrys_ask_keeps_the_others`
+`verified-by: bravebot_update::lib::a_registry_has_one_record_however_often_it_is_asked`
 `verified-by: bravebot_tui::persist::a_launch_whose_stamp_cannot_be_written_does_not_ask`
 `verified-by: by-construction (the stamp is written before the request is made, and the request is made only once it has landed, so an ask that is refused, that answers with nothing usable, or that is still out when the session ends is recorded as readily as one that answers)`
 
@@ -175,8 +177,8 @@ ask that one.
 been published there. On a machine where both installations have existed, reading one as the other
 offers a command for a version that registry does not serve.
 
-`verified-by: bravebot_tui::update::a_stored_answer_is_read_back_as_it_was_written`
-`verified-by: bravebot_tui::update::an_answer_from_the_other_registry_is_not_read`
+`verified-by: bravebot_update::lib::a_stored_answer_is_read_back_as_it_was_written`
+`verified-by: bravebot_update::lib::an_answer_from_the_other_registry_is_not_read`
 
 <a id="UPDATE-8"></a>
 ### UPDATE-8: a session that keeps nothing records no answer and asks for none
@@ -188,7 +190,7 @@ says the line. It writes no answer, and it makes no request that would produce o
 saying a copy was superseded would be the second. Asking without recording is a request whose
 answer is thrown away on arrival.
 
-`verified-by: bravebot_tui::update::a_session_that_records_nothing_asks_nothing`
+`verified-by: bravebot_update::lib::a_session_that_records_nothing_asks_nothing`
 `verified-by: bravebot_tui::incognito::the_answer_about_updating_is_still_read`
 `verified-by: bravebot_tui::incognito::a_session_that_records_nothing_makes_no_request_for_a_newer_version`
 `verified-by: bravebot_tui::persist::a_session_that_records_asks_for_a_newer_version_when_the_record_is_old`
@@ -206,10 +208,10 @@ where somebody is about to start work, reads as this program being broken, and n
 session from doing anything. A registry being unreachable today does not make what it said
 yesterday untrue either, so the line a person was shown this morning is still shown this evening.
 
-`verified-by: bravebot_tui::update::a_version_stands_until_an_ask_learns_another`
-`verified-by: bravebot_tui::update::an_answer_that_is_not_the_shape_expected_is_no_version`
-`verified-by: bravebot_tui::update::a_file_that_is_not_the_shape_written_here_is_no_answer`
-`verified-by: bravebot_tui::update::a_version_that_is_not_three_numbers_is_no_answer`
+`verified-by: bravebot_update::lib::a_version_stands_until_an_ask_learns_another`
+`verified-by: bravebot_update::lib::an_answer_that_is_not_the_shape_expected_is_no_version`
+`verified-by: bravebot_update::lib::a_file_that_is_not_the_shape_written_here_is_no_answer`
+`verified-by: bravebot_update::lib::a_version_that_is_not_three_numbers_is_no_answer`
 
 <a id="UPDATE-10"></a>
 ### UPDATE-10: the install script's record names the install and is where the next one goes
@@ -244,10 +246,49 @@ not touch UPDATE-5. It governs only this check: the installer's checksum and sig
 ([releases.md](releases.md)) are separate and unchanged. Only a boolean `false` and the exact value
 `0` turn it off, so a misspelled value leaves the check on, as `terminalTitle` does for the title.
 
-`verified-by: bravebot_tui::update::either_switch_turns_the_check_off`
+`verified-by: bravebot_update::lib::either_switch_turns_the_check_off`
 `verified-by: bravebot_tui::incognito::a_check_turned_off_says_nothing_though_a_newer_version_is_recorded`
 `verified-by: bravebot_tui::persist::a_check_turned_off_leaves_the_record_as_it_was`
 `verified-by: bravebot_config::settings::only_a_boolean_turns_the_update_check_off`
+
+<a id="UPDATE-12"></a>
+### UPDATE-12: the desktop app is told through a link, as a yes or no
+
+The packaged desktop app starts its agent with `BRAVEBOT_INSTALLED_VIA` set to `desktop`, and that
+agent asks the GitHub release listing at startup, under the hour of UPDATE-6, the refusal of
+UPDATE-8 and the switches of UPDATE-11. It shares the install script's record, since its installers
+are assets of the same release. An agent the packaged app did not start, one a developer or a test
+ran, asks nothing. The window learns through `update.status` whether the check is on, the version
+running, and whether the recorded version is newer than it: `true`, `false`, or null where nothing
+is recorded. The recorded version is not in the answer. Where it is newer the sidebar shows a notice
+naming the running version, with a Download link to the latest release page, a literal in the main
+process, and About says the same. Dismissing the notice keeps it hidden for as long as the version
+running then is the one running, and a release recorded as newer than a later version shows it
+again. About still says it after a dismissal. Help, Check for Updates… opens About and asks nobody.
+
+**Why.** No shell command updates a copy inside an app bundle, so UPDATE-3's line has nothing to
+offer it, and the release page is where its installer is. A yes or no is all the window needs, and
+keeping the number out of the answer keeps UPDATE-5's rule at the bridge rather than trusting the
+renderer to leave it unshown. The release page as a literal means no answer can choose where the
+link goes. An ask on demand would put a round trip in front of the window that UPDATE-1 keeps
+behind it. A notice that came back on every launch after being dismissed would be one a person
+learns to ignore, and one that never came back would hide the next release too.
+
+**Known costs.** The notice names the version running, not the one the page offers, for UPDATE-5's
+reason. The window cannot tell one recorded release from the next, since it is told no version, so
+a dismissal is kept by the version running: a second release published while the same version
+runs does not bring the notice back, and About is where it is still said. A window started in development is never told anything, since its agent
+asks nobody.
+
+`verified-by: bravebot_update::lib::the_desktop_app_asks_the_release_listing_and_shares_the_scripts_record`
+`verified-by: bravebot_update::lib::the_desktop_app_is_told_only_whether_a_newer_version_is_recorded`
+`verified-by: bravebot_update::lib::a_desktop_check_turned_off_says_nothing_of_a_record`
+`verified-by: bravebot_update::lib::a_desktop_record_that_is_not_the_shape_written_is_no_answer`
+`verified-by: bravebot_update::lib::only_the_packaged_desktop_app_asks_and_not_with_the_check_off`
+`verified-by: bravebot_ui_bridge::update_status::a_newer_release_recorded_is_a_yes_without_its_version`
+`verified-by: bravebot_ui_bridge::update_status::a_release_this_build_is_not_behind_is_a_no_and_npm_s_record_is_none`
+`verified-by: bravebot_ui_bridge::update_status::nothing_recorded_is_no_answer`
+`verified-by: bravebot_ui_bridge::update_status::the_check_turned_off_in_settings_says_off_and_nothing_of_the_record`
 
 ## Known costs
 

@@ -4,7 +4,10 @@ title: The diagnostic log
 status: normative
 governs:
   - crates/diag/src/lib.rs
+  - crates/diag/src/report.rs
   - crates/cli/src/bug_report.rs
+  - crates/ui-bridge/src/bug_report.rs
+  - crates/ui-bridge/src/bin/bravebot-rpc.rs
 documented-by: docs/website/docs/reference/cli.md
 ---
 
@@ -81,13 +84,16 @@ only after the failure they wanted it for.
 <a id="DIAG-4"></a>
 ### DIAG-4: an incognito session, or a machine with no home, writes no log
 
-Neither creates the directory or a file in it.
+Neither creates the directory or a file in it. The desktop app's agent, `bravebot-rpc`, writes its
+log where the terminal does, at the default level, and to nowhere on the same two conditions.
 
 **Why.** An incognito session adds nothing to the state directory, and a log that said where it
 had been would be the trace the mode exists to avoid.
 
 `verified-by: bravebot_diag::lib::a_log_with_no_directory_writes_nothing`
 `verified-by: bravebot_cli::running::an_incognito_session_writes_no_log`
+`verified-by: bravebot_ui_bridge::diagnostic_log::a_desktop_turn_that_cannot_reach_its_service_leaves_a_log`
+`verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
 
 <a id="DIAG-5"></a>
 ### DIAG-5: `doctor` names the directory the logs are in
@@ -109,7 +115,7 @@ names alone ([DIAG-8](#DIAG-8)).
 on it. A log that was read back would be a channel from a remote party's failure into the next
 decision, whatever the log was meant for.
 
-`verified-by: by-construction (the crate exposes functions to write a line and to name the newest file, and none to read a file's content; the directory name is read by the CLI only to be passed to the writer, to be shown by doctor and to be handed to the naming function)`
+`verified-by: by-construction (the crate exposes functions to write a line and to name the newest file, and none to read a file's content; the directory name is read by the CLI only to be passed to the writer, to be shown by doctor and to be handed to the naming function, and by the desktop bridge only to be handed to the naming function)`
 
 <a id="DIAG-7"></a>
 ### DIAG-7: a failed request, a retry and a server that did not start are recorded
@@ -179,4 +185,43 @@ the file is for a person to read before it is posted. Two files are attached rat
 `verified-by: bravebot_cli::running::a_bug_report_with_an_argument_is_refused`
 `verified-by: bravebot_cli::bug_report::a_report_never_overwrites_one_and_is_private`
 `verified-by: bravebot_cli::bug_report::the_report_holds_the_build_both_streams_and_the_log_path`
+`verified-by: bravebot_cli::bug_report::the_report_is_the_layout_it_has_always_been`
 `verified-by: bravebot_diag::lib::the_newest_log_is_the_greatest_timestamp_among_files_this_crate_made`
+`verified-by: bravebot_diag::report::a_report_is_its_header_its_sections_and_the_logs_path`
+
+<a id="DIAG-9"></a>
+### DIAG-9: the desktop app's bug report is the same file, made from what Run Diagnostics shows
+
+Help, Report a Bug… and About's Report a bug link open a preview of the report's exact text, which
+`bug-report.compose` builds in the layout DIAG-8's file has: a header naming the desktop app, its
+interface version, the agent's build and the target, the settings report Run Diagnostics shows in
+place of `doctor`'s output, and the path of the newest log, taken from the file names before
+anything else the request does. The interface version is written only where it is a version's
+shape, and as `unknown` otherwise. Above the preview a note says what the text names and what it
+holds none of. Save Report… writes it where the person chooses, `bravebot-bug-report.txt` in
+Documents by default, readable by its owner alone, and the main process asks the agent for the text
+again rather than taking the window's copy. Copy puts it on the clipboard. Open an Issue opens the
+repository's new issue page, a literal with nothing in its query. Show Log reveals the named log in
+the file manager, only where the main process finds the path under the state directory's `logs/`.
+An incognito session, or a machine with no home, is told a report is not available, and nothing is
+offered to save. It holds nothing the terminal's file holds none of, and not the agent's standard
+error either.
+
+**Why.** The app bundle has no command-line binary to run `doctor` with, and the settings report is
+what the window already shows a person asking it about their setup, so it is the same answer in
+the same place. One format means a maintainer reads either report the same way. A preview makes the
+DIAG-8 cost, a file to read before posting, something a person sees before saving rather than
+after. Asking the agent again at save time means the renderer cannot choose what is written. An
+issue page with a body in its address would put the report in browser history and server logs
+before the person read it. The agent's standard error carries notices, refusals and panic messages
+that hold none of DIAG-1's discipline.
+
+**Known costs.** The settings report names paths, model services and credential states by kind,
+so the note asks the person to read it before posting. The report is shown, saved and posted by
+hand: nothing sends it.
+
+`verified-by: bravebot_ui_bridge::bug_report::the_desktop_report_names_both_versions_the_settings_report_and_the_log`
+`verified-by: bravebot_ui_bridge::bug_report::an_interface_version_of_another_shape_is_not_written`
+`verified-by: bravebot_ui_bridge::bug_report::the_report_names_the_build_the_settings_file_and_the_log_and_holds_neither`
+`verified-by: bravebot_ui_bridge::bug_report::an_interface_version_of_another_shape_is_unknown_and_no_log_is_none`
+`verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`

@@ -83,7 +83,6 @@ pub mod theme;
 pub mod theme_prompt;
 mod title;
 pub mod trust_prompt;
-pub mod update;
 pub mod verbs;
 pub mod vim;
 pub mod watch_command;

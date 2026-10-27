@@ -22,6 +22,8 @@ bravebot-backtrace = { path = "../backtrace" }
 # hands us is not a widening of what this depends on.
 bravebot-aichat = { path = "../aichat" }
 bravebot-config = { path = "../config" }
+# The diagnostic log this process writes, and the bug report format the terminal's report shares.
+bravebot-diag = { path = "../diag" }
 # What a dropped file's name says it is, the terminal's rule, so the window marks a drop as it does.
 bravebot-filetype = { path = "../filetype" }
 # The note a window shows for a file too large to attach, in the terminal's words.
@@ -38,6 +40,8 @@ bravebot-session = { path = "../session" }
 # Which build wrote a record. The stamp is a crate of its own, so naming the build no longer
 # costs a front end that draws nothing a dependency on the terminal library.
 bravebot-stamp = { path = "../stamp" }
+# Whether a newer release is recorded, which the desktop app shows as a link, and the hourly ask.
+bravebot-update = { path = "../update" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

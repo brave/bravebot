@@ -50,30 +50,23 @@ pub(crate) fn command(args: &[String]) -> ExitCode {
     }
 }
 
-/// The file's text. Fixed headings in English: a maintainer reads it, not the person who made it.
+/// The file's text, in the format the desktop app's report shares ([`bravebot_diag::report`]).
 fn report(
     build: &str,
     target: &str,
     doctor: Option<&(String, String)>,
     log: Option<&Path>,
 ) -> String {
-    let mut text = format!("bravebot {build}\ntarget {target}\n\n== doctor ==\n");
-    match doctor {
-        Some((stdout, stderr)) => {
-            text.push_str(stdout);
-            if !stderr.is_empty() {
-                text.push_str("\n== doctor, standard error ==\n");
-                text.push_str(stderr);
-            }
+    let header = [format!("bravebot {build}"), format!("target {target}")];
+    let header: Vec<&str> = header.iter().map(String::as_str).collect();
+    let sections: Vec<(&str, &str)> = match doctor {
+        Some((stdout, stderr)) if !stderr.is_empty() => {
+            vec![("doctor", stdout), ("doctor, standard error", stderr)]
         }
-        None => text.push_str("doctor could not be run\n"),
-    }
-    text.push_str("\n== newest diagnostic log, to attach separately ==\n");
-    match log {
-        Some(path) => text.push_str(&format!("{}\n", path.display())),
-        None => text.push_str("none\n"),
-    }
-    text
+        Some((stdout, _)) => vec![("doctor", stdout)],
+        None => vec![("doctor", "doctor could not be run\n")],
+    };
+    bravebot_diag::report::compose(&header, &sections, log)
 }
 
 /// `doctor`, run as this program started again, with nothing on its standard input.
@@ -186,5 +179,28 @@ mod tests {
         let text = report("1", "t", Some(&quiet), None);
         assert!(!text.contains("standard error"), "{text}");
         assert!(text.ends_with("none\n"), "{text}");
+    }
+
+    /// The text is byte for byte what `bug-report` has always written, so a report from an older
+    /// release and one from this reads the same.
+    #[test]
+    fn the_report_is_the_layout_it_has_always_been() {
+        let said = ("out\n".to_string(), "err\n".to_string());
+        assert_eq!(
+            report(
+                "1.2.3",
+                "linux-x86_64",
+                Some(&said),
+                Some(Path::new("/l/a.log"))
+            ),
+            "bravebot 1.2.3\ntarget linux-x86_64\n\n== doctor ==\nout\n\
+             \n== doctor, standard error ==\nerr\n\
+             \n== newest diagnostic log, to attach separately ==\n/l/a.log\n"
+        );
+        assert_eq!(
+            report("1", "t", None, None),
+            "bravebot 1\ntarget t\n\n== doctor ==\ndoctor could not be run\n\
+             \n== newest diagnostic log, to attach separately ==\nnone\n"
+        );
     }
 }

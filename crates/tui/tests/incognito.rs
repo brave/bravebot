@@ -346,9 +346,9 @@ fn a_check_turned_off_says_nothing_though_a_newer_version_is_recorded() {
     scratch.seed("installed-by", &format!("{}\n", running.display()));
     scratch.seed("update-check", "1700000000\treleases\t99.0.0\n");
 
-    assert!(bravebot_tui::update::at_startup(Some(false)).is_none());
+    assert!(bravebot_update::at_startup(Some(false)).is_none());
     assert!(
-        bravebot_tui::update::at_startup(Some(true)).is_some(),
+        bravebot_update::at_startup(Some(true)).is_some(),
         "the seeded record does not say a line, so the silence above proves nothing"
     );
 }
@@ -370,7 +370,7 @@ fn the_answer_about_updating_is_still_read() {
 
     // A line is said only once a record is read, since without one there is no version to be behind.
     assert!(
-        bravebot_tui::update::at_startup(None).is_some(),
+        bravebot_update::at_startup(None).is_some(),
         "the recorded answer was not read back, so a version this far ahead went unannounced"
     );
 
@@ -406,7 +406,7 @@ fn a_session_that_records_nothing_makes_no_request_for_a_newer_version() {
     let listener = proxy_listener();
 
     assert!(
-        bravebot_tui::update::at_startup(None).is_some(),
+        bravebot_update::at_startup(None).is_some(),
         "the recorded answer was not read back, so the silence below proves nothing"
     );
 

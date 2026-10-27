@@ -27,6 +27,14 @@
 //! that asked, which can be weeks, while the command installs whatever is newest when it runs. A
 //! copy on 0.9.0 that last asked while 0.10.0 was newest would be told 0.10.0 is out, and updating
 //! would install 0.11.0.
+//!
+//! # The desktop app
+//!
+//! The desktop app ships its own copy of the agent, released on the same GitHub release as the
+//! script's binary, and no shell command updates it. It asks the release listing as the script
+//! install does and shares that record, and what it is told is a boolean: whether the recorded
+//! version is newer than the one running ([`desktop_status`]). The window offers a link to the
+//! release page rather than a command (UPDATE-12).
 
 use bravebot_config::install::{Install, installed_how};
 use bravebot_core::capability::{Capability, CapabilitySet};
@@ -35,6 +43,7 @@ use bravebot_core::policy::{Policy, ReleasePlan, Routing};
 use bravebot_i18n::t;
 use bravebot_net::{Egress, Request};
 use std::fmt;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bravebot_session::audit::Trail;
@@ -60,34 +69,48 @@ const CACHE_TEMPORARY: &str = "update-check.tmp";
 /// launches still makes one request.
 const GOOD_FOR: u64 = 60 * 60;
 
-/// What an installation answers about the registry it came from.
+/// Who is asked what the newest version is.
 ///
-/// An extension trait rather than methods on [`Install`] itself, because the registries are this
-/// crate's business: the type says how a copy was installed and what command updates it, and
-/// nothing in the configuration surface asks anybody what the newest version is.
-trait Registry {
-    /// Who is asked what the newest version is.
-    fn url(self) -> &'static str;
-    /// The field of that answer holding the version.
-    fn field(self) -> &'static str;
-    /// What a stored answer records about where it came from.
-    fn source(self) -> &'static str;
-    /// The other way of installing, whose record shares the file with this one's.
-    fn other(self) -> Self;
+/// Its own type rather than methods on [`Install`], because the registries are this crate's
+/// business and one asker, the desktop app, is no installation: the type in the configuration
+/// surface says how a copy was installed and what command updates it, and nothing there asks
+/// anybody what the newest version is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Registry {
+    /// The npm package's registry entry.
+    Npm,
+    /// The release listing of this repository, which every other installation and the desktop app
+    /// are published on.
+    Releases,
 }
 
-impl Registry for Install {
-    fn url(self) -> &'static str {
-        match self {
-            Self::Npm => NPM_URL,
-            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => RELEASES_URL,
+impl Registry {
+    /// The registry an installation came from.
+    fn of(install: Install) -> Self {
+        match install {
+            Install::Npm => Self::Npm,
+            Install::Script | Install::PowerShell | Install::Homebrew | Install::Winget => {
+                Self::Releases
+            }
         }
     }
 
+    /// The registry the desktop app asks. Its installers are assets of the GitHub release, so it
+    /// shares the script install's record (UPDATE-7).
+    const DESKTOP: Self = Self::Releases;
+
+    fn url(self) -> &'static str {
+        match self {
+            Self::Npm => NPM_URL,
+            Self::Releases => RELEASES_URL,
+        }
+    }
+
+    /// The field of that answer holding the version.
     fn field(self) -> &'static str {
         match self {
             Self::Npm => "version",
-            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => "tag_name",
+            Self::Releases => "tag_name",
         }
     }
 
@@ -96,14 +119,15 @@ impl Registry for Install {
     fn source(self) -> &'static str {
         match self {
             Self::Npm => "npm",
-            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => "releases",
+            Self::Releases => "releases",
         }
     }
 
+    /// The other registry, whose record shares the file with this one's.
     fn other(self) -> Self {
         match self {
-            Self::Npm => Self::Script,
-            Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => Self::Npm,
+            Self::Npm => Self::Releases,
+            Self::Releases => Self::Npm,
         }
     }
 }
@@ -142,18 +166,88 @@ struct Record {
 /// `setting` is what the `updateCheck` key said. Switched off, by it or by the environment, this
 /// returns before anything is read, asked or written (UPDATE-11).
 pub fn at_startup(setting: Option<bool>) -> Option<String> {
-    if !check_enabled(
+    if !enabled(setting) {
+        return None;
+    }
+    let install = installed_how()?;
+    let registry = Registry::of(install);
+    let stored = stored_record(registry);
+    refresh(registry, stored);
+    line(install, running_version()?, stored?.latest?)
+}
+
+/// What the desktop app is told about updating: whether the check is on, and, where an earlier ask
+/// recorded a version, whether it is newer than the one running.
+///
+/// The recorded version itself is not in the answer, only the comparison, so no number a registry
+/// sent reaches the window (UPDATE-5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Status {
+    /// `false` when the setting or the variable turned the check off (UPDATE-11).
+    pub check: bool,
+    /// `None` when there is no record to compare with, which is also what any failure to read one
+    /// is (UPDATE-9).
+    pub newer: Option<bool>,
+}
+
+/// What the desktop app is told about updating, from what an earlier ask recorded.
+///
+/// Reads one file and asks nobody. With the check off nothing is read.
+pub fn desktop_status(setting: Option<bool>) -> Status {
+    let directory = bravebot_agent::home::directory();
+    status_in(enabled(setting), directory.as_deref(), running_version())
+}
+
+/// [`desktop_status`] from its inputs, so the rules need neither the environment nor a home.
+fn status_in(enabled: bool, directory: Option<&Path>, running: Option<Version>) -> Status {
+    if !enabled {
+        return Status {
+            check: false,
+            newer: None,
+        };
+    }
+    let latest = directory
+        .and_then(|directory| record_in(directory, Registry::DESKTOP))
+        .and_then(|record| record.latest);
+    Status {
+        check: true,
+        newer: running
+            .zip(latest)
+            .map(|(running, latest)| latest > running),
+    }
+}
+
+/// What the packaged desktop app sets [`bravebot_config::env_var::INSTALLED_VIA`] to when it
+/// starts its agent.
+pub const DESKTOP_LAUNCHER: &str = "desktop";
+
+/// Start the ask that answers the desktop app's next launch, on a thread nothing joins.
+///
+/// The same hourly stamp the terminal keeps, and the same refusal to ask from a session that can
+/// record nothing (UPDATE-6, UPDATE-8). With the check off nothing is read or asked. Only an agent
+/// the packaged app started asks: one built from source and run by hand, by a test or by a window
+/// in development is left alone, as a build from source is in the terminal.
+pub fn desktop_refresh(setting: Option<bool>) {
+    let launcher = std::env::var(bravebot_config::env_var::INSTALLED_VIA).ok();
+    if !desktop_asks(enabled(setting), launcher.as_deref()) {
+        return;
+    }
+    refresh(Registry::DESKTOP, stored_record(Registry::DESKTOP));
+}
+
+/// Whether the desktop app's agent asks: the check is on and the packaged app started it.
+fn desktop_asks(enabled: bool, launcher: Option<&str>) -> bool {
+    enabled && launcher == Some(DESKTOP_LAUNCHER)
+}
+
+/// Whether the check is on, from the setting and the variable.
+fn enabled(setting: Option<bool>) -> bool {
+    check_enabled(
         setting,
         std::env::var(bravebot_config::env_var::UPDATE_CHECK)
             .ok()
             .as_deref(),
-    ) {
-        return None;
-    }
-    let install = installed_how()?;
-    let stored = stored_record(install);
-    refresh(install, stored);
-    line(install, running_version()?, stored?.latest?)
+    )
 }
 
 /// Whether the person has left the check on. Either the key being `false` or the variable being
@@ -180,32 +274,39 @@ fn running_version() -> Option<Version> {
     parse_version(env!("CARGO_PKG_VERSION"))
 }
 
-/// What an earlier launch recorded about this installation's registry, where it recorded anything.
-fn stored_record(install: Install) -> Option<Record> {
-    let path = bravebot_agent::home::directory()?.join(CACHE_FILE);
-    parse_record(&std::fs::read_to_string(path).ok()?, install)
+/// What an earlier launch recorded about this registry, where it recorded anything.
+fn stored_record(registry: Registry) -> Option<Record> {
+    record_in(&bravebot_agent::home::directory()?, registry)
 }
 
-/// Read this installation's record out of the file's contents.
+/// The record of `registry` in the state directory `directory`.
+fn record_in(directory: &Path, registry: Registry) -> Option<Record> {
+    parse_record(
+        &std::fs::read_to_string(directory.join(CACHE_FILE)).ok()?,
+        registry,
+    )
+}
+
+/// Read this registry's record out of the file's contents.
 ///
 /// A machine where both installations have been used holds a line for each, and each installation
 /// reads only the one naming the registry it would ask.
-fn parse_record(contents: &str, install: Install) -> Option<Record> {
-    contents.lines().find_map(|line| record_on(line, install))
+fn parse_record(contents: &str, registry: Registry) -> Option<Record> {
+    contents.lines().find_map(|line| record_on(line, registry))
 }
 
-/// One line of that file, where it is this installation's record.
+/// One line of that file, where it is this registry's record.
 ///
 /// Separate from the I/O so the rules are testable, and there are three: the line is the shape
 /// this program writes, it came from the registry this installation would ask, and its version is
 /// three numbers or is absent. Anything else is no record, which is silence rather than an error.
-fn record_on(line: &str, install: Install) -> Option<Record> {
+fn record_on(line: &str, registry: Registry) -> Option<Record> {
     let mut fields = line.splitn(3, '\t');
     let (Some(at), Some(source), Some(latest)) = (fields.next(), fields.next(), fields.next())
     else {
         return None;
     };
-    if source != install.source() {
+    if source != registry.source() {
         return None;
     }
     Some(Record {
@@ -221,12 +322,12 @@ fn record_on(line: &str, install: Install) -> Option<Record> {
 ///
 /// An ask that learned no version leaves that field empty, which is what tells a stamp with
 /// nothing behind it from a line of some other shape.
-fn encode_record(install: Install, record: Record) -> String {
+fn encode_record(registry: Registry, record: Record) -> String {
     let latest = record.latest.map(|latest| latest.to_string());
     format!(
         "{}\t{}\t{}",
         record.at,
-        install.source(),
+        registry.source(),
         latest.unwrap_or_default()
     )
 }
@@ -261,7 +362,7 @@ fn parse_version(text: &str) -> Option<Version> {
 ///
 /// Nothing waits on the thread and nothing reads what it learns: it writes the record down, and
 /// the next launch is what says anything about it.
-fn refresh(install: Install, stored: Option<Record>) {
+fn refresh(registry: Registry, stored: Option<Record>) {
     if !worth_asking(
         bravebot_agent::home::writable().is_some(),
         now(),
@@ -276,11 +377,11 @@ fn refresh(install: Install, stored: Option<Record>) {
         // the whole reply timeout, which outlasts most sessions. Recording the ask first bounds
         // the requests to one an hour whatever becomes of this one, so an ask whose stamp did not
         // land is not made: nothing would hold the next launch back from making it again.
-        if !store(install, recorded(stored, None, now())) {
+        if !store(registry, recorded(stored, None, now())) {
             return;
         }
-        if let Some(latest) = ask(install) {
-            store(install, recorded(stored, Some(latest), now()));
+        if let Some(latest) = ask(registry) {
+            store(registry, recorded(stored, Some(latest), now()));
         }
     });
 }
@@ -314,17 +415,17 @@ fn worth_asking(recordable: bool, now: u64, asked_at: Option<u64>) -> bool {
         }
 }
 
-/// Ask the registry this installation came from what the newest version is.
+/// Ask the registry what the newest version is.
 ///
 /// Through the egress gate like everything else, since that gate is the only way out. The
 /// destination is one of two literals in this file, fixed before the request is made, so nothing
 /// fetched has any say in where this goes.
-fn ask(install: Install) -> Option<Version> {
+fn ask(registry: Registry) -> Option<Version> {
     let mut sink = Trail::new();
     let egress = Egress::new();
 
     let mut routing = Routing::new();
-    routing.insert_trusted("update", install.url());
+    routing.insert_trusted("update", registry.url());
 
     let mut policy = Policy::begin(
         routing,
@@ -334,7 +435,7 @@ fn ask(install: Install) -> Option<Version> {
     )
     .ok()?;
 
-    let request = Request::get(install.url())
+    let request = Request::get(registry.url())
         .header("accept", "application/json")
         // GitHub answers a request without one with 403, and a name is politer than a library's
         // default to a registry serving this for free.
@@ -347,22 +448,22 @@ fn ask(install: Install) -> Option<Version> {
     let (bytes, _) = policy
         .decode_transport("update check", label)
         .decode(response.body);
-    version_in(install, &bytes)
+    version_in(registry, &bytes)
 }
 
 /// The version an answer states, or `None` for anything that is not the shape expected.
 ///
 /// Separate from the request so both shapes can be read without a server.
-fn version_in(install: Install, bytes: &[u8]) -> Option<Version> {
+fn version_in(registry: Registry, bytes: &[u8]) -> Option<Version> {
     let answer: serde_json::Value = serde_json::from_slice(bytes).ok()?;
-    parse_version(answer.get(install.field())?.as_str()?)
+    parse_version(answer.get(registry.field())?.as_str()?)
 }
 
 /// Write the record down for the next launch, answering whether it landed.
 ///
 /// A machine with no home, a directory this user cannot write to and an incognito session all
 /// answer `false`, and nothing is reported (UPDATE-9).
-fn store(install: Install, record: Record) -> bool {
+fn store(registry: Registry, record: Record) -> bool {
     let Some(directory) = bravebot_agent::home::writable() else {
         return false;
     };
@@ -372,7 +473,7 @@ fn store(install: Install, record: Record) -> bool {
     let path = directory.join(CACHE_FILE);
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let temporary = directory.join(CACHE_TEMPORARY);
-    let contents = merged(&existing, install, record);
+    let contents = merged(&existing, registry, record);
     bravebot_agent::home::write_file(&temporary, contents.as_bytes()).is_ok()
         && std::fs::rename(&temporary, path).is_ok()
 }
@@ -383,11 +484,11 @@ fn store(install: Install, record: Record) -> bool {
 /// other's stamp away would send the next launch of the other back to its registry, which is the
 /// request per session the day exists to prevent. Nothing else in the file survives: a line of any
 /// other shape is not a record and is not carried forward.
-fn merged(existing: &str, install: Install, record: Record) -> String {
-    let mut contents = format!("{}\n", encode_record(install, record));
+fn merged(existing: &str, registry: Registry, record: Record) -> String {
+    let mut contents = format!("{}\n", encode_record(registry, record));
     if let Some(other) = existing
         .lines()
-        .find(|line| record_on(line, install.other()).is_some())
+        .find(|line| record_on(line, registry.other()).is_some())
     {
         contents.push_str(other);
         contents.push('\n');
@@ -473,12 +574,18 @@ mod tests {
         assert!(!said.contains("install.sh"), "the wrong command: {said}");
         assert!(!said.contains("npm install"), "the wrong command: {said}");
         assert_eq!(
-            version_in(Install::PowerShell, br#"{"tag_name":"v0.7.2"}"#),
+            version_in(
+                Registry::of(Install::PowerShell),
+                br#"{"tag_name":"v0.7.2"}"#
+            ),
             Some(version(0, 7, 2)),
             "the release listing was not read"
         );
-        assert_eq!(Install::PowerShell.source(), Install::Script.source());
-        assert_eq!(Install::PowerShell.other(), Install::Npm);
+        assert_eq!(
+            Registry::of(Install::PowerShell),
+            Registry::of(Install::Script)
+        );
+        assert_eq!(Registry::of(Install::PowerShell).other(), Registry::Npm);
     }
 
     /// A package manager's copy is told its manager's own upgrade command, read from the release
@@ -497,12 +604,12 @@ mod tests {
         let listing = br#"{"tag_name":"v0.7.2"}"#;
         for install in [Install::Homebrew, Install::Winget] {
             assert_eq!(
-                version_in(install, listing),
+                version_in(Registry::of(install), listing),
                 Some(version(0, 7, 2)),
                 "{install:?} did not read the release listing"
             );
-            assert_eq!(install.source(), Install::Script.source());
-            assert_eq!(install.other(), Install::Npm);
+            assert_eq!(Registry::of(install), Registry::of(Install::Script));
+            assert_eq!(Registry::of(install).other(), Registry::Npm);
         }
     }
 
@@ -565,12 +672,12 @@ mod tests {
         let registry = br#"{"name":"@brave/bravebot","version":"0.7.2"}"#;
         let listing = br#"{"tag_name":"v0.7.2","name":"0.7.2"}"#;
         assert_eq!(
-            version_in(Install::Npm, registry),
+            version_in(Registry::of(Install::Npm), registry),
             Some(version(0, 7, 2)),
             "the registry answer was not read"
         );
         assert_eq!(
-            version_in(Install::Script, listing),
+            version_in(Registry::of(Install::Script), listing),
             Some(version(0, 7, 2)),
             "the release listing was not read"
         );
@@ -580,7 +687,8 @@ mod tests {
     /// registry sends reaches somebody's screen, as text or as the numbers read out of it.
     #[test]
     fn nothing_a_registry_answered_reaches_the_line() {
-        let latest = version_in(Install::Npm, br#"{"version":"v0.06.0"}"#).expect("a version");
+        let latest =
+            version_in(Registry::of(Install::Npm), br#"{"version":"v0.06.0"}"#).expect("a version");
         let said = line(Install::Npm, version(0, 5, 0), latest).expect("a newer version");
         assert!(
             !said.contains("0.06.0"),
@@ -603,7 +711,7 @@ mod tests {
             &br#"{"version":"latest"}"#[..],
             &br#"{"tag_name":"v0.7.2"}"#[..],
         ] {
-            assert_eq!(version_in(Install::Npm, bytes), None);
+            assert_eq!(version_in(Registry::of(Install::Npm), bytes), None);
         }
     }
 
@@ -613,8 +721,11 @@ mod tests {
             at: 1_700_000_000,
             latest: Some(version(0, 6, 0)),
         };
-        let line = encode_record(Install::Npm, record);
-        assert_eq!(parse_record(&line, Install::Npm), Some(record));
+        let line = encode_record(Registry::of(Install::Npm), record);
+        assert_eq!(
+            parse_record(&line, Registry::of(Install::Npm)),
+            Some(record)
+        );
     }
 
     /// One machine can have had both installations. An answer from the release listing says
@@ -622,13 +733,13 @@ mod tests {
     #[test]
     fn an_answer_from_the_other_registry_is_not_read() {
         let stored = encode_record(
-            Install::Script,
+            Registry::of(Install::Script),
             Record {
                 at: 1_700_000_000,
                 latest: Some(version(9, 9, 9)),
             },
         );
-        assert_eq!(parse_record(&stored, Install::Npm), None);
+        assert_eq!(parse_record(&stored, Registry::of(Install::Npm)), None);
     }
 
     #[test]
@@ -641,7 +752,11 @@ mod tests {
             "1700000000\tnpm\t0.6.0-rc.1",
             "1700000000\tnpm\tlatest",
         ] {
-            assert_eq!(parse_record(contents, Install::Npm), None, "{contents}");
+            assert_eq!(
+                parse_record(contents, Registry::of(Install::Npm)),
+                None,
+                "{contents}"
+            );
         }
     }
 
@@ -651,8 +766,9 @@ mod tests {
     #[test]
     fn an_ask_that_learned_nothing_still_holds_the_next_one_off_for_the_day() {
         let asked_at = 1_000_000;
-        let written = encode_record(Install::Npm, recorded(None, None, asked_at));
-        let read_back = parse_record(&written, Install::Npm).expect("the record just written");
+        let written = encode_record(Registry::of(Install::Npm), recorded(None, None, asked_at));
+        let read_back =
+            parse_record(&written, Registry::of(Install::Npm)).expect("the record just written");
 
         assert_eq!(read_back.latest, None, "a version was invented: {written}");
         assert!(
@@ -704,17 +820,17 @@ mod tests {
             at: 2_000_000,
             latest: None,
         };
-        let existing = format!("{}\n", encode_record(Install::Script, script));
+        let existing = format!("{}\n", encode_record(Registry::of(Install::Script), script));
 
-        let file = merged(&existing, Install::Npm, npm);
+        let file = merged(&existing, Registry::of(Install::Npm), npm);
 
         assert_eq!(
-            parse_record(&file, Install::Npm),
+            parse_record(&file, Registry::of(Install::Npm)),
             Some(npm),
             "the launch's own ask was not recorded: {file:?}"
         );
         assert_eq!(
-            parse_record(&file, Install::Script),
+            parse_record(&file, Registry::of(Install::Script)),
             Some(script),
             "the other registry's record was lost: {file:?}"
         );
@@ -733,10 +849,14 @@ mod tests {
             latest: Some(version(0, 7, 0)),
         };
 
-        let file = merged(&merged("", Install::Npm, first), Install::Npm, second);
+        let file = merged(&merged("", Registry::Npm, first), Registry::Npm, second);
 
         assert_eq!(file.lines().count(), 1, "{file:?}");
-        assert_eq!(parse_record(&file, Install::Npm), Some(second), "{file:?}");
+        assert_eq!(
+            parse_record(&file, Registry::of(Install::Npm)),
+            Some(second),
+            "{file:?}"
+        );
     }
 
     /// Asking on every launch would be a request to somebody else's registry per session, for a
@@ -794,5 +914,126 @@ mod tests {
     #[test]
     fn the_version_this_was_built_as_is_three_numbers() {
         assert!(running_version().is_some(), "{}", env!("CARGO_PKG_VERSION"));
+    }
+
+    /// The desktop app's installers are assets of the GitHub release, so it reads the release
+    /// listing and the record a script install wrote, and a record the npm registry answered is not
+    /// read as one about the release.
+    #[test]
+    fn the_desktop_app_asks_the_release_listing_and_shares_the_scripts_record() {
+        assert_eq!(Registry::DESKTOP, Registry::of(Install::Script));
+        assert_eq!(Registry::DESKTOP.url(), RELEASES_URL);
+        assert_eq!(
+            version_in(Registry::DESKTOP, br#"{"tag_name":"v0.7.2"}"#),
+            Some(version(0, 7, 2))
+        );
+        let state = tempfile::tempdir().expect("a state directory");
+        let script = Record {
+            at: 1_000_000,
+            latest: Some(version(9, 0, 0)),
+        };
+        std::fs::write(
+            state.path().join(CACHE_FILE),
+            merged("", Registry::of(Install::Script), script),
+        )
+        .expect("a record");
+        assert_eq!(record_in(state.path(), Registry::DESKTOP), Some(script));
+
+        let npm_only = tempfile::tempdir().expect("a state directory");
+        std::fs::write(
+            npm_only.path().join(CACHE_FILE),
+            merged("", Registry::Npm, script),
+        )
+        .expect("a record");
+        assert_eq!(record_in(npm_only.path(), Registry::DESKTOP), None);
+    }
+
+    /// The window is told whether the recorded version is newer than the one running, and the
+    /// version itself is not in the answer (UPDATE-5, UPDATE-12).
+    #[test]
+    fn the_desktop_app_is_told_only_whether_a_newer_version_is_recorded() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let running = Some(version(0, 9, 0));
+        assert_eq!(
+            status_in(true, Some(state.path()), running),
+            Status {
+                check: true,
+                newer: None
+            },
+            "a first run has no record"
+        );
+        let seed = |latest| {
+            let record = Record {
+                at: 1_000_000,
+                latest: Some(latest),
+            };
+            std::fs::write(
+                state.path().join(CACHE_FILE),
+                merged("", Registry::DESKTOP, record),
+            )
+            .expect("a record");
+        };
+        seed(version(0, 10, 0));
+        assert_eq!(
+            status_in(true, Some(state.path()), running).newer,
+            Some(true)
+        );
+        seed(version(0, 9, 0));
+        assert_eq!(
+            status_in(true, Some(state.path()), running).newer,
+            Some(false)
+        );
+        seed(version(0, 8, 9));
+        assert_eq!(
+            status_in(true, Some(state.path()), running).newer,
+            Some(false)
+        );
+        assert_eq!(status_in(true, None, running).newer, None, "no home");
+    }
+
+    /// With the check off the desktop app is told so, and nothing a record says changes that.
+    #[test]
+    fn a_desktop_check_turned_off_says_nothing_of_a_record() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let record = Record {
+            at: 1_000_000,
+            latest: Some(version(99, 0, 0)),
+        };
+        std::fs::write(
+            state.path().join(CACHE_FILE),
+            merged("", Registry::DESKTOP, record),
+        )
+        .expect("a record");
+        assert_eq!(
+            status_in(false, Some(state.path()), Some(version(0, 9, 0))),
+            Status {
+                check: false,
+                newer: None
+            }
+        );
+    }
+
+    /// A record that is not the shape written here is no record, so the window shows no notice
+    /// rather than an error (UPDATE-9).
+    #[test]
+    fn a_desktop_record_that_is_not_the_shape_written_is_no_answer() {
+        let state = tempfile::tempdir().expect("a state directory");
+        std::fs::write(state.path().join(CACHE_FILE), "later\treleases\t99.0.0\n")
+            .expect("a record");
+        assert_eq!(
+            status_in(true, Some(state.path()), Some(version(0, 9, 0))).newer,
+            None
+        );
+    }
+
+    /// Only an agent the packaged app started asks, and not with the check off: a build run by
+    /// hand, by a test or by a window in development asks nobody.
+    #[test]
+    fn only_the_packaged_desktop_app_asks_and_not_with_the_check_off() {
+        assert!(desktop_asks(true, Some(DESKTOP_LAUNCHER)));
+        assert!(!desktop_asks(false, Some(DESKTOP_LAUNCHER)));
+        for launcher in [None, Some("npm"), Some(""), Some("Desktop")] {
+            assert!(!desktop_asks(true, launcher), "{launcher:?}");
+        }
     }
 }

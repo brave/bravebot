@@ -75,13 +75,13 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
 | [state-directory.md](state-directory.md) | `STATE` | 4 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
-| [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 8 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and `bug-report`, which names it |
+| [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 9 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and the bug report that names it, from the terminal or the desktop app |
 | [trace.md](trace.md) | `TRACE` | 11 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
 | [acp.md](acp.md) | `ACP` | 8 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, and what a failed turn says |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
 | [releases.md](releases.md) | `RELEASE` | 21 | what names a version, what starts a release, and what an installer trusts about what it fetched |
-| [updates.md](updates.md) | `UPDATE` | 11 | learning that a newer version is out, and the line that installs it |
+| [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
 
 ## The tools

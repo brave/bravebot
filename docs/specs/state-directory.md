@@ -11,7 +11,7 @@ governs:
   - crates/agent/src/trusted.rs
   - crates/config/src/settings.rs
   - crates/session/src/store.rs
-  - crates/tui/src/update.rs
+  - crates/update/src/lib.rs
   - crates/session/src/sessions.rs
   - crates/session/src/retention.rs
   - crates/agent/src/findings.rs

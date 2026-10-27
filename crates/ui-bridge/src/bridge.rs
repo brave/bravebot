@@ -335,8 +335,25 @@ impl Bridge {
             "doctor" => Ok(
                 json!({"found": true, "structured": true, "text": serde_json::to_string_pretty(&crate::settings::report(None, self.settings.as_deref())).unwrap_or_default()}),
             ),
+            "update.status" => Ok(self.update_status()),
+            "bug-report.compose" => Ok(crate::bug_report::compose(
+                request.optional_string("interface").as_deref(),
+                self.settings.as_deref(),
+            )),
             other => Err(Failure::bad_request(format!("unknown method `{other}`"))),
         }
+    }
+
+    /// Whether a newer release than this one is recorded, as a yes or no and never the version
+    /// the record names (UPDATE-5, UPDATE-12). `newer` is null where nothing is recorded.
+    fn update_status(&self) -> Value {
+        let setting = crate::settings::layers(None, self.settings.as_deref()).update_check();
+        let status = bravebot_update::desktop_status(setting);
+        json!({
+            "check": if status.check { "on" } else { "off" },
+            "running": env!("CARGO_PKG_VERSION"),
+            "newer": status.newer,
+        })
     }
 
     /// Which build of the agent is behind this.
