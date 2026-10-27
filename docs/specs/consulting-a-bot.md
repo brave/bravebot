@@ -329,8 +329,9 @@ of one path do: the second is refused while the first is in progress.
 `verified-by: bravebot_tui::app::a_later_brief_that_is_not_sent_puts_the_line_back`
 `verified-by: bravebot_tui::state::the_next_bot_is_consulted_only_once_the_one_before_replied`
 `verified-by: bravebot_tui::state::the_bots_after_a_brief_go_with_it_and_esc_drops_them`
-`verified-by: bravebot_ui_bridge::consult::bots_named_together_are_consulted_in_the_order_the_line_names_them`
-`verified-by: bravebot_ui_bridge::consult::a_refused_bot_is_skipped_and_the_next_is_consulted`
+`verified-by: bravebot_agent::consult::bots_named_together_are_consulted_in_the_order_the_line_names_them`
+`verified-by: bravebot_agent::consult::a_refused_bot_is_skipped_and_the_next_is_consulted`
+`verified-by: bravebot_ui_bridge::consult::only_the_bots_left_are_picked_from`
 `verified-by: bravebot_ui_bridge::bridge::the_bots_a_line_left_are_consulted_by_the_next_poll_and_never_given_to_the_host`
 `verified-by: bravebot_ui_bridge::bridge::a_consult_still_running_keeps_the_rest_and_stopping_it_drops_them`
 `verified-by: bravebot_ui_bridge::consulting::the_next_bot_is_briefed_from_the_line_and_not_the_brief_before_it`
@@ -354,6 +355,9 @@ view, where the brief is sent at once.
 `verified-by: bravebot_tui::app::a_bot_whose_model_needs_a_sign_in_is_refused_and_not_consulted`
 `verified-by: bravebot_agent::tools::a_proposed_bot_whose_model_needs_a_sign_in_is_refused_on_the_card`
 `verified-by: bravebot_tui::confirm::a_refused_consult_card_names_the_model_and_takes_no_yes`
+`verified-by: bravebot_agent::consult::a_bot_whose_model_the_machine_refuses_is_not_consulted`
+`verified-by: bravebot_agent::consult::a_bot_whose_model_needs_a_sign_in_is_not_consulted`
+`verified-by: bravebot_agent::turn::a_proposed_consult_runs_on_its_bots_model_over_the_command_lines`
 
 ## What comes back
 

@@ -5,11 +5,9 @@
 //! and its reply is handed to the host by `bravebot_agent::consult::record`. A line naming several
 //! consults them one after another (CONSULT-9).
 
-use crate::protocol::Failure;
 use bravebot_agent::Workspace;
 use bravebot_config::Config;
 use bravebot_core::delegate::{Definition, Definitions};
-use bravebot_i18n::t;
 
 /// The bot a line consults, as the turn addressed to it needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,99 +42,31 @@ pub fn bots(definitions: &Definitions) -> Vec<String> {
         .collect()
 }
 
-/// Every bot `prompt` names among `definitions`, in the order it names them, each with the consult
-/// it starts or why it cannot be consulted.
-///
-/// Empty for a line that names no bot. A bot whose model this machine does not request, or needs a
-/// sign-in for, is refused before anything runs, and the session's model is not put in its place
-/// (CONSULT-10).
-pub fn consulted(
-    config: &Config,
-    definitions: &Definitions,
-    prompt: &str,
-) -> Vec<(String, Result<Consulting, String>)> {
-    let bots = bots(definitions);
-    let names: Vec<&str> = bots.iter().map(String::as_str).collect();
-    bravebot_mentions::consulted(prompt, &names)
-        .into_iter()
-        .filter_map(|named| {
-            let found = definitions.get(&named)?;
-            let consulting = consulting(config, found, &named);
-            Some((named, consulting))
-        })
-        .collect()
-}
-
-fn consulting(config: &Config, found: &Definition, named: &str) -> Result<Consulting, String> {
-    if let Some(written) = found.model()
-        && let Some((file, why)) = config.model_refused(written)
-    {
-        return Err(t!(
-            delegate_model_refused,
-            definition = named,
-            model = written,
-            reason = bravebot_agent::backend::refusal_reason(file, why)
-        )
-        .to_string());
-    }
-    if let Some(written) = found.model()
-        && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
-    {
-        return Err(t!(
-            delegate_model_needs_sign_in,
-            definition = named,
-            model = written
-        )
-        .to_string());
-    }
-    Ok(Consulting {
-        definition: found.origin().to_string(),
-        model: found.model().map(|written| config.model_named(written)),
-        bot: named.to_string(),
-    })
-}
-
 /// The consult to start now out of the bots a line named, in its order.
-#[derive(Debug)]
-pub struct Picked {
-    /// The first bot that may be consulted, or where none may, why the last one cannot be.
-    pub now: Result<Consulting, Failure>,
-    /// Why each bot before it cannot be consulted. They are noted and skipped (CONSULT-10).
-    pub skipped: Vec<String>,
-    /// The bots named after it, to be consulted once it replies (CONSULT-9).
-    pub left: Vec<String>,
-}
+pub type Picked = bravebot_agent::consult::Picked<Consulting>;
 
-/// Pick the consult to start now out of `named`, keeping only the bots in `only` where it is given.
+/// The consult to start now out of the bots `line` names among `definitions`, keeping only the
+/// bots in `only` where it is given (CONSULT-9, CONSULT-10).
 ///
 /// `None` where no bot is left to consult.
 pub fn pick(
-    named: Vec<(String, Result<Consulting, String>)>,
+    config: &Config,
+    definitions: &Definitions,
+    line: &str,
     only: Option<&[String]>,
 ) -> Option<Picked> {
-    let mut named = named
-        .into_iter()
-        .filter(|(bot, _)| only.is_none_or(|only| only.contains(bot)));
-    let mut skipped = Vec::new();
-    let mut last = None;
-    for (_, consulting) in named.by_ref() {
-        match consulting {
-            Ok(consulting) => {
-                skipped.extend(last.take());
-                return Some(Picked {
-                    now: Ok(consulting),
-                    skipped,
-                    left: named.map(|(bot, _)| bot).collect(),
-                });
-            }
-            Err(refused) => skipped.extend(last.replace(refused)),
-        }
+    let named = bravebot_agent::consult::consulted(config, definitions, line, |found| {
+        consulting(config, found)
+    });
+    bravebot_agent::consult::pick(named, only)
+}
+
+fn consulting(config: &Config, found: &Definition) -> Consulting {
+    Consulting {
+        definition: found.origin().to_string(),
+        model: found.model().map(|written| config.model_named(written)),
+        bot: found.name().to_string(),
     }
-    last.map(|refused| Picked {
-        now: Err(Failure::bad_request(refused)),
-        skipped,
-        left: Vec::new(),
-    })
 }
 
 #[cfg(test)]
@@ -172,7 +102,7 @@ mod tests {
     }
 
     fn picked(prompt: &str) -> Option<Picked> {
-        pick(consulted(&config(), &definitions(), prompt), None)
+        pick(&config(), &definitions(), prompt, None)
     }
 
     /// CONSULT-2: a line naming a bot consults it, with the definition it was read from and its
@@ -197,49 +127,27 @@ mod tests {
         assert_eq!(bots(&definitions()), vec!["reviewer".to_string()]);
     }
 
-    fn several() -> Vec<(String, Result<Consulting, String>)> {
-        let bot = |name: &str| {
-            Ok(Consulting {
-                bot: name.into(),
-                definition: "~/.bravebot/agents".into(),
-                model: None,
-            })
-        };
-        vec![
-            ("first".into(), Err("first needs a sign-in".into())),
-            ("second".into(), bot("second")),
-            ("third".into(), Err("third needs a sign-in".into())),
-            ("fourth".into(), bot("fourth")),
-        ]
-    }
-
-    /// CONSULT-9: bots named together are consulted in the line's order, and the ones after the
-    /// first are left for once it replies.
+    /// CONSULT-9: the bots an earlier consult of the line left are the only ones picked from.
     #[test]
-    fn bots_named_together_are_consulted_in_the_order_the_line_names_them() {
-        let picked = pick(several(), None).expect("named");
-        assert_eq!(picked.now.expect("consulted").bot, "second");
-        assert_eq!(picked.left, vec!["third".to_string(), "fourth".to_string()]);
+    fn only_the_bots_left_are_picked_from() {
+        let mut definitions = definitions();
+        definitions.insert(
+            Definition::from_file(
+                "writer",
+                "Writes.",
+                Kind::Reader,
+                None,
+                "W",
+                "~/.bravebot/agents",
+            )
+            .with_model("haiku"),
+        );
+        let line = "@reviewer and @writer, look";
+        let picked = pick(&config(), &definitions, line, None).expect("named");
+        assert_eq!(picked.now.expect("consulted").bot, "reviewer");
+        assert_eq!(picked.left, vec!["writer".to_string()]);
 
-        let next = pick(several(), Some(&picked.left)).expect("named");
-        assert_eq!(next.now.expect("consulted").bot, "fourth");
-        assert!(next.left.is_empty());
-    }
-
-    /// CONSULT-9 and CONSULT-10: a bot that may not be consulted is noted and skipped, and the
-    /// next one is consulted. Where none may, the last refusal is the turn's.
-    #[test]
-    fn a_refused_bot_is_skipped_and_the_next_is_consulted() {
-        let picked = pick(several(), None).expect("named");
-        assert_eq!(picked.skipped, vec!["first needs a sign-in".to_string()]);
-
-        let refused = pick(several(), Some(&["third".to_string()])).expect("named");
-        assert!(refused.now.is_err());
-        assert!(refused.skipped.is_empty());
-
-        let only = ["first".to_string(), "third".to_string()];
-        let refused = pick(several(), Some(&only)).expect("named");
-        assert_eq!(refused.skipped, vec!["first needs a sign-in".to_string()]);
-        assert!(pick(several(), Some(&[])).is_none());
+        let next = pick(&config(), &definitions, line, Some(&picked.left)).expect("named");
+        assert_eq!(next.now.expect("consulted").bot, "writer");
     }
 }

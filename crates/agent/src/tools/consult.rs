@@ -12,7 +12,6 @@ use bravebot_core::event::Sink;
 use bravebot_core::label::Label;
 use bravebot_core::policy::Policy;
 use bravebot_core::value::Labelled;
-use bravebot_i18n::t;
 use serde_json::Value;
 
 /// A consult a person sent from the card, for the turn to run.
@@ -80,30 +79,8 @@ pub(super) fn propose_consult<S: Sink, C: Confirmer>(
         .map(str::to_string)
         .or_else(|| tools.chat.model.map(str::to_string))
         .unwrap_or_else(|| config.default_model.clone());
-    // Only a model the definition wrote can be refused here: the host is already running on its
-    // own, and the host's is never put in place of the bot's (CONSULT-10). The machine-level layer
-    // first, as a typed tag is refused.
-    let refused = definition.model().and_then(|written| {
-        if let Some((file, why)) = config.model_refused(written) {
-            return Some(
-                t!(
-                    delegate_model_refused,
-                    definition = definition.name(),
-                    model = written,
-                    reason = crate::backend::refusal_reason(file, why)
-                )
-                .to_string(),
-            );
-        }
-        crate::backend::Backend::needs_sign_in(config, &config.model_named(written)).then(|| {
-            t!(
-                delegate_model_needs_sign_in,
-                definition = definition.name(),
-                model = written
-            )
-            .to_string()
-        })
-    });
+    // Refused as a typed tag is, and the host's model is never put in the bot's place (CONSULT-10).
+    let refused = crate::consult::model_refused(config, definition);
     let request = ConsultRequest {
         bot: definition.name().to_string(),
         definition: definition.origin().to_string(),

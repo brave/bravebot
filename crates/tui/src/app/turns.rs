@@ -1236,65 +1236,18 @@ pub(super) fn consult_among(
     let bots: Vec<String> = bravebot_agent::agents::bots(definitions)
         .map(|definition| definition.name().to_string())
         .collect();
-    let names: Vec<&str> = bots.iter().map(String::as_str).collect();
-    bravebot_mentions::consulted(prompt, &names)
-        .into_iter()
-        .filter_map(|named| {
-            let found = definitions.get(&named)?;
-            let definition = found.origin().to_string();
-            let row = bravebot_agent::agents::bot_row(found);
-            let consult = definition_named(config, definitions, &named)
-                .map(|addressed| Consult {
-                    addressed,
-                    definition,
-                    bots: bots.clone(),
-                    row,
-                })
-                .map_err(Unusable::into_message);
-            Some((named, consult))
-        })
-        .collect()
+    bravebot_agent::consult::consulted(config, definitions, prompt, |found| Consult {
+        addressed: super::addressed(config, found),
+        definition: found.origin().to_string(),
+        bots: bots.clone(),
+        row: bravebot_agent::agents::bot_row(found),
+    })
 }
 
 /// The consult to start now out of the bots a line named, in its order.
-pub(super) struct Picked {
-    /// The first bot that may be consulted, or where none may, why the last one cannot be.
-    pub(super) now: Result<Consult, String>,
-    /// Why each bot before it cannot be consulted. They are noted and skipped (CONSULT-10).
-    pub(super) skipped: Vec<String>,
-    /// The bots named after it, to be consulted once it replies (CONSULT-9).
-    pub(super) left: Vec<String>,
-}
+pub(super) type Picked = bravebot_agent::consult::Picked<Consult>;
 
-/// Pick the consult to start now out of `named`, keeping only the bots in `only` where it is given.
-pub(super) fn pick(
-    named: Vec<(String, Result<Consult, String>)>,
-    only: Option<&[String]>,
-) -> Option<Picked> {
-    let mut named = named
-        .into_iter()
-        .filter(|(bot, _)| only.is_none_or(|only| only.contains(bot)));
-    let mut skipped = Vec::new();
-    let mut last = None;
-    for (_, consult) in named.by_ref() {
-        match consult {
-            Ok(consult) => {
-                skipped.extend(last.take());
-                return Some(Picked {
-                    now: Ok(consult),
-                    skipped,
-                    left: named.map(|(bot, _)| bot).collect(),
-                });
-            }
-            Err(refused) => skipped.extend(last.replace(refused)),
-        }
-    }
-    last.map(|refused| Picked {
-        now: Err(refused),
-        skipped,
-        left: Vec::new(),
-    })
-}
+pub(super) use bravebot_agent::consult::pick;
 
 /// The host's conversation, given the line and the consult's reply, in place of the consult's.
 ///

@@ -1612,6 +1612,8 @@ where
     consult.inbox = None;
     consult.output_schema = None;
     consult.jobs = None;
+    // A model the host's command line named does not outrank the bot's own (CONSULT-10).
+    consult.model_outranks_a_definition = false;
 
     // The person answering the consult's questions is the host's, so what they settle there stays
     // settled for the host: file decisions through the authority both share, and the rest taken

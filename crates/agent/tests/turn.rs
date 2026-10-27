@@ -74972,6 +74972,70 @@ fn a_proposed_consult_is_reported_under_its_bot_and_counted_to_the_host() {
     );
 }
 
+/// CONSULT-10: a consult a planner proposed runs on the model its bot's definition names, even
+/// where the host's model came from a command line that outranked a definition's (CLI-9). The
+/// control is the host's own request, which stays on the host's model.
+#[test]
+fn a_proposed_consult_runs_on_its_bots_model_over_the_command_lines() {
+    let scratch = Scratch::new("consult-proposed-model");
+    let home = Scratch::new("consult-proposed-model-home");
+    define(
+        &home,
+        "reviewer",
+        "kind: reader\nmodel: haiku\n",
+        "REVIEWER-PROMPT",
+    );
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "HOST-ASKS",
+            vec![
+                tool_request(
+                    "propose_consult",
+                    r#"{"bot":"reviewer","brief":"BRIEF-FOR-REVIEWER is the parser safe?"}"#,
+                ),
+                reply_with("the reviewer says it is safe"),
+            ],
+        ),
+        ("BRIEF-FOR-REVIEWER", vec![reply_with("REVIEWED-SAFE")]),
+    ]);
+    let config = config_for(&endpoint);
+    let (haiku, opus) = (config.model_named("haiku"), config.model_named("opus"));
+
+    turns::run_cancellable(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &Task::new("HOST-ASKS")
+            .with_home(Some(home.path.clone()))
+            .with_model(Some(opus.clone()))
+            .model_outranks_a_definition(true)
+            .drawing_consult_cards(true),
+        &mut SendsConsults::default(),
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let requests: Vec<String> = received.try_iter().collect();
+    let model = |of: &str| format!(r#""model":"{of}""#);
+    let consult = requests
+        .iter()
+        .find(|request| request.contains("BRIEF-FOR-REVIEWER") && !request.contains("HOST-ASKS"))
+        .expect("the consult asked a model");
+    assert!(
+        consult.contains(&model(&haiku)),
+        "the consult did not run on its bot's model: {consult}"
+    );
+    let host = requests.first().expect("the host asked a model");
+    assert!(
+        host.contains(&model(&opus)),
+        "the host left its own model: {host}"
+    );
+}
+
 /// SKILL-21. The skill a person put in force with `/mode` is in the system prompt of every turn,
 /// once each: a turn that dropped it after the first, or put it in the conversation as a message
 /// that the next turn repeats, would pass a test of one turn. The control is a turn with no mode.

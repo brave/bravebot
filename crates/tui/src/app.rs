@@ -1058,34 +1058,23 @@ pub fn definition_named(
             names = definitions.names().join(", ")
         )));
     };
-    // The machine-level layer first: a model this machine does not request is refused whatever the
-    // credentials for it are, and asking about a sign-in would send somebody to fix the wrong thing
-    // (BACKEND-48).
-    if let Some(written) = definition.model()
-        && let Some((file, why)) = config.model_refused(written)
-    {
-        return Err(Unusable::Refused(t!(
-            delegate_model_refused,
-            definition = name,
-            model = written,
-            reason = bravebot_agent::backend::refusal_reason(file, why)
-        )));
+    if let Some(refused) = bravebot_agent::consult::model_refused(config, definition) {
+        return Err(Unusable::Refused(refused));
     }
-    if let Some(written) = definition.model()
-        && bravebot_agent::backend::Backend::needs_sign_in(config, &config.model_named(written))
-    {
-        return Err(Unusable::Refused(t!(
-            delegate_model_needs_sign_in,
-            definition = name,
-            model = written
-        )));
-    }
-    Ok(crate::state::Addressed {
-        name: name.to_string(),
+    Ok(addressed(config, definition))
+}
+
+/// The turn addressed to `definition`, on the model it names as this machine requests it.
+fn addressed(
+    config: &Config,
+    definition: &bravebot_core::delegate::Definition,
+) -> crate::state::Addressed {
+    crate::state::Addressed {
+        name: definition.name().to_string(),
         model: definition
             .model()
             .map(|written| config.model_named(written)),
-    })
+    }
 }
 
 /// Take a paste while a turn is running.
@@ -23698,7 +23687,7 @@ mod tests {
         );
         assert_eq!(picked.now.expect("allowed").addressed.name, "test-writer");
 
-        let picked = pick(
+        let picked = pick::<turns::Consult>(
             vec![
                 ("a".to_string(), Err("a was refused".to_string())),
                 ("b".to_string(), Err("b was refused".to_string())),

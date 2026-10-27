@@ -1319,12 +1319,17 @@ impl Bridge {
         // after the brief's are left for once it replies (CONSULT-9).
         let picked = match (&definitions, &brief) {
             (Some(definitions), Some(brief)) => crate::consult::pick(
-                crate::consult::consulted(&config, definitions, &brief.line),
+                &config,
+                definitions,
+                &brief.line,
                 Some(std::slice::from_ref(&brief.bot)),
             ),
             _ => None,
         };
-        let consulting = picked.map(|picked| picked.now).transpose()?;
+        let consulting = picked
+            .map(|picked| picked.now)
+            .transpose()
+            .map_err(Failure::bad_request)?;
         // A brief whose bot is gone since it was drafted is not sent to the host instead.
         if brief.is_some() && consulting.is_none() {
             return Err(Failure::bad_request(
@@ -2158,10 +2163,7 @@ impl Bridge {
             .then(|| session_definitions(open, &workspace, true))
             .flatten();
         let picked = definitions.as_ref().and_then(|definitions| {
-            crate::consult::pick(
-                crate::consult::consulted(&config, definitions, &line),
-                only.as_deref(),
-            )
+            crate::consult::pick(&config, definitions, &line, only.as_deref())
         });
         let Some(picked) = picked else {
             // The line was the host's to answer once, before its first consult, and is not sent
@@ -2173,7 +2175,7 @@ impl Bridge {
             }
             return Ok(json!({ "brief": null }));
         };
-        let bot = picked.now?.bot;
+        let bot = picked.now.map_err(Failure::bad_request)?.bot;
         let row = definitions
             .as_ref()
             .and_then(|definitions| definitions.get(&bot))
