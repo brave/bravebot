@@ -989,8 +989,14 @@ trusted, as [`/add-dir`](commands.md) does. It does not let `read_file`, `write_
 `list_files` or `search` reach the path either: those are opened with `/add-dir`, and a refusal from one of them for a path outside the workspace names `/add-dir` alone. `/reach paths` lists what you have allowed and
 `/reach paths remove <number>` takes one back; `/status` lists them too. With permissions bypassed
 the answer is yes without a question, and the directory is also opened for those five tools and
-trusted, as `/add-dir` would, and the result tells the planner whether they now reach it (a refusal from a file tool then mentions `request_path` as well): `/add-dir close` and `/clear` close it, and `--resume` carries it. On macOS and Linux with the sandbox mode `workspace-write`, the programs the lead session's
-`run` starts are also given those paths, minus your home directory as a whole, the credential
+trusted, as `/add-dir` would, and the result tells the planner whether they now reach it: `/add-dir close` and `/clear` close it, and `--resume` carries it. With permissions bypassed the file tools do not need the
+request: every tool that names a path (`read_file`, `write_file`, `edit_file`, `list_files`, `search`, `repo_map`,
+`read_git`, `download_url`, a `run` directory and the target of a redirection) reaches a path
+outside the workspace wherever your account can, under every sandbox mode, with no directory opened or trusted,
+and it ends when you leave bypass. The paths this page lists as refused here are refused to them too, so are
+your `denyRead` and `denyWrite` paths, `permissions.readsStayInWorkspace`, writes under `read-only` and a workspace you
+have not trusted. `/status` lists the directories reached. On macOS and Linux with the sandbox mode `workspace-write`, the programs
+every `run` starts, a delegate's included, are also given those paths, minus your home directory as a whole, the credential
 locations and your `denyRead` and `denyWrite` paths, so a sibling of the working directory does not
 fail with `Operation not permitted`. A
 directory inside the working directory, or one that `/add-dir` would otherwise refuse, is not opened,

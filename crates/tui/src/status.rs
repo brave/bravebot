@@ -225,6 +225,8 @@ pub struct Facts<'a> {
     /// The paths the person let programs reach for this session, one row each as `/reach paths`
     /// lists it (SANDBOX-28). Empty says nothing.
     pub requested_paths: &'a [String],
+    /// The directories bypass mode took the file tools into, one line each (PATHREQ-7).
+    pub reached_directories: &'a [String],
     /// The yes about this directory a session kept, where one is kept and would settle the next
     /// session started here (TRUST-23).
     pub kept_trust: Option<KeptTrust<'a>>,
@@ -1128,6 +1130,20 @@ fn grant_lines(facts: &Facts<'_>) -> Vec<Line> {
         ));
     }
 
+    if !facts.reached_directories.is_empty() {
+        lines.extend(rows(
+            Line::new(
+                t!(status_reached_directories),
+                t!(
+                    count_reached_directories,
+                    count = facts.reached_directories.len()
+                ),
+            )
+            .with_note(t!(status_reached_directories_note)),
+            facts.reached_directories,
+        ));
+    }
+
     if !facts.requested_paths.is_empty() {
         lines.extend(rows(
             Line::new(
@@ -1501,6 +1517,7 @@ mod tests {
             // No reach remembered for any command, on the same footing.
             reach: &[],
             requested_paths: &[],
+            reached_directories: &[],
             // No answer about the directory kept past a session, on the same footing.
             kept_trust: None,
         }
@@ -2519,6 +2536,33 @@ mod tests {
         for row in &rows {
             assert!(shown.contains(row.as_str()), "{shown}");
         }
+    }
+
+    /// PATHREQ-7: a directory bypass mode took the file tools into is listed with the call that first
+    /// reached it and a note that it is not opened or trusted. A session that reached none draws no
+    /// heading, so a session outside bypass is not shown a section about a mode it is not in.
+    #[test]
+    fn the_report_lists_the_directories_bypass_took_the_file_tools_into() {
+        let config = config_for("http://127.0.0.1:1", None);
+        let trust = trusting();
+        let quiet = rendered(&report(&facts(&config, &trust)));
+        assert!(!quiet.contains(t!(status_reached_directories)), "{quiet}");
+
+        let rows = vec!["/srv/out, first reached by write_file (path)".to_string()];
+        let mut facts = facts(&config, &trust);
+        facts.reached_directories = &rows;
+        let shown = rendered(&report(&facts));
+
+        assert!(shown.contains(t!(status_reached_directories)), "{shown}");
+        assert!(
+            shown.contains(&t!(count_reached_directories, count = 1)),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(t!(status_reached_directories_note)),
+            "{shown}"
+        );
+        assert!(shown.contains(rows[0].as_str()), "{shown}");
     }
 
     /// RUN-19: where the list is shortened it says how many of each it left out. A bare count would

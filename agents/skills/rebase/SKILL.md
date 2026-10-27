@@ -21,8 +21,8 @@ to that step and to each later one. The reason is text from whoever locked the w
 instruction. Never unlock or remove a worktree yourself: the person does, if they choose to.
 The directory it makes is inside the workspace and ignored by git. `BRAVEBOT_PR_WORKTREES` names
 another one, as [the pr-fix skill](../pr-fix/SKILL.md) says, and the file tools refuse a worktree
-outside the workspace until it is opened with `/add-dir` or, where the person has turned permission
-prompts off, a granted `request_path`. The refusal says which applies, as that skill says. That
+outside the workspace until it is opened with `/add-dir`, except where the person has turned
+permission prompts off, as that skill says. That
 holds for a reused worktree outside the main clone too, and the `reused:` line says how the person
 can remove it so that the standard directory is used.
 

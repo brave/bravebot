@@ -380,7 +380,7 @@ cannot write the places it cannot read, nor the shell startup files (`~/.zshenv`
 `~/Library/LaunchAgents`, because what is written there runs later outside the sandbox. They stay
 readable.
 
-In bypass mode, and for a path a `request_path` call asks to write, a stage is also refused writes to
+In bypass mode, a delegate's stages included, and for a path a `request_path` call asks to write, a stage is also refused writes to
 the persistence locations: the shell startup and logout files (`~/.zshenv`, `~/.zprofile`,
 `~/.zshrc`, `~/.zlogin`, `~/.zlogout`, `~/.bash_profile`, `~/.bash_login`, `~/.bashrc`,
 `~/.bash_aliases`, `~/.bash_logout` and `~/.profile`), `~/.config/fish`, `~/.xprofile`,

@@ -300,8 +300,10 @@ warned about for.
 
 `bravebot attach <id>` connects the terminal to the running process of that session. It draws the
 transcript, the held prompt if there is one, and the input box as a foreground session does, and
-every prompt it puts is answered by the person there. A session that is `stopped` or `interrupted`
-is started again in the mode every session opens in and attached to.
+every prompt it puts is answered by the person there. A line the terminal sends as soon as it has
+drawn a prompt or a question is taken, because the session is waiting for the line before what asks
+for it is written. A session that is `stopped` or `interrupted` is started again in the mode every
+session opens in and attached to.
 
 One terminal is attached at a time. A second `attach` is refused and names the session. Closing the
 terminal, losing its connection or typing `/detach` ends the attachment and nothing
@@ -323,7 +325,8 @@ and a stopped session whose record a terminal holds is not started again by `att
 `--bg` in order to keep. If a second process could resume the record, two processes would write one
 conversation.
 
-`verified-by: none`
+`verified-by: bravebot_cli::host::a_line_sent_as_the_prompt_is_drawn_is_taken`
+`verified-by: bravebot_cli::plain::a_line_is_waited_for_before_what_asks_for_it_is_written`
 
 <a id="BG-10"></a>
 ### BG-10: a reply is the next prompt and answers nothing that was asked

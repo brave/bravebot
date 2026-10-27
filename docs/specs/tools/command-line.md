@@ -323,6 +323,16 @@ that is outside every opened directory is asked about under the name it was writ
 session that would accept the request, the refusal says that `unconfined` is the argument that
 makes the write possible.
 
+**Where the permission mode reaches a path.** While the mode that answers every permission question
+is in force ([MODE-4](../permission-modes.md#MODE-4)), a destination in a directory outside the
+workspace that the file tools reach ([PATHREQ-7](request-path.md#PATHREQ-7)) is not refused for
+leaving it, so the line needs no `unconfined` argument there. The refusals that hold for a granted
+request still refuse a destination, the check is made again at each open, and a delegate's
+destination is held to its definition's `writes:` limit as a tool's write is
+([DELEGATE-28](../delegation.md#DELEGATE-28)).
+
+`verified-by: bravebot_agent::turn::under_bypass_the_file_tools_reach_a_sibling_directory_with_no_request`
+`verified-by: bravebot_agent::turn::a_limited_delegate_of_a_bypass_turn_is_refused_a_sibling_directory_its_patterns_do_not_cover`
 `verified-by: bravebot_agent::turn::an_approved_unconfined_line_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::turn::a_line_under_off_may_redirect_into_a_file_outside_the_workspace`
 `verified-by: bravebot_agent::tools::a_redirection_may_leave_the_workspace_only_where_the_line_has_no_profile`
