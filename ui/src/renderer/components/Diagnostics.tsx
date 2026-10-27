@@ -116,7 +116,8 @@ function LastRequestView({ session }: { session: string }): React.JSX.Element {
   </section>
 }
 
-function RequestSpan({ span }: { span: Span }): React.JSX.Element {
+/** One part of the request, as plain text under its label. */
+export function RequestSpan({ span }: { span: Span }): React.JSX.Element {
   const long = span.text.length > COLLAPSE_AT
   const [open, setOpen] = useState(false)
   return <li className="diagnostics-span" data-kind={span.kind}>
