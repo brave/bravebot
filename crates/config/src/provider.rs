@@ -71,8 +71,10 @@ const OPENAI_ID: &str = "openai";
 /// through the Responses API alone ([BACKEND-19]).
 ///
 /// OpenAI's own listing states no capability for a model, so this list is the only statement of
-/// which ids that route cannot serve. It is read from two public documents and is not observed at
-/// the API, because no chat completion sent there has answered 200:
+/// which ids that route cannot serve. On 2026-10-27 the route answered none of its ids with a 200
+/// when each was asked once with one short message and a ceiling of 16 tokens, and named the
+/// Responses API in its refusal of three of them ([BACKEND-19]). The ids are read from two public
+/// documents:
 ///
 /// - the `ResponsesOnlyModel` list under `ModelIdsResponses` in version 2.3.0 of `openai-openapi`;
 /// - the model pages at `https://developers.openai.com/api/docs/models/<id>`, read on 2026-10-27
@@ -1031,10 +1033,12 @@ impl Provider {
     /// Whether a request to this service carries `cache_control` marks on the prefix it will send
     /// again ([BACKEND-32]).
     ///
-    /// False for OpenAI's own API, which caches a repeated prefix without being asked and whose
-    /// published request schema has no such mark on a content part. Sending them there could cost
-    /// one refused request for each model in each process.
+    /// False for OpenAI's own API, whose published request schema has no such mark on a content
+    /// part. On 2026-10-27 six of the seven models tried read a repeated prompt from the cache with
+    /// no mark ([BACKEND-31]), and `gpt-4o-mini` and `gpt-5.4-mini` answered a request that carried
+    /// one with 200. Whether a mark changes what is read is not known. None is sent there.
     ///
+    /// [BACKEND-31]: ../../../docs/specs/backends.md#BACKEND-31
     /// [BACKEND-32]: ../../../docs/specs/backends.md#BACKEND-32
     pub fn takes_cache_markers(&self) -> bool {
         !self.at_openais_api()
