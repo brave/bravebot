@@ -1125,9 +1125,16 @@ it, and a settings file cannot state what its author does not know either.
 `verified-by: bravebot_cli::running::a_run_sends_a_level_the_roster_says_the_model_reads`
 `verified-by: bravebot_cli::running::a_session_in_lines_withholds_a_level_the_roster_says_the_model_does_not_read`
 `verified-by: bravebot_cli::running::a_service_that_refuses_the_level_it_advertised_is_reported_as_reading_none`
+`verified-by: bravebot_bedrock::lib::a_model_that_refused_the_level_once_is_remembered_as_refusing_it`
+`verified-by: bravebot_agent::backend::before_any_refusal_every_service_reads_the_level`
+`verified-by: bravebot_agent::backend::a_level_one_gateway_refused_is_not_refused_at_another_service_with_the_slug`
+`verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_level_the_chatgpt_account_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_model_a_bedrock_account_answers_for_is_not_asked_of_the_default_endpoint`
 `verified-by: bravebot_agent::backend::a_level_the_default_endpoint_refused_is_not_refused_at_a_gateway_offering_the_bare_slug`
 `verified-by: bravebot_agent::backend::a_model_bedrock_serves_is_asked_of_bedrock_and_not_of_a_gateway_with_the_same_name`
 `verified-by: bravebot_agent::backend::a_level_the_account_refused_is_reported_for_its_model_only`
+`verified-by: bravebot_agent::backend::a_level_a_bedrock_model_refused_is_reported_for_that_model_only`
 `verified-by: bravebot_tui::app::a_level_is_withheld_from_a_model_that_reads_none`
 `verified-by: bravebot_tui::app::a_level_a_model_cannot_use_is_kept_rather_than_forgotten`
 `verified-by: bravebot_tui::app::asking_for_a_level_a_model_cannot_use_says_so`
@@ -3094,6 +3101,7 @@ parsed number only how long.
 `verified-by: bravebot_aichat::call::a_rate_limit_is_waited_out_and_announced_before_the_wait`
 `verified-by: bravebot_aichat::client::a_rate_limit_is_waited_out_before_a_whole_reply_is_asked_for_again`
 `verified-by: bravebot_aichat::client::a_wait_past_the_ceiling_fails_at_once_and_carries_the_figure`
+`verified-by: bravebot_aichat::lib::a_transient_failure_is_retried_unless_a_429_asked_for_more_than_the_ceiling`
 `verified-by: bravebot_aichat::client::a_retry_after_that_does_not_parse_falls_back_to_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_of_zero_still_takes_the_backoff`
 `verified-by: bravebot_aichat::client::a_retry_after_on_another_status_is_not_waited_for_or_refused`

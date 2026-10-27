@@ -138,7 +138,7 @@ guards:
       - crates/agent/src/attached.rs: 1
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/lsp.rs: 4
-      - crates/agent/src/turn.rs: 16
+      - crates/agent/src/turn.rs: 15
       - crates/core/src/policy.rs: 9
   - symbol: Policy::render_in_place
     sites:
@@ -173,7 +173,7 @@ guards:
       - crates/agent/src/goal.rs: 1
       - crates/agent/src/manifest.rs: 1
       - crates/agent/src/tools.rs: 2
-      - crates/agent/src/turn.rs: 3
+      - crates/agent/src/turn.rs: 2
       - crates/core/src/policy.rs: 4
   - symbol: Policy::read_planner_argument
     sites:
@@ -215,17 +215,21 @@ L = I × C      I ∈ {T, U}      trusted / untrusted
                C ∈ {pub, priv} public  / private
 ```
 
-Untrusted input degrades integrity; private input raises confidentiality. `(U,priv)` and `(T,pub)`
-are **incomparable**, so this is a lattice rather than a pair of booleans and no total order may be
-imposed on it. Integrity meets pessimistically and confidentiality joins pessimistically.
+Untrusted input degrades integrity; private input raises confidentiality. A label degrades into
+another when the other is no more trusted and no less private than it. `(T,priv)` and `(U,pub)` are
+**incomparable**: neither degrades into the other. So this is a lattice rather than a pair of
+booleans, and no total order may be imposed on it: `Label` implements neither `PartialOrd` nor
+`Ord`. Integrity meets pessimistically and confidentiality joins pessimistically.
 
 `verified-by: bravebot_core::label::middle_elements_are_incomparable`
-`verified-by: bravebot_core::label::bottom_flows_everywhere_and_top_flows_nowhere`
+`verified-by: bravebot_core::label::degradation_has_one_source_and_one_sink`
+`verified-by: bravebot_core::label::degradation_is_reflexive`
+`verified-by: bravebot_core::label::degradation_is_antisymmetric`
+`verified-by: bravebot_core::label::degradation_is_transitive`
 `verified-by: bravebot_core::label::integrity_meet_is_pessimistic`
 `verified-by: bravebot_core::label::confidentiality_join_is_pessimistic`
-`verified-by: bravebot_core::label::ordering_is_reflexive_and_antisymmetric`
-`verified-by: bravebot_core::label::ordering_is_transitive`
 `verified-by: bravebot_core::label::display_matches_the_canonical_notation`
+`verified-by: by-construction (Label implements neither PartialOrd nor Ord, so two labels cannot be ranked with <, <=, > or >=; the compile_fail doctest on Label in crates/core/src/label.rs pins the < case)`
 
 <a id="LABEL-2"></a>
 ### LABEL-2: a derived value is labelled by taint over its inputs
@@ -443,7 +447,7 @@ design is wrong, not the label.
 `verified-by: bravebot_core::value::relabel_may_not_upgrade`
 `verified-by: bravebot_core::value::relabel_refuses_incomparable_labels`
 `verified-by: bravebot_core::value::relabel_may_not_make_private_content_public`
-`verified-by: bravebot_core::label::degradation_is_not_the_lattice_ordering`
+`verified-by: bravebot_core::label::degradation_never_raises_integrity_or_lowers_confidentiality`
 `verified-by: bravebot_core::label::trusted_input_cannot_launder_untrusted`
 `verified-by: bravebot_core::label::top_of_taint_degrades_from_everything`
 
@@ -514,7 +518,12 @@ reads as holding private content. The trail says which of these made the context
 resumed run is not recorded as letting anything out of quarantine. The user's own message is not labelled at all, which is why the
 two carriers that join it take no label either.
 
+The reply that ends a turn and an answer given between calls enter the conversation by the same
+step. In a context that has met something untrusted the reply is labelled untrusted, so the planner
+is told that it answered and given a reference to the reply, and the reply is in no later request.
+
 `verified-by: bravebot_core::policy::adopting_model_output_from_a_fallen_context_stays_untrusted`
+`verified-by: bravebot_agent::turn::the_final_reply_of_a_turn_is_held_under_a_reference_once_something_untrusted_was_met`
 `verified-by: bravebot_core::policy::only_a_value_a_transport_labelled_can_be_adopted_as_model_output`
 `verified-by: bravebot_core::policy::a_delegate_starts_out_holding_what_its_parent_held`
 `verified-by: bravebot_core::policy::the_trail_says_how_the_context_came_to_hold_private_content`
