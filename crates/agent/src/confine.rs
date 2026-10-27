@@ -2093,7 +2093,10 @@ impl Container {
 /// A turn that does not confine says nothing, so a planner is never told of a boundary its
 /// programs do not have. Where the platform has no base to confine on, it is told the opposite.
 ///
-/// The `off` mode says nothing either, for the same reason: the programs have no boundary to state.
+/// The `off` mode says nothing about confinement either, for the same reason: the programs have no
+/// boundary to state. Both still say that `run` accepts no `scopes` or `unconfined` argument where
+/// `requests_offered` is false ([`NOT_CONFINED_REQUESTS_REFUSED_SENTENCE`]), since neither is
+/// accepted there and a planner is not told otherwise.
 ///
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call.
 /// Where it would not, the description names neither and says which routes the person has instead
@@ -2103,19 +2106,29 @@ pub fn stated_to_the_planner(
     mode: SandboxMode,
     requests_offered: bool,
 ) -> Option<String> {
-    let said = stated(
+    let Some(said) = stated(
         confine_runs,
         Prelude::current(),
         bravebot_config::run_network(),
         mode,
         requests_offered,
-    )?;
+    ) else {
+        return (!requests_offered).then(|| NOT_CONFINED_REQUESTS_REFUSED_SENTENCE.to_string());
+    };
     Some(with_temporary_held_back_said(
         said,
         Prelude::current(),
         bravebot_config::holds_back_temporary_directory(),
     ))
 }
+
+/// Said in place of the account of confinement where the turn does not confine or the mode is `off`
+/// and the session accepts no request (SANDBOX-19, SANDBOX-26). Names no boundary, so it does not
+/// tell a planner of one its programs lack. Without it a planner sends `scopes` or `unconfined`
+/// with every `gh` or `git` line and meets a refusal that names neither.
+const NOT_CONFINED_REQUESTS_REFUSED_SENTENCE: &str = "This session accepts no `scopes` or \
+     `unconfined` argument on `run`: a call that carries one is refused and its line does not \
+     run. Leave them out.";
 
 /// `said` with the sentence that the person holds the temporary directory back, where a platform
 /// confines and the person did.
@@ -5434,6 +5447,60 @@ mod tests {
             "{workspace_write}"
         );
         assert_eq!(told(SandboxMode::Off), None);
+    }
+
+    /// SANDBOX-19, SANDBOX-26: where the turn states no confinement, because it does not confine or
+    /// the mode is `off`, and the session accepts no request, the description still says `run`
+    /// accepts no `scopes` or `unconfined` argument. Where a request would be accepted it says
+    /// nothing, so the control row is the silence that held before. The regressions it rejects are
+    /// the old silence, which sends a planner to a refusal on its first line, and a sentence said
+    /// where the arguments are accepted, which tells it to leave out an argument it may use.
+    #[test]
+    fn a_turn_that_states_no_confinement_and_accepts_no_request_says_so() {
+        for (confine_runs, mode, requests_offered, said, why) in [
+            (true, SandboxMode::Off, false, true, "off"),
+            (
+                false,
+                SandboxMode::WorkspaceWrite,
+                false,
+                true,
+                "no confinement",
+            ),
+            (
+                false,
+                SandboxMode::Off,
+                false,
+                true,
+                "off and no confinement",
+            ),
+            (
+                true,
+                SandboxMode::Off,
+                true,
+                false,
+                "control: off, requests offered",
+            ),
+            (
+                false,
+                SandboxMode::Strict,
+                true,
+                false,
+                "control: no confinement, offered",
+            ),
+        ] {
+            let told = stated_to_the_planner(confine_runs, mode, requests_offered);
+            match said {
+                true => {
+                    let told = told.unwrap_or_else(|| panic!("{why}: said nothing"));
+                    assert!(
+                        told.contains("`scopes`") && told.contains("`unconfined`"),
+                        "{why}: {told}"
+                    );
+                    assert!(!told.contains("confined and"), "{why}: {told}");
+                }
+                false => assert_eq!(told, None, "{why}"),
+            }
+        }
     }
 
     /// SANDBOX-19, PATHREQ-5: where the session would accept no request, as in a workspace that is

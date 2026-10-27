@@ -1649,7 +1649,9 @@ says that only the person widens it: that `/add-dir` and `--add-dir` add a direc
 that choosing another sandbox mode lets programs write the project. It also says that the file tools
 write nothing in that mode and that a line redirecting output into a file is refused. On a turn
 that does not confine runs, and under the mode `off`, it says nothing about confinement, since a planner told of a boundary its
-programs do not have stops reaching for paths they can reach.
+programs do not have stops reaching for paths they can reach. Neither accepts a request, so the description says only that
+`run` accepts no `scopes` or `unconfined` argument and that a call carrying one is refused and its line does not run. Without it a
+planner sends them with every `gh` or `git` line and meets a refusal that names neither.
 
 A result whose step did not exit zero, from a run or from a job left running, carries one more
 sentence from the driver after the account of how it ended ([RUN-13](tools/run.md#RUN-13)): the
@@ -1746,6 +1748,7 @@ chooses `It failed` over `It exited 0`.
 `verified-by: bravebot_agent::turn::a_turn_that_does_not_confine_runs_says_nothing_of_it_in_the_description_or_a_failure`
 `verified-by: bravebot_agent::turn::a_failed_job_on_a_confining_turn_says_what_it_ran_under`
 `verified-by: bravebot_agent::tools::the_statement_follows_the_sandbox_mode`
+`verified-by: bravebot_agent::confine::a_turn_that_states_no_confinement_and_accepts_no_request_says_so`
 `verified-by: bravebot_agent::confine::a_strict_stage_does_not_read_the_machine`
 `verified-by: bravebot_agent::confine::the_failure_sentence_names_the_menu_where_a_request_is_accepted`
 `verified-by: bravebot_agent::confine::the_planner_is_told_of_the_menu_in_every_mode_but_off`

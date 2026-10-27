@@ -1,5 +1,7 @@
 ## Unreleased
 
+ - Changed the `run` description to say that `scopes` and `unconfined` are refused when the sandbox mode is `off` or the session does not confine. A skill that sends them with every `gh` or `git` line is told to leave them out before its first line, and no longer meets a refusal that names neither.
+ - Changed the `implement-issues` skill to run a step again without `scopes` and `unconfined` when the session refuses them, instead of repeating the refused call.
  - Changed the info panel's Files section so that clicking its heading no longer opens `/diff`. Click the count under it.
 
 ## [0.19.0](https://github.com/brave/bravebot/releases/tag/v0.19.0)

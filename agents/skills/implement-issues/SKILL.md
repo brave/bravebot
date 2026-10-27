@@ -156,8 +156,13 @@ of its steps and says why. This skill's other calls take these:
   back give them `scopes: ["signing"]`; on macOS they run confined, as the pr-fix skill says of
   `git commit`.
 
-A refusal that names an argument is retried once with it. A commit that will not sign stops the
-run, as [When a commit will not sign](../pr-fix/SKILL.md#when-a-commit-will-not-sign) says.
+A refusal starting `refused: this session does not accept` is handled as
+[When the session refuses an argument](../pr-fix/SKILL.md#when-the-session-refuses-an-argument)
+says, for every call in this skill that carries `scopes` or `unconfined`: run the same step again
+with neither argument, once, and stop and report the step, the refusal and the failure if that call
+fails. Do not repeat the refused call, and do not send `scopes` or `unconfined` on the later calls
+of a run that has met the refusal. A commit that will not sign stops the run, as
+[When a commit will not sign](../pr-fix/SKILL.md#when-a-commit-will-not-sign) says.
 
 ## 1. Resolve the list
 

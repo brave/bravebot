@@ -1830,8 +1830,10 @@ pub fn offer_tool_loader(tools: &mut Vec<Tool>, names: &[String]) {
 /// Say in the `run` description what its programs are held to, for a turn that confines them.
 ///
 /// Appended to the table's description rather than a parameter of it, so the many callers that
-/// build a table for another reason are untouched. Nothing where the list does not offer `run` or
-/// the turn does not confine, since a planner is not told of a boundary its programs do not have.
+/// build a table for another reason are untouched. Nothing where the list does not offer `run`.
+/// Where the turn does not confine, or the mode is `off`, it names no boundary, since a planner is
+/// not told of one its programs do not have, and says only that `run` accepts no `scopes` or
+/// `unconfined` argument.
 ///
 /// `requests_offered` says the session would accept a `scopes` argument and a `request_path` call,
 /// so the description names them only where it would.
