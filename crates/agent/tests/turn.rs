@@ -20275,6 +20275,78 @@ fn a_reference_write_is_reviewed_as_a_diff() {
     assert_eq!(reviewed.existing.as_deref(), Some("original\n"));
 }
 
+/// A body a processor wrote can hold characters that draw as nothing, and the rows a person
+/// approves it from are the only check on it (PROMPT-13, WRITE-4). The rows write each one out and
+/// the request counts them; the file a yes writes keeps the characters it was given.
+#[test]
+fn a_reference_write_spells_what_draws_as_nothing_and_the_file_keeps_the_bytes() {
+    let scratch = Scratch::new("processor-hidden-characters");
+    std::fs::write(scratch.path.join("config.py"), "original\n").unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let hidden = "run(\"ok\")\u{202e} \u{200b}\u{e0069}";
+
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"config.py"}"#),
+        tool_request(
+            "spawn_processor",
+            r#"{"reads":["ref:1"],"instruction":"rewrite it"}"#,
+        ),
+        processor_reply(hidden),
+        tool_request(
+            "write_file",
+            r#"{"path":"config.py","contents_ref":"ref:3"}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = RecordingConfirmer::approving();
+
+    turns::run(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("rewrite the config"),
+        &mut confirmer,
+        &mut sink,
+    )
+    .expect("turn runs");
+
+    let reviewed = confirmer.seen.last().expect("a write was reviewed");
+    assert_eq!(reviewed.diff.hidden(), 3);
+    let rows: String = reviewed
+        .diff
+        .condensed(3)
+        .into_iter()
+        .filter_map(|row| match row {
+            bravebot_agent::diff::Change::Added(text)
+            | bravebot_agent::diff::Change::Removed(text)
+            | bravebot_agent::diff::Change::Kept(text) => Some(text),
+            bravebot_agent::diff::Change::Elided(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for spelled in [
+        "\u{2039}U+202E\u{203a}",
+        "\u{2039}U+200B\u{203a}",
+        "\u{2039}U+E0069 i\u{203a}",
+    ] {
+        assert!(
+            rows.contains(spelled),
+            "{spelled} is not in the rows: {rows}"
+        );
+    }
+    for raw in ['\u{202e}', '\u{200b}', '\u{e0069}'] {
+        assert!(!rows.contains(raw), "{raw:?} was left in a row: {rows}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(scratch.path.join("config.py")).unwrap(),
+        format!("{hidden}\n"),
+        "the file did not get the bytes the processor wrote"
+    );
+}
+
 /// The property the whole arrangement rests on: a processor holds no tools, so a reply that
 /// asks for one is a reply that asks for nothing. Nothing dispatches what a processor says.
 ///

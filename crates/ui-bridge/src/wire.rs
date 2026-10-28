@@ -483,6 +483,10 @@ pub fn write_request(id: u64, request: &WriteRequest) -> Value {
         // What the write does to the file's line terminators, which the changes below cannot
         // show: they are compared without them. Null where both sides end in `\n`.
         "lineEndings": request.line_endings_note(),
+        // How many characters in the lines added or removed draw as nothing, already written out
+        // in `changes`, and the sentence that says so in the catalog's words, or null where none do.
+        "hidden": diff.hidden(),
+        "hiddenNote": bravebot_approval::write_hidden_note(diff.hidden()),
         "existing": request.is_overwrite(),
         "added": diff.added(),
         "removed": diff.removed(),

@@ -1467,6 +1467,7 @@ fn change(request: &WriteRequest) -> Vec<String> {
         written_since_checkout: request.written_since_checkout,
         line_endings: line_endings.as_deref(),
         exact: request.diff.is_exact(),
+        hidden: request.diff.hidden(),
         added: request.diff.added(),
         removed: request.diff.removed(),
         changes: &changes,
@@ -3061,6 +3062,37 @@ mod tests {
         };
         assert!(asked(true).contains("after the checkout was made"));
         assert!(!asked(false).contains("after the checkout was made"));
+    }
+
+    /// PROMPT-13, WRITE-4: the plain question for a write says how many characters of the lines it
+    /// changes draw as nothing, above the rows, and a write with none says nothing of them.
+    #[test]
+    fn the_plain_write_question_says_how_many_characters_draw_as_nothing() {
+        let asked = |body: &str, spelled: bool| {
+            let diff = bravebot_agent::diff::Diff::compute("", body);
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: "out.txt".to_string(),
+                contents: body.to_string(),
+                existing: None,
+                diff: if spelled { diff.spelled() } else { diff },
+                intent: bravebot_agent::confirm::Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+                may_edit: false,
+            })
+            .join("\n")
+        };
+        let said = t!(write_hidden_characters, count = 2usize).to_string();
+        let said = said.split('.').next().unwrap().to_string();
+        let hidden = asked("run(\"ok\") \u{200b}\u{e0069}\n", true);
+        assert!(hidden.contains(&said), "{hidden}");
+        assert!(hidden.contains("\u{2039}U+200B\u{203a}"), "{hidden}");
+        assert!(!asked("plain\n", true).contains(&said));
     }
 
     /// The diff compares lines without their terminators, so an edit that keeps a file's CRLF
