@@ -8057,6 +8057,7 @@ mod tests {
                 settings,
                 &crate::managed::Managed::default(),
                 &crate::keys::Keys::default(),
+                None,
                 |_| None,
                 |key| match key {
                     crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
