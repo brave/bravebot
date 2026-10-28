@@ -1,5 +1,6 @@
 ## Unreleased
 
+ - Added an offer to use an API key exported in the environment. A first run with nothing configured, and `bravebot import-providers`, now offer an entry for `OPENROUTER_API_KEY`, `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` that names the variable and writes no key, and a one-shot refusal names `bravebot auth login import`. A key exported beside `ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` or `OPENAI_API_BASE` is named as left. ([#3439](https://github.com/brave/bravebot/issues/3439))
  - Changed `/sandbox off` to turn the sandbox off as soon as it is typed. It no longer asks first, and while a turn runs it is no longer held until the turn ends. The turn running keeps the mode it began with, and the next turn runs with no profile.
  - Changed the `spawn_processor` description to say that only later `spawn_processor` calls are refused once the conversation holds private content, and that `run`, `read_output` and the file tools keep working. ([#3333](https://github.com/brave/bravebot/issues/3333))
  - Changed `list_files` and `search` to say how many symbolic links they did not enter, as a number with no names, so a directory made only of links no longer lists as empty. `load_skill` names the directory a project skill's link lands on inside the project. ([#3334](https://github.com/brave/bravebot/issues/3334))

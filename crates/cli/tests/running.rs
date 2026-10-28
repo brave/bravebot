@@ -7790,6 +7790,113 @@ fn a_claude_code_anthropic_key_is_importable_and_the_refusal_names_the_command()
     );
 }
 
+/// IMPORT-3, IMPORT-8: a key exported for a service with an endpoint compiled in has something to
+/// import, so the refusal names the command that asks, never shows the key, and writes nothing.
+#[test]
+fn an_exported_key_is_importable_and_the_refusal_names_the_command() {
+    let scratch = Scratch::new("cli-running-import-exported-key");
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[("OPENAI_API_KEY", "sk-proj-exported-nobody-may-see")],
+    ]
+    .concat();
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("An API key for a model service bravebot can use is exported here")
+            && stderr.contains("bravebot auth login import"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("nobody-may-see"),
+        "the key was shown: {stderr}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "a one-shot run wrote settings"
+    );
+}
+
+/// IMPORT-4, IMPORT-8: a key exported beside a host of its own cannot be written at the endpoint
+/// compiled in, so the refusal says it was left, before the routes, by the variable's name and
+/// never its value or the host, and names no command that would only ask nothing.
+#[test]
+fn a_key_exported_beside_a_host_is_said_to_be_left_before_the_routes() {
+    let scratch = Scratch::new("cli-running-import-exported-key-host");
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[
+            ("ANTHROPIC_API_KEY", "sk-ant-exported-nobody-may-see"),
+            ("ANTHROPIC_BASE_URL", "https://proxy.invalid"),
+        ],
+    ]
+    .concat();
+
+    let output = bravebot(&scratch.path, &environment, &["-p", "say something"]);
+
+    let (_, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    let left = stderr
+        .find("ANTHROPIC_API_KEY: a key exported beside a host of its own")
+        .unwrap_or_else(|| panic!("what was left was not said: {stderr}"));
+    let routes = stderr.find("amazon-bedrock").expect("the routes");
+    assert!(left < routes, "{stderr}");
+    for value in ["nobody-may-see", "proxy.invalid"] {
+        assert!(!stderr.contains(value), "{value} was shown: {stderr}");
+    }
+    assert!(!stderr.contains("auth login import"), "{stderr}");
+}
+
+/// IMPORT-1, IMPORT-3, IMPORT-9: a first start with a key exported shows the entry it would write
+/// before it asks, writes the variable and not the key, and then ends in the refusal for a missing
+/// model, since the key names none.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_an_exported_key_offers_an_entry_naming_the_variable() {
+    let scratch = Scratch::new("cli-running-import-exported-key-offered");
+    let environment = [
+        NOTHING_CONFIGURED,
+        &[("OPENAI_API_KEY", "sk-proj-exported-nobody-may-see")],
+    ]
+    .concat();
+
+    let output = in_a_terminal_answering(&scratch.path, &environment, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let entry = transcript
+        .find(
+            r#"provider.openai, reached at https://api.openai.com/v1: {"env":["OPENAI_API_KEY"]}"#,
+        )
+        .unwrap_or_else(|| panic!("the entry was not shown: {transcript}"));
+    let question = transcript
+        .find("Import this from your environment?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    assert!(entry < question, "{transcript}");
+    let written = transcript
+        .find("imported what your environment configured into")
+        .unwrap_or_else(|| panic!("the write was not said: {transcript}"));
+    assert!(question < written, "{transcript}");
+    assert!(
+        transcript.contains("name one of your own with the `model` key"),
+        "{transcript}"
+    );
+    assert!(
+        !transcript.contains("nobody-may-see"),
+        "the key was shown: {transcript}"
+    );
+    let file = std::fs::read_to_string(scratch.settings()).expect("the import was written");
+    assert!(file.contains("OPENAI_API_KEY"), "{file}");
+    assert!(
+        !file.contains("nobody-may-see"),
+        "the key was written: {file}"
+    );
+}
+
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
 /// refusal names the command that does ask.
 #[test]

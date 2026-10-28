@@ -65,7 +65,7 @@ const KNOWN_ENDPOINTS: &[(&str, &str, &str)] = &[
 ///
 /// Named apart from the table because a reply from it is read differently: see
 /// [`Provider::answers_under_the_model_behind_an_alias`].
-const OPENAI_ID: &str = "openai";
+pub(crate) const OPENAI_ID: &str = "openai";
 
 /// The models a chat completions route at OpenAI's own API cannot reach, because they take requests
 /// through the Responses API alone ([BACKEND-19]).

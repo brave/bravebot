@@ -409,6 +409,9 @@ onboarding-import-one =
 # llama-server.
 onboarding-import-running =
     { $source } is running here with models bravebot can use: run `bravebot auth login import` in a terminal to import it.
+# Said where the one source is an API key exported in the environment, which belongs to no program.
+onboarding-import-keys =
+    An API key for a model service bravebot can use is exported here: run `bravebot auth login import` in a terminal to import it.
 onboarding-import-both =
     { $first } and { $second } each have a model service bravebot can use: run `bravebot auth login import` in a terminal to import them.
 onboarding-import-three =
@@ -1033,6 +1036,9 @@ import-found = { $source } configures a model service bravebot can use, in { $fi
 # Where no file was read: the setup is exported rather than written down.
 import-found-exported =
     { $source } configures a model service bravebot can use, in this process's environment.
+# Where the source is a key exported in the environment: no file was read and no program is named.
+import-found-keys =
+    An API key for a model service bravebot can use is exported in this process's environment.
 # Where the source is a server that answered rather than a file: Ollama, LM Studio or llama-server,
 # at the address asked.
 import-found-running = { $source } is running at { $url }, serving models bravebot can use.
@@ -1068,6 +1074,10 @@ import-left-substitution =
     its key is built from an opencode substitution inside a longer value, which bravebot does not make
 import-left-elsewhere = names an address other than this machine's loopback, which is not asked
 import-left-no-tool-model = running there, with no model that can call tools
+import-left-another-host =
+    a key exported beside a host of its own, which is not offered at this service's usual address: add a provider block that states that host and names the variable
+# What the environment is called inside a sentence, as the name of a place the import is read from.
+import-source-environment = your environment
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
 import-key-question =
