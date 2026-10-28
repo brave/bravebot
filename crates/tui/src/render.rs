@@ -378,11 +378,15 @@ pub(crate) fn marked_rows(
                     continue;
                 }
                 // A word wider than the row itself. There is nowhere better to break it, and
-                // dropping the tail would lose bytes the person is being shown on purpose.
-                let (head, tail) = split_at_width(&piece, room);
-                row.push(Span::styled(head, span.style));
-                rows.push(behind(margin, std::mem::take(&mut row)));
-                piece = tail;
+                // dropping the tail would lose bytes the person is being shown on purpose. It is
+                // cut into rows in one pass, since measuring what is left after each cut takes
+                // time that grows with the square of the word.
+                let (heads, tail) = cut_to_width(&piece, room);
+                for head in heads {
+                    row.push(Span::styled(head.to_string(), span.style));
+                    rows.push(behind(margin, std::mem::take(&mut row)));
+                }
+                piece = tail.to_string();
             }
         }
     }
@@ -416,6 +420,37 @@ fn pieces(text: &str) -> Vec<String> {
         out.push(current);
     }
     out
+}
+
+/// `text` cut into rows of at most `width` display columns, each taking at least one grapheme
+/// cluster, and what is left after them.
+///
+/// What is left is the last row when it fits in `width`, so the caller can go on filling it. When
+/// the last row is a single cluster wider than `width` it is one of the rows and nothing is left.
+/// The rows and what is left are what cutting [`split_at_width`] off `text` over and over gives,
+/// found without measuring the remainder each time.
+fn cut_to_width(text: &str, width: usize) -> (Vec<&str>, &str) {
+    let mut rows = Vec::new();
+    // What has not been cut off yet, of which the first `taken` bytes are the row being filled.
+    let mut rest = text;
+    let mut taken = 0usize;
+    let mut used = 0usize;
+    for (bytes, reached) in wrap::clusters(text) {
+        if taken > 0 && used + reached > width {
+            let (row, after) = rest.split_at(taken);
+            rows.push(row);
+            rest = after;
+            taken = 0;
+            used = 0;
+        }
+        used += reached;
+        taken += bytes;
+    }
+    if used > width {
+        rows.push(rest);
+        return (rows, "");
+    }
+    (rows, rest)
 }
 
 /// `text` cut where it reaches `width` display columns, taking at least one grapheme cluster.
@@ -10351,5 +10386,48 @@ mod tests {
         assert_eq!(offered_first, invited_first);
         assert_eq!(offered_rest, invited_rest);
         assert_ne!(offered_first, offered_rest);
+    }
+
+    /// A word wider than the row is laid out in time that grows with its length. Cutting a row
+    /// off it and measuring what is left, over and over, grows with the square of the length: at
+    /// five thousand characters in a one-column row that takes seconds, where this takes
+    /// milliseconds, and a draw lays out the same words again every time it is made. Every row
+    /// keeps the margin and the rows hold the word whole.
+    #[test]
+    fn a_word_far_wider_than_the_row_is_laid_out_in_time_that_grows_with_its_length() {
+        let word = "a".repeat(5_000);
+        let started = std::time::Instant::now();
+        let rows = marked_rows(&Span::raw("┃ "), &[Span::raw(word.clone())], 3);
+        let took = started.elapsed();
+
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "{} characters took {took:?}",
+            word.len()
+        );
+        let drawn: Vec<String> = rows.iter().map(ToString::to_string).collect();
+        assert_eq!(drawn.len(), word.len());
+        assert!(
+            drawn.iter().all(|row| row == "┃ a"),
+            "a row lost its margin"
+        );
+    }
+
+    /// The rows a word is cut into hold a cluster at least each, so a cluster wider than the row
+    /// has a row of its own, and a row fills by columns and not by characters. What is left is
+    /// the last row when it fits, for the words after it to share.
+    #[test]
+    fn a_word_is_cut_into_rows_of_the_width_and_a_wide_cluster_has_a_row_of_its_own() {
+        assert_eq!(cut_to_width("abcdefg", 3), (vec!["abc", "def"], "g"));
+        assert_eq!(cut_to_width("abc", 3), (vec![], "abc"));
+        assert_eq!(cut_to_width("", 3), (vec![], ""));
+        assert_eq!(cut_to_width("漢字漢", 4), (vec!["漢字"], "漢"));
+        assert_eq!(cut_to_width("a漢b", 1), (vec!["a", "漢"], "b"));
+        assert_eq!(cut_to_width("ab漢", 1), (vec!["a", "b", "漢"], ""));
+        assert_eq!(cut_to_width("漢", 1), (vec!["漢"], ""));
+
+        let rows = marked_rows(&Span::raw("┃ "), &[Span::raw("ab漢")], 3);
+        let drawn: Vec<String> = rows.iter().map(ToString::to_string).collect();
+        assert_eq!(drawn, ["┃ a", "┃ b", "┃ 漢", "┃ "]);
     }
 }
