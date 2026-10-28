@@ -33,14 +33,14 @@ pub fn compose(interface: Option<&str>, selected: Option<&Path>) -> Value {
         &settings,
         log.as_deref(),
     );
-    available(text, log.as_deref())
+    available(&text, log.as_deref())
 }
 
 /// The answer for a report that was composed. The log's path is sent only where it is text, and
 /// as null otherwise, so the main process is never handed a path that names another file than the
 /// one found (PATH-002). The report's text still names it as `display` writes it, for a person to
 /// read, as the terminal's report does.
-fn available(text: String, log: Option<&Path>) -> Value {
+fn available(text: &str, log: Option<&Path>) -> Value {
     json!({
         "available": true,
         "text": text,
@@ -118,9 +118,9 @@ mod tests {
     /// The log's path is sent where it is text.
     #[test]
     fn a_log_path_that_is_text_is_sent() {
-        let answer = available(String::new(), Some(Path::new("/h/.bravebot/logs/a.log")));
+        let answer = available("", Some(Path::new("/h/.bravebot/logs/a.log")));
         assert_eq!(answer["log"], "/h/.bravebot/logs/a.log");
-        assert!(available(String::new(), None)["log"].is_null());
+        assert!(available("", None)["log"].is_null());
     }
 
     /// A log path that is not UTF-8 is sent as no log, not as a lossy copy that names another
@@ -130,7 +130,7 @@ mod tests {
     fn a_log_path_that_is_not_text_is_sent_as_no_log() {
         use std::os::unix::ffi::OsStrExt;
         let path = Path::new(std::ffi::OsStr::from_bytes(b"/h/\xff/logs/a.log"));
-        let answer = available("report".into(), Some(path));
+        let answer = available("report", Some(path));
         assert!(answer["log"].is_null());
         assert_eq!(answer["available"], true);
         assert_eq!(answer["text"], "report");
