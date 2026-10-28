@@ -110,7 +110,18 @@ impl SettingsRules {
                 .iter()
                 .map(|reject| Unreadable {
                     rule: reject.text.clone(),
-                    said: bravebot_agent::permissions::describe(reject),
+                    // The sentence quotes the entry and the file it was written in, so both go
+                    // into it spelled for a person (PROMPT-1).
+                    said: bravebot_agent::permissions::describe(
+                        &bravebot_core::permissions::Rejected {
+                            text: bravebot_agent::confirm::shown_text(&reject.text),
+                            reason: reject.reason,
+                            file: reject
+                                .file
+                                .as_deref()
+                                .map(bravebot_agent::confirm::shown_name),
+                        },
+                    ),
                 })
                 .collect(),
             proposed: bravebot_agent::permissions::proposed(settings, profile.as_deref())
@@ -133,12 +144,28 @@ impl SettingsRules {
     ///
     /// Rule text is what a person wrote in a settings file, so none of it is untrusted content.
     pub fn json(&self) -> Value {
+        // Every name a person is shown is sent spelled beside the name as held (PROMPT-1): a rule
+        // as text, a path as the string it was written as, a file as a path. The window draws the
+        // spelled one and decides nothing from either.
+        let spelled_rules = |rules: &[String]| -> Vec<String> {
+            rules
+                .iter()
+                .map(|rule| bravebot_agent::confirm::shown_text(rule))
+                .collect()
+        };
         json!({
             "deny": self.deny,
+            "shownDeny": spelled_rules(&self.deny),
             "ask": self.ask,
+            "shownAsk": spelled_rules(&self.ask),
             "allow": self.allow,
+            "shownAllow": spelled_rules(&self.allow),
             "unreadable": self.unreadable.iter()
-                .map(|entry| json!({ "rule": entry.rule, "said": entry.said }))
+                .map(|entry| json!({
+                    "rule": entry.rule,
+                    "shownRule": bravebot_agent::confirm::shown_text(&entry.rule),
+                    "said": entry.said,
+                }))
                 .collect::<Vec<_>>(),
             "proposed": self.proposed.iter()
                 .map(|entry| json!({
@@ -150,17 +177,26 @@ impl SettingsRules {
                 }))
                 .collect::<Vec<_>>(),
             "directories": self.directories,
+            "shownDirectories": self.directories.iter()
+                .map(|directory| bravebot_agent::confirm::shown_name(directory))
+                .collect::<Vec<_>>(),
             "filesystem": self.filesystem.iter()
                 .map(|entry| json!({
                     "key": entry.key,
                     "path": entry.path,
+                    "shownPath": bravebot_agent::confirm::shown_name(&entry.path),
                     "file": entry.file.as_ref().map(|file| file.display().to_string()),
+                    "shownFile": entry.file.as_ref().map(|file| bravebot_agent::confirm::shown_path(file)),
                     "pinned": entry.pinned,
                     "refused": entry.refused,
                 }))
                 .collect::<Vec<_>>(),
             "filesystemIgnored": self.filesystem_ignored.iter()
-                .map(|(key, file)| json!({ "key": key, "file": file.display().to_string() }))
+                .map(|(key, file)| json!({
+                    "key": key,
+                    "file": file.display().to_string(),
+                    "shownFile": bravebot_agent::confirm::shown_path(file),
+                }))
                 .collect::<Vec<_>>(),
         })
     }
@@ -252,7 +288,7 @@ mod tests {
         assert!(rules.permissions.is_empty());
         assert_eq!(
             rules.json(),
-            json!({ "deny": [], "ask": [], "allow": [], "unreadable": [], "proposed": [], "directories": [], "filesystem": [], "filesystemIgnored": [] })
+            json!({ "deny": [], "shownDeny": [], "ask": [], "shownAsk": [], "allow": [], "shownAllow": [], "unreadable": [], "proposed": [], "directories": [], "shownDirectories": [], "filesystem": [], "filesystemIgnored": [] })
         );
     }
 
@@ -334,6 +370,97 @@ mod tests {
             ]),
             "{json}"
         );
+    }
+
+    /// PROMPT-1: every list the window shows is sent spelled beside the list as held. A rule with a
+    /// zero-width character, a directory or a path with a space at its end and a file whose
+    /// directory ends in a space do not read as the rule, directory, path and file without them, and
+    /// the sentence about an unreadable rule quotes the spelled rule.
+    #[test]
+    fn every_list_the_window_shows_is_sent_spelled_for_a_person() {
+        let rules = SettingsRules {
+            deny: vec!["WebFetch(domain:den\u{200b}ied.test)".to_string()],
+            ask: vec!["WebFetch(domain:as\u{202e}ked.test)".to_string()],
+            allow: vec!["WebFetch(domain:fine.test)".to_string()],
+            unreadable: vec![Unreadable {
+                rule: "Fet\u{200b}chh(x)".to_string(),
+                said: "said".to_string(),
+            }],
+            directories: vec!["../other ".to_string()],
+            filesystem: vec![FilesystemEntry {
+                key: "allowWrite",
+                path: "~/out\u{200b}".to_string(),
+                file: Some(PathBuf::from("/work/proj /.bravebot/settings.json")),
+                pinned: false,
+                refused: None,
+            }],
+            filesystem_ignored: vec![(
+                "allowRead".to_string(),
+                PathBuf::from("/work/proj /.bravebot/settings.json"),
+            )],
+            ..SettingsRules::default()
+        };
+        let json = rules.json();
+        assert_eq!(
+            json["shownDeny"],
+            json!(["\"WebFetch(domain:den\\u{200b}ied.test)\""]),
+            "{json}"
+        );
+        assert_eq!(
+            json["shownAsk"],
+            json!(["\"WebFetch(domain:as\\u{202e}ked.test)\""]),
+            "{json}"
+        );
+        assert_eq!(
+            json["shownAllow"],
+            json!(["WebFetch(domain:fine.test)"]),
+            "{json}"
+        );
+        assert_eq!(
+            json["unreadable"][0]["shownRule"], "\"Fet\\u{200b}chh(x)\"",
+            "{json}"
+        );
+        assert_eq!(
+            json["shownDirectories"],
+            json!(["\"../other\u{2423}\""]),
+            "{json}"
+        );
+        assert_eq!(
+            json["filesystem"][0]["shownPath"], "\"~/out\\u{200b}\"",
+            "{json}"
+        );
+        assert_eq!(
+            json["filesystem"][0]["shownFile"], "\"/work/proj\u{2423}/.bravebot/settings.json\"",
+            "{json}"
+        );
+        assert_eq!(
+            json["filesystemIgnored"][0]["shownFile"],
+            "\"/work/proj\u{2423}/.bravebot/settings.json\"",
+            "{json}"
+        );
+        // The held values are unchanged beside the spelled ones.
+        assert_eq!(
+            json["deny"],
+            json!(["WebFetch(domain:den\u{200b}ied.test)"])
+        );
+        assert_eq!(json["directories"], json!(["../other "]));
+    }
+
+    /// PERM-11: the sentence about an unreadable rule quotes it spelled, so a rule with a zero-width
+    /// character is not quoted as the rule without it.
+    #[test]
+    fn the_sentence_about_an_unreadable_rule_quotes_it_spelled() {
+        let (dir, settings) = layers(
+            Some(r#"{"permissions": {"deny": ["Fet\u200bchh(domain:denied.test)"]}}"#),
+            None,
+        );
+        let rules = SettingsRules::read(&settings, dir.path());
+        let [unreadable] = rules.unreadable.as_slice() else {
+            panic!("{:?}", rules.unreadable);
+        };
+        assert_eq!(unreadable.rule, "Fet\u{200b}chh(domain:denied.test)");
+        assert!(!unreadable.said.contains('\u{200b}'), "{}", unreadable.said);
+        assert!(unreadable.said.contains(r"\u{200b}"), "{}", unreadable.said);
     }
 
     /// `deny` and `ask` rules only narrow, so a checkout's hold as the person's own do.

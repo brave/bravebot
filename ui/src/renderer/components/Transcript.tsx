@@ -1464,7 +1464,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {rules.directories.map((directory, index) => (
               <li key={index}>
-                <code>{directory}</code>
+                <code>{rules.shownDirectories?.[index] ?? directory}</code>
               </li>
             ))}
           </ul>
@@ -1479,7 +1479,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {refused.map((entry, index) => (
               <li key={index}>
-                <code>{entry.key}</code> <code>{entry.path}</code>: {entry.refused}
+                <code>{entry.key}</code> <code>{entry.shownPath ?? entry.path}</code>: {entry.refused}
               </li>
             ))}
           </ul>
@@ -1491,7 +1491,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {ignored.map((entry, index) => (
               <li key={index}>
-                <code>{entry.key}</code> in <code>{entry.file}</code>
+                <code>{entry.key}</code> in <code>{entry.shownFile ?? entry.file}</code>
               </li>
             ))}
           </ul>

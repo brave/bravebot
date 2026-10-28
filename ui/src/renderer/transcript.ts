@@ -297,8 +297,11 @@ export const askedFetch = (request: FetchRequest): Entry => ({ kind: 'fetch', id
 export const askedServer = (request: ServerRequest): Entry => ({ kind: 'server', id: nextId(), request, decision: null })
 export const askedManifest = (request: ManifestRequest, unheld: string[] = []): Entry => ({ kind: 'manifest', id: nextId(), request, decision: null, unheld })
 
-/** The rules that narrow what a session does, which a manifest run is not held to. */
-export const narrowing = (rules: SettingsRules | null | undefined): string[] => [...(rules?.deny ?? []), ...(rules?.ask ?? [])]
+/** The rules that narrow what a session does, which a manifest run is not held to, spelled for a person (PROMPT-1). */
+export const narrowing = (rules: SettingsRules | null | undefined): string[] => [
+  ...(rules?.shownDeny ?? rules?.deny ?? []),
+  ...(rules?.shownAsk ?? rules?.ask ?? []),
+]
 
 /** Whether a settings file wrote something that is not in force, which the person is told. */
 export const notInForce = (rules: SettingsRules | null | undefined): boolean =>

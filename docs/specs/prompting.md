@@ -119,7 +119,11 @@ desktop window's Context panel, which draw the name the bridge sent for the file
 as written, and the target a call carries to a program or is matched on is the name as held. The
 notes said before the first prompt about an allow rule a checkout proposed, whether it was granted
 before or is not granted, draw the rule as a rule is drawn and the settings file and the record a yes
-is kept in as paths. A name that is
+is kept in as paths. The desktop window's lists of the rules in force, of the entries that are not
+rules, of the directories a settings file named, of the `sandbox.filesystem` paths and of the files
+that wrote them draw the spelled fields the bridge sends beside each (`shownDeny`, `shownAsk`,
+`shownAllow`, `shownRule`, `shownDirectories`, `shownPath`, `shownFile`) and never the value as
+held, and the sentence about an entry that is not a rule quotes the entry spelled. A name that is
 empty, is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
 selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
@@ -216,6 +220,9 @@ bound to the arguments as held.
 `verified-by: bravebot_ui_bridge::opening_tests::the_response_opening_a_session_carries_the_directory_and_the_record_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::opening_tests::a_kept_answer_carries_its_file_and_its_root_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::rules::a_proposed_rule_and_its_file_are_reported_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::rules::every_list_the_window_shows_is_sent_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::rules::the_sentence_about_an_unreadable_rule_quotes_it_spelled`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/settings-rules.test.mjs renders the rules in force, the filesystem lists, the rules banner and the manifest card's list of rules through react-dom/server and asserts each draws the spelled field and not the value as held, and make check-ui runs it)`
 `verified-by: by-construction (the mobile app is not a crate this workspace compiles; mobile/src/__tests__/approvals.test.tsx and transcript.test.tsx render the write, run and trust cards, the waiting-write line and a call's line through react-test-renderer and assert each draws the path the bridge spelled and not the path as held, mobile/src/__tests__/calls.test.ts asserts the list of calls does the same, mobile/src/__tests__/payloads.test.ts asserts a request without the spelled fields is not offered, and make check-mobile runs them)`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
