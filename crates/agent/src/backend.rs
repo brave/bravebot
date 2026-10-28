@@ -1341,8 +1341,12 @@ impl<'a> Backend<'a> {
                 egress,
                 cancel,
             } => {
-                let mut client = bedrock_client(config, egress, cancel.as_ref());
-                counted!(client, client.complete_streaming(policy, request, progress))
+                // What an earlier session found the model to refuse is put back before the first
+                // stream, and what this one found is kept after it (BACKEND-63).
+                crate::bedrock_refusals::around(&request.model, || {
+                    let mut client = bedrock_client(config, egress, cancel.as_ref());
+                    counted!(client, client.complete_streaming(policy, request, progress))
+                })
             }
             Self::Gateway {
                 config,

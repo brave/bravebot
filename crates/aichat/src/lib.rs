@@ -1428,7 +1428,8 @@ pub struct Refusals {
     /// It will not take a streamed request that asks to show thinking as it happens.
     ///
     /// Learned by the Bedrock client alone. A model wanting to be told whether to think refuses the
-    /// ask, since the ask says only how.
+    /// ask, since the ask says only how. The one field an earlier process may have found out: the
+    /// agent keeps it for later sessions ([BACKEND-63](../../../docs/specs/backends.md#BACKEND-63)).
     pub thinking_shown: bool,
 }
 
