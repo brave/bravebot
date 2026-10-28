@@ -258,11 +258,36 @@ impl Acp {
             .and_then(Value::as_str)
             .filter(|cwd| Path::new(cwd).is_absolute())
             .ok_or((INVALID_PARAMS, "`cwd` must be an absolute path".to_string()))?;
+        let mut session_params = json!({ "directory": cwd });
+        // Opened the way `--add-dir` opens one (ACP-9): reachable, and vouched for by nobody. An
+        // editor's own workspace roots, never a file in the checkout, so there is nothing here to
+        // read before the list is passed on. An entry that is not an absolute path to an existing
+        // directory is refused, as a link `session/new` cannot carry is (ACP-2).
+        if let Some(listed) = params.get("additionalDirectories") {
+            let directories = listed
+                .as_array()
+                .ok_or((
+                    INVALID_PARAMS,
+                    "`additionalDirectories` must be a list of strings".to_string(),
+                ))?
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|path| Path::new(path).is_absolute())
+                        .map(str::to_string)
+                        .ok_or((
+                            INVALID_PARAMS,
+                            "every entry of `additionalDirectories` must be an absolute path"
+                                .to_string(),
+                        ))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            session_params["directories"] = json!(directories);
+        }
         // Servers the editor lists are not started: a server is declared in a person's own
         // directory and asked about before it starts, and an editor's list is neither.
-        let made = self
-            .call("session.new", json!({ "directory": cwd }))
-            .map_err(failed)?;
+        let made = self.call("session.new", session_params).map_err(failed)?;
         let handle = made["session"].as_str().unwrap_or_default().to_string();
         let mut shared = self.lock();
         shared.sessions.insert(
@@ -436,6 +461,7 @@ fn initialized() -> Value {
             "loadSession": false,
             "promptCapabilities": { "image": true, "audio": false, "embeddedContext": false },
             "mcpCapabilities": { "http": false, "sse": false },
+            "sessionCapabilities": { "additionalDirectories": {} },
         },
         "agentInfo": {
             "name": "bravebot",

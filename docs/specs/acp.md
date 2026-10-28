@@ -164,6 +164,27 @@ question reaches the editor is [MODE-2](permission-modes.md#MODE-2) for acceptin
 
 `verified-by: bravebot_ui_bridge::acp::an_editor_selects_three_modes_and_bypass_is_refused`
 
+<a id="ACP-9"></a>
+### ACP-9: `additionalDirectories` is advertised and opened like `--add-dir`
+
+The agent advertises `agentCapabilities.sessionCapabilities.additionalDirectories` as an empty
+object, so an editor with several workspace roots may send every one of them and not only the
+`cwd` it names as the session's directory. An editor sends the rest as `session/new`'s
+`additionalDirectories`, a list of absolute paths; each is opened the way `--add-dir` opens one
+([CLI-11](cli.md#CLI-11)): reachable for the rest of the session, and vouched for by nobody, so
+the trust question answers for `cwd` alone ([ACP-5](#ACP-5)) and a write anywhere in the rest is
+still asked about as a write outside `cwd` is asked about elsewhere. An entry that is not an
+absolute path to an existing directory refuses the whole request with invalid parameters before
+a session starts, as a link `session/new` cannot carry is refused ([ACP-2](#ACP-2)), rather than
+opening a session with some of the list silently missing. The list comes only from what the
+editor sent; nothing in the checkout is read to make it or to add to it.
+
+`verified-by: bravebot_ui_bridge::acp::the_agent_advertises_what_it_carries_and_nothing_more`
+`verified-by: bravebot_ui_bridge::acp::additional_directories_are_opened_like_add_dir`
+`verified-by: bravebot_ui_bridge::acp::additional_directories_refuses_an_entry_it_cannot_open`
+`verified-by: bravebot_ui_bridge::bridge::session_new_opens_every_directory_it_is_given`
+`verified-by: bravebot_ui_bridge::bridge::session_new_refuses_a_directory_that_does_not_exist`
+
 <a id="ACP-8"></a>
 ### ACP-8: a prompt whose turn failed ends saying the account's sentence where the account failed
 
