@@ -1,11 +1,11 @@
 // The bug report's main-process half (DIAG-9): a save writes what the bridge composed and nothing
-// the window said, readable by its owner alone; a page is opened by name; the log is shown only
-// where it is a log.
+// the window said, readable by its owner alone at every moment; a page is opened by name; the log
+// the bridge names is shown only where it is a plain file.
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { buildSync } from 'esbuild'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -53,7 +53,11 @@ test('compose states the app\'s own version as the interface and reads only the 
   assert.deepEqual(asked, [{ method: 'bug-report.compose', params: { interface: '0.9.1' } }])
   assert.equal((await main.compose(async () => { throw new Error('gone') })).available, false)
   assert.equal(main.parseComposed({ available: true, text: 3 }).available, false)
-  assert.equal(main.parseComposed({ available: true, text: 'x', log: '/etc/passwd' }).log, null, 'a log path that is not a log is dropped')
+  assert.equal(main.parseComposed({ available: true, text: 'x', log: 7 }).log, null, 'a log that is not a path is none')
+  assert.equal(main.parseComposed({ available: true, text: 'x', log: null }).log, null, 'nor is the null the bridge sends for a path that is not text')
+  // Which file is a log is the bridge's rule (SHARE-001), so this module has no copy of it.
+  assert.equal(main.isLogPath, undefined)
+  assert.doesNotMatch(readFileSync('src/main/bug-report.ts', 'utf8'), /\\\.log|'logs'/)
 })
 
 test('a save writes the bridge\'s text, owner-only, even over a file that was readable by others', async (t) => {
@@ -61,6 +65,7 @@ test('a save writes the bridge\'s text, owner-only, even over a file that was re
   const target = join(dir, 'report.txt')
   writeFileSync(target, 'old')
   chmodSync(target, 0o644)
+  const before = statSync(target).ino
   const { main, seen } = load({ saveTo: target, documents: dir })
   const { ask, asked } = bridge({ available: true, text: 'composed by the bridge\n', log: null })
   // The window cannot hand text in: the function takes a window and a bridge and nothing else.
@@ -68,8 +73,25 @@ test('a save writes the bridge\'s text, owner-only, even over a file that was re
   assert.deepEqual(await main.save({}, ask), { status: 'saved', where: target })
   assert.equal(readFileSync(target, 'utf8'), 'composed by the bridge\n')
   if (process.platform !== 'win32') assert.equal(statSync(target).mode & 0o777, 0o600)
+  // The report went into a new owner-only file renamed over the old one, so the old file, readable
+  // by others, never held it, and nothing is left beside it.
+  if (process.platform !== 'win32') assert.notEqual(statSync(target).ino, before, 'the readable file was written in place')
+  assert.deepEqual(readdirSync(dir), ['report.txt'])
   assert.equal(asked.length, 1, 'composed again after the sheet closed')
   assert.equal(seen.sheets[0].defaultPath, join(dir, 'bravebot-bug-report.txt'))
+})
+
+test('a save that cannot be written fails and leaves no file behind', async (t) => {
+  const dir = scratch(t)
+  // A directory where the file would be: the rename fails, and the new file is taken away again.
+  const target = join(dir, 'report.txt')
+  mkdirSync(target)
+  writeFileSync(join(target, 'inside'), '')
+  const { main } = load({ saveTo: target, documents: dir })
+  const outcome = await main.save({}, bridge({ available: true, text: 'x', log: null }).ask)
+  assert.equal(outcome.status, 'failed')
+  assert.match(outcome.message, /could not be saved/)
+  assert.deepEqual(readdirSync(dir), ['report.txt'])
 })
 
 test('a cancelled sheet writes nothing, and a session that keeps nothing fails', async (t) => {
@@ -107,17 +129,12 @@ test('only the two named pages open, at their literal URLs', () => {
   ])
 })
 
-test('the log is shown only where it is a plain file named as a log in a logs directory', async (t) => {
+test('the log the bridge names is shown only where it is still a plain file', async (t) => {
   const dir = scratch(t)
   const logs = join(dir, 'logs')
   mkdirSync(logs)
   const log = join(logs, '20261027T101500Z-4242.log')
   writeFileSync(log, 'line\n')
-  assert.equal(load().main.isLogPath(log), true)
-  for (const bad of ['logs/20261027T101500Z-4242.log', join(dir, '20261027T101500Z-4242.log'),
-    join(logs, 'notes.txt'), join(logs, '20261027T101500Z-4242.log.sh'), '/etc/passwd']) {
-    assert.equal(load().main.isLogPath(bad), false, bad)
-  }
 
   const { main, seen } = load()
   assert.equal(await main.showLog(bridge({ available: true, text: 'x', log }).ask), true)
@@ -128,7 +145,7 @@ test('the log is shown only where it is a plain file named as a log in a logs di
   const absent = join(logs, '20261027T101700Z-4244.log')
   const other = join(logs, '20261027T101800Z-4245.log')
   mkdirSync(other)
-  for (const path of [linked, absent, other, '/etc/hosts']) {
+  for (const path of [linked, absent, other, 'logs/20261027T101500Z-4242.log']) {
     const { main: again, seen: none } = load()
     assert.equal(await again.showLog(bridge({ available: true, text: 'x', log: path }).ask), false, path)
     assert.deepEqual(none.shown, [])

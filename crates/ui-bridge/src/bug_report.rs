@@ -33,10 +33,18 @@ pub fn compose(interface: Option<&str>, selected: Option<&Path>) -> Value {
         &settings,
         log.as_deref(),
     );
+    available(text, log.as_deref())
+}
+
+/// The answer for a report that was composed. The log's path is sent only where it is text, and
+/// as null otherwise, so the main process is never handed a path that names another file than the
+/// one found (PATH-002). The report's text still names it as `display` writes it, for a person to
+/// read, as the terminal's report does.
+fn available(text: String, log: Option<&Path>) -> Value {
     json!({
         "available": true,
         "text": text,
-        "log": log.map(|path| path.display().to_string()),
+        "log": log.and_then(Path::to_str),
     })
 }
 
@@ -58,8 +66,9 @@ fn text(
     )
 }
 
-/// Whether `text` is a version's shape: letters, digits, dots, dashes and pluses, and short.
-fn is_version(text: &str) -> bool {
+/// Whether `text` is a version's shape: letters, digits, dots, dashes and pluses, and short. The
+/// header's interface version and the running version `update.status` sends are both held to it.
+pub(crate) fn is_version(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= VERSION_LIMIT
         && text
@@ -104,5 +113,26 @@ mod tests {
         ] {
             assert!(!is_version(odd), "{odd:?}");
         }
+    }
+
+    /// The log's path is sent where it is text.
+    #[test]
+    fn a_log_path_that_is_text_is_sent() {
+        let answer = available(String::new(), Some(Path::new("/h/.bravebot/logs/a.log")));
+        assert_eq!(answer["log"], "/h/.bravebot/logs/a.log");
+        assert!(available(String::new(), None)["log"].is_null());
+    }
+
+    /// A log path that is not UTF-8 is sent as no log, not as a lossy copy that names another
+    /// file (PATH-002).
+    #[cfg(unix)]
+    #[test]
+    fn a_log_path_that_is_not_text_is_sent_as_no_log() {
+        use std::os::unix::ffi::OsStrExt;
+        let path = Path::new(std::ffi::OsStr::from_bytes(b"/h/\xff/logs/a.log"));
+        let answer = available("report".into(), Some(path));
+        assert!(answer["log"].is_null());
+        assert_eq!(answer["available"], true);
+        assert_eq!(answer["text"], "report");
     }
 }

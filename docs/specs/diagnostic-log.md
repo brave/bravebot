@@ -201,11 +201,13 @@ place of `doctor`'s output, and the path of the newest log, taken from the file 
 anything else the request does. The interface version is written only where it is a version's
 shape, and as `unknown` otherwise. Above the preview a note says what the text names and what it
 holds none of. Save Report… writes it where the person chooses, `bravebot-bug-report.txt` in
-Documents by default, readable by its owner alone, and the main process asks the agent for the text
+Documents by default, readable by its owner alone at every moment of the write: it goes to a new
+owner-only file beside the one chosen, renamed over it. The main process asks the agent for the text
 again rather than taking the window's copy. Copy puts it on the clipboard. Open an Issue opens the
-repository's new issue page, a literal with nothing in its query. Show Log reveals the named log in
-the file manager, only where the main process finds the path is a plain file with a log's name
-directly in a `logs` directory, and never opens it.
+repository's new issue page, a literal with nothing in its query. `bug-report.compose` names the
+log's path only where it is text, and no log otherwise; which file is the newest log is the agent's
+rule alone. Show Log reveals that log in the file manager, only where the main process finds the
+path is still a plain file, and never opens it.
 An incognito session, or a machine with no home, is told a report is not available, and nothing is
 offered to save. It holds nothing the terminal's file holds none of, and not the agent's standard
 error either.
@@ -217,15 +219,22 @@ DIAG-8 cost, a file to read before posting, something a person sees before savin
 after. Asking the agent again at save time means the renderer cannot choose what is written. An
 issue page with a body in its address would put the report in browser history and server logs
 before the person read it. The agent's standard error carries notices, refusals and panic messages
-that hold none of DIAG-1's discipline.
+that hold none of DIAG-1's discipline. Writing in place and then narrowing the mode would leave the
+report readable by others in between, where the file chosen was. A path converted lossily would
+name a file other than the one found, and a second copy of the rule for a log's name in the main
+process is one to keep in step with the agent's.
 
 **Known costs.** The settings report names paths, model services and credential states by kind,
 so the note asks the person to read it before posting. The report is shown, saved and posted by
-hand: nothing sends it.
+hand: nothing sends it. A state directory whose path is not text offers no Show Log, though the
+report's text still names the log as the system prints it. Saving over a file replaces it, so a
+link at the chosen path is replaced rather than written through.
 
 `verified-by: bravebot_ui_bridge::bug_report::the_desktop_report_names_both_versions_the_settings_report_and_the_log`
 `verified-by: bravebot_ui_bridge::bug_report::an_interface_version_of_another_shape_is_not_written`
 `verified-by: bravebot_ui_bridge::bug_report::the_report_names_the_build_the_settings_file_and_the_log_and_holds_neither`
 `verified-by: bravebot_ui_bridge::bug_report::an_interface_version_of_another_shape_is_unknown_and_no_log_is_none`
+`verified-by: bravebot_ui_bridge::bug_report::a_log_path_that_is_text_is_sent`
+`verified-by: bravebot_ui_bridge::bug_report::a_log_path_that_is_not_text_is_sent_as_no_log`
 `verified-by: bravebot_ui_bridge::no_state_directory::with_no_state_directory_there_is_no_bug_report_and_no_update_record`
-`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/bug-report.test.mjs pins the window's half: compose states the app's own version as the interface, a save composes again after the sheet closes and writes that text with mode 0600 even over a file that was 0644, a cancelled sheet writes nothing and an unavailable report fails, only the two named pages open and at their literal URLs, the log is shown only where it is a plain file with a log's name in a logs directory and never through a link, the modal carries the privacy note and hands the main process no text, URL or path, and bug-report.compose is not on the window's allow-list; make check-ui runs it, and the governs list above holds the files to existing)`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/bug-report.test.mjs pins the window's half: compose states the app's own version as the interface and holds no rule for a log's name, a save composes again after the sheet closes and writes that text with mode 0600 into a new file renamed over one that was 0644, leaving nothing beside it, and a save that cannot be written fails and leaves no file, a cancelled sheet writes nothing and an unavailable report fails, only the two named pages open and at their literal URLs, the log is shown only where it is still a plain file and never through a link, a directory or a relative path, the modal carries the privacy note and hands the main process no text, URL or path, and bug-report.compose is not on the window's allow-list; make check-ui runs it, and the governs list above holds the files to existing)`
