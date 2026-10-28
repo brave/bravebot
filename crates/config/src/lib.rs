@@ -1562,10 +1562,14 @@ impl Config {
 
         // A premium host that is present but malformed is dropped rather than rejected: it only
         // matters to someone who has imported a subscription, and failing every run over it would
-        // punish everyone else.
+        // punish everyone else. A query or a fragment makes it malformed: a transport ends the host
+        // at the first `/`, `?` or `#`, so the text after either is not part of the host although a
+        // suffix test on the whole value reads it as one, and the request path is appended to a base
+        // that has either, which puts it inside the query or the fragment.
         let premium_endpoint = lookup(env_var::PREMIUM_ENDPOINT)
             .map(|value| value.trim().to_string())
             .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
+            .filter(|value| !value.contains(['?', '#']))
             .map(|value| value.trim_end_matches('/').to_string());
 
         // Nonsense falls back to the default rather than disabling compaction, which is what a
@@ -5569,6 +5573,46 @@ mod tests {
             .unwrap();
             assert_eq!(config.premium_endpoint, None, "accepted '{value}'");
         }
+    }
+
+    /// PREM-2: a premium endpoint is a base the request path is appended to, so a query or a
+    /// fragment is never part of a base. A transport ends the host at the first `/`, `?` or `#`, so
+    /// `https://attacker.example#.brave.com` names `attacker.example` while its text ends with a
+    /// Brave suffix. The value is dropped here, as a schemeless one is, so the URL requests are sent
+    /// to and the host the credential is judged by are read from a string that cannot be split two
+    /// ways.
+    #[test]
+    fn a_premium_endpoint_with_a_query_or_a_fragment_is_discarded() {
+        for value in [
+            "https://attacker.example#.brave.com",
+            "https://attacker.example?.brave.com",
+            "https://attacker.example:8443#.brave.com",
+            "https://ai-chat-premium.bsg.brave.com?x=1",
+            "https://ai-chat-premium.bsg.brave.com/v1#x",
+        ] {
+            let config = Config::from_lookup(|k| match k {
+                env_var::PREMIUM_ENDPOINT => Some(value.into()),
+                other => complete_env(other),
+            })
+            .unwrap();
+            assert_eq!(config.premium_endpoint, None, "accepted '{value}'");
+            assert_eq!(config.premium_chat_completions_url(), None, "{value}");
+        }
+    }
+
+    /// The drop above is for the two shapes that split a host two ways. A port and a path in a
+    /// base are ordinary, and a premium host behind a gateway path still has to work.
+    #[test]
+    fn a_premium_endpoint_with_a_port_and_a_path_is_kept() {
+        let config = Config::from_lookup(|k| match k {
+            env_var::PREMIUM_ENDPOINT => Some("https://premium.invalid:8443/gateway/".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert_eq!(
+            config.premium_chat_completions_url().as_deref(),
+            Some("https://premium.invalid:8443/gateway/v1/chat/completions")
+        );
     }
 
     #[test]
