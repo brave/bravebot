@@ -13503,6 +13503,11 @@ mod tests {
 
         offer_advisor(&mut offered);
         offer_tool_loader(&mut offered, &["server:tool".to_string()]);
+        offer_message_session(&mut offered);
+        offer_propose_plan(&mut offered);
+        offer_remember(&mut offered);
+        offer_propose_rule(&mut offered);
+        offer_recall(&mut offered);
 
         for tool in offered {
             let name = &tool.function.name;
@@ -13511,6 +13516,8 @@ mod tests {
                 parameters["properties"][WHY]["type"], "string",
                 "{name} does not ask why it is being called"
             );
+            // An array, so a tool that states no arguments of its own does not send `null`, which
+            // Bedrock refuses as a schema for the whole request.
             assert!(
                 parameters["required"]
                     .as_array()
