@@ -362,7 +362,7 @@ answers where no file names one, above the build.
 
 A choice recorded with `/model` ranks as the person's own file, `~/.bravebot/settings.json`, does.
 It outranks the `model` key in that file, is outranked by one in the file `--settings` named
-([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act),
+([BACKEND-24](#BACKEND-24) reads that file after all three, and naming it is the person's own act when the file is not inside the checkout),
 and a checkout's `.bravebot/settings.json` or `.bravebot/settings.local.json` cannot name a model at
 all. A key spelled blank, or as something other than a string, names nothing and does not outrank a
 pick. It still displaces the key a lower file named, so with nothing recorded the exported variable
@@ -1278,7 +1278,7 @@ every file that was found. The flag that names one, and the path it refuses, are
 |---|---|
 | `env`, `keybindings`, `search` | per name, one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, every list under `permissions`, `mcp.request` | every layer's entries are kept |
-| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `attribution` | home layer, and the file `--settings` names; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
+| `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `attribution` | home layer, and a file `--settings` names that is not inside the checkout; a project or local layer naming any of them is ignored, and the file is reported as one whose naming was dropped |
 | anything else | the closest layer that set it wins |
 
 A layer that spells `permissions` or `run` as something other than an object, or `run.scrubEnv` or
@@ -1303,8 +1303,11 @@ decide, and the credential value comes from the person's own environment under n
 choose. A `headers` block is inside `provider`, so dropping the block drops it
 ([BACKEND-60](#BACKEND-60)). A project or
 local layer naming one is dropped whole and reported, so the destination of every request stays
-something the person's own files or command line named. The file `--settings` names is the person's
-own act and is read.
+something the person's own files or command line named. A file `--settings` names is the person's
+own act and is read only when it is not inside the checkout, as [BACKEND-33](#BACKEND-33) reads the network names: a
+file that resolves inside the workspace or the directory the session started in is the checkout's, whoever typed the
+flag, because a README or a CI workflow can pass it. That includes `.bravebot/settings.json` itself. Such a file is
+dropped whole for these names and reported as a project layer is.
 
 `attribution` is the exception for the reason [BACKEND-30](#BACKEND-30) gives: its free text reaches
 the planner on every round, so a project or local layer carrying one is dropped whole and reported.
@@ -1362,6 +1365,7 @@ with it.
 `verified-by: bravebot_config::settings::a_project_layer_cannot_smuggle_a_provider_env_name`
 `verified-by: bravebot_config::settings::a_project_layer_cannot_pick_a_model`
 `verified-by: bravebot_config::settings::a_project_model_leaves_the_default_in_force`
+`verified-by: bravebot_config::settings::a_named_file_inside_the_workspace_cannot_pick_a_backend`
 `verified-by: bravebot_config::settings::a_layer_above_the_home_one_does_not_pick_a_model`
 `verified-by: bravebot_config::settings::a_layer_above_that_names_nothing_does_not_outrank_a_saved_pick`
 `verified-by: bravebot_cli::running::doctor_says_a_checkouts_provider_block_is_not_obeyed`
@@ -1627,7 +1631,7 @@ nothing is carried; unset leaves the decision with whoever writes the commit, an
 would make a file that mentions the block at all speak for names it never named.
 
 **Only the person's own files may write the block.** It is read from the home file and from the
-file `--settings` names, and removed from the project and local layers before the merge, each file
+file `--settings` names that is not inside the checkout, and removed from the project and local layers before the merge, each file
 that wrote one being reported. The string reaches the planner on every round, and untrusted bytes
 never enter that context: a checkout arrives with whatever produced it, and nobody vouched for what
 it says. [references.md](references.md) refuses `references` from a checkout for the same reason. A
@@ -3185,7 +3189,7 @@ strict one, refuses the request, and a conversation can change service between t
 ### BACKEND-53: a turn whose model keeps failing moves to the fallback model a person named
 
 The `fallbackModel` setting holds one model name. It is read from the person's own settings file and
-from the file `--settings` names, and from no project or local layer ([BACKEND-24](#BACKEND-24)):
+from the file `--settings` names from outside the checkout, and from no project or local layer ([BACKEND-24](#BACKEND-24)):
 a layer that names it is dropped and `doctor` names the file. A tier word in it resolves as it does
 for `model`. A model the managed layer refuses ([BACKEND-48](#BACKEND-48)) is not a fallback.
 
@@ -3343,7 +3347,7 @@ no say in either.
 ### BACKEND-56: a turn that begins in plan mode runs on the model a person named for planning
 
 The `planModel` setting holds one model name. It is read from the person's own settings file and
-from the file `--settings` names, and from no project or local layer ([BACKEND-24](#BACKEND-24)): a
+from the file `--settings` names from outside the checkout, and from no project or local layer ([BACKEND-24](#BACKEND-24)): a
 layer that names it is dropped and `doctor` names the file. A tier word in it resolves as it does
 for `model` ([BACKEND-12](#BACKEND-12)).
 

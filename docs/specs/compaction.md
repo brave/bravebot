@@ -358,7 +358,7 @@ again, as in COMPACT-8.
 
 `summaryModel` holds one model name. The summariser runs on it, and on the session's own model
 where the key names nothing. A tier word in it resolves as it does for `model`. The key is read from
-`~/.bravebot/settings.json` and from the file `--settings` names, and from no project or local layer
+`~/.bravebot/settings.json` and from the file `--settings` names from outside the checkout, and from no project or local layer
 ([BACKEND-24](backends.md#BACKEND-24)): the model it names is sent the conversation, which makes it
 a destination, so a layer that names it is dropped and `doctor` names the file.
 

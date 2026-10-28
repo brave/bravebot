@@ -735,7 +735,8 @@ fn bridge_handoff(ending: &str) {
         ],
         None,
     );
-    let settings = root.join("test-settings.json");
+    // Beside the workspace and not in it: a file inside it may not pick the backend (BACKEND-24).
+    let settings = root.with_extension("test-settings.json");
     std::fs::write(
         &settings,
         json!({"model":"undo-test/test", "provider": {"undo-test": {

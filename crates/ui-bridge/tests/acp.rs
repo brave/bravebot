@@ -48,7 +48,8 @@ impl Editor {
         settings["provider"] = json!({"acp-test": {
             "options": {"baseURL": endpoint}, "models": {"test": {}}
         }});
-        let settings_file = project.join("test-settings.json");
+        // Beside the workspace and not in it: a file inside it may not pick the backend (BACKEND-24).
+        let settings_file = project.with_extension("test-settings.json");
         std::fs::write(&settings_file, settings.to_string()).unwrap();
         let settings = settings_file;
         let (sent, written) = mpsc::channel();

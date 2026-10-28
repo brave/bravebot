@@ -89,7 +89,8 @@ fn project(name: &str) -> PathBuf {
 
 /// The settings that point the agent at the scripted model service.
 fn settings_for(endpoint: &str, directory: &Path) -> PathBuf {
-    let settings = directory.join("test-settings.json");
+    // Beside the workspace and not in it: a file inside it may not pick the backend (BACKEND-24).
+    let settings = directory.with_extension("test-settings.json");
     std::fs::write(
         &settings,
         json!({"model": "hooks-test/test", "provider": {"hooks-test": {

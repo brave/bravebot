@@ -256,7 +256,7 @@ vetting and compaction, are not affected: compaction and goal checks have `summa
 ([COMPACT-15](compaction.md#COMPACT-15)).
 
 The name is configuration, not content. It is read from the person's own settings file and from the
-file `--settings` names, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
+file `--settings` names from outside the checkout, and from no project or local layer ([BACKEND-24](backends.md#BACKEND-24)):
 a layer that names it is dropped and `doctor` names the file. No tool argument, planner word or
 file content chooses it, so the destination of a processor's input stays the one the person
 configured. `--processor-model` ([CLI-34](cli.md#CLI-34)) names it for one run from the person's own

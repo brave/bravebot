@@ -110,7 +110,7 @@ refuse is not asked, whichever route named it, and the planner is told to carry 
 
 `advisorModel` in the settings names the model the `advisor` tool asks, in the words `--advisor`
 takes, tier words included. `--advisor` outranks it for the run it is given to. The key is read
-from `~/.bravebot/settings.json` and from the file `--settings` names, as `model` is
+from `~/.bravebot/settings.json` and from a file `--settings` names from outside the checkout, as `model` is
 ([BACKEND-24](../backends.md#BACKEND-24)); a project or local file that sets it is not obeyed, and
 `doctor` and the desktop settings report name the file. A delegate is not offered the tool
 whatever the setting says. A model the setting names that the machine refuses or nothing serves is

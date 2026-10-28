@@ -33,7 +33,8 @@ struct Window {
 impl Window {
     /// A bridge whose model is the scripted endpoint, on a project the person trusted.
     fn on(project: &Path, endpoint: &str) -> (Self, String) {
-        let settings = project.join("test-settings.json");
+        // Beside the workspace and not in it: a file inside it may not pick the backend (BACKEND-24).
+        let settings = project.with_extension("test-settings.json");
         std::fs::write(
             &settings,
             json!({"model": "attach-test/test", "provider": {"attach-test": {
