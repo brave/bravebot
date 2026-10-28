@@ -67,7 +67,6 @@ pub struct Entry {
     /// Workspace-relative, with a trailing slash for a directory so it reads as one. A
     /// definition's name for a [`Kind::Definition`] row.
     pub path: String,
-    /// What the row is.
     pub kind: Kind,
     /// Whether it is a directory, which completes to a path that can be typed further.
     pub is_directory: bool,
