@@ -1063,6 +1063,11 @@ The desktop picker draws the rows it is sent and groups them by the provider eac
 so the account's rows reach it as they are: the failure card is the one place the window names a service, and
 [XAI-15](#XAI-15) says what it shows there.
 
+The desktop picker opens before its listing arrives. The menu is drawn, its search field is focused and a line says
+the models are loading, and the only row is the model already in force. What is typed meanwhile narrows the rows when
+they arrive, and Enter chooses nothing until they have. The listing is one request answered when every endpoint has
+answered, so the rows arrive together.
+
 **Why.** None is offered without a sign-in, for the reason [XAI-14](#XAI-14) gives for offering only what the listing
 shows, and a roster that could not be had is said where it is missed and not guessed at from one account's listing
 on one day. Both pickers ask
@@ -1083,7 +1088,7 @@ a turn on one of the account's models, which is the one place a person has agree
 `verified-by: bravebot_ui_bridge::models::a_turn_in_the_window_asks_the_xai_account_only_for_one_of_its_own_models`
 `verified-by: bravebot_ui_bridge::models::the_models_list_asks_the_xai_account_whatever_model_is_configured`
 `verified-by: bravebot_ui_bridge::account_words::the_xai_pickers_warning_is_one_sentence_naming_the_sign_in_and_nothing_is_said_where_nothing_failed`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, and ui/scripts/drive-models.mjs opens the real picker against a model list with one warning and the command it names; the rows are drawn from the fields the bridge sends, grouped by the provider they name, in ui/src/renderer/components/ModelPicker.tsx, which holds no service's name; make check-ui runs them)`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/marking.test.mjs draws the picker's warnings and holds that the command a warning names is drawn as code and the rest as text, and ui/scripts/drive-models.mjs opens the real picker against a model list held back, to hold that the menu, the loading line and the focused search field are drawn before the list arrives, that no row but the model in force is drawn until it does, and that the words typed meanwhile narrow the rows that arrive, and then against a model list with one warning and the command it names; the rows are drawn from the fields the bridge sends, grouped by the provider they name, in ui/src/renderer/components/ModelPicker.tsx, which holds no service's name; make check-ui runs them)`
 
 ## What is built
 
