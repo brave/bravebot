@@ -374,6 +374,49 @@ pub(super) fn handle_after_clear(
     handle
 }
 
+/// How many of the turns addressed to a definition elsewhere are noted when a session works under
+/// it. The rest are counted in one more note.
+const ADDRESSED_ELSEWHERE_NOTED: usize = 3;
+
+/// Note the turns of this project's other sessions that were addressed to `definition` for that
+/// turn alone, newest first, with the first of what it replied
+/// ([SESSION-39](../../../../docs/specs/sessions.md#SESSION-39)).
+fn note_addressed_elsewhere(
+    session: &mut Session,
+    project: &std::path::Path,
+    definition: &str,
+    own: &str,
+) {
+    let found: Vec<_> = bravebot_session::sessions::addressed_for_one_turn(project, definition)
+        .into_iter()
+        .filter(|found| found.id != own)
+        .collect();
+    for found in found.iter().take(ADDRESSED_ELSEWHERE_NOTED) {
+        let when = bravebot_session::sessions::how_long_ago(found.at);
+        session.note(match &found.replied {
+            Some(replied) => t!(
+                session_addressed_elsewhere,
+                definition = definition,
+                title = found.title.as_str(),
+                when = when.as_str(),
+                reply = crate::status::cut(replied, 100).as_str()
+            ),
+            None => t!(
+                session_addressed_elsewhere_unanswered,
+                definition = definition,
+                title = found.title.as_str(),
+                when = when.as_str()
+            ),
+        });
+    }
+    if found.len() > ADDRESSED_ELSEWHERE_NOTED {
+        session.note(t!(
+            session_addressed_elsewhere_more,
+            count = found.len() - ADDRESSED_ELSEWHERE_NOTED
+        ));
+    }
+}
+
 /// Work the session under the definition [`settle_definition`] settles on, writing the name into
 /// its record, or say why it cannot start.
 ///
@@ -411,6 +454,7 @@ pub(super) fn settle_under(
                 session.note(t!(session_working_under_by_setting));
                 session.standing_chosen_by_setting();
             }
+            note_addressed_elsewhere(session, workspace.root(), &name, stored.id());
             stored.set_agent(Some(name));
         }
         Settled::SettingGone { name, why } => {

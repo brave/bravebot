@@ -334,6 +334,19 @@ pub fn recounted(said: &[Said]) -> Vec<Value> {
         .collect()
 }
 
+/// The rows of one exchange of a recounted conversation: its `prompt`th user row and what was said
+/// after it up to the next, in the shape [`recounted`] gives them
+/// ([SESSION-39](../../../docs/specs/sessions.md#SESSION-39)).
+pub fn exchange(said: &[Said], prompt: usize) -> Vec<Value> {
+    recounted(said)
+        .into_iter()
+        .skip_while(|row| row["prompt"] != json!(prompt))
+        .enumerate()
+        .take_while(|(index, row)| *index == 0 || row.get("prompt").is_none())
+        .map(|(_, row)| row)
+        .collect()
+}
+
 /// One thing said, from a conversation nobody watched happen.
 ///
 /// A `Tool` line says only that a call happened and what it was about. The record does

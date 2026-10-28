@@ -4324,6 +4324,18 @@ session-working-under =
 # Said after the line above where the agent setting, not --agent, chose the definition (ADDRESS-13).
 session-working-under-by-setting =
     the agent setting chose this definition; --agent <name> chooses another for the session
+# Said after the lines above for each turn of another session in this directory that was addressed
+# to the definition for that turn alone, newest first (SESSION-39). The title is that session's, the
+# time is how long ago the turn was asked, and the reply is the start of what the definition said.
+session-addressed-elsewhere = { $definition } answered in "{ $title }" { $when }: { $reply }
+# The line above for a turn whose record holds no reply.
+session-addressed-elsewhere-unanswered = { $definition } was asked in "{ $title }" { $when } and did not answer
+# Said after the lines above when more turns were addressed to the definition than they list.
+session-addressed-elsewhere-more =
+    { $count ->
+        [one] and 1 more turn; /resume lists the sessions
+       *[other] and { $count } more turns; /resume lists the sessions
+    }
 # Said when the agent setting names a definition this session did not resolve. The reason follows in
 # the next line, and the session goes on without one.
 session-agent-setting-gone =

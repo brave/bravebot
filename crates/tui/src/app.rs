@@ -24133,6 +24133,117 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
+    /// SESSION-39. A session opened under a definition notes the turns of the directory's other
+    /// sessions that were addressed to it for that turn alone, newest first, with the start of each
+    /// reply, and counts the ones past the first three. The regressions it rejects are the notes
+    /// left out, the newest left out for the oldest, and the session's own record noted as another.
+    #[test]
+    fn a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere() {
+        use bravebot_agent::conversation::Address;
+        use bravebot_agent::request_view::Provenance;
+        use bravebot_aichat::protocol::Message;
+        use bravebot_session::sessions::Standing;
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let home = a_home_with_a_definition("bravebot-addressed-elsewhere-home", None);
+        let root = crate::test_profile::project("bravebot-addressed-elsewhere");
+        std::fs::create_dir_all(&root).expect("create");
+        let workspace = Workspace::new(&root).expect("a workspace");
+        let trust = TrustStore::new(workspace.root());
+        let mut config = a_config_needing_no_sign_in();
+
+        let mut conversation = Conversation::new();
+        let now = bravebot_session::sessions::now();
+        for (turn, prompt) in ["first", "second", "third", "fourth"].iter().enumerate() {
+            conversation.push_from(Message::user(*prompt), Provenance::Typed);
+            conversation.address_last(Address {
+                definition: "rule-reviewer".to_string(),
+                standing: false,
+                at: Some(now + turn as u64),
+            });
+            conversation.push(Message::assistant(format!(
+                "reviewed the {prompt}\nin full"
+            )));
+        }
+        let mut elsewhere = a_handle_for_test(&workspace);
+        elsewhere.save(
+            "review the diffs",
+            Standing {
+                history: None,
+                conversation: &conversation.snapshot(),
+                turns: 4,
+                tokens: 0,
+                split: Default::default(),
+                spend: &Default::default(),
+                timing: &Default::default(),
+                model: None,
+                todos: &Default::default(),
+                asides: &[],
+                trust: &trust,
+                programs: &TrustedPrograms::new(),
+                directories: &[],
+                manifest: None,
+                rewind: &[],
+                checkouts: &[],
+            },
+        );
+
+        let mut opened = Session::new("none");
+        let mut stored = a_handle_for_test(&workspace);
+        settle_under(
+            &mut opened,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut stored,
+            Some("rule-reviewer"),
+            None,
+            None,
+        )
+        .expect("the name is held");
+        let said = said_in_the_transcript(&opened);
+        let noted: Vec<&str> = said
+            .iter()
+            .map(String::as_str)
+            .skip_while(|line| !line.starts_with("every turn is addressed"))
+            .skip(1)
+            .collect();
+        assert_eq!(
+            noted,
+            vec![
+                "rule-reviewer answered in \"review the diffs\" just now: reviewed the fourth in full",
+                "rule-reviewer answered in \"review the diffs\" just now: reviewed the third in full",
+                "rule-reviewer answered in \"review the diffs\" just now: reviewed the second in full",
+                "and 1 more turn; /resume lists the sessions",
+            ],
+            "{said:?}"
+        );
+
+        let mut resumed = Session::new("none");
+        settle_under(
+            &mut resumed,
+            &mut config,
+            &workspace,
+            Some(&home),
+            &trust,
+            &Default::default(),
+            &mut elsewhere,
+            None,
+            Some("rule-reviewer"),
+            None,
+        )
+        .expect("the recorded name is held");
+        let said = said_in_the_transcript(&resumed);
+        assert!(
+            !said.iter().any(|line| line.contains("answered in")),
+            "the session's own turns were noted as another's: {said:?}"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     /// ADDRESS-3. A definition deleted since is said, naming it and that the narrowing is gone,
     /// and the session opens. It stops recording the name, because the turns from here are not the
     /// definition's.

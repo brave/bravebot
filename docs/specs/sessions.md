@@ -29,6 +29,9 @@ governs:
   - crates/agent/src/aside.rs
   - crates/ui-bridge/src/store.rs
   - crates/ui-bridge/src/bridge.rs
+  - crates/ui-bridge/src/wire.rs
+  - crates/ui-bridge/src/allowlist.rs
+  - crates/tui/src/app/opening.rs
 documented-by:
   - docs/website/docs/using/sessions.md
   - docs/website/docs/using/manifest-mode.md
@@ -1500,6 +1503,12 @@ stay behind because they were given for work that the brief describes only in wo
 
 ## Known costs
 
+- **Listing the turns addressed to a definition reads every record.** `session.addressed` with no
+  directory, and a terminal session opened under a definition, read each record whole
+  ([SESSION-39](#SESSION-39)), so a directory with many long sessions is slow to list.
+- **A fork made in the second a turn was asked lists that turn as its own.** Times are kept in
+  seconds, so a line said in the second the fork's record started is not told apart from one the
+  fork said ([SESSION-39](#SESSION-39)).
 - **A record is held until its session ends.** A terminal that is suspended or left open holds its
   record, so resuming it from another terminal is refused until the first ends, with `--fork` as the
   way to carry on from a copy ([SESSION-38](#SESSION-38)).
@@ -1725,3 +1734,36 @@ from fetched bytes ([TRUST-4](trust-map.md#TRUST-4)), after which the file reads
 `verified-by: bravebot_ui_bridge::attaching::a_session_opened_again_waits_for_what_is_still_writing_its_record`
 `verified-by: bravebot_tui::sessions::resume_refuses_a_record_another_process_holds`
 `verified-by: bravebot_cli::running::a_record_a_terminal_holds_is_not_resumed_or_started_again`
+
+<a id="SESSION-39"></a>
+### SESSION-39: the turns addressed to a definition for that turn alone are listed from the records
+
+The line that opens a turn addressed to a definition is recorded with the time it was sent, in
+seconds, the definition, and whether the session stands under it
+([ADDRESS-12](addressing-a-definition.md#ADDRESS-12)). `addressed_for_one_turn` reads every record
+of a directory and lists, newest first, the turns addressed to one definition that the session did
+not stand under: the record's id, title and directory, the prompt's ordinal as `session.open` and
+`session.fork` count it, the time, and the last thing the assistant said before the next prompt. A
+manifest run is not read.
+
+A fork copies its source's lines with the times they were sent, so a line sent before its record
+started is the source's and is not listed for the fork. A line recorded before the time was kept is
+not listed.
+
+The bridge answers `session.addressed` with `definition`, a slug, and `directory`, or every
+directory with a store where it names none. Each exchange carries the rows `session.open` would
+send for it, from its user row up to the next one, so a window draws a reply from the text that
+path already gives it. A name that is not a slug is refused. The host does not offer the method.
+
+A terminal session that works under a definition ([CLI-17](cli.md#CLI-17)) notes, when it opens or
+resumes, the three newest such turns in the directory's other sessions, each with the session's
+title, how long ago it was asked and the start of the reply, and counts the rest.
+
+**Why.** A definition answering in a conversation not its own leaves nothing in its own. The record
+already holds which turn was addressed to whom, so a front end reads it there and keeps no list of
+its own that a rewind, a delete or a fork would leave out of date.
+
+`verified-by: bravebot_session::sessions::the_turns_addressed_to_a_definition_for_one_turn_are_listed_and_a_forks_copies_are_not`
+`verified-by: bravebot_ui_bridge::addressing::the_turns_addressed_to_a_definition_for_one_turn_are_listed_with_their_reply`
+`verified-by: bravebot_tui::app::a_session_opened_under_a_definition_notes_the_turns_addressed_to_it_elsewhere`
+`verified-by: bravebot_agent::turn::the_record_keeps_which_definition_each_prompt_was_addressed_to`

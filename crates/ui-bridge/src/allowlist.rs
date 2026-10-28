@@ -120,6 +120,7 @@ pub const DENIED: &[&str] = &[
     "session.list",
     "session.open",
     "session.fork",
+    "session.addressed",
     "session.delete",
     "session.purge",
     "session.import",
