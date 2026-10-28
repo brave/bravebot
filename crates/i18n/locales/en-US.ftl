@@ -38,10 +38,10 @@ cli-usage-doctor-sandbox = Run everyday workflows under the sandbox and report w
 cli-usage-update = Print the command that updates this copy
 cli-usage-bug-report = Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
 # Said when the retired `bravebot import-leo-creds` is typed, in place of starting a task named by that word.
-cli-import-leo-creds-retired = bravebot no longer imports a Leo subscription from Brave. Premium requests use the key in BRAVE_AI_CHAT_PREMIUM_KEY, which `bravebot doctor` reports
+cli-import-leo-creds-retired = bravebot no longer imports a Leo subscription from Brave. Premium requests use a key stored with `bravebot auth login brave`
 cli-usage-import-providers = Import a model service Claude Code or opencode configured
 cli-usage-auth-login = Sign in to a model service, listing every way when none is named
-cli-usage-auth-logout = Forget a stored gateway key, or a ChatGPT or xAI sign-in
+cli-usage-auth-logout = Forget the stored Brave premium key, a gateway key, or a ChatGPT or xAI sign-in
 cli-usage-auth-status = Say whether a sign-in is usable, exiting 0 only if it is
 cli-usage-mcp = Declare, list and approve MCP servers
 cli-usage-completion = Print a shell completion script
@@ -445,7 +445,7 @@ onboarding-xai =
 # gateway, which is still in development. It is offered rather than left out because it is the
 # route a build made with the key set already takes.
 onboarding-premium =
-    Brave's premium service, if you have a key for it: set BRAVE_AI_CHAT_PREMIUM_KEY and BRAVE_AI_CHAT_PREMIUM_ENDPOINT in the environment, or build bravebot with them set (see contrib/envrc.example). Its AI gateway is still in development, so prefer one of the four above for now.
+    Brave's premium service, if you have a key for it: run `bravebot auth login brave` in a terminal and type the key. Its AI gateway is still in development, so prefer one of the four above for now.
 # Said after either, so it reads after the routes and after the one line alike.
 onboarding-where-to-read =
     There are worked examples in https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
@@ -497,7 +497,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     a session credential: issued by AWS STS for the profile, and this program asks the AWS CLI for another as it builds each request, so the expiry ends that copy rather than this program's access; ended at its issuer, since `aws sso logout` clears this machine's copy rather than the session behind it, and the next one is minted from whatever the profile chains to, for as long as that lasts
 doctor-ends-premium-key =
-    the premium key: issued by Brave's premium service, which is also the only surface that revokes it; unsetting the variable or building without it ends this machine's custody and leaves the key live there
+    the premium key: issued by Brave's premium service, which is also the only surface that revokes it; `bravebot auth logout brave` ends this machine's custody and leaves the key live there
 doctor-ends-gateway-token =
     a gateway bearer token: issued by { $gateway }, which is also the only surface that revokes it; deleting it from the settings file, unsetting the variable or running `bravebot auth logout gateway` ends this machine's custody and leaves the token live there
 doctor-ends-chatgpt-account =
@@ -580,7 +580,7 @@ doctor-dropped-premium-key-nothing-decides-each-use =
 doctor-dropped-premium-key-no-bound-fixed-before-issue =
     gate { $gate }, { $answer }: no bound on what the key may do is fixed before it is issued, since the premium service issues one key and nothing here asks it for a narrower one
 doctor-dropped-premium-key-not-minted-for-one-step =
-    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever the build carries or the variable holds, and it is held for the whole run
+    gate { $gate }, { $answer }: it is not minted for one step, since the key is whatever `bravebot auth login brave` stored, and it is held for the whole run
 doctor-dropped-gateway-token-not-minted-for-one-step =
     gate { $gate }, { $answer }: it is not minted for one step, since the token is whatever the settings file carries, the variable holds or `bravebot auth login gateway` stored, and it is held for the whole run
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
@@ -1112,6 +1112,7 @@ auth-logout-needs-a-way = bravebot auth logout needs the name of the way to sign
 # The heading over the list. Each line under it starts with a number and a word, bedrock,
 # import, gateway, chatgpt or xai, which a script types and which are not translated.
 auth-ways-heading = Ways to sign in to a model service:
+auth-way-brave = Brave's premium service, with a key typed here and kept by bravebot
 auth-way-bedrock = An AWS account, for Amazon Bedrock
 auth-way-import = A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
 # The services are the ids bravebot knows an endpoint for, such as openrouter, comma separated.
@@ -1244,7 +1245,10 @@ auth-status-not-signed-in = not signed in: { $detail }
 auth-status-unusable = unusable: { $detail }
 auth-status-none-usable = no sign-in is usable
 auth-status-not-all-usable = a sign-in asked about is not usable
-auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name bedrock, gateway, chatgpt or xai
+auth-status-brave-held = a premium key is stored and is sent to Brave's premium service alone
+auth-status-brave-none = no premium key is stored; run bravebot auth login brave
+auth-status-brave-nowhere = this machine has nowhere to keep a key, so none is stored
+auth-status-import = bravebot auth login import writes settings and keeps no sign-in of its own, so there is nothing to ask about: name brave, bedrock, gateway, chatgpt or xai
 # Said of a gateway when no key is stored for any service and no provider block names a gateway.
 auth-status-gateway-none = no gateway key is stored; run bravebot auth login gateway
 # The id is a service bravebot knows that no provider block names, so no session sends a key to it.
@@ -1357,6 +1361,26 @@ chatgpt-defect-no-expiry = it has no expiry
 # port. They are shown in the browser, not in the terminal.
 chatgpt-page-done = You can close this tab and return to bravebot, which says whether the sign-in worked.
 chatgpt-page-not-found = Not found.
+
+## Signing in to Brave's premium service
+
+# `bravebot auth login brave` asks for one key and keeps it in a file of its own. The key is never
+# said back, and the premium host it goes to is compiled in.
+brave-not-while-incognito = a premium key is kept on disk, which an incognito session will not do
+brave-needs-a-terminal = bravebot auth login brave asks for the key without showing it, so it needs a terminal to ask on
+brave-no-home = there is nowhere to keep a key: neither BRAVEBOT_HOME nor the profile directory names one
+brave-key-unreadable = the premium key file { $path } cannot be read, so it is left as it is; delete it to store a key again
+brave-key-held = a premium key is stored already
+brave-replace = Replace it?
+brave-key-question = Brave premium key (nothing is shown as you type):
+brave-nothing-stored = no key was typed, so nothing was stored
+brave-not-read = the key could not be read: { $error }
+brave-not-stored = the key could not be stored in { $path }: { $error }
+brave-stored = stored the premium key in { $path }; premium requests will now use it
+brave-forgotten = forgot the stored premium key; it still works at Brave's premium service until it is revoked there
+brave-nothing-to-forget = no premium key is stored
+brave-not-forgotten = the stored premium key in { $path } could not be removed: { $error }
+doctor-brave-key = premium key
 
 ## Signing in to xAI with a SuperGrok subscription
 

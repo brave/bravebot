@@ -12,7 +12,7 @@ description: What to check when something is not working, and why some behaviour
 bravebot doctor
 ```
 
-It reports the endpoint, whether a premium host is configured and whether a premium key is held, the
+It reports the endpoint, the premium host and whether a premium key is stored, the
 key id, the model in force and whether it was chosen or defaulted, and the confinement available on this
 platform. It changes nothing, and a configuration error makes it **fail** rather than pass with a
 warning.
@@ -38,7 +38,7 @@ stored, or both, and no other service configured, it says so instead of listing 
 commands that use the account: `bravebot -i "<prompt>" --model chatgpt/<model>` and `bravebot "<task>" --model
 chatgpt/<model>`, or the same with `xai/<model>`. Started in a terminal outside an incognito session with no
 `--model`, `bravebot` first asks which of the accounts' models to use, where an account lists them. See
-[Configuration](customize/configuration.md). A premium key and a premium endpoint are one of the ways; see
+[Configuration](customize/configuration.md). A premium key stored with `bravebot auth login brave` is one of the ways; see
 [Brave's premium service](customize/premium.md).
 
 ## When a turn fails

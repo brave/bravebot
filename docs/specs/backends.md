@@ -1955,7 +1955,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these twenty-three variables
+### BACKEND-33: an `env` block names these twenty-two variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1965,8 +1965,7 @@ something reads:
 | `SERVICES_KEY_AICHAT` | the key a request to Brave's endpoint is signed with |
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to |
-| `BRAVE_AI_CHAT_PREMIUM_KEY` | the key that host authorises a request with, held only together with the premium endpoint |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to, in place of the one compiled in |
 | `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
@@ -2013,7 +2012,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a twenty-fourth variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a twenty-third variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -2090,12 +2089,8 @@ easiest thing on the machine to write to, which is the same reason BACKEND-1 giv
 granting no capability at all.
 
 On a binary built with nothing, which is a source build, the file is what answers for all of it:
-the endpoint, the key id, the signing key and the premium key included, and a project layer can name
-any of them. That is the case the file exists for, and what it costs is under Known costs.
-
-`BRAVE_AI_CHAT_PREMIUM_KEY` is ranked by this order as the premium endpoint beside it is. It is held
-only together with that endpoint ([PREM-11](premium-credentials.md#PREM-11)), and being a credential
-it is not a name a machine-level file pins (BACKEND-38).
+the endpoint, the key id and the signing key included, and a project layer can name any of them.
+That is the case the file exists for, and what it costs is under Known costs.
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
 default on every binary anybody was given, and an exported default would outrank every `model` key
@@ -2269,9 +2264,9 @@ above the process environment and therefore above every other source. It is
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
-name in the file decides nothing, the signing key, the key id and the premium key included, save the
-server lists below. A pinned name is resolved from this file alone, and a name it does not pin
-resolves exactly as it would with no such file.
+name in the file decides nothing, the signing key and the key id included, save the server lists
+below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
+as it would with no such file.
 
 The file may also keep an MCP server from starting, and that is the one thing it decides that is
 not a destination: `"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
@@ -2356,7 +2351,7 @@ that path rather than with the person in front of the screen.
 <a id="BACKEND-39"></a>
 ### BACKEND-39: a configuration naming no model service says what to configure
 
-Where the model in force would be sent to Brave's own aichat endpoint and no premium key is held to
+Where the model in force would be sent to Brave's own aichat endpoint and no premium key is stored to
 present to it ([PREM-13](premium-credentials.md#PREM-13)), nothing is configured to serve the turn and
 no work starts.
 A session does not open and a one-shot run asks nothing. What is said instead is the five ways to
@@ -2364,8 +2359,8 @@ configure a service that can answer, each naming the thing to type or to write: 
 through Bedrock, an OpenAI-compatible gateway, signing in with a ChatGPT account
 (`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), signing in with an xAI
 account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and Brave's premium service for
-somebody who has a key for it, with `BRAVE_AI_CHAT_PREMIUM_KEY` and `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`
-set in the environment or built in. The line for each sign-in says that the account's models are then
+somebody who has a key for it, stored by running `bravebot auth login brave` in a terminal and typing
+the key. The line for each sign-in says that the account's models are then
 offered in `/model` as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is
 [CLI-7](cli.md#CLI-7).
 `bravebot --bg <prompt>` is refused the same way, in the terminal that typed it, before the
@@ -2457,7 +2452,7 @@ The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a s
 
 **Why.** Nothing has been set up yet. A released binary arrives pointed at Brave's own aichat
 endpoint, and being pointed at it is not the same as having a service configured to do this work: no
-account was named, no gateway was written down, and no premium key was set. A run that went
+account was named, no gateway was written down, and no premium key was stored. A run that went
 ahead would send the turn there anyway and hand back whatever that request became, and whatever it
 became is not the agent doing the work. What a person is left with is a session that failed, or one
 that answered poorly, and nothing on the screen saying the missing piece was a configuration. The
@@ -2507,6 +2502,7 @@ refusal exists because one does not.
 `verified-by: bravebot_agent::backend::a_model_a_configured_service_serves_has_one`
 `verified-by: bravebot_agent::backend::a_service_configured_while_the_model_is_braves_own_has_none_for_that_model`
 `verified-by: bravebot_agent::backend::an_endpoint_that_is_not_braves_is_a_service_that_was_chosen`
+`verified-by: bravebot_agent::backend::a_premium_key_with_a_braves_premium_host_is_a_service_configured`
 `verified-by: bravebot_agent::subscription::braves_own_deployments_are_told_from_a_host_somebody_chose`
 `verified-by: bravebot_agent::subscription::a_port_is_not_part_of_the_host`
 `verified-by: bravebot_cli::running::a_first_run_with_no_service_configured_says_how_to_configure_one`
@@ -3968,8 +3964,9 @@ credentials. Entries that state a readable port, or none, are unaffected by anot
 A `BRAVE_AI_CHAT_ENDPOINT` that writes such a port fails the configuration with an error that names
 the text written there, as a missing scheme fails it.
 
-The other readers of a url are unchanged. `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is dropped when it is
-malformed, which this clause leaves as it is, and the constants for the ChatGPT account and xAI state
+The other readers of a url are unchanged. `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is not used when it is
+malformed, the host compiled in standing in its place ([PREM-11](premium-credentials.md#PREM-11)), which this
+clause leaves as it is, and the constants for the ChatGPT account and xAI state
 their own ports. A block imported from `opencode.json` is written into the settings file as it
 stands, so the rule applies when that file is read.
 

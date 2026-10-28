@@ -9,7 +9,7 @@ description: What is baked into the binary, what lives in ~/.bravebot and beside
 There is one thing to set up before the first session, and it is which service answers a turn. A
 released binary arrives pointed at Brave's own endpoint, which is not the same as having a service
 configured to do this work: no account was named, no gateway was written down, and no premium key
-was set. So rather than open a session with nothing set up to answer it, a first run **says
+was stored. So rather than open a session with nothing set up to answer it, a first run **says
 what to configure and stops**. It names five routes, each by the thing to type or write:
 
 | Route | Where |
@@ -18,7 +18,7 @@ what to configure and stops**. It names five routes, each by the thing to type o
 | an OpenAI-compatible gateway, including a local one | [Reaching an OpenAI-compatible gateway](#reaching-an-openai-compatible-gateway) |
 | a ChatGPT Plus or Pro account | [Reaching a model with a ChatGPT account](providers/chatgpt.md) |
 | an xAI SuperGrok subscription | [Reaching a model with an xAI SuperGrok subscription](providers/xai.md) |
-| a premium key for Brave's premium service | [Brave's premium service](premium.md) |
+| a premium key for Brave's premium service, stored with `bravebot auth login brave` | [Brave's premium service](premium.md) |
 
 `bravebot doctor` says the same thing and fails while it holds. A run whose model a configured
 service serves is not this case, whatever the Brave fields hold, and neither is a build pointed at a
@@ -107,6 +107,9 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
 
+A premium key stored with `bravebot auth login brave` is kept here too, in `brave-key.json`, a file only
+you can read. See [Brave's premium service](premium.md#storing-the-key).
+
 **Nobody else on the machine can read any of it.** On Unix, every directory bravebot makes under
 `~/.bravebot` is reachable by you alone and every file it writes there is readable by you alone,
 whichever part of the program is doing the writing. The history is the reason: it holds every prompt
@@ -184,7 +187,7 @@ as your shell sources the hook, so export it before the line in your shell's sta
 evaluates the hook, and the hook records in that directory.
 
 :::warning
-A program a `run` starts is refused `~/.bravebot`, where the gateway keys are,
+A program a `run` starts is refused `~/.bravebot`, where the gateway keys and the premium key are,
 and not a directory `BRAVEBOT_HOME` puts anywhere else
 ([what a stage cannot reach](../security/security.md)). Keep it somewhere you would not mind a
 program a `run` starts reading, or leave the variable unset.
@@ -224,8 +227,7 @@ without rebuilding it. The one exception is `BRAVEBOT_DEFAULT_MODEL`, which a
 | Variable | What it sets |
 |---|---|
 | `BRAVE_AI_CHAT_ENDPOINT` | the host requests go to |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, used once a premium key is held ([Brave's premium service](premium.md)) |
-| `BRAVE_AI_CHAT_PREMIUM_KEY` | the premium key, sent as a bearer token to a premium host that is Brave's. Held only with a premium endpoint |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host, in place of the one compiled in ([Brave's premium service](premium.md#what-is-sent-and-where)) |
 | `SERVICES_KEY_AICHAT` | the services key requests are signed with |
 | `BRAVE_SERVICES_KEY_ID` | the key id that goes with it |
 | `BRAVEBOT_DEFAULT_MODEL` | the model to request when no settings file or `/model` choice names one |
@@ -251,8 +253,8 @@ one.
 `BRAVEBOT_CONTEXT_BUDGET` is never baked into a binary. It is a knob one person turns while working,
 so it has to be set in the environment.
 
-**Fourteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
-spelling: eight of the eleven above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
+**Thirteen of these names can go in a settings file's [`env`](#settingsjson) block**, under the same
+spelling: seven of the ten above, plus the six AWS ones. The three exceptions are `BRAVEBOT_LOCALE`,
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB` and `BRAVEBOT_HOME`, which are read from the environment alone. Exporting a name wins over
 the file, except where an [administrator pinned it](managed-settings.md), and except for
 `BRAVEBOT_DEFAULT_MODEL`, which the top-level [`model`](#model) key outranks.

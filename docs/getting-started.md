@@ -272,13 +272,13 @@ renamed. The design is [specs/xai-sign-in.md](specs/xai-sign-in.md).
 ### Brave's premium service, if you have a key for it
 
 ```sh
-export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="<the premium endpoint>"
-export BRAVE_AI_CHAT_PREMIUM_KEY="<your key>"
+bravebot auth login brave
 ```
 
-Set both in the environment, or build bravebot with them set (see `contrib/envrc.example`). The key is
-sent as a bearer token to the premium endpoint, and only where its host is one of Brave's.
-`bravebot doctor` says whether a key is held and never prints it.
+This asks for the key in a terminal and shows nothing as you type. It is kept in
+`~/.bravebot/brave-key.json`, readable by your account alone, and sent as a bearer token to Brave's
+premium service and nowhere else. `bravebot auth logout brave` removes it, and `bravebot doctor` says
+whether a key is stored and never prints it.
 
 These models are reached through Brave's AI gateway, which is still in development, so prefer one of
 the other routes for now.

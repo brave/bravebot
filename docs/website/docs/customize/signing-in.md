@@ -15,11 +15,12 @@ pick by number or by name:
 
 ```
 Ways to sign in to a model service:
-  1. bedrock  An AWS account, for Amazon Bedrock
-  2. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
-  3. gateway  A key for openrouter, openai, anthropic or a gateway a provider block in settings names, typed here and kept by bravebot
-  4. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
-  5. xai      An xAI SuperGrok subscription, signed in to with a code entered on any device
+  1. brave    Brave's premium service, with a key typed here and kept by bravebot
+  2. bedrock  An AWS account, for Amazon Bedrock
+  3. import   A model service Claude Code, opencode, Ollama, LM Studio or llama-server has, imported into settings
+  4. gateway  A key for openrouter, openai, anthropic or a gateway a provider block in settings names, typed here and kept by bravebot
+  5. chatgpt  A ChatGPT Plus or Pro account, signed in to in a browser
+  6. xai      An xAI SuperGrok subscription, signed in to with a code entered on any device
 Which one? Type its number or its name, or nothing to stop:
 ```
 
@@ -31,20 +32,23 @@ Each way is the command it was before, run for you:
 
 | Way | Same as | More |
 |---|---|---|
+| `brave` | nothing before it: a premium key typed at the terminal | [Brave's premium service](premium.md) |
 | `bedrock` | the AWS sign-in a session makes on its first turn | [AWS Bedrock](providers/bedrock.md) |
 | `import` | `bravebot import-providers` | [Importing](importing.md) |
 | `gateway` | nothing before it: the key used to go in a variable or a settings file | [below](#gateway) |
 | `chatgpt` | nothing before it: a sign-in in a browser | [ChatGPT](providers/chatgpt.md) |
 | `xai` | no other command: a sign-in with a code entered on any device | [below](#xai) |
 
-A script names the way, so nothing is asked: `bravebot auth login bedrock`,
-`bravebot auth login import`, `bravebot auth login chatgpt`, `bravebot auth login xai`. With no way
-named and no terminal to ask on, the command is refused and prints these forms. `gateway` is the
-exception, since the key is typed at the terminal and never given on the command line. `chatgpt` shows an address to open and waits for the browser, and `xai` shows an address and a
-code and waits for them to be used, so each needs a terminal on standard error.
+A script names the way, so nothing is asked: `bravebot auth login brave`,
+`bravebot auth login bedrock`, `bravebot auth login import`, `bravebot auth login chatgpt`,
+`bravebot auth login xai`. With no way named and no terminal to ask on, the command is refused and
+prints these forms. `brave` and `gateway` are the exception, since the key is typed at the terminal and
+never given on the command line. `chatgpt` shows an address to open and waits for the browser, and `xai`
+shows an address and a code and waits for them to be used, so each needs a terminal on standard error.
 
-Brave's premium service is not one of the ways: it uses a key set in the environment or built into the
-binary. See [Brave's premium service](premium.md).
+**Brave** asks for a premium key without showing it and keeps it in `~/.bravebot/brave-key.json`. If a
+key is already stored it asks before replacing it. `bravebot auth logout brave` forgets the key, which
+still works at Brave until it is revoked there. See [Brave's premium service](premium.md).
 
 **Bedrock** signs in to every AWS account your configuration names: the one `AWS_PROFILE` names
 with `AWS_REGION` and a tier model such as `ANTHROPIC_DEFAULT_OPUS_MODEL` set, and each
@@ -168,19 +172,19 @@ line names the host. Logging out leaves the provider entry in your settings, and
 ## Checking a sign-in
 
 ```sh
-bravebot auth status bedrock
+bravebot auth status brave
 ```
 
-prints whether the AWS account is signed in and usable, and exits 0 only if it is, so a script can test
-it. `gateway [id]`, `chatgpt` and `xai` ask about the others. `gateway openai` says whether a
+prints whether a premium key is stored, and exits 0 only if one is, so a script can test it. `bedrock`,
+`gateway [id]`, `chatgpt` and `xai` ask about the others. `gateway openai` says whether a
 session would send a key for `openai`, and a key stored for it with no block naming it is reported
 as not signed in. With no way named it asks about all of them and exits 0 if any is usable. See [the
 reference](../reference/cli.md#auth).
 
 ## In an incognito session
 
-In an [incognito session](../using/incognito.md), `import`, `gateway`, `chatgpt` and `xai` are
+In an [incognito session](../using/incognito.md), `brave`, `import`, `gateway`, `chatgpt` and `xai` are
 refused, since each keeps something in bravebot's own directory.
 `bedrock` is allowed: the AWS CLI keeps that session, and a session in this mode signs in to it as
 well. It writes nothing to settings, so `BRAVEBOT_USE_BEDROCK=1` still has to be exported. Forgetting a
-gateway key and signing out of ChatGPT or xAI are allowed.
+premium key or a gateway key and signing out of ChatGPT or xAI are allowed.

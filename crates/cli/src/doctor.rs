@@ -766,6 +766,21 @@ fn report_backends(config: &Config, ending: &mut Ending) {
         );
     }
 
+    // A premium key file that cannot be read is read as no key, so every premium request goes to the
+    // free endpoint, and this says why. The same footing as the file of gateway keys above.
+    if let Some(directory) = bravebot_agent::home::directory()
+        && bravebot_config::brave_key::read(&directory).is_err()
+    {
+        *ending = ends_on(*ending, Ending::Failed);
+        fact(
+            t!(doctor_brave_key),
+            t!(
+                brave_key_unreadable,
+                path = bravebot_config::brave_key::file(&directory).display()
+            ),
+        );
+    }
+
     // What would end each credential this build holds for itself, and which tier the gate
     // walk left it on. Reported beside the backends rather than kept for a leak, because it
     // can only be written down while the arrangement is still understood, and the person

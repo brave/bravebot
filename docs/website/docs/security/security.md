@@ -118,7 +118,7 @@ Stated plainly, because an unlisted exception is indistinguishable from a violat
   keychains other than the macOS login keychain file that `gh` and `git` use, browser profiles and
   password stores, shell and database histories, the logins and transcripts of other coding agents
   (`~/.claude`, `~/.codex`, `~/.gemini`), mail, chat and editor data, and `~/.bravebot`, where the
-  gateway keys and the MCP server list are, which no
+  gateway keys, the premium key and the MCP server list are, which no
   `allowRead` entry, scope or `/reach` grant lifts, except that a program reads, and never writes,
   the session records in `~/.bravebot/sessions`) and can write only the directories the session
   was opened on, its scratch directory, the system temporary directory (unless you [hold it back](sandbox.md#sandboxholdbacktemporarydirectory)) and the toolchain caches. A
@@ -549,18 +549,20 @@ part of your own message. Deleting a session record removes that session; the pr
 separate file holding every prompt you have submitted across all runs, and deleting a session does not
 touch it.
 
-bravebot writes no file for the premium key. It comes from the build, the environment or a settings
-file's `env` block. A key baked into a binary is masked so that `strings` does not print it, which
-hides it and does not encrypt it. See
-[Brave's premium service](../customize/premium.md).
+A premium key stored with `bravebot auth login brave` lives in `~/.bravebot/brave-key.json`, a file
+created readable by your account alone: mode 0600 on macOS and Linux, and an access list granting only
+your account on Windows. It is not encrypted at rest. It is not read from a variable or baked into a
+build. It is sent only to a host that ends in `.brave.com`, `.brave.software` or `.bravesoftware.com`.
+See [Brave's premium service](../customize/premium.md).
 
 The credentials Brave Bot reaches a model with are overwritten in memory when the value holding
 them goes, rather than handed back to the allocator with the bytes still in them, and the process
 turns off its own core dump before it reads the first one, so a crash leaves no file with a key in
-it. A key held in a settings file is also kept out of swap on macOS and Linux, unless the kernel
-refuses the lock, and on Windows it is held in ordinary memory. Two things are not covered: swap for
-the buffers a credential passes through on its way in, and the copy in the process's environment when
-you exported it as a variable.
+it. The premium key is held the same way, and so is the text of the file it is read out of. A key held
+in a settings file is also kept out of swap on macOS and Linux, unless the kernel refuses the lock, and
+on Windows it is held in ordinary memory. Two things are not covered: swap for the buffers a credential
+passes through on its way in, and the copy in the process's environment when you exported it as a
+variable.
 
 ## Crash reports
 

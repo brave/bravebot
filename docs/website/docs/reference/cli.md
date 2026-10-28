@@ -27,7 +27,7 @@ Usage:
   bravebot bug-report                    Write the version, what doctor reports and the newest log's name to a file to attach to a bug report
   bravebot update                        Print the command that updates this copy
   bravebot auth login [way]              Sign in to a model service, listing every way when none is named
-  bravebot auth logout <way>             Forget a stored gateway key, or a ChatGPT or xAI sign-in
+  bravebot auth logout <way>             Forget the stored Brave premium key, a gateway key, or a ChatGPT or xAI sign-in
   bravebot auth status [way]             Say whether a sign-in is usable, exiting 0 only if it is
   bravebot import-providers              Import a model service Claude Code or opencode configured
   bravebot mcp <command>                 Declare, list and approve MCP servers
@@ -58,10 +58,11 @@ Usage:
 | `bravebot bug-report` | write a text file to attach to a bug report ([below](#bug-report)) |
 | `bravebot update` | print the command that updates this copy, and run nothing ([below](#update)) |
 | `bravebot auth login [way]` | sign in to a model service, listing the ways when none is named ([below](#auth)) |
+| `bravebot auth logout brave` | forget the premium key `auth login brave` stored |
 | `bravebot auth logout gateway [id]` | forget a gateway key `auth login gateway` stored |
 | `bravebot auth logout chatgpt` | forget the ChatGPT sign-in `auth login chatgpt` stored |
 | `bravebot auth logout xai` | forget the xAI sign-in `auth login xai` stored |
-| `bravebot auth status [bedrock\|gateway [id]\|chatgpt\|xai]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
+| `bravebot auth status [brave\|bedrock\|gateway [id]\|chatgpt\|xai]` | say whether a sign-in is usable, exiting 0 only if it is ([below](#auth)) |
 | `bravebot import-providers` | import a model service Claude Code or opencode configured, asking first |
 | `bravebot --bg "<prompt>"` | start a session that runs in the background and keeps going after the terminal closes ([Sessions](../using/sessions.md#sessions-in-the-background)) |
 | `bravebot sessions` | list the background sessions of every project, grouped by state when run in a terminal ([Sessions](../using/sessions.md#sessions-in-the-background)) |
@@ -873,7 +874,7 @@ bravebot doctor
 Answers "what will this actually use", and changes nothing. It reports:
 
 - every backend this build can reach and what identifies it, which names the settings set;
-- the premium endpoint, and whether a premium key is held, never its value ([Brave's premium service](../customize/premium.md));
+- the premium host and whether a premium key is stored, never its value, and the premium key file's path where it cannot be read ([Brave's premium service](../customize/premium.md));
 - for each AWS account, whether it is signed in, and `bravebot auth login bedrock` where signing in
   is what is missing;
 - which settings files are in force, and which of them won a name more than one set;
@@ -960,11 +961,12 @@ what was already true.
 ## `auth`
 
 ```sh
-bravebot auth login [bedrock | import | gateway [id] | chatgpt | xai]
+bravebot auth login [brave | bedrock | import | gateway [id] | chatgpt | xai]
+bravebot auth logout brave
 bravebot auth logout gateway [id]
 bravebot auth logout chatgpt
 bravebot auth logout xai
-bravebot auth status [bedrock | gateway [id] | chatgpt | xai]
+bravebot auth status [brave | bedrock | gateway [id] | chatgpt | xai]
 ```
 
 With no way named, `auth login` lists the ways to sign in, marks the ones already in use, and asks
@@ -972,20 +974,23 @@ which to run. It needs a terminal for that. A script names the way instead:
 
 | Way | What it runs |
 |---|---|
+| `brave` | asks for a premium key with nothing shown as it is typed, and keeps it in `~/.bravebot/brave-key.json`, asking first before it replaces one already stored ([Brave's premium service](../customize/premium.md)) |
 | `bedrock` | the AWS sign-in a session would make on its first turn, for every account the configuration names, then sets `BRAVEBOT_USE_BEDROCK` to `1` in `~/.bravebot/settings.json` once the `AWS_PROFILE` account signs in, unless that file names it, something turns Bedrock off, or the session is incognito |
 | `import` | what `import-providers` runs |
 | `gateway [id]` | asks for a key for `openrouter`, `openai`, `anthropic` or a gateway a provider block names, with nothing shown as it is typed, and keeps it in `~/.bravebot/gateway-keys.json`. For one of the three that no block names it then adds `"provider": {"<id>": {}}` to `~/.bravebot/settings.json` |
 | `chatgpt` | prints an address on `auth.openai.com` and opens it in a browser, waits five minutes for the browser to return to a port on `127.0.0.1`, and keeps the sign-in in `chatgpt-account.json` ([ChatGPT](../customize/providers/chatgpt.md)) |
 | `xai` | asks `auth.x.ai` for a code, prints an address and the code on standard error, waits for them to be used on any device, and keeps the sign-in in `xai-account.json` ([Signing in](../customize/signing-in.md#xai)) |
 
+`brave` needs a terminal, and is refused with status 2 where standard input or standard error is not one.
 `gateway` needs a terminal even with the id named, since the key is typed rather than given as an
 argument. With one service offered it asks for no id. Where the machine-level file names the
 gateways, only those are offered, and the list and the refusal of any other id name that file.
 
-`auth logout gateway [id]` forgets a stored key, and the id can be left off when only one is stored. It names the host the key still works at, and
+`auth logout brave` removes the stored premium key and ends nothing at Brave, where the key still works
+until it is revoked. `auth logout gateway [id]` forgets a stored key, and the id can be left off when only one is stored. It names the host the key still works at, and
 leaves the settings as they are. `auth logout chatgpt` forgets the stored ChatGPT
 sign-in and ends nothing at OpenAI, and `auth logout xai` forgets the stored xAI sign-in and ends nothing at
-xAI. In an incognito session the `import`, `gateway`, `chatgpt` and `xai` ways are refused, and
+xAI. In an incognito session the `brave`, `import`, `gateway`, `chatgpt` and `xai` ways are refused, and
 `bedrock`, `auth status` and every form of `auth logout` are allowed. See
 [Signing in](../customize/signing-in.md).
 
@@ -993,6 +998,7 @@ xAI. In an incognito session the `import`, `gateway`, `chatgpt` and `xai` ways a
 
 ```text
 $ bravebot auth status
+brave: signed in: a premium key is stored and is sent to Brave's premium service alone
 bedrock: not signed in: the AWS session has lapsed: run `bravebot auth login bedrock`
 gateway openrouter: signed in: stored by bravebot auth login gateway (never printed)
 chatgpt: signed in: the access token expires 2026-10-22T21:05:27Z
@@ -1001,7 +1007,8 @@ xai: signed in: the access token expires 2026-10-22T21:05:27Z and is sent to api
 
 A line says signed in, not signed in (signing in fixes it), or unusable (it does not: an unreadable
 file, a missing `aws`), with the reason and
-what to run. For ChatGPT it says when the access token expires, and a token past that time is still
+what to run. For Brave it says a premium key is stored and is sent to Brave's premium service alone, or
+that none is stored and to run `bravebot auth login brave`, or that the file cannot be read, naming it. For ChatGPT it says when the access token expires, and a token past that time is still
 signed in, since the next request replaces it. For xAI it says when the access token expires, and that a token
 past that time is still signed in, that the access token is sent to `api.x.ai` alone, and that the refresh token is
 sent to `auth.x.ai` alone. Only counts and fixed sentences are printed, never a credential. For Bedrock the reason
@@ -1023,9 +1030,8 @@ signed in, since no session sends it, and `auth login gateway <id>` records the 
 bravebot import-leo-creds
 ```
 
-Retired. It prints that bravebot no longer imports a Leo subscription from Brave, that premium
-requests use the key in `BRAVE_AI_CHAT_PREMIUM_KEY`, and that `bravebot doctor` reports it, and it
-exits with status 2. See [Brave's premium service](../customize/premium.md).
+Retired. It prints that bravebot no longer imports a Leo subscription from Brave and that premium
+requests use a key stored with `bravebot auth login brave`, and it exits with status 2. See [Brave's premium service](../customize/premium.md).
 
 ## `import-providers`
 

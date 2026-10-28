@@ -25,6 +25,7 @@ use std::process::ExitCode;
 /// A way to sign in, in the order the list shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Way {
+    Brave,
     Bedrock,
     Import,
     Gateway,
@@ -33,7 +34,8 @@ enum Way {
 }
 
 impl Way {
-    const ALL: [Way; 5] = [
+    const ALL: [Way; 6] = [
+        Way::Brave,
         Way::Bedrock,
         Way::Import,
         Way::Gateway,
@@ -44,6 +46,7 @@ impl Way {
     /// The word that names this way on the command line. Not translated, because a script types it.
     fn name(self) -> &'static str {
         match self {
+            Way::Brave => "brave",
             Way::Bedrock => "bedrock",
             Way::Import => "import",
             Way::Gateway => "gateway",
@@ -62,6 +65,7 @@ impl Way {
     /// from the same table a session reaches them by.
     fn description(self) -> String {
         match self {
+            Way::Brave => t!(auth_way_brave).to_string(),
             Way::Bedrock => t!(auth_way_bedrock).to_string(),
             Way::Import => t!(auth_way_import).to_string(),
             Way::Gateway => t!(auth_way_gateway, services = listed(known_ids())),
@@ -91,15 +95,17 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
     said.push_str(t!(auth_forms_heading));
     for form in [
         "bravebot auth login",
+        "bravebot auth login brave",
         "bravebot auth login bedrock",
         "bravebot auth login import",
         "bravebot auth login gateway [id]",
         "bravebot auth login chatgpt",
         "bravebot auth login xai",
+        "bravebot auth logout brave",
         "bravebot auth logout gateway [id]",
         "bravebot auth logout chatgpt",
         "bravebot auth logout xai",
-        "bravebot auth status [bedrock|gateway [id]|chatgpt|xai]",
+        "bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]",
     ] {
         said.push_str("\n  ");
         said.push_str(form);
@@ -109,8 +115,8 @@ fn refused_with_the_forms(message: impl std::fmt::Display) -> ExitCode {
 
 /// `bravebot auth login [way]`: the way named, or the list and a question where none is.
 fn login(args: &[String]) -> ExitCode {
-    // No incognito check of its own: the import and a gateway key are refused by the checks
-    // their own code makes, and an AWS session is the AWS CLI's, which a session in that mode signs
+    // No incognito check of its own: the Brave key, the import and a gateway key are refused by the
+    // checks their own code makes, and an AWS session is the AWS CLI's, which a session in that mode signs
     // in to as well.
     if let Some((word, rest)) = args.split_first() {
         return match Way::named(word) {
@@ -181,6 +187,8 @@ fn picked<R: BufRead, W: Write>(
 /// directory the keys are kept in, where there is one.
 fn held(way: Way, directory: Option<&Path>) -> Option<String> {
     match way {
+        Way::Brave => matches!(crate::brave::standing(), crate::brave::Standing::Held)
+            .then(|| t!(auth_signed_in).to_string()),
         Way::Bedrock => {
             let config = bedrock_config(&Settings::load(), &Managed::load()).ok()?;
             let accounts = accounts(&config, inherited_profile().as_deref());
@@ -222,9 +230,10 @@ fn gateways_held(stored: Result<Keys, keys::Unreadable>) -> Option<String> {
 /// Run one way with the arguments that followed its name.
 fn sign_in(way: Way, rest: &[String]) -> ExitCode {
     match way {
-        Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai if !rest.is_empty() => {
+        Way::Brave | Way::Bedrock | Way::Import | Way::ChatGpt | Way::Xai if !rest.is_empty() => {
             unexpected(way, &rest[0])
         }
+        Way::Brave => crate::brave::login(),
         Way::Bedrock => bedrock(),
         Way::Import => crate::import::providers(&[]),
         Way::ChatGpt => crate::chatgpt::login(),
@@ -1143,7 +1152,13 @@ type Line = (String, Standing);
 fn status(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return report(
-            &[Way::Bedrock, Way::Gateway, Way::ChatGpt, Way::Xai],
+            &[
+                Way::Brave,
+                Way::Bedrock,
+                Way::Gateway,
+                Way::ChatGpt,
+                Way::Xai,
+            ],
             None,
             false,
         );
@@ -1188,6 +1203,7 @@ fn report(ways: &[Way], gateway_id: Option<&str>, named: bool) -> ExitCode {
     let mut lines: Vec<Line> = Vec::new();
     for way in ways {
         match way {
+            Way::Brave => lines.push(("brave".into(), brave())),
             Way::Bedrock => lines.extend(bedrock_standings(
                 bedrock_config(&Settings::load(), &Managed::load()),
                 inherited_profile().as_deref(),
@@ -1245,6 +1261,17 @@ fn verdict(lines: &[Line], named: bool) -> Ending {
         Ending::Configuration
     } else {
         Ending::Failed
+    }
+}
+
+/// The stored Brave premium key, read from the file a turn would read.
+fn brave() -> Standing {
+    use crate::brave::Standing as Stored;
+    match crate::brave::standing() {
+        Stored::Held => Standing::SignedIn(t!(auth_status_brave_held).into()),
+        Stored::NotHeld => Standing::NotSignedIn(t!(auth_status_brave_none).into()),
+        Stored::Nowhere => Standing::NotSignedIn(t!(auth_status_brave_nowhere).into()),
+        Stored::Unusable(reason) => Standing::Unusable(reason),
     }
 }
 
@@ -1447,8 +1474,8 @@ fn listed<'n>(names: impl Iterator<Item = &'n str>) -> String {
     names.map(printable).collect::<Vec<_>>().join(", ")
 }
 
-/// `bravebot auth logout <way>`. A gateway, ChatGPT and xAI keep a credential of their own, so they
-/// are the ways signed out of here; the other two say where what they left is kept.
+/// `bravebot auth logout <way>`. The Brave key, a gateway, ChatGPT and xAI keep a credential of their
+/// own, so they are the ways signed out of here; the other two say where what they left is kept.
 fn logout(args: &[String]) -> ExitCode {
     let Some((word, rest)) = args.split_first() else {
         return refused_with_the_forms(t!(auth_logout_needs_a_way));
@@ -1478,6 +1505,7 @@ fn logout(args: &[String]) -> ExitCode {
         );
     }
     match way {
+        Way::Brave => crate::brave::logout(),
         Way::Bedrock => fail(Ending::Argument, t!(auth_logout_bedrock)),
         Way::Import => fail(Ending::Argument, t!(auth_logout_import)),
         Way::Gateway => forget_gateway(rest.first().map(String::as_str)),
@@ -1615,7 +1643,7 @@ mod tests {
         let (said, _) = asked("\n", &nothing_held);
         let line = said
             .lines()
-            .find(|line| line.starts_with("  3. gateway"))
+            .find(|line| line.starts_with("  4. gateway"))
             .unwrap_or_else(|| panic!("gateway is not listed: {said}"));
         assert!(known_ids().count() > 0);
         for id in known_ids() {
@@ -1666,11 +1694,13 @@ mod tests {
     #[test]
     fn a_way_is_picked_by_its_number_or_its_name() {
         for (answers, expected) in [
-            ("1\n", Some(Way::Bedrock)),
-            ("2\n", Some(Way::Import)),
-            ("3\n", Some(Way::Gateway)),
-            ("4\n", Some(Way::ChatGpt)),
-            ("5\n", Some(Way::Xai)),
+            ("1\n", Some(Way::Brave)),
+            ("2\n", Some(Way::Bedrock)),
+            ("3\n", Some(Way::Import)),
+            ("4\n", Some(Way::Gateway)),
+            ("5\n", Some(Way::ChatGpt)),
+            ("6\n", Some(Way::Xai)),
+            ("brave\n", Some(Way::Brave)),
             ("bedrock\n", Some(Way::Bedrock)),
             ("gateway\n", Some(Way::Gateway)),
             ("ChatGPT\n", Some(Way::ChatGpt)),
@@ -1687,7 +1717,7 @@ mod tests {
                 "{answers:?}: {said}"
             );
         }
-        for refused in ["0\n", "6\n", "aws\n", "leo\n"] {
+        for refused in ["0\n", "7\n", "aws\n", "leo\n"] {
             let (said, picked) = asked(refused, &nothing_held);
             let complaint = picked.expect_err(refused);
             assert!(

@@ -1061,8 +1061,8 @@ fn the_list_of_ways_names_xai_and_says_signed_in_only_where_a_sign_in_is_stored(
         terminal
             .lines()
             .map(|line| line.trim_end_matches('\r'))
-            .find(|line| line.contains("5. xai"))
-            .unwrap_or_else(|| panic!("xai is not the fifth way listed: {terminal}"))
+            .find(|line| line.contains("6. xai"))
+            .unwrap_or_else(|| panic!("xai is not the sixth way listed: {terminal}"))
             .to_string()
     };
 
@@ -2507,7 +2507,7 @@ fn a_start_that_is_not_in_a_terminal_asks_nothing_reads_nothing_and_names_the_xa
         assert!(text.contains("--model xai/"), "{locale}: {text}");
         assert!(!text.contains(THE_QUESTION), "{locale}: {text}");
         assert!(
-            !text.contains("BRAVE_AI_CHAT_PREMIUM_KEY") && !text.contains("amazon-bedrock"),
+            !text.contains("bravebot auth login brave") && !text.contains("amazon-bedrock"),
             "the routes were offered to a person who has signed in: {locale}: {text}"
         );
         assert!(the_state_file(&home, "model").is_none(), "a pipe answered");
@@ -2548,7 +2548,7 @@ fn the_routes_offered_where_nothing_is_stored_include_xai_with_the_command_and_t
     );
     assert!(
         text.find("bravebot auth login chatgpt") < text.find("bravebot auth login xai")
-            && text.find("bravebot auth login xai") < text.find("BRAVE_AI_CHAT_PREMIUM_KEY"),
+            && text.find("bravebot auth login xai") < text.find("bravebot auth login brave"),
         "the routes are not in the order that puts the premium key last: {text}"
     );
     assert!(stand_in.asked().is_empty());
@@ -2927,7 +2927,7 @@ fn doctor_says_an_xai_sign_in_is_stored_where_a_start_would_and_asks_the_account
         "{stdout}"
     );
     assert!(
-        !stdout.contains("Configure one of these") && !stdout.contains("BRAVE_AI_CHAT_PREMIUM_KEY"),
+        !stdout.contains("Configure one of these") && !stdout.contains("bravebot auth login brave"),
         "the routes were offered on a machine that has a sign-in: {stdout}"
     );
     assert!(

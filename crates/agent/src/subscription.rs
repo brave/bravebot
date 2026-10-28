@@ -64,16 +64,19 @@ pub fn is_a_brave_endpoint(endpoint: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// A configuration whose premium host is `premium` where one is named and the compiled-in one
+    /// where not, with `key` stored as `bravebot auth login brave` leaves it.
     fn configured(premium: Option<&str>, key: Option<&str>) -> Config {
-        Config::from_lookup(|name| match name {
+        let mut config = Config::from_lookup(|name| match name {
             "SERVICES_KEY_AICHAT" => Some("test-signing-key".into()),
             "BRAVE_SERVICES_KEY_ID" => Some("test-key-id".into()),
             "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.software".into()),
             "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => premium.map(str::to_string),
-            "BRAVE_AI_CHAT_PREMIUM_KEY" => key.map(str::to_string),
             _ => None,
         })
-        .expect("a configuration")
+        .expect("a configuration");
+        config.premium_key = key.map(bravebot_config::Secret::new);
+        config
     }
 
     /// PREM-12: the key a configuration holds is the one presented, every time it is asked for. A
@@ -92,11 +95,15 @@ mod tests {
         }
     }
 
-    /// PREM-2: a key is held only with a Brave premium host to go to. A configuration with neither
-    /// or only one of the two has nothing to present, and a host somebody chose is sent nothing.
+    /// PREM-2: a key is presented only to a premium host that is Brave's. With none stored there is
+    /// nothing to present, the host compiled in is Brave's, and a host somebody named in its place
+    /// that is not Brave's is sent nothing.
     #[test]
     fn a_key_is_presented_only_to_a_premium_host_that_is_braves() {
-        assert!(PremiumKey::held(&configured(None, None)).is_none());
+        assert!(
+            PremiumKey::held(&configured(None, None)).is_none(),
+            "no key"
+        );
         assert!(
             PremiumKey::held(&configured(
                 Some("https://ai-chat-premium.bsg.brave.software"),
@@ -106,19 +113,27 @@ mod tests {
             "a host with no key"
         );
         assert!(
-            PremiumKey::held(&configured(None, Some("the-premium-key"))).is_none(),
-            "a key with no host"
+            PremiumKey::held(&configured(None, Some("the-premium-key"))).is_some(),
+            "the host compiled in is not Brave's"
         );
-        for theirs in [
-            "http://127.0.0.1:8080",
-            "https://premium.example",
-            "https://attacker.example#.brave.com",
-        ] {
+        for theirs in ["http://127.0.0.1:8080", "https://premium.example"] {
             assert!(
                 PremiumKey::held(&configured(Some(theirs), Some("the-premium-key"))).is_none(),
                 "{theirs} was sent the key"
             );
         }
+
+        // A value that a transport would split two ways is not used by the configuration, so the host
+        // compiled in stands and it is that host the key goes to (PREM-11).
+        let split = configured(
+            Some("https://attacker.example#.brave.com"),
+            Some("the-premium-key"),
+        );
+        assert!(PremiumKey::held(&split).is_some());
+        assert_eq!(
+            split.premium_endpoint.as_deref(),
+            Some(bravebot_config::DEV_PREMIUM_ENDPOINT)
+        );
     }
 
     /// A turn whose model is served by another backend is not handed the key.
@@ -129,15 +144,11 @@ mod tests {
     /// The Brave half is asserted too, since a gate that handed out nothing would pass the other.
     #[test]
     fn a_turn_on_another_backend_is_not_handed_the_premium_key() {
-        let config = Config::from_lookup(|name| {
+        let mut config = Config::from_lookup(|name| {
             match name {
                 "SERVICES_KEY_AICHAT" => Some("test-signing-key"),
                 "BRAVE_SERVICES_KEY_ID" => Some("test-key-id"),
                 "BRAVE_AI_CHAT_ENDPOINT" => Some("https://ai-chat.bsg.brave.software"),
-                "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => {
-                    Some("https://ai-chat-premium.bsg.brave.software")
-                }
-                "BRAVE_AI_CHAT_PREMIUM_KEY" => Some("the-premium-key"),
                 "BRAVEBOT_USE_BEDROCK" => Some("1"),
                 "AWS_REGION" => Some("us-west-2"),
                 "ANTHROPIC_DEFAULT_OPUS_MODEL" => Some("opus-arn"),
@@ -146,6 +157,7 @@ mod tests {
             .map(str::to_string)
         })
         .expect("a configuration");
+        config.premium_key = Some(bravebot_config::Secret::new("the-premium-key"));
         let egress = bravebot_net::Egress::new();
 
         assert!(

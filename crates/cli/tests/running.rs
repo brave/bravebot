@@ -260,7 +260,7 @@ fn a_first_run_with_no_service_configured_says_how_to_configure_one() {
         "OpenRouter",
         "bravebot auth login chatgpt",
         "bravebot auth login xai",
-        "BRAVE_AI_CHAT_PREMIUM_KEY",
+        "bravebot auth login brave",
     ] {
         assert!(
             stderr.contains(route),
@@ -413,7 +413,7 @@ fn a_stored_chatgpt_sign_in_beside_a_configured_gateway_leaves_the_line_that_nam
         "A ChatGPT sign-in is stored",
         "Name one of the account's models",
         "amazon-bedrock",
-        "BRAVE_AI_CHAT_PREMIUM_KEY",
+        "bravebot auth login brave",
     ] {
         assert!(
             !stderr.contains(replaced),
@@ -462,7 +462,7 @@ fn doctor_treats_a_stored_chatgpt_sign_in_as_a_service_configured() {
             && stdout.contains(r#"`bravebot "<task>" --model chatgpt/<model>`"#),
         "the report did not say how to use the sign-in: {stdout}"
     );
-    for offered in ["amazon-bedrock", "OpenRouter", "BRAVE_AI_CHAT_PREMIUM_KEY"] {
+    for offered in ["amazon-bedrock", "OpenRouter", "bravebot auth login brave"] {
         assert!(
             !stdout.contains(offered),
             "the report offered {offered} to somebody who signed in: {stdout}"
@@ -1113,7 +1113,7 @@ fn a_service_configured_with_no_model_of_its_own_named_says_to_name_one() {
         "the run refused without saying which key names a model: {stderr}"
     );
     assert!(
-        !stderr.contains("BRAVE_AI_CHAT_PREMIUM_KEY"),
+        !stderr.contains("bravebot auth login brave"),
         "somebody who has configured a service was sent to configure another: {stderr}"
     );
 }
@@ -3260,7 +3260,7 @@ fn doctor_ends_on_the_configuration_status_where_nothing_will_serve_a_turn() {
     // And the report still says it, in the section CLI-7 puts it in: a status is what a caller
     // reads and the routes out are what the person in front of the screen reads, so the fix is
     // not the report losing one to gain the other.
-    for route in ["bravebot auth login chatgpt", "BRAVE_AI_CHAT_PREMIUM_KEY"] {
+    for route in ["bravebot auth login chatgpt", "bravebot auth login brave"] {
         assert!(
             stdout.contains(route),
             "the report stopped saying how to configure a service with {route}: {stdout}"
@@ -3834,37 +3834,37 @@ fn doctor_names_the_tier_of_every_credential_it_accounts_for() {
     }
 }
 
+/// A premium key as `bravebot auth login brave` stores it, for a test that needs a key held.
+const A_PREMIUM_KEY: &str = "placeholder-premium-key";
+
+fn a_stored_premium_key() -> String {
+    format!(r#"{{"version": 1, "key": "{A_PREMIUM_KEY}"}}"#)
+}
+
 /// CRED-2: the premium key is a credential in use, so the report accounts for it and names the
 /// tier its walk stopped at, without printing it.
 ///
-/// Three builds from one fixture, because the account is owed for custody of a key that is held
-/// and for no other: the same build with no key holds one credential fewer, and a key with no
-/// premium host to go to is dropped, so a rule that listed it unconditionally would send somebody
-/// to revoke a key they never held.
+/// Four homes from one fixture, because the account is owed for custody of a key that is stored
+/// and for no other: the same build with no key holds one credential fewer, a key stored on a
+/// machine whose build reaches no Brave backend has nowhere to go and is dropped, and a file that
+/// cannot be read is said rather than read as no key.
 #[test]
 fn doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at() {
-    let scratch = Scratch::new("cli-running-premium-key-tier");
     let configured = [
         ("SERVICES_KEY_AICHAT", "a-services-key"),
         ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
         ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
     ];
-    const PREMIUM_HOST: (&str, &str) = (
-        "BRAVE_AI_CHAT_PREMIUM_ENDPOINT",
-        "https://ai-chat-premium.bsg.brave.software",
-    );
-    const THE_KEY: (&str, &str) = ("BRAVE_AI_CHAT_PREMIUM_KEY", "placeholder-premium-key");
+    let bedrock_only = [("BRAVEBOT_USE_BEDROCK", "1"), ("AWS_REGION", "us-west-2")];
 
-    let accounted = |extra: &[(&str, &str)]| {
-        let environment = [&configured[..], extra].concat();
-        let output = bravebot(&scratch.path, &environment, &["doctor"]);
+    let report = |scratch: &Scratch, environment: &[(&str, &str)]| {
+        let output = bravebot(&scratch.path, environment, &["doctor"]);
         let (stdout, stderr) = said(&output);
-        assert!(output.status.success(), "doctor did not run: {stderr}");
         assert!(
-            !stdout.contains(THE_KEY.1) && !stderr.contains(THE_KEY.1),
+            !stdout.contains(A_PREMIUM_KEY) && !stderr.contains(A_PREMIUM_KEY),
             "doctor printed the premium key: {stdout}{stderr}"
         );
-        stdout
+        (output.status.code(), stdout, stderr)
     };
     let account_of_the_key = |stdout: &str| {
         let lines: Vec<String> = stdout.lines().map(|line| line.trim().to_string()).collect();
@@ -3874,7 +3874,9 @@ fn doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at() {
             .map(|at| lines[at + 1].clone())
     };
 
-    let without = accounted(&[PREMIUM_HOST]);
+    let nothing = Scratch::new("cli-running-premium-key-none");
+    let (code, without, stderr) = report(&nothing, &configured);
+    assert_eq!(code, Some(0), "{stderr}");
     assert_eq!(
         account_of_the_key(&without),
         None,
@@ -3882,14 +3884,10 @@ fn doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at() {
     );
     assert!(without.contains("without a premium key"), "{without}");
 
-    let no_host = accounted(&[THE_KEY]);
-    assert_eq!(
-        account_of_the_key(&no_host),
-        None,
-        "a key with no host to go to is accounted for: {no_host}"
-    );
-
-    let with = accounted(&[PREMIUM_HOST, THE_KEY]);
+    let held = Scratch::new("cli-running-premium-key-held")
+        .with_state("brave-key.json", &a_stored_premium_key());
+    let (code, with, stderr) = report(&held, &configured);
+    assert_eq!(code, Some(0), "{stderr}");
     let tier = account_of_the_key(&with)
         .unwrap_or_else(|| panic!("the premium key is not accounted for: {with}"));
     assert!(
@@ -3897,6 +3895,22 @@ fn doctor_accounts_for_the_premium_key_at_the_tier_its_walk_stopped_at() {
         "the key is accounted for at a tier its walk did not stop at: {tier}"
     );
     assert!(with.contains("with a premium key"), "{with}");
+
+    let nowhere_to_go = Scratch::new("cli-running-premium-key-no-backend")
+        .with_state("brave-key.json", &a_stored_premium_key());
+    let (_, dropped, _) = report(&nowhere_to_go, &bedrock_only);
+    assert_eq!(
+        account_of_the_key(&dropped),
+        None,
+        "a key with no Brave backend to go to is accounted for: {dropped}"
+    );
+
+    let garbled =
+        Scratch::new("cli-running-premium-key-garbled").with_state("brave-key.json", "not a key");
+    let (code, said_of_it, _) = report(&garbled, &configured);
+    assert_eq!(code, Some(1), "{said_of_it}");
+    assert!(said_of_it.contains("brave-key.json"), "{said_of_it}");
+    assert_eq!(account_of_the_key(&said_of_it), None);
 }
 
 /// CRED-10: the figure sizing the one brief window reaches the person, under the account of what
@@ -4888,7 +4902,7 @@ fn a_session_in_lines_with_no_service_configured_says_how_to_configure_one() {
         "amazon-bedrock",
         "OpenRouter",
         "bravebot auth login chatgpt",
-        "BRAVE_AI_CHAT_PREMIUM_KEY",
+        "bravebot auth login brave",
     ] {
         assert!(
             transcript.contains(route),
@@ -4930,7 +4944,7 @@ fn a_background_session_with_no_service_configured_says_how_to_configure_one() {
         "amazon-bedrock",
         "OpenRouter",
         "bravebot auth login chatgpt",
-        "BRAVE_AI_CHAT_PREMIUM_KEY",
+        "bravebot auth login brave",
     ] {
         assert!(
             transcript.contains(route),
@@ -5065,7 +5079,7 @@ fn a_session_in_lines_with_a_configured_gateway_opens() {
         "a configured gateway was refused as no service at all: {transcript}"
     );
     assert!(
-        !transcript.contains("BRAVE_AI_CHAT_PREMIUM_KEY"),
+        !transcript.contains("bravebot auth login brave"),
         "somebody who has configured a service was sent to configure another: {transcript}"
     );
     // The end of the input in place of an answer to the startup question starts no session and
@@ -5269,7 +5283,7 @@ fn the_retired_import_command_says_so_and_starts_no_work() {
         );
         assert!(stdout.is_empty(), "{arguments:?} started work: {stdout}");
         assert!(
-            stderr.contains("no longer imports") && stderr.contains("BRAVE_AI_CHAT_PREMIUM_KEY"),
+            stderr.contains("no longer imports") && stderr.contains("bravebot auth login brave"),
             "{arguments:?} did not say what replaced it: {stderr}"
         );
     }
@@ -8147,6 +8161,7 @@ fn auth_login_naming_no_way_is_refused_where_nobody_can_pick_one() {
         "the list was printed for nobody: {stdout}"
     );
     for form in [
+        "bravebot auth login brave",
         "bravebot auth login bedrock",
         "bravebot auth login import",
         "bravebot auth login gateway",
@@ -8168,6 +8183,8 @@ fn auth_refuses_what_names_no_way_to_sign_in() {
         (&["auth", "login", "LEO"][..], "LEO"),
         (&["auth", "login", "leo", "beta"][..], "leo"),
         (&["auth", "status", "leo"][..], "leo"),
+        (&["auth", "login", "brave", "now"][..], "now"),
+        (&["auth", "logout", "brave", "now"][..], "now"),
         (&["auth", "login", "bedrock", "us-east-1"][..], "us-east-1"),
         (&["auth", "logout"][..], "bravebot auth logout gateway"),
         (&["auth", "logout", "bedrock"][..], "aws sso logout"),
@@ -8969,6 +8986,10 @@ fn status_of(
         !stdout.contains(A_STORED_KEY) && !stderr.contains(A_STORED_KEY),
         "{arguments:?} printed a gateway key: {stdout}{stderr}"
     );
+    assert!(
+        !stdout.contains(A_PREMIUM_KEY) && !stderr.contains(A_PREMIUM_KEY),
+        "{arguments:?} printed the premium key: {stdout}{stderr}"
+    );
     for held in [
         A_CHATGPT_ACCESS_TOKEN,
         A_CHATGPT_REFRESH_TOKEN,
@@ -8981,6 +9002,120 @@ fn status_of(
         );
     }
     (output.status.code(), stdout, stderr)
+}
+
+/// CLI-23: with no key stored the Brave way is not signed in, which is a failure a script can test
+/// for, and the line says how to store one. Reading writes nothing, so an incognito session may ask.
+#[test]
+fn auth_status_brave_with_no_key_is_not_signed_in_and_exits_nonzero() {
+    let scratch = Scratch::new("cli-running-auth-status-brave-none");
+
+    let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["brave"]);
+
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "brave: not signed in: no premium key is stored; run bravebot auth login brave\n"
+    );
+    assert!(stderr.starts_with("BB1001: "), "{stderr}");
+    let incognito = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "status", "brave"],
+    );
+    assert_eq!(said(&incognito), (stdout, stderr));
+}
+
+/// CLI-23: a stored key is signed in, said without the key, and one that cannot be read is unusable
+/// and names the file.
+#[test]
+fn auth_status_brave_reports_a_stored_key_without_the_key() {
+    let held = Scratch::new("cli-running-auth-status-brave-held")
+        .with_state("brave-key.json", &a_stored_premium_key());
+
+    let (code, stdout, stderr) = status_of(&held, NOTHING_CONFIGURED, &["brave"]);
+
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert_eq!(
+        stdout,
+        "brave: signed in: a premium key is stored and is sent to Brave's premium service alone\n"
+    );
+    assert_eq!(stderr, "");
+
+    let garbled = Scratch::new("cli-running-auth-status-brave-garbled")
+        .with_state("brave-key.json", "not a key");
+    let (code, stdout, stderr) = status_of(&garbled, NOTHING_CONFIGURED, &["brave"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.starts_with("brave: unusable: "), "{stdout}");
+    assert!(stdout.contains("brave-key.json"), "{stdout}");
+}
+
+/// CLI-18: logging out of Brave removes the one file, in an incognito session as well since it
+/// leaves less behind, says what it leaves at Brave, is not an error where nothing is stored, and
+/// leaves the other files of the state directory where they are.
+#[test]
+fn auth_logout_brave_forgets_the_key_and_only_that_one() {
+    let scratch = Scratch::new("cli-running-auth-logout-brave")
+        .with_state("brave-key.json", &a_stored_premium_key())
+        .with_state("gateway-keys.json", &stored_keys(&["work"]));
+
+    let output = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "logout", "brave"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("forgot the stored premium key"), "{stdout}");
+    assert!(stdout.contains("still works"), "{stdout}");
+    assert!(!stdout.contains(A_PREMIUM_KEY), "{stdout}");
+    let state = scratch.path.join(".bravebot");
+    assert!(!state.join("brave-key.json").exists());
+    assert!(state.join("gateway-keys.json").exists());
+
+    let again = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "logout", "brave"],
+    );
+    let (stdout, stderr) = said(&again);
+    assert!(again.status.success(), "{stdout}{stderr}");
+    assert!(stdout.contains("no premium key is stored"), "{stdout}");
+}
+
+/// CLI-18: the Brave key is asked for on a terminal, so a pipe is refused as an argument and nothing
+/// is stored, and an incognito session stores nothing either.
+#[test]
+fn auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept() {
+    let scratch = Scratch::new("cli-running-auth-login-brave-refused");
+
+    let piped = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["auth", "login", "brave"],
+    );
+    let (stdout, stderr) = said(&piped);
+    assert_eq!(piped.status.code(), Some(2), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("needs a terminal"), "{stderr}");
+
+    let incognito = bravebot(
+        &scratch.path,
+        NOTHING_CONFIGURED,
+        &["--incognito", "auth", "login", "brave"],
+    );
+    let (stdout, stderr) = said(&incognito);
+    assert_eq!(incognito.status.code(), Some(1), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("incognito"), "{stderr}");
+    assert!(
+        !scratch
+            .path
+            .join(".bravebot")
+            .join("brave-key.json")
+            .exists()
+    );
 }
 
 /// CLI-23: a gateway is signed in where a turn would find a key for it, said by where and never by
@@ -9180,7 +9315,11 @@ fn auth_status_with_no_way_named_succeeds_when_any_sign_in_is_usable() {
 
     let (code, stdout, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &[]);
     assert_eq!(code, Some(0), "{stdout}{stderr}");
-    for expected in ["bedrock: not signed in", "gateway openrouter: signed in"] {
+    for expected in [
+        "brave: not signed in",
+        "bedrock: not signed in",
+        "gateway openrouter: signed in",
+    ] {
         assert!(stdout.contains(expected), "{expected} is missing: {stdout}");
     }
 
@@ -9221,6 +9360,7 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
         &["import"][..],
         &["elsewhere"],
         &["xai", "now"],
+        &["brave", "now"],
         &["bedrock", "now"],
         &["gateway", "work", "now"],
         &["--json"],
@@ -9234,7 +9374,7 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     }
     let (_, _, stderr) = status_of(&scratch, NOTHING_CONFIGURED, &["elsewhere"]);
     assert!(
-        stderr.contains("bravebot auth status [bedrock|gateway [id]|chatgpt|xai]"),
+        stderr.contains("bravebot auth status [brave|bedrock|gateway [id]|chatgpt|xai]"),
         "{stderr}"
     );
 
@@ -9242,13 +9382,13 @@ fn auth_status_refuses_what_asks_about_no_sign_in() {
     // the language the interface is in.
     let (_, _, english) = status_of(&scratch, NOTHING_CONFIGURED, &["import"]);
     assert!(
-        english.contains("name bedrock, gateway, chatgpt or xai"),
+        english.contains("name brave, bedrock, gateway, chatgpt or xai"),
         "{english}"
     );
     let in_french = [NOTHING_CONFIGURED, &[("BRAVEBOT_LOCALE", "fr")]].concat();
     let (_, _, french) = status_of(&scratch, &in_french, &["import"]);
     assert!(
-        french.contains("nommez bedrock, gateway, chatgpt ou xai"),
+        french.contains("nommez brave, bedrock, gateway, chatgpt ou xai"),
         "{french}"
     );
 }

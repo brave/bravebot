@@ -145,8 +145,9 @@ impl fmt::Display for ChatError {
             Self::Account(failure) => write!(f, "ChatGPT account: {failure}"),
             Self::Subscription(detail) => write!(
                 f,
-                "the premium key could not be used: {detail}. Unset BRAVE_AI_CHAT_PREMIUM_KEY to \
-                 send requests to the free endpoint instead"
+                "the premium key could not be used: {detail}. Run `bravebot auth login brave` to \
+                 replace it, or `bravebot auth logout brave` to send requests to the free endpoint \
+                 instead"
             ),
         }
     }

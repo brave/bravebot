@@ -15,6 +15,7 @@ governs:
   - crates/cli/src/invocation.rs
   - crates/cli/src/flags.rs
   - crates/cli/src/auth.rs
+  - crates/cli/src/brave.rs
 documented-by:
   - docs/website/docs/using/sessions.md
   - docs/website/docs/using/incognito.md
@@ -105,8 +106,8 @@ hold gate names and paths, which is a record of a session having happened and wh
 ### INCOG-5: reading is unchanged, apart from the one answer named here
 
 An incognito session reads the settings, the recorded model and theme, the standing instructions,
-the skills and the stored ChatGPT and xAI sign-ins, exactly as an ordinary one does. What is refused
-is writing, apart from the three files [INCOG-8](#INCOG-8) names, and one read, named below. The record of
+the skills, the stored premium key and the stored ChatGPT and xAI sign-ins, exactly as an ordinary one
+does. What is refused is writing, apart from the three files [INCOG-8](#INCOG-8) names, and one read, named below. The record of
 command lines somebody asked to be remembered past a session, which [tools/run.md](tools/run.md)
 governs, is read here on the same terms: a line already in it stops the asking as it does anywhere,
 and the key that would add one is not offered. The files in that record a write may create a
@@ -175,8 +176,11 @@ cleared and by what, and one missed ordering writes the thing the mode exists no
 <a id="INCOG-7"></a>
 ### INCOG-7: signing in, storing a key and importing are refused rather than silently skipped
 
-In an incognito session, storing a gateway key with `bravebot auth login gateway` is refused, before
-the key is asked for, and forgetting one with `bravebot auth logout gateway` is allowed. Importing
+In an incognito session, storing a premium key with `bravebot auth login brave` is refused, before
+the key is asked for, and forgetting one with `bravebot auth logout brave` is allowed
+([PREM-16](premium-credentials.md#PREM-16)). Storing a gateway key with
+`bravebot auth login gateway` is refused the same way, before the key is asked for, and forgetting
+one with `bravebot auth logout gateway` is allowed. Importing
 model services from other tools with `bravebot import-providers` is refused the same way
 ([IMPORT-8](import.md#IMPORT-8)). Signing in with a ChatGPT account with
 `bravebot auth login chatgpt` is refused the same way, before the listener binds and before a browser
@@ -194,6 +198,9 @@ removing a stored secret leaves less behind rather than more, which is the direc
 points.
 
 `verified-by: bravebot_cli::running::import_providers_is_refused_while_incognito`
+`verified-by: bravebot_cli::running::auth_login_brave_is_refused_where_a_key_cannot_be_typed_or_kept`
+`verified-by: bravebot_cli::running::auth_logout_brave_forgets_the_key_and_only_that_one`
+`verified-by: bravebot_cli::brave::the_sign_in_is_refused_where_a_key_cannot_be_asked_for_or_kept`
 `verified-by: bravebot_cli::running::auth_login_gateway_is_refused_before_a_key_is_asked_for`
 `verified-by: bravebot_cli::running::auth_logout_gateway_forgets_the_key_named_in_an_incognito_session`
 `verified-by: bravebot_cli::running::auth_login_chatgpt_is_refused_before_a_browser_opens_where_it_cannot_be_done`

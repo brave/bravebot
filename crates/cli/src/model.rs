@@ -611,7 +611,7 @@ mod tests {
             at("OpenRouter"),
             at("bravebot auth login chatgpt"),
             at("bravebot auth login xai"),
-            at("BRAVE_AI_CHAT_PREMIUM_KEY"),
+            at("bravebot auth login brave"),
         ];
         assert!(routes.is_sorted(), "{said}");
         let line = said
@@ -642,7 +642,7 @@ mod tests {
             "OpenRouter",
             "bravebot auth login chatgpt",
             "bravebot auth login xai",
-            "BRAVE_AI_CHAT_PREMIUM_KEY",
+            "bravebot auth login brave",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
         }
@@ -672,7 +672,7 @@ mod tests {
             "amazon-bedrock",
             "OpenRouter",
             "bravebot auth login chatgpt",
-            "BRAVE_AI_CHAT_PREMIUM_KEY",
+            "bravebot auth login brave",
             "`model` key",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
@@ -706,7 +706,7 @@ mod tests {
             "amazon-bedrock",
             "OpenRouter",
             "bravebot auth login xai",
-            "BRAVE_AI_CHAT_PREMIUM_KEY",
+            "bravebot auth login brave",
             "`model` key",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");

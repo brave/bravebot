@@ -1423,18 +1423,20 @@ fn an_unusable_premium_key_fails_rather_than_downgrading() {
     let shown = err.to_string();
     assert!(shown.contains("premium key"), "unclear error: {shown}");
     assert!(
-        shown.contains("BRAVE_AI_CHAT_PREMIUM_KEY"),
+        shown.contains("bravebot auth login brave"),
         "no remedy offered: {shown}"
     );
 }
 
-/// PREM-2: a build with no premium host attaches no key even when a source of one is lent, rather
-/// than sending it to an endpoint it was not issued for. The request is the free endpoint's, signed
-/// as it always was.
+/// PREM-2: a configuration with no premium host attaches no key even when a source of one is lent,
+/// rather than sending it to an endpoint it was not issued for. The request is the free endpoint's,
+/// signed as it always was. The host is compiled in for every build that reaches Brave, so the case
+/// is one a configuration is handed, here by clearing it.
 #[test]
 fn without_a_premium_host_no_key_is_attached() {
     let (base_endpoint, received) = serve(REPLY);
-    let config = config_for(&base_endpoint);
+    let mut config = config_for(&base_endpoint);
+    config.premium_endpoint = None;
     let egress = Egress::new();
     let mut sink = RecordingSink::new();
     let mut policy = Policy::begin(

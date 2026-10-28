@@ -304,7 +304,6 @@ mod tests {
         let names = names(&Settings::default());
         assert!(names.iter().any(|name| name == "SERVICES_KEY_AICHAT"));
         assert!(names.iter().any(|name| name == "BRAVE_SERVICES_KEY_ID"));
-        assert!(names.iter().any(|name| name == "BRAVE_AI_CHAT_PREMIUM_KEY"));
     }
 
     /// What the planner is told is the fixed set and nothing a configuration adds. An entry in a
@@ -314,11 +313,7 @@ mod tests {
     fn the_credentials_told_to_the_planner_are_the_fixed_ones() {
         assert_eq!(
             builtin_credentials(),
-            [
-                "SERVICES_KEY_AICHAT",
-                "BRAVE_SERVICES_KEY_ID",
-                "BRAVE_AI_CHAT_PREMIUM_KEY"
-            ]
+            ["SERVICES_KEY_AICHAT", "BRAVE_SERVICES_KEY_ID"]
         );
     }
 
@@ -418,7 +413,6 @@ mod tests {
             "GATEWAY_SECOND_TOKEN",
             "SERVICES_KEY_AICHAT",
             "BRAVE_SERVICES_KEY_ID",
-            "BRAVE_AI_CHAT_PREMIUM_KEY",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -475,7 +469,6 @@ mod tests {
             [
                 "SERVICES_KEY_AICHAT",
                 "BRAVE_SERVICES_KEY_ID",
-                "BRAVE_AI_CHAT_PREMIUM_KEY",
                 "GATEWAY_TOKEN"
             ]
         );

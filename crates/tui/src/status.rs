@@ -1341,16 +1341,20 @@ mod tests {
     use bravebot_agent::servers::{Access, PolicyEgress};
     use bravebot_config::DEFAULT_MODEL;
 
+    /// A configuration whose premium host is `premium` where one is named, with a key stored for it
+    /// as `bravebot auth login brave` leaves one. Without `premium` there is no key, so the build
+    /// has no premium tier to report.
     fn config_for(endpoint: &str, premium: Option<&str>) -> Config {
-        Config::from_lookup(|key| match key {
+        let mut config = Config::from_lookup(|key| match key {
             "SERVICES_KEY_AICHAT" => Some("a-signing-key".into()),
             "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
             "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
             "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => premium.map(str::to_string),
-            "BRAVE_AI_CHAT_PREMIUM_KEY" => premium.map(|_| "a-premium-key".to_string()),
             _ => None,
         })
-        .expect("config")
+        .expect("config");
+        config.premium_key = premium.map(|_| bravebot_config::Secret::new("a-premium-key"));
+        config
     }
 
     /// Leaked once so a `Facts` built by the helper can borrow it for the test's lifetime.

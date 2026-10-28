@@ -90,7 +90,8 @@ Ten things still reach the filesystem:
   trusted. The record names the file and nothing else, though that does say you worked in the
   project.
 
-`bravebot auth login chatgpt` is refused rather than quietly skipped, before a browser opens, and
-`bravebot auth logout chatgpt` still works, because removing a stored secret leaves less behind rather
-than more. `bravebot auth login xai` is refused the same way, before the code is asked for, and
-`bravebot auth logout xai` still works.
+`bravebot auth login brave` is refused rather than quietly skipped, before the key is asked for, and
+`bravebot auth logout brave` still works, because removing a stored secret leaves less behind rather
+than more. `bravebot auth login chatgpt` is refused the same way, before a browser opens, and
+`bravebot auth logout chatgpt` still works. `bravebot auth login xai` is refused the same way, before
+the code is asked for, and `bravebot auth logout xai` still works.

@@ -27,6 +27,7 @@ pub mod env_var {
     include!("env_var.rs");
 }
 
+pub mod brave_key;
 pub mod connectors;
 pub mod git_identities;
 pub mod hooks;
@@ -77,6 +78,31 @@ include!(concat!(env!("OUT_DIR"), "/baked.rs"));
 /// this product identify themselves with `Brave-Product: bravebot` so the listing and completions
 /// endpoints offer this name instead.
 pub const DEFAULT_MODEL: &str = "automatic-bravebot";
+
+/// Where Brave's premium service is, for a build whose free endpoint is a development one.
+///
+/// Compiled in rather than configured: the key a person types with `bravebot auth login brave` goes
+/// to this host, so no variable or settings file is what decides where it goes. The two constants
+/// below are one value while the premium service is live only in development, and are two so that
+/// production can move without touching how the choice is made.
+pub const DEV_PREMIUM_ENDPOINT: &str = "https://ai-chat-premium.bsg.brave.software";
+
+/// Where Brave's premium service is, for every other build.
+pub const PROD_PREMIUM_ENDPOINT: &str = "https://ai-chat-premium.bsg.brave.software";
+
+/// The premium host compiled in for a build whose free endpoint is `free`.
+///
+/// A development endpoint is one under `brave.software` or `bravesoftware.com`; every other host,
+/// including one that names nothing, is production's.
+fn compiled_in_premium_endpoint(free: &str) -> &'static str {
+    let development = provider::reached_at(free).is_some_and(|(host, _)| {
+        host.ends_with(".brave.software") || host.ends_with(".bravesoftware.com")
+    });
+    match development {
+        true => DEV_PREMIUM_ENDPOINT,
+        false => PROD_PREMIUM_ENDPOINT,
+    }
+}
 
 /// The automatic routing name Leo uses. Remembered choices and configuration may still say it from
 /// before bravebot had its own entry; [`normalize_model`] rewrites those to [`DEFAULT_MODEL`].
@@ -632,13 +658,13 @@ pub enum Held<'a> {
         /// The host the block's endpoint names, from [`provider::Provider::host`].
         host: &'a str,
     },
-    /// The key the premium host authorises a request with, baked into this build or exported into
-    /// the shell, and sent as a bearer token with every premium request.
+    /// The key the premium host authorises a request with, kept in `~/.bravebot/brave-key.json`
+    /// and sent as a bearer token with every premium request.
     ///
     /// Held. It carries no expiry, and this program presents it itself with nothing deciding a
     /// use: the premium host is both the issuer and the only surface that revokes it, and it
-    /// offers no narrower or shorter form. Unsetting the variable or rebuilding without it ends
-    /// this machine's custody and leaves the key live there.
+    /// offers no narrower or shorter form. `bravebot auth logout brave` ends this machine's
+    /// custody and leaves the key live there.
     ///
     /// No parameter. The host is Brave's premium deployment, which [`Config::premium_endpoint`]
     /// names, and the key is one value whatever the person.
@@ -1202,17 +1228,19 @@ pub struct Config {
     pub key_id: String,
     /// Base URL. The API path is appended by the client.
     pub endpoint: String,
-    /// Base URL for the premium tier, when this build has one.
+    /// Base URL for the premium tier: the one compiled in for this build's environment, or the one
+    /// [`env_var::PREMIUM_ENDPOINT`] names in its place.
     ///
-    /// `None` leaves premium unavailable, which is the right outcome for a build that was never
-    /// given the host: falling back to the free endpoint with a subscription credential attached
-    /// would send the credential somewhere it does not belong.
+    /// `None` only for a build that cannot reach the Brave backend at all, which has no premium tier
+    /// to reach either. A value that is present but malformed is not used and the compiled-in host
+    /// stands, so the key never goes to an address a settings file spelled badly.
     pub premium_endpoint: Option<String>,
-    /// The key the premium host authorises a request with, sent as a bearer token.
+    /// The key `bravebot auth login brave` stored, sent as a bearer token to the premium host.
     ///
-    /// `None` where there is no premium host to send it to: the two go together, so a key with
-    /// nowhere to go is dropped rather than held. Whether the host is one of Brave's is decided
-    /// where the key is presented, not here ([PREM-2](../../../docs/specs/premium-credentials.md#PREM-2)).
+    /// `None` where none is stored, and where there is no premium host to send it to: the two go
+    /// together, so a key with nowhere to go is dropped rather than held. Whether the host is one
+    /// of Brave's is decided where the key is presented, not here
+    /// ([PREM-2](../../../docs/specs/premium-credentials.md#PREM-2)).
     pub premium_key: Option<Secret>,
     /// Model to request when the user has not picked one. The server may substitute a different
     /// one regardless.
@@ -1467,13 +1495,22 @@ impl Config {
         settings: &Settings,
         managed: &Managed,
     ) -> Result<Self, ConfigError> {
-        let stored = settings::home()
-            .and_then(|home| keys::Keys::read(&home).ok())
+        let home = settings::home();
+        let stored = home
+            .as_deref()
+            .and_then(|home| keys::Keys::read(home).ok())
             .unwrap_or_default();
+        // Read on the footing the gateway keys are: a file that cannot be read is no key, and
+        // `doctor` says it is unreadable.
+        let premium_key = home
+            .as_deref()
+            .and_then(|home| brave_key::read(home).ok())
+            .flatten();
         Self::from_sources(
             settings,
             managed,
             &stored,
+            premium_key,
             |key| env::var(key).ok(),
             built_in,
         )
@@ -1485,6 +1522,7 @@ impl Config {
         settings: &Settings,
         managed: &Managed,
         stored: &keys::Keys,
+        premium_key: Option<Secret>,
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
@@ -1503,6 +1541,9 @@ impl Config {
             })
             .collect();
         let mut config = Self::from_lookup_with_providers(lookup, providers)?;
+        // Held only with a host to send it to, so a key stored on a machine whose build reaches no
+        // Brave backend is carried by nothing.
+        config.premium_key = premium_key.filter(|_| config.premium_endpoint.is_some());
         // Carried rather than consulted here: the name to check against the lists arrives later, from
         // any of the places that may name a model, and each is checked against the same pair
         // (BACKEND-48).
@@ -1615,26 +1656,24 @@ impl Config {
             reaches_brave,
         );
 
-        // A premium host that is present but malformed is dropped rather than rejected: it only
-        // matters to someone who has imported a subscription, and failing every run over it would
-        // punish everyone else. A query or a fragment makes it malformed: a transport ends the host
-        // at the first `/`, `?` or `#`, so the text after either is not part of the host although a
-        // suffix test on the whole value reads it as one, and the request path is appended to a base
-        // that has either, which puts it inside the query or the fragment.
+        // A premium host that is present but malformed is not used rather than rejected, and the one
+        // compiled in stands: failing every run over it would punish everyone else, and sending the
+        // key to an address that was spelled badly would send it somewhere nobody chose. A query or
+        // a fragment makes it malformed: a transport ends the host at the first `/`, `?` or `#`, so
+        // the text after either is not part of the host although a suffix test on the whole value
+        // reads it as one, and the request path is appended to a base that has either, which puts it
+        // inside the query or the fragment.
+        //
+        // None for a build that reaches no Brave backend, which has no free endpoint to say which
+        // environment's premium host it would be.
         let premium_endpoint = lookup(env_var::PREMIUM_ENDPOINT)
             .map(|value| value.trim().to_string())
             .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
             .filter(|value| !value.contains(['?', '#']))
-            .map(|value| value.trim_end_matches('/').to_string());
-
-        // Held only with a host to send it to, so a build or a shell that has one without the other
-        // sends neither.
-        let premium_key = premium_endpoint
-            .as_ref()
-            .and_then(|_| lookup(env_var::PREMIUM_KEY))
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .map(Secret::new);
+            .map(|value| value.trim_end_matches('/').to_string())
+            .or_else(|| {
+                (!endpoint.is_empty()).then(|| compiled_in_premium_endpoint(&endpoint).to_string())
+            });
 
         // Nonsense falls back to the default rather than disabling compaction, which is what a
         // zero or an unparseable value would otherwise quietly do. A mistyped budget should cost
@@ -1664,7 +1703,7 @@ impl Config {
             key_id,
             endpoint: endpoint.trim_end_matches('/').to_string(),
             premium_endpoint,
-            premium_key,
+            premium_key: None,
             default_model,
             advisor_model: None,
             defer_mcp_tools_above: None,
@@ -2822,24 +2861,32 @@ mod tests {
         );
     }
 
+    /// A configuration over `lookup` with a premium key stored, as `bravebot auth login brave`
+    /// leaves one.
+    fn with_a_stored_premium_key(lookup: impl Fn(&str) -> Option<String>) -> Config {
+        Config::from_sources(
+            &Settings::default(),
+            &Managed::default(),
+            &keys::Keys::default(),
+            Some(Secret::new("a-premium-key")),
+            |_| None,
+            lookup,
+        )
+        .expect("configured")
+    }
+
     /// CRED-2: the premium key is a credential this machine holds and presents with every premium
-    /// request, so it is in the record with a tier of its own. Left out, a bearer key baked into
-    /// the build or exported into the shell has no recorded tier at all, which is the outcome the
-    /// clause forbids.
+    /// request, so it is in the record with a tier of its own. Left out, a bearer key stored under
+    /// the state directory has no recorded tier at all, which is the outcome the clause forbids.
     ///
     /// Both directions, because the record is what a report walks: a rule that pushed the entry
     /// unconditionally would account for a key on every build that was given none, and send
-    /// somebody to revoke a key that does not exist. A key with no premium host to go to is not
-    /// held at all, and a Bedrock-only build is held to the absent case with a key present, since
-    /// nothing there reads it and CRED-2 gives a credential nothing reads no tier.
+    /// somebody to revoke a key that does not exist. A Bedrock-only build is held to the absent case
+    /// with a key stored, since nothing there reads it and CRED-2 gives a credential nothing reads
+    /// no tier.
     #[test]
     fn a_premium_key_is_a_credential_this_configuration_holds() {
-        let with_the_key = |k: &str| match k {
-            env_var::PREMIUM_ENDPOINT => Some("https://premium.invalid".into()),
-            env_var::PREMIUM_KEY => Some("a-premium-key".into()),
-            other => complete_env(other),
-        };
-        let brave = Config::from_lookup(with_the_key).expect("configured");
+        let brave = with_a_stored_premium_key(complete_env);
         assert!(brave.serves_aichat());
         assert_eq!(
             brave.held(),
@@ -2854,25 +2901,11 @@ mod tests {
             "a build with no premium key is accounted for one it does not hold"
         );
 
-        let no_host = Config::from_lookup(|k| match k {
-            env_var::PREMIUM_ENDPOINT => None,
-            other => with_the_key(other),
-        })
-        .expect("configured");
-        assert_eq!(
-            no_host.held(),
-            [Held::SigningKey],
-            "a key with no premium host to go to is accounted for"
-        );
-
-        let bedrock_only = Config::from_lookup(|k| match k {
+        let bedrock_only = with_a_stored_premium_key(|k| match k {
             env_var::USE_BEDROCK => Some("1".into()),
             env_var::AWS_REGION => Some("us-west-2".into()),
-            env_var::PREMIUM_ENDPOINT => Some("https://premium.invalid".into()),
-            env_var::PREMIUM_KEY => Some("a-premium-key".into()),
             _ => None,
-        })
-        .expect("bedrock alone is a working configuration");
+        });
         assert!(!bedrock_only.serves_aichat());
         assert_eq!(
             bedrock_only.held(),
@@ -4036,7 +4069,14 @@ mod tests {
         exported: impl Fn(&str) -> Option<String>,
         baked: impl Fn(&str) -> Option<String>,
     ) -> Result<Config, ConfigError> {
-        Config::from_sources(settings, managed, &keys::Keys::default(), exported, baked)
+        Config::from_sources(
+            settings,
+            managed,
+            &keys::Keys::default(),
+            None,
+            exported,
+            baked,
+        )
     }
 
     /// The names a settings file may set are the names something reads, and this is all of them. A
@@ -4050,7 +4090,6 @@ mod tests {
                 "BRAVE_SERVICES_KEY_ID": "key-id-from-the-file",
                 "BRAVE_AI_CHAT_ENDPOINT": "https://endpoint.invalid",
                 "BRAVE_AI_CHAT_PREMIUM_ENDPOINT": "https://premium.invalid",
-                "BRAVE_AI_CHAT_PREMIUM_KEY": "premium-key-from-the-file",
                 "BRAVEBOT_DEFAULT_MODEL": "model-from-the-file",
                 "BRAVEBOT_CONTEXT_BUDGET": "4096",
                 "BRAVEBOT_OUTPUT_BUDGET": "48000",
@@ -4082,10 +4121,6 @@ mod tests {
         assert_eq!(
             config.premium_endpoint.as_deref(),
             Some("https://premium.invalid")
-        );
-        assert_eq!(
-            config.premium_key.as_ref().map(Secret::expose),
-            Some("premium-key-from-the-file")
         );
         assert_eq!(config.default_model, "model-from-the-file");
         assert_eq!(config.context_budget, 4096);
@@ -4398,7 +4433,7 @@ mod tests {
         settings: &Settings,
         stored: &keys::Keys,
     ) -> Vec<(String, Option<String>)> {
-        Config::from_sources(settings, managed, stored, |_| None, complete_env)
+        Config::from_sources(settings, managed, stored, None, |_| None, complete_env)
             .expect("configured")
             .providers
             .iter()
@@ -4466,6 +4501,7 @@ mod tests {
             &recorded,
             &Managed::default(),
             &stored,
+            None,
             exported,
             complete_env,
         )
@@ -4492,6 +4528,7 @@ mod tests {
             &unnamed,
             &Managed::default(),
             &stored,
+            None,
             exported,
             complete_env,
         )
@@ -4531,6 +4568,7 @@ mod tests {
             &settings,
             &Managed::default(),
             &stored,
+            None,
             |_| None,
             complete_env,
         )
@@ -4583,6 +4621,7 @@ mod tests {
             &settings,
             &Managed::default(),
             &stored,
+            None,
             |_| None,
             complete_env,
         )
@@ -5800,35 +5839,70 @@ mod tests {
         assert_eq!(config.models_url(), "https://example.invalid/v1/models");
     }
 
-    /// A build without the premium host must report premium as unavailable rather than quietly
-    /// using the free endpoint, which would send a subscription credential to the wrong host.
+    /// The premium host is compiled in, so a build that names none still has one, and it is the
+    /// host of the environment the free endpoint is in. A key typed with `bravebot auth login brave`
+    /// goes to it with no variable or settings file having a say.
     #[test]
-    fn a_build_without_a_premium_endpoint_has_no_premium_url() {
+    fn a_build_that_names_no_premium_host_has_the_one_compiled_in() {
         let config = Config::from_lookup(complete_env).unwrap();
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some(PROD_PREMIUM_ENDPOINT)
+        );
+        assert_eq!(
+            config.premium_chat_completions_url().as_deref(),
+            Some(format!("{PROD_PREMIUM_ENDPOINT}/v1/chat/completions").as_str())
+        );
+
+        let development = Config::from_lookup(|k| match k {
+            env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.software".into()),
+            other => complete_env(other),
+        })
+        .unwrap();
+        assert_eq!(
+            development.premium_endpoint.as_deref(),
+            Some(DEV_PREMIUM_ENDPOINT)
+        );
+    }
+
+    /// A build that reaches no Brave backend has no premium host either, since there is no free
+    /// endpoint to say whose environment it would be.
+    #[test]
+    fn a_build_that_reaches_no_brave_backend_has_no_premium_host() {
+        let config = Config::from_lookup(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            _ => None,
+        })
+        .unwrap();
         assert_eq!(config.premium_endpoint, None);
         assert_eq!(config.premium_chat_completions_url(), None);
     }
 
-    /// A blank or schemeless premium host is discarded, not turned into a request to a host with
-    /// no scheme.
+    /// A blank or schemeless premium host is not used, and the one compiled in stands, rather than
+    /// the key being sent to a host with no scheme.
     #[test]
-    fn a_malformed_premium_endpoint_is_discarded() {
+    fn a_malformed_premium_endpoint_is_not_used() {
         for value in ["", "   ", "premium.invalid"] {
             let config = Config::from_lookup(|k| match k {
                 env_var::PREMIUM_ENDPOINT => Some(value.into()),
                 other => complete_env(other),
             })
             .unwrap();
-            assert_eq!(config.premium_endpoint, None, "accepted '{value}'");
+            assert_eq!(
+                config.premium_endpoint.as_deref(),
+                Some(PROD_PREMIUM_ENDPOINT),
+                "accepted '{value}'"
+            );
         }
     }
 
     /// PREM-11: a premium endpoint is a base the request path is appended to, so a query or a
     /// fragment is never part of a base. A transport ends the host at the first `/`, `?` or `#`, so
     /// `https://attacker.example#.brave.com` names `attacker.example` while its text ends with a
-    /// Brave suffix. The value is dropped here, as a schemeless one is, so the URL requests are sent
-    /// to and the host the credential is judged by are read from a string that cannot be split two
-    /// ways.
+    /// Brave suffix. The value is not used here, as a schemeless one is not, so the URL requests are
+    /// sent to and the host the credential is judged by are read from a string that cannot be split
+    /// two ways.
     #[test]
     fn a_premium_endpoint_with_a_query_or_a_fragment_is_discarded() {
         for value in [
@@ -5843,8 +5917,11 @@ mod tests {
                 other => complete_env(other),
             })
             .unwrap();
-            assert_eq!(config.premium_endpoint, None, "accepted '{value}'");
-            assert_eq!(config.premium_chat_completions_url(), None, "{value}");
+            assert_eq!(
+                config.premium_endpoint.as_deref(),
+                Some(PROD_PREMIUM_ENDPOINT),
+                "accepted '{value}'"
+            );
         }
     }
 
@@ -5863,51 +5940,35 @@ mod tests {
         );
     }
 
-    /// PREM-11: the key and the premium host travel together. A key exported with no host to send it
-    /// to is dropped, so nothing downstream holds a credential with nowhere to go, and a host with
-    /// no key leaves premium unused.
+    /// PREM-11: the key a person stored is held, and goes with the compiled-in host. A build with
+    /// no key stored holds none, so every request it makes is the free endpoint's.
     #[test]
-    fn a_premium_key_is_held_only_with_a_premium_host() {
-        let both = Config::from_lookup(|k| match k {
-            env_var::PREMIUM_ENDPOINT => Some("https://premium.invalid".into()),
-            env_var::PREMIUM_KEY => Some("  the-premium-key \n".into()),
-            other => complete_env(other),
-        })
-        .unwrap();
+    fn a_stored_premium_key_is_held_with_the_host_compiled_in() {
+        let config = with_a_stored_premium_key(complete_env);
         assert_eq!(
-            both.premium_key.as_ref().map(Secret::expose),
-            Some("the-premium-key")
+            config.premium_key.as_ref().map(Secret::expose),
+            Some("a-premium-key")
+        );
+        assert_eq!(
+            config.premium_endpoint.as_deref(),
+            Some(PROD_PREMIUM_ENDPOINT)
         );
 
-        let no_host = Config::from_lookup(|k| match k {
-            env_var::PREMIUM_KEY => Some("the-premium-key".into()),
-            other => complete_env(other),
-        })
-        .unwrap();
-        assert!(no_host.premium_key.is_none(), "a key with nowhere to go");
-
-        let no_key = Config::from_lookup(|k| match k {
-            env_var::PREMIUM_ENDPOINT => Some("https://premium.invalid".into()),
-            other => complete_env(other),
-        })
-        .unwrap();
-        assert!(no_key.premium_key.is_none());
-        assert!(no_key.premium_endpoint.is_some());
+        let none = Config::from_lookup(complete_env).unwrap();
+        assert!(none.premium_key.is_none());
     }
 
-    /// A blank key is no key, so an `.envrc` that exports an empty value does not send
-    /// `Authorization: Bearer ` to the premium host.
+    /// PREM-11: the key and the premium host travel together. A key stored on a machine whose build
+    /// reaches no Brave backend has no host to go to, so it is dropped and nothing downstream holds
+    /// a credential with nowhere to go.
     #[test]
-    fn a_blank_premium_key_is_no_key() {
-        for value in ["", "   ", "\n"] {
-            let config = Config::from_lookup(|k| match k {
-                env_var::PREMIUM_ENDPOINT => Some("https://premium.invalid".into()),
-                env_var::PREMIUM_KEY => Some(value.into()),
-                other => complete_env(other),
-            })
-            .unwrap();
-            assert!(config.premium_key.is_none(), "accepted {value:?}");
-        }
+    fn a_stored_premium_key_is_dropped_where_there_is_no_brave_backend() {
+        let config = with_a_stored_premium_key(|k| match k {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            _ => None,
+        });
+        assert!(config.premium_key.is_none());
     }
 
     #[test]

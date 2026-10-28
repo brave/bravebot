@@ -1790,27 +1790,27 @@ mod tests {
         );
     }
 
-    /// BACKEND-39: a premium key held with a premium host that is Brave's configures the Brave
+    /// BACKEND-39: a premium key stored with a premium host that is Brave's configures the Brave
     /// backend, so a build that holds one starts work. Each half of the pair is held to the other:
-    /// a host with no key and a key with no host (which the configuration drops) leave the state a
-    /// first run is told about, and a key for a host that is not Brave's is a destination somebody
-    /// chose, whose key is not presented.
+    /// a host with no key leaves the state a first run is told about, and a key for a host that is
+    /// not Brave's is a destination somebody chose, whose key is not presented.
     #[test]
     fn a_premium_key_with_a_braves_premium_host_is_a_service_configured() {
         let egress = Egress::new();
         let with = |premium: Option<&str>, key: Option<&str>| {
-            Config::from_lookup(|name| {
+            let mut config = Config::from_lookup(|name| {
                 match name {
                     env_var::SIGNING_KEY => Some("test-signing-key"),
                     env_var::KEY_ID => Some("test-key-id"),
                     env_var::ENDPOINT => Some("https://ai-chat.bsg.brave.com"),
                     env_var::PREMIUM_ENDPOINT => premium,
-                    env_var::PREMIUM_KEY => key,
                     _ => None,
                 }
                 .map(str::to_string)
             })
-            .expect("configured")
+            .expect("configured");
+            config.premium_key = key.map(bravebot_config::Secret::new);
+            config
         };
         let served = |config: &Config| {
             serving_with(
@@ -1829,12 +1829,12 @@ mod tests {
         let premium = Some("https://ai-chat-premium.bsg.brave.software");
 
         assert_eq!(served(&with(premium, Some("a-key"))), Serving::Configured);
-        assert_eq!(served(&with(premium, None)), nothing, "a host and no key");
         assert_eq!(
             served(&with(None, Some("a-key"))),
-            nothing,
-            "a key and no host"
+            Serving::Configured,
+            "the host compiled in"
         );
+        assert_eq!(served(&with(premium, None)), nothing, "a host and no key");
         assert_eq!(
             served(&with(Some("https://premium.example"), Some("a-key"))),
             nothing,
@@ -5060,7 +5060,7 @@ mod tests {
         assert!(bedrock.contains("aws sso login"), "{bedrock}");
 
         let premium = BackendError::from(ChatError::Subscription("not held".into())).to_string();
-        assert!(premium.contains("BRAVE_AI_CHAT_PREMIUM_KEY"), "{premium}");
+        assert!(premium.contains("bravebot auth login brave"), "{premium}");
         assert!(!premium.contains("aws sso login"), "{premium}");
     }
 

@@ -4,6 +4,7 @@
 
 mod auth;
 mod background;
+mod brave;
 mod bug_report;
 mod chatgpt;
 mod completion;

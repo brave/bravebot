@@ -120,7 +120,7 @@ features anything here implements.
 
 | Group | Where it lives |
 | --- | --- |
-| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the premium key, `BRAVE_AI_CHAT_PREMIUM_KEY`, which is baked in and masked the same way or set in the environment or a settings file's `env` block, and which is sent as a bearer token to Brave's premium host alone ([PREM-2](premium-credentials.md#PREM-2)), with no file of bravebot's own for it; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/gateway-keys.json`, kept the same way, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)); `~/.bravebot/xai-account.json`, kept the same way, the access token and refresh token `bravebot auth login xai` stored for an xAI account ([XAI-5](xai-sign-in.md#XAI-5)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
+| Its own auth | the signing key and key id that sign a request to the default backend, baked into the binary at build time and masked rather than encrypted, so one build's key is every install's key; the Backtrace submission URL, baked and masked the same way, whose token can add crash reports to one project and read nothing ([crash-reports.md](crash-reports.md#CRASH-3)); `~/.bravebot/gateway-keys.json`, kept to the account that wrote it by a mode of 0600 on Unix and a protected one-account access-control list on Windows, the gateway keys `bravebot auth login gateway` stored, one per provider id; `~/.bravebot/brave-key.json`, kept the same way, the key `bravebot auth login brave` stored for Brave's premium service, sent as a bearer token to Brave's premium host alone ([PREM-2](premium-credentials.md#PREM-2), [PREM-14](premium-credentials.md#PREM-14)); `~/.bravebot/chatgpt-account.json`, kept the same way, the access token and refresh token `bravebot auth login chatgpt` stored for a ChatGPT account ([CHATGPT-6](chatgpt-sign-in.md#CHATGPT-6)); `~/.bravebot/xai-account.json`, kept the same way, the access token and refresh token `bravebot auth login xai` stored for an xAI account ([XAI-5](xai-sign-in.md#XAI-5)). With Bedrock opted into instead, the AWS CLI's own cache, listed under Cloud above |
 | What it keeps beside that | `~/.bravebot/history`, every submitted prompt across runs; `~/.bravebot/sessions/<project-key>/<id>.json` and its trail beside it, and the record holds the conversation rather than a title, so it carries whatever file content the planner was shown until nothing has written the record for the retention period, 30 days where none is stated ([state-directory.md](state-directory.md#STATE-4)); `~/.bravebot/mcp.json`, which holds each value `bravebot mcp add -e NAME=value` stored for a server, often an API key, at a mode of 0600 on Unix (values for an HTTP server's headers are read from the environment at launch and never stored); `/export`, which writes a transcript as markdown inside the working directory |
 | Its own project settings | `.bravebot/settings.json` and `.bravebot/settings.local.json` in a checkout, a layer over the one at home, which on some machines carries credentials |
 | Minted access, by a turn | `~/.ssh/`, then deploy key or `authorized_keys`; `gh auth login`, `~/.config/gh/hosts.yml`; `aws iam create-access-key` → `~/.aws/credentials`; `gcloud iam service-accounts keys create`; `az ad sp create-for-rbac`; `npm token create`, `docker login`, `helm registry login` |
@@ -139,8 +139,8 @@ the only answer that costs no one a decision, and the only one that works before
 Everything outside the working tree has it already: `read_file`, `write_file`, `edit_file` and
 `search` resolve a path and refuse one that lands outside, symlinks included. Its strict form
 covers what the agent authenticates with, `~/.bravebot/gateway-keys.json`,
-`~/.bravebot/chatgpt-account.json`, `~/.bravebot/xai-account.json`, a `~/.bravebot/leo-premium.json` that
-an earlier version left, and the credentials that sign or authorise a model request, which CRED-14 puts
+`~/.bravebot/brave-key.json`, `~/.bravebot/chatgpt-account.json`, `~/.bravebot/xai-account.json`, a
+`~/.bravebot/leo-premium.json` that an earlier version left, and the credentials that sign or authorise a model request, which CRED-14 puts
 out of reach of every program, prompt and record with no legitimate exception. A program a turn runs under the confined default is refused `~/.bravebot` as
 it is refused `~/.ssh` ([SANDBOX-12](sandboxing.md#SANDBOX-12)), except `~/.bravebot/sessions`,
 which it reads and never writes, as it reads `~/.ssh/config`. No `allowRead` or `allowWrite`
@@ -288,7 +288,9 @@ walk drops at all three gates, each recorded as one nobody attempted, as a gatew
 premium host issues one key, this program presents it itself with nothing deciding a use, and nothing
 here has asked that host for a narrower or a shorter one. It has no figure for how quickly a leak
 would be noticed, revoking it at the premium host leaves nothing minted from it working, and it is
-not derived from another credential, so it has no binding to record. Granted and Held briefly remain
+not derived from another credential, so it has no binding to record. `bravebot auth logout brave`
+ends this machine's custody and leaves the key working at the premium service, which is the only
+place that revokes it. Granted and Held briefly remain
 tiers a credential can stand at, and none does.
 
 `verified-by: bravebot_config::lib::every_credential_in_the_record_stands_at_a_tier_the_walk_arrived_at`
@@ -586,8 +588,8 @@ whatever a front end sends back. The terminal draws both; the desktop front end 
 What this agent authenticates with, and anything it holds to spend on the person's behalf, are
 never written to a session record and never shown except as a redaction. Removing them from the
 environment of a program the agent starts is the same rule [tools/run.md](tools/run.md) already
-states and pins, covering the signing key, its key id, the premium key and every variable a
-gateway's provider block names as the home of its token, exempting a line the person typed at the `!` prompt, and switched off
+states and pins, covering the signing key, its key id and every variable a gateway's provider
+block names as the home of its token, exempting a line the person typed at the `!` prompt, and switched off
 only by an environment variable rather than by any settings file. The gateway variables come from the
 effective provider configuration ([RUN-12](tools/run.md#RUN-12)), so a block naming a variable of its
 own is covered without a list of well-known gateways.
@@ -628,6 +630,14 @@ presented to `api.x.ai` alone, as a bearer on a request that follows no redirect
 account says a sentence chosen from the step and a status, and repeats nothing a reply said, since an error
 body carried the account's team identifier ([XAI-15](xai-sign-in.md#XAI-15)).
 
+**The stored premium key.** `~/.bravebot/brave-key.json` holds the key
+([PREM-14](premium-credentials.md#PREM-14)), and this clause holds it as it holds the gateway keys. It
+is in the secret type from the read of its file on, so a print of it is a redaction. The file is one
+of the locations a program a turn runs is refused ([SANDBOX-12](sandboxing.md#SANDBOX-12)). The
+command that stores it says the file and never the key, and `auth status` and `doctor` print neither
+([PREM-16](premium-credentials.md#PREM-16)). No variable carries the key, so there is none to take
+out of the environment of a program.
+
 **The state directory is out of a Windows grant.** A stage on Windows is refused when a directory
 the session was opened on is, holds or lies inside `~/.bravebot`, since the grant would hand a
 program the gateway keys and `settings.json` and a Windows container cannot be refused a path
@@ -655,6 +665,8 @@ is owed there is the test, which scans the trail for every secret the process ho
 `verified-by: bravebot_agent::confine::a_windows_session_on_the_home_directory_is_refused_for_the_state_directory`
 `verified-by: bravebot_agent::confine::a_stage_reads_the_machine_and_is_refused_the_credential_locations`
 `verified-by: bravebot_sandbox::base::the_run_base_reads_the_session_records_and_no_other_file_in_the_state_directory`
+`verified-by: bravebot_cli::brave::a_typed_key_is_stored_private_and_never_said`
+`verified-by: bravebot_cli::running::auth_status_brave_reports_a_stored_key_without_the_key`
 `verified-by: bravebot_skus::chatgpt::account::the_tokens_are_redacted_wherever_the_account_is_printed`
 `verified-by: bravebot_tui::opener::the_opener_is_not_handed_this_agents_own_credentials`
 `verified-by: bravebot_cli::chatgpt_account::no_value_of_a_chatgpt_sign_in_reaches_an_output_of_a_run_that_signs_in_renews_and_fails`
@@ -959,7 +971,8 @@ defend against a debugger attached to a live process, which is the same account 
 the authority holding the value instead.
 
 **What holds today.** The core dumps, the pages a `Secret` is held in, the buffers reading a
-settings file makes on the way to one, and the buffers a stored gateway key passes through.
+settings file makes on the way to one, the buffers a stored gateway key passes through, and the buffers
+the stored premium key passes through.
 The process lowers its core dump limit to nothing before it reads the first credential, and every
 credential the backend configuration resolves is kept in a `Secret`, the gateway token in a settings
 file included. Reading that file fills buffers of its own: the text it was read into, the document
@@ -967,12 +980,13 @@ the parse made of it, and whatever a stronger layer displaced by restating a gat
 had stated. The text is cleared as the parse answers, whatever it answered, and the document clears
 itself and what it displaced when it goes. Every reader of a settings file holds the document rather
 than a bare parse, the front end's check of a file somebody chose included, so none of them has a
-clearing to remember. The premium key is held in a `Secret` in the configuration and in each credential handed to the
-client, so a print of one is a redaction, and the header it is written into is an ordinary string.
-`bravebot-skus` has its own, because
+clearing to remember. `bravebot-skus` has its own `Secret`, because
 [LAYER-1](layering.md#LAYER-1) gives that crate no dependency on another crate here; what has to
 hold across the two is that the bytes are overwritten where they lie and that reading them is
-visible at the call site. What a settings file's `env` block set is cleared too: the settings keep
+visible at the call site. The premium key is read out of `brave-key.json` as a `Secret`: the text the
+file was read into and the document the parse made are overwritten before the read answers, whatever
+it answered. The configuration and each credential handed to the client hold it in a `Secret`, so a
+print of one is a redaction, and the header it is written into is an ordinary string. What a settings file's `env` block set is cleared too: the settings keep
 what each layer said so the configuration can be built out of it and `doctor` can report which file
 won a name, and a signing key written there is a credential in that map, so the map is overwritten
 when the settings go. Every value in it rather than the names a credential is known to arrive under,

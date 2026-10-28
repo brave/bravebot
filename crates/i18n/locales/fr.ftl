@@ -48,10 +48,10 @@ cli-usage-doctor = Vérifier la configuration et le confinement
 cli-usage-doctor-sandbox = Exécuter les flux de travail courants dans le bac à sable et indiquer lesquels fonctionnent
 cli-usage-update = Afficher la commande qui met à jour cette copie
 cli-usage-bug-report = Écrire la version, le rapport de doctor et le nom du journal le plus récent dans un fichier à joindre à un rapport de bogue
-cli-import-leo-creds-retired = bravebot n'importe plus d'abonnement Leo depuis Brave. Les requêtes premium utilisent la clé de BRAVE_AI_CHAT_PREMIUM_KEY, que `bravebot doctor` signale
+cli-import-leo-creds-retired = bravebot n'importe plus d'abonnement Leo depuis Brave. Les requêtes premium utilisent une clé enregistrée avec `bravebot auth login brave`
 cli-usage-import-providers = Importer un service de modèle configuré par Claude Code ou opencode
 cli-usage-auth-login = Se connecter à un service de modèle, en listant chaque façon si aucune n'est nommée
-cli-usage-auth-logout = Oublier une clé de passerelle enregistrée, ou une connexion ChatGPT ou xAI
+cli-usage-auth-logout = Oublier la clé premium de Brave enregistrée, une clé de passerelle, ou une connexion ChatGPT ou xAI
 cli-usage-auth-status = Dire si une connexion est utilisable, avec le code de sortie 0 seulement si elle l'est
 cli-usage-mcp = Déclarer, lister et approuver des serveurs MCP
 cli-usage-completion = Afficher un script de complétion pour le shell
@@ -407,7 +407,7 @@ onboarding-chatgpt =
 onboarding-xai =
     Un abonnement xAI SuperGrok, si vous en avez un : lancez `bravebot auth login xai` dans un terminal et ouvrez l'adresse qu'il affiche sur n'importe quel appareil. Ses modèles sont ensuite proposés dans /model sous la forme xai/<modèle>.
 onboarding-premium =
-    Le service premium de Brave, si vous avez une clé : définissez BRAVE_AI_CHAT_PREMIUM_KEY et BRAVE_AI_CHAT_PREMIUM_ENDPOINT dans l'environnement, ou compilez bravebot avec elles (voir contrib/envrc.example). Sa passerelle d'IA est encore en développement, donc préférez l'une des quatre ci-dessus pour l'instant.
+    Le service premium de Brave, si vous avez une clé : lancez `bravebot auth login brave` dans un terminal et saisissez la clé. Sa passerelle d'IA est encore en développement, donc préférez l'une des quatre ci-dessus pour l'instant.
 onboarding-where-to-read =
     Des exemples concrets se trouvent dans https://github.com/brave/bravebot/blob/main/docs/getting-started.md#choosing-a-model-service
 
@@ -451,7 +451,7 @@ doctor-ends-aws-access-key =
 doctor-ends-aws-session =
     une identification de session : émise par AWS STS pour le profil, et ce programme en demande une autre à l'AWS CLI à chaque requête qu'il construit, de sorte que l'expiration met fin à cette copie et non à l'accès de ce programme ; on y met fin auprès de son émetteur, car `aws sso logout` efface la copie de cette machine et non la session elle-même, et la suivante est émise à partir de ce à quoi le profil se rattache, tant que cela dure
 doctor-ends-premium-key =
-    la clé premium : émise par le service premium de Brave, qui est aussi la seule surface qui la révoque ; effacer la variable ou compiler sans elle met fin à la garde de cette machine et laisse la clé active là-bas
+    la clé premium : émise par le service premium de Brave, qui est aussi la seule surface qui la révoque ; `bravebot auth logout brave` met fin à la garde de cette machine et laisse la clé active là-bas
 doctor-ends-gateway-token =
     un jeton porteur de passerelle : émis par { $gateway }, qui est aussi la seule surface qui le révoque ; le supprimer du fichier de réglages, effacer la variable ou lancer `bravebot auth logout gateway` met fin à la garde de cette machine et laisse le jeton actif là-bas
 doctor-ends-chatgpt-account =
@@ -514,7 +514,7 @@ doctor-dropped-premium-key-nothing-decides-each-use =
 doctor-dropped-premium-key-no-bound-fixed-before-issue =
     porte { $gate }, { $answer } : aucune limite sur ce que la clé peut faire n'est fixée avant son émission, car le service premium n'émet qu'une clé et rien ici ne lui en demande une plus étroite
 doctor-dropped-premium-key-not-minted-for-one-step =
-    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car la clé est ce que porte la compilation ou ce que contient la variable, et elle est gardée pendant toute l'exécution
+    porte { $gate }, { $answer } : elle n'est pas émise pour une seule étape, car la clé est ce que `bravebot auth login brave` a enregistré, et elle est gardée pendant toute l'exécution
 doctor-dropped-gateway-token-not-minted-for-one-step =
     porte { $gate }, { $answer } : il n'est pas émis pour une seule étape, car le jeton est ce que porte le fichier de réglages, la variable ou ce que `bravebot auth login gateway` a enregistré, et il est gardé pendant toute l'exécution
 doctor-dropped-chatgpt-account-nothing-decides-each-use =
@@ -932,6 +932,7 @@ auth-needs-a-terminal =
     bravebot auth login demande par quelle façon se connecter, il lui faut donc un terminal où demander, ou le nom d'une façon
 auth-logout-needs-a-way = bravebot auth logout a besoin du nom de la façon dont se déconnecter
 auth-ways-heading = Façons de se connecter à un service de modèle :
+auth-way-brave = Le service premium de Brave, avec une clé saisie ici et gardée par bravebot
 auth-way-bedrock = Un compte AWS, pour Amazon Bedrock
 auth-way-import = Un service de modèle de Claude Code, opencode, Ollama, LM Studio ou llama-server, importé dans les réglages
 auth-way-gateway = Une clé pour { $services } ou pour une passerelle nommée par un bloc provider des réglages, saisie ici et gardée par bravebot
@@ -1029,7 +1030,10 @@ auth-status-not-signed-in = non connecté : { $detail }
 auth-status-unusable = inutilisable : { $detail }
 auth-status-none-usable = aucune connexion n'est utilisable
 auth-status-not-all-usable = une connexion demandée n'est pas utilisable
-auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez bedrock, gateway, chatgpt ou xai
+auth-status-brave-held = une clé premium est enregistrée et n'est envoyée qu'au service premium de Brave
+auth-status-brave-none = aucune clé premium n'est enregistrée ; lancez bravebot auth login brave
+auth-status-brave-nowhere = cette machine n'a nulle part où garder une clé, donc aucune n'est enregistrée
+auth-status-import = bravebot auth login import écrit des réglages et ne garde aucune connexion, donc il n'y a rien à demander : nommez brave, bedrock, gateway, chatgpt ou xai
 auth-status-gateway-none = aucune clé de passerelle n'est enregistrée ; lancez bravebot auth login gateway
 auth-status-gateway-none-stored = aucune clé n'est enregistrée pour { $id } ; lancez bravebot auth login gateway { $id }
 auth-status-gateway-unrecorded =
@@ -1130,6 +1134,24 @@ chatgpt-defect-no-expiry = il n'a pas d'expiration
 # requête sur le port. Elles sont affichées dans le navigateur, pas dans le terminal.
 chatgpt-page-done = Vous pouvez fermer cet onglet et revenir à bravebot, qui dit si la connexion a réussi.
 chatgpt-page-not-found = Introuvable.
+
+## Se connecter au service premium de Brave
+
+brave-not-while-incognito = une clé premium est gardée sur le disque, ce qu'une session incognito ne fera pas
+brave-needs-a-terminal = bravebot auth login brave demande la clé sans l'afficher, donc il lui faut un terminal pour la demander
+brave-no-home = il n'y a nulle part où garder une clé : ni BRAVEBOT_HOME ni le répertoire du profil n'en nomme un
+brave-key-unreadable = le fichier de la clé premium { $path } ne peut pas être lu, donc il est laissé tel quel ; supprimez-le pour enregistrer une clé de nouveau
+brave-key-held = une clé premium est déjà enregistrée
+brave-replace = La remplacer ?
+brave-key-question = Clé premium de Brave (rien ne s'affiche pendant la saisie) :
+brave-nothing-stored = aucune clé n'a été saisie, donc rien n'a été enregistré
+brave-not-read = la clé n'a pas pu être lue : { $error }
+brave-not-stored = la clé n'a pas pu être enregistrée dans { $path } : { $error }
+brave-stored = clé premium enregistrée dans { $path } ; les requêtes premium l'utiliseront désormais
+brave-forgotten = clé premium enregistrée oubliée ; elle fonctionne encore auprès du service premium de Brave tant qu'elle n'y est pas révoquée
+brave-nothing-to-forget = aucune clé premium n'est enregistrée
+brave-not-forgotten = la clé premium enregistrée dans { $path } n'a pas pu être supprimée : { $error }
+doctor-brave-key = clé premium
 
 ## Se connecter à xAI avec un abonnement SuperGrok
 
