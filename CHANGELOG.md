@@ -1,9 +1,13 @@
 ## Unreleased
 
+ - Changed `/sandbox off` to turn the sandbox off as soon as it is typed. It no longer asks first, and while a turn runs it is no longer held until the turn ends. The turn running keeps the mode it began with, and the next turn runs with no profile.
  - Changed the `spawn_processor` description to say that only later `spawn_processor` calls are refused once the conversation holds private content, and that `run`, `read_output` and the file tools keep working. ([#3333](https://github.com/brave/bravebot/issues/3333))
  - Changed `list_files` and `search` to say how many symbolic links they did not enter, as a number with no names, so a directory made only of links no longer lists as empty. `load_skill` names the directory a project skill's link lands on inside the project. ([#3334](https://github.com/brave/bravebot/issues/3334))
  - Changed `run` to accept and ignore `scopes` and `unconfined` where the line starts with no sandbox anyway, under `--sandbox off` and in a turn that confines none of its runs. They were refused with `this session does not accept a request for a credential scope or toolchain list`. A malformed value is still an error, and an untrusted workspace and the other sandbox modes refuse as before.
  - Changed the info panel's Files section so that clicking its heading no longer opens `/diff`. Click the count under it.
+ - Changed an `openai` entry that reaches `api.openai.com` to be sent `/responses`, where it was sent `/chat/completions`, so a turn on `gpt-6-sol` or `gpt-6.1-sol` no longer ends in HTTP 400, which OpenAI answers a function tool with on chat completions. An entry that states a `baseURL` at another host is unchanged. To keep chat completions at OpenAI's host, name `npm: "@ai-sdk/openai-compatible"`. ([#3430](https://github.com/brave/bravebot/issues/3430))
+ - Changed `/model` for an `openai` entry that reaches `api.openai.com` to leave out a model whose listed `shutdown_date` is today or earlier, since OpenAI no longer serves it. ([#3430](https://github.com/brave/bravebot/issues/3430))
+ - Changed the import of an opencode `openai` entry that names `@ai-sdk/openai` to offer it where it states no `baseURL` or OpenAI's. It was left as another SDK's. ([#3430](https://github.com/brave/bravebot/issues/3430))
 
 ## [0.19.0](https://github.com/brave/bravebot/releases/tag/v0.19.0)
 

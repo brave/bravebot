@@ -207,13 +207,13 @@ no more.
   or the variable that names a stand-in at all, in a flag, a list of arguments, a variable or a line of its
   own, in capitals, with `_` for `-`, quoted in pieces, split over lines or written with the escapes of a
   string. It fails if any file asks for every feature (`--all-features`, `all_features`, or
-  `all-features = true` in `deny.toml`) in a form the lines of the file do not show, or on a line that is not
+  `all-features = true` in `.config/deny.toml`) in a form the lines of the file do not show, or on a line that is not
   one of the thirteen the test names with their file and how often each occurs: the `cargo clippy` runs in
   `Makefile`, `.github/workflows/ci.yml`, `.githooks/pre-commit`, `contrib/check-lint-increase.py`,
   `agents/pr_worktree.py` and `agents/skills/maintenance/maintenance.py`, which compile and ship nothing, the
   plan `agents/pr_worktree_selftest.py` checks the second of those against, which runs nothing, the
   descriptions of them in `ui/docs/testing.md`, `ui/docs/development.md` and
-  `ui/docs/v0.9.0-implementation.md`, and the setting of `deny.toml`, which reads the dependency graph and
+  `ui/docs/v0.9.0-implementation.md`, and the setting of `.config/deny.toml`, which reads the dependency graph and
   compiles nothing. It fails if any file spells a way to undo the two things a release has that the refusal
   reads: `debug-assertions` in any form (`-C debug-assertions`, a profile setting), `panic=unwind`, or
   `CARGO_PROFILE_RELEASE_` (a variable, or a `--config` of the release profile), however they are quoted,

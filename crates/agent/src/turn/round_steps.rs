@@ -290,9 +290,7 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
 
     // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
     // what the planner reads once it is compacted away (OPEN-4).
-    if !std::mem::replace(&mut state.told_of_open_loops, true)
-        && let Some(said) = &task.open_loops
-    {
+    if let Some(said) = state.open_loops.take() {
         conversation.push_composed_from(
             Message::user(format!("{TOOL_BUDGET_SPENT} {said}")),
             Composed::Notice,

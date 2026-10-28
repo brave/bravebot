@@ -2734,8 +2734,6 @@ command-when-either = direct/en file
 command-waits-for-the-turn = La commande { $command } attend la fin du tour : elle agit sur ce que le tour tient ou lance un tour.
 # Une commande exécutée dès qu'elle est tapée, sauf si une ligne qui attend devant elle pourrait changer ce sur quoi elle agit. $line est cette ligne : une commande telle qu'elle a été tapée, ou ce qu'est la ligne quand ce n'est pas une commande.
 command-waits-behind = La commande { $command } attend la fin du tour, derrière { $line }.
-# `/sandbox off`, qui demande avant de changer quoi que ce soit.
-command-waits-to-ask = La commande { $command } attend la fin du tour : passer à off demande d'abord, et le tour a l'écran.
 # Dit sous la boîte quand un clic sur une ligne du panneau d'information qui tient lieu de commande est fait pendant qu'une commande tapée par la personne s'exécute, ce qui ne lit aucune ligne tapée après elle.
 command-waits-for-the-command = La commande { $command } attend la fin de la commande en cours.
 
@@ -4193,7 +4191,6 @@ session-sandbox-from-command = { $mode } depuis /sandbox
 session-sandbox-from-flag = { $mode } depuis --sandbox
 session-sandbox-needs-a-mode = /sandbox demande l'un de : { $names }, ou rien pour afficher le mode en vigueur
 session-sandbox-already = Le mode du bac à sable est déjà { $mode }.
-session-sandbox-kept = Le mode du bac à sable reste { $mode }.
 session-sandbox-set = Le mode du bac à sable est { $mode } dès le prochain tour, pour le reste de cette session.
 session-sandbox-turn-keeps-its-mode = Le tour en cours, et chaque programme qu'il lance, garde le mode avec lequel il a commencé.
 session-sandbox-set-off = Le mode du bac à sable est off dès le prochain tour, pour le reste de cette session : les programmes que `run` lance n'ont aucun profil.
@@ -4204,12 +4201,6 @@ session-sandbox-refused-mode =
 session-sandbox-refused-network =
     /sandbox { $asked } est refusé : { $pinned_in } fixe run.network à closed, et un programme lancé sans
     bac à sable n'y est pas tenu. Utilisez /sandbox workspace-write, read-only ou strict.
-ask-sandbox-off-title = bac à sable
-ask-sandbox-off-header = Bac à sable désactivé
-ask-sandbox-off-question = Les programmes que `run` lance n'auront aucun profil : rien ne limitera ce qu'ils lisent, écrivent ou atteignent. Désactiver le bac à sable pour le reste de cette session ?
-ask-sandbox-off-no = Non, garder { $mode }
-ask-sandbox-off-yes = Oui, lancer les programmes sans profil
-ask-sandbox-off-yes-detail = S'applique dès le prochain tour. /sandbox workspace-write ou /sandbox strict le réactive.
 cli-usage-doctor-push-identity = Demander à GitHub sous quel compte chacune de vos clés ssh pousse
 cli-doctor-push-identity-argument = doctor --push-identity accepte au plus un argument, écrit <hôte>/<propriétaire>.
 doctor-push-no-home = Il n'y a pas de répertoire personnel où chercher des clés ssh.

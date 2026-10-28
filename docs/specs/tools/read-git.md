@@ -82,7 +82,7 @@ reader whose behaviour no file can change answers the common question, what happ
 history, with nobody asked.
 
 Built on gitoxide's plumbing crates for hashes, objects, packs and refs, none of which starts a
-process. The history walk, the tree diff and the line diff are written here, and `deny.toml` bans
+process. The history walk, the tree diff and the line diff are written here, and `.config/deny.toml` bans
 the gix crates that start one.
 
 `verified-by: bravebot_agent::turn::read_git_shows_the_planner_the_history_of_a_trusted_repository`

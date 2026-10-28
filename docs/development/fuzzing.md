@@ -103,7 +103,7 @@ artifact kept for 30 days and fails the leg. The workflow files no issue. A pers
 failed run and files it as the section below says. The repository is public, so the log of a
 failed run prints the input that stopped the target and the artifact holds it, and anyone can read
 both until the run is deleted. Report a crash that may be a vulnerability through HackerOne
-([SECURITY.md](../../SECURITY.md)), and a maintainer can delete the run.
+([SECURITY.md](../../.github/SECURITY.md)), and a maintainer can delete the run.
 
 ## The lockfile
 
@@ -165,7 +165,7 @@ checksum in `event_stream`, or the automaton in `regex`.
    input steered an effect or reached a context closed to it, the finding is about the guarantee and
    takes `security`, `needs-security-review` and a `severity`
    ([labelling-issues.md](labelling-issues.md#security)), and goes through HackerOne
-   ([SECURITY.md](../../SECURITY.md)) without the reproducer attached. Attach the reproducer to
+   ([SECURITY.md](../../.github/SECURITY.md)) without the reproducer attached. Attach the reproducer to
    any other.
 4. A timeout or an out-of-memory stop is a finding. A failed property is a finding against the
    documentation or clause it came from. Where the property was wrong, correct it in the harness

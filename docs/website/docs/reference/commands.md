@@ -461,16 +461,15 @@ same file and decides later `git` commands that reach that owner.
 Bare, it says the sandbox mode programs `run` starts are held to and what chose it: the default, a
 settings file, the managed file, `--sandbox`, or an earlier `/sandbox`. With a word it sets the mode
 for the rest of the session, starting with the next turn. Typed while a turn runs with nothing
-waiting, a mode is set at once and the turn running keeps the mode it began with, so one turn's `run`
-description, refusals and profile all come from one mode. `/sandbox off` waits for the turn to end and
-says why, since it asks first and the turn has the screen until then. The mode is
+waiting, a mode is set at once, `off` included, and the turn running keeps the mode it began with, so one turn's `run`
+description, refusals and profile all come from one mode. The mode is
 not written to the session, so a resumed session takes the mode the process started with, and `/resume`
 inside a session keeps the one you set.
 
 Once `/sandbox ` is typed the box lists the four modes after it, and Tab finishes a started one, so `/sandbox w` becomes `/sandbox workspace-write`.
 
-Moving to `off` asks first, because programs then start with no profile at all; answering no keeps the
-mode. A mode looser than the managed file's `sandbox.mode`, or `off` under a managed `run.network` of
+Moving to `off` is made when you type it, with no question, and programs then start with no profile at all; the
+reply says so. A mode looser than the managed file's `sandbox.mode`, or `off` under a managed `run.network` of
 `closed`, is refused with a sentence naming that file. For a pinned `sandbox.mode`, the sentence says
 whether the mode you asked for reads more of the machine, writes more, or both. `strict` and
 `read-only` are each looser than the other in one of those ways, and a pin of `read-only` has no
@@ -1554,10 +1553,10 @@ waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step
 key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme` and `/config` change only how the screen
 is drawn and what the box edits in, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
-`/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` (except `/sandbox off`, which waits) change what the session keeps, and are carried out as you
+`/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` change what the session keeps, and are carried out as you
 type them unless a line waiting ahead of them could change what they act on. Behind such a line they wait too, so `/rename` typed after a
 waiting `/clear` names the new session, and the line they wait behind is named under the turn and on their mark under the box (`after /clear`).
-A waiting `/sandbox` line changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
+A `/sandbox` line waits only behind a line typed before it, and while it waits it changes the sandbox mode and nothing else, so it holds back none of them but another `/sandbox`: a `/note` typed
 behind a waiting `/sandbox off` is written at once. `/issue` and `/pr` set a link on the session's record, which only `/clear`, `/handoff`,
 `/branch`, `/resume`, `/bg` and `/exit` replace, so they are carried out as you type them behind any other waiting line, a prompt
 included. `/rename` and `/note` act on the name and the notes the session's record holds. A prompt, a command that sends a request, `/clear`,
@@ -1572,7 +1571,7 @@ out as you type them. `/style` picks what every turn opens its prompt with, so i
 begin another session; behind a command line, `/compact`,
 `/btw`, `/recap`, `/memory`, `/undo`, `/rewind`, `/hunks`, `/mcp`, `/after` and the settings commands above it is carried out as you type it. `/forget-trust` withdraws the answer kept about the
 directory, which a program a prompt or a command line runs can change the meaning of by making a `.git` entry, so it waits behind those as well as behind the
-commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/after` and the settings commands
+commands that start a session here, move the directory or leave the session, and behind `/undo`, `/rewind`, `/hunks` and `/mcp`; it is carried out as you type it behind `/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/branch`, `/after` and the settings commands
 above it. What they say goes into the history as you type them,
 so it scrolls with the rest, and stays there when the turn ends. `/model`, `/theme`, `/effort` and `/config` alone open their list
 over the turn, which keeps running behind it: Escape closes the list without stopping the turn, and

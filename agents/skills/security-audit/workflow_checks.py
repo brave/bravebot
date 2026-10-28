@@ -752,7 +752,7 @@ def check_pinned_images():
     """Every container image this tree runs names a digest, not a tag its publisher can move.
 
     The same question `check_pinned_actions` asks, about the other thing that runs with the tree in
-    it. `Dockerfile.cross` compiles every shipped binary with the checkout at `/src` and the
+    it. `contrib/Dockerfile.cross` compiles every shipped binary with the checkout at `/src` and the
     configured credential mounted, and `make strip` rewrites each finished asset inside a second
     container, both before Jenkins signs what comes out; the three check targets run a third with
     the tree mounted. An image on a tag is a decision left to whoever can push that tag.

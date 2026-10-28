@@ -369,15 +369,15 @@ machine npm installs it on, run the real launcher in a tree laid out the way npm
 hold the wrapper's manifest and the publish workflow to the same six platforms. They are the
 things in the tree that run clauses of [../specs/releases.md](../specs/releases.md) as code, so
 run this target for a change to the published wrapper as well as to a lockfile. `make check-deps` decides
-`deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
+`.config/deny.toml`: an advisory against anything in the tree, a licence the binary cannot ship, a crate the
 build compiles at two versions without a recorded reason, a dependency from anywhere but
 crates.io, and a regex engine. It reads the graph of the fuzz package as well as the root one,
 since `fuzz/` is a workspace of its own, and that package's lockfile does not follow the root one
-on its own ([fuzzing.md](fuzzing.md#the-lockfile)). It also fails an exception in `deny.toml` that has no
+on its own ([fuzzing.md](fuzzing.md#the-lockfile)). It also fails an exception in `.config/deny.toml` that has no
 `reason`, or a licence exception with no comment, since cargo-deny takes no `reason` on one, which
 [../../contrib/check-deny-reasons.py](../../contrib/check-deny-reasons.py) decides before
 cargo-deny is built. CI runs this same target on a pull request that touches a manifest, the
-lockfile or `deny.toml`, on main, and once a day, since an advisory arrives without a commit.
+lockfile or `.config/deny.toml`, on main, and once a day, since an advisory arrives without a commit.
 `make check-reviewdog` is the [security scan](security-scan.md).
 
 `make check-fuzz` lints, builds, replays and briefly runs the fuzz targets in `fuzz/`, which is a package

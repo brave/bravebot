@@ -3,7 +3,7 @@
 //! A generated pattern is a syntax tree of the subset `bravebot_agent::regex` supports. It is
 //! rendered to the text the engine compiles and read directly by an evaluator that shares no code
 //! with the engine's parser, program or literal shortcuts, so a disagreement is a defect in one of
-//! them. `deny.toml` bans the `regex` crate, so the evaluator is written here.
+//! them. `.config/deny.toml` bans the `regex` crate, so the evaluator is written here.
 //!
 //! The evaluator tracks the set of positions a node can end at instead of backtracking. `(a*)*` and
 //! `(a|)*` have empty iterations that a backtracking search has to guard against, and the set

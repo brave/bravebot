@@ -19,6 +19,6 @@ declared in a manifest or a build file. Review transitive dependencies, build sc
 code as part of that cost. Convenience alone does not justify the addition.
 
 A diff that adds an entry to `[advisories] ignore` or `[bans] skip` in
-`deny.toml` is read for what its `reason` says: what ships anyway, and why that
+`.config/deny.toml` is read for what its `reason` says: what ships anyway, and why that
 is acceptable. The next person to read it is whoever is deciding whether it
 still holds.

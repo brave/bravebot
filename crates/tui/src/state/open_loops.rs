@@ -28,7 +28,7 @@ impl Session {
         Loops {
             open_todos: self.plan().iter().filter(|row| !row.struck()).count(),
             running_jobs: self.running_job_names(),
-            kept_checkouts: self.kept_checkouts(workspace).len(),
+            kept_checkouts: kept_checkouts(workspace).len(),
             uncommitted_files: bravebot_agent::open_loops::uncommitted(workspace.root(), &written)
                 .len(),
             stopped_goal: self.goal_stopped(),
@@ -98,7 +98,7 @@ impl Session {
                 .collect();
             said.extend(open);
         }
-        for checkout in self.kept_checkouts(workspace) {
+        for checkout in kept_checkouts(workspace) {
             said.push(
                 t!(
                     unfinished_checkout,
@@ -118,11 +118,10 @@ impl Session {
             );
         }
         if let Some(goal) = self.goal().filter(|_| loops.stopped_goal) {
-            let key = match goal.is_paused() {
+            said.push(match goal.is_paused() {
                 true => t!(unfinished_goal_paused, condition = goal.condition()),
                 false => t!(unfinished_goal_stalled, condition = goal.condition()),
-            };
-            said.push(key.to_string());
+            });
         }
         let running: Vec<String> = self
             .jobs()
@@ -138,19 +137,6 @@ impl Session {
             .collect();
         said.extend(running);
         self.note(said.join("\n"));
-    }
-
-    /// The checkouts kept and neither applied nor removed (OPEN-1). A removed one is no longer
-    /// listed, and one whose delegate still runs has no size yet.
-    fn kept_checkouts(
-        &self,
-        workspace: &bravebot_agent::Workspace,
-    ) -> Vec<bravebot_agent::workspace::SessionCheckout> {
-        workspace
-            .session_checkouts()
-            .into_iter()
-            .filter(|checkout| checkout.size.is_some() && !checkout.applied)
-            .collect()
     }
 
     /// Whether the goal is paused, or still set after it stopped sending the work back (OPEN-1).
@@ -185,6 +171,18 @@ impl Session {
         }
         (all, since)
     }
+}
+
+/// The checkouts kept and neither applied nor removed (OPEN-1). A removed one is no longer listed,
+/// and one whose delegate still runs has no size yet.
+fn kept_checkouts(
+    workspace: &bravebot_agent::Workspace,
+) -> Vec<bravebot_agent::workspace::SessionCheckout> {
+    workspace
+        .session_checkouts()
+        .into_iter()
+        .filter(|checkout| checkout.size.is_some() && !checkout.applied)
+        .collect()
 }
 
 /// The person's line: each open kind with its count, grouped by whose move it is (OPEN-3).

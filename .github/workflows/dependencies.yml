@@ -1,6 +1,6 @@
 name: Dependencies
 
-# The dependency policy in deny.toml, which that file states and this workflow only runs.
+# The dependency policy in .config/deny.toml, which that file states and this workflow only runs.
 #
 # On a schedule as well as on a pull request, which is what the advisories half needs. An
 # advisory against a version that is already pinned lands on a day nobody touched this
@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 jobs:
-  # On a pull request, only where a manifest, the lockfile or deny.toml changed, decided the way
+  # On a pull request, only where a manifest, the lockfile or .config/deny.toml changed, decided the way
   # ci.yml decides its jobs and failing the same way: toward running. The schedule and main run it
   # whatever changed, since an advisory arrives without a diff.
   changes:

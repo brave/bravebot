@@ -80,7 +80,7 @@ warning: building bravebot-rpc WITHOUT backend credentials.
   The app will start, list sessions, and open them. The first inference request will
   fail with "SERVICES_KEY_AICHAT is not set and was not built in".
 
-  To fix: copy .envrc.example to .envrc at the root of this repository, run
+  To fix: copy contrib/envrc.example to .envrc at the root of this repository, run
   `direnv allow` there, then build again. If you keep one in a sibling checkout,
   BRAVEBOT_DIR pointed at that checkout is read for credentials instead.
 MSG

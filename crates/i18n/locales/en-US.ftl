@@ -3351,8 +3351,6 @@ command-when-either = now/queued
 command-waits-for-the-turn = { $command } waits for the turn to end: it acts on what the turn holds or starts a turn.
 # A command that is carried out as typed unless a line waiting ahead of it could change what it acts on. $line is that line: a command as it was typed, or what the line is where it is not a command.
 command-waits-behind = { $command } waits for the turn to end, behind { $line }.
-# `/sandbox off`, which asks before it changes anything.
-command-waits-to-ask = { $command } waits for the turn to end: moving to off asks first, and the turn has the screen.
 # Said under the box when a click on a row of the info panel that stands for a command is made while a command the person typed is running, which reads no line typed after it.
 command-waits-for-the-command = { $command } waits for the command that is running to end.
 
@@ -4837,7 +4835,6 @@ session-sandbox-from-command = { $mode } from /sandbox
 session-sandbox-from-flag = { $mode } from --sandbox
 session-sandbox-needs-a-mode = /sandbox takes one of { $names }, or nothing to report the mode in force
 session-sandbox-already = The sandbox mode is already { $mode }.
-session-sandbox-kept = The sandbox mode stays { $mode }.
 session-sandbox-set = The sandbox mode is { $mode } from the next turn, for the rest of this session.
 session-sandbox-turn-keeps-its-mode = The turn running now, and every program it starts, keeps the mode it began with.
 session-sandbox-set-off = The sandbox mode is off from the next turn, for the rest of this session: programs `run` starts have no profile.
@@ -4848,12 +4845,6 @@ session-sandbox-refused-mode =
 session-sandbox-refused-network =
     /sandbox { $asked } is refused: { $pinned_in } pins run.network to closed, and a program started with
     no sandbox is not held to that. Use /sandbox workspace-write, read-only or strict.
-ask-sandbox-off-title = sandbox
-ask-sandbox-off-header = Sandbox off
-ask-sandbox-off-question = Programs `run` starts will have no profile, so nothing confines what they read, write or reach. Turn the sandbox off for the rest of this session?
-ask-sandbox-off-no = No, keep { $mode }
-ask-sandbox-off-yes = Yes, start programs with no profile
-ask-sandbox-off-yes-detail = Applies from the next turn. /sandbox workspace-write or /sandbox strict turns it back on.
 cli-usage-doctor-push-identity = Ask GitHub which account each of your ssh keys pushes as
 cli-doctor-push-identity-argument = doctor --push-identity takes at most one argument, written <host>/<owner>.
 doctor-push-no-home = There is no home directory to look for ssh keys in.

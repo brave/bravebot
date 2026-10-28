@@ -5,7 +5,7 @@ decide.
 
 Nothing here restates a rule a tool already enforces or could: formatting, lints, clause numbering,
 the lockfiles, an em-dash, an attribution marker, a `declassify` outside the gates, a regex engine,
-an exception in `deny.toml` with no reason, a first-person correction in a commit message. Those
+an exception in `.config/deny.toml` with no reason, a first-person correction in a commit message. Those
 belong in `make check`, `make check-spec`, `make check-npm`, `make check-deps`,
 `make check-narration` and the security scan, and a rule that can be written as one of those
 checks is a bug against this directory rather than an entry in it.

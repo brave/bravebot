@@ -42,13 +42,13 @@ DECIDES_UNDER = (".github/workflows/",)
 # that test finds whatever else the change is. They add the Rust checks to what their own area
 # needs.
 READ_BY_THE_SEAM_GUARD = frozenset({
-    ".envrc.example",
+    "contrib/envrc.example",
     ".githooks/pre-commit",
-    "Dockerfile.cross",
+    "contrib/Dockerfile.cross",
     "agents/pr_worktree.py",
     "agents/pr_worktree_selftest.py",
     "agents/skills/maintenance/maintenance.py",
-    "deny.toml",
+    ".config/deny.toml",
     "docs/development/fuzzing.md",
     "docs/development/releasing.md",
     "docs/website/docs/development.md",
@@ -112,7 +112,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "README.md", "LICENSE", "SECURITY.md", ".gitignore", ".envrc.example",
+    "README.md", "LICENSE", ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -162,13 +162,13 @@ def classify_by_area(path, desktop, fuzz):
         return frozenset({"rust", "ui", "build", "deps", "fuzz"})
     if path == "Cargo.lock":
         return frozenset({"rust", "ui", "build", "deps"})
-    if path in ("deny.toml", "contrib/check-deny-reasons.py"):
+    if path in (".config/deny.toml", "contrib/check-deny-reasons.py"):
         return frozenset({"deps"})
     if path == "contrib/check-pnpm-lockfiles.py":
         return frozenset({"npm"})
     if path == "contrib/check-lint-increase.py":
         return frozenset({"rust"})
-    if path == "Dockerfile.cross":
+    if path == "contrib/Dockerfile.cross":
         return frozenset({"build"})
     parts = path.split("/")
     if parts[0] == "crates" and len(parts) > 2:
@@ -402,9 +402,9 @@ CASES = (
     ("somewhere-new/file.txt", EVERYTHING),
     ("Cargo.lock", {"rust", "ui", "build", "deps"}),
     ("Cargo.toml", {"rust", "ui", "build", "deps", "fuzz"}),
-    ("deny.toml", {"deps", "rust"}),
+    (".config/deny.toml", {"deps", "rust"}),
     ("contrib/check-deny-reasons.py", {"deps"}),
-    ("Dockerfile.cross", {"build", "rust"}),
+    ("contrib/Dockerfile.cross", {"build", "rust"}),
     ("crates/tui/src/render.rs", {"rust"}),
     ("crates/core/src/policy.rs", {"rust", "ui", "fuzz"}),
     ("crates/agent/src/regex.rs", {"rust", "fuzz"}),
@@ -461,7 +461,7 @@ CASES = (
     ("agents/skills/rebase/SKILL.md", NOTHING),
     ("contrib/check-locales.py", NOTHING),
     ("README.md", NOTHING),
-    ("SECURITY.md", NOTHING),
+    (".github/SECURITY.md", NOTHING),
 )
 
 # One crate reached each way a manifest can name another, one reached only through another, and

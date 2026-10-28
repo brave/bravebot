@@ -381,13 +381,6 @@ pub enum MidTurn {
     /// Where the bare word opens a picker, the picker is held as a mode of the session while the
     /// turn runs, so the turn's own questions are still drawn over it.
     Changes,
-    /// Carried out as it is typed under the rule [`MidTurn::Changes`] gives, except where the form
-    /// typed would ask the person a question, which waits: the screen is the turn's while it runs,
-    /// and a yes given to a question drawn under another one is not one anybody read.
-    ///
-    /// `/sandbox`: a mode moves what the next turn is built with and nothing the turn in flight
-    /// holds, and the move to `off` asks first (SANDBOX-22).
-    ChangesUnlessItAsks,
     /// Waits for the turn to end, because it acts on the conversation, the workspace, the
     /// terminal or the network, and the turn holds all four.
     Waits,
@@ -572,7 +565,7 @@ pub fn commands() -> [Command; 61] {
             name: SANDBOX_COMMAND,
             argument: "[<mode>]",
             description: t!(command_sandbox),
-            mid_turn: MidTurn::ChangesUnlessItAsks,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: LOOP_COMMAND,
@@ -911,11 +904,6 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     match command.mid_turn {
         MidTurn::Runs | MidTurn::Changes => true,
         MidTurn::Waits => false,
-        MidTurn::ChangesUnlessItAsks => {
-            let argument = argument_to(line, command.name).unwrap_or_default();
-            bravebot_sandbox::SandboxMode::parse(argument)
-                != Some(bravebot_sandbox::SandboxMode::Off)
-        }
         MidTurn::RunsUnlessItStarts => {
             let argument = argument_to(line, command.name).unwrap_or_default();
             match command.name {
@@ -1113,9 +1101,9 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
     ADVISOR_COMMAND,
 ];
 
-/// The commands that neither start a turn, start, switch to or leave a session, move the working
-/// directory, write the file the kept answer is in, start a server nor put files back. A command
-/// not named here holds `/forget-trust` back, as does a command line.
+/// The commands that neither start a turn, start a session here, leave for another one, move the
+/// working directory, write the file the kept answer is in, start a server nor put files back. A
+/// command not named here holds `/forget-trust` back, as does a command line.
 ///
 /// Each command named was read against what `/forget-trust` acts on. `/compact`, `/btw` and
 /// `/recap` send a request and run no program, and none of the three touches the file the answer is
@@ -1128,10 +1116,12 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
 /// way. `/add-dir` opens a directory and records a rule in the session's own trust map, and closing
 /// one withdraws the rule. It starts no program, leaves the working directory where it is and writes
 /// neither the answer nor a `.git` entry. `/reach` writes `reach.jsonl` or changes the workspace's
-/// list of paths programs may reach, and compiles the line it is given without running it. `/clear`
-/// and `/branch` are not named: `/clear` starts a session here and reads the answer, and `/branch`
-/// replaces the session's record and its reach and has not been read against the answer. `/cd` moves
-/// the directory the answer is about. `/undo`, `/rewind` and `/hunks` put back files a file tool wrote,
+/// list of paths programs may reach, and compiles the line it is given without running it.
+/// `/branch` copies the session's record and goes on in the copy, forgets the in-session answers no
+/// record keeps and ends the paths programs were let reach. It starts no program, leaves the
+/// working directory where it is, and neither reads nor writes the file the answer is kept in or a
+/// `.git` entry, so the answer is withdrawn the same before it as after it. `/clear` is not named:
+/// it starts a session here and reads the answer. `/cd` moves the directory the answer is about. `/undo`, `/rewind` and `/hunks` put back files a file tool wrote,
 /// and a write the person approved into an added directory that holds the working directory may have
 /// made the `.git` entry there, which a rewind removes. `/mcp` starts a server that may write the
 /// directory its declaration names. Neither has been shown unable to make or remove the `.git`
@@ -1145,6 +1135,7 @@ const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
     UNFINISHED_COMMAND,
     ADD_DIR_COMMAND,
     REACH_COMMAND,
+    BRANCH_COMMAND,
     AFTER_COMMAND,
     RENAME_COMMAND,
     NOTE_COMMAND,
@@ -1202,10 +1193,7 @@ pub(crate) fn held_back_by<'a>(
     line: &str,
 ) -> Option<(Bound, &'a str)> {
     let command = row_typed(line)?;
-    let changes = matches!(
-        command.mid_turn,
-        MidTurn::Changes | MidTurn::ChangesUnlessItAsks
-    );
+    let changes = command.mid_turn == MidTurn::Changes;
     let acts = acts_on(command.name);
     session.queued_ahead(at).find(|&(goes, waiting)| {
         let word = match goes {
@@ -1267,8 +1255,6 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
             command = word,
             line = named(goes, ahead)
         )
-    } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
-        t!(command_waits_to_ask, command = word)
     } else {
         t!(command_waits_for_the_turn, command = word)
     })
@@ -1303,7 +1289,7 @@ mod tests {
             (RECAP_COMMAND, false, true, true, false, false),
             (CLEAR_COMMAND, true, false, true, true, true),
             (HANDOFF_COMMAND, true, true, true, true, true),
-            (BRANCH_COMMAND, true, false, true, true, true),
+            (BRANCH_COMMAND, true, false, true, true, false),
             (RESUME_COMMAND, true, true, true, true, true),
             (BACKGROUND_COMMAND, true, true, true, true, true),
             (REACH_COMMAND, false, false, false, true, false),

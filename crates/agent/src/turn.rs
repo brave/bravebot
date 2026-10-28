@@ -2213,7 +2213,8 @@ struct State<'s> {
     messages_sent: crate::messages::Ledger,
     jobs: &'s mut tools::Jobs,
     told_of_kept_jobs: bool,
-    told_of_open_loops: bool,
+    /// What earlier turns left open, until the first round tells the planner (OPEN-4).
+    open_loops: Option<String>,
     run_directory: std::path::PathBuf,
     confined_failures: tools::ConfinedFailures,
     spent: Elapsed,
@@ -3126,7 +3127,7 @@ where
         // Said to the planner on the first round only, and not at all where nothing is kept. Read
         // before `jobs` is moved into the literal.
         told_of_kept_jobs: !jobs.is_kept(),
-        told_of_open_loops: task.open_loops.is_none(),
+        open_loops: task.open_loops.clone(),
         jobs,
         // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
         //

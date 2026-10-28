@@ -75,7 +75,7 @@ cancellation, but cannot become an approval. See [security](security.md).
 
 **Practical drag.** A native module needs rebuilding and re-testing per Electron ABI,
 with prebuilds per architecture, where a plain binary is already cross-built by the
-existing `Makefile` and `Dockerfile.cross`. And Electron's main process would end up
+existing `Makefile` and `contrib/Dockerfile.cross`. And Electron's main process would end up
 holding the keyring access and `Egress`'s connection pool.
 
 None of this is permanent. §2.2 is what keeps it cheap to revisit.
