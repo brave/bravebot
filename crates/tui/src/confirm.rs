@@ -695,6 +695,7 @@ mod tests {
     pub(super) fn a_checkout_forty_files_were_written_in()
     -> bravebot_agent::workspace::SessionCheckout {
         bravebot_agent::workspace::SessionCheckout {
+            applied: false,
             id: "c2".into(),
             path: "/state/checkouts/work/c2".into(),
             repository: "/work/.git".into(),

@@ -1201,12 +1201,12 @@ pub(crate) struct Worked {
 
 impl Worked {
     /// Count what one call did, in the round it was made.
-    fn count(&mut self, round: usize, changed_a_file: bool, ran_a_program: bool) {
+    fn count(&mut self, round: usize, changed_a_file: bool, ran_a_program: bool, failed: bool) {
         if changed_a_file {
             self.changed_at.get_or_insert(round);
         }
         self.ran_a_program |= ran_a_program;
-        self.work.count(changed_a_file, ran_a_program);
+        self.work.count(changed_a_file, ran_a_program, failed);
     }
 
     /// Count what a delegate did in this run's workspace as this run's own, from the round it was
@@ -1225,6 +1225,7 @@ impl Worked {
         self.ran_a_program |= delegate.ran_a_program;
         self.work.then(crate::outcome::Work {
             commands: delegate.work.commands,
+            last_command_failed: delegate.work.last_command_failed,
             ..Default::default()
         });
     }
@@ -2212,6 +2213,8 @@ struct State<'s> {
     messages_sent: crate::messages::Ledger,
     jobs: &'s mut tools::Jobs,
     told_of_kept_jobs: bool,
+    /// What earlier turns left open, until the first round tells the planner (OPEN-4).
+    open_loops: Option<String>,
     run_directory: std::path::PathBuf,
     confined_failures: tools::ConfinedFailures,
     spent: Elapsed,
@@ -3124,6 +3127,7 @@ where
         // Said to the planner on the first round only, and not at all where nothing is kept. Read
         // before `jobs` is moved into the literal.
         told_of_kept_jobs: !jobs.is_kept(),
+        open_loops: task.open_loops.clone(),
         jobs,
         // Where the next command line runs, absent one naming its own directory (CMDLINE-12).
         //
@@ -3187,7 +3191,8 @@ where
         reporter,
         &mut state,
         began,
-        may_run,
+        // A caller that shows the open loops says this itself, across turns (OPEN-3).
+        may_run && !task.shows_open_loops,
         rounds_taken,
         worked_out,
     );
@@ -4936,6 +4941,7 @@ mod tests {
         writes: 1,
         commands: 2,
         ran_after_last_write: true,
+        last_command_failed: false,
     };
 
     /// GROUND-2. A delegate's report reaches the planner beside the driver's count of what the
@@ -5020,11 +5026,12 @@ mod tests {
                 writes: 1,
                 commands: 0,
                 ran_after_last_write: false,
+                last_command_failed: false,
             },
             ..Worked::default()
         };
         let mut turn = Worked::default();
-        turn.count(0, false, true);
+        turn.count(0, false, true, false);
         turn.adopt(1, delegate);
         assert_eq!(
             turn.work,
@@ -5032,10 +5039,11 @@ mod tests {
                 writes: 1,
                 commands: 1,
                 ran_after_last_write: false,
+                last_command_failed: false,
             }
         );
         let mut turn = Worked::default();
-        turn.count(0, true, false);
+        turn.count(0, true, false, false);
         turn.adopt_run(Worked {
             work: BUILT,
             ..Worked::default()
@@ -5046,6 +5054,7 @@ mod tests {
                 writes: 1,
                 commands: 2,
                 ran_after_last_write: true,
+                last_command_failed: false,
             }
         );
     }

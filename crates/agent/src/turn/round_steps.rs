@@ -288,6 +288,16 @@ pub(super) fn before_a_request<S: Sink, C: Confirmer, R: Reporter>(
         tell_of_kept_jobs(state.jobs, conversation);
     }
 
+    // Once, beside the jobs and for the same reason: what earlier turns left open is gone from
+    // what the planner reads once it is compacted away (OPEN-4).
+    if let Some(said) = state.open_loops.take() {
+        conversation.push_composed_from(
+            Message::user(format!("{TOOL_BUDGET_SPENT} {said}")),
+            Composed::Notice,
+            Provenance::Driver,
+        );
+    }
+
     // And whatever another session sent, in the same place and for the same reason: it
     // reaches the planner at the start of a request, so a session with no turn running
     // keeps it until a person starts one (MSG-6).
@@ -1439,9 +1449,12 @@ pub(super) fn after_a_call<'scope, 'env, S, C, R, P>(
     // gave it. Read at the end of the turn to say whether a change went out
     // unbuilt, and the round is the one the first change landed on, since before
     // that there was nothing to run.
-    state
-        .worked
-        .count(state.steps, output.changed_a_file, output.ran_a_program);
+    state.worked.count(
+        state.steps,
+        output.changed_a_file,
+        output.ran_a_program,
+        output.command_failed,
+    );
     if (output.changed_a_file || output.started_a_program)
         && let Some(checkout) = workspace.checkout()
     {

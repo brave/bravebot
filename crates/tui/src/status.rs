@@ -3765,6 +3765,7 @@ mod tests {
         let trust = trusting();
         let checkouts = [
             SessionCheckout {
+                applied: false,
                 id: "c1".into(),
                 path: "/state/checkouts/work/c1".into(),
                 repository: "/work/.git".into(),
@@ -3775,6 +3776,7 @@ mod tests {
                 size: None,
             },
             SessionCheckout {
+                applied: false,
                 id: "c3".into(),
                 path: "/state/checkouts/work/c3".into(),
                 repository: "/work/.git".into(),

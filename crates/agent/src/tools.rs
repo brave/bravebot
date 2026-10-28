@@ -194,6 +194,9 @@ pub struct Output {
     /// Read beside `changed_a_file` and the outcome for the same reason: a run the person
     /// declined leaves the change as unbuilt as it was before.
     pub ran_a_program: bool,
+    /// Whether the program this call ran ended badly: a stage exited with a status other than 0,
+    /// or the line was stopped. False where no program ran (OPEN-1).
+    pub command_failed: bool,
     /// Whether a program was started, whatever came of the call.
     ///
     /// Wider than `ran_a_program`, which says a program ran: a line that failed after an earlier
@@ -1186,6 +1189,8 @@ struct Produced {
     /// happen, and a turn that counted it would say a change had been built when nothing had
     /// compiled it.
     ran_a_program: bool,
+    /// Whether the program it ran ended badly (OPEN-1).
+    command_failed: bool,
     /// Whether a program was started, including a call that was then refused or failed.
     started_a_program: bool,
     /// The directory each git stage of the command worked in.
@@ -1291,6 +1296,7 @@ impl Produced {
             untrusted: false,
             changed_a_file: false,
             ran_a_program: false,
+            command_failed: false,
             started_a_program: false,
             ran_git_in: Vec::new(),
             answers_for: None,
@@ -2511,6 +2517,7 @@ fn output_of(produced: Produced, call_id: Option<String>, tool: String) -> Outpu
         content: produced.content,
         changed_a_file: produced.changed_a_file,
         ran_a_program: produced.ran_a_program,
+        command_failed: produced.command_failed,
         started_a_program: produced.started_a_program,
         ran_git_in: produced.ran_git_in,
         usage: produced.usage,
@@ -5327,6 +5334,25 @@ fn removed_sentence(removed: &[String]) -> String {
 /// The half of [`apply_checkout`] that does not care who named the checkout: the planner's call
 /// and the person's `/checkouts apply` both end here, and ask the same questions (CHECKOUT-14).
 fn bring_back<S: Sink, C: Confirmer>(
+    policy: &mut Policy<'_, S>,
+    tools: &mut Tools<'_>,
+    confirmer: &mut C,
+    id: &str,
+    kept: &crate::workspace::SessionCheckout,
+    offered: &Offered,
+    paths: Vec<String>,
+) -> Produced {
+    let produced = bring_back_files(policy, tools, confirmer, id, kept, offered, paths);
+    // Whoever asked, the planner or the person, a checkout whose files came back is no longer
+    // waiting on anybody (OPEN-1).
+    if produced.changed_a_file {
+        tools.workspace.checkout_applied(id);
+    }
+    produced
+}
+
+/// [`bring_back`]'s work: put each path to the person and write back the ones they allow.
+fn bring_back_files<S: Sink, C: Confirmer>(
     policy: &mut Policy<'_, S>,
     tools: &mut Tools<'_>,
     confirmer: &mut C,
@@ -9402,6 +9428,7 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             produced.covered_by_record = covered_by_record;
             produced.read_asked = read_asked;
             produced.ran_a_program = true;
+            produced.command_failed = !ran.succeeded();
             produced.started_a_program = true;
             produced.ran_git_in = plan
                 .steps()
@@ -9420,7 +9447,11 @@ fn run<S: Sink, C: Confirmer, R: Reporter>(
             let text = failed_line_text(&said, &error);
             let produced = Produced::problem(text);
             match stopped {
-                true => produced.having_run_a_program(),
+                true => {
+                    let mut produced = produced.having_run_a_program();
+                    produced.command_failed = true;
+                    produced
+                }
                 false => produced.having_started_a_program(),
             }
         }

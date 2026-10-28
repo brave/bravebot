@@ -3146,6 +3146,47 @@ todos-heading = plan: { $done } of { $total } done
 # The same where some of its tasks were cancelled, which are counted apart from the done ones.
 todos-heading-cancelled = plan: { $done } of { $total } done, { $cancelled } cancelled
 todos-none = there is no plan in this session yet
+# The line a turn ends with when the session's open loops changed (OPEN-3): each kind with its
+# count, grouped by whose move it is. Names no file, command or task text.
+open-loops-line = open: { $groups }
+open-loops-nothing = open: nothing
+open-loops-planner = { $items } (planner)
+open-loops-person = { $items } (you)
+open-loops-unbuilt = changes not built
+open-loops-failed = the last command failed
+open-loops-todos = { $count ->
+    [one] { $count } todo
+   *[other] { $count } todos
+    }
+open-loops-checkouts = { $count ->
+    [one] { $count } kept checkout
+   *[other] { $count } kept checkouts
+    }
+open-loops-uncommitted = { $count ->
+    [one] { $count } file not committed
+   *[other] { $count } files not committed
+    }
+open-loops-goal = a stopped goal
+open-loops-jobs = { $count ->
+    [one] { $count } job running
+   *[other] { $count } jobs running
+    }
+# What /unfinished says, to the person only (OPEN-5).
+unfinished-nothing = nothing is open
+unfinished-unbuilt = changes not built, in the files written since the last command:
+unfinished-failed = the last command failed: { $command } ({ $outcome })
+unfinished-todos = { $count ->
+    [one] { $count } todo is open:
+   *[other] { $count } todos are open:
+    }
+unfinished-checkout = checkout { $id } is kept at { $path }: /checkouts apply { $id } brings it back, /checkouts remove { $id } removes it
+unfinished-uncommitted = { $count ->
+    [one] { $count } file this session wrote is not committed:
+   *[other] { $count } files this session wrote are not committed:
+    }
+unfinished-goal-paused = the goal is paused: { $condition }. /goal resume judges turns against it again
+unfinished-goal-stalled = the goal stopped sending the work back: { $condition }. Your next prompt is judged against it
+unfinished-job = { $name } is still running, for { $seconds }s
 # The status each task of a printed plan carries beside its mark.
 todos-status-pending = pending
 todos-status-active = in progress
@@ -3289,6 +3330,7 @@ command-outputs = Open what the commands this session ran printed, background jo
 command-panel = Show or hide the info panel beside the transcript
 command-diff = List the files the session wrote and show every edit to the one highlighted
 command-todos = Print the whole plan, every task with its status
+command-unfinished = List what this session left open, and whose move each is
 command-caffeinate = Keep the computer awake while a turn or loop is pending
 command-thinking = Show or hide the model's thinking as it arrives
 command-checkouts = List kept checkouts, bring their files back, or remove one

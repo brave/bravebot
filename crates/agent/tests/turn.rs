@@ -16541,9 +16541,112 @@ fn a_turns_outcome_carries_the_summary_of_its_work() {
             writes: 2,
             commands: 1,
             ran_after_last_write: true,
+            last_command_failed: false,
         },
         "two writes to one file are two writes, and a pipeline is one command"
     );
+}
+
+/// OPEN-1. A turn whose last command exits with a status other than 0 hands back a record that
+/// says so, and one whose last command succeeds after a failure does not.
+#[test]
+fn a_turns_record_says_whether_its_last_command_failed() {
+    let failed = |commands: &[&str]| {
+        let scratch = Scratch::new("work-last-failed");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut replies: Vec<_> = commands
+            .iter()
+            .map(|command| {
+                tool_request(
+                    "run",
+                    &serde_json::json!({ "command": command }).to_string(),
+                )
+            })
+            .collect();
+        replies.push(reply_with("done"));
+        let (endpoint, _received) = serve_sequence(replies);
+        let config = config_for(&endpoint);
+        turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("check the build"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .work
+        .last_command_failed
+    };
+    assert!(failed(&["ls no-such-directory"]));
+    assert!(!failed(&["ls no-such-directory", "ls ."]));
+}
+
+/// Run one turn that writes a file and answers, under `task`, and give back what the model was sent
+/// and what the person was told.
+fn a_turn_that_writes_under(name: &str, task: Task) -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("write_file", r#"{"path":"a.txt","contents":"one"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    (received.try_iter().collect(), reporter.narration)
+}
+
+/// OPEN-4. The open loops the caller hands the turn reach the planner at its start, as the
+/// driver's words, and a turn given none is told nothing about them.
+#[test]
+fn the_next_turn_begins_with_the_open_loops_that_changed() {
+    let said = "Open from earlier in this session: the last command failed. Yours to act on if they still matter.";
+    let (sent, _) = a_turn_that_writes_under(
+        "open-loops-told",
+        Task::new("carry on").with_open_loops(Some(said.to_string())),
+    );
+    assert!(sent[0].contains(said), "{}", sent[0]);
+    let (sent, _) = a_turn_that_writes_under(
+        "open-loops-untold",
+        Task::new("carry on").with_open_loops(None),
+    );
+    assert!(!sent[0].contains("Open from earlier"), "{}", sent[0]);
+}
+
+/// OPEN-3. A caller that shows the open loops gets no closing line about unbuilt changes from the
+/// turn, since its own line says so across turns, and one that does not still gets it (TURN-4).
+#[test]
+fn a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes() {
+    let unbuilt = |narration: &[String]| {
+        narration
+            .iter()
+            .any(|said| said.contains("no command was run"))
+    };
+    let (_, told) =
+        a_turn_that_writes_under("open-loops-quiet", Task::new("edit").with_open_loops(None));
+    assert!(!unbuilt(&told), "{told:?}");
+    let (_, told) = a_turn_that_writes_under("open-loops-loud", Task::new("edit"));
+    assert!(unbuilt(&told), "{told:?}");
 }
 
 /// An authority nothing here holds is recorded where it is spent, and nowhere else.
@@ -44825,7 +44928,8 @@ fn a_checkout_kept_after_a_worker_wrote(
 /// CHECKOUT-14. `/checkouts apply` is the same operation typed by a person: every recorded file
 /// of the kept checkout is put to them as a write the table would not ask about, an approved one
 /// lands in the working directory and the trail records it, a declined one leaves it as it was,
-/// and a checkout the session does not keep asks nobody.
+/// and a checkout the session does not keep asks nobody. Only the approved apply closes the
+/// checkout's open loop (OPEN-1).
 #[test]
 fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
     let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
@@ -44836,6 +44940,13 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
     let egress = bravebot_net::Egress::new();
     let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
 
+    let applied = |workspace: &bravebot_agent::Workspace| {
+        workspace
+            .session_checkouts()
+            .iter()
+            .find(|checkout| checkout.id == "c1")
+            .map(|checkout| checkout.applied)
+    };
     let mut declining = RecordingConfirmer::rejecting();
     let mut sink = RecordingSink::new();
     let declined = turn::apply_checkout_asked_for(
@@ -44861,6 +44972,12 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
             .iter()
             .any(|(_, detail)| detail.starts_with("applied from ")),
         "the trail records an apply the person declined"
+    );
+    // OPEN-1: a checkout none of whose files came back is still open.
+    assert_eq!(
+        applied(&workspace),
+        Some(false),
+        "a declined apply closed the checkout"
     );
 
     let mut approving = RecordingConfirmer::approving();
@@ -44889,6 +45006,11 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
             .iter()
             .any(|(_, detail)| detail.starts_with("applied from ") && detail.contains("/c1")),
         "the trail does not record the apply"
+    );
+    assert_eq!(
+        applied(&workspace),
+        Some(true),
+        "an apply left the checkout open"
     );
 
     let mut asked_nobody = RecordingConfirmer::approving();
@@ -45956,7 +46078,8 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
 
 /// CHECKOUT-13, CHECKOUT-14. A file a program wrote in a kept checkout, by no tool and no
 /// redirection, comes back through the apply because the checkout's status lists it, and a file the
-/// program deleted is named as deleted and left in the working directory.
+/// program deleted is named as deleted and left in the working directory. The apply closes the
+/// checkout's open loop (OPEN-1).
 #[test]
 fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
     let scratch = Scratch::new("checkout-status-apply");
@@ -46044,6 +46167,14 @@ fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
              back"
         )),
         "the deletion was not named"
+    );
+    // OPEN-1: the planner's apply closes the checkout's open loop as the person's does.
+    assert!(
+        workspace
+            .session_checkouts()
+            .iter()
+            .any(|checkout| checkout.id == "c1" && checkout.applied),
+        "the planner's apply left the checkout open"
     );
 }
 

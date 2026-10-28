@@ -39,6 +39,8 @@ pub struct SessionCheckout {
     /// What it took on disk when its delegate ended (CHECKOUT-15). `None` while that delegate
     /// runs.
     pub size: Option<crate::git::checkout::Size>,
+    /// Whether its files were brought back into the working directory (OPEN-1).
+    pub applied: bool,
 }
 
 /// What the driver recorded doing in a checkout. One record for the delegate's workspace and the
@@ -48,6 +50,7 @@ pub(super) struct Record {
     pub(super) worked_in: AtomicBool,
     pub(super) written: Mutex<Candidates>,
     pub(super) size: Mutex<Option<crate::git::checkout::Size>>,
+    pub(super) applied: AtomicBool,
 }
 
 /// A checkout the session made, with what removing it takes.
@@ -78,6 +81,7 @@ impl Made {
             candidates: locked(&self.record.written).clone(),
             repository: self.git_dir.clone(),
             size: *locked(&self.record.size),
+            applied: self.record.applied.load(Ordering::SeqCst),
         }
     }
 
@@ -442,6 +446,17 @@ impl Workspace {
             .cloned()
     }
 
+    /// Say that the files of the session's checkout `id` were brought back into the working
+    /// directory (OPEN-1).
+    pub(crate) fn checkout_applied(&self, id: &str) {
+        if let Some(made) = locked(&self.kept.session_checkouts)
+            .iter()
+            .find(|made| made.id == id)
+        {
+            made.record.applied.store(true, Ordering::SeqCst);
+        }
+    }
+
     /// Remove the session's checkout `id`, one [`Workspace::session_checkouts`] lists, and take
     /// its rules out of `trust` the way a delegate's ending does (CHECKOUT-15).
     ///
@@ -547,6 +562,7 @@ impl Workspace {
                 worked_in: AtomicBool::new(one.worked_in),
                 written: Mutex::new(one.candidates.clone()),
                 size: Mutex::new(one.size),
+                applied: AtomicBool::new(one.applied),
             };
             held.push(Made {
                 id: one.id.clone(),

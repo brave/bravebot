@@ -182,6 +182,8 @@ commit, as a checkout made without changes does, and nothing the delegate does t
 The record also counts writes and commands, and whether a command came after the last write
 ([GROUND-1](grounding.md#GROUND-1)). The question is unchanged.
 
+In the terminal app the person's line is the open-loops line of [OPEN-3](open-loops.md#OPEN-3), which says the same across turns. The question to the planner is unchanged.
+
 `verified-by: bravebot_agent::turn::a_turn_that_writes_without_running_is_asked_about_it`
 `verified-by: bravebot_agent::turn::a_turn_that_wrote_and_ran_is_not_asked_about_it`
 `verified-by: bravebot_agent::turn::a_write_the_person_refused_is_not_reported_as_a_change_that_was_never_built`

@@ -49,6 +49,7 @@ pub mod memory;
 pub mod messages;
 pub mod mode;
 pub mod notebook;
+pub mod open_loops;
 pub mod outcome;
 pub mod output_schema;
 pub mod permission_mode;

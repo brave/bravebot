@@ -20,6 +20,7 @@ mod entry;
 mod files;
 mod hover;
 mod menu;
+mod open_loops;
 mod queue;
 mod scroller;
 mod settings;
@@ -927,6 +928,15 @@ pub struct Session {
     /// conversation somebody resumed to read and keep working it, with nothing in the transcript
     /// to say why.
     goal: Option<crate::goals::Running>,
+    /// What every turn of this session did, added in order (OPEN-1).
+    work: bravebot_agent::Work,
+    /// The files a resumed session's record says it wrote, whose calls replay without what they
+    /// wrote (OPEN-6).
+    written_before: Vec<std::path::PathBuf>,
+    /// The open loops when the person was last shown them, and when the planner was last told
+    /// (OPEN-3, OPEN-4).
+    loops_shown: bravebot_agent::open_loops::Loops,
+    loops_told: bravebot_agent::open_loops::Loops,
     /// The definition the turn about to start was addressed to, from a `/agent` line a person typed.
     ///
     /// Taken by the one turn it was set for, so the next line is the session's own planner again
@@ -1358,6 +1368,10 @@ impl Session {
             watches: watch::Watches::new(),
             driver_prompt_pending: false,
             goal: None,
+            work: bravebot_agent::Work::default(),
+            written_before: Vec::new(),
+            loops_shown: Default::default(),
+            loops_told: Default::default(),
             addressing: None,
             system_prompts: bravebot_agent::turn::SystemPrompts::default(),
             standing: None,
@@ -3420,8 +3434,10 @@ impl Session {
         ));
     }
 
-    /// Add what a turn did to the goal's record, where a goal is set (GROUND-4).
-    pub fn goal_worked(&mut self, work: bravebot_agent::Work) {
+    /// Add what a turn did to the session's record (OPEN-1) and to the goal's, where a goal is set
+    /// (GROUND-4).
+    pub fn worked(&mut self, work: bravebot_agent::Work) {
+        self.work.then(work);
         if let Some(goal) = self.goal.as_mut() {
             goal.worked(work);
         }
@@ -7409,14 +7425,15 @@ mod tests {
             writes: 1,
             commands: 1,
             ran_after_last_write: true,
+            last_command_failed: false,
         };
         let mut s = session();
         s.start_goal("cargo test exits 0".to_string());
-        s.goal_worked(built);
+        s.worked(built);
         assert_eq!(s.goal().map(crate::goals::Running::record), Some(built));
         s.turn_in_flight = true;
         s.start_goal("cargo clippy is clean".to_string());
-        s.goal_worked(built);
+        s.worked(built);
         assert_eq!(
             s.goal().map(crate::goals::Running::record),
             Some(bravebot_agent::Work::default())
@@ -9572,6 +9589,7 @@ mod tests {
         );
 
         let idle = SessionCheckout {
+            applied: false,
             id: "c1".into(),
             path: "/state/checkouts/work/c1".into(),
             repository: "/work/.git".into(),
@@ -9582,6 +9600,7 @@ mod tests {
             size: None,
         };
         let written = SessionCheckout {
+            applied: false,
             id: "c2".into(),
             path: "/state/checkouts/work/c2".into(),
             worked_in: true,
@@ -9592,6 +9611,7 @@ mod tests {
             ..idle.clone()
         };
         let ran = SessionCheckout {
+            applied: false,
             id: "c3".into(),
             path: "/state/checkouts/work/c3".into(),
             worked_in: true,
@@ -9646,6 +9666,7 @@ mod tests {
         use bravebot_agent::workspace::SessionCheckout;
         const MEGABYTE: u64 = 1024 * 1024;
         let checkout = |id: &str, size: Option<Size>| SessionCheckout {
+            applied: false,
             id: id.into(),
             path: format!("/state/checkouts/work/{id}").into(),
             repository: "/work/.git".into(),

@@ -171,6 +171,8 @@ pub enum Action {
     ForgetTrust,
     /// List the checkouts the session keeps. Needs the workspace, which the loop owns.
     ListCheckouts,
+    /// List what the session left open (OPEN-5). Needs the workspace, which the loop owns.
+    Unfinished,
     /// List each definition's memory (MEMORY-12).
     ListMemories,
     /// Remove the checkout with this number. Needs the workspace, the trust map and the terminal

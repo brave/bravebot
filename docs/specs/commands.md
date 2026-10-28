@@ -370,7 +370,7 @@ starts another record, switches to one or leaves this one changes: `/clear`, `/h
 they are carried out as they are typed. `/model`, `/effort` and `/advisor` act on what a request is
 built with. A prompt reads it, and so does every command that sends a request or leaves for another
 session, and the three hold one another back, since the level a model reads depends on the model. A
-command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/reach`, `/branch`, `/add-dir`,
+command line, `/clear`, `/undo`, `/rewind`, `/hunks`, `/memory`, `/unfinished`, `/reach`, `/branch`, `/add-dir`,
 `/cd` and `/mcp` read none of it and change none of it, nor does a waiting `/rename`, `/note`,
 `/style`, `/forget-trust`, `/issue`, `/pr` or `/sandbox`, so behind any of those the three are
 carried out as they are typed. `/rename` and `/note` act on the name and the notes the record holds. A
@@ -379,7 +379,7 @@ undone by the commands that put one back, so a line that begins a turn changes w
 every prompt, every command that sends a request or begins a turn, `/clear`, `/undo`, `/rewind`,
 `/hunks`, `/cd`, `/compact`, `/handoff`, `/branch`, `/resume`, `/bg` and `/exit` hold them back, and
 they name it. A command line adds to the conversation and saves the record with the notes and the name
-it already holds, and `/add-dir`, `/memory`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`,
+it already holds, and `/add-dir`, `/memory`, `/unfinished`, `/reach`, `/mcp`, `/style`, `/forget-trust`, `/issue`,
 `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` write neither, so behind any of those, and
 behind a waiting `/note` for `/rename` and a waiting `/rename` for `/note`, they are carried out as
 they are typed. A `/note` typed behind a waiting `!make` is written at once and stamped with the turn
@@ -389,7 +389,7 @@ only where its path does not land in the reach the workspace holds: the root, th
 the checkouts the session kept and the paths programs were let reach. A prompt, every command that
 begins a turn, and `/clear`, `/cd`, `/add-dir`, `/reach`, `/branch`, `/handoff`, `/resume`, `/bg`
 and `/exit` hold it back, since each moves or ends that reach or leaves for another session, and it
-names the line. A command line and `/compact`, `/btw`, `/recap`, `/memory`, `/undo`, `/rewind`,
+names the line. A command line and `/compact`, `/btw`, `/recap`, `/memory`, `/unfinished`, `/undo`, `/rewind`,
 `/hunks`, `/mcp`, `/after`, `/rename`, `/note`, `/forget-trust`, `/issue`, `/pr`, `/sandbox`,
 `/model`, `/effort` and `/advisor` do not, so behind any of those it is carried out as it is typed:
 `/undo`, `/rewind` and `/hunks` put back files the workspace resolves and move no reach, `/mcp`
@@ -406,7 +406,7 @@ changes what is withdrawn, so all of those hold it back, as do `/mcp`, `/undo`,
 removes what a file tool wrote, which may be a `.git` entry written into an added directory that
 holds the working directory, and a server `/mcp` starts may write the directory its declaration
 names. Behind
-`/compact`, `/btw`, `/recap`, `/memory`, `/add-dir`, `/reach`, `/branch`, `/after`, `/rename`, `/note`, `/style`,
+`/compact`, `/btw`, `/recap`, `/memory`, `/unfinished`, `/add-dir`, `/reach`, `/branch`, `/after`, `/rename`, `/note`, `/style`,
 `/issue`, `/pr`, `/sandbox`, `/model`, `/effort` and `/advisor` it is carried out as it is typed:
 `/after` arms a prompt that goes out when its delay is up and runs nothing now, so the turn it sends
 runs under the answer as `/forget-trust` left it whichever of the two is carried out first.

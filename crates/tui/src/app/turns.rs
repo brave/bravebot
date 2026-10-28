@@ -576,7 +576,11 @@ pub(super) fn run_turn_animated(
         .with_injected_facts(stored.injected_facts().clone())
         // The servers the session started, with a grant naming each. Their tools are offered once
         // a person has read the list, which the turn puts to them before it plans (SERVERS-8).
-        .with_mcp(session.servers.session.clone());
+        .with_mcp(session.servers.session.clone())
+        // What earlier turns left open, where it changed since the planner was last told, and
+        // this session's own line in place of the turn's about changes left unbuilt (OPEN-3,
+        // OPEN-4).
+        .with_open_loops(session.open_loops_for_the_planner());
     // Every file named with `@` becomes context, which a turn treats as trusted: the user typed the
     // path and their keystroke is what vouches for it, exactly as `--file` does on the command
     // line. Read back out of the prompt rather than tracked while it is typed, so the line that was
@@ -1058,6 +1062,11 @@ pub(super) fn run_turn_animated(
     if let Some(decisions) = &finished.decisions {
         stored.set_injected_facts(decisions.injected_facts.clone());
     }
+    // And what every turn did, so a resume can say what was left open (OPEN-6).
+    let mut whole = session.work();
+    whole.then(finished.work);
+    stored.set_work(whole);
+    stored.set_written(&session.written());
     Ok(finish_turn(
         session,
         config,
@@ -1091,7 +1100,7 @@ pub(super) fn finish_turn(
     } = finished;
     // Before anything judges the goal, and however the turn ended: a stopped turn's writes are on
     // disk all the same (GROUND-4).
-    session.goal_worked(work);
+    session.worked(work);
     let carried = match decisions {
         Some(turn::Decisions {
             trust,
@@ -1162,6 +1171,8 @@ pub(super) fn finish_turn(
     // After the turn is folded in, so the prompt a stop gives back and the trail a failure keeps
     // are decided with what commands said during the turn still set apart from it.
     session.settle_what_was_said();
+    // Last, after every note the ending made, however the turn ended (OPEN-3).
+    session.say_open_loops(workspace);
     let Carried {
         trust,
         programs,

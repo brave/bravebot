@@ -437,6 +437,7 @@ mod tests {
             writes: 3,
             commands: 1,
             ran_after_last_write: false,
+            last_command_failed: false,
         };
         assert_eq!(
             work_sentences(work, true),
