@@ -631,7 +631,14 @@ arrives at all.
   processor writes and where it puts the mark. Everything that buys them is on this list:
 
   - **Leave the mark out.** Then there is no document and the write is refused. They stopped
-    something from happening, which is the direction this is built to fail in.
+    something from happening, which is the direction this is built to fail in. It still decides
+    which of two driver-worded sentences the planner is shown next: a reference to the document,
+    or a sentence saying that answer marked no document and asking the planner to process it
+    again. That is one bit, no larger than the sizes a reference already carries for any
+    document the attacker's file produces, and no byte of the reply is in either sentence. In a
+    manifest, where there is no planner to ask again, the same bit makes the driver retry the
+    `process` step once itself, with the plan's instruction plus one fixed sentence, which is a
+    second paid call to the model for every file an attacker can make answer unmarked.
   - **Put the mark somewhere else, or more than once.** That shifts where the text is cut, so
     their words land in the document rather than in the remark. But the document becomes the body
     of a file the planner named and a person approved from a diff, and its contents were already
