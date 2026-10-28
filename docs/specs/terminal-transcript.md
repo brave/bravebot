@@ -399,6 +399,8 @@ need searching.
 `verified-by: bravebot_tui::model_prompt::typing_narrows_the_list_to_the_models_that_match`
 `verified-by: bravebot_tui::model_prompt::a_search_matches_the_service_and_the_requestable_name_too`
 `verified-by: bravebot_tui::model_prompt::a_search_ignores_case`
+`verified-by: bravebot_tui::model_prompt::a_word_held_by_only_one_place_still_finds_the_model`
+`verified-by: bravebot_tui::model_prompt::the_search_box_is_drawn_with_what_was_typed`
 `verified-by: bravebot_tui::model_prompt::backspace_widens_the_list_again`
 `verified-by: bravebot_tui::model_prompt::the_cursor_stays_on_the_model_it_was_on_while_the_search_narrows`
 `verified-by: bravebot_tui::model_prompt::the_cursor_stays_on_the_model_it_was_on_while_the_search_widens`

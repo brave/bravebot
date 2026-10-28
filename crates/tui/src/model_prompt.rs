@@ -978,6 +978,57 @@ mod tests {
         assert_eq!(picker.matching().len(), 1);
     }
 
+    /// VIEW-14: a word is looked for in the name shown, the name a request carries and the service,
+    /// each on its own. Each word here is held by exactly one of the three places, so a search that
+    /// read two of them would leave a model unreachable by the word only the third holds.
+    ///
+    /// Rejects: a haystack built without the name shown, without the key, or without the service.
+    #[test]
+    fn a_word_held_by_only_one_place_still_finds_the_model() {
+        let models = vec![
+            served_by("Gateway", "slug-a", "shown-only"),
+            served_by("Gateway", "carried-only", "name-b"),
+            served_by("Provider-Z", "slug-c", "name-c"),
+        ];
+        let found = |word: &str| -> Vec<String> {
+            let mut picker = Picker::new(models.clone(), None);
+            typing(&mut picker, word);
+            picker
+                .matching()
+                .iter()
+                .map(|model| model.key.clone())
+                .collect()
+        };
+
+        assert_eq!(found("shown-only"), ["slug-a"], "the name shown");
+        assert_eq!(found("carried-only"), ["carried-only"], "the name carried");
+        assert_eq!(found("provider-z"), ["slug-c"], "the service");
+    }
+
+    /// VIEW-14: the box above the list shows what has been typed, and only an empty box shows the
+    /// placeholder in its place.
+    ///
+    /// Rejects: a box that draws the placeholder (or nothing) while the search holds text, which
+    /// leaves a person narrowing a list with no sight of what narrows it.
+    #[test]
+    fn the_search_box_is_drawn_with_what_was_typed() {
+        let mut picker = Picker::new(from_two_services(), None);
+        let empty = rendered(&picker);
+        assert!(
+            empty.contains(t!(model_picker_search_placeholder)),
+            "{empty}"
+        );
+
+        // Nothing matches, so the only place the word can be on the screen is the box.
+        typing(&mut picker, "zzz");
+        let typed = rendered(&picker);
+        assert!(typed.contains("zzz"), "{typed}");
+        assert!(
+            !typed.contains(t!(model_picker_search_placeholder)),
+            "{typed}"
+        );
+    }
+
     #[test]
     fn backspace_widens_the_list_again() {
         let mut picker = Picker::new(from_two_services(), None);
