@@ -302,7 +302,11 @@ const VERTEX_SDK: &str = "@ai-sdk/google-vertex";
 
 /// The SDK an entry names to say that its endpoint takes the Responses API, as opencode names the
 /// package that speaks it.
-const RESPONSES_SDK: &str = "@ai-sdk/openai";
+pub(crate) const RESPONSES_SDK: &str = "@ai-sdk/openai";
+
+/// The SDK an entry names to say that its endpoint takes chat completions, as opencode names the
+/// package for a gateway that speaks it.
+const CHAT_SDK: &str = "@ai-sdk/openai-compatible";
 
 /// The publisher a model named without one is taken to belong to.
 const VERTEX_PUBLISHER: &str = "google";
@@ -570,7 +574,8 @@ pub enum Protocol {
     Messages,
     /// Google's native `generateContent` API, which Vertex AI express mode speaks.
     GenerateContent,
-    /// OpenAI's Responses API, which an entry naming `@ai-sdk/openai` speaks
+    /// OpenAI's Responses API, which an entry naming `@ai-sdk/openai` speaks, and an `openai`
+    /// entry reached at OpenAI's own API
     /// ([BACKEND-61](../../../docs/specs/backends.md#BACKEND-61)).
     Responses,
 }
@@ -662,7 +667,7 @@ impl Provider {
         }
         let stated = stated_endpoint(options);
         let npm = string(entry.get("npm"));
-        let mut protocol = protocol_of(id, npm.as_deref());
+        let mut protocol = protocol_of(id, npm.as_deref(), stated);
         let project = string(options.and_then(|options| options.get("project")));
         // A Vertex entry naming no project is the express mode of the native API, which needs the
         // key alone. One that states an endpoint of its own keeps speaking chat completions there
@@ -1003,25 +1008,33 @@ impl Provider {
     }
 
     /// Whether this entry's requests go to OpenAI's own API, from the host and port they are sent
-    /// to compared with the endpoint compiled in for [`OPENAI_ID`].
+    /// to ([`is_openais_endpoint`]).
     ///
     /// The entry's id does not matter: an entry keyed `openai` that states a proxy behaves as that
-    /// proxy, and an entry under another id that states OpenAI's endpoint behaves as OpenAI's. Case,
-    /// a trailing dot on the host and a port that is the scheme's default are spellings of the same
-    /// place ([`reached_at`]). A port that is not the default is another service listening on
-    /// OpenAI's name, so it is not OpenAI's own API.
+    /// proxy, and an entry under another id that states OpenAI's endpoint behaves as OpenAI's.
     fn at_openais_api(&self) -> bool {
-        let own = known_endpoint(OPENAI_ID).and_then(reached_at);
-        own.is_some() && own == reached_at(&self.base_url)
+        is_openais_endpoint(&self.base_url)
+    }
+
+    /// Whether a listing of this service states a `shutdown_date` for a model that its requests
+    /// are refused after ([BACKEND-19]).
+    ///
+    /// OpenAI's own API only. Another service that states a field of that name may mean something
+    /// else by it, and nothing is known of what its dates are for.
+    ///
+    /// [BACKEND-19]: ../../../docs/specs/backends.md#BACKEND-19
+    pub fn lists_shutdown_dates(&self) -> bool {
+        self.at_openais_api()
     }
 
     /// The ids a listing of this service is not offered, because the models they name take
     /// requests through the Responses API only.
     ///
-    /// Empty except for OpenAI's own API reached in the chat completions protocol. An entry that
-    /// names `@ai-sdk/openai` is reached in the Responses protocol, which serves them, and a
-    /// proxy at another host may serve them over chat completions. A block that names `models`
-    /// is offered those and no others, so a Responses-only model is still one somebody can name.
+    /// Empty except for OpenAI's own API reached in the chat completions protocol, which an
+    /// `openai` entry is only where it names the OpenAI-compatible SDK. An entry reached in the
+    /// Responses protocol serves them, and a proxy at another host may serve them over chat
+    /// completions. A block that names `models` is offered those and no others, so a
+    /// Responses-only model is still one somebody can name.
     pub fn responses_only_models(&self) -> &'static [&'static str] {
         if self.protocol == Protocol::ChatCompletions && self.at_openais_api() {
             RESPONSES_ONLY_MODELS
@@ -1253,21 +1266,36 @@ impl fmt::Debug for Credential {
     }
 }
 
-/// The protocol an entry's requests are written in, from its id and the SDK it names.
+/// The protocol an entry's requests are written in, from its id, the SDK it names and the endpoint
+/// it states.
 ///
 /// An entry naming the SDK that speaks the Responses API is reached in it, whatever its id but
-/// `google-vertex`, whose own protocols, and the header its key goes in, are fixed by the id. Otherwise
-/// only the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and an entry
-/// under that id that names the OpenAI-compatible SDK is reached as any other gateway is. Any other
+/// `google-vertex`, whose own protocols, and the header its key goes in, are fixed by the id.
+/// Otherwise the `anthropic` id is reached in the Messages protocol, as opencode reaches it, and the
+/// `openai` id in the Responses protocol where it is reached at OpenAI's own API. An entry under
+/// either id that names the OpenAI-compatible SDK is reached as any other gateway is, and so is an
+/// `openai` entry that states a proxy's endpoint, which may speak chat completions alone. Any other
 /// SDK an entry names is not read: the id decides.
-fn protocol_of(id: &str, npm: Option<&str>) -> Protocol {
+pub(crate) fn protocol_of(id: &str, npm: Option<&str>, stated: Option<&str>) -> Protocol {
     if npm == Some(RESPONSES_SDK) && id != GOOGLE_VERTEX_ID {
         Protocol::Responses
-    } else if id == ANTHROPIC_ID && npm != Some("@ai-sdk/openai-compatible") {
+    } else if id == ANTHROPIC_ID && npm != Some(CHAT_SDK) {
         Protocol::Messages
+    } else if id == OPENAI_ID && npm != Some(CHAT_SDK) && stated.is_none_or(is_openais_endpoint) {
+        Protocol::Responses
     } else {
         Protocol::ChatCompletions
     }
+}
+
+/// Whether `url` reaches the same host and port as the endpoint compiled in for [`OPENAI_ID`].
+///
+/// Case, a trailing dot on the host and a port that is the scheme's default are spellings of the
+/// same place ([`reached_at`]). A port that is not the default is another service listening on
+/// OpenAI's name, so it is not OpenAI's own API.
+fn is_openais_endpoint(url: &str) -> bool {
+    let own = known_endpoint(OPENAI_ID).and_then(reached_at);
+    own.is_some() && own == reached_at(url)
 }
 
 /// The OpenAI-compatible endpoint of Vertex AI for a project and location, without a trailing slash.
@@ -2449,14 +2477,18 @@ mod tests {
     /// OpenAI is a gateway like any other once its host is known: the key goes in `authorization`,
     /// nothing is compiled in to offer, and no tool call carries anything back that this program
     /// keeps. A name that changed any of that would be a second code path for a service that
-    /// speaks the protocol everything else here speaks.
+    /// speaks the protocol everything else here speaks. The protocol is the Responses one
+    /// ([BACKEND-17]), the one every model OpenAI serves takes with a tool.
+    ///
+    /// [BACKEND-17]: ../../../docs/specs/backends.md#BACKEND-17
     #[test]
     fn an_openai_entry_is_reached_at_openais_host_like_any_other_gateway() {
         let provider = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
         assert_eq!(provider.base_url, "https://api.openai.com/v1");
+        assert_eq!(provider.protocol(), Protocol::Responses);
         assert_eq!(
-            provider.chat_completions_url(),
-            "https://api.openai.com/v1/chat/completions"
+            provider.completion_url(),
+            "https://api.openai.com/v1/responses"
         );
         assert_eq!(provider.models_url(), "https://api.openai.com/v1/models");
         assert_eq!(provider.host(), "api.openai.com");
@@ -2539,7 +2571,11 @@ mod tests {
     /// entry that states OpenAI's host.
     #[test]
     fn openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called() {
-        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let own = one(r#"{"provider": {"openai": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["OPENAI_API_KEY"]
+            }}}"#);
+        assert_eq!(own.protocol(), Protocol::ChatCompletions);
         assert_eq!(own.host(), "api.openai.com");
         assert!(!own.takes_cache_markers());
         assert_eq!(own.responses_only_models(), RESPONSES_ONLY_MODELS);
@@ -2569,6 +2605,15 @@ mod tests {
         assert!(
             responses.responses_only_models().is_empty(),
             "the Responses route serves those models"
+        );
+
+        let bare = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        assert_eq!(bare.protocol(), Protocol::Responses);
+        assert!(!bare.takes_cache_markers());
+        assert!(bare.lists_shutdown_dates());
+        assert!(
+            bare.responses_only_models().is_empty(),
+            "an openai entry is reached in the Responses protocol, which serves those models"
         );
 
         let other = one(r#"{"provider": {"openrouter": {"env": ["OPENROUTER_API_KEY"]}}}"#);
@@ -2639,7 +2684,10 @@ mod tests {
     /// id passes.
     #[test]
     fn the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered() {
-        let own = one(r#"{"provider": {"openai": {"env": ["OPENAI_API_KEY"]}}}"#);
+        let own = one(r#"{"provider": {"openai": {
+                "npm": "@ai-sdk/openai-compatible",
+                "env": ["OPENAI_API_KEY"]
+            }}}"#);
         let listed = own.responses_only_models();
         for id in [
             "gpt-5.1-codex",
@@ -2852,11 +2900,11 @@ mod tests {
             "https://api.openai.com/v1/responses"
         );
 
-        let plain = one(r#"{"provider": {"openai": {"env": ["A_KEY"]}}}"#);
+        let plain = one(r#"{"provider": {"openrouter": {"env": ["A_KEY"]}}}"#);
         assert_eq!(plain.protocol(), Protocol::ChatCompletions);
         assert_eq!(
             plain.completion_url(),
-            "https://api.openai.com/v1/chat/completions"
+            "https://openrouter.ai/api/v1/chat/completions"
         );
 
         let stated = one(r#"{"provider": {"anthropic": {
@@ -2875,6 +2923,76 @@ mod tests {
                 "options": {"project": "an-example-project", "apiKey": "a-key"}
             }}}"#);
         assert_eq!(vertex.protocol(), Protocol::ChatCompletions);
+    }
+
+    /// BACKEND-17 and BACKEND-61: an `openai` entry is reached in the Responses protocol where it is
+    /// reached at OpenAI's own API. On its chat completions route OpenAI refuses a request that
+    /// offers a function tool to `gpt-6-sol` or `gpt-6.1-sol`, and every request from this program
+    /// offers tools. A proxy keyed `openai` may speak chat completions alone, so
+    /// it keeps that route, as does an entry that names the OpenAI-compatible SDK, which is how a
+    /// person asks for chat completions at OpenAI's own API. An entry under another id keeps
+    /// chat completions whatever endpoint it states, so a block written for another service is not
+    /// moved to a route its service may not have.
+    #[test]
+    fn an_openai_entry_is_reached_in_the_responses_protocol_at_openais_own_api_only() {
+        let at = |block: &str| one(&format!(r#"{{"provider": {block}}}"#)).protocol();
+
+        for (block, expected) in [
+            (r#"{"openai": {"env": ["A_KEY"]}}"#, Protocol::Responses),
+            (r#"{"openai": {}}"#, Protocol::Responses),
+            (
+                r#"{"openai": {"options": {"baseURL": "https://api.openai.com/v1"}}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "HTTPS://API.OpenAI.com.:443/v1/"}}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["A_KEY"]}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"npm": "an-sdk-nobody-reads", "env": ["A_KEY"]}}"#,
+                Protocol::Responses,
+            ),
+            (
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["A_KEY"]}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "https://api.openai.com:8443/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"options": {"baseURL": "http://localhost:11434/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible",
+                    "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+            (
+                r#"{"work": {"options": {"baseURL": "https://api.openai.com/v1"}}}"#,
+                Protocol::ChatCompletions,
+            ),
+        ] {
+            assert_eq!(at(block), expected, "{block}");
+        }
+
+        // The entry a session reaches for the name alone, which is what a stored key is sent to.
+        assert_eq!(
+            Provider::known("openai").map(|provider| provider.protocol()),
+            Some(Protocol::Responses)
+        );
+        // The other known names keep their own.
+        assert_eq!(at(r#"{"openrouter": {}}"#), Protocol::ChatCompletions);
+        assert_eq!(at(r#"{"anthropic": {}}"#), Protocol::Messages);
     }
 
     /// The table supplies an address and nothing else. A block naming no credential does not have an

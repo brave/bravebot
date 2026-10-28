@@ -648,11 +648,15 @@ the host it shows is the one a session sends the key to.
 
 A known name supplies an endpoint and no credential. An `openai` entry is reached as any other
 gateway is, with its key as a bearer token in `authorization`, and names where that key lives as
-[BACKEND-16](#BACKEND-16) says. What differs at OpenAI's own host follows the host and port a request goes
-to, whatever the entry is called. [BACKEND-19](#BACKEND-19) states the models its chat completions route
-cannot reach, which the roster leaves out, and [BACKEND-32](#BACKEND-32) states that no cache marks are sent.
-A proxy keyed `openai` is a gateway as any other is, and an entry under another id that states OpenAI's
-endpoint is treated as OpenAI's. An `anthropic` entry names the key the same way, and is the one known name
+[BACKEND-16](#BACKEND-16) says. It is reached in the Responses protocol ([BACKEND-61](#BACKEND-61)) where it
+reaches OpenAI's own host, whether it states no endpoint or states that host, and in chat completions where it
+names `@ai-sdk/openai-compatible` in `npm`, which is how a person asks for them at OpenAI's host, or states
+the endpoint of a proxy, which may speak chat completions alone. What else differs at OpenAI's own host
+follows the host and port a request goes to, whatever the entry is called. [BACKEND-19](#BACKEND-19) states
+the models its roster leaves out, those that only the Responses API takes where the route is chat
+completions and those past their `shutdown_date`, and [BACKEND-32](#BACKEND-32) states that no cache marks
+are sent. A proxy keyed `openai` is a gateway as any other is, and an entry under another id that states
+OpenAI's endpoint is treated as OpenAI's for those two, and keeps chat completions. An `anthropic` entry names the key the same way, and is the one known name
 whose entry may say it is not Anthropic's: one that names `@ai-sdk/openai-compatible` in `npm`, as
 opencode names the SDK for a gateway, is an OpenAI-compatible gateway like any other and states an
 endpoint of its own, since the address compiled in is the one the other protocol is spoken at. Its models are asked for as [BACKEND-19](#BACKEND-19) says, and
@@ -685,6 +689,7 @@ what keeps a known name usable against a proxy or a private deployment.
 `verified-by: bravebot_config::provider::an_id_with_no_row_in_the_table_is_not_a_known_provider`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in`
 `verified-by: bravebot_config::provider::an_openai_entry_is_reached_at_openais_host_like_any_other_gateway`
+`verified-by: bravebot_config::provider::an_openai_entry_is_reached_in_the_responses_protocol_at_openais_own_api_only`
 `verified-by: bravebot_config::provider::a_stated_endpoint_beats_the_one_compiled_in_for_openai`
 `verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
 `verified-by: bravebot_agent::backend::an_openai_alias_is_not_expected_to_be_the_name_that_comes_back`
@@ -824,9 +829,13 @@ gateway is still read: what a gateway puts under `capabilities` is its own.
 **An `openai` service is asked as any gateway is, and its listing is read for ids.** `/models/user` is asked
 first and is expected to be refused, then `/models`. A row states an id and no capability, so nothing is dropped
 for what a model can do, and embedding, speech and image models are offered beside the chat ones ([Known
-costs](#known-costs)). One list compiled into the binary leaves ids out: where an entry is reached in the chat
-completions protocol at `api.openai.com`, the models that take requests through the Responses API alone are not
-offered, since that route cannot reach them. The list is read from two public documents: the `ResponsesOnlyModel` list
+costs](#known-costs)). A row states a `shutdown_date` for some models, and a model dated today or earlier is not
+offered where the entry is reached at `api.openai.com`, in either protocol, since the service no longer serves it:
+the date is read as its first second in UTC, and a row with no date, a `null` or a date in any shape but
+`YYYY-MM-DD` is offered. Another host is not read for the field. One list compiled into the binary leaves ids
+out: where an entry is reached in the chat completions protocol at `api.openai.com`, which an `openai` entry
+is only where it names `@ai-sdk/openai-compatible` ([BACKEND-17](#BACKEND-17)), the models that take requests
+through the Responses API alone are not offered, since that route cannot reach them. The list is read from two public documents: the `ResponsesOnlyModel` list
 of OpenAI's published API description (version 2.3.0), and the model pages at
 `developers.openai.com/api/docs/models/<id>`, read on 2026-10-27 for each id of the listing of 2026-10-26. On
 2026-10-27 the route answered none of its 28 ids with a 200 when each was asked once with one short message and a
@@ -840,7 +849,8 @@ the rows go to a picker. The place is told by the host and port of the entry's e
 whatever the entry's id: the host is compared in lower case without a trailing dot, a port that is the scheme's
 default is the same place whether or not it is written, and a port that is not the default is another service, so
 it is not `api.openai.com`. A proxy keyed `openai` is therefore offered its whole listing, and so is an entry
-naming `@ai-sdk/openai`, which is reached in the Responses protocol ([BACKEND-61](#BACKEND-61)). The list changes
+reached in the Responses protocol ([BACKEND-61](#BACKEND-61)), which an `openai` entry at `api.openai.com` is
+by default. The list changes
 with a release of either document. A block naming `models` is offered those and no others, so a model on the list is
 still reached by naming it.
 
@@ -941,6 +951,9 @@ token is not renewed for it.
 `verified-by: bravebot_aichat::models::a_gateway_that_reports_no_capabilities_still_offers_its_models`
 `verified-by: bravebot_aichat::client::an_openai_listing_that_reports_no_capabilities_offers_every_model_it_lists`
 `verified-by: bravebot_aichat::models::an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes`
+`verified-by: bravebot_aichat::models::an_openai_listing_is_not_offered_a_model_on_or_past_its_shutdown_date`
+`verified-by: bravebot_aichat::models::a_shutdown_date_takes_effect_at_the_start_of_its_day`
+`verified-by: bravebot_aichat::models::a_shutdown_date_is_read_at_openais_own_api_and_nowhere_else`
 `verified-by: bravebot_config::provider::openais_own_api_follows_the_host_a_request_goes_to_whatever_the_entry_is_called`
 `verified-by: bravebot_config::provider::the_spellings_of_openais_host_are_its_own_api_and_another_host_or_port_is_not`
 `verified-by: bravebot_config::provider::the_responses_only_list_holds_the_marked_ids_and_leaves_out_a_sample_that_stays_offered`
@@ -3747,9 +3760,11 @@ credential into wherever the output goes.
 ### BACKEND-61: a service that takes the Responses protocol is sent a request in it and read in it, and nothing is asked to be kept
 
 A request is made in the Responses protocol where the service is the ChatGPT account of
-[CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10), and where a `provider` entry, or a model under one, names
-`@ai-sdk/openai` in `npm`, as opencode names the SDK that speaks it. Every other service is spoken to in
-chat completions, and an entry naming no SDK stays one. The ChatGPT account is always spoken
+[CHATGPT-10](chatgpt-sign-in.md#CHATGPT-10), where a `provider` entry, or a model under one, names
+`@ai-sdk/openai` in `npm`, as opencode names the SDK that speaks it, and where an `openai` entry reaches
+OpenAI's own host without naming `@ai-sdk/openai-compatible` ([BACKEND-17](#BACKEND-17)), as opencode's
+`openai` provider does. Every other service is spoken to in chat completions, and an entry naming no SDK
+stays one, an `openai` entry that states a proxy's endpoint among them. The ChatGPT account is always spoken
 to in this protocol, and no request is made to its host in another. A model's own `npm` outranks its
 entry's, so one entry may offer models in both protocols. The SDK an entry names decides over its id, except
 under `google-vertex`, whose id fixes its protocols and the header its key goes in: an `anthropic` entry that names `@ai-sdk/openai` is reached in this protocol, and states an endpoint of its own,
@@ -3838,8 +3853,27 @@ cached part of a prompt inside `input_tokens`
 ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). A `response.failed`
 event has not been seen there, and an `error` event has not been seen on the POST event stream this protocol
 reads. An `error` event was seen over the ChatGPT host's websocket on 2026-10-27, with its code in an `error`
-object ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)). Nothing has
-been observed of an entry that names `@ai-sdk/openai` on another service.
+object ([What the exchange has to record](chatgpt-sign-in.md#what-the-exchange-has-to-record)).
+
+`api.openai.com` was observed on 2026-10-27, with a key whose account had credit. A chat completion that
+offered one function tool and carried no `reasoning_effort` was answered 400 by `gpt-6-sol`, with the error
+type `invalid_request_error`, the `param` `reasoning_effort` and the message "Function tools with
+reasoning_effort are not supported for gpt-6-sol in /v1/chat/completions. To use function tools, use
+/v1/responses or set reasoning_effort to 'none'.". With `reasoning_effort` `high`, `gpt-6-sol` and
+`gpt-6.1-sol` each refused it with the same message for their own name. With `none`, `gpt-6-sol` took it and
+returned a tool call, and `gpt-6.1-sol` refused `none` with 400, "Unsupported value: 'reasoning_effort' does
+not support 'none' with this model. Supported values are: 'low', 'medium', 'high', and 'xhigh'.". A chat
+completion without a tool answered 200 for `gpt-6-sol`, whole and streamed with `stream_options.include_usage`.
+A request to `/responses` that offered the same function tool, with `store` `false`, completed for both
+models. Through this program, `bravebot -p` on `openai/gpt-6-sol` and on `openai/gpt-6.1-sol` ended with HTTP
+400 at `/chat/completions`, and ended with a reply and exit status 0 for both when the entry named
+`@ai-sdk/openai`. A turn that asked for the word in a file, which the model read with a tool call, ended with
+that word and exit status 0 for `gpt-6-sol`, `gpt-6.1-sol` and `gpt-4.1` at an `openai` entry that names no SDK,
+and ended with HTTP 400 for `gpt-6-sol` where the entry named `@ai-sdk/openai-compatible`. Each was run once.
+Sending the request again without the level, as a refusal of a level is answered
+([BACKEND-22](#BACKEND-22)), does not get past the refusal for the tool, since no level was sent. Nothing has
+been observed at `api.openai.com` in this protocol of cached tokens, a reasoning summary, a picture, a reply
+stopped at its ceiling or a turn of several rounds.
 
 **Built:** the protocol for an entry that names `@ai-sdk/openai`, in `bravebot-aichat` beside the Anthropic
 and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings
@@ -3865,6 +3899,7 @@ and the ChatGPT host refuses `temperature`, so a field added for every service w
 clause was written for.
 
 `verified-by: bravebot_config::provider::an_entry_naming_the_openai_sdk_is_reached_through_the_responses_api`
+`verified-by: bravebot_config::provider::an_openai_entry_is_reached_in_the_responses_protocol_at_openais_own_api_only`
 `verified-by: bravebot_aichat::responses::protocol::a_request_is_the_body_this_api_states`
 `verified-by: bravebot_aichat::responses::protocol::a_listed_code_reported_on_the_stream_is_a_refusal_and_no_other_failure`
 `verified-by: bravebot_aichat::responses::protocol::a_call_and_its_result_are_items_beside_the_messages`
@@ -4264,14 +4299,17 @@ clause was written for.
   for one that is absent: the next tool is tried, and with none left a copy goes out as the
   terminal's own escape sequence and a paste reads as an empty clipboard.
 
-- **An `openai` entry naming no models is offered everything OpenAI's listing returns, less one
-  compiled-in list.** The listing states an id and an owner for each model and nothing about what it
-  can do, so BACKEND-19 has nothing to drop on, and the picker holds embedding, speech and image
-  models beside the chat ones. That waives BACKEND-5's promise that picking a listed name works, for
-  the rows of this one service. The ids left out are those of the `ResponsesOnlyModel` list of
+- **An `openai` entry naming no models is offered everything OpenAI's listing returns, less a
+  model past its `shutdown_date` and one compiled-in list.** The listing states an id and an owner for
+  each model and nothing about what it can do, so BACKEND-19 has nothing to drop on for a capability,
+  and the picker holds embedding, speech and image models beside the chat ones. That waives
+  BACKEND-5's promise that picking a listed name works, for the rows of this one service. A model
+  whose listed `shutdown_date` is today or earlier is left out, and a row with no date or a date in
+  another shape is offered. The ids of the compiled list are those of the `ResponsesOnlyModel` list of
   OpenAI's published API description and of the model pages that mark chat completions unsupported
-  and Responses supported ([BACKEND-19](#BACKEND-19)), and only where the route is chat completions
-  at `api.openai.com`. The list goes stale with each release of either. Filtering by anything else
+  and Responses supported ([BACKEND-19](#BACKEND-19)), and they are left out only where the route is
+  chat completions at `api.openai.com`, which an `openai` entry reaches only by naming
+  `@ai-sdk/openai-compatible`. The list goes stale with each release of either. Filtering by anything else
   an id says would be a guess about OpenAI's naming, and a model named otherwise would be hidden
   from somebody who could use it. A list of the chat models compiled into the binary, as BACKEND-49
   compiles one for Vertex AI, would go stale the same way, and each id on it would first have to be
@@ -4279,22 +4317,27 @@ clause was written for.
   and no others.
 
 - **A model the chat completions route does not serve is offered and fails when picked.** The route is chat
-  completions unless the entry names `@ai-sdk/openai`, and the listing does not say which models take either.
+  completions where an `openai` entry names `@ai-sdk/openai-compatible`, and the listing does not say which
+  models take either.
   The compiled list holds the ids the description and the model pages read on 2026-10-27 name, so a model
   released since, or one whose page states no endpoints, is offered, and so is `gpt-image-1-mini`, which the route
   refuses as Responses-only. The list holds ids the route answers as deprecated or unknown as well: of its 28 ids the
   route named the Responses API for 3, answered "not a chat model" for 6, "deprecated" for 13 and "does not exist or
-  you do not have access" for 6, and none answered 200. A model whose listed `shutdown_date` has passed is offered
-  too: of the 36 ids of the listing of 2026-10-27 with a date on or before that day, 34 answered that the model has
-  been deprecated and two (`sora-2` and `sora-2-pro`) answered 503, and 4 ids with no date answered it as well. The
-  route answered the same for `gpt-3.5-turbo`, `o1`, `o3-mini` and `o4-mini`, whose pages mark them as taking chat
-  completions. The rows of embedding, speech, transcription, realtime, moderation, audio, image and video models are
+  you do not have access" for 6, and none answered 200. A model whose listed `shutdown_date` has passed is left out
+  ([BACKEND-19](#BACKEND-19)): of the 36 ids of the listing of 2026-10-27 with a date on or before that day, 34
+  answered that the model had been deprecated and two (`sora-2` and `sora-2-pro`) answered 503, and 4 ids with no
+  date answered it as well and are offered. The figures below count the rows of the listing of 2026-10-27, those
+  past their `shutdown_date` included. The route answered the same for `gpt-3.5-turbo`, `o1`, `o3-mini` and
+  `o4-mini`, whose pages mark them as taking chat completions. The rows of embedding, speech, transcription, realtime, moderation, audio, image and video models are
   offered. Asked once each on 2026-10-27 with one short message and no `modalities`, the embedding ids answered 403 or
   404, the speech, transcription, realtime and moderation ids 404, five of the six audio ids 400 for want of an audio
   modality, and the image and video ids 500 or 503, which may not be about the route, except two image ids that
   answered 404. Of the 118 ids of the listing of 2026-10-27 that the compiled list leaves in, 40 answered 200 to a
   request with a ceiling of 16 tokens, 10 of them with an empty content cut at that ceiling, and 78 did not
-  ([BACKEND-19](#BACKEND-19)). A block naming `models` offers only the ones it names.
+  ([BACKEND-19](#BACKEND-19)). An `openai` entry that names no SDK is reached at `/responses`
+  ([BACKEND-17](#BACKEND-17)), and nothing has been observed of what that route answers for the rows of
+  embedding, speech, transcription, realtime, moderation, audio, image and video models, which the listing holds
+  as well. A block naming `models` offers only the ones it names.
 
 - **A cache write figure is stated by some of OpenAI's models and not by others.** BACKEND-31 reads
   `prompt_tokens_details.cache_write_tokens` where a reply states it. On 2026-10-27 eight of the 40 ids that answered 200 to
