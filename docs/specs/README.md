@@ -82,7 +82,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
 | [acp.md](acp.md) | `ACP` | 9 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, and what a failed turn says |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |
-| [releases.md](releases.md) | `RELEASE` | 21 | what names a version, what starts a release, and what an installer trusts about what it fetched |
+| [releases.md](releases.md) | `RELEASE` | 22 | what names a version, what starts a release, and what an installer trusts about what it fetched |
 | [updates.md](updates.md) | `UPDATE` | 12 | learning that a newer version is out, and the line or link that installs it |
 | [crash-reports.md](crash-reports.md) | `CRASH` | 10 | what a panic tells the maintainers: the one file it leaves, what the file may hold, when and where it is sent, and how a person stops it |
 

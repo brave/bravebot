@@ -21,6 +21,7 @@ governs:
   - contrib/release-preflight.py
   - contrib/package-manifests.py
   - contrib/check-pnpm-lockfiles.py
+  - crates/cli/tests/repo_metadata.rs
 documented-by:
   - docs/website/docs/quickstart.md
   - docs/website/docs/install.md
@@ -35,11 +36,13 @@ Building for a platform is not this topic. Reproducible cross-builds are ordinar
 in [../development/releasing.md](../development/releasing.md). This file governs only the path from a version to a
 published asset, and the checks along it.
 
-Four routes carry what is published: the npm packages, which hold the binaries themselves and are
+Five routes carry what is published: the npm packages, which hold the binaries themselves and are
 built from the GitHub release when they are published, the shell script and the PowerShell script
-served from the trunk of this repository, which fetch the release when they run, and the Homebrew
-cask and the WinGet package, whose manifests name the release's assets and their digests. All are
-governed here. Learning from a running copy that a newer release exists is [updates.md](updates.md).
+served from the trunk of this repository, which fetch the release when they run, the Homebrew
+cask and the WinGet package, whose manifests name the release's assets and their digests, and the
+apt and dnf repositories, whose metadata this tree writes and whose signing and hosting are not
+here. All are governed here. Learning from a running copy that a newer release exists is
+[updates.md](updates.md).
 
 GitHub Actions compiles and tests. It does not create a GitHub release. Signed, configured
 binaries are built and published by the Jenkins job `bravebot-build` in the devops repository.
@@ -562,7 +565,70 @@ six runner jobs before it fails on the 404.
 
 `verified-by: by-construction (npm/tests/bootstrap-platform-packages.test.mjs runs the script against a fake npm: it publishes a placeholder for each name the registry answers 404 for and for none it holds, never one with more than a manifest and the licence, never at the version of a release or under latest, nothing without a login, and nothing when the registry does not answer with a package or a 404; the check names every missing package and publishes nothing; the script reads no environment value and starts npm alone; and the recipe of make publish-npm is held to run the check before gh workflow run. make check-npm runs it)`
 
+<a id="RELEASE-22"></a>
+### RELEASE-22: the apt and dnf repositories are checked by the client against the release key, and each is written from the packages of one version
+
+`make cli-repo-metadata` writes, from the four packages `make cli-packages-linux` makes, one
+apt repository and one dnf repository under `dist/repo/`, each flat and holding both
+architectures: `apt/` with `Packages`, `Packages.gz` and `Release`, and `rpm/` with `repodata/`.
+Each package is copied under a name that states the version. A target refuses, naming the package
+and the command that makes it, and writes nothing, when a package it describes is not in `dist/`.
+Neither target holds a key or signs: `Release` is signed as `InRelease` and `Release.gpg`, and
+`repomd.xml` as `repomd.xml.asc`, by the publish job, with the release signing key named in
+[RELEASE-14](#RELEASE-14), whose public half is published at
+`https://brave-browser-downloads.s3.brave.com/keys/bravebot-release.asc`. A signature the job has
+made can be given to a target as `REPO_APT_INRELEASE`, `REPO_APT_RELEASE_GPG` or
+`REPO_RPM_REPOMD_ASC`, a path to a file that the target copies unread to `InRelease`,
+`Release.gpg` or `repodata/repomd.xml.asc`, and a target stops before it runs a tool when a
+variable names a path that is not a file.
+
+The README and the install page give the repository at
+`https://brave-browser-downloads.s3.brave.com/bravebot/apt/` and
+`https://brave-browser-downloads.s3.brave.com/bravebot/rpm/`. The apt source names that key file
+in `Signed-By`, and the dnf repository file sets `repo_gpgcheck=1` and the key's URL. The rpm files
+carry no signature of their own, so the file sets `gpgcheck=0`: dnf checks the signed metadata, and
+the metadata holds the hash of each package. No instruction turns off the check of the metadata.
+Debian 12, Ubuntu 22.04, Ubuntu 24.04 and Fedora 42 are the releases supported, and the
+instructions say so.
+
+**Why.** `apt` and `dnf` check the signature on the repository's metadata and the metadata's
+hashes of the packages, so the signature on a package's own checksum, which
+[RELEASE-8](#RELEASE-8) and [RELEASE-14](#RELEASE-14) cover, is not what a client looks at. Using
+the key the installers already carry means one key to publish, pin and rotate, and a client that
+has verified an installer's download has been shown the same fingerprint. The key is named for
+the repository by `Signed-By` or `repo_gpgcheck`, so a different key, including one the host
+serves beside the packages, does not sign it. A key held outside the tree is why the targets
+stop before signing: a target that signed would need that key on the machine that runs it. The
+repositories are flat and one per format because the binary depends on libc alone, so one tree
+serves every supported release, and a repository shared with other packages would let another
+package's key decide what is trusted for this one.
+
+`verified-by: bravebot_cli::repo_metadata::the_apt_target_writes_a_release_over_both_architectures`
+`verified-by: bravebot_cli::repo_metadata::the_apt_target_refuses_when_a_package_is_missing`
+`verified-by: bravebot_cli::repo_metadata::the_rpm_target_writes_repodata_over_both_architectures`
+`verified-by: bravebot_cli::repo_metadata::the_rpm_target_refuses_when_a_package_is_missing`
+`verified-by: bravebot_cli::repo_metadata::the_metadata_targets_hold_no_signing_step`
+`verified-by: bravebot_cli::repo_metadata::the_apt_target_places_the_signatures_it_is_given`
+`verified-by: bravebot_cli::repo_metadata::the_rpm_target_places_the_signature_it_is_given`
+`verified-by: bravebot_cli::repo_metadata::a_signature_path_that_is_not_a_file_stops_the_target_before_a_tool_runs`
+`verified-by: bravebot_cli::repo_metadata::the_install_instructions_check_the_repository_metadata`
+`verified-by: by-construction (signing and the upload are steps of the publish job in devops, which this tree does not contain; the supported releases are a statement in the instructions and not a build limit)`
+
 ## Known costs
+
+- **The apt and dnf repositories are written here and signed and served elsewhere.** Nothing in
+  this tree signs `Release` or `repomd.xml`, uploads the repository, or installs from it, so
+  [RELEASE-22](#RELEASE-22) is by-construction for those and the tests hold only the layout the
+  targets write, with stand-ins for `apt-ftparchive` and `createrepo_c`. That the real tools
+  write a repository `apt` and `dnf` accept, and that a package installs on each supported
+  release, is first seen by the person who publishes. The repository host and path the install
+  instructions name are a choice made here, and the job that publishes has to upload to them. A
+  copy installed from a package is in `/usr/bin`, which the update notice
+  ([UPDATE-2](updates.md#UPDATE-2)) does not recognise, so it offers such a copy no line. Changing
+  the signing key reaches a repository as [RELEASE-14](#RELEASE-14) describes for the install
+  script: a client holds the key it was given, so a new key means every client fetches it again.
+  The supported releases are a statement of support and not a limit: the packages require glibc
+  2.30, which more releases than those listed provide.
 
 - **The signature checks are pinned by a Rust test, and the package script and launcher by Node
   ones.** Every clause but [RELEASE-13](#RELEASE-13) to [RELEASE-17](#RELEASE-17) is

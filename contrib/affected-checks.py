@@ -69,6 +69,12 @@ READ_BY_THE_SEAM_GUARD = frozenset({
     "ui/src/renderer/App.tsx",
 })
 
+# Files that belong to another area and are also read by a test in the cli crate. They add the
+# Rust checks to what their own area needs.
+ALSO_READ_BY_RUST = frozenset({
+    "docs/website/docs/install.md",
+})
+
 # Outside crates/, and read by a test all the same.
 READ_BY_RUST = ("CHANGELOG.md",)
 
@@ -150,7 +156,7 @@ def classify(path, desktop, fuzz):
     """The areas a change to `path` could affect, where `desktop` is desktop_crates() and `fuzz`
     is fuzz_crates()."""
     found = classify_by_area(path, desktop, fuzz)
-    if path in READ_BY_THE_SEAM_GUARD:
+    if path in READ_BY_THE_SEAM_GUARD or path in ALSO_READ_BY_RUST:
         found = found | {"rust"}
     return found
 
@@ -429,6 +435,7 @@ CASES = (
     ("CHANGELOG.md", {"rust"}),
     ("docs/specs/routing.md", {"rust"}),
     ("docs/specs/tools/read-file.md", {"rust"}),
+    ("docs/website/docs/install.md", {"docs", "help", "rust"}),
     ("docs/website/docs/intro.md", {"docs", "help"}),
     ("docs/website/docs/using/watches.md", {"docs", "help"}),
     ("docs/website/package-lock.json", {"docs", "npm"}),
