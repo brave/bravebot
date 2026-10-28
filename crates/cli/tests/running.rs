@@ -2120,6 +2120,9 @@ fn a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictur
 /// A person's home holding a definition whose name carries escape sequences, beside a settings
 /// file whose `agent` key names a definition that is not there. The sentence saying so lists the
 /// names that are, so it carries this one.
+///
+/// Unix only, like the tests that call it.
+#[cfg(unix)]
 fn a_home_whose_definition_is_named_with_control_characters(name: &str) -> Scratch {
     let gateway = a_gateway(r#"["tools"]"#, answered("done"));
     Scratch::new(name)
