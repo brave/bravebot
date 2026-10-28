@@ -473,11 +473,14 @@ impl Session {
     /// session resolved, and is checked against that set again when the line is sent.
     fn pick_definition(&mut self, name: &str) {
         let start = bravebot_mentions::last_word_starts_at(&self.input);
-        if !self.input[start..].starts_with('@') {
+        let Some((kept, word)) = self.input.split_at_checked(start) else {
+            return;
+        };
+        if !word.starts_with('@') {
             return;
         }
         let marker = bravebot_mentions::marker(name, name);
-        let kept = self.input[..start].to_string();
+        let kept = kept.to_string();
         self.put_in_the_box(format!("{kept}{marker} "));
         self.pick = Some(Pick {
             name: name.to_string(),
