@@ -102,7 +102,7 @@ pub fn to_text(key: &Secret) -> Secret {
     // Six bytes is the most one byte escapes to (`\u001f`), and the rest is the quotes, the
     // separators and the version.
     let mut text = String::with_capacity(6 * key.expose().len() + 96);
-    let _ = writeln!(text, "{root:#}");
+    writeln!(text, "{root:#}").unwrap_or_default();
     crate::scrub_value(&mut root);
     Secret::new(text)
 }

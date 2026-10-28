@@ -202,7 +202,7 @@ fn store(directory: &Path, key: &Secret) -> std::io::Result<()> {
         })
         .and_then(|()| std::fs::rename(&temporary, &path));
     if written.is_err() {
-        let _ = std::fs::remove_file(&temporary);
+        std::fs::remove_file(&temporary).unwrap_or_default();
     }
     written
 }
