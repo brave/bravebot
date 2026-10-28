@@ -428,6 +428,13 @@ A no is never kept, so a directory answered with a no asks again. `/clear` begin
 therefore asks, on the same terms. `--resume` does not ask, and restores the map from the record of
 the session chosen; a record from before maps were kept has none, and is asked about.
 
+A record written by a sitting that had bypass on at any point says so, and `--resume` restores neither
+its map nor its opened directories: the mode answered the startup question and each vouch in the
+person's place ([MODE-4](permission-modes.md#MODE-4)), so what the map holds is not an answer the
+person resuming gave, and it asks. A rule the person made in that sitting by hand is not kept either,
+which is the cost of a record that cannot tell the two apart. Resuming with the flag again is
+answered by the mode as it was.
+
 A continuing caller keeps the current map after success, returned error or cancellation, after
 joining the turn's children. This includes grants made while loading context before a later load
 fails and downgrades recorded by effects. The caller adopts that map before saving or starting
@@ -435,6 +442,8 @@ another turn; a pre-turn copy cannot replace it. A record is written by one proc
 ([SESSION-38](sessions.md#SESSION-38)), so the map one process recorded is not replaced by a copy
 another process made before it.
 
+`verified-by: bravebot_tui::app::a_resume_without_the_flag_asks_where_bypass_answered_for_the_record`
+`verified-by: bravebot_tui::sessions::a_record_written_under_bypass_restores_no_trust_and_no_directory`
 `verified-by: bravebot_cli::plain_retention_tests::failed_plain_turn_excludes_replacement_from_the_next_request`
 `verified-by: bravebot_agent::turn::retention::early_loading_errors_return_current_decisions`
 `verified-by: bravebot_agent::turn::ordinary_parent_endings_retain_delegate_file_and_program_decisions`

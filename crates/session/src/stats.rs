@@ -702,6 +702,7 @@ mod tests {
                 rewind: &[],
                 checkouts: &[],
                 touched: None,
+                answered_by_mode: false,
             },
         );
 

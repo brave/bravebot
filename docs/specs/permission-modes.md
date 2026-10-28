@@ -491,7 +491,9 @@ in bypass because the flag was given again.
 decisions about the future that their owner made deliberately ([sessions.md](sessions.md) is what
 keeps them). A mode is an answer somebody gave while watching one piece of work. Coming back
 tomorrow into a session that had stopped asking about writes, with nothing chosen today, is the
-wrong direction for this to be wrong in.
+wrong direction for this to be wrong in. For the same reason the record says whether bypass was on
+at any point of the sitting, and a resume without the flag restores neither the map nor the
+directories that sitting held, since the mode answered for them ([TRUST-6](trust-map.md#TRUST-6)).
 
 `verified-by: bravebot_tui::state::cycling_the_mode_changes_nothing_a_resume_would_read`
 `verified-by: bravebot_session::sessions::a_resumed_session_asks_about_writes_whatever_the_record_says`

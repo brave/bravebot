@@ -139,6 +139,8 @@ pub struct Finished<'a> {
     /// What the run's file tools reached, which the record carries so a run that continues it has
     /// the nested instructions and path-scoped rules they loaded (INSTR-14, INSTR-16).
     pub touched: bravebot_agent::workspace::TouchedRecord,
+    /// Whether the run was in bypass, so the record can say the map may be the mode's (MODE-4).
+    pub answered_by_mode: bool,
 }
 
 /// Write the turn down, as a new session or as one more turn of the one it continued.
@@ -176,6 +178,7 @@ pub fn keep(
                     prompt_at: turn.prompt_at,
                     rewind: rewind.points(),
                     timing: turn.outcome.timing,
+                    answered_by_mode: turn.answered_by_mode,
                 },
             );
             if written {
@@ -215,6 +218,7 @@ pub fn keep(
                     rewind: &[],
                     checkouts: &[],
                     touched: Some(&turn.touched),
+                    answered_by_mode: turn.answered_by_mode,
                 },
             );
             let id = handle.resumable().map(str::to_string);

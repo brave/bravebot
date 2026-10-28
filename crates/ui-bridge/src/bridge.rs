@@ -766,7 +766,7 @@ impl Bridge {
         // Everything needed is copied out under the lock and the lock is dropped before any of
         // it is used. A fork does no I/O and no thinking, but holding a session's state across
         // work is the habit that turns into a stall later.
-        let (snapshot, said, trust, programs, directories, todos, parent, inherited, touched) = {
+        let (snapshot, said, trust, programs, directories, todos, parent, inherited, touched, by_mode) = {
             let state = open
                 .state
                 .lock()
@@ -795,6 +795,7 @@ impl Bridge {
                     .kept
                     .as_ref()
                     .map(bravebot_agent::workspace::KeptBetweenTurns::touched_record),
+                state.answered_by_mode,
             )
         };
 
@@ -850,16 +851,21 @@ impl Bridge {
 
         let child = self.mint(Open::opened(
             project.clone(),
-            State::forked(
-                begun,
-                cut.before,
-                opening.trust,
-                programs,
-                directories,
-                ordinal,
-                todos.clone(),
-                first_prompt,
-            ),
+            {
+                let mut forked = State::forked(
+                    begun,
+                    cut.before,
+                    opening.trust,
+                    programs,
+                    directories,
+                    ordinal,
+                    todos.clone(),
+                    first_prompt,
+                );
+                // The map is the parent's, so what the mode answered in it is still the mode's.
+                forked.answered_by_mode = by_mode;
+                forked
+            },
             // Inherited along with the map itself: the same person, in the same directory, in
             // the same window, so asking again would be asking somebody to answer twice.
             opening.answered,
@@ -2951,7 +2957,7 @@ fn work(work: Work) {
     // which no mode a window can choose answers: only bypassing does (SERVERS-13), and a window
     // cannot reach it. The screening value is the task's, so the confirmer and the tools that fill
     // in a verdict read the same answer.
-    let mut confining = Confining::new(&mut confirmer, permission_mode, task.auto_vetting);
+    let mut confining = Confining::new(&mut confirmer, permission_mode.clone(), task.auto_vetting);
     open_rewind_point(&mut state, &workspace, &prompt);
     #[cfg(test)]
     crate::running::built_in::record("turn", task.account_session().identifier());
@@ -3053,6 +3059,7 @@ fn work(work: Work) {
                 state.model = Some(outcome.model.clone());
             }
 
+            state.answered_by_mode |= permission_mode.has_bypassed();
             let archived = save(&project, &mut state, turn, sink.trail());
 
             let rules = rules_json(&state.answers.trust);
@@ -3132,6 +3139,7 @@ fn work(work: Work) {
                 reporter.spent().unwrap_or_default(),
                 began_at.elapsed(),
             );
+            state.answered_by_mode |= permission_mode.has_bypassed();
             let _ = save(&project, &mut state, turn, sink.trail());
 
             let notices = [
@@ -3429,6 +3437,7 @@ pub(crate) fn save(
             manifest: None,
             checkouts: &checkouts,
             touched: touched.as_ref(),
+            answered_by_mode: state.answered_by_mode,
         },
     );
     handle.append_audit(turn, trail.events());

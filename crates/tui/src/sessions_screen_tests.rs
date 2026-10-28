@@ -346,6 +346,7 @@ fn save(handle: &mut Handle, root: &Path, prompt: &str) {
             trust: &trust,
             programs: &TrustedPrograms::default(),
             directories: &[],
+            answered_by_mode: false,
             manifest: None,
             rewind: &[],
             checkouts: &[],

@@ -213,6 +213,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         manifest: None,
         rewind: Vec::new(),
         server_children_may_run: false,
+        trust_answered_by_mode: false,
         checkouts: Vec::new(),
         touched: Default::default(),
         agent: None,
