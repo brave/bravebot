@@ -142,6 +142,23 @@ step below the fold is as binding as the first. A run prompt's arguments are the
 them runs as surely as the first, so no key that runs the line is taken until every row of its plan
 has been on the screen ([PROMPT-4](#PROMPT-4)).
 
+A run prompt's arguments, its environment values and the paths it redirects to are drawn through
+`command::quoted`, which wraps an argument in single quotes where it is empty or holds a space, a
+quote, a backslash or a `>`, and also where it holds a control character, white space other than a
+space, a character that draws as nothing or the blank braille pattern. Inside the quotes each such
+character is written as `\u{..}`, its code point in hex, and a literal backslash is written `\\`.
+Two argument lists that differ only in such a character therefore draw apart, an argument made only
+of them is still drawn as an argument, and the text `\u{200b}` does not draw as the character it
+spells. The mapping reads no meaning from the argument and decides no effect. The approval stays
+bound to the arguments as held.
+
+`verified-by: bravebot_core::command::an_argument_holding_an_invisible_character_is_spelled`
+`verified-by: bravebot_core::command::two_argument_lists_that_differ_in_an_invisible_character_draw_apart`
+`verified-by: bravebot_core::command::an_argument_of_invisible_characters_alone_is_still_drawn_as_an_argument`
+`verified-by: bravebot_core::command::the_text_of_a_spelling_draws_apart_from_the_character_it_spells`
+`verified-by: bravebot_core::command::an_invisible_character_in_an_environment_value_or_a_redirect_is_spelled`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart`
+
 `verified-by: bravebot_tui::confirm::write::a_new_file_prompt_shows_the_path_and_body`
 `verified-by: bravebot_tui::confirm::write::an_overwrite_prompt_shows_what_it_replaces`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_argv_the_binary_and_the_directory`

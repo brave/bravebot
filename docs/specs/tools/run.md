@@ -107,6 +107,8 @@ in it.
 `verified-by: bravebot_agent::programs::a_link_is_started_by_its_own_path`
 `verified-by: bravebot_core::command::two_spellings_of_one_binary_encode_apart`
 `verified-by: bravebot_core::command::an_argument_holding_an_arrow_is_quoted`
+`verified-by: bravebot_core::command::an_argument_holding_an_invisible_character_is_spelled`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart`
 `verified-by: bravebot_core::command::a_plan_shows_a_program_started_through_a_link_as_the_link_and_its_file`
 `verified-by: bravebot_core::command::arguments_that_spell_a_link_draw_apart_from_the_link_in_a_plan`
 `verified-by: bravebot_core::remembered::a_line_started_through_a_link_is_read_back_as_the_plan_draws_it`
