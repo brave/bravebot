@@ -119,7 +119,7 @@ esac
 #
 # Baked into the binary at build time and read from nowhere at run time, so
 # exporting it when starting a binary changes nothing. Releases are built by
-# the Jenkins job `bravebot-build`, which needs the same variable set; this
+# the Jenkins job `brave-bot-build`, which needs the same variable set; this
 # file only covers a build made here, `make all-platforms` included.
 #
 # Leave it commented out for day-to-day work. A build that has it sends your

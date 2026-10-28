@@ -73,10 +73,12 @@ READ_BY_THE_SEAM_GUARD = frozenset({
 # Rust checks to what their own area needs.
 ALSO_READ_BY_RUST = frozenset({
     "docs/website/docs/install.md",
+    "ui/build/entitlements.mac.plist",
+    "ui/build/entitlements.mac.inherit.plist",
 })
 
 # Outside crates/, and read by a test all the same.
-READ_BY_RUST = ("CHANGELOG.md", "README.md")
+READ_BY_RUST = ("CHANGELOG.md", "README.md", "LICENSE")
 
 # Read by a test, and by the build of the agent crate, which carries each spec's clause headings.
 READ_BY_RUST_UNDER = ("docs/specs/",)
@@ -120,7 +122,7 @@ PACKAGE_FILES = (
 
 # Read by nothing heavier than the checks that always run.
 QUIET = (
-    "LICENSE", ".github/SECURITY.md", ".gitignore",
+    ".github/SECURITY.md", ".gitignore",
     ".github/CODEOWNERS", ".github/renovate.json",
 )
 QUIET_UNDER = ("docs/", "agents/", "contrib/", ".githooks/")
@@ -432,6 +434,9 @@ CASES = (
     ("docs/specs/credential-protection.md", {"rust"}),
     ("docs/specs/sandboxing.md", {"rust"}),
     ("CHANGELOG.md", {"rust"}),
+    ("LICENSE", {"rust"}),
+    ("ui/build/entitlements.mac.plist", {"ui", "rust"}),
+    ("ui/build/entitlements.mac.inherit.plist", {"ui", "rust"}),
     ("docs/specs/routing.md", {"rust"}),
     ("docs/specs/tools/read-file.md", {"rust"}),
     ("docs/website/docs/install.md", {"docs", "help", "rust"}),
