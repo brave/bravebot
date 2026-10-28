@@ -200,3 +200,53 @@ test('a path a settings file wrote is drawn as text and never as markup', () => 
   })
   assert.ok(!markup.includes('<img'), markup)
 })
+
+// PROMPT-1: every rule, directory, path and file the window lists is drawn from the spelled field
+// beside it. The held value carries a zero-width character, so a draw from the held value shows
+// it as nothing and the markup holds the character itself.
+const ZW = '\u200b'
+const spelled = (text) => `"${text.replaceAll(ZW, '\\u{200b}')}"`
+
+test('the rules in force are drawn from their spelled lists', () => {
+  const markup = render(RulesInForce, {
+    rules: rules({
+      deny: [`Read(.e${ZW}nv)`], shownDeny: [spelled(`Read(.e${ZW}nv)`)],
+      ask: [`Edit(s${ZW}rc)`], shownAsk: [spelled(`Edit(s${ZW}rc)`)],
+      allow: [`Bash(l${ZW}s)`], shownAllow: [spelled(`Bash(l${ZW}s)`)],
+    }),
+  })
+  assert.ok(!markup.includes(ZW), 'a rule was drawn from the held value')
+  for (const rule of ['Read(.e\\u{200b}nv)', 'Edit(s\\u{200b}rc)', 'Bash(l\\u{200b}s)']) assert.ok(markup.includes(rule), `${rule}: ${markup}`)
+})
+
+test('the filesystem lists are drawn from their spelled path and file', () => {
+  const entry = { key: 'allowWrite', path: `~/o${ZW}ut`, shownPath: spelled(`~/o${ZW}ut`), file: `/p${ZW}/s.json`, shownFile: spelled(`/p${ZW}/s.json`), pinned: false, refused: null }
+  const markup = render(FilesystemRules, {
+    rules: rules({ filesystem: [entry], filesystemIgnored: [{ key: 'allowRead', file: `/p${ZW}/s.json`, shownFile: spelled(`/p${ZW}/s.json`) }] }),
+  })
+  assert.ok(!markup.includes(ZW), 'a path or file was drawn from the held value')
+  assert.ok(markup.includes('~/o\\u{200b}ut'), markup)
+  assert.ok(markup.includes('/p\\u{200b}/s.json'), markup)
+  assert.ok(markup.includes('allowRead in &quot;/p\\u{200b}/s.json&quot; is not obeyed'), markup)
+})
+
+test('the banner draws a directory, a path and a file from their spelled fields', () => {
+  const file = `/p${ZW}/s.json`
+  const markup = render(RulesBanner, {
+    rules: rules({
+      directories: [`../o${ZW}ther`], shownDirectories: [spelled(`../o${ZW}ther`)],
+      filesystem: [{ key: 'denyRead', path: `../s${ZW}ecrets`, shownPath: spelled(`../s${ZW}ecrets`), file: null, shownFile: null, pinned: false, refused: 'it climbs out' }],
+      filesystemIgnored: [{ key: 'allowRead', file, shownFile: spelled(file) }],
+    }),
+  })
+  assert.ok(!markup.includes(ZW), 'the banner drew a held value')
+  for (const text of ['../o\\u{200b}ther', '../s\\u{200b}ecrets', '/p\\u{200b}/s.json']) assert.ok(markup.includes(text), `${text}: ${markup}`)
+})
+
+test('a plan names the rules it is not held to as they are spelled', () => {
+  const held = t.narrowing(rules({
+    deny: [`Edit(n${ZW}otes)`], shownDeny: [spelled(`Edit(n${ZW}otes)`)],
+    ask: [`Edit(s${ZW}rc)`], shownAsk: [spelled(`Edit(s${ZW}rc)`)],
+  }))
+  assert.deepEqual(held, ['"Edit(n\\u{200b}otes)"', '"Edit(s\\u{200b}rc)"'])
+})

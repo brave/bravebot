@@ -684,6 +684,11 @@ doctor-settings-vetting-ignored =
 # reason: a checkout cannot choose where requests go, and a line that does nothing is worth saying so.
 doctor-settings-provider-ignored =
     provider in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
+# A gateway whose baseURL writes a ':' that no port a connection can use follows. The client would
+# connect to the scheme's default port, so the entry is dropped. The port is the text written there,
+# empty where nothing follows the ':'.
+doctor-settings-provider-port-refused =
+    provider { $id } is not used: its baseURL writes a port that is not a number up to 65535 (found "{ $port }")
 doctor-settings-model-ignored =
     model in { $path } is not obeyed: it is read from ~/.bravebot/settings.json and from the file --settings names only
 doctor-settings-advisor-ignored =

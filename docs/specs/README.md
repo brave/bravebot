@@ -58,7 +58,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [browser.md](browser.md) | `BROWSER` | 17 | reaching a Brave extension from a session: the relay between them, who starts each half, and how each trusts the other |
 | [hooks.md](hooks.md) | `HOOK` | 10 | a command a person asked to have run when something happens |
 | [network-egress.md](network-egress.md) | `NET` | 12 | every request that leaves this process, and what comes back |
-| [backends.md](backends.md) | `BACKEND` | 61 | which service answers a request, and what a person may choose between |
+| [backends.md](backends.md) | `BACKEND` | 62 | which service answers a request, and what a person may choose between |
 | [import.md](import.md) | `IMPORT` | 12 | a first start with nothing configured: what Claude Code and opencode set up, or a running Ollama, LM Studio or llama-server serves, and what of it may be copied here |
 | [compaction.md](compaction.md) | `COMPACT` | 18 | shortening a long conversation into a summary of itself, in the request only |
 | [loop.md](loop.md) | `LOOP` | 18 | sending a prompt again and again until somebody stops it, or once after a delay |
@@ -76,7 +76,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [state-directory.md](state-directory.md) | `STATE` | 4 | `~/.bravebot`, and who on the machine may read what is written into it |
 | [incognito.md](incognito.md) | `INCOG` | 8 | a session that runs normally and adds nothing to `~/.bravebot` |
 | [diagnostic-log.md](diagnostic-log.md) | `DIAG` | 8 | a file of hosts, statuses and counts, never content, for a person to attach to a bug report, and `bug-report`, which names it |
-| [trace.md](trace.md) | `TRACE` | 10 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
+| [trace.md](trace.md) | `TRACE` | 11 | what is recorded about every decision the system makes, what that record may contain, and the view of the request a turn built |
 | [localization.md](localization.md) | `LOCALE` | 8 | every word said to a person, and which of them change with the reader's language |
 | [acp.md](acp.md) | `ACP` | 8 | an editor hosting a session over the Agent Client Protocol: what a prompt, an attachment and an answer may carry, and what a failed turn says |
 | [layering.md](layering.md) | `LAYER` | 6 | which crate is allowed to do what |

@@ -24,6 +24,27 @@ pub(crate) fn scratch_dir(name: &str) -> PathBuf {
     path
 }
 
+/// A listening unix socket that stands at `place`.
+///
+/// A socket path must fit in `sun_path` (104 bytes on macOS), which a path under a deep checkout
+/// need not. The socket is bound through a short symlink in the temporary directory that points at
+/// the directory of `place`, so it is created at `place` itself, on whatever filesystem that is.
+/// The symlink is removed once the socket is bound.
+#[cfg(unix)]
+pub(crate) fn socket_standing_at(place: &Path) -> std::os::unix::net::UnixListener {
+    static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // nosemgrep: rust.lang.security.temp-dir.temp-dir
+    let link = std::env::temp_dir().join(format!("bb{}-{made}.link", std::process::id()));
+    let _ = std::fs::remove_file(&link);
+    std::os::unix::fs::symlink(place.parent().expect("a directory"), &link).expect("link made");
+    let listener =
+        std::os::unix::net::UnixListener::bind(link.join(place.file_name().expect("a file name")))
+            .expect("socket");
+    std::fs::remove_file(&link).expect("link removed");
+    listener
+}
+
 /// Repositories written object by object, the fixture the integration tests of `read_git` use.
 #[allow(
     dead_code,

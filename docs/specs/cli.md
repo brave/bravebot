@@ -142,7 +142,9 @@ having seen part of.
 
 Progress, errors and the audit trail go to stderr, so a one-shot run is pipeable. `--trace` puts
 the trail on stderr beside it: which gate checked what, the label every value carried, and what
-was released. The one thing that may take the reply's place on that stream is the result object in
+was released. Each line is drawn with its control characters replaced, and so are the notices, the
+plan and the model line written beside the reply ([TRACE-11](trace.md#TRACE-11)). The one thing that
+may take the reply's place on that stream is the result object in
 CLI-12, and it is still the only thing on it. The events of CLI-24 are the second exception: a run
 given `--json-stream` writes them ahead of that object, and nothing else is on the stream. A run
 given `--input-format lines` writes a result object for each turn it runs, and the two events of

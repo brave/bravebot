@@ -1031,7 +1031,14 @@ impl Disposition {
 pub enum ConfigError {
     Missing(&'static str),
     Empty(&'static str),
-    InvalidEndpoint { value: String },
+    InvalidEndpoint {
+        value: String,
+    },
+    /// The endpoint writes a `:` that no port a connection can use follows. `port` is the text
+    /// written there, not the endpoint, which may state credentials.
+    UnreadablePort {
+        port: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -1045,6 +1052,10 @@ impl fmt::Display for ConfigError {
             Self::InvalidEndpoint { value } => write!(
                 f,
                 "endpoint must start with http:// or https://, got '{value}'"
+            ),
+            Self::UnreadablePort { port } => write!(
+                f,
+                "endpoint writes a port that is not a number up to 65535, got ':{port}'"
             ),
         }
     }
@@ -1525,6 +1536,9 @@ impl Config {
         let names_a_scheme = endpoint.starts_with("https://") || endpoint.starts_with("http://");
         if !endpoint.is_empty() && !names_a_scheme {
             return Err(ConfigError::InvalidEndpoint { value: endpoint });
+        }
+        if let Some(fault) = provider::unreadable_port(&endpoint) {
+            return Err(ConfigError::UnreadablePort { port: fault.port });
         }
 
         // [`DEFAULT_MODEL`] for everyone, Bedrock block or not: it is the Brave backend's own
@@ -5424,6 +5438,51 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, ConfigError::InvalidEndpoint { .. }));
+    }
+
+    /// BACKEND-62: an endpoint whose `:` is followed by no port a connection can use is refused,
+    /// and the refusal names the text written there and nothing else of the url.
+    #[test]
+    fn an_endpoint_whose_port_cannot_be_read_is_rejected_naming_the_port() {
+        for (endpoint, port) in [
+            ("https://gw.example.com:", ""),
+            ("https://gw.example.com:/v1", ""),
+            ("https://gw.example.com:abc/v1", "abc"),
+            ("https://gw.example.com:99999/v1", "99999"),
+            ("https://gw.example.com:65536", "65536"),
+            ("https://user:secret@gw.example.com:x/v1", "x"),
+            ("http://[::1]:", ""),
+        ] {
+            let err = Config::from_lookup(|k| match k {
+                env_var::ENDPOINT => Some(endpoint.into()),
+                other => complete_env(other),
+            })
+            .unwrap_err();
+            assert_eq!(
+                err,
+                ConfigError::UnreadablePort { port: port.into() },
+                "{endpoint}"
+            );
+            let said = err.to_string();
+            assert!(said.contains("port"), "{said}");
+            assert!(!said.contains("secret"), "{said}");
+        }
+        for endpoint in [
+            "https://gw.example.com/v1",
+            "https://gw.example.com:8080/v1",
+            "https://gw.example.com:65535",
+            "http://[::1]:8080/v1",
+            "https://user:secret@gw.example.com:8080/v1",
+        ] {
+            assert!(
+                Config::from_lookup(|k| match k {
+                    env_var::ENDPOINT => Some(endpoint.into()),
+                    other => complete_env(other),
+                })
+                .is_ok(),
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]

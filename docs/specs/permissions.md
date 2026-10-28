@@ -651,7 +651,10 @@ is an entry that is not a line at all: a number, or a rule nested one array too 
 `ask` or `allow` value that is not an array, and a `permissions` block that is not an object, each
 named with the keys that lead to it and the file that wrote it. Every one dropped is reported: on
 `doctor`, and in the session where the file was read, named in the spelling the file used, with each
-control character drawn as its picture ([LAYER-3](layering.md#LAYER-3)).
+control character drawn as its picture ([LAYER-3](layering.md#LAYER-3)). The desktop window's
+sentence about a dropped rule quotes the rule and the file spelled as in
+[PROMPT-1](prompting.md#PROMPT-1), so an invisible character or a trailing space in it is
+written out.
 
 **Why.** A misspelled deny rule reads as protection that is not there, which is the one failure
 here worth interrupting somebody over. Refusing the whole file instead would mean a typo in an
@@ -677,6 +680,7 @@ allow rule quietly removed a deny rule's protection.
 `verified-by: bravebot_core::permissions::a_dropped_rule_is_named_in_the_spelling_the_file_used`
 `verified-by: bravebot_agent::permissions::a_padded_unreadable_rule_is_reported_in_the_spelling_the_file_used`
 `verified-by: bravebot_ui_bridge::rules::a_padded_unreadable_rule_is_not_listed_as_in_force`
+`verified-by: bravebot_ui_bridge::rules::the_sentence_about_an_unreadable_rule_quotes_it_spelled`
 `verified-by: bravebot_agent::permissions::every_reason_a_rule_is_dropped_for_says_something_of_its_own`
 `verified-by: bravebot_cli::running::doctor_names_a_permission_entry_that_is_not_a_rule`
 `verified-by: bravebot_cli::running::doctor_names_a_padded_path_rule_that_an_earlier_version_read_as_the_file_without_the_padding`

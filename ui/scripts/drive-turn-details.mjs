@@ -79,7 +79,7 @@ try {
   await emit('audit', { turn: 2, event: { kind: 'action_field', tool: 'write_file', field: 'path', role: 'routing', label: { integrity: 'untrusted', confidentiality: 'public' }, allowed: false, refusal: true } })
   await page.getByText('Untrusted data used as a destination', { exact: true }).first().waitFor()
   await emit('audit', { turn: 2, event: { kind: 'action_field', tool: 'write_file', field: 'content', role: 'content', label: { integrity: 'untrusted', confidentiality: 'private' }, allowed: true, refusal: false } })
-  await emit('audit', { turn: 2, event: { kind: 'declassified', slot: 's1', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, reason: 'person approved', refusal: false } })
+  await emit('audit', { turn: 2, event: { kind: 'declassified', slot: 's1', from: { integrity: 'untrusted', confidentiality: 'private' }, to: { integrity: 'untrusted', confidentiality: 'public' }, reason: 'person approved', refusal: false }, pictured: { kind: 'declassified', slot: 's1', reason: 'person approved' } })
   const routing = page.locator('[data-test="audit-routing"]')
   await routing.getByText('Released s1', { exact: false }).waitFor()
   assert.match(await routing.innerText(), /Routing & content[^]*write_file[^]*path[^]*routing: decides where[^]*Refused[^]*content[^]*content: carried[^]*Allowed/)

@@ -9,6 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { build } from 'esbuild'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 import { CASES } from './shown-cases.mjs'
 
 const require = createRequire(import.meta.url)
@@ -262,6 +263,16 @@ test('the sentence the agent sent is drawn as sent, with no wording of the cardâ
     assert.equal(texts(markup).filter((run) => run.text === note && run.deciding === 'all').length, 1, `${kind}: the sentence is drawn once, as a deciding row\n${markup}`)
     assert.ok(!markup.includes('draw as nothing') && !markup.includes('draws as nothing'), `${kind}: the card put words of its own beside the agent's\n${markup}`)
   }
+})
+
+// The overlay drawn while a file is dragged over the transcript takes no pointer, so a hit test
+// passes through it and only the mark tells `shown.ts` that it covers the rows under it.
+// drive-shown.mjs holds the window to it in a real renderer; this fails without one.
+test('the overlay drawn while a file is dragged over the transcript is marked as a veil', () => {
+  const source = readFileSync('src/renderer/components/Transcript.tsx', 'utf8')
+  const overlay = source.match(/<div [^>]*data-test="drop-target"[^>]*>/)?.[0]
+  assert.ok(overlay, 'the drop overlay is no longer found by its data-test')
+  assert.match(overlay, /data-veil="own"/, `the drop overlay takes no pointer and is not marked as a veil: ${overlay}`)
 })
 
 test('every warning a decision card draws is inside a row it marks as deciding, or holds one', () => {

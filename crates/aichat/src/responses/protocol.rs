@@ -355,6 +355,9 @@ pub enum Event {
         /// Whether the service stopped the reply for its content, which is not a ceiling.
         withheld: bool,
     },
+    /// The service declined to write the reply, in a content part of type `refusal`. Carries none
+    /// of the words the service wrote, so they reach no screen, record or error.
+    Declined,
     /// The service says it could not write the reply.
     Failed(Failure),
     /// The service says what it says to an account that may not be used this way, in a code of
@@ -382,6 +385,15 @@ pub fn stream_event(value: &Value) -> Decoded {
             Some(delta) => Decoded::Event(Event::Text(delta.to_string())),
             None => Decoded::Unreadable,
         },
+        "response.refusal.delta" => match value.get("delta").and_then(Value::as_str) {
+            Some(_) => Decoded::Event(Event::Declined),
+            None => Decoded::Unreadable,
+        },
+        "response.refusal.done" => match value.get("refusal").and_then(Value::as_str) {
+            Some(_) => Decoded::Event(Event::Declined),
+            None => Decoded::Unreadable,
+        },
+        "response.content_part.added" | "response.content_part.done" => content_part(value),
         "response.reasoning_summary_text.delta" => match value.get("delta").and_then(Value::as_str)
         {
             Some(delta) => Decoded::Event(Event::Thinking(delta.to_string())),
@@ -421,6 +433,9 @@ pub fn stream_event(value: &Value) -> Decoded {
             let Some(item) = value.get("item") else {
                 return Decoded::Unreadable;
             };
+            if item.get("type").and_then(Value::as_str) == Some("message") {
+                return finished_message(item);
+            }
             if item.get("type").and_then(Value::as_str) != Some("function_call") {
                 return Decoded::Ignored;
             }
@@ -451,6 +466,37 @@ pub fn stream_event(value: &Value) -> Decoded {
         // An error the service raised on the stream itself, outside any response.
         "error" => failed(error_event_code(value)),
         _ => Decoded::Ignored,
+    }
+}
+
+/// A content part, announced when it opens and again when it is whole. Only the part's type is
+/// read, never what it says.
+fn content_part(value: &Value) -> Decoded {
+    match value
+        .get("part")
+        .and_then(|part| part.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("refusal") => Decoded::Event(Event::Declined),
+        Some(_) => Decoded::Ignored,
+        None => Decoded::Unreadable,
+    }
+}
+
+/// A finished message item, which is a refusal where its content holds a part of type `refusal`.
+/// Only the part's type is read, never what it says.
+fn finished_message(item: &Value) -> Decoded {
+    let declined = item
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|part| part.get("type").and_then(Value::as_str) == Some("refusal"))
+        });
+    match declined {
+        true => Decoded::Event(Event::Declined),
+        false => Decoded::Ignored,
     }
 }
 
@@ -848,6 +894,55 @@ mod tests {
                 {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
             ])
         );
+    }
+
+    /// BACKEND-61: a refusal content part is read as a refusal and carries none of its words. It
+    /// is announced by `response.refusal.delta` events or by a content part event, closed by
+    /// `response.refusal.done`, and present in a finished message item. The regression it rejects is
+    /// reading the part as nothing, which ends the turn as an empty reply, or keeping its words as
+    /// the reply's.
+    #[test]
+    fn a_refusal_part_decodes_to_an_event_that_carries_no_words() {
+        for payload in [
+            json!({"type": "response.refusal.delta", "delta": "I can't help with that"}),
+            json!({"type": "response.refusal.done", "refusal": "I can't help with that"}),
+            json!({"type": "response.content_part.added", "output_index": 0, "content_index": 1,
+                   "part": {"type": "refusal", "refusal": ""}}),
+            json!({"type": "response.content_part.done", "output_index": 0, "content_index": 1,
+                   "part": {"type": "refusal", "refusal": "I can't help with that"}}),
+            json!({"type": "response.output_item.done", "output_index": 0,
+                   "item": {"type": "message", "role": "assistant", "content": [
+                       {"type": "output_text", "text": "ok"},
+                       {"type": "refusal", "refusal": "I can't help with that"}]}}),
+        ] {
+            assert_eq!(
+                event(payload.clone()),
+                Decoded::Event(Event::Declined),
+                "{payload}"
+            );
+        }
+        for payload in [
+            json!({"type": "response.output_item.done", "output_index": 0,
+                   "item": {"type": "message", "content": [{"type": "output_text", "text": "ok"}]}}),
+            json!({"type": "response.output_item.done", "output_index": 0,
+                   "item": {"type": "message"}}),
+            json!({"type": "response.content_part.added", "output_index": 0, "content_index": 0,
+                   "part": {"type": "output_text", "text": ""}}),
+            json!({"type": "response.content_part.done", "output_index": 0, "content_index": 0,
+                   "part": {"type": "output_text", "text": "ok"}}),
+        ] {
+            assert_eq!(event(payload.clone()), Decoded::Ignored, "{payload}");
+        }
+        for payload in [
+            json!({"type": "response.content_part.added", "output_index": 0}),
+            json!({"type": "response.content_part.done", "part": {"refusal": "x"}}),
+            json!({"type": "response.content_part.done", "part": {"type": 3}}),
+            json!({"type": "response.refusal.delta", "delta": 7}),
+            json!({"type": "response.refusal.delta"}),
+            json!({"type": "response.refusal.done", "refusal": null}),
+        ] {
+            assert_eq!(event(payload.clone()), Decoded::Unreadable, "{payload}");
+        }
     }
 
     /// BACKEND-61: the events that carry a reply decode to what they carry, including the one that

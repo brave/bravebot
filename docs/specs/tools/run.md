@@ -107,6 +107,8 @@ in it.
 `verified-by: bravebot_agent::programs::a_link_is_started_by_its_own_path`
 `verified-by: bravebot_core::command::two_spellings_of_one_binary_encode_apart`
 `verified-by: bravebot_core::command::an_argument_holding_an_arrow_is_quoted`
+`verified-by: bravebot_core::command::an_argument_holding_an_invisible_character_is_spelled`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart`
 `verified-by: bravebot_core::command::a_plan_shows_a_program_started_through_a_link_as_the_link_and_its_file`
 `verified-by: bravebot_core::command::arguments_that_spell_a_link_draw_apart_from_the_link_in_a_plan`
 `verified-by: bravebot_core::remembered::a_line_started_through_a_link_is_read_back_as_the_plan_draws_it`
@@ -239,7 +241,8 @@ settings and the person's answer and never from what a stage wrote or printed:
 
 - the line starts in the workspace root the yes was given for, not a directory beneath or beside it,
   and the root is still trusted. The answer is keyed to that one directory ([RUN-8](#RUN-8)), so a
-  worktree is its own directory with its own answer and `/cd` leaves the answer behind;
+  worktree is its own directory with its own answer, `/cd` leaves the answer behind, and a delegate's
+  checkout ([CHECKOUT-10](../checkouts.md#CHECKOUT-10)) is not the directory the yes was given for;
 - the yes said so. A directory trusted before the question said so, one trusted by a kept answer
   written before it, a session that resumed from a record that kept no answer or kept one for another
   directory (a resume brings back the answer its own record kept, for the directory it was given in and no
@@ -335,6 +338,8 @@ for the same reason: anything it does not fully recognise asks.
 `verified-by: bravebot_agent::confine::a_quoted_name_in_a_command_string_names_the_file_it_runs`
 `verified-by: bravebot_agent::trusted::an_answer_kept_before_the_question_said_so_does_not_say_so_until_answered_again`
 `verified-by: bravebot_agent::confined_lines::trust_of_the_directory_answers_a_held_line_and_nothing_else`
+`verified-by: bravebot_core::policy::the_answer_given_for_the_working_directory_does_not_cover_a_checkout`
+`verified-by: bravebot_agent::confined_lines::trust_of_the_directory_does_not_answer_a_held_line_in_a_checkout`
 
 <a id="RUN-6"></a>
 ### RUN-6: private input asks every time, whatever is vouched for
@@ -431,8 +436,9 @@ too.
 
 **The person's trust of a directory is one directory's too.** What a yes to the startup question
 says about confined lines ([RUN-5](#RUN-5)) is keyed to the workspace root it was given in, exactly as an
-entry is: it grants nothing in a directory beneath it, and none in another worktree of the same repository,
-which has a root and an answer of its own. Whether trust should follow the repository is not decided here.
+entry is: it grants nothing in a directory beneath it, and none in another worktree of the same repository
+or in a delegate's checkout ([CHECKOUT-10](../checkouts.md#CHECKOUT-10)), each of which has a root and an
+answer of its own. Whether trust should follow the repository is not decided here.
 Reading the identity of a repository from a worktree's `.git` pointer or `commondir` is not an option, since
 a stage can write those bytes.
 

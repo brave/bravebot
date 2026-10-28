@@ -481,8 +481,7 @@ mod tests {
 
         // Something that is not a file in the place.
         std::fs::remove_file(root.join("seen.txt")).expect("removed");
-        let _socket =
-            std::os::unix::net::UnixListener::bind(root.join("seen.txt")).expect("socket");
+        let _socket = crate::testutil::socket_standing_at(&root.join("seen.txt"));
         assert_eq!(
             open_seen(&path, &seen).unwrap_err(),
             NotCarried::Unreadable,

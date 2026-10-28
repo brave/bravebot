@@ -1650,13 +1650,17 @@ Still open:
   `mayStand`, which says whether the third answer can be recorded. A `remember: true` sent
   where it is false is read as a yes to the one call.
 - `session.new`, `session.open`, `session.fork` and `permissions.list` carry `settingsRules`:
-  `{ deny, ask, allow, unreadable, proposed, directories }`. The first three are the rules in
-  force, as the files spelled them. `unreadable` holds `{ rule, said }` for each entry that is
-  not a rule, where `said` is the agent's sentence about why. `proposed` holds
+  `{ deny, ask, allow, unreadable, proposed, directories, filesystem, filesystemIgnored }`. The first three are the rules in
+  force, as the files spelled them, and `shownDeny`, `shownAsk` and `shownAllow` are the same
+  lists spelled as text. `unreadable` holds `{ rule, shownRule, said }` for each entry that is
+  not a rule, where `shownRule` is `rule` spelled as text and `said` is the agent's sentence about
+  why, which quotes the entry spelled. `proposed` holds
   `{ rule, shownRule, file, shownFile }` for each `allow` rule a checkout wrote, which is not in
   force; `shownRule` is `rule` spelled as text and `shownFile` is `file` spelled as `shownPath`
   is, and a client draws those. `directories` holds the names
-  in `additionalDirectories`, none of which is opened.
+  in `additionalDirectories`, none of which is opened, and `shownDirectories` the same names
+  spelled as `shownPath` is. Each entry of `filesystem` carries `shownPath` and `shownFile` and
+  each entry of `filesystemIgnored` carries `shownFile`, spelled the same way.
 - The rules are read when a session opens and kept for its turns. A fork takes its parent's.
   A settings file edited while a session is open governs the next one.
 - A manifest run is passed the session's rules, and the agent's runner does not read them.

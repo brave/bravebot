@@ -81,7 +81,7 @@ pub(crate) fn unattended_trust(root: &Path, flagged: bool) -> bravebot_core::Tru
         flagged,
     );
     if let Some(notice) = notice {
-        eprintln!("{}", t!(cli_notice, notice = notice));
+        crate::finish::say_notices(&mut std::io::stderr().lock(), &[notice]);
     }
     trust
 }

@@ -6528,17 +6528,45 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     /// Whether the person's trust of the workspace root said that lines held to a closed sandbox
     /// run without asking, and this plan starts in that root ([RUN-5]).
     ///
-    /// Three things, each from a person's answer or the session's own record of where it works: the
-    /// map says the yes that wrote it said so ([`TrustStore::allows_confined_lines`]), the root is
-    /// still trusted, and the line starts in the root and not a directory below it or beside it.
-    /// Nothing a program printed or wrote is read. False when no root is known, for the reason
+    /// Four things, each from a person's answer or the session's own record of where it works: the
+    /// map says the yes that wrote it said so ([`TrustStore::allows_confined_lines`]), the
+    /// directory that yes was given for is the root this policy works in, the root is still
+    /// trusted, and the line starts in the root and not a directory below it or beside it. Nothing
+    /// a program printed or wrote is read. False when no root is known, for the reason
     /// [`Policy::runs_at_the_root`] is.
     ///
+    /// The second condition is what keeps the answer out of a checkout. A delegate in a checkout
+    /// shares the live map, whose answer names the working directory, and reads the rules copied
+    /// to the checkout, so the root is trusted and the line starts in the policy's root, which is
+    /// the checkout. The person said nothing about that tree ([RUN-8], [CHECKOUT-10]).
+    ///
     /// [RUN-5]: ../../../docs/specs/tools/run.md
+    /// [RUN-8]: ../../../docs/specs/tools/run.md
+    /// [CHECKOUT-10]: ../../../docs/specs/checkouts.md
     fn confined_lines_were_allowed(&self, plan: &crate::command::Plan) -> bool {
         self.runs_at_the_root(plan)
-            && self.trust.snapshot().allows_confined_lines()
+            && self.answer_was_given_for_the_root()
             && self.trust.integrity_of("") == Some(Integrity::Trusted)
+    }
+
+    /// Whether the map's confined-lines answer names the root this policy works in.
+    ///
+    /// The map's root is a key and the policy's is a path, so the policy's is spelled as a key
+    /// before the two are compared. False when no root is known.
+    ///
+    /// Also false when the root is not text. The map keys its root through a lossy rendering, so
+    /// two roots that differ only in bytes that are not UTF-8 share one key, and comparing the
+    /// policy's rendering with it would carry the answer given for one to the other. A root that
+    /// cannot be compared byte for byte asks, which is the direction that trusts nothing.
+    fn answer_was_given_for_the_root(&self) -> bool {
+        let snapshot = self.trust.snapshot();
+        let Some(given_for) = snapshot.confined_lines_root() else {
+            return false;
+        };
+        self.root
+            .as_deref()
+            .and_then(std::path::Path::to_str)
+            .is_some_and(|root| crate::trust::normalise(&self.keyed(root)) == given_for)
     }
 
     /// Whether the last line put to [`Policy::plan_needs_approval_held`] was let through by the
@@ -12129,6 +12157,58 @@ five
         );
     }
 
+    /// RUN-5 and PATH-001: the map keys its root through a lossy rendering, so the roots
+    /// `/work-\xff` and `/work-\xfe` have one key. The answer given for the first is not carried to
+    /// the second, and a root that is not text asks. The control is a root of the same shape that
+    /// is text, which the answer covers.
+    #[cfg(unix)]
+    #[test]
+    fn a_confined_lines_answer_is_not_carried_between_roots_that_differ_only_in_invalid_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = |last: u8| {
+            let mut bytes = b"/work-".to_vec();
+            bytes.push(last);
+            std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+        };
+        let (given_for, working_in) = (root(0xff), root(0xfe));
+        assert_eq!(
+            given_for.to_string_lossy(),
+            working_in.to_string_lossy(),
+            "the two roots must share a lossy rendering for this test to distinguish anything"
+        );
+        let mut trust = TrustStore::new(&given_for);
+        trust.trust(".");
+        trust.allow_confined_lines();
+        let line = || {
+            let mut line = a_plain_line();
+            line.directory = working_in.clone();
+            line
+        };
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trust.clone())
+            .with_root(&working_in);
+        assert!(
+            policy.plan_needs_approval_held(&line(), &[], Containment::Held),
+            "the answer given for /work-\\xff let a line run unasked in /work-\\xfe"
+        );
+
+        let mut text_trust = TrustStore::new("/work-text");
+        text_trust.trust(".");
+        text_trust.allow_confined_lines();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(text_trust)
+            .with_root(std::path::Path::new("/work-text"));
+        let mut control = a_plain_line();
+        control.directory = std::path::PathBuf::from("/work-text");
+        assert!(
+            !policy.plan_needs_approval_held(&control, &[], Containment::Held),
+            "the control root, which is text, asked"
+        );
+    }
+
     /// RUN-5 and PERM-2: a rule the person wrote says ask, and a matching ask rule prompts whatever
     /// else would answer. The control is the same line without the rule.
     #[test]
@@ -12173,6 +12253,37 @@ five
         assert!(
             policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
             "a root distrusted afterwards still answered"
+        );
+    }
+
+    /// RUN-5 and RUN-8: a delegate in a checkout shares the live map and reads the rules copied to
+    /// the checkout, so the checkout is trusted and the line starts in the policy's own root. The
+    /// yes was given for the working directory, so it does not cover the checkout. The control is
+    /// the same map answering for the working directory itself.
+    #[test]
+    fn the_answer_given_for_the_working_directory_does_not_cover_a_checkout() {
+        let authority =
+            crate::file_authority::FileAuthority::new(trusting_and_allowing_confined_lines(&[]));
+        authority.copy_beneath("", "/state/c1");
+        let mut line = a_plain_line();
+        line.directory = std::path::PathBuf::from("/state/c1");
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_file_authority(authority.rooted_at("/state/c1"))
+            .with_root(std::path::Path::new("/state/c1"));
+        assert!(
+            policy.plan_needs_approval_held(&line, &[], Containment::Held),
+            "an answer about /work covered the checkout /state/c1"
+        );
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_file_authority(authority)
+            .with_root(std::path::Path::new("/work"));
+        assert!(
+            !policy.plan_needs_approval_held(&a_plain_line(), &[], Containment::Held),
+            "the answer stopped covering the working directory it was given for"
         );
     }
 

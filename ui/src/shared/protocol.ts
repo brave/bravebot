@@ -144,22 +144,31 @@ export interface ProposedRule {
  */
 export interface SettingsRules {
   deny: string[]
+  /** `deny` spelled as text, so a character that draws as nothing is visible (PROMPT-1). Draw this and not `deny`. */
+  shownDeny?: string[]
   ask: string[]
+  /** `ask` spelled as `shownDeny` is. */
+  shownAsk?: string[]
   allow: string[]
-  /** An entry nothing could read as a rule, and the agent's sentence about why. */
-  unreadable: { rule: string; said: string }[]
+  /** `allow` spelled as `shownDeny` is. */
+  shownAllow?: string[]
+  /** An entry nothing could read as a rule, and the agent's sentence about why. `shownRule` is `rule` spelled as text. */
+  unreadable: { rule: string; shownRule?: string; said: string }[]
   /** The `allow` rules a project's settings file wrote. They answer no question here. */
   proposed: ProposedRule[]
   /** A directory a settings file asked to have opened. This app opens none of them. */
   directories: string[]
+  /** `directories` spelled as a name is (PROMPT-1). Draw this and not `directories`. */
+  shownDirectories?: string[]
   /**
    * Every entry of the four `sandbox.filesystem` lists a confined program is held to, with the
    * file that wrote it (null for the command line) and, where it is not in force, the agent's
-   * sentence about why. Absent from an older bridge.
+   * sentence about why. Absent from an older bridge. `shownPath` is `path` spelled as a name is and
+   * `shownFile` is `file` spelled as `ConfirmRequest.shownPath` is (PROMPT-1); draw those.
    */
-  filesystem?: { key: FilesystemKey; path: string; file: string | null; pinned: boolean; refused: string | null }[]
-  /** `allowRead` and `allowWrite` a project's file wrote, which are not in force. Absent from an older bridge. */
-  filesystemIgnored?: { key: FilesystemKey; file: string }[]
+  filesystem?: { key: FilesystemKey; path: string; shownPath?: string; file: string | null; shownFile?: string | null; pinned: boolean; refused: string | null }[]
+  /** `allowRead` and `allowWrite` a project's file wrote, which are not in force. Absent from an older bridge. `shownFile` is `file` spelled. */
+  filesystemIgnored?: { key: FilesystemKey; file: string; shownFile?: string }[]
 }
 
 export type FilesystemKey = 'allowRead' | 'denyRead' | 'allowWrite' | 'denyWrite'
@@ -1007,8 +1016,11 @@ export interface EventMap {
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }
-  /** Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. */
-  audit: { turn?: number; run?: number; event: Record<string, unknown> }
+  /**
+   * Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. `pictured`
+   * holds each string field of `event` with its control characters replaced by their pictures.
+   */
+  audit: { turn?: number; run?: number; event: Record<string, unknown>; pictured: Record<string, string> }
   'confirm.request': ConfirmRequest
   'run.request': RunRequest
   'output.request': OutputRequest

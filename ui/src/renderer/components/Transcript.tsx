@@ -726,7 +726,7 @@ export function Transcript({
       onDragLeave={(event) => { if (carriesFiles(event) && --dragDepth.current === 0) setDragging(false) }}
       onDrop={() => { dragDepth.current = 0; setDragging(false) }}>
       {dragging && (
-        <div className="drop-target" data-test="drop-target" aria-hidden="true">
+        <div className="drop-target" data-test="drop-target" data-veil="own" aria-hidden="true">
           <Icon name="attachment" />
           <span className="drop-target-title">Drop files to attach</span>
           <span className="drop-target-note"><Icon name="warning-triangle-outline" />Sent with your message as trusted context</span>
@@ -1464,7 +1464,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {rules.directories.map((directory, index) => (
               <li key={index}>
-                <code>{directory}</code>
+                <code>{rules.shownDirectories?.[index] ?? directory}</code>
               </li>
             ))}
           </ul>
@@ -1479,7 +1479,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {refused.map((entry, index) => (
               <li key={index}>
-                <code>{entry.key}</code> <code>{entry.path}</code>: {entry.refused}
+                <code>{entry.key}</code> <code>{entry.shownPath ?? entry.path}</code>: {entry.refused}
               </li>
             ))}
           </ul>
@@ -1491,7 +1491,7 @@ export function RulesBanner({ rules }: { rules: SettingsRules }): React.JSX.Elem
           <ul>
             {ignored.map((entry, index) => (
               <li key={index}>
-                <code>{entry.key}</code> in <code>{entry.file}</code>
+                <code>{entry.key}</code> in <code>{entry.shownFile ?? entry.file}</code>
               </li>
             ))}
           </ul>

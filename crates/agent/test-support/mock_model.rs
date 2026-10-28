@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 #[path = "answers.rs"]
-mod answers;
+pub mod answers;
 
 /// A scratch directory under `target/`, removed with the test.
 pub struct Scratch {
@@ -168,6 +168,89 @@ fn as_sse(reply: &str) -> String {
     frame(json!({"choices": [{"finish_reason": "stop"}]}));
     frames.push_str("data: [DONE]\n\n");
     frames
+}
+
+/// Serve replies chosen by what a request says rather than by the order requests arrive in.
+///
+/// A delegate runs beside the turn that started it, so their requests reach the socket in no fixed
+/// order. Each rule is a marker to look for in the request body and the replies to give the run
+/// that sent it, in order. The first rule whose marker appears and still has a reply left answers,
+/// so a turn's own marker goes before the tasks it hands out: a turn replays the arguments it
+/// called with, and so holds every task it asked for as well as its own prompt.
+pub fn serve_by_marker(
+    rules: Vec<(&'static str, Vec<String>)>,
+) -> (String, std::sync::mpsc::Receiver<String>) {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    type Waiting = Vec<(&'static str, VecDeque<String>)>;
+    let waiting: Arc<Mutex<Waiting>> = Arc::new(Mutex::new(
+        rules
+            .into_iter()
+            .map(|(marker, replies)| (marker, replies.into_iter().collect()))
+            .collect(),
+    ));
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let waiting = Arc::clone(&waiting);
+            let sender = sender.clone();
+            thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line);
+                let mut content_length = 0usize;
+                loop {
+                    let mut header = String::new();
+                    if reader.read_line(&mut header).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if header == "\r\n" || header == "\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.trim().eq_ignore_ascii_case("content-length")
+                    {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).to_string();
+                let _ = sender.send(body.clone());
+
+                let reply = waiting
+                    .lock()
+                    .expect("not poisoned")
+                    .iter_mut()
+                    .find(|(marker, replies)| body.contains(marker) && !replies.is_empty())
+                    .and_then(|(_, replies)| replies.pop_front());
+                let response = match reply {
+                    Some(reply) => {
+                        let frames = as_sse(&reply);
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{frames}",
+                            frames.len()
+                        )
+                    }
+                    None => {
+                        let body = "no scripted reply for this request\n";
+                        format!(
+                            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    }
+                };
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            });
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), receiver)
 }
 
 /// Serve a sequence of replies, one per request, reporting every request body.

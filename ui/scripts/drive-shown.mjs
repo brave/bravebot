@@ -6,11 +6,13 @@
 // page, independent of the card's own count, watches every frame: an approving button open while
 // one of its tokens has not been wholly on screen, uncovered, since the card last changed width is
 // a failure. Then the card must open once it has been read, close again when its width changes,
-// refuse a click while closed, and send its reply once pressed open. A refusal never waits.
+// refuse a click while closed, and send its reply once pressed open. A refusal never waits. A
+// row read under a veil counts for nothing: the dock's fade, a first row half covered, and the
+// overlay drawn while a file is dragged over the transcript.
 //
 //   npm run drive:shown
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron } from 'playwright-core'
@@ -288,6 +290,44 @@ try {
     assert.equal((await replied(ready)).decision, 'reject', 'confirm: the refusal after the veil')
   }
 
+  // The overlay drawn while a file is dragged over the transcript takes no pointer either, so a
+  // card swept through under it is still unread, and reads once the drag has ended.
+  {
+    await page.setViewportSize(SMALL)
+    const found = CASES.confirm
+    await emit(found.event, { ...found.request, request: 803 })
+    const card = page.locator('.confirm', { hasText: found.tokens[0] }).last()
+    await card.waitFor()
+    await toBottom(card)
+    const dragged = join(directory, 'dragged.txt')
+    writeFileSync(dragged, 'a file for the drag\n')
+    const cdp = await page.context().newCDPSession(page)
+    const data = { items: [], files: [dragged], dragOperationsMask: 1 }
+    const box = await page.locator('main.transcript').boundingBox()
+    const [x, y] = [Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2)]
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data })
+    for (let i = 0; i < 3; i++) {
+      await cdp.send('Input.dispatchDragEvent', { type: 'dragOver', x, y, data })
+      await page.waitForTimeout(100)
+    }
+    await page.locator('[data-test="drop-target"]').waitFor()
+    await sweep(card)
+    assert.ok(await page.locator('[data-test="drop-target"]').count(), 'confirm: the drag ended during the sweep, so the overlay tested nothing')
+    const covered = await states(card)
+    assert.ok(covered.filter((button) => button.approve).every((button) => button.closed), `confirm: read under the drop overlay, the approval opened: ${JSON.stringify(covered)}`)
+    assert.match(await card.locator('.shown-left').innerText(), /^\d+ more lines? to read before approving$/, 'confirm: the note under the drop overlay')
+    await cdp.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data })
+    // A cancelled drag sends no dragleave, so the page is told the drag is over by a drop it made
+    // up, which resets the overlay and which the preload ignores for being untrusted.
+    await page.evaluate(() => document.querySelector('main.transcript').dispatchEvent(new DragEvent('drop', { dataTransfer: new DataTransfer(), bubbles: true, cancelable: true })))
+    await page.locator('[data-test="drop-target"]').waitFor({ state: 'detached' })
+    await sweep(card)
+    assert.ok((await states(card)).every((button) => !button.closed), 'confirm: closed after the drag ended and the card was read')
+    const ready = (await replies()).length
+    await card.locator('.confirm-actions .reject').click()
+    assert.equal((await replied(ready)).decision, 'reject', 'confirm: the refusal after the drop overlay')
+  }
+
   // A first row is the whole first line an element draws: not its first run of text, and not cut
   // at a newline drawn as a space. A veil over the end of that line leaves the row unread. Each
   // card is whole on screen when it arrives, so a change of width clears what was counted, in the
@@ -368,7 +408,7 @@ try {
 
   assert.deepEqual(errors, [])
   assert.deepEqual(await app.evaluate(() => globalThis.shown.thrown), [])
-  console.log(`PASS: ${answered.length} cards took no approval before every row they rest on was on screen, closed again on a change of width, refused a press while closed, and sent their reply once read; a row read under a veil, a first row half veiled and a press in the frame of a change of width counted for nothing. Screenshots in ${output}`)
+  console.log(`PASS: ${answered.length} cards took no approval before every row they rest on was on screen, closed again on a change of width, refused a press while closed, and sent their reply once read; a row read under a veil, under the file-drop overlay, a first row half veiled and a press in the frame of a change of width counted for nothing. Screenshots in ${output}`)
 } catch (error) {
   if (page) await page.screenshot({ path: join(output, 'shown-failure.png') }).catch(() => undefined)
   console.error(error)

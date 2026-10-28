@@ -44,20 +44,23 @@ pub(crate) fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Fini
     if let Some(complaint) = run.not_served {
         // Said with the identifier of the status it is the reason for (CLI-6), and plainly where
         // the run did not fail over it.
+        // It names the model the service reported having served, which the service chose.
+        let complaint = crate::progress::printable_lines(complaint);
         let said = if run.ending == Ending::Failed {
             Ending::Failed.told(complaint)
         } else {
-            complaint.to_string()
+            complaint
         };
         let _ = writeln!(beside, "{said}");
     }
     let _ = writeln!(reply, "{}", run.reply);
     if let Some(attempt) = run.attempt {
         let _ = writeln!(beside);
-        let _ = write!(beside, "{attempt}");
+        let _ = write!(beside, "{}", crate::progress::printable_lines(attempt));
     }
     if let Some(model) = run.model {
         let _ = writeln!(beside);
+        let model = crate::progress::printable(model);
         let _ = writeln!(beside, "{}", t!(cli_model_used, model = model));
     }
     if !run.clean {
@@ -76,8 +79,12 @@ pub(crate) fn report(reply: &mut impl Write, beside: &mut impl Write, run: &Fini
 /// One function for all three surfaces that print these, so a turn that ended in a failure and one
 /// that answered cannot come to word the same sentence differently. Never on the reply's stream:
 /// these are the driver's own words and a pipe reading the reply must not pick them up.
+///
+/// A notice can name a file the checkout holds, so each is drawn through
+/// [`crate::progress::printable_lines`] (LAYER-3).
 pub(crate) fn say_notices(beside: &mut impl Write, notices: &[String]) {
     for notice in notices {
+        let notice = crate::progress::printable_lines(notice);
         let _ = writeln!(beside, "{}", t!(cli_notice, notice = notice));
     }
 }
@@ -90,7 +97,24 @@ pub(crate) fn say_what_a_stopped_manifest_produced(
     output: &mut impl Write,
     attempt: &bravebot_agent::manifest::Attempt,
 ) {
-    let report = attempt.describe();
+    say_a_manifest_report(output, &attempt.describe());
+}
+
+/// What a manifest run that was written down produced, as `--resume` and `--fork` name it: the
+/// same report as [`say_what_a_stopped_manifest_produced`], read back from the record, so the
+/// plan, the steps and the reason it stopped are text a checkout or a model chose and are drawn
+/// through [`crate::progress::printable_lines`] (LAYER-3).
+pub(crate) fn say_what_a_stored_manifest_produced(
+    output: &mut impl Write,
+    stored: &bravebot_session::sessions::StoredManifest,
+) {
+    say_a_manifest_report(output, &stored.describe());
+}
+
+/// A manifest report after a blank line, drawn through [`crate::progress::printable_lines`]
+/// (LAYER-3), or nothing where the report is empty.
+fn say_a_manifest_report(output: &mut impl Write, described: &str) {
+    let report = crate::progress::printable_lines(described);
     if !report.is_empty() {
         let _ = writeln!(output);
         let _ = write!(output, "{report}");
@@ -101,7 +125,16 @@ pub(crate) fn say_what_a_stopped_manifest_produced(
 pub(crate) const TRAIL_HEADING: &str = "audit trail";
 
 /// One line of the audit trail: what was checked, allowed, or refused, and by which run.
+///
+/// The whole line is drawn through [`crate::progress::printable`] (LAYER-3). A path, a listing
+/// entry's name or a gate's reason is text a checkout can choose, and the line goes to a
+/// terminal, so a control character in any of them is replaced by its picture. The trail is one
+/// line per event, so a line break in a field is pictured too.
 pub(crate) fn trace_line(delegate: Option<DelegateId>, event: &Event) -> String {
+    crate::progress::printable(&unpictured_trace_line(delegate, event))
+}
+
+fn unpictured_trace_line(delegate: Option<DelegateId>, event: &Event) -> String {
     // Which run took the decision, in front of what it decided. A turn and the delegates it
     // spawned record into one trail, and two delegates of the same kind decide alike.
     let run = match delegate {

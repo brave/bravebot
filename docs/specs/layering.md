@@ -95,6 +95,19 @@ taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 `verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_checkouts_rule_as_pictures`
 `verified-by: bravebot_cli::running::permissions_check_draws_the_control_characters_of_a_checkouts_rules_as_pictures`
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_a_checkouts_settings_as_pictures_before_the_startup_question`
+`verified-by: bravebot_cli::main::a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
+`verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::main::a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures`
+`verified-by: bravebot_cli::main::a_stored_manifest_report_draws_its_text_as_pictures`
+`verified-by: bravebot_cli::main::the_resume_hint_draws_the_directory_it_names_as_pictures`
+`verified-by: bravebot_cli::main::the_complaint_about_a_model_not_served_draws_the_served_name_as_pictures`
+`verified-by: bravebot_cli::plain::the_opening_lines_draw_a_model_name_and_a_refusal_as_pictures`
+`verified-by: bravebot_cli::plain::the_kept_answer_line_draws_the_paths_it_names_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures`
+`verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
+`verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe

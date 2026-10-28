@@ -103,9 +103,9 @@ export function PathPermissions({ paths, busy, onRevoke }: { paths: Grants['path
  */
 export function RulesInForce({ rules }: { rules: SettingsRules | null }): React.JSX.Element {
   const lists: [string, string, string[]][] = [
-    ['Refused', 'Refused before anything is asked or started.', rules?.deny ?? []],
-    ['Always asked', 'You are asked, whatever else would have answered.', rules?.ask ?? []],
-    ['Not asked', 'The question is answered for you. What a command prints is not trusted because of it.', rules?.allow ?? []],
+    ['Refused', 'Refused before anything is asked or started.', rules?.shownDeny ?? rules?.deny ?? []],
+    ['Always asked', 'You are asked, whatever else would have answered.', rules?.shownAsk ?? rules?.ask ?? []],
+    ['Not asked', 'The question is answered for you. What a command prints is not trusted because of it.', rules?.shownAllow ?? rules?.allow ?? []],
   ]
   const none = lists.every(([, , held]) => held.length === 0) && !(rules?.filesystem?.length || rules?.filesystemIgnored?.length)
   return <section className="grant-section settings-rules">
@@ -146,13 +146,13 @@ export function FilesystemRules({ rules }: { rules: SettingsRules | null }): Rea
         <h4>{name}</h4>
         <p className="grant-note">{meaning}</p>
         <ul className="grant-list">{held.map((entry, index) => <li className="grant-row" key={index}>
-          <code>{entry.path}</code>
-          <span className="grant-state">{entry.refused ? `Not in force: ${entry.refused}` : entry.pinned ? 'Set by your administrator' : entry.file ?? 'Command line'}</span>
+          <code>{entry.shownPath ?? entry.path}</code>
+          <span className="grant-state">{entry.refused ? `Not in force: ${entry.refused}` : entry.pinned ? 'Set by your administrator' : entry.shownFile ?? entry.file ?? 'Command line'}</span>
         </li>)}</ul>
       </div>
     })}
     {ignored.map((entry, index) => <Alert type="warning" key={index} data-test="filesystem-ignored">
-      {`${entry.key} in ${entry.file} is not obeyed: a project file can refuse reach and never add it.`}
+      {`${entry.key} in ${entry.shownFile ?? entry.file} is not obeyed: a project file can refuse reach and never add it.`}
     </Alert>)}
   </div>
 }

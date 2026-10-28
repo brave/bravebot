@@ -656,6 +656,8 @@ pub struct Settings {
     /// refused by the handler (LINK-6).
     deep_links: Option<bool>,
     providers: Vec<crate::provider::Provider>,
+    /// The entries under `provider` dropped for a `baseURL` whose port cannot be read, by id.
+    providers_refused: Vec<(String, crate::provider::PortFault)>,
     /// The models a `provider` entry named `chatgpt` names where it states no endpoint, which is
     /// the ChatGPT account's roster rather than a gateway's.
     chatgpt_models: Vec<crate::provider::AccountModel>,
@@ -1640,6 +1642,7 @@ impl Settings {
             git_identities_ignored: Vec::new(),
             git_identities_misshapen: Vec::new(),
             providers: crate::provider::Provider::all(root),
+            providers_refused: crate::provider::Provider::refused(root),
             chatgpt_models: crate::provider::account_models(root),
             layers: Vec::new(),
             contested: BTreeMap::new(),
@@ -2339,6 +2342,7 @@ impl Settings {
             && self.git_identities_ignored.is_empty()
             && self.git_identities_misshapen.is_empty()
             && self.providers.is_empty()
+            && self.providers_refused.is_empty()
             && self.chatgpt_models.is_empty()
             // A file that named `vetting.auto` and was not obeyed still said something, and
             // `doctor` reports both facts about it. Reading it as absence would print "no
@@ -2395,6 +2399,12 @@ impl Settings {
     /// The gateways these settings configured, in the order they were listed.
     pub fn providers(&self) -> &[crate::provider::Provider] {
         &self.providers
+    }
+
+    /// The `provider` entries read and dropped because the `baseURL` they state writes a port that
+    /// cannot be read, by id ([BACKEND-62](../../../docs/specs/backends.md#BACKEND-62)).
+    pub fn providers_refused(&self) -> &[(String, crate::provider::PortFault)] {
+        &self.providers_refused
     }
 
     /// The models the ChatGPT account is offered as, where a `provider` entry named `chatgpt`

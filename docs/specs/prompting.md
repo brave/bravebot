@@ -119,7 +119,11 @@ desktop window's Context panel, which draw the name the bridge sent for the file
 as written, and the target a call carries to a program or is matched on is the name as held. The
 notes said before the first prompt about an allow rule a checkout proposed, whether it was granted
 before or is not granted, draw the rule as a rule is drawn and the settings file and the record a yes
-is kept in as paths. A name that is
+is kept in as paths. The desktop window's lists of the rules in force, of the entries that are not
+rules, of the directories a settings file named, of the `sandbox.filesystem` paths and of the files
+that wrote them draw the spelled fields the bridge sends beside each (`shownDeny`, `shownAsk`,
+`shownAllow`, `shownRule`, `shownDirectories`, `shownPath`, `shownFile`) and never the value as
+held, and the sentence about an entry that is not a rule quotes the entry spelled. A name that is
 empty, is only whitespace, has a space at either end of it or of a directory in it, or holds a character
 that draws as nothing (a zero-width character, a bidirectional control, a tag character, a variation
 selector, a no-break space) or as a blank cell (the blank braille pattern) is drawn quoted with each
@@ -141,6 +145,23 @@ alone. Every step, never a count and never the first few: one answer covers all 
 step below the fold is as binding as the first. A run prompt's arguments are the same: the last of
 them runs as surely as the first, so no key that runs the line is taken until every row of its plan
 has been on the screen ([PROMPT-4](#PROMPT-4)).
+
+A run prompt's arguments, its environment values and the paths it redirects to are drawn through
+`command::quoted`, which wraps an argument in single quotes where it is empty or holds a space, a
+quote, a backslash or a `>`, and also where it holds a control character, white space other than a
+space, a character that draws as nothing or the blank braille pattern. Inside the quotes each such
+character is written as `\u{..}`, its code point in hex, and a literal backslash is written `\\`.
+Two argument lists that differ only in such a character therefore draw apart, an argument made only
+of them is still drawn as an argument, and the text `\u{200b}` does not draw as the character it
+spells. The mapping reads no meaning from the argument and decides no effect. The approval stays
+bound to the arguments as held.
+
+`verified-by: bravebot_core::command::an_argument_holding_an_invisible_character_is_spelled`
+`verified-by: bravebot_core::command::two_argument_lists_that_differ_in_an_invisible_character_draw_apart`
+`verified-by: bravebot_core::command::an_argument_of_invisible_characters_alone_is_still_drawn_as_an_argument`
+`verified-by: bravebot_core::command::the_text_of_a_spelling_draws_apart_from_the_character_it_spells`
+`verified-by: bravebot_core::command::an_invisible_character_in_an_environment_value_or_a_redirect_is_spelled`
+`verified-by: bravebot_tui::confirm::run::a_run_prompt_draws_names_that_differ_in_an_invisible_character_apart`
 
 `verified-by: bravebot_tui::confirm::write::a_new_file_prompt_shows_the_path_and_body`
 `verified-by: bravebot_tui::confirm::write::an_overwrite_prompt_shows_what_it_replaces`
@@ -199,6 +220,9 @@ has been on the screen ([PROMPT-4](#PROMPT-4)).
 `verified-by: bravebot_ui_bridge::opening_tests::the_response_opening_a_session_carries_the_directory_and_the_record_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::opening_tests::a_kept_answer_carries_its_file_and_its_root_spelled_for_a_person`
 `verified-by: bravebot_ui_bridge::rules::a_proposed_rule_and_its_file_are_reported_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::rules::every_list_the_window_shows_is_sent_spelled_for_a_person`
+`verified-by: bravebot_ui_bridge::rules::the_sentence_about_an_unreadable_rule_quotes_it_spelled`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/settings-rules.test.mjs renders the rules in force, the filesystem lists, the rules banner and the manifest card's list of rules through react-dom/server and asserts each draws the spelled field and not the value as held, and make check-ui runs it)`
 `verified-by: by-construction (the mobile app is not a crate this workspace compiles; mobile/src/__tests__/approvals.test.tsx and transcript.test.tsx render the write, run and trust cards, the waiting-write line and a call's line through react-test-renderer and assert each draws the path the bridge spelled and not the path as held, mobile/src/__tests__/calls.test.ts asserts the list of calls does the same, mobile/src/__tests__/payloads.test.ts asserts a request without the spelled fields is not offered, and make check-mobile runs them)`
 `verified-by: bravebot_agent::turn::approval_prompts_carry_the_labels_the_gates_released_their_bytes_under`
 `verified-by: bravebot_tui::trust_prompt::the_named_prompt_shows_the_directory_it_would_open`
@@ -380,7 +404,7 @@ in a window is the same question asked with a mouse, so it owes the same.
 `verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
 `verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
 `verified-by: bravebot_tui::trust_prompt::a_question_that_fits_its_box_says_nothing_of_scrolling`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen, and that rows swept through under the overlay drawn while a file is dragged over the transcript, which takes no pointer, count for nothing until the drag ends)`
 
 ## What an answer means
 

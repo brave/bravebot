@@ -152,7 +152,10 @@ impl Stage {
     /// The quoting has to be **unambiguous**, not merely readable, because an approval is bound to
     /// what the person saw. Quoting only on whitespace was not: `["a b"]` and `["'a", "b'"]` both
     /// came out as `prog 'a b'`, so a reviewer reading one could have been approving the other. So
-    /// a quote or a backslash forces quoting too, and both are escaped inside it.
+    /// a quote or a backslash forces quoting too, and both are escaped inside it. A control
+    /// character, white space other than a space and a character that draws as nothing or as a
+    /// blank cell are written inside the quoting as `\u{..}`, so two argument lists that differ in
+    /// one of them do not draw alike.
     pub fn display(&self) -> String {
         let mut out = String::from(&self.program);
         for arg in &self.args {
@@ -184,9 +187,19 @@ pub(crate) fn started_through(started_as: &Path, file: &Path) -> String {
 /// backslash and a quote escaped inside the wrapping, which is what makes the rendering reversible
 /// and therefore safe to bind an approval to. An argument holding `>` is wrapped too, so an
 /// argument list cannot draw as the arrow [`started_through`] puts between a link and its file.
+///
+/// A character that does not draw as itself is written inside the wrapping as `\u{..}`, its code
+/// point in hex: a control character, any white space other than a space, a character
+/// [`crate::invisible::draws_as_nothing`] holds and the blank braille pattern. Without that, a
+/// terminal skips a zero-width character and a control character moves the cursor, so `a.tmp` and
+/// `a<U+200B>.tmp` would draw alike, and an argument made only of such characters would draw as no
+/// argument. A literal backslash is written `\\`, so a spelled character cannot be confused with
+/// the text `\u{200b}`. The mapping reads no meaning from the argument.
 pub fn quoted(arg: &str) -> String {
     let plain = !arg.is_empty()
-        && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '\\' || c == '>');
+        && !arg.contains(|c: char| {
+            c == ' ' || c == '\'' || c == '\\' || c == '>' || needs_spelling(c)
+        });
     if plain {
         return arg.to_string();
     }
@@ -196,10 +209,24 @@ pub fn quoted(arg: &str) -> String {
         if c == '\'' || c == '\\' {
             out.push('\\');
         }
-        out.push(c);
+        if needs_spelling(c) {
+            out.push_str(&format!("\\u{{{:x}}}", c as u32));
+        } else {
+            out.push(c);
+        }
     }
     out.push('\'');
     out
+}
+
+/// Whether `c` is written out in [`quoted`] because it would not draw as itself: a control
+/// character, white space other than a space, a character that draws as nothing and the blank
+/// braille pattern.
+fn needs_spelling(c: char) -> bool {
+    c.is_control()
+        || (c.is_whitespace() && c != ' ')
+        || crate::invisible::draws_as_nothing(c)
+        || crate::invisible::draws_as_blank(c)
 }
 
 /// A sequence of stages, each feeding the next.
@@ -318,7 +345,8 @@ impl Step {
     /// The binary rather than the name, because that is what will run: the path it is started by
     /// and the file that leads to, as [`Step::binary`] draws them. The file alone names another
     /// program wherever a link leads to a multi-call binary: `cargo` served by rustup would read
-    /// `rustup test`. Every argument is quoted so that no two argument lists can render alike.
+    /// `rustup test`. Every argument is quoted so that no two argument lists can render alike,
+    /// with a character that draws as nothing written out as [`quoted`] writes it.
     pub fn display(&self) -> String {
         self.render(&self.binary())
     }
@@ -1285,6 +1313,94 @@ mod tests {
     fn an_argument_holding_an_arrow_is_quoted() {
         let stage = Stage::new("prog", vec!["->".into(), "/usr/bin/b".into()]);
         assert_eq!(stage.display(), "prog '->' /usr/bin/b");
+    }
+
+    /// A character that draws as nothing or moves the cursor in an argument is written out inside
+    /// the quoting, so the drawn text holds none of them. A terminal skips a zero-width character,
+    /// so an argument left bare would draw as the name without it.
+    #[test]
+    fn an_argument_holding_an_invisible_character_is_spelled() {
+        for arg in [
+            "a\u{200b}.tmp",
+            "a\u{202e}b",
+            "a\u{7}b",
+            "\u{200b}",
+            "a\u{e0041}",
+            "a\u{2800}b",
+            "a\u{a0}b",
+            "a\tb",
+            "a\nb",
+            "a\u{1b}[2Jb",
+            "a\u{85}b",
+        ] {
+            let drawn = quoted(arg);
+            assert!(
+                !drawn.chars().any(|c| c.is_control()
+                    || (c.is_whitespace() && c != ' ')
+                    || crate::invisible::draws_as_nothing(c)
+                    || crate::invisible::draws_as_blank(c)),
+                "{arg:?} drew as {drawn:?}"
+            );
+            assert!(drawn.starts_with('\'') && drawn.ends_with('\''), "{drawn}");
+        }
+        assert_eq!(quoted("a\u{200b}.tmp"), r"'a\u{200b}.tmp'");
+        assert_eq!(quoted("\u{200b}"), r"'\u{200b}'");
+        assert_eq!(quoted("a\u{e0041}"), r"'a\u{e0041}'");
+    }
+
+    /// Two file names that differ only in a zero-width character are two arguments that draw
+    /// apart, so a yes cannot cover the one that was not drawn. What a terminal does with the
+    /// drawn text is modelled by dropping the zero-width and control characters.
+    #[test]
+    fn two_argument_lists_that_differ_in_an_invisible_character_draw_apart() {
+        let undrawn = |text: String| -> String {
+            text.chars()
+                .filter(|c| !c.is_control() && !crate::invisible::draws_as_nothing(*c))
+                .collect()
+        };
+        let plain = Stage::new("rm", vec!["a.tmp".into(), "a.tmp".into()]);
+        let hidden = Stage::new("rm", vec!["a.tmp".into(), "a\u{200b}.tmp".into()]);
+        assert_ne!(undrawn(plain.display()), undrawn(hidden.display()));
+        assert_eq!(
+            undrawn(hidden.display()),
+            r"rm a.tmp 'a\u{200b}.tmp'",
+            "the spelled token has to survive a terminal that skips zero-width characters"
+        );
+    }
+
+    /// An argument made only of characters that draw as nothing is still one argument, and the
+    /// list that holds it draws apart from the list without it.
+    #[test]
+    fn an_argument_of_invisible_characters_alone_is_still_drawn_as_an_argument() {
+        let one = Stage::new("rm", vec!["a".into(), "\u{200b}".into()]);
+        let none = Stage::new("rm", vec!["a".into()]);
+        assert_eq!(one.display(), r"rm a '\u{200b}'");
+        assert_ne!(one.display(), none.display());
+    }
+
+    /// The text `\u{200b}` is an argument of its own: its backslash is escaped, so it cannot draw
+    /// as the character it spells.
+    #[test]
+    fn the_text_of_a_spelling_draws_apart_from_the_character_it_spells() {
+        let character = Stage::new("rm", vec!["\u{200b}".into()]);
+        let text = Stage::new("rm", vec![r"\u{200b}".into()]);
+        assert_ne!(character.display(), text.display());
+        assert_eq!(text.display(), r"rm '\\u{200b}'");
+    }
+
+    /// An environment value and a redirection path are drawn through the same function, so a
+    /// character that draws as nothing in either is spelled too.
+    #[test]
+    fn an_invisible_character_in_an_environment_value_or_a_redirect_is_spelled() {
+        let mut one = step("prog", &[]);
+        one.environment = vec![("NAME".into(), "a\u{200b}b".into())];
+        one.routes = vec![Route::Stdout {
+            path: PathBuf::from("/work/o\u{202e}ut"),
+            append: false,
+        }];
+        let drawn = one.as_written();
+        assert!(drawn.starts_with(r"NAME='a\u{200b}b' prog"), "{drawn}");
+        assert!(drawn.ends_with(r"> '/work/o\u{202e}ut'"), "{drawn}");
     }
 
     /// A backslash is what does the escaping, so an argument containing one has to escape it too
