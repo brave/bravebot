@@ -71,6 +71,7 @@ wrong rather than describing it, and a person reads the drafts and says which ge
 | [info-panel.md](info-panel.md) | `PANEL` | 15 | telling many sessions apart: the terminal's title and the info panel |
 | [files-mode.md](files-mode.md) | `FILES` | 10 | a state of the info panel that lists the files the session wrote and every edit to the highlighted one |
 | [background-sessions.md](background-sessions.md) | `BG` | 16 | proposed, the roster, its list (grouped by state on a terminal) and stop, `--bg`, `/bg`, attach, reply and the supervisor that restarts an idle process built: sessions that keep running after the terminal closes, with a list, attach and reply |
+| [sessions-screen.md](sessions-screen.md) | `SCREEN` | 17 | the Sessions screen: one list of every session on the machine, opened with Left over an empty box, `/sessions`, `/resume` or `--resume`, its status tabs, grouping, search, pins and the keys and clicks that open, copy, begin, stop, rename, archive and delete one |
 | [session-messages.md](session-messages.md) | `MSG` | 12 | proposed, built: one background session sending text to another, put to a person and never starting a turn |
 | [plugins.md](plugins.md) | `PLUGIN` | 10 | proposed, nothing built: a bundle of skills, definitions, hooks and servers installed by one command a person types, and the marketplace index it may come from |
 | [state-directory.md](state-directory.md) | `STATE` | 4 | `~/.bravebot`, and who on the machine may read what is written into it |

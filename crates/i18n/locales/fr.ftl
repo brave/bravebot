@@ -1787,20 +1787,6 @@ input-history-narrow = { $chord } cette session
 input-history-project = { $chord } prompts du projet
 input-history-search = { $chord } pour rechercher
 input-history-scope = { $chord } ce projet
-resume-heading = Reprendre une session
-resume-search-placeholder = Rechercher dans les titres et les échanges… (since:7d pour les récentes)
-resume-keys =
-    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  Suppr pour supprimer  ·  tapez pour rechercher  ·
-    Échap pour une nouvelle session
-resume-from-pr = pull request { $pull_request }
-resume-keys-within =
-    ↑↓ pour choisir  ·  Entrée pour reprendre  ·  Suppr pour supprimer  ·  tapez pour rechercher  ·
-    Échap pour rester ici
-resume-nothing-matches = aucune correspondance
-resume-delete-question = Supprimer « { $title } » ? y la supprime, toute autre touche la garde
-resume-delete-held = cette session s'exécute en arrière-plan ; arrêtez-la avant de la supprimer
-resume-delete-done = supprimée
-resume-delete-failed = impossible de supprimer cette session
 resume-manifest-run =
     c'était une exécution manifest, qui ne peut pas être reprise ; démarrez une nouvelle
     session
@@ -2536,7 +2522,6 @@ session-checkout-not-restored =
         [one] le checkout { $ids } était gardé par cette session mais n'est plus où il a été créé, il n'est donc pas listé
        *[other] les checkouts { $ids } étaient gardés par cette session mais ne sont plus où ils ont été créés, ils ne sont donc pas listés
     }
-session-resume-nothing-else = aucune autre session à reprendre dans ce répertoire
 session-resume-already-here = c'est la session déjà ouverte
 session-resume-no-such = aucune session avec cet identifiant dans ce répertoire
 session-resume-held-by-background = cette session est tenue par une session d'arrière-plan en cours, elle ne peut donc pas être reprise ici
@@ -4180,7 +4165,6 @@ commit-message-partial = les changements dépassaient ce qu'une lecture prend, d
 commit-message-failed = le message de commit n'a pas pu être rédigé : { $problem }
 commit-message-stopped = la rédaction du message de commit a été arrêtée
 handoff-started = transmis : ceci est une nouvelle session, et la précédente est restée telle quelle. Pour y revenir, lancez `bravebot --resume { $id }`
-resume-handed-off = depuis { $id }
 
 enhance-ready = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Échap remet ce que vous aviez écrit
 enhance-ready-vi = la ligne améliorée est dans la zone de saisie. Modifiez-la, puis Entrée l'envoie, ou Ctrl-C remet ce que vous aviez écrit

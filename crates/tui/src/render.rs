@@ -30,6 +30,10 @@ mod hover;
 mod menu;
 mod prompt;
 mod scroller;
+mod sessions_screen;
+pub(crate) use sessions_screen::{
+    status_in_words as session_status_in_words, status_word as session_status_word,
+};
 mod transcript;
 mod watching;
 
@@ -909,6 +913,10 @@ pub fn draw(frame: &mut Frame, session: &Session) -> Laid {
     laid
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one function draws each mode of the session, and each mode is one early return"
+)]
 fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     // A named theme paints the frame so chrome and text share one background. `brave` leaves the
     // terminal's own colours alone. It is painted before the mode is chosen, since the scroller
@@ -930,6 +938,12 @@ fn draw_frame(frame: &mut Frame, session: &Session) -> Laid {
     // box is not drawn and what it cost goes to the lines somebody opened the mode to read.
     if session.watching().is_some() {
         return draw_watching(frame, session);
+    }
+
+    // The Sessions screen takes the screen in the same way: while it is open no key reaches
+    // the box, so the box is not drawn (SCREEN-1).
+    if session.showing_sessions() {
+        return sessions_screen::draw_sessions_screen(frame, session);
     }
 
     // The same shape for the same reason: while the history is being searched the box takes no

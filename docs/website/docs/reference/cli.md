@@ -15,8 +15,8 @@ Usage:
   bravebot --plain                       Start a session in lines, taking nothing from the terminal
   bravebot "<task>" [--file <path>]...   Run a single task
   cat file | bravebot -p "<task>"        ...with piped input, never trusted
-  bravebot --resume [id]                 Pick up a session in this directory
-  bravebot --from-pr <number|url>        Pick up a session linked to a pull request
+  bravebot --resume [id]                 Choose a session to pick up
+  bravebot --from-pr <number|url>        Choose among the sessions linked to a pull request
   bravebot --continue                    Pick up the most recent session in this directory
   bravebot -p "<task>" --resume <id>     Send a one-shot task as the next turn of a session
   bravebot -p "<task>" --continue        Send a one-shot task as the next turn of the most recent session
@@ -45,9 +45,9 @@ Usage:
 | `bravebot -i "<prompt>"`, `--interactive` | start the same session and send the prompt as its first turn ([below](#-i-prompt)) |
 | `bravebot --plain` | start a session in lines, drawing nothing ([below](#--plain)) |
 | `bravebot "<task>"` | run one task and print the reply |
-| `bravebot --resume`, `-r` | choose a session in this directory to pick up |
+| `bravebot --resume`, `-r` | open the [Sessions screen](../using/sessions-screen.md) to choose a session to pick up; Esc leaves it for an ordinary session |
 | `bravebot --resume <id>` | resume that session by id |
-| `bravebot --from-pr <number or url>` | choose among the sessions linked to that pull request. The picker opens and says nothing matches when no session is linked, even in a directory with no sessions at all; Esc starts an ordinary session |
+| `bravebot --from-pr <number or url>` | choose among the sessions linked to that pull request. The Sessions screen opens and says nothing matches when no session is linked, even in a directory with no sessions at all; Esc leaves it for an ordinary session |
 | `bravebot --continue`, `-c` | pick up the most recent session in this directory |
 | `bravebot -p "<task>" --resume <id>` | run the task as one more turn of that session, without opening it ([below](#continuing-a-session-from-a-one-shot-run)) |
 | `bravebot -p "<task>" --continue` | the same, for the most recent session in this directory |

@@ -505,27 +505,16 @@ pub(super) fn note_session(
 /// session holds is refused as it refuses them. With no id the picker is drawn over the session,
 /// without the session itself in it, and leaving it keeps the session as it was.
 pub(super) fn record_to_resume(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     session: &mut Session,
     root: &Path,
     current: &str,
     typed: &str,
 ) -> Option<Box<bravebot_session::sessions::Record>> {
     let refusal = if typed.is_empty() {
-        let others = bravebot_session::sessions::list(root)
-            .iter()
-            .any(|listed| listed.id != current);
-        if !others {
-            session.note(t!(session_resume_nothing_else));
-            return None;
-        }
-        let chosen = crate::resume::choose_other(terminal, root, current, session.wheel_rows());
-        session.end_a_pickers_press();
-        match chosen {
-            crate::resume::Choice::Resume(record) => crate::resume::continuable(root, record),
-            // Leaving the picker, by Escape or by Ctrl-C, stays where the person is.
-            crate::resume::Choice::Fresh | crate::resume::Choice::Quit => return None,
-        }
+        // The Sessions screen is the list of sessions to pick up from, with this directory's among
+        // them, so `/resume` and Left open the same one.
+        super::sessions_screen::open_sessions_screen(session, current, root, None, true);
+        return None;
     } else {
         crate::resume::named(root, current, typed)
     };

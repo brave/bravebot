@@ -30,9 +30,11 @@ enum State {
     Files,
     /// The view of a delegate is open.
     DelegateView,
+    /// The Sessions screen is open.
+    SessionsScreen,
 }
 
-const STATES: [State; 9] = [
+const STATES: [State; 10] = [
     State::Rest,
     State::Turn,
     State::Command,
@@ -42,6 +44,7 @@ const STATES: [State; 9] = [
     State::Search,
     State::Files,
     State::DelegateView,
+    State::SessionsScreen,
 ];
 
 /// Put the session in `state`, from whatever state it is in, without drawing a frame.
@@ -77,6 +80,16 @@ fn enter(session: &mut Session, state: State) {
             }
         }
         State::Files => enter_files(session),
+        State::SessionsScreen => {
+            if !session.showing_sessions() {
+                session.open_sessions_screen(crate::sessions_screen::SessionsScreen::new(
+                    bravebot_session::listing::Grouping::Together,
+                    Vec::new(),
+                    std::collections::HashMap::new(),
+                    None,
+                ));
+            }
+        }
         State::DelegateView => {
             use bravebot_agent::report::{DelegateId, Delegation};
             if session.watching_a_delegate() {
@@ -148,9 +161,10 @@ enum Kind {
     Popup,
     PopupRows,
     Match,
+    SessionsScreen,
 }
 
-const KINDS: [Kind; 18] = [
+const KINDS: [Kind; 19] = [
     Kind::Back,
     Kind::Reply,
     Kind::Block,
@@ -169,6 +183,7 @@ const KINDS: [Kind; 18] = [
     Kind::Popup,
     Kind::PopupRows,
     Kind::Match,
+    Kind::SessionsScreen,
 ];
 
 fn kind_of(hit: Hit) -> Kind {
@@ -191,56 +206,78 @@ fn kind_of(hit: Hit) -> Kind {
         Hit::Popup(_) => Kind::Popup,
         Hit::PopupRows(_) => Kind::PopupRows,
         Hit::Match(_) => Kind::Match,
+        Hit::SessionsScreen(_) => Kind::SessionsScreen,
     }
 }
 
 /// Whether a target stands in each state, in the order of [`STATES`]: as built, a turn running, a
 /// command running, the scroller open, its list of keys up, a picker open, the search open, the files
 /// state open, and a delegate's view open.
-type Stands = [bool; 9];
+type Stands = [bool; 10];
 
 /// What is drawn beside the transcript in the plain frame: it stands at rest and while work runs.
 /// The scroller and the views of a delegate replace the frame, a panel that holds the input is
 /// answered by itself, and the files state draws other rows in place of these.
-const A_ROW_OF_THE_PLAIN_FRAME: Stands =
-    [true, true, true, false, false, false, false, false, false];
+const A_ROW_OF_THE_PLAIN_FRAME: Stands = [
+    true, true, true, false, false, false, false, false, false, false,
+];
 
 /// A control of the files state, and a pane of it the wheel scrolls, are drawn by the files state,
 /// over the frame the scroller and the views of a delegate replace, and stand in no state the
 /// ordinary rows of the panel do.
-const A_CONTROL_OF_THE_FILES_STATE: Stands =
-    [true, true, true, false, false, false, false, true, false];
+const A_CONTROL_OF_THE_FILES_STATE: Stands = [
+    true, true, true, false, false, false, false, true, false, false,
+];
 
 /// A hint is read by no key while a command the person typed is running.
-const A_HINT: Stands = [true, true, false, false, false, false, false, false, false];
+const A_HINT: Stands = [
+    true, true, false, false, false, false, false, false, false, false,
+];
 
 /// The way out of shell mode is a key of the box at rest, which a turn does not read.
-const THE_WAY_OUT_OF_SHELL: Stands = [true, false, false, false, false, false, false, false, false];
+const THE_WAY_OUT_OF_SHELL: Stands = [
+    true, false, false, false, false, false, false, false, false, false,
+];
 
 /// The transcript's own targets stand in the scroller as well as in the plain frame.
-const A_TARGET_OF_THE_TRANSCRIPT: Stands =
-    [true, true, true, true, false, false, false, false, false];
+const A_TARGET_OF_THE_TRANSCRIPT: Stands = [
+    true, true, true, true, false, false, false, false, false, false,
+];
 
 /// A link in the assistant's words is drawn in the transcript wherever that is, so an address stands
 /// in the scroller, in the files state and in a delegate's view, and under no panel that holds the
 /// input.
-const AN_ADDRESS: Stands = [true, true, true, true, false, false, false, true, true];
+const AN_ADDRESS: Stands = [
+    true, true, true, true, false, false, false, true, true, false,
+];
 
 /// A path is shown and opened where the person is at the plain prompt or in the scroller, which is
 /// where nothing else is drawing the screen.
-const A_PATH: Stands = [true, false, false, true, false, false, false, true, false];
+const A_PATH: Stands = [
+    true, false, false, true, false, false, false, true, false, false,
+];
 
 /// The way back stands in a delegate's view, over the scroller or not.
-const THE_WAY_BACK: Stands = [true, true, true, true, false, false, false, false, true];
+const THE_WAY_BACK: Stands = [
+    true, true, true, true, false, false, false, false, true, false,
+];
 
 /// The list under the box is read by no view that replaces the frame.
-const THE_LIST_UNDER_THE_BOX: Stands = [true, true, true, false, false, false, false, true, false];
+const THE_LIST_UNDER_THE_BOX: Stands = [
+    true, true, true, false, false, false, false, true, false, false,
+];
 
 /// The scrollbar is kept beside the transcript by the files state.
-const THE_SCROLLBAR: Stands = [true, true, true, false, false, false, false, true, false];
+const THE_SCROLLBAR: Stands = [
+    true, true, true, false, false, false, false, true, false, false,
+];
 
 /// A panel that holds the input, and the rows of its list, stand while they are drawn.
-const A_PANEL_THAT_HOLDS_THE_INPUT: Stands = [true; 9];
+const A_PANEL_THAT_HOLDS_THE_INPUT: Stands = [true; 10];
+
+/// A row or a tab of the Sessions screen is the frame while it is open, so it stands for as long
+/// as the Sessions screen does, and no part of the plain frame stands under it.
+const THE_CENTER: Stands = [true; 10];
 
 /// What each fixture of the table of targets a panel may cover is, and where it stands.
 fn expected(name: &str) -> (Kind, Stands) {
@@ -320,6 +357,59 @@ fn a_pane_of_the_files_state(edits: bool) -> (Session, (u16, u16)) {
         .1;
     let row = if edits { panel.bottom() - 1 } else { panel.y };
     (session, (row, panel.x + 3))
+}
+
+/// The cell of a row of the Sessions screen, and of one of its tabs, with it open.
+fn the_sessions_screen_with(tab: bool) -> (Session, (u16, u16)) {
+    use bravebot_session::listing::{Grouping, Page, Status as TaskStatus, Task};
+    let mut session = Session::new("kernel-enforced");
+    let mut sessions_screen = crate::sessions_screen::SessionsScreen::new(
+        Grouping::Together,
+        Vec::new(),
+        std::collections::HashMap::new(),
+        None,
+    );
+    sessions_screen.replace(Page {
+        tasks: vec![Task {
+            id: "a".to_string(),
+            directory: "/work/one".to_string(),
+            title: "a task of the Sessions screen".to_string(),
+            status: TaskStatus::Saved,
+            held: None,
+            updated: 1,
+            started: 0,
+            model: None,
+            branch: None,
+            prompt: None,
+            turns: 0,
+            tokens: 0,
+            read: 0,
+            written: 0,
+            mode: None,
+            background: false,
+            live: false,
+            current: false,
+            manifest: false,
+            agent: None,
+            bytes: 0,
+            issue: None,
+            pull_request: None,
+            handed_off_from: None,
+        }],
+        more: false,
+    });
+    session.open_sessions_screen(sessions_screen);
+    let buffer = drawn(&mut session);
+    let cell = find_cell(
+        &buffer,
+        if tab {
+            "Needs you"
+        } else {
+            // The start of it, since a long name is cut in the row and whole in the details.
+            "a task of the"
+        },
+    );
+    (session, cell)
 }
 
 /// The cell of a match in the search over the prompts already sent, with the search open.
@@ -481,6 +571,18 @@ fn every_kind_of_target_stands_in_the_states_its_click_works_in_and_in_no_other(
         ));
     }
     kinds_asked.push(Kind::Wheel);
+    for (name, tab) in [
+        ("a row of the Sessions screen", false),
+        ("a tab of the Sessions screen", true),
+    ] {
+        wrong.extend(wrong_cells(
+            name,
+            || the_sessions_screen_with(tab),
+            Kind::SessionsScreen,
+            THE_CENTER,
+        ));
+    }
+    kinds_asked.push(Kind::SessionsScreen);
     wrong.extend(wrong_cells(
         "a match of the search over earlier prompts",
         a_match_of_the_search,

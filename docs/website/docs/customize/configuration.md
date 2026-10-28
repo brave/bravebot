@@ -104,6 +104,9 @@ Everything that should outlive a session lives here:
 | `~/.bravebot/editor-mode` | the editing style chosen with `/config` |
 | `~/.bravebot/language` | the interface language chosen with `/language` ([details](language.md)) |
 | `~/.bravebot/panel` | whether the [info panel](../using/sessions.md#telling-sessions-apart) was left open |
+| `~/.bravebot/sessions-grouping` | how the [Sessions screen](../using/sessions-screen.md) lays out its list: `together`, `project`, `agent` or `model` |
+| `~/.bravebot/sessions-pinned` | the sessions pinned in the Sessions screen, one id a line |
+| `~/.bravebot/sessions-archived` | the sessions archived in the Sessions screen, each with the time it was archived |
 | `~/.bravebot/themes/<name>.json` | themes you wrote yourself |
 | `~/.bravebot/settings.json` | long-lived settings (see [below](#settingsjson)) |
 
@@ -297,7 +300,7 @@ one thing leaves everything else in force:
 
 | What | How the files combine |
 |---|---|
-| `env`, `keybindings` | per name one level down; the value under a name is replaced whole |
+| `env`, `keybindings`, `sessionsKeys` | per name one level down; the value under a name is replaced whole |
 | `run.scrubEnv`, `permissions.deny`, `permissions.ask`, `permissions.additionalDirectories`, `mcp.request` | every file's entries are kept |
 | `permissions.allow` | your own file's entries, a `--settings` file outside the project, and a project's entries you granted |
 | `provider`, `model`, `advisorModel`, `fallbackModel`, `summaryModel`, `planModel`, `processorModel`, `agent`, `style`, `attribution` | your own file and the file `--settings` names. A project or local file naming any of them is ignored and reported, `headers` inside `provider` included |
@@ -370,6 +373,7 @@ These keys are read, and anything else in the file is ignored rather than refuse
 | `run.defaultSeconds`, `run.maxSeconds` | how long a command may run ([below](#rundefaultseconds-and-runmaxseconds)) |
 | `attribution` | what a commit message or a pull request this agent writes may carry ([below](#attribution)) |
 | `keybindings` | keys rebound to your own choice ([below](#keybindings)) |
+| `sessionsKeys` | the keys of the [Sessions screen](../using/sessions-screen.md) rebound to your own choice ([below](#sessionskeys)) |
 | `search` | how large a tree a search may walk ([below](#search)) |
 | `deferMcpToolsAbove` | the size past which a server's tools are offered by name until one is loaded ([below](#defermcptoolsabove)) |
 | `retentionDays` | how many days a session record, a language server index and a findings file are kept ([below](#retentiondays)) |
@@ -1448,6 +1452,42 @@ to another action has that action back on its default until the file moves `todo
 
 The block layers per action the way `env` does, so a project file moving one action says nothing about
 the others. See [Interactive mode](../using/interactive-mode.md) for what the keys do.
+
+### `sessionsKeys`
+
+```json
+{ "sessionsKeys": { "stop": "ctrl-x", "archive": "z" } }
+```
+
+The keys of the [Sessions screen](../using/sessions-screen.md), which are bare letters and so are not
+covered by [`keybindings`](#keybindings). Thirteen actions can be moved and nothing else can:
+
+| Action | Default | What it does |
+|---|---|---|
+| `up`, `down` | `k`, `j` | move the cursor |
+| `new` | `n` | begin a session in the directory of the one under the cursor |
+| `fork` | `f` | copy the session and carry on in the copy |
+| `rename` | `r` | rename it |
+| `stop` | `x` | stop the background process running it |
+| `archive` | `a` | take it off the list until it is used again |
+| `delete` | `backspace` | delete it (the Delete key too) |
+| `hide` | `h` | hide it for as long as the session you are in lasts |
+| `pin` | `p` | pin it to the top, or take the pin off |
+| `group` | `g` | go to the next layout |
+| `search` | `/` | open the search (F3 too) |
+| `help` | `?` | open and close the list of keys |
+
+A key is one character, alone or after `ctrl-` or `alt-`, or a function key from `f1` to `f12`. Unlike
+[`keybindings`](#keybindings), a key without Ctrl or Alt is on offer, since a character typed into a
+search or a name is text whatever it is bound to. The key an action was moved off does nothing.
+
+**A request that cannot be had leaves the action where it was.** That covers a spelling that names no
+key, a key the screen keeps (Enter, the arrows, Tab, Escape, the digits 1 to 5, Ctrl-P, Ctrl-N,
+Ctrl-B, Ctrl-F, Ctrl-C, F3), a name that is no action, and a key another action stands on. A key two
+actions both asked for is given up by both, and two actions *trading* keys is not a conflict. The
+Sessions screen says what was refused when it opens.
+
+The block layers per action the way `keybindings` does.
 
 ### `search`
 

@@ -60,6 +60,7 @@ use bravebot_session::audit::{Stamped, Trail};
 pub use crate::command_table::*;
 
 mod actions;
+mod sessions_screen;
 use actions::Held;
 mod directories;
 use directories::*;
@@ -351,6 +352,35 @@ fn carry_out_while_working(
         }),
         Action::ChooseModel => {
             session.answer_while_working(|session| open_model_picker(session, beside.config));
+        }
+        // The sessions beside this one can be looked at, stopped, named, archived and deleted while
+        // a turn runs. Opening one ends this session, which a turn in flight does not allow
+        // without being stopped, and that is asked once (SCREEN-15).
+        Action::OpenCenter => sessions_screen::open_sessions_screen(
+            session,
+            beside.stored.id(),
+            beside.root,
+            None,
+            false,
+        ),
+        Action::SessionsScreen(crate::sessions_screen::Effect::Rename { task, name })
+            if task.current =>
+        {
+            session.answer_while_working(|session| {
+                rename_session(session, beside.stored, &name);
+            });
+            sessions_screen::read_sessions_screen(session, Instant::now());
+        }
+        // The question answered, so the turn is stopped as its stop key stops it, and what was
+        // asked waits for the turn to end (SCREEN-15).
+        Action::SessionsScreen(crate::sessions_screen::Effect::StopTurnThen(then)) => {
+            session.hold_for_the_end_of_the_turn(*then);
+            keys::stop_what_is_running(session, cancel);
+        }
+        // Opening, copying and beginning a session end this one, so the question is put before the
+        // turn is touched (SCREEN-15).
+        Action::SessionsScreen(effect) => {
+            sessions_screen::ask_to_stop_the_turn(session, beside.root, effect)
         }
         Action::ChooseTheme => open_theme_picker(session),
         Action::Aside(question, pasted, attached) => session.answer_while_working(|session| {
@@ -783,6 +813,11 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
     // that does nothing at all reads as one that was not understood.
     if line.trim() == OUTPUTS_COMMAND {
         return open_outputs(session);
+    }
+    // Opens the Sessions screen, as Left over an empty box does (SCREEN-1). Nothing the person
+    // typed after the word reaches it, and nothing is sent.
+    if line.trim() == SESSIONS_COMMAND {
+        return Action::OpenCenter;
     }
     if line.trim() == PANEL_COMMAND {
         session.toggle_panel();
@@ -1249,6 +1284,9 @@ fn pump_terminal(
     }
     // Whether or not anything arrived: the step is owed to a pointer that stayed where it was.
     session.scroll_toward_the_pointer(Instant::now());
+    // And the list of sessions, if the Sessions screen is open over the work: nobody presses a key for a
+    // session elsewhere to change (SCREEN-1).
+    sessions_screen::read_sessions_screen_if_due(session, Instant::now());
     Ok(())
 }
 
@@ -1742,7 +1780,7 @@ pub enum Start {
     /// A new session with this text put in the box and not sent, and the sentence that says where
     /// it started where that is not where a link asked (LINK-4).
     Prefilling(String, Option<String>),
-    /// Ask which of this directory's sessions to pick up, if there are any.
+    /// A new session with the Sessions screen open over it, to pick one up (`--resume`).
     Choose,
     /// The same, opened for the sessions linked to one pull request, given by number or address.
     ChooseFromPr(String),
@@ -1765,6 +1803,31 @@ pub enum Ended {
     /// record to resume is held by another process, for this reason. The caller prints it after the
     /// terminal is handed back, so it stays on the screen.
     Refused(String),
+    /// The person opened a task in the Sessions screen that this process cannot carry on in:
+    /// a background process to join, or a record of another directory to resume, copy or begin a
+    /// session in (SCREEN-8). The caller does it once the terminal is handed back.
+    Open(Elsewhere),
+}
+
+/// Where the Sessions screen sent the person, and how.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Elsewhere {
+    /// The directory the session works in, which the new process starts in.
+    pub directory: String,
+    pub how: How,
+}
+
+/// What is done in the directory of an [`Elsewhere`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum How {
+    /// Join the background process running the session with this id (BG-9).
+    Attach(String),
+    /// Resume the record with this id, as `--resume` does.
+    Resume(String),
+    /// Copy the record with this id and carry on in the copy, as `--fork` does.
+    Fork(String),
+    /// Begin a session there.
+    Fresh,
 }
 
 /// What `/resume` leaves for the loop's caller to start the next session with.
@@ -1807,8 +1870,6 @@ pub fn run(
     // terminal is taken.
     let early = bravebot_config::Settings::load();
     let mouse = early.tui_mouse() != Some(false);
-    // The list of sessions `--resume` opens runs before there is a session to read the step from.
-    let wheel = crate::state::wheel_rows_named(early.wheel_rows());
     let mut stdout = io::stdout();
     take_over_terminal(&mut stdout, mouse)?;
     // After the takeover, which has finished asking about the background, and before the first
@@ -1826,23 +1887,9 @@ pub fn run(
         }
     };
 
-    // Asked before the session begins, so what it starts with is settled before anything is
-    // drawn for it. Choosing nothing is an ordinary session rather than an error.
-    let start = match start {
-        choosing @ (Start::Choose | Start::ChooseFromPr(_)) => {
-            let from_pr = match &choosing {
-                Start::ChooseFromPr(wanted) => Some(wanted.as_str()),
-                _ => None,
-            };
-            match crate::resume::choose(&mut terminal, workspace.root(), from_pr, wheel) {
-                crate::resume::Choice::Resume(record) => Some(Start::Resuming(record)),
-                crate::resume::Choice::Fresh => Some(Start::Fresh),
-                // Leaving at the picker starts nothing. The terminal is still put back below.
-                crate::resume::Choice::Quit => None,
-            }
-        }
-        chosen => Some(chosen),
-    };
+    // `--resume` and `--from-pr` open the Sessions screen over an ordinary new session, once it has
+    // begun, so leaving the screen is an ordinary session rather than nothing.
+    let start = Some(start);
 
     let result = match start {
         // The picker refuses Enter on one of these, and `--resume` refuses it too. If a record
@@ -2281,6 +2328,7 @@ fn adopt_settings(
     // line's switch is read here and nowhere else in the interface.
     session.adopt_vetting(bravebot_core::vetting::asked_for(), settings.auto_vetting());
     session.adopt_keybindings(settings.keybindings());
+    session.adopt_sessions_keys(settings.sessions_keys());
     // And how far the wheel moves the view, for the reason the chords are read here: a figure read
     // once at startup describes the session, and a terminal's own idea of a notch does not change
     // under it.
@@ -2404,6 +2452,12 @@ fn begin_session(
     };
     let prefill = match &start {
         Start::Prefilling(text, note) => Some((text.clone(), note.clone())),
+        _ => None,
+    };
+    // Whether the Sessions screen opens over the new session, and for which pull request.
+    let choosing = match &start {
+        Start::Choose => Some(None),
+        Start::ChooseFromPr(wanted) => Some(Some(wanted.clone())),
         _ => None,
     };
 
@@ -2589,6 +2643,16 @@ fn begin_session(
             session.note(note);
         }
         session.prefill_from_link(&text);
+    }
+
+    if let Some(from_pr) = choosing {
+        sessions_screen::open_sessions_screen(
+            &mut session,
+            stored.id(),
+            workspace.root(),
+            from_pr.as_deref(),
+            true,
+        );
     }
 
     let run_settings = RunSettings::from_settings(&settings);
@@ -2799,25 +2863,43 @@ fn event_loop(
         // arrives would sit there until somebody typed something unrelated. It becomes an
         // ordinary submission, because that is what it is: the line the person typed at `/loop`,
         // sent again.
-        let action = match session.loop_tick() {
+        //
+        // While the Sessions screen is open the session starts nothing of its own: a loop's
+        // tick, a watch and the queue wait until it is left (SCREEN-1). Its list is read again on a
+        // timer, because nobody presses a key for a session elsewhere to change.
+        let showing_sessions = session.showing_sessions();
+        if showing_sessions
+            && sessions_screen::read_sessions_screen_if_due(&mut session, Instant::now())
+        {
+            needs_draw = true;
+        }
+        let action = match (!showing_sessions).then(|| session.loop_tick()).flatten() {
             Some(prompt) => Action::Submit(prompt),
             // Then the watches, looked at here for the same reason and in the same pass: a
             // filesystem change is the one event in this program that nobody presses a key for.
             // Only one of the two can produce a turn, and a session holds only one kind at a
             // time, so the order between them decides nothing.
-            None => match session
-                .watch_fired(Instant::now(), |path, under| workspace.look(path, under))
+            None => match (!showing_sessions)
+                .then(|| {
+                    session.watch_fired(Instant::now(), |path, under| workspace.look(path, under))
+                })
+                .flatten()
             {
                 Some(prompt) => Action::Submit(prompt),
                 // Then what the queue is holding, before the interface settles down to wait, for
                 // the reason a tick is looked at here.
                 // Then a click on a path that has waited to see whether it was the first of a
                 // double click, which nobody is going to press anything to carry out (MOUSE-42).
-                None => match queued_or_recap(&mut session, Instant::now()).or_else(|| {
-                    session
-                        .take_the_click_due(Instant::now())
-                        .map(Action::Preview)
-                }) {
+                None => match (!showing_sessions)
+                    .then(|| {
+                        queued_or_recap(&mut session, Instant::now()).or_else(|| {
+                            session
+                                .take_the_click_due(Instant::now())
+                                .map(Action::Preview)
+                        })
+                    })
+                    .flatten()
+                {
                     Some(action) => action,
                     None => {
                         if a_countdown_is_owed_a_frame(
@@ -2847,6 +2929,10 @@ fn event_loop(
                         // And until a click that waits is due.
                         if let Some(due) = session.the_click_due_in(Instant::now()) {
                             wait = wait.min(due);
+                        }
+                        // And until the Sessions screen's list is to be read again (SCREEN-2).
+                        if let Some(sessions_screen) = session.sessions_screen() {
+                            wait = wait.min(sessions_screen.due_in(Instant::now()));
                         }
                         // Through the reader rather than the terminal, so a run is seen whole.
                         if !input::poll(wait)? {
@@ -2954,7 +3040,14 @@ fn event_loop(
             }
             Action::Branch(name) => held.branch(&name),
             Action::Resume(typed) => {
-                if let Some(ended) = held.resume(terminal, servers, switch, &typed) {
+                if let Some(ended) = held.resume(servers, switch, &typed) {
+                    return Ok(ended);
+                }
+            }
+            Action::OpenCenter => held.open_sessions_screen(),
+            Action::SessionsScreen(effect) => {
+                if let Some(ended) = held.sessions_screen_effect(terminal, servers, switch, effect)
+                {
                     return Ok(ended);
                 }
             }
@@ -3005,6 +3098,14 @@ fn event_loop(
             Action::Cancel | Action::SendNow | Action::None | Action::Redraw => {}
             // Settled into a `Submit` or a note ahead of this match.
             Action::Address(..) => {}
+        }
+        // What the person chose over a running turn, and answered `y` to stopping it for, is
+        // carried out now that the turn has ended and its record is written (SCREEN-15).
+        if let Some(effect) = held.session.take_held_for_the_end_of_the_turn() {
+            needs_draw = true;
+            if let Some(ended) = held.sessions_screen_effect(terminal, servers, switch, effect) {
+                return Ok(ended);
+            }
         }
     }
 }
@@ -27881,6 +27982,7 @@ mod tests {
                 RENAME_COMMAND,
                 REQUEST_COMMAND,
                 SANDBOX_COMMAND,
+                SESSIONS_COMMAND,
                 STATUS_COMMAND,
                 STYLE_COMMAND,
                 THEME_COMMAND,
@@ -28275,6 +28377,39 @@ mod tests {
             .iter()
             .map(|queued| queued.prompt.as_str())
             .collect()
+    }
+
+    /// SCREEN-1. The Sessions screen opens over a turn that is running, by the key and by the command, and
+    /// the turn goes on: it is still working, nothing waits, and nothing was said into the transcript.
+    #[test]
+    fn the_sessions_screen_opens_over_a_running_turn_and_leaves_it_running() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        for (line, send) in [
+            ("", key(KeyCode::Left)),
+            (SESSIONS_COMMAND, key(KeyCode::Enter)),
+        ] {
+            let mut session = a_turn_running_on("first");
+            let said = said_under_the_turn(&session).len();
+
+            nothing_beside(|beside| typed_during_a_turn(&mut session, line, send, beside));
+
+            assert!(
+                session.showing_sessions(),
+                "{line:?} then {send:?} did not open the Sessions screen"
+            );
+            assert!(
+                session.a_turn_is_running(),
+                "opening the Sessions screen ended the turn"
+            );
+            assert!(session.queued.is_empty(), "the opening waited");
+            assert_eq!(
+                said_under_the_turn(&session).len(),
+                said,
+                "the opening said something"
+            );
+        }
     }
 
     /// `/rename` mid-turn names the session as it is typed. The turn was handed only the record's
@@ -31411,8 +31546,11 @@ mod tests {
         for command in commands() {
             let line = match command.mid_turn {
                 MidTurn::Waits => continue,
-                // The bare word opens a picker, which is a mode of the session and says nothing.
-                _ if [CONFIG_COMMAND, MODEL_COMMAND].contains(&command.name) => continue,
+                // The bare word opens a picker or the Sessions screen, which are modes of the session and
+                // say nothing.
+                _ if [CONFIG_COMMAND, MODEL_COMMAND, SESSIONS_COMMAND].contains(&command.name) => {
+                    continue;
+                }
                 _ if [THEME_COMMAND, EFFORT_COMMAND].contains(&command.name) => {
                     format!("{} no-such-name", command.name)
                 }
@@ -42805,6 +42943,7 @@ mod tests {
     mod hints;
     mod history_search;
     mod hover;
+    mod interrupt;
     mod menu;
     mod pickers;
     mod popups;
@@ -42818,6 +42957,10 @@ mod tests {
 #[cfg(test)]
 #[path = "undo_tests.rs"]
 mod undo_tests;
+
+#[cfg(test)]
+#[path = "sessions_screen_tests.rs"]
+mod sessions_screen_tests;
 
 #[cfg(all(test, unix))]
 #[path = "chatgpt_failure_tests.rs"]

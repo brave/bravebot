@@ -514,6 +514,24 @@ impl Session {
         self.bindings = crate::keybindings::Keybindings::from_map(configured);
     }
 
+    /// Adopt the keys of the Sessions screen from settings (SCREEN-14). What a settings file asked
+    /// for and could not have is kept, to be said when the screen opens.
+    pub fn adopt_sessions_keys(&mut self, configured: &std::collections::BTreeMap<String, String>) {
+        let (keys, refused) = crate::sessions_keys::SessionsKeys::from_map(configured);
+        self.sessions_keys = keys;
+        self.sessions_keys_refused = refused;
+    }
+
+    /// The keys the Sessions screen answers in this session, and what was refused.
+    pub fn sessions_keys(
+        &self,
+    ) -> (
+        &crate::sessions_keys::SessionsKeys,
+        &[crate::sessions_keys::Refused],
+    ) {
+        (&self.sessions_keys, &self.sessions_keys_refused)
+    }
+
     /// The active keybindings for this session.
     pub fn bindings(&self) -> &crate::keybindings::Keybindings {
         &self.bindings

@@ -46,6 +46,8 @@ yet builds either: the checkouts delegates are given, `checkouts/`, which hold a
 written readable by their owner alone and are read through the trust map.
 [background-sessions.md](background-sessions.md) proposes a third, which nothing yet builds: the
 roster of sessions running in the background, `jobs/` ([BG-4](background-sessions.md#BG-4)).
+The Sessions screen keeps three small files there, the grouping of its list, the sessions pinned
+in it and the sessions archived from it, each holding only ids and words ([SCREEN-11](sessions-screen.md#SCREEN-11)).
 
 What each of those files means belongs to the spec for that subject:
 [sessions.md](sessions.md) for a session record, [tools/run.md](tools/run.md) for the remembered

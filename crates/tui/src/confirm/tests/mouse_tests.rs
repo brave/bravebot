@@ -283,24 +283,8 @@ fn a_question_with_rows() -> bravebot_core::ask::Asking {
     }
 }
 
-fn a_session(id: &str, title: &str) -> bravebot_session::sessions::Summary {
-    bravebot_session::sessions::Summary {
-        id: id.into(),
-        title: title.into(),
-        directory: "/work".into(),
-        front: Some("terminal".into()),
-        branch: None,
-        issue: None,
-        pull_request: None,
-        handed_off_from: None,
-        updated: 100,
-        bytes: 1024,
-        manifest: false,
-    }
-}
-
-/// The questions that are not a reply to a turn: put by a command, at startup, at a credential
-/// read, or beside a list of sessions.
+/// The questions that are not a reply to a turn: put by a command, at startup or at a credential
+/// read.
 fn other_questions() -> Vec<Row> {
     let start = row("start a server", vec![interrupt()], |terminal| {
         let declaration = bravebot_config::mcp::Declaration::http("https://example.com/mcp".into())
@@ -361,27 +345,7 @@ fn other_questions() -> Vec<Row> {
             )
         },
     );
-    let delete = Row {
-        before: vec![key(KeyCode::Delete)],
-        ..row(
-            "delete a session's record",
-            vec![key(KeyCode::Char('y')), key(KeyCode::Esc)],
-            |terminal| {
-                let picker =
-                    crate::resume::Picker::new(vec![a_session("abcdef12", "notes")], "/work");
-                let deleted = std::cell::RefCell::new(Vec::new());
-                let choice =
-                    crate::resume::converse(terminal, Path::new("/work"), picker, 3, |_, id| {
-                        deleted
-                            .borrow_mut()
-                            .push((id.to_string(), crate::input::script::unread()));
-                        Ok(())
-                    });
-                format!("{choice:?} {:?}", deleted.into_inner())
-            },
-        )
-    };
-    vec![start, remove, trust, named, granted, credential, delete]
+    vec![start, remove, trust, named, granted, credential]
 }
 
 /// Every question there is, one row each.
@@ -419,7 +383,7 @@ fn no_pointer_event_answers_any_question() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// The questions that are read in `ask.rs`, `trust_prompt.rs`, `hidden.rs` and `resume.rs` and not by
+/// The questions that are read in `ask.rs`, `trust_prompt.rs` and `hidden.rs` and not by
 /// the loops of `confirm.rs`, by the start of the name of the row.
 const READ_IN_THEIR_OWN_FILES: &[&str] = &[
     "a question the planner puts",
@@ -602,11 +566,6 @@ const READERS: &[(&str, usize, &str)] = &[
         "the three questions asked before a session",
     ),
     ("hidden.rs", 1, "the credential read"),
-    (
-        "resume.rs",
-        1,
-        "a list of sessions, and the question of deleting one",
-    ),
     ("list_picker.rs", 1, "a list to pick from, not a question"),
     ("theme_prompt.rs", 1, "a list to pick from, not a question"),
     ("sessions_view.rs", 2, "a list to read, not a question"),

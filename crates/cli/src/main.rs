@@ -27,6 +27,7 @@ mod permissions_check;
 mod plain;
 mod progress;
 mod push_identity;
+mod reopen;
 mod sandbox_check;
 mod session_delete;
 mod session_import;
@@ -2366,6 +2367,9 @@ fn interactive(
         // the session never took a turn, and a one-shot run exits with the same status for the
         // same name (CLI-17).
         Ok(bravebot_tui::app::Ended::Refused(refused)) => fail(Ending::Argument, refused),
+        // After the terminal is handed back, like the rest, so the session it opens has the terminal
+        // to itself (SCREEN-8).
+        Ok(bravebot_tui::app::Ended::Open(opening)) => reopen::open(&opening),
         Err(err) => fail(Ending::Failed, t!(cli_interface_problem, problem = err)),
     }
 }

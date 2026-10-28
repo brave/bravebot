@@ -636,6 +636,10 @@ for delegates and asides, and does nothing where only commands have run. Once a 
 has run, the row beneath the box names Alt-L, `/outputs` and how many rows they open, beside the key's own
 count. `outputs` is one of the [chords you can move](#moving-a-key).
 
+**Left, with nothing typed in the box, or `/sessions`, opens the [Sessions screen](./sessions-screen.md)**:
+one list of every session on the machine, in every project, with what each is doing. It opens at the
+prompt and while a turn runs, and Escape puts it away. Left is the caret's as soon as anything is typed.
+
 | Key | What it does |
 |---|---|
 | Ctrl-L | open the list of delegates and asides, and close the mode from either level |

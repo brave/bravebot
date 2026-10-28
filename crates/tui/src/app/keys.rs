@@ -151,6 +151,11 @@ pub enum Action {
     /// Leave this session for another of this directory's: the id typed, or empty for the picker.
     /// Needs the terminal, the record store and the loop's state, which the loop owns.
     Resume(String),
+    /// Open the Sessions screen over the plain prompt (SCREEN-1). Needs the record of the
+    /// session being run, the state directory and the roster, which the loop holds.
+    OpenCenter,
+    /// Carry out what the Sessions screen asked for beyond changing its own state (SCREEN-8).
+    SessionsScreen(crate::sessions_screen::Effect),
     /// Show, set or clear one of the session's links. Needs the session record, which the loop
     /// owns, and carries the argument unparsed, since what it says back goes in the transcript.
     Link(bravebot_session::sessions::Link, String),
@@ -365,6 +370,7 @@ pub(super) fn stops_the_turn(session: &Session, key: KeyEvent) -> bool {
 pub(super) fn stops_a_command(session: &Session, key: KeyEvent) -> bool {
     !session.scrolling()
         && session.watching().is_none()
+        && !session.showing_sessions()
         && !session.searching_history()
         && !session.files_open()
         && session.picking().is_none()
@@ -754,6 +760,29 @@ fn history_search_key(session: &mut Session, key: KeyEvent) -> Action {
 /// Two levels, and the key that leaves is read against the nearer one: from a delegate it goes
 /// back to the list, and from the list it closes. The chord that opened it and Ctrl-C leave the
 /// mode outright from either, because a person who wants out of a mode wants out of the mode.
+/// A key while the Sessions screen is open: the Sessions screen answers it, and what it asks for
+/// beyond its own state is handed on (SCREEN-1).
+pub(super) fn sessions_screen_key(session: &mut Session, key: KeyEvent) -> Action {
+    use crate::sessions_screen::Outcome;
+    let Some(sessions_screen) = session.sessions_screen_mut() else {
+        return Action::None;
+    };
+    match sessions_screen.key(key) {
+        Outcome::Nothing => Action::None,
+        Outcome::Redraw => Action::Redraw,
+        Outcome::Close => {
+            session.close_sessions_screen();
+            Action::Redraw
+        }
+        // What changes nothing the session is running is done here, in whichever loop has the keys.
+        // What is left is for the loop that holds the record and the terminal.
+        Outcome::Effect(effect) => match super::sessions_screen::carry_out(session, effect) {
+            Some(left) => Action::SessionsScreen(left),
+            None => Action::Redraw,
+        },
+    }
+}
+
 pub(super) fn watching_key(session: &mut Session, key: KeyEvent) -> Action {
     // Ctrl alone: a settings file can give Ctrl-Alt-U to an action, and that is not the view's key.
     let ctrl = key.modifiers == KeyModifiers::CONTROL;
@@ -1005,6 +1034,9 @@ pub(super) fn claimed_by_a_mode(session: &mut Session, key: KeyEvent) -> Option<
     if session.files_open() {
         return Some(files_key(session, key));
     }
+    if session.showing_sessions() {
+        return Some(sessions_screen_key(session, key));
+    }
     if session.watching().is_some() {
         return Some(watching_key(session, key));
     }
@@ -1076,6 +1108,14 @@ pub fn handle_key(session: &mut Session, key: KeyEvent) -> Action {
     // the ones this answers are exactly the ones nothing else claims.
     if let Some(action) = change_history_scope(session, key) {
         return action;
+    }
+    // A press of Left with the box empty has nowhere to go in the line, so it goes to the sessions
+    // beside this one (SCREEN-1).
+    if key.code == KeyCode::Left
+        && key.modifiers.is_empty()
+        && session.left_opens_the_sessions_screen()
+    {
+        return Action::OpenCenter;
     }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
@@ -1601,6 +1641,14 @@ pub fn handle_key_while_working(session: &mut Session, key: KeyEvent) -> Action 
     if let Some(action) = change_history_scope(session, key) {
         return action;
     }
+    // Looking at the sessions beside this one sends nothing, so a running turn refuses nothing here
+    // either (SCREEN-1).
+    if key.code == KeyCode::Left
+        && key.modifiers.is_empty()
+        && session.left_opens_the_sessions_screen()
+    {
+        return Action::OpenCenter;
+    }
     if !session.bindings().claims(&key) && edit_line(session, key) {
         return Action::Redraw;
     }
@@ -2017,7 +2065,9 @@ fn carry_out_choice(session: &mut Session, choice: crate::state::Choice) -> Acti
 /// which is the same distance in each.
 fn wheel(session: &mut Session, mouse: MouseEvent, down: bool) -> Action {
     let rows = session.wheel_rows();
-    if session.scrolling() {
+    if let Some(sessions_screen) = session.sessions_screen_mut() {
+        sessions_screen.wheel(usize::from(rows), down);
+    } else if session.scrolling() {
         session.take_the_scroller_count();
         match down {
             true => session.scroller_on(rows),
@@ -2072,7 +2122,10 @@ fn release(session: &mut Session, mouse: MouseEvent) -> Action {
 /// the first was a click on it or the start of a double click (MOUSE-42).
 fn click_acted_on(session: &Session, hit: Hit, action: &Action) -> bool {
     *action != Action::Copy
-        && !matches!(hit, Hit::Text { .. } | Hit::Item(_))
+        && !matches!(
+            hit,
+            Hit::Text { .. } | Hit::Item(_) | Hit::SessionsScreen(_)
+        )
         && session.pending_click.is_none()
 }
 
@@ -2087,6 +2140,14 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         return match presses {
             1 | 2 => click_an_item(session, index, presses == 2),
             _ => Action::Copy,
+        };
+    }
+    // The same for a row of the Sessions screen: the first click puts the cursor on it and the
+    // second opens it, as Enter does (SCREEN-12).
+    if let Hit::SessionsScreen(click) = target.hit {
+        return match presses {
+            1 | 2 => click_in_the_sessions_screen(session, click, presses == 2),
+            _ => Action::None,
         };
     }
     if presses != 1 {
@@ -2133,13 +2194,46 @@ fn click_on(session: &mut Session, target: Target, presses: u8, mouse: MouseEven
         | Hit::Match(_)
         | Hit::Item(_)
         | Hit::Words(_)
-        | Hit::Wheel(_) => false,
+        | Hit::Wheel(_)
+        | Hit::SessionsScreen(_) => false,
     };
     if !acted {
         return Action::Copy;
     }
     session.clear_selection();
     Action::Redraw
+}
+
+/// What a release does that ends a click on a part of the Sessions screen: a tab is chosen, and
+/// a row or "Show more" takes the cursor, and is opened by the second click of a double click
+/// (SCREEN-12).
+fn click_in_the_sessions_screen(
+    session: &mut Session,
+    click: crate::sessions_screen::Click,
+    second: bool,
+) -> Action {
+    use crate::sessions_screen::{Click, Outcome};
+    session.clear_selection();
+    let Some(sessions_screen) = session.sessions_screen_mut() else {
+        return Action::None;
+    };
+    // A second press is one only where it is on what the first pointed at, and not on whatever a
+    // turn of the wheel or a read of the list has since put at the cell (MOUSE-15).
+    let second = sessions_screen.press(click) && second;
+    let outcome = match (click, second) {
+        (Click::Tab(_), _) | (_, false) => return Action::Redraw,
+        (_, true) => sessions_screen.open(),
+    };
+    match outcome {
+        // What changes nothing the session is running is done here, as the key path does it, so
+        // that "Show more" loads more whichever loop has the mouse. What is left is for the loop that
+        // holds the record and the terminal.
+        Outcome::Effect(effect) => match super::sessions_screen::carry_out(session, effect) {
+            Some(left) => Action::SessionsScreen(left),
+            None => Action::Redraw,
+        },
+        _ => Action::Redraw,
+    }
 }
 
 /// What a release does that ends the first or the second click of a double click on a row of a list
@@ -2263,7 +2357,8 @@ fn click_shortcut(session: &mut Session, hit: Hit) -> Action {
         | Hit::Text { .. }
         | Hit::Link(_)
         | Hit::Call(_)
-        | Hit::Delegate(_) => Action::None,
+        | Hit::Delegate(_)
+        | Hit::SessionsScreen(_) => Action::None,
     }
 }
 

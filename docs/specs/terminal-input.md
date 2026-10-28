@@ -2266,6 +2266,9 @@ Shift is spared because Shift-Tab arrives carrying it.
 readline editing keys (such as `ctrl-u` or `alt-b`), the action answers rather than the line
 editing arm. In vi's normal mode, `/` translates to the chord configured for history search.
 
+The keys of the Sessions screen are a table of their own, `sessionsKeys`, and a bare character is
+on offer there ([SCREEN-14](sessions-screen.md#SCREEN-14)).
+
 **The screen names the chord that answers.** `?` lists the keys from the one place they are written
 down (INPUT-13), and the rows above are asked of the chord in force rather than spelled out
 there. So is every other line that names one: the row saying what brings a stashed line back

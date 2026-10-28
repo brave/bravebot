@@ -198,6 +198,7 @@ const READ_KEYS: &[&str] = &[
     "run",
     SANDBOX_BLOCK,
     "search",
+    "sessionsKeys",
     "suggestions",
     "style",
     "summaryModel",
@@ -578,6 +579,8 @@ pub struct Settings {
     /// A checkout's file that stated one of those names, and which, for `doctor`. Names only.
     network_ignored: Vec<(PathBuf, String)>,
     keybindings: BTreeMap<String, String>,
+    /// The `sessionsKeys` block: a key of the Sessions screen by the action it is to answer.
+    sessions_keys: BTreeMap<String, String>,
     attribution: Attribution,
     search: SearchCaps,
     /// What `run.maxOutput` said, if it said anything.
@@ -1608,6 +1611,7 @@ impl Settings {
             network_by: BTreeMap::new(),
             network_ignored: Vec::new(),
             keybindings: keybindings_block(root),
+            sessions_keys: strings_block(root, "sessionsKeys"),
             attribution: attribution_block(root),
             search: search_caps(root),
             run_output: run_output_cap(root),
@@ -1665,6 +1669,13 @@ impl Settings {
             language: word(root, "language"),
             language_ignored: Vec::new(),
         }
+    }
+
+    /// What the settings in force say about the keys of the Sessions screen.
+    ///
+    /// Maps an action name (e.g. "stop", "archive") to the key it is to answer (e.g. "ctrl-x").
+    pub fn sessions_keys(&self) -> &BTreeMap<String, String> {
+        &self.sessions_keys
     }
 
     /// What the settings in force say about keybindings.
@@ -2326,6 +2337,7 @@ impl Settings {
             && self.sandbox_unreadable.is_empty()
             && !self.sandbox_hold_back_temporary
             && self.keybindings.is_empty()
+            && self.sessions_keys.is_empty()
             && self.attribution.is_empty()
             && self.search.is_empty()
             && self.run_output.is_none()
@@ -2648,6 +2660,7 @@ impl Settings {
                     .then_some("sandbox.mode"),
             )
             .chain((!self.keybindings.is_empty()).then_some("keybindings"))
+            .chain((!self.sessions_keys.is_empty()).then_some("sessionsKeys"))
             .chain(
                 self.attribution
                     .commit
@@ -3243,6 +3256,7 @@ fn merge(document: &mut Document, over: serde_json::Map<String, serde_json::Valu
                     || key == "provider"
                     || key == "attribution"
                     || key == "keybindings"
+                    || key == "sessionsKeys"
                     || key == "search"
                     || key == "download" =>
             {
@@ -3485,7 +3499,16 @@ fn attribution_block(root: &serde_json::Map<String, serde_json::Value>) -> Attri
 fn keybindings_block(
     root: &serde_json::Map<String, serde_json::Value>,
 ) -> BTreeMap<String, String> {
-    let Some(serde_json::Value::Object(block)) = root.get("keybindings") else {
+    strings_block(root, "keybindings")
+}
+
+/// A block of names and the strings they are given, read the way `keybindings` is: an entry that is
+/// not a string is dropped, and a name is lowercased.
+fn strings_block(
+    root: &serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) -> BTreeMap<String, String> {
+    let Some(serde_json::Value::Object(block)) = root.get(name) else {
         return BTreeMap::new();
     };
     block
@@ -9230,6 +9253,33 @@ mod tests {
             settings.keybindings().get("editor"),
             Some(&"alt-e".to_string())
         );
+    }
+
+    /// SCREEN-14. The `sessionsKeys` block is read as the keybindings are, an entry that is not a
+    /// string is dropped, and it layers per action so that a file moving one key says nothing about
+    /// the others.
+    #[test]
+    fn a_sessions_keys_block_is_read_and_layers_per_action() {
+        let settings =
+            Settings::parse(r#"{"sessionsKeys": {"Stop": " z ", "archive": 7, "pin": ""}}"#);
+        assert_eq!(settings.sessions_keys().get("stop"), Some(&"z".to_string()));
+        assert_eq!(settings.sessions_keys().get("archive"), None);
+        assert_eq!(settings.sessions_keys().get("pin"), None);
+
+        let settings = Layers::new("sessions-keys-override")
+            .global(r#"{"sessionsKeys": {"stop": "z", "archive": "ctrl-e"}}"#)
+            .project(r#"{"sessionsKeys": {"stop": "ctrl-x"}}"#)
+            .read();
+        assert_eq!(
+            settings.sessions_keys().get("stop"),
+            Some(&"ctrl-x".to_string())
+        );
+        assert_eq!(
+            settings.sessions_keys().get("archive"),
+            Some(&"ctrl-e".to_string()),
+            "a file moving one key replaced the block"
+        );
+        assert!(!settings.is_empty());
     }
 
     /// Only the two words the providers accept name a lifetime. Anything else is absence, so a
