@@ -2040,11 +2040,11 @@ saved under. `/sandbox` alone says the mode in force and the flag or file that c
 uses. `/sandbox strict`, `/sandbox read-only`, `/sandbox workspace-write` and `/sandbox off` set the mode for the rest of the
 process, and only a person's typed word does ([CMD-1](commands.md#CMD-1)): no tool, skill, hook or
 `AGENTS.md` line sets it, and the planner is told the mode in force and nothing about the command.
-A mode named while a turn runs is set as it is typed, and `off` waits for the turn to end because it asks first ([CMD-8](commands.md#CMD-8)). A turn is built with the mode in force when it begins, so a turn's `run` description, its
+A mode named while a turn runs is set as it is typed, `off` included ([CMD-8](commands.md#CMD-8)). A turn is built with the mode in force when it begins, so a turn's `run` description, its
 failure sentence, its `scopes` and `request_path` refusals and the profile its programs start under
 all come from one mode, every stage of the running turn keeps it, and the change applies from the next turn; a delegate spawned by a later turn runs
-under the new mode. A move to `off` asks first, saying that programs then start with no profile, and
-a no keeps the mode. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
+under the new mode. A move to `off` is made when it is typed, like a move to any other mode, with
+no question; the reply says that programs then start with no profile. A background job keeps the profile it started under ([RUN-15](tools/run.md#RUN-15)), so a
 move to `read-only` while jobs are running says which ones keep the earlier mode, by the names `/jobs`
 lists, and that `/jobs stop` ends them; with none running it says nothing of jobs
 `verified-by: bravebot_tui::sandbox_command::a_move_to_read_only_names_the_jobs_that_keep_the_earlier_mode`.
@@ -2208,17 +2208,15 @@ directory, and the profile refuses it elsewhere.
 `verified-by: bravebot_ui_bridge::sandbox_mode::a_chosen_mode_is_what_the_next_turns_program_is_held_to`
 `verified-by: bravebot_tui::sandbox_command::a_named_mode_is_the_mode_the_next_turn_is_built_with`
 `verified-by: bravebot_tui::sandbox_command::a_session_started_from_the_held_choice_keeps_the_commands_mode`
-`verified-by: bravebot_tui::sandbox_command::a_move_to_off_asks_and_anything_but_a_yes_keeps_the_mode`
-`verified-by: bravebot_tui::sandbox_command::the_row_the_cursor_starts_on_keeps_the_mode`
-`verified-by: bravebot_tui::sandbox_command::the_managed_floor_refuses_a_looser_mode_naming_the_file_and_asks_nothing`
+`verified-by: bravebot_tui::sandbox_command::a_move_to_off_is_made_when_typed_and_asks_nothing`
+`verified-by: bravebot_tui::sandbox_command::the_managed_floor_refuses_a_looser_mode_naming_the_file`
 `verified-by: bravebot_tui::sandbox_command::a_refusal_says_which_of_reading_and_writing_the_mode_does_more_of`
 `verified-by: bravebot_agent::sandbox_reason::each_way_a_mode_is_looser_than_the_pin_has_its_own_sentence`
 `verified-by: bravebot_tui::sandbox_command::a_word_that_is_not_a_mode_changes_nothing_and_the_bare_word_only_reports`
 `verified-by: bravebot_tui::sandbox_command::the_report_names_what_chose_the_mode`
 `verified-by: bravebot_tui::app::the_sandbox_command_carries_its_word_unparsed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
-`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_waits_and_says_why`
-`verified-by: bravebot_tui::ask::a_question_the_driver_puts_is_not_titled_as_the_agents`
+`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
 
 <a id="SANDBOX-23"></a>
 ### SANDBOX-23: reach a person remembered for a command is attached to that command's stage, and nothing else makes it

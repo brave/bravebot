@@ -1,5 +1,6 @@
 ## Unreleased
 
+ - Changed `/sandbox off` to turn the sandbox off as soon as it is typed. It no longer asks first, and while a turn runs it is no longer held until the turn ends. The turn running keeps the mode it began with, and the next turn runs with no profile.
  - Changed the `spawn_processor` description to say that only later `spawn_processor` calls are refused once the conversation holds private content, and that `run`, `read_output` and the file tools keep working. ([#3333](https://github.com/brave/bravebot/issues/3333))
  - Changed `list_files` and `search` to say how many symbolic links they did not enter, as a number with no names, so a directory made only of links no longer lists as empty. `load_skill` names the directory a project skill's link lands on inside the project. ([#3334](https://github.com/brave/bravebot/issues/3334))
  - Changed `run` to accept and ignore `scopes` and `unconfined` where the line starts with no sandbox anyway, under `--sandbox off` and in a turn that confines none of its runs. They were refused with `this session does not accept a request for a credential scope or toolchain list`. A malformed value is still an error, and an untrusted workspace and the other sandbox modes refuse as before.

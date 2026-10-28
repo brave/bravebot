@@ -15,9 +15,9 @@ that leaves out of what was shown, and how long it lasts. The spec's `kept_in` l
 question the agent's confirmer can ask, every remembered set the front ends hold in `Answers` and
 every question the terminal's trust prompts ask, each with the row it lands in. `make check-security`
 already fails where one of those has no row, where a cell is empty, and where a named test does not
-exist. It reads nothing else: a question asked another way, such as the one `/sandbox off` puts, has
-a row only because somebody wrote it, so a kept answer with no row is a finding here. Nor can the
-check read whether the key the code builds holds what the row says. That is this lane.
+exist. It reads nothing else: a question asked another way has a row only because somebody wrote
+it, so a kept answer with no row is a finding here. Nor can the check read whether the key the code
+builds holds what the row says. That is this lane.
 
 ### Where to start
 
