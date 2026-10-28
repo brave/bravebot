@@ -85,6 +85,10 @@ esac
 # key. BRAVE_AI_CHAT_PREMIUM_ENDPOINT, exported here, replaces the compiled-in
 # host with another Brave one; a host that is not Brave's is never sent the key.
 
+# Optional. This is the model requested when nothing else says, and the value
+# below is the one already built in, so there is nothing to set unless a
+# different default is wanted.
+#
 # Model to request from POST /v1/chat/completions when the user has not chosen
 # one. `/model` in the interface picks from what GET /v1/models lists and that
 # choice wins, so this is the fallback rather than the setting. It is the default
@@ -106,7 +110,7 @@ esac
 # selections; once spent, requesting a premium model returns 403 error 40301. Free
 # models such as llama-3-8b-instruct always work. GET /v1/models reports which is
 # which in an "access" field when called with Brave-Product: bravebot.
-export BRAVEBOT_DEFAULT_MODEL="automatic-bravebot"
+#export BRAVEBOT_DEFAULT_MODEL="automatic-bravebot"
 
 # ---------------------------------------------------------------------------
 # Crash reports. The submission URL of the Backtrace project a release build
