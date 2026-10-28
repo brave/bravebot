@@ -60,6 +60,8 @@ Each rule reads only bravebot's own records: the work record, exit statuses, the
 `verified-by: bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
 `verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`
+`verified-by: bravebot_agent::turn::a_typed_checkouts_apply_asks_about_each_recorded_file`
+`verified-by: bravebot_agent::turn::a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status`
 `verified-by: bravebot_agent::open_loops::a_file_written_and_committed_is_not_uncommitted`
 `verified-by: bravebot_agent::open_loops::a_name_that_is_not_utf8_is_told_apart_from_its_lossy_lookalike`
 `verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`

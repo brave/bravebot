@@ -8287,12 +8287,14 @@ mod tests {
             last_command_failed: true,
         };
         handle.set_work(work);
-        let mut written = vec![root.join("out.txt")];
         // A name that is not UTF-8 is kept as its bytes, not its lossy spelling (PATH-001).
         #[cfg(unix)]
-        written.push(
+        let written = vec![
+            root.join("out.txt"),
             root.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"tool-\xff")),
-        );
+        ];
+        #[cfg(not(unix))]
+        let written = vec![root.join("out.txt")];
         handle.set_written(&written);
         save_a_turn_session(&mut handle);
 
