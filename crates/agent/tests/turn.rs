@@ -68672,6 +68672,7 @@ fn a_yes_to_a_path_lets_a_program_write_it_and_a_read_only_yes_does_not() {
 /// TOOL-4, PATHREQ-2: the sentence the planner reads names the path as it typed it, so a name a link
 /// lands on, which whoever made the link chose, is not in the driver's own words. The grant and the
 /// prompt stay on where the link lands.
+#[cfg(unix)]
 #[test]
 fn an_approved_path_is_worded_as_typed_and_not_as_a_link_landed() {
     if cannot_confine_here() {
