@@ -23457,6 +23457,9 @@ impl AskedAboutRuns {
     }
 
     /// Runs `act` while the first run is being asked about.
+    ///
+    /// Unix only, like the tests that use it: they make a link.
+    #[cfg(unix)]
     fn doing_while_asked(mut self, act: impl FnOnce() + Send + 'static) -> Self {
         self.while_asked = Some(Box::new(act));
         self
