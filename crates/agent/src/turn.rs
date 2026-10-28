@@ -623,12 +623,49 @@ pub fn aside<S: Sink, R: Reporter>(
     watching: impl FnMut(&str),
     cancel: &Cancel,
 ) -> Result<crate::aside::Answered, crate::aside::AsideError> {
+    aside_sharing(
+        config,
+        egress,
+        session,
+        question,
+        model,
+        reporter,
+        sink,
+        bravebot_core::file_authority::FileAuthority::new(trust),
+        watching,
+        cancel,
+    )
+}
+
+/// [`aside`] over file decisions another policy is still making, for a question asked while a turn
+/// runs (CMD-8).
+///
+/// The authority is the turn's own, shared and not copied, so what the turn has decided about a
+/// path since the question was typed is what the question's policy reads, and a copy taken at
+/// typing time cannot go stale. The question holds `WebFetch` alone and reads no file, so it
+/// records no decision into the authority.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "aside_sharing takes aside's collaborators with the turn's file authority in place of a trust map"
+)]
+pub fn aside_sharing<S: Sink, R: Reporter>(
+    config: &Config,
+    egress: &Egress,
+    session: &crate::chatgpt::AccountSession,
+    question: crate::aside::Question,
+    model: Option<&str>,
+    reporter: &mut R,
+    sink: &mut S,
+    files: bravebot_core::file_authority::FileAuthority,
+    watching: impl FnMut(&str),
+    cancel: &Cancel,
+) -> Result<crate::aside::Answered, crate::aside::AsideError> {
     let mut routing = Routing::new();
     routing.insert_trusted("task", "answer a question asked beside the work");
 
     let capabilities = CapabilitySet::from_iter([Capability::WebFetch]);
     let mut policy = Policy::begin(routing, ReleasePlan::new(), capabilities, sink)?
-        .with_trust(trust)
+        .with_file_authority(files)
         .resuming(question.context());
 
     let mut subscription = discover_subscription(config, egress, model, reporter);

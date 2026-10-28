@@ -15,6 +15,9 @@ fr:agent-rule-approval-no-words
 fr:agent-rule-approval-refuse
 fr:agent-rule-approval-why
 fr:agent-rule-approval-yes-words
+fr:btw-no-files-beside-a-turn
+fr:btw-nothing-sent-yet
+fr:btw-one-at-a-time
 fr:chatgpt-use-by-asking
 fr:chatgpt-use-by-naming
 fr:command-lsp

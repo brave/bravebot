@@ -296,6 +296,17 @@ impl<T: Reporter + ?Sized> Reporter for Borrowed<'_, '_, T> {
         }
     }
 
+    fn wants_fork(&self) -> bool {
+        self.from.is_none() && self.lent.hold().wants_fork()
+    }
+
+    /// Only the turn's own exchange: a delegate's is a different conversation.
+    fn exchange_forked(&mut self, fork: crate::aside::Fork) {
+        if self.from.is_none() {
+            self.lent.hold().exchange_forked(fork);
+        }
+    }
+
     fn prompt_recorded(&mut self, at: usize) {
         // A delegate has its own conversation; its offsets do not describe the parent turn.
         if self.from.is_none() {

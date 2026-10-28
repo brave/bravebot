@@ -617,6 +617,8 @@ pub(super) fn run_turn_animated(
     // The worker shares file decisions so errors cannot return the pre-write map.
     let file_authority = bravebot_core::file_authority::FileAuthority::new(trust.clone());
     let task = task.with_file_authority(file_authority.clone());
+    // The same map, for a `/btw` typed beside the turn to read the decisions the turn is making.
+    session.set_turn_files(Some(file_authority.clone()));
     let retained = RetainedTurn {
         files: file_authority,
         programs: programs.clone(),
@@ -723,6 +725,7 @@ pub(super) fn run_turn_animated(
         session.keep_awake();
         // The rows of a model picker opened during the turn, taken as they arrive.
         settle_picking_during_a_turn(session);
+        settle_aside_beside_a_turn(session, &cancel);
         redraw(terminal, session)?;
 
         // Input is polled here rather than in the outer loop, which is blocked for the duration
@@ -1046,6 +1049,8 @@ pub(super) fn run_turn_animated(
         session.give_way_to_the_queue(Instant::now());
     }
 
+    end_aside_beside_a_turn(session);
+    session.set_turn_files(None);
     let finished = worker.join().unwrap_or_else(|_| {
         // A panicked turn is reported rather than propagated: the session survives. The
         // conversation does not, since the thread that held it is gone, and neither do the

@@ -256,6 +256,11 @@ cannot carry what it stands for: it is put back before the argument is taken, a 
 `/loop`, a marker the request can carry stays in it as it was typed and what it stands for goes with
 it, which is this rule rather than an exception to it.
 
+A file dropped on a `/btw` typed while a turn runs is refused and not carried, because reading it
+records a rule in the map the turn is answering into (CMD-8). That refusal is pinned by the test
+named below. The tests of a waiting line that carries a dropped file use `/manifest`, which still
+waits during a turn.
+
 **Why.** The argument is what the command acts on: a directory that becomes trusted, a name a
 session is stored under. A person is taken to have endorsed exactly the characters they typed, so
 exactly those characters have to arrive.
@@ -271,6 +276,7 @@ exactly those characters have to arrive.
 `verified-by: bravebot_tui::app::a_picture_a_command_line_named_is_carried_out_as_words_rather_than_as_its_marker`
 `verified-by: bravebot_tui::app::a_picture_dropped_onto_a_question_goes_with_it`
 `verified-by: bravebot_tui::app::a_file_dropped_onto_a_command_line_is_carried_out_as_its_name`
+`verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
 
 
 <a id="CMD-6"></a>
@@ -344,7 +350,7 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/btw <question>`, which asks over the exchange the turn last sent and holds nothing the turn holds; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
 | everything else | every other command, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
@@ -438,17 +444,28 @@ turn.
 
 Neither kind is offered to the turn in flight. Which lines are commands is CMD-2's rule and nothing
 narrower, so a sentence mentioning a command is a prompt mid-turn as it is at rest, and a word the
-table gives no argument is a prompt with anything after it. A compaction, an aside and the other
-loops that share the working status are not a turn, and every command typed during one waits. A
-click on a row of the info panel that stands for one of these commands is carried out by the same
-rule ([MOUSE-29](mouse.md#MOUSE-29)).
+table gives no argument is a prompt with anything after it. A compaction, an aside asked with no
+turn running and the other loops that share the working status are not a turn, and every command
+typed during one waits. A `/btw` typed during a turn is the exception: it is asked beside the turn
+on a thread of its own over the exchange the turn published with its latest request, over the
+turn's own file authority and with no sign-in, so it holds nothing the turn holds and no command
+waits for it. Its answer is a row of the agents list and does not open the view
+([WATCH-19](watching.md#WATCH-19)). A second `/btw` is refused while one is out, a file dropped on
+it is refused, a `/btw` typed before the turn has sent a request says there is nothing to read
+yet, nothing is saved or closed for it, and the stop that ends the turn ends the question. A
+prompt or command waiting in the queue does not hold a `/btw` back: it is asked at once and the
+waiting lines stay where they were. Only a `/btw` already waiting holds a later one back, as a
+waiting line of the same command does for any command. A click on a row of the info panel that
+stands for one of these commands is carried out by the same rule ([MOUSE-29](mouse.md#MOUSE-29)).
 
 **The commands that rewrite the conversation or the workspace wait.** `/clear`, `/compact`,
 `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` are not carried out while the turn runs, and do
 not stop it: stopping a turn costs the work it has done, and a person who typed a command did not
 ask for that. Each says why it waits, and Ctrl-Enter on one stops the turn and carries the command
 out, as it does for a waiting prompt, since that press is the person asking for it to be hurried. A
-turn stopped that way gives its prompt back to the box when it recorded nothing.
+turn stopped that way gives its prompt back to the box when it recorded nothing. `/exit` typed
+beside a running turn waits for the turn to end like the others and does not stop it. Whether it
+should end the session at once is open ([#3473](https://github.com/brave/bravebot/issues/3473)).
 
 **Why the second kind waits.** Enter mid-turn already means the line waits, and that is what a
 person pressing it expects of a line they type. What the queue must not do is send a command: a line
@@ -547,6 +564,13 @@ does not read:
   `/clear` has not happened yet, so the file goes where the turn is working and holds what the
   transcript holds now, as `/copy` copies the reply it holds now.
 
+- **`/btw`.** It asks over a copy of the exchange the turn published with its latest request, on a
+  thread of its own, so the turn's conversation, record and rewind point are neither read nor
+  changed. The answer is a row of the agents list and the transcript gets nothing
+  ([WATCH-19](watching.md#WATCH-19)). A file dropped on it is refused, since reading it records a
+  rule in the map the turn answers into. Before the turn has sent a request it says there is nothing
+  to read yet. What the question cost is charged to the turn ([SESSION-11](sessions.md#SESSION-11)).
+
 - **`/status`.** It reads what the session keeps, the workspace and the configuration the turn was
   started with, none of which it changes. The trust map and the vouched programs are the turn's: it
   answers into both as it runs, so a copy taken when it began would state "every run is asked" about
@@ -570,7 +594,8 @@ While work runs the commands are offered as at rest ([INPUT-9](terminal-input.md
 marked with the column above: `now` for a command that is carried out as it is typed, `queued` for
 one that waits, and `now/queued` for one that is carried out or waits by what follows the word and
 by what is already waiting; a `now` row reads `queued` while a line of the same command waits
-(above). During a compaction or an aside every row reads `queued`. Tab, or Enter
+(above). During a compaction or an aside with no turn running every row reads `queued`; `/btw` reads
+`now` while a turn runs, and a question out beside the turn queues nothing. Tab, or Enter
 on a half-typed word, takes the highlighted row and queues nothing; Enter on a whole command is
 carried out or queued as above.
 
@@ -657,6 +682,17 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::tests::menu::copy_as_text_and_the_typed_command_put_the_same_words_on_the_clipboard`
 `verified-by: bravebot_tui::render::each_command_row_says_whether_it_runs_now_or_waits_while_a_turn_runs`
 `verified-by: bravebot_tui::render::every_row_is_queued_during_an_aside`
+`verified-by: bravebot_tui::app::btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued`
+`verified-by: bravebot_tui::app::btw_typed_before_the_first_request_says_there_is_nothing_to_read`
+`verified-by: bravebot_tui::app::the_published_exchange_is_kept_and_dropped_when_the_next_turn_begins`
+`verified-by: bravebot_tui::app::a_second_btw_beside_a_turn_is_refused`
+`verified-by: bravebot_tui::app::btw_with_a_dropped_file_beside_a_turn_is_refused`
+`verified-by: bravebot_tui::app::btw_typed_mid_turn_is_asked_at_once_with_a_prompt_waiting`
+`verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn`
+`verified-by: bravebot_tui::app::stopping_the_turn_stops_the_question_beside_it`
+`verified-by: bravebot_tui::app::a_question_still_out_when_the_turn_ends_is_stopped`
+`verified-by: bravebot_agent::turn::the_exchange_is_forked_once_per_parent_request_and_never_for_a_delegate`
+`verified-by: bravebot_agent::turn::a_question_over_a_published_exchange_holds_the_prompt_and_ends_with_the_question`
 `verified-by: bravebot_tui::render::a_row_reads_queued_while_a_line_of_its_command_waits`
 `verified-by: bravebot_tui::render::the_rows_carry_no_label_when_nothing_is_running`
 `verified-by: bravebot_tui::app::enter_completes_a_half_typed_command_instead_of_queueing_it_while_a_turn_runs`

@@ -4268,6 +4268,9 @@ turn-ended-unexpectedly = the turn ended unexpectedly
 
 btw-needs-a-question = /btw takes the question to ask, which the conversation will not read
 btw-stopped = the question was stopped
+btw-nothing-sent-yet = /btw has nothing to read yet: the turn has not sent its first request
+btw-no-files-beside-a-turn = /btw does not read dropped files while a turn runs; ask again when it has ended
+btw-one-at-a-time = a question is already being answered beside the turn; ask again when it has
 btw-ended-unexpectedly = the question ended unexpectedly
 btw-failed = the question could not be answered: { $problem }
 

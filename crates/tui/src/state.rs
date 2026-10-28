@@ -59,7 +59,7 @@ pub use scroller::{Bar, Footer, HintRow, Laid, Panel, Popup, Scroller, TopOfView
 pub use settings::wheel_rows_named;
 pub use targets::{Hit, Scrolled, Space, Target};
 pub use vi::Spelled;
-pub use watching::{WatchScope, Watching};
+pub use watching::{AsideDone, AsideFlight, WatchScope, Watching};
 
 /// How many bytes of the model's thinking are kept for the screen, counted from the end.
 ///
@@ -570,6 +570,14 @@ pub struct Session {
     /// aside drawn among the turn's own lines would read as an exchange the planner had, and the
     /// planner has read neither half of it.
     asides: Vec<Aside>,
+    /// The conversation as the running turn last sent it, for a `/btw` typed beside the turn to be
+    /// asked over (CMD-8). Replaced at each request the turn makes and dropped when a turn begins.
+    fork: Option<bravebot_agent::aside::Fork>,
+    /// The file decisions the running turn answers into, shared with it, so a question asked
+    /// beside the turn reads the map the turn is using and writes none of its own back (CMD-8).
+    turn_files: Option<bravebot_core::file_authority::FileAuthority>,
+    /// The question being answered beside the running turn, if there is one (CMD-8).
+    aside_flight: Option<watching::AsideFlight>,
     /// Where the turn's own view was when somebody went to look at a delegate.
     ///
     /// Held rather than recomputed, so coming back puts them where they were reading instead of
@@ -1296,6 +1304,9 @@ impl Session {
             outputs: Vec::new(),
             jobs_from: 0,
             asides: Vec::new(),
+            fork: None,
+            turn_files: None,
+            aside_flight: None,
             held_view: None,
             history_search: None,
             picking: None,
@@ -3836,6 +3847,9 @@ impl Session {
         self.hunks_listed = None;
         self.links_listed = None;
         self.prompt_at = None;
+        // The last turn's exchange is not this one's: a question asked before this turn has sent
+        // its first request would be answered over the wrong conversation.
+        self.fork = None;
         self.said_while_working.clear();
         // Set again by the call that took a line from the box, after this returns. A tick, a watch,
         // a goal sending the work back and a command's own prompt are not a lone word the person
@@ -14851,6 +14865,46 @@ mod tests {
                     read: 200,
                     written: 50
                 }
+            );
+        }
+
+        /// SESSION-11. A question answered beside a running turn is charged to that turn with its
+        /// split, and neither ends the turn's work nor touches its clock.
+        #[test]
+        fn a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split() {
+            let mut s = session();
+            s.type_char('a');
+            s.submit();
+            let timing = s.timing_by_turn().clone();
+
+            s.charge_aside_beside_a_turn(bravebot_aichat::protocol::Usage {
+                prompt_tokens: 200,
+                completion_tokens: 50,
+                ..Default::default()
+            });
+
+            assert_eq!(s.tokens, 250);
+            assert_eq!(
+                s.spend_by_turn(),
+                &std::collections::BTreeMap::from([(1, 250)]),
+                "the question was charged to no turn, or to another"
+            );
+            assert_eq!(
+                s.split(),
+                bravebot_session::sessions::Split {
+                    read: 200,
+                    written: 50
+                }
+            );
+            assert_eq!(
+                s.status,
+                Status::Working,
+                "the question ended the turn's work"
+            );
+            assert_eq!(
+                s.timing_by_turn(),
+                &timing,
+                "the question was added to the turn's clock"
             );
         }
 

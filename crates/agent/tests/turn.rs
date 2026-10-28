@@ -38351,6 +38351,60 @@ fn an_answer_over_an_untrusted_exchange_is_shown_and_not_written_down() {
     );
 }
 
+/// CMD-8. A question typed beside a running turn is asked over the turn's file authority and
+/// records no decision into it: it holds `WebFetch` alone and reads no file. Had the question
+/// recorded a rule or published an integrity, the turn's next gate would read a decision nobody
+/// gave. The authority is handed in by value and `FileAuthority::clone` shares its state, so a
+/// decision made through the handle the question holds shows on the handle kept here; that is what
+/// makes the assertions below able to fail. Nothing the question does reads a path, so the sharing
+/// itself has no other observable effect to pin.
+#[test]
+fn a_question_beside_a_turn_leaves_the_turns_file_authority_as_it_was() {
+    let (endpoint, _received) = serve_sequence(vec![reply_with("because the grammar nests")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let turns = bravebot_core::file_authority::FileAuthority::new(
+        bravebot_core::trust::TrustStore::new("/work"),
+    );
+    let revision = turns.revision();
+    let rules = turns.snapshot().rules().count();
+    let programs = turns.programs_started();
+    let integrity = turns.integrity_of("/work/src/a.rs");
+
+    let answered = turn::aside_sharing(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        bravebot_agent::aside::Question::about(
+            &an_exchange_to_ask_beside(),
+            "why recursive?",
+            Vec::new(),
+        ),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        turns.clone(),
+        |_| {},
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("asking beside a turn must not be refused");
+
+    assert_eq!(answered.shown, "because the grammar nests");
+    assert_eq!(
+        turns.revision(),
+        revision,
+        "the question recorded a decision into the turn's authority"
+    );
+    assert_eq!(
+        turns.snapshot().rules().count(),
+        rules,
+        "the question added a rule to the turn's map"
+    );
+    assert_eq!(turns.programs_started(), programs);
+    assert_eq!(turns.integrity_of("/work/src/a.rs"), integrity);
+}
+
 /// Where a compaction landed is most of what a reader wants afterwards, because it is the point
 /// the turn stopped being able to remember what it had done. A compaction forced by the budget
 /// happens in the middle of a turn's rounds, and the round it happened on is the part that cannot
@@ -67768,6 +67822,247 @@ fn the_view_of_the_request_is_the_parents_when_a_delegate_ran_and_labels_its_rep
         Provenance::Trusted("delegate report"),
         "{report:?}"
     );
+}
+
+/// A question asked while a turn runs is asked over the exchange the turn last built a request
+/// from. The turn publishes that exchange once per request it sends, and a delegate, whose
+/// conversation is its own, publishes none.
+#[test]
+fn the_exchange_is_forked_once_per_parent_request_and_never_for_a_delegate() {
+    let scratch = Scratch::new("exchange-fork-delegate");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+
+    let (endpoint, received) = serve_by_marker(vec![
+        (
+            "FORK-DELEGATING",
+            vec![
+                tool_request(
+                    "spawn_agent",
+                    r#"{"kind":"reader","task":"FORK-DELEGATE-TASK"}"#,
+                ),
+                reply_with("nothing to add while it works"),
+                reply_with("relayed"),
+            ],
+        ),
+        ("FORK-DELEGATE-TASK", vec![reply_with("REPORTED BACK")]),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("FORK-DELEGATING"),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+
+    let asked = every_request(&received);
+    let mine = asked
+        .iter()
+        .filter(|body| body.contains("FORK-DELEGATING"))
+        .count();
+    assert!(
+        asked.len() > mine,
+        "no delegate asked the backend, so the test shows nothing"
+    );
+    assert_eq!(
+        reporter.forks.len(),
+        mine,
+        "one exchange is published for each request the parent sent and none for a delegate's"
+    );
+}
+
+/// Ask `question` over `fork` the way `/btw` does beside a turn, and return the messages the
+/// backend was sent as `(role, content)` pairs, in order.
+fn messages_an_aside_over(
+    fork: bravebot_agent::aside::Fork,
+    question: &str,
+) -> Vec<(String, String)> {
+    let (endpoint, received) = serve_sequence(vec![reply_with("an answer")]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    turn::aside(
+        &config,
+        &egress,
+        &bravebot_agent::chatgpt::AccountSession::begin(),
+        bravebot_agent::aside::Question::over(fork, question, Vec::new()),
+        None,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        bravebot_core::trust::TrustStore::new("/work"),
+        |_| {},
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("asking over a published exchange must not be refused");
+    let body: serde_json::Value =
+        serde_json::from_str(&received.recv().expect("the question's request"))
+            .expect("the request is JSON");
+    body["messages"]
+        .as_array()
+        .expect("the request carries messages")
+        .iter()
+        .map(|message| {
+            (
+                message["role"].as_str().unwrap_or_default().to_string(),
+                message["content"].to_string(),
+            )
+        })
+        .collect()
+}
+
+/// Run a turn that reads `target.txt` and then answers, and return every exchange it published.
+fn exchanges_published_by_a_turn_that_reads(
+    name: &str,
+    prompt: &str,
+    body: &str,
+    answer: &str,
+) -> Vec<bravebot_agent::aside::Fork> {
+    let scratch = Scratch::new(name);
+    std::fs::write(scratch.path.join("target.txt"), body).unwrap();
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, _received) = serve_sequence(vec![
+        tool_request("read_file", r#"{"path":"target.txt"}"#),
+        reply_with(answer),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turns::run_cancellable(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new(prompt),
+        &mut bravebot_agent::confirm::ApproveWrites,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .expect("turn runs");
+    reporter.forks
+}
+
+/// The exchange a turn publishes is what a question over it is asked beside: the prompt and what
+/// the turn had already been told, with the question as the last message and nothing after it.
+#[test]
+fn a_question_over_a_published_exchange_holds_the_prompt_and_ends_with_the_question() {
+    let forks = exchanges_published_by_a_turn_that_reads(
+        "exchange-fork-question",
+        "FORK-THE-PROMPT",
+        "FORK-FILE-BODY",
+        "FORK-FINAL-ANSWER",
+    );
+    let fork = forks
+        .last()
+        .expect("the turn published its exchange")
+        .clone();
+
+    let sent = messages_an_aside_over(fork, "WHAT-IS-THIS");
+
+    let (last_role, last) = sent.last().expect("the request holds messages");
+    assert_eq!(last_role, "user");
+    assert!(last.contains("WHAT-IS-THIS"), "{last}");
+    let before_the_question = &sent[..sent.len() - 1];
+    assert!(
+        before_the_question
+            .iter()
+            .any(|(role, content)| role == "user" && content.contains("FORK-THE-PROMPT")),
+        "the prompt is not in the exchange: {before_the_question:?}"
+    );
+    assert!(
+        before_the_question
+            .iter()
+            .all(|(_, content)| !content.contains("WHAT-IS-THIS")),
+        "the question is in the exchange before it: {before_the_question:?}"
+    );
+}
+
+/// CMD-8. The exchange published at a request holds what the turn had when it built that request
+/// and nothing the turn added afterwards. A question over the first request's exchange does not
+/// hold the file the first round read or the answer the last round gave; one over the second
+/// request's exchange holds the file and still not the answer.
+#[test]
+fn a_question_over_an_earlier_request_holds_nothing_a_later_round_added() {
+    let forks = exchanges_published_by_a_turn_that_reads(
+        "exchange-fork-later-rounds",
+        "FORK-EARLY-PROMPT",
+        "LATER-ROUND-FILE-BODY",
+        "LATER-ROUND-ANSWER",
+    );
+    assert_eq!(
+        forks.len(),
+        2,
+        "one exchange for each request the turn sent"
+    );
+
+    let first = messages_an_aside_over(forks[0].clone(), "ASKED-AT-THE-FIRST");
+    let second = messages_an_aside_over(forks[1].clone(), "ASKED-AT-THE-SECOND");
+    let holds = |sent: &[(String, String)], text: &str| {
+        sent.iter().any(|(_, content)| content.contains(text))
+    };
+
+    assert!(holds(&first, "FORK-EARLY-PROMPT"));
+    assert!(
+        !holds(&first, "LATER-ROUND-FILE-BODY"),
+        "the first request's exchange holds what the first round read: {first:?}"
+    );
+    assert!(!holds(&first, "LATER-ROUND-ANSWER"));
+    assert!(
+        holds(&second, "LATER-ROUND-FILE-BODY"),
+        "the second request's exchange lacks what the first round read: {second:?}"
+    );
+    assert!(
+        !holds(&second, "LATER-ROUND-ANSWER"),
+        "the second request's exchange holds the answer given after it: {second:?}"
+    );
+    assert!(
+        second.len() > first.len(),
+        "the second exchange is not longer than the first"
+    );
+}
+
+/// CMD-8. What the parent adds after the exchange was taken is not in a question over it, and the
+/// question is the only message after the exchange. The parent's own conversation is left as it
+/// was.
+#[test]
+fn a_question_over_a_forked_exchange_does_not_hold_what_the_parent_adds_afterwards() {
+    let mut conversation = an_exchange_to_ask_beside();
+    let fork = bravebot_agent::aside::Fork::of(&conversation);
+    conversation.push(bravebot_aichat::protocol::Message::user(
+        "ADDED-AFTER-THE-FORK",
+    ));
+    let parent_len = conversation.len();
+
+    let sent = messages_an_aside_over(fork, "ASKED-ON-THE-FORK");
+
+    assert!(
+        sent.iter()
+            .all(|(_, content)| !content.contains("ADDED-AFTER-THE-FORK")),
+        "the question holds a message the parent added after the fork: {sent:?}"
+    );
+    assert!(
+        sent.iter()
+            .any(|(_, content)| content.contains("port the parser to the new grammar")),
+        "{sent:?}"
+    );
+    assert!(sent.last().unwrap().1.contains("ASKED-ON-THE-FORK"));
+    assert_eq!(
+        sent.len(),
+        1 + 2 + 1,
+        "system prompt, the two messages forked, and the question"
+    );
+    assert_eq!(conversation.len(), parent_len);
 }
 
 /// A line typed while the turn runs is what a person typed, and the view says so from the line

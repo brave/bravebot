@@ -839,6 +839,16 @@ pub trait Reporter {
     /// The request a turn is about to send the planner, read from the request itself.
     fn request_built(&mut self, _view: crate::request_view::RequestView) {}
 
+    /// Whether this interface keeps the exchange a turn publishes at each round, so a turn copies
+    /// it only for one that does.
+    fn wants_fork(&self) -> bool {
+        false
+    }
+
+    /// The exchange as it stands as a round's request is built, for a question asked while the
+    /// turn runs. Not sent for a delegate, whose conversation is not the session's.
+    fn exchange_forked(&mut self, _fork: crate::aside::Fork) {}
+
     /// The parent is about to join a delegate, which may already have finished.
     fn delegate_waiting(&mut self, _delegate: DelegateId) {}
 
@@ -1153,11 +1163,21 @@ pub struct RecordingReporter {
     pub attributed_to: Option<DelegateId>,
     /// Every request view a turn published, in order.
     pub requests: Vec<crate::request_view::RequestView>,
+    /// Every exchange a turn published at a round boundary, in order.
+    pub forks: Vec<crate::aside::Fork>,
 }
 
 impl Reporter for RecordingReporter {
     fn wants_request_view(&self) -> bool {
         true
+    }
+
+    fn wants_fork(&self) -> bool {
+        true
+    }
+
+    fn exchange_forked(&mut self, fork: crate::aside::Fork) {
+        self.forks.push(fork);
     }
 
     fn request_built(&mut self, view: crate::request_view::RequestView) {
