@@ -449,6 +449,10 @@ impl Watcher for Watching {
             inner.phase = Phase::Working;
             inner.queue.push_back(first);
         }
+    }
+
+    fn drawn(&mut self, _on: Waiting) {
+        let mut inner = self.0.locked();
         self.0.publish(&mut inner);
     }
 
@@ -1191,6 +1195,7 @@ mod tests {
         shared.locked().first = None;
         let mut watching = Watching(Arc::clone(&shared));
         watching.waiting(Waiting::Answer(Held::Fetch));
+        watching.drawn(Waiting::Answer(Held::Fetch));
         let held = shared.locked().job.clone();
         assert_eq!(held.state, State::NeedsInput);
         assert_eq!(held.held, Some(Held::Fetch));
@@ -1199,9 +1204,37 @@ mod tests {
         assert_eq!(working.state, State::Working);
         assert_eq!(working.held, None);
         watching.waiting(Waiting::Prompt);
+        watching.drawn(Waiting::Prompt);
         assert_eq!(shared.locked().job.state, State::Idle);
         shared.finish();
         assert_eq!(shared.locked().job.state, State::Stopped);
+    }
+
+    /// BG-7: nothing outside this process is told a question is held until the backlog already
+    /// holds the whole of it. `Watcher::waiting` alone must not publish `NeedsInput`, since the
+    /// caller writes the line that asks for an answer only after it returns; a late terminal
+    /// deciding to attach from that published state, before `Watcher::drawn` runs, would otherwise
+    /// read a backlog missing that line (#3064 reproduced this under CI load as a flaky failure of
+    /// [`a_late_terminal_is_given_all_of_a_held_question_however_long`]).
+    #[test]
+    fn a_question_is_not_published_held_until_its_last_line_is_in_the_backlog() {
+        let shared = a_shared();
+        let mut watching = Watching(Arc::clone(&shared));
+
+        watching.waiting(Waiting::Answer(Held::Read));
+        assert_eq!(
+            shared.locked().job.state,
+            State::Idle,
+            "a late attacher was told the question is held before its line was written"
+        );
+
+        shared
+            .locked()
+            .backlog
+            .extend_from_slice(b"Approve this read? y/n ");
+        watching.drawn(Waiting::Answer(Held::Read));
+        assert_eq!(shared.locked().job.state, State::NeedsInput);
+        assert_eq!(replayed(&shared), "ok\nApprove this read? y/n ");
     }
 
     /// BG-9: a session started again keeps the name and the last prompt its entry had when nothing is
@@ -1386,6 +1419,10 @@ mod tests {
 
         fn waiting(&mut self, on: Waiting) {
             self.inner.waiting(on);
+        }
+
+        fn drawn(&mut self, on: Waiting) {
+            self.inner.drawn(on);
             if matches!(on, Waiting::Answer(_)) {
                 let _ = self.held.send(());
             }

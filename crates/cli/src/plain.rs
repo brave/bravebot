@@ -1306,8 +1306,13 @@ pub(crate) trait Watcher: Send {
     /// Called before the first line of a question is written, so that what is written from here
     /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
     fn asking(&mut self);
-    /// Called before the read, which blocks, and before what asks for the line is written.
+    /// Called before the read, which blocks, and before what asks for the line is written (BG-9).
     fn waiting(&mut self, on: Waiting);
+    /// Called after what asks for the line has been written and flushed, so that nothing outside
+    /// this process is told a question is held until the backlog already holds the whole of it
+    /// (BG-7): a terminal attaching between [`Watcher::waiting`] and the write landing would
+    /// otherwise see a question missing its last line.
+    fn drawn(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
     fn received(&mut self, on: Waiting, line: Option<&str>);
 }
@@ -1389,6 +1394,9 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         }
         let _ = write!(self.output, "{invitation}");
         let _ = self.output.flush();
+        if let Some(watch) = &mut self.watch {
+            watch.drawn(on);
+        }
         let mut line = String::new();
         let read = self.input.read_line(&mut line);
         let _ = writeln!(self.output);
@@ -3569,6 +3577,8 @@ mod tests {
             self.seen.lock().expect("the record").push(on);
         }
 
+        fn drawn(&mut self, _on: Waiting) {}
+
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {
             self.announced = false;
         }
@@ -3608,6 +3618,8 @@ mod tests {
             let text = self.screen.text();
             self.at_each_wait.lock().expect("the record").push(text);
         }
+
+        fn drawn(&mut self, _on: Waiting) {}
 
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
     }
