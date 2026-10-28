@@ -2847,12 +2847,17 @@ done
     }
 
     /// A server starts under the spawn gate, so it cannot overlap the creation of a control channel.
+    ///
+    /// [`LAUNCHING`] is taken and the workspace written on this thread before the hook holds the
+    /// gate. The hook runs the start on another thread, and a start that took [`LAUNCHING`] there
+    /// would wait behind a test that holds it while it waits for the gate this thread holds.
     #[cfg(unix)]
     #[test]
     fn a_server_start_waits_for_a_channel_being_created() {
-        bravebot_sandbox::process::start_waits_at_the_gate(|| {
-            let (_launching, scratch, _log, declared) =
-                a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+        let _launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let (scratch, _log, declared) =
+            write_a_workspace_with_a_declared_server(DECLARED_AND_APPROVED);
+        bravebot_sandbox::process::start_waits_at_the_gate(move || {
             let mut servers = Servers::new(
                 scratch.to_path_buf(),
                 None,
@@ -3122,6 +3127,10 @@ done
     ///
     /// One at a time closes the window rather than waiting it out, since [`Server::launch`] is the
     /// only thing in this binary that forks and no write is in flight while one of them happens.
+    ///
+    /// A test takes this before the spawn gate, never after: every launch holds this and then waits
+    /// for the gate, so a thread that held the gate and waited for this would wait for a test that
+    /// is itself waiting for the gate.
     #[cfg(unix)]
     static LAUNCHING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -3919,6 +3928,8 @@ done
     }
 
     /// A workspace holding one file the declared server serves, with its script and a log path.
+    ///
+    /// [`LAUNCHING`] comes back with them for the reason [`a_workspace_a_server_rejects`] gives.
     #[cfg(unix)]
     fn a_workspace_with_a_declared_server(
         name: &str,
@@ -3928,9 +3939,21 @@ done
         PathBuf,
         Declared,
     ) {
+        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
+        let (scratch, log, declared) = write_a_workspace_with_a_declared_server(name);
+        (launching, scratch, log, declared)
+    }
+
+    /// [`a_workspace_with_a_declared_server`] for a caller that already holds [`LAUNCHING`]. A test
+    /// that runs its launch on another thread under the spawn gate takes the lock first on its own
+    /// thread and writes the workspace there, because a guard cannot move to that thread and the
+    /// lock has to be taken before the gate.
+    #[cfg(unix)]
+    fn write_a_workspace_with_a_declared_server(
+        name: &str,
+    ) -> (crate::testutil::Scratch, PathBuf, Declared) {
         use std::os::unix::fs::PermissionsExt;
 
-        let launching = LAUNCHING.lock().unwrap_or_else(|held| held.into_inner());
         let scratch = crate::testutil::Scratch::new(name);
         std::fs::create_dir_all(&*scratch).expect("create the workspace");
         std::fs::write(scratch.join("a.zz"), "one\ntwo\n").expect("write the file");
@@ -3952,7 +3975,7 @@ done
             initialization_options: Some(serde_json::json!({ "indexer": { "threads": 3 } })),
             digest: "one".into(),
         };
-        (launching, scratch, log, declared)
+        (scratch, log, declared)
     }
 
     #[cfg(unix)]
