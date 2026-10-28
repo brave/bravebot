@@ -240,7 +240,7 @@ to use it.
 
 ## `/limit [<amount> | off]`
 
-Sets the most tokens, or Leo Premium credits, this session may spend. `/limit 500k` or `/limit 2m`
+Sets the most tokens, or premium requests, this session may spend. `/limit 500k` or `/limit 2m`
 sets it in tokens, with `k` for thousands and `m` for millions, `/limit 200 credits` sets it in
 credits, `/limit off` removes it, and `/limit` alone says what it is and what
 has been spent. The `limit` key in [the settings file](../customize/configuration.md#limit) starts a
@@ -252,10 +252,11 @@ in your own words with a figure in the same unit above what is spent, such as `2
 the question appears in every permission mode, including the one that asks about nothing. A
 `/loop` or `/goal` run ends there. Tokens are the usage the model service reports, so a limit in
 tokens is not money, and a service that reports no usage is never stopped by it. Credits are the
-credentials this session presented, one per premium request, delegates included. A session with no
-subscription spends none and is never stopped by a limit in credits, and `/compact`, `/aside` and
-goal checks are not counted. `/clear` starts the count again, and a resumed session starts at zero. The round that reaches the
-limit has already been paid for, so the total can end a little above it.
+premium requests this session made, one for each request that presents the premium key, delegates
+included. A session with no premium key presents none and is never stopped by a limit in credits, and
+`/compact`, `/aside` and goal checks are not counted. `/clear` starts the count again, and a resumed
+session starts at zero. The round that reaches the limit has already been paid for, so the total can
+end a little above it.
 
 Typed while a turn runs it is taken at once, and the running turn's next request is held to it.
 

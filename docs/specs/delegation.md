@@ -967,7 +967,7 @@ and running it on the turn's model would spend past that boundary without anybod
 sign-in is no alternative either: a delegate runs on a worker thread with nowhere to show one.
 
 **Why the substitution is said.** The endpoint substitutes rather than refuses a name it will not
-serve, a misspelt one or a premium one this run holds no subscription for, so without it a
+serve, a misspelt one or a premium one this run holds no key for, so without it a
 definition could ask for one model and have every delegate it starts answered by another.
 
 `verified-by: bravebot_agent::agents::a_definition_reads_a_model_name`

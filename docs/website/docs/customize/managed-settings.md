@@ -30,7 +30,7 @@ to say so.
 **Only these names may be pinned**, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three `ANTHROPIC_DEFAULT_*_MODEL` tiers, and the `provider` block. Every other name
-in the file decides nothing, the signing key and key id included, save the two pairs of lists and the
+in the file decides nothing, the signing key, key id and premium key included, save the two pairs of lists and the
 two refusals: `"mcp": { "allow": [...], "deny": [...] }` name the
 [MCP servers](mcp-servers.md#refused-by-an-administrator)
 a session on the machine may start and may not, by host or by command. The file can keep a server

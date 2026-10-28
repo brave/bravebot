@@ -131,7 +131,7 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
     {
         return None;
     }
-    let (subscription, a_service_is_configured, chatgpt, xai) = match serving {
+    let (a_service_is_configured, chatgpt, xai) = match serving {
         bravebot_agent::backend::Serving::Configured => return None,
         bravebot_agent::backend::Serving::Refused { file, why } => {
             return Some(fail(
@@ -140,11 +140,10 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
             ));
         }
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
-        } => (subscription, a_service_is_configured, chatgpt, xai),
+        } => (a_service_is_configured, chatgpt, xai),
     };
     match at_the_start(a_service_is_configured, named) {
         Start::Serving(imported) => {
@@ -155,7 +154,6 @@ pub(crate) fn before_the_session(config: &mut Config, named: Option<&str>) -> Op
         Start::Refuse(looked) => Some(fail(
             Ending::Configuration,
             crate::model::how_to_configure_a_model(
-                subscription.as_deref(),
                 a_service_is_configured,
                 chatgpt,
                 xai,
@@ -254,14 +252,12 @@ fn at_the_start(a_service_is_configured: bool, named: Option<&str>) -> Start {
     let model = crate::model::model_for_this_run(named, &config);
     match bravebot_agent::backend::serving(&config, &bravebot_net::Egress::new(), &model) {
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
         } => Start::Ended(fail(
             Ending::Configuration,
             crate::model::how_to_configure_a_model(
-                subscription.as_deref(),
                 a_service_is_configured,
                 chatgpt,
                 xai,
@@ -351,8 +347,7 @@ pub(crate) fn providers(args: &[String]) -> ExitCode {
     if !args.is_empty() {
         return fail(Ending::Argument, t!(import_takes_nothing_else));
     }
-    // Before the terminal, as `import-leo-creds` refuses: this is a write, and the one thing an
-    // incognito session will not do.
+    // Before the terminal: this is a write, and the one thing an incognito session will not do.
     if bravebot_core::incognito::engaged() {
         return fail(Ending::Failed, t!(import_not_while_incognito));
     }

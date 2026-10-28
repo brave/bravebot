@@ -261,7 +261,7 @@ class CheckTargets(unittest.TestCase):
         cargo = self.bin / "cargo"
         cargo.write_text('#!/bin/sh\n'
                          'if [ "$BRAVEBOT_BUILD_UNCONFIGURED" = 1 ]; then\n'
-                         '  [ -z "$SERVICES_KEY_AICHAT$BRAVE_SERVICES_KEY_ID$BRAVE_AI_CHAT_ENDPOINT$BRAVE_AI_CHAT_PREMIUM_ENDPOINT$BRAVEBOT_DEFAULT_MODEL$BACKTRACE_SUBMIT_URL" ] || exit 7\n'
+                         '  [ -z "$SERVICES_KEY_AICHAT$BRAVE_SERVICES_KEY_ID$BRAVE_AI_CHAT_ENDPOINT$BRAVE_AI_CHAT_PREMIUM_ENDPOINT$BRAVE_AI_CHAT_PREMIUM_KEY$BRAVEBOT_DEFAULT_MODEL$BACKTRACE_SUBMIT_URL" ] || exit 7\n'
                          '  [ "$BRAVEBOT_ALLOW_UNCONFIGURED_BUILD" = 1 ]\n'
                          'else\n  [ "$SERVICES_KEY_AICHAT" = fixture-key ]\nfi\n')
         cargo.chmod(0o755)
@@ -275,6 +275,7 @@ class CheckTargets(unittest.TestCase):
                              SERVICES_KEY_AICHAT="fixture-key", BRAVE_SERVICES_KEY_ID="fixture-id",
                              BRAVE_AI_CHAT_ENDPOINT="https://example.invalid",
                              BRAVE_AI_CHAT_PREMIUM_ENDPOINT="https://example.invalid",
+                             BRAVE_AI_CHAT_PREMIUM_KEY="fixture-premium-key",
                              BRAVEBOT_DEFAULT_MODEL="fixture-model",
                              BACKTRACE_SUBMIT_URL="https://fixture.invalid/universe/token/json"),
                     capture_output=True, text=True, timeout=20)

@@ -1955,7 +1955,7 @@ sent.
 `verified-by: bravebot_agent::turn::a_turn_without_attachments_sends_the_prompt_and_nothing_beside_it`
 
 <a id="BACKEND-33"></a>
-### BACKEND-33: an `env` block names these twenty-two variables
+### BACKEND-33: an `env` block names these twenty-three variables
 
 The `env` block of a settings file sets variables under their own names, and these are the names
 something reads:
@@ -1965,7 +1965,8 @@ something reads:
 | `SERVICES_KEY_AICHAT` | the key a request to Brave's endpoint is signed with |
 | `BRAVE_SERVICES_KEY_ID` | which key that signature is checked against |
 | `BRAVE_AI_CHAT_ENDPOINT` | the host Brave's endpoint is reached at |
-| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host an imported subscription is spent against |
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the host the premium key is presented to |
+| `BRAVE_AI_CHAT_PREMIUM_KEY` | the key that host authorises a request with, held only together with the premium endpoint |
 | `BRAVEBOT_DEFAULT_MODEL` | which model answers before anybody has chosen one |
 | `BRAVEBOT_CONTEXT_BUDGET` | how many prompt tokens a conversation may reach before it is shortened |
 | `BRAVEBOT_OUTPUT_BUDGET` | how many tokens one reply may run to before the service cuts it off |
@@ -2012,7 +2013,7 @@ choice rather than a variable, and BACKEND-11 is what ranks it.
 reading the source. Anything written *about* this system (the site somebody installs it from, a
 message telling a person what to set) is written from what is stated here, so a backend whose
 variables are named nowhere is a backend that reaches people undocumented however completely its
-behaviour is specified. Naming them is also what makes the set reviewable: a twenty-third variable is
+behaviour is specified. Naming them is also what makes the set reviewable: a twenty-fourth variable is
 a change to this table, which a person reads, rather than a constant added to a file nobody is
 asked to look at.
 
@@ -2089,8 +2090,12 @@ easiest thing on the machine to write to, which is the same reason BACKEND-1 giv
 granting no capability at all.
 
 On a binary built with nothing, which is a source build, the file is what answers for all of it:
-the endpoint, the key id and the signing key included, and a project layer can name any of them.
-That is the case the file exists for, and what it costs is under Known costs.
+the endpoint, the key id, the signing key and the premium key included, and a project layer can name
+any of them. That is the case the file exists for, and what it costs is under Known costs.
+
+`BRAVE_AI_CHAT_PREMIUM_KEY` is ranked by this order as the premium endpoint beside it is. It is held
+only together with that endpoint ([PREM-11](premium-credentials.md#PREM-11)), and being a credential
+it is not a name a machine-level file pins (BACKEND-38).
 
 BACKEND-11 is the one exception and says why: a `model` key ranked here would lose to the baked-in
 default on every binary anybody was given, and an exported default would outrank every `model` key
@@ -2264,9 +2269,9 @@ above the process environment and therefore above every other source. It is
 These names may be pinned, being the ones that decide where a request goes:
 `BRAVE_AI_CHAT_ENDPOINT`, `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`, `BRAVEBOT_USE_BEDROCK`, `AWS_REGION`,
 `AWS_PROFILE`, the three tier models of BACKEND-33's table, and the `provider` block. Every other
-name in the file decides nothing, the signing key and the key id included, save the server lists
-below. A pinned name is resolved from this file alone, and a name it does not pin resolves exactly
-as it would with no such file.
+name in the file decides nothing, the signing key, the key id and the premium key included, save the
+server lists below. A pinned name is resolved from this file alone, and a name it does not pin
+resolves exactly as it would with no such file.
 
 The file may also keep an MCP server from starting, and that is the one thing it decides that is
 not a destination: `"mcp": { "allow": [...], "deny": [...] }` names servers by the host a url
@@ -2351,15 +2356,18 @@ that path rather than with the person in front of the screen.
 <a id="BACKEND-39"></a>
 ### BACKEND-39: a configuration naming no model service says what to configure
 
-Where the model in force would be sent to Brave's own aichat endpoint and no Leo Premium
-subscription is in hand to spend on it, nothing is configured to serve the turn and no work starts.
+Where the model in force would be sent to Brave's own aichat endpoint and no premium key is held to
+present to it ([PREM-13](premium-credentials.md#PREM-13)), nothing is configured to serve the turn and
+no work starts.
 A session does not open and a one-shot run asks nothing. What is said instead is the five ways to
 configure a service that can answer, each naming the thing to type or to write: an AWS account
 through Bedrock, an OpenAI-compatible gateway, signing in with a ChatGPT account
 (`bravebot auth login chatgpt`, [CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)), signing in with an xAI
-account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and importing a Leo Premium
-subscription. The line for each sign-in says that the account's models are then offered in `/model`
-as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is [CLI-7](cli.md#CLI-7).
+account (`bravebot auth login xai`, [XAI-7](xai-sign-in.md#XAI-7)), and Brave's premium service for
+somebody who has a key for it, with `BRAVE_AI_CHAT_PREMIUM_KEY` and `BRAVE_AI_CHAT_PREMIUM_ENDPOINT`
+set in the environment or built in. The line for each sign-in says that the account's models are then
+offered in `/model` as `chatgpt/<model>` and `xai/<model>`. `doctor` says the same and fails, which is
+[CLI-7](cli.md#CLI-7).
 `bravebot --bg <prompt>` is refused the same way, in the terminal that typed it, before the
 background process is started.
 
@@ -2384,7 +2392,7 @@ one the build baked in. What is said there is the key that names one of the conf
 models, and the routes are left out.
 
 **A stored ChatGPT or xAI sign-in is such a service.** Each is a way to configure one, beside a Bedrock
-block, a gateway block and a stored Leo batch, and is read only where none of those has answered. A
+block, a gateway block and a premium key, and is read only where none of those has answered. A
 Bedrock or gateway block that is configured keeps the line above whatever else is stored: neither file is
 read, so a person who set up an AWS account or a gateway and also signed in to ChatGPT or xAI is asked
 which of that service's models to use where a person can be asked (below), and is told to name a model with
@@ -2446,12 +2454,10 @@ goes on to the refusal that names the `model` key. A one-shot run, a start that 
 `doctor` ask nothing.
 
 The refusal is the configuration ending of [CLI-6](cli.md#CLI-6) rather than a status of its own.
-Where a subscription is stored and could not be read, what the store said about it is said first.
-A machine with nowhere to keep credentials has none stored rather than a batch it could not read.
 
 **Why.** Nothing has been set up yet. A released binary arrives pointed at Brave's own aichat
 endpoint, and being pointed at it is not the same as having a service configured to do this work: no
-account was named, no gateway was written down, and no subscription was imported. A run that went
+account was named, no gateway was written down, and no premium key was set. A run that went
 ahead would send the turn there anyway and hand back whatever that request became, and whatever it
 became is not the agent doing the work. What a person is left with is a session that failed, or one
 that answered poorly, and nothing on the screen saying the missing piece was a configuration. The
@@ -2462,15 +2468,15 @@ service". Afterwards the question a person has is why the answers are bad, which
 configuration cannot be reached from.
 
 Refusing rather than letting the request go, for the reason
-[PREM-8](premium-credentials.md#PREM-8) reports a subscription it could not read rather than passing
-over it: what comes back from a request that was never going to be served carries no sign of why,
-and nothing about a bad session points at where a request went.
+[PREM-10](premium-credentials.md#PREM-10) fails a request that cannot present its key rather than
+sending it without one: what comes back from a request that was never going to be served carries no
+sign of why, and nothing about a bad session points at where a request went.
 
 Five routes rather than one, and each named by what to type, because a refusal that states the
 problem and no way out of it has moved the work to the person and told them nothing they could not
-already see. Leo Premium is last and says why it is last: those models are reached through Brave's
-AI gateway, which has problems of its own being worked on. It is still the shortest route for
-somebody who already subscribes, which is why it is offered rather than left out. The ChatGPT
+already see. The premium key is last and says why it is last: those models are reached through
+Brave's AI gateway, which is still in development. It is offered rather than left out, for somebody
+who has a key for it. The ChatGPT
 and xAI sign-ins come before it, since each reaches its own service and not Brave's gateway, and each says
 the command to type because a session never starts a sign-in itself
 ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1), [XAI-7](xai-sign-in.md#XAI-7)).
@@ -2510,7 +2516,7 @@ refusal exists because one does not.
 `verified-by: bravebot_cli::running::a_session_in_lines_with_no_service_configured_says_how_to_configure_one`
 `verified-by: bravebot_cli::running::a_session_in_lines_with_a_configured_gateway_opens`
 `verified-by: bravebot_cli::running::a_background_session_with_no_service_configured_says_how_to_configure_one`
-`verified-by: bravebot_cli::model::the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last`
+`verified-by: bravebot_cli::model::the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_the_premium_key_last`
 `verified-by: bravebot_cli::model::a_configured_service_is_told_to_name_a_model_and_is_not_offered_the_routes`
 `verified-by: bravebot_cli::running::a_first_run_names_the_chatgpt_sign_in_in_the_language_it_is_read_in`
 `verified-by: bravebot_agent::backend::a_stored_chatgpt_sign_in_is_a_service_configured_and_an_unreadable_one_is_not`
@@ -2927,8 +2933,7 @@ would refuse it, while the configured model beneath it would be served, the pick
 that start. The interface, a session in lines and a one-shot run given no `--model` open on the
 configured model and say which pick they set aside. `doctor` reports the configured model with the
 pick beside it. The record is left as it is. Where the configured model would be refused as well,
-or the pick is refused because a stored Leo Premium batch could not be used, nothing is set aside
-and the refusal is BACKEND-39's.
+nothing is set aside and the refusal is BACKEND-39's.
 
 **Why.** An inference-profile ARN changes when the profile is recreated, and the tier variable is
 what a person edits when that happens, which leaves a recorded ARN naming the old profile. That
@@ -2937,13 +2942,11 @@ with advice to set the key it already outranks. Recording the tier word removes 
 made from now on. A record written before this, or one naming a model of a gateway block that was
 removed, still names nothing a configured service offers, and refusing it leaves somebody stuck on a
 file no message names. The record is kept because the configuration that served it can return, such
-as an `.envrc` that exports the tier variables in one checkout only. A refused batch is left to
-BACKEND-39 because importing it again is what serves the pick, and the refusal says how.
+as an `.envrc` that exports the tier variables in one checkout only.
 
 `verified-by: bravebot_config::lib::a_tier_model_is_recorded_as_its_word_and_read_back_through_the_variable`
 `verified-by: bravebot_agent::backend::a_recorded_tier_word_names_the_model_its_variable_names`
 `verified-by: bravebot_agent::backend::a_pick_is_set_aside_only_for_a_default_that_is_served`
-`verified-by: bravebot_agent::backend::a_pick_refused_for_a_stored_batch_is_not_set_aside`
 `verified-by: bravebot_tui::persist::a_picked_tier_is_recorded_as_its_word_and_follows_the_variable`
 `verified-by: bravebot_tui::persist::a_pick_nothing_serves_is_set_aside_and_named`
 `verified-by: bravebot_cli::running::a_recorded_pick_nothing_serves_is_set_aside_for_the_configured_model`
@@ -4286,8 +4289,8 @@ others.
   nonsense value in `reasoning_effort` is answered `200` with usage identical to a request that omits
   the field, so it is not validated, and on `near-glm-5`, which reports a non-zero reasoning-token
   count for an ordinary prompt, that count does not move with the level. The premium rows of the
-  roster were not measured, an unsubscribed request being substituted to a weaker model before the
-  request lands, so nothing here is established about them. A level chosen against a Brave-served
+  roster were not measured, a request without the premium key being substituted to a weaker model
+  before the request lands, so nothing here is established about them. A level chosen against a Brave-served
   model is therefore carried, sent, and dropped, while the interface goes on reporting it as in
   force. Bedrock is unaffected, the level reaching the model in the field that model defines.
 
@@ -4374,12 +4377,13 @@ others.
   The alternative is asking again after every such status, which is the round trip the memory
   exists to spend once.
 
-- **The request BACKEND-32 sends again is outside the retry budget, and spends a credential.** It is
+- **The request BACKEND-32 sends again is outside the retry budget, and counts as a premium request.** It is
   not a retry: nothing failed in transit, and the same body with a field removed is a different
   request. So it does not count against the attempts a failure gets, which means the worst case
-  is one request more than the count allows, four rather than three where none is stated. On a
-  premium subscription it also costs one more single-use credential, each request presenting its
-  own. That is once per service and model per process, and
+  is one request more than the count allows, four rather than three where none is stated. On the
+  premium host it also asks the key source once more, so a limit in credits counts it as one more
+  premium request ([PREM-12](premium-credentials.md#PREM-12)). That is once per service and model per
+  process, and
   the alternative is paying for the whole prompt on every request instead.
 
 - **A gateway credential may be a plaintext string in the settings file.** The shape this block

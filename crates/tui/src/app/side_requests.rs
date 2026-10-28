@@ -386,8 +386,10 @@ pub(super) fn ask_animated(
     session.begin_aside();
 
     let worker = thread::spawn(move || {
+        // Dropped when this thread ends, which is how the loop driving it learns it has: it draws
+        // frames until every sender is gone.
+        let _ends_with_the_worker = to_main;
         let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
         let egress = Egress::new();
         // Before the question's own policy exists, which is the whole point: that one holds
         // `WebFetch` alone and reaches no workspace, so what reads a dropped file is a policy of its
@@ -415,7 +417,6 @@ pub(super) fn ask_animated(
             &account,
             asking,
             model.as_deref(),
-            &mut reporter,
             &mut sink,
             worker_trust.clone(),
             // Taken and dropped. An answer has to be released to be looked at, and the one place
@@ -501,8 +502,10 @@ pub(super) fn commit_message_animated(
     session.begin_aside();
 
     let worker = thread::spawn(move || {
+        // Dropped when this thread ends, which is how the loop driving it learns it has: it draws
+        // frames until every sender is gone.
+        let _ends_with_the_worker = to_main;
         let mut sink = Trail::new();
-        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
         let egress = Egress::new();
         // Reduced to what a person can be told before it crosses back, since the error types are
         // the kernel's and this thread is the only place they mean anything.
@@ -514,7 +517,6 @@ pub(super) fn commit_message_animated(
             &asked.source,
             asked.format.as_deref(),
             model.as_deref(),
-            &mut reporter,
             &mut sink,
             worker_trust,
             &worker_cancel,
@@ -998,19 +1000,13 @@ pub(super) fn check_the_goal_on_a_worker(
     cancel: &Cancel,
     to_main: mpsc::Sender<crate::remote_confirm::ToMain>,
 ) -> (Result<bravebot_agent::goal::Assessed, String>, Trail) {
+    // Dropped when this returns, which is how the loop driving it learns it has: it draws frames
+    // until every sender is gone.
+    let _ends_with_the_worker = to_main;
     let mut sink = Trail::new();
-    let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
     let egress = Egress::new();
     let done = turn::goal(
-        config,
-        &egress,
-        account,
-        check,
-        model,
-        &mut reporter,
-        &mut sink,
-        trust,
-        cancel,
+        config, &egress, account, check, model, &mut sink, trust, cancel,
     )
     .map_err(|e| e.to_string());
     (done, sink)

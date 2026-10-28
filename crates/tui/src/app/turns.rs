@@ -1452,7 +1452,7 @@ pub(super) struct Asked {
 
 /// Record what the turn asked for against what answered, and say so once where they differ.
 ///
-/// The endpoint substitutes rather than refusing: a premium model requested without a credential
+/// The endpoint substitutes rather than refusing: a premium model requested without a key
 /// comes back answered by a weaker model, with a 200 and a perfectly ordinary reply. So the only
 /// trace is this field, and a session that never compares them cannot tell a model it chose from
 /// one chosen for it.

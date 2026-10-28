@@ -136,7 +136,7 @@ pub struct Facts<'a> {
     /// in force for the *next* turn: `/model` moves it and leaves the served name alone, so a panel
     /// that compares the two is comparing two different turns.
     pub substituted_model: Option<&'a str>,
-    /// Whether the last turn actually spent a subscription credential.
+    /// Whether the last turn actually presented the premium key.
     ///
     /// `None` before any turn has run. Three states rather than a bool because "not yet known" is
     /// not the same as "no", and reporting a guess as an observation is the bug this replaced.
@@ -731,12 +731,12 @@ fn choice_lines(facts: &Facts<'_>) -> Vec<Line> {
     //
     // The note says which tier the last turn actually ran on, not whether this build knows a premium
     // host. It used to say the latter, which is baked in at compile time and true of every build:
-    // a session whose subscription was never read still reported "premium configured" while every
-    // request went out spending no subscription and came back answered by a weaker model. What a
-    // person wants from this line is what they are getting, and that is a fact about a request.
+    // a session that never presented a key still reported "premium configured" while every
+    // request went out without one and came back answered by a weaker model. What a person wants
+    // from this line is what they are getting, and that is a fact about a request.
     lines.push(
         Line::new(t!(status_endpoint), environment(&facts.config.endpoint)).with_note(
-            match (facts.config.premium_endpoint.is_some(), facts.premium) {
+            match (facts.config.premium_key.is_some(), facts.premium) {
                 (true, Some(true)) => t!(status_premium_in_use),
                 (true, Some(false)) => t!(status_premium_not_spent),
                 // Nothing has run yet, so nothing has been observed. Saying which tier is in use
@@ -1194,15 +1194,14 @@ fn rows(heading: Line, rows: &[String]) -> Vec<Line> {
 
 /// What can be said about the tier before a request has settled it.
 ///
-/// The configuration and nothing else, which is why the premium wording stops short of claiming a
-/// credential will be spent. A stored batch may still be expired, exhausted, or issued for another
-/// environment, and which of those holds is settled by a request rather than by looking. Reading the
-/// file at startup would license a firmer claim than the file supports.
+/// The configuration and nothing else, which is why the premium wording stops short of claiming the
+/// key will be accepted. The premium host may still refuse it, and whether it does is settled by a
+/// request rather than by looking.
 ///
 /// Shared with the opening screen rather than written twice, so the line drawn at startup and the
 /// line `/status` shows an hour later cannot drift apart.
 pub fn configured_tier(config: &Config) -> &'static str {
-    match config.premium_endpoint {
+    match config.premium_key {
         Some(_) => t!(status_premium_available),
         None => t!(status_no_subscription),
     }
@@ -1348,6 +1347,7 @@ mod tests {
             "BRAVE_SERVICES_KEY_ID" => Some("a-key-id".into()),
             "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.to_string()),
             "BRAVE_AI_CHAT_PREMIUM_ENDPOINT" => premium.map(str::to_string),
+            "BRAVE_AI_CHAT_PREMIUM_KEY" => premium.map(|_| "a-premium-key".to_string()),
             _ => None,
         })
         .expect("config")
@@ -2856,9 +2856,9 @@ mod tests {
     }
 
     /// The bug this replaced. Every build knows a premium host, so reporting premium from the
-    /// configuration said "premium" for a session whose credentials were never read, while every
-    /// request went out spending no subscription and came back answered by a weaker model. A panel
-    /// that cannot be trusted on this point is worse than one that omits it.
+    /// configuration said "premium" for a session that never presented a key, while every request
+    /// went out without one and came back answered by a weaker model. A panel that cannot be
+    /// trusted on this point is worse than one that omits it.
     #[test]
     fn the_tier_reported_is_the_one_the_last_turn_actually_ran_on() {
         let config = config_for(
@@ -2867,29 +2867,29 @@ mod tests {
         );
         let trust = trusting();
 
-        // A premium host is configured and a turn ran without spending anything. The old line said
+        // A premium host is configured and a turn ran without presenting the key. The old line said
         // "premium configured" here, which is the sentence that hid a whole broken session.
         let mut free = facts(&config, &trust);
         free.premium = Some(false);
         let shown = rendered(&report(&free));
-        assert!(shown.contains("no subscription was spent"), "{shown}");
+        assert!(shown.contains("the premium key was not sent"), "{shown}");
         assert!(
-            !shown.contains("premium, a credential"),
-            "a turn that spent no subscription was reported as premium: {shown}"
+            !shown.contains("premium, the premium key was sent"),
+            "a turn that sent no key was reported as premium: {shown}"
         );
 
         let mut premium = facts(&config, &trust);
         premium.premium = Some(true);
         let shown = rendered(&report(&premium));
-        assert!(shown.contains("a credential was spent"), "{shown}");
+        assert!(shown.contains("the premium key was sent"), "{shown}");
     }
 
     /// What the opening screen draws before anything has run is what `/status` says at that moment,
     /// because both take it from here. Two copies of this wording would be two things to keep true,
     /// and the one that drifted would be the one nobody re-reads.
     ///
-    /// Neither reads the store. A batch on disk may be expired, exhausted, or for the wrong
-    /// environment, so its presence is not the tier: only a request settles that.
+    /// Neither sends anything. A key that is held may still be refused, so holding one is not the
+    /// tier: only a request settles that.
     #[test]
     fn the_opening_line_and_the_panel_say_the_same_thing_before_a_turn_runs() {
         let premium = config_for(

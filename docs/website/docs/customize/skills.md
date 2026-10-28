@@ -62,7 +62,7 @@ line took the place of the definition's model, a skill's model replaces the comm
 would with no definition addressed.
 
 If the service answers a skill's rounds with a different model than the one the skill named, which
-it does for a misspelt name or a premium model with no subscription in hand, the session says so.
+it does for a misspelt name or a premium model with no premium key in hand, the session says so.
 
 A value that cannot be used is reported and the skill still loads, on whatever the session was
 already running: a level spelled some other way, or a model needing a sign-in this machine has not

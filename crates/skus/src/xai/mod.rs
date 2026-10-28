@@ -3,7 +3,7 @@
 //!
 //! # Why this crate has no labels
 //!
-//! The reason is the one [the crate](crate) gives for the Leo import, and it is checked for this flow
+//! The reason is the one [the crate](crate) gives, and it is checked for this flow
 //! in [XAI-4](../../../../docs/specs/xai-sign-in.md#XAI-4). A person types `bravebot auth login xai`
 //! at a shell, so no planner exists and no model has a context. The bytes read from outside are the
 //! replies of the authorization server. They are compared and parsed here. What leaves this module is
@@ -180,7 +180,7 @@ pub struct SignedIn {
 ///
 /// `announce` is called once, with the address and the code, after the code is had and before the
 /// token endpoint is asked anything. `transport` is what the caller has decided its clients trust and
-/// go through, half-built as for [`crate::device::register`].
+/// go through, half-built so the caller can finish it.
 pub fn sign_in(
     hosts: &Hosts,
     transport: ureq::config::ConfigBuilder<ureq::typestate::AgentScope>,

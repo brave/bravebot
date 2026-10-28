@@ -1,113 +1,72 @@
 ---
 sidebar_position: 5
-title: Leo Premium
-description: Import a Leo Premium subscription so requests go to the premium tier.
+title: Brave's premium service
+description: Set a premium key and a premium endpoint so requests for Brave's models go to Brave's premium service.
 ---
 
-# Leo Premium
+# Brave's premium service
 
-Brave Bot can register itself against a Leo Premium subscription in a Brave install on this machine
-and spend its own credentials on the premium tier.
+Requests for Brave's models go to Brave's premium service when bravebot holds a premium key and a
+premium endpoint. The key is sent as a bearer token. Brave's AI gateway is still in development, so
+prefer one of the other ways of reaching a model for now: AWS Bedrock, a gateway, a ChatGPT account or
+an xAI account. See [Signing in](signing-in.md).
 
-```sh
-bravebot import-leo-creds            # from the stable Brave install
-bravebot import-leo-creds beta
-bravebot import-leo-creds nightly
-bravebot import-leo-creds development
-bravebot import-leo-creds --forget   # remove what was imported
-```
+## The two variables
 
-Without a channel, `stable` is what importing means.
+| Variable | What it is |
+|---|---|
+| `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` | the premium host |
+| `BRAVE_AI_CHAT_PREMIUM_KEY` | the premium key |
 
-## What it does, and does not do
+Both are optional, and premium is used only when both are held. A key with no premium endpoint is
+dropped. A premium endpoint that holds a query or a fragment is dropped too, which drops the key with
+it.
 
-**This registers as a new device.** Only the subscription's *order id* is read from the browser
-profile. The credentials themselves are generated here and signed by Brave, exactly as a second
-browser on another machine would do it. The browser keeps its own, and nothing it holds is spent.
+**A build can bake them in.** A build made with either variable set holds it. Baked values are masked
+in the binary so that `strings` does not print them; that hides them and does not encrypt them, so a
+binary built with a key should be treated as holding one. A build without them works, and sends its
+requests to the free endpoint. A source checkout sets them in `.envrc`, and `contrib/envrc.example`
+shows how.
 
-Before anything is registered, the order is checked: an unpaid order, one asking for no credentials,
-one asking for an implausible number, and one without interval metadata are all refused. The Leo item
-is picked out of a multi-item order rather than assumed to be the only one. A batch is then verified
-against the issuer's key before it is stored, and tokens are matched by value rather than by position.
+**The environment outranks what is baked.** A value exported in the environment is used in place of
+the built-in one. A [settings file's `env` block](configuration.md#environment-variables) supplies
+either variable when nothing is built in.
 
-## How credentials are spent
+## What is sent, and where
 
-Credentials arrive in batches covering a few days and are spent one per request. A spent credential is
-never offered again, consecutive spends hand out different credentials, and spending past the end of a
-batch is refused. This holds across every `bravebot` running on the machine, delegates included: each
-spend is recorded in the file before the credential is sent, so two sessions never present the same one.
-A credential recorded as spent whose request was then abandoned is not offered again either.
+When both are held and the premium endpoint's host is one of Brave's, a request for the Brave backend
+goes to the premium endpoint's `/v1/chat/completions` with `Authorization: Bearer <key>`. Such a
+request is not signed, so it carries no `digest` header and no `Signature` authorization. A redirect
+in answer is a failure and is not followed.
 
-**A credential is never sent to the non-premium host.** The premium host and the credential travel
-together, because a credential belongs to a deployment. A build with no premium host configured stays
-on the free tier rather than sending one where it does not belong. Whether a host is Brave's is read
-from the host a request would connect to, so a Brave name after a `?` or a `#` in
-`BRAVE_AI_CHAT_PREMIUM_ENDPOINT` does not count, and a premium endpoint holding a query or a fragment
-is ignored.
+**The key is never sent to the free endpoint or to a host that is not Brave's.** A host is Brave's
+when it ends in `.brave.com`, `.brave.software` or `.bravesoftware.com`. The host is the one a request
+connects to, so a Brave name after a `?` or a `#` in `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` does not count:
+`https://attacker.example#.brave.com` is not Brave's.
 
-Nothing is written back unless a credential was actually spent, so a session that spends nothing never
-touches the store. A write that is interrupted leaves the last good batch in place rather than half of a
-new one.
+**Only a turn whose model Brave serves is handed the key.** A turn whose model is served by AWS Bedrock
+or by a gateway is not, since those services were set up with credentials of their own.
 
-## Where they are kept
+Without a key, requests go to the free endpoint, signed with the services key built into the binary. A
+session whose model is one of Brave's, with no key held and no other model service configured (no
+Bedrock block, gateway, ChatGPT sign-in or xAI sign-in), does not start. Instead it says no model
+service is configured and lists the ways to configure one, premium among them.
 
-In one file under `~/.bravebot`, readable by your account alone before anything is written to it and
-still after a re-import over an existing one: mode 0600 on macOS and Linux, and on Windows an access
-list granting only your account. A platform with neither has the import refused. Nothing asks you for a password, and the file is not
-encrypted at rest, as the browser these are imported from keeps the same secret unencrypted in its own
-profile.
-
-**One file, not one per channel.** You have one subscription however many Brave builds are installed,
-so importing from Nightly replaces what was imported from Stable rather than sitting beside it. The
-channel only says which browser profile to read the order id from, which is a fact about your machine
-rather than about the agent, so `--forget` takes no channel: `bravebot import-leo-creds --forget
-nightly` is refused as a bad argument and removes nothing. Forgetting removes the file, and is not
-an error when there was nothing to remove.
-
-A malformed or empty file is reported as such rather than treated as absent credentials, and so is one
-recording a version this build does not write. Each refusal says to re-import with `bravebot auth login
-leo` or to forget the batch with `bravebot auth logout leo`. A credential without a token is rejected
-on load. With no home directory there is nowhere a secret
-belongs, and that is reported rather than guessed at.
-
-## When a subscription cannot be read
-
-Finding nothing has two causes, and they are not the same fact.
-
-**Nothing imported** is the free tier working as intended, and nothing is said about it. An endpoint
-belonging to no environment, such as a local one, is this case too. No credential belongs near it by
-design. So is a machine with nowhere to keep credentials at all: reported as a broken batch, that
-would tell somebody who has never held a subscription that theirs could not be used.
-
-**A batch that exists and cannot be spent** is reported to you, with the reason and what to do about
-it. That covers a file that could not be read, one holding nothing, one another version wrote, and
-one imported for an environment this endpoint does not accept. A credential only verifies against the
-deployment that signed it, so a batch from the wrong Brave channel is refused with the reason rather
-than passed over.
-
-**Only a turn that could have spent a credential is told.** Which service answers is decided by the
-model you picked, and only Brave's endpoint has any notion of a subscription. A turn whose model is
-served by AWS Bedrock or by a gateway therefore says nothing about the store, however unusable what is
-stored may be. That turn ran on the model you chose, so there is no downgrade to report, and the
-credential it did not spend is one that service would not have accepted.
-
-The downgrade is said out loud because its only other symptom is the agent appearing to get worse for
-no reason. The request goes out on the free tier, where the endpoint answers a premium model name by
-**substituting a weaker model rather than failing**: a 200 and an ordinary reply. A request that
-silently lost its credential still returns something that reads like an answer, and nothing else on
-your screen would connect that to the store.
+**Programs bravebot starts do not see the key.** `run`, hooks, language servers and the AWS CLI are
+started without `BRAVE_AI_CHAT_PREMIUM_KEY`, as they are without the services key and its id. See
+[the run tool](../reference/run-tool.md).
 
 ## Which tier a turn actually ran on
 
 **What `/status` says about the tier is what the last turn actually did**, not what the build was
-compiled with. Before the first turn it says premium is *available*, rather than claiming it is or is
-not in use. A turn that ran on a model named by an addressed definition or by a skill is recorded the
-same way, so `/status` does not stay on "nothing sent yet" or on an earlier turn's tier after one.
+compiled with. With a key held, and before the first turn, it says "premium available, nothing sent
+yet". After a turn it says "premium, the premium key was sent" or "the premium key was not sent",
+whichever that turn did. With no key it says "no premium key configured". A turn that ran on a model
+named by an addressed definition or by a skill is recorded the same way, so `/status` does not stay on
+"nothing sent yet" or on an earlier turn's tier after one.
 
-The opening screen draws the tier beside the confinement, from the configuration, in the same words
-`/status` uses before a turn has run. It deliberately does **not** read the credential store: a
-stored batch may be expired, exhausted, or issued for another environment, so finding one would not
-settle the tier either. A pane too narrow for the wordmark still reports both.
+The opening screen draws the tier beside the confinement, from the configuration, in the words
+`/status` uses before a turn has run. A pane too narrow for the wordmark still reports both.
 
 Where the server reports using a model other than the one you asked for, **both are shown**: the
 choice you made and the model that actually answered. This is said once when it starts happening
@@ -115,21 +74,12 @@ rather than every turn. The automatic entry (`automatic-bravebot`, shown as **Au
 to a concrete model is not a substitution: that is the server choosing per request, which is what
 picking it means.
 
-## Requirements and limits
+## Limits
 
-- A session spend limit can count credentials instead of tokens: `/limit 200 credits`, or `"limit": "200 credits"` in a settings file. Each credential handed out counts, delegates included. See [`/limit`](../reference/commands.md#limit-amount--off).
-- **macOS and Linux** to import, including a machine with no desktop session. Nothing here needs one.
-  Importing is not supported on Windows, since no Brave profile is located there. A batch imported on
-  another machine and copied to `~/.bravebot` on Windows is spent normally.
-- The build must know the premium host. Without it, premium is unavailable.
-- A credential only works against the deployment that issued it, so import from the Brave channel
-  matching the environment the binary is configured for. A mismatch is refused before a request is
-  made, rather than sent and answered with a 401.
-- Sign in to Leo in that Brave install first: a subscription that is not in the profile cannot be
-  imported.
-- The stored batch is a bearer secret in a file you own. It is not encrypted at rest, which is what
-  the browser does with the same secret, and anything running as you can read it. That includes a
-  program `run` launches, which is [deliberately unconfined](../security/permissions.md).
+A session spend limit can count premium requests instead of tokens: `/limit 200 credits`, or
+`"limit": "200 credits"` in a settings file. Each request that presents the key counts as one,
+delegates' included. A session that holds no key presents none and is never stopped by a limit in
+credits. See [`/limit`](../reference/commands.md#limit-amount--off).
 
 ## Checking what you have
 
@@ -137,14 +87,20 @@ picking it means.
 bravebot doctor
 ```
 
-reports whether a subscription is imported, which environment it was issued for, and how many of its
-credentials are still unspent. Counts only: a credential is a bearer secret, so none of it is
-printed.
+reports the premium endpoint on a `premium` line, as one of:
 
-```sh
-bravebot auth status leo
-```
+- `<premium url>, with a premium key`
+- `<premium url>, without a premium key, so requests go to the endpoint above`
+- `not configured`
 
-says the same in one line and exits 0 only if the subscription is usable. A subscription imported
-for a Brave channel the endpoint does not accept is reported as unusable, with the command that
-replaces it.
+The key's value is never printed. `doctor` also lists the premium key among the credentials this build
+holds: it is issued by Brave's premium service, which is also the only surface that revokes it, and
+unsetting the variable or building without it ends this machine's custody of the key and leaves the key
+live there.
+
+## A file left by an earlier version
+
+Earlier versions imported a subscription from a Brave profile and kept its credentials in
+`~/.bravebot/leo-premium.json`. bravebot no longer reads or writes that file, and
+`bravebot import-leo-creds` is a retired command that prints a message saying so. The file can be
+deleted by hand.

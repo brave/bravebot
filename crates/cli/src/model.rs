@@ -13,9 +13,9 @@ use std::path::Path;
 ///
 /// Five routes, each a line, in the order they are worth taking today. The four that reach a
 /// service directly lead: AWS Bedrock, a gateway, and signing in with a ChatGPT or an xAI account.
-/// Importing a Leo Premium subscription is last and says why, since those models are reached through
-/// Brave's AI gateway and it has open problems of its own. It is still the shortest route for somebody
-/// who already subscribes, which is why it is offered at all.
+/// The premium key is last and says why, since those models are reached through Brave's AI gateway
+/// and it is still in development. It is the route a build made with the key set already takes,
+/// which is why it is offered at all.
 ///
 /// `a_service_is_configured` replaces all five with one line. That person set a service up and
 /// left the model this build baked in, which a settings block copied out of another tool does by
@@ -26,9 +26,6 @@ use std::path::Path;
 /// `chatgpt` and `xai` are what the sign-in files hold. A file that cannot be read is said before the
 /// routes, with the remedy, since it is not a service and the person has to know why a sign-in they
 /// made is not used.
-///
-/// `refused` is what was wrong with a stored subscription, where something was. It leads, because
-/// it changes what the person should do: a batch that could not be read is one import away.
 ///
 /// Built as a string rather than printed, so the ending that carries it leads the block with its
 /// identifier the way it does every other failure, and so `doctor` can say the same thing. It says it too: a report reading "configuration OK" about a machine where a
@@ -46,7 +43,6 @@ use std::path::Path;
 /// behind comes before the routes, so a person whose setup was looked at is told so (IMPORT-4), and
 /// a source holding something importable names the command that asks (IMPORT-8).
 pub(crate) fn how_to_configure_a_model(
-    refused: Option<&str>,
     a_service_is_configured: bool,
     chatgpt: AccountFile,
     xai: AccountFile,
@@ -54,9 +50,6 @@ pub(crate) fn how_to_configure_a_model(
     why_no_model_was_offered: Option<&str>,
 ) -> String {
     let mut lines = vec![t!(onboarding_no_model).to_string()];
-    if let Some(problem) = refused {
-        lines.push(t!(onboarding_subscription_unusable, problem = problem));
-    }
     if let Some(why) = why_no_model_was_offered {
         lines.push(why.to_string());
     }
@@ -101,7 +94,7 @@ pub(crate) fn how_to_configure_a_model(
             t!(onboarding_openrouter),
             t!(onboarding_chatgpt),
             t!(onboarding_xai),
-            t!(onboarding_leo),
+            t!(onboarding_premium),
         ] {
             lines.push(format!("  - {route}"));
         }
@@ -350,12 +343,10 @@ pub(crate) fn a_start_would_ask(config: &Config) -> bool {
 pub(crate) fn nothing_serves(config: &Config, model: &str) -> Option<String> {
     match bravebot_agent::backend::serving(config, &bravebot_net::Egress::new(), model) {
         bravebot_agent::backend::Serving::NothingConfigured {
-            subscription,
             a_service_is_configured,
             chatgpt,
             xai,
         } => Some(how_to_configure_a_model(
-            subscription.as_deref(),
             a_service_is_configured,
             chatgpt,
             xai,
@@ -597,14 +588,14 @@ mod tests {
     }
 
     /// BACKEND-39: each way to configure a service is named by what to type or write, the ChatGPT
-    /// and xAI sign-ins among them, and Leo Premium comes last because its line tells the reader to
-    /// prefer the others. A list that left a sign-in out sends somebody who has the account to a gateway
+    /// and xAI sign-ins among them, and the premium key comes last because its line tells the reader
+    /// to prefer the others. A list that left a sign-in out sends somebody who has the account to a gateway
     /// they do not need, and the xAI line says that its models are then offered in `/model` as
     /// `xai/<model>`, which is what a person signing in has to know to name one.
     #[test]
-    fn the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_leo_last() {
+    fn the_routes_of_an_unconfigured_start_each_name_what_to_type_or_write_and_leave_the_premium_key_last()
+     {
         let said = how_to_configure_a_model(
-            None,
             false,
             AccountFile::NotStored,
             AccountFile::NotStored,
@@ -620,7 +611,7 @@ mod tests {
             at("OpenRouter"),
             at("bravebot auth login chatgpt"),
             at("bravebot auth login xai"),
-            at("bravebot auth login leo"),
+            at("BRAVE_AI_CHAT_PREMIUM_KEY"),
         ];
         assert!(routes.is_sorted(), "{said}");
         let line = said
@@ -639,7 +630,6 @@ mod tests {
     #[test]
     fn a_configured_service_is_told_to_name_a_model_and_is_not_offered_the_routes() {
         let said = how_to_configure_a_model(
-            None,
             true,
             AccountFile::NotStored,
             AccountFile::NotStored,
@@ -652,7 +642,7 @@ mod tests {
             "OpenRouter",
             "bravebot auth login chatgpt",
             "bravebot auth login xai",
-            "bravebot auth login leo",
+            "BRAVE_AI_CHAT_PREMIUM_KEY",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
         }
@@ -665,7 +655,6 @@ mod tests {
     fn a_stored_chatgpt_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes()
      {
         let said = how_to_configure_a_model(
-            None,
             true,
             AccountFile::Stored,
             AccountFile::NotStored,
@@ -683,7 +672,7 @@ mod tests {
             "amazon-bedrock",
             "OpenRouter",
             "bravebot auth login chatgpt",
-            "bravebot auth login leo",
+            "BRAVE_AI_CHAT_PREMIUM_KEY",
             "`model` key",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
@@ -700,7 +689,6 @@ mod tests {
     fn a_stored_xai_sign_in_is_told_to_name_one_of_the_accounts_models_and_not_offered_the_routes()
     {
         let said = how_to_configure_a_model(
-            None,
             true,
             AccountFile::NotStored,
             AccountFile::Stored,
@@ -718,7 +706,7 @@ mod tests {
             "amazon-bedrock",
             "OpenRouter",
             "bravebot auth login xai",
-            "bravebot auth login leo",
+            "BRAVE_AI_CHAT_PREMIUM_KEY",
             "`model` key",
         ] {
             assert!(!said.contains(route), "{route} was offered: {said}");
@@ -732,7 +720,6 @@ mod tests {
     #[test]
     fn where_both_accounts_are_signed_in_the_refusal_says_both() {
         let said = how_to_configure_a_model(
-            None,
             true,
             AccountFile::Stored,
             AccountFile::Stored,
@@ -766,7 +753,6 @@ mod tests {
     #[test]
     fn an_xai_sign_in_that_cannot_be_read_configures_nothing_and_the_routes_stay() {
         let said = how_to_configure_a_model(
-            None,
             false,
             AccountFile::NotStored,
             AccountFile::Unreadable,
@@ -788,7 +774,6 @@ mod tests {
     fn a_start_asks_the_accounts_that_are_stored_and_nothing_else() {
         use bravebot_agent::backend::Serving;
         let nothing = |chatgpt, xai| Serving::NothingConfigured {
-            subscription: None,
             a_service_is_configured: chatgpt == AccountFile::Stored || xai == AccountFile::Stored,
             chatgpt,
             xai,

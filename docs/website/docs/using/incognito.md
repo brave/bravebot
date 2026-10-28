@@ -10,7 +10,7 @@ description: Start a session with --incognito so it adds nothing to ~/.bravebot,
 bravebot --incognito
 ```
 
-An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the four files
+An incognito session runs like any other and adds nothing to `~/.bravebot`, apart from the three files
 [below](#what-it-does-not-cover). No prompt reaches the history, no session record and no title are
 written, no audit trail is kept, and a model, theme or effort level chosen inside it applies for
 that session without being recorded. The sessions directory is not created either, since an empty
@@ -21,7 +21,7 @@ A history and records that were already there are left exactly as they were, and
 from before stays resumable. It stops being updated for as long as the incognito one runs.
 
 **Reading is untouched.** The settings, the model and theme you chose, your standing instructions,
-your skills and your imported credentials are all read as usual, so the session is the one you
+your skills and your stored sign-ins and keys are all read as usual, so the session is the one you
 configured rather than a fresh install. The record of command lines you asked to be remembered past a
 session is read on the same terms: a line already in it still stops the asking, and the key that would
 add one is not offered. So is the record of directories you answered yes to at the startup question,
@@ -66,14 +66,6 @@ Eleven things still reach the filesystem:
   own to keep its files in, such as a runner's cache. Here it sits in the system temporary directory
   on the same terms and goes once the server stops, so a runner fetches its package again each
   session.
-- **A credential you spent.** With a [Leo Premium](../customize/premium.md) subscription imported,
-  the session spends credentials from it as any session does, and records which ones it spent in the
-  file the import created under `~/.bravebot`. A credential is single use and presenting it to the
-  service spends it there, so one left looking unspent would be offered again in your next session,
-  wasting a credential you paid for. If the batch runs out while you are working, a new one is
-  fetched for the same subscription and written to the same file, rather than thrown away when you
-  exit. What ends up in the file is credentials for a subscription you imported before the session
-  and which of them are spent, and nothing about the project or what you asked.
 - **A ChatGPT sign-in whose access token was replaced.** A stored
   [ChatGPT sign-in](../customize/providers/chatgpt.md) is used as in any session. When its access
   token is replaced the new tokens are written to `chatgpt-account.json` under `~/.bravebot`, and a
@@ -98,8 +90,7 @@ Eleven things still reach the filesystem:
   trusted. The record names the file and nothing else, though that does say you worked in the
   project.
 
-[`import-leo-creds`](../customize/premium.md) is refused rather than quietly skipped, since a
-credential that did not outlive the session would not be an import. `--forget` still works, because
-removing a stored secret leaves less behind rather than more. `bravebot auth login chatgpt` is refused
-the same way, before a browser opens, and `bravebot auth logout chatgpt` still works. `bravebot auth login xai`
-is refused the same way, before the code is asked for, and `bravebot auth logout xai` still works.
+`bravebot auth login chatgpt` is refused rather than quietly skipped, before a browser opens, and
+`bravebot auth logout chatgpt` still works, because removing a stored secret leaves less behind rather
+than more. `bravebot auth login xai` is refused the same way, before the code is asked for, and
+`bravebot auth logout xai` still works.

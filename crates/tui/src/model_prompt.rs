@@ -680,7 +680,7 @@ fn model_line(model: &Model, selected: bool, current: bool, width: usize) -> Lin
         ),
     };
 
-    // Said rather than left to be discovered by a request failing: without a subscription a premium
+    // Said rather than left to be discovered by a request failing: without a premium key a premium
     // model returns 403 and the session looks broken for no stated reason.
     let label = match model.premium {
         true => format!("{}  ", t!(picker_premium)),

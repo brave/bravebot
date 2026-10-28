@@ -233,14 +233,14 @@ confinement available on this platform, whether the network is closed for confin
 which layer closed it ([SANDBOX-20](sandboxing.md#SANDBOX-20)), the sandbox mode in force and the file
 or flag that chose it ([SANDBOX-22](sandboxing.md#SANDBOX-22)), each entry of the four filesystem lists
 with the file or flag that wrote it and each that is not in force with why
-([SANDBOX-25](sandboxing.md#SANDBOX-25)), and the state of any imported subscription. Each AWS
+([SANDBOX-25](sandboxing.md#SANDBOX-25)), and the premium host with whether a premium key is held,
+never its value ([PREM-14](premium-credentials.md#PREM-14)). Each AWS
 account gets its profile and a line saying whether the AWS CLI gives it a credential a request can
 be signed with. Where it does not, the line says why: a session that is signed out names `bravebot
 auth login bedrock`, and a profile the CLI does not have, a CLI that is not installed and an answer
 that is not a credential are each said as such, naming no sign-in. That line does not change the
-exit status. Where the report names a Bravebot command that signs in, or one that forgets an
-imported subscription, it is `bravebot auth login` or `bravebot auth logout`
-([CLI-18](#CLI-18)). The signing key
+exit status. Where the report names a Bravebot command that signs in, or one that forgets a
+sign-in, it is `bravebot auth login` or `bravebot auth logout` ([CLI-18](#CLI-18)). The signing key
 is named as never transmitted, and a value from a settings file is never printed: where a credential
 decides whether a backend works, what is reported is that one was found. A configuration error makes
 it fail rather than pass with a warning. Text it names from a settings file, such as a rule, a key
@@ -512,10 +512,10 @@ still goes to stdout, and stdout carries nothing else. Two cases are neither rep
 name that asks for whichever model the server picks rather than for a particular one, and a backend
 that does not report the name it was asked for.
 
-**Why.** A model a run cannot be served is substituted rather than refused. One that needs a
-subscription is answered by a weaker model, with an ordinary reply and nothing to distinguish it, so
-the name the server reports is the only trace there is. Reporting it is about the model in force
-rather than the flag alone, because every route to a model is somebody naming
+**Why.** A model a run cannot be served is substituted rather than refused. A request for one that
+needs the premium key, sent without it, is answered by a weaker model with an ordinary reply and
+nothing to distinguish it, so the name the server reports is the only trace there is. Reporting it
+is about the model in force rather than the flag alone, because every route to a model is somebody naming
 one they expect to be answered by: the settings file's key is what a repository commits beside its
 scripts, and a remembered choice is what a person picked and is being shown.
 
@@ -960,7 +960,6 @@ person's own file or by `--agent`.
 `bravebot auth login` with no way named lists the ways this program signs in to a model service,
 each by a number and by the word that names it:
 
-- `leo` imports a Brave Leo Premium subscription, as `import-leo-creds` does.
 - `bedrock` signs in to every AWS account the configuration names for Amazon Bedrock.
 - `import` reads model services out of other tools, as `import-providers` does.
 - `gateway` stores a key for a service this program knows an endpoint for, or for a gateway a
@@ -968,21 +967,19 @@ each by a number and by the word that names it:
 - `chatgpt` signs in to a ChatGPT Plus or Pro account in a browser ([CHATGPT-1](chatgpt-sign-in.md#CHATGPT-1)).
 - `xai` signs in to an xAI SuperGrok subscription with a code entered on any device ([XAI-7](xai-sign-in.md#XAI-7)).
 
-A way that already holds a sign-in says so on its line. For Leo that is the line `doctor` prints for
-the stored subscription. For Bedrock it is shown where every account named has a usable session. For
-a gateway it is the ids keys are stored for, whether or not a block names them. For ChatGPT it is that a
+A way that already holds a sign-in says so on its line. For Bedrock it is shown where every account
+named has a usable session. For a gateway it is the ids keys are stored for, whether or not a block
+names them. For ChatGPT it is that a
 sign-in is stored, and for xAI what `auth status xai` says of it: when the access token expires, and that each
 token is sent to one host alone ([XAI-9](xai-sign-in.md#XAI-9)). The credential itself is never printed.
 
 The answer is a number or a name, in any case. If nothing is typed, or the input ends, the command exits
 successfully having run nothing. An answer that names no listed way is refused with the argument
-status (CLI-6). Picking Leo asks which channel, and nothing typed means stable. Where a subscription
-is already imported, it first asks whether to sign in again, names `bravebot auth logout leo`, and
-runs nothing without a yes.
+status (CLI-6). The `leo` of earlier versions is no longer a way: an answer or an argument naming it is
+refused, as is any other word that names no way.
 
-`bravebot auth login <way>` runs that way without the list. A word after `leo` is the channel and
-is checked as `import-leo-creds` checks it. A word opening with `-` is refused there, and so are a
-second word and any word after `bedrock`, `import`, `chatgpt` or `xai`. The list needs a terminal on stdin and on stderr. Without one, the
+`bravebot auth login <way>` runs that way without the list. Any word after `bedrock`, `import`,
+`chatgpt` or `xai` is refused. The list needs a terminal on stdin and on stderr. Without one, the
 command is refused with the argument status and the forms a script can type instead.
 
 Each way is run by the function its own command runs, so `auth login import` prompts, refuses and
@@ -1066,12 +1063,11 @@ was typed or now names the id as something that configures no service, the key s
 command names the entry to add and the file, and exits with the failure status. A key is never
 repeated, in that message or any other.
 
-In an incognito session the Leo and import ways are refused by the checks `import-leo-creds` and
-`import-providers` make, with their words. The Bedrock way is not refused. It records nothing, and
+In an incognito session the import way is refused by the check `import-providers` makes, with its
+words. The Bedrock way is not refused. It records nothing, and
 says `BRAVEBOT_USE_BEDROCK=1` still has to be exported. The xAI way is refused before the code is asked
 for ([XAI-10](xai-sign-in.md#XAI-10)).
-`bravebot auth logout leo` forgets the stored subscription, as `import-leo-creds --forget` does, and
-is allowed in an incognito session. `bravebot auth logout chatgpt` forgets the stored ChatGPT sign-in
+`bravebot auth logout chatgpt` forgets the stored ChatGPT sign-in
 ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)) and is allowed in one too, as is `bravebot auth logout xai`, which forgets
 the stored xAI sign-in ([XAI-9](xai-sign-in.md#XAI-9)). `bravebot auth logout gateway [id]` forgets the key stored for
 that id, or the only one stored where none is named, and is allowed in an incognito session too.
@@ -1095,10 +1091,9 @@ prompts cannot drift between the two, and nothing that scripts the old commands 
 runs before any session exists, so no planner or driver context is involved and no labelled value
 passes through it.
 
-A held Leo sign-in is confirmed before it is repeated because a second import registers this
-machine with Brave as one more device. A repeated Bedrock sign-in leaves a good session alone, and
-a repeated import says when it has nothing new, so neither is asked about. A stored gateway key is
-confirmed before it is replaced, because the file is rewritten and nothing else holds the old one.
+A repeated Bedrock sign-in leaves a good session alone, and a repeated import says when it has
+nothing new, so neither is asked about. A stored gateway key is confirmed before it is replaced,
+because the file is rewritten and nothing else holds the old one.
 
 A known service needs no block written first because the endpoint is compiled in
 ([BACKEND-17](backends.md#BACKEND-17)), so the block would say nothing the program does not already
@@ -1117,7 +1112,7 @@ machine and kept in the shell's history. The file holds an id and a key and no h
 decides where the key goes, and a file of keys that will not parse is refused rather than read as
 empty, because the next write would make it empty.
 
-Leo, the import and the gateway key are refused in an incognito session for the reason in
+The import and the gateway key are refused in an incognito session for the reason in
 [INCOG-7](incognito.md#INCOG-7): each writes to the directory this program owns. The AWS session is
 the AWS CLI's, a subprocess [INCOG-8](incognito.md#INCOG-8) leaves outside the mode, and a session
 in that mode signs in to it on its first turn, so refusing it here would refuse nothing the session
@@ -1165,8 +1160,7 @@ and was told of none.
 
 `verified-by: bravebot_cli::auth::every_way_is_listed_and_only_a_held_one_says_what_it_holds`
 `verified-by: bravebot_cli::auth::a_way_is_picked_by_its_number_or_its_name`
-`verified-by: bravebot_cli::auth::leo_is_asked_which_channel_and_passes_the_word_on`
-`verified-by: bravebot_cli::auth::a_held_leo_sign_in_is_repeated_only_when_asked_to`
+`verified-by: bravebot_cli::auth::what_each_way_holds_is_asked_once`
 `verified-by: bravebot_cli::auth::each_aws_profile_is_signed_in_to_once`
 `verified-by: bravebot_cli::auth::the_switch_is_recordable_where_nothing_ranked_above_the_persons_file_turns_it_off`
 `verified-by: bravebot_config::settings::a_default_answers_only_where_no_layer_names_it`
@@ -1213,7 +1207,6 @@ and was told of none.
 `verified-by: bravebot_cli::running::auth_login_naming_no_way_is_refused_where_nobody_can_pick_one`
 `verified-by: bravebot_cli::running::auth_refuses_what_names_no_way_to_sign_in`
 `verified-by: bravebot_cli::running::auth_login_in_an_incognito_session_refuses_what_its_command_refuses`
-`verified-by: bravebot_cli::running::auth_logout_leo_forgets_the_import_in_an_incognito_session`
 `verified-by: bravebot_cli::running::auth_login_bedrock_is_refused_where_no_aws_account_is_configured`
 `verified-by: bravebot_cli::running::auth_login_bedrock_signs_in_to_every_profile_and_names_the_one_that_failed`
 `verified-by: bravebot_cli::running::auth_login_bedrock_records_the_opt_in_once_its_account_signs_in`
@@ -1262,8 +1255,9 @@ The flags are refused, with the status for an argument (CLI-6), when no words fo
 words are blank, and when they open with `-` and hold no whitespace, since that is the next flag:
 taken as the words, `--json` would be removed and the run would answer in the other format. A
 sentence that opens with `-` holds a space and is words. If a flag is given twice, the last is used.
-They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`, `stats`, `import-leo-creds`,
-`import-providers`, `completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
+They are refused with `--mode manifest`, and with `doctor`, `bug-report`, `auth`, `mcp`, `permissions`,
+`stats`, the retired `import-leo-creds` ([PREM-15](premium-credentials.md#PREM-15)), `import-providers`,
+`completion` and `shell-init`, which start neither a session nor a task. A refusal writes the
 result object of CLI-12 if one was asked for, sends nothing, and says why through the catalogue
 ([LOCALE-2](localization.md#LOCALE-2)).
 
@@ -1380,35 +1374,32 @@ what it leaves out is permission: nothing is added to what the planner may do.
 <a id="CLI-23"></a>
 ### CLI-23: `auth status` says whether a sign-in is usable, and its exit status says it too
 
-`bravebot auth status [leo|bedrock|gateway [id]|chatgpt|xai]` reads what a turn reads, writes nothing, and
-prints one line per sign-in: `leo`, `bedrock` for the default AWS profile or `bedrock <profile>`,
+`bravebot auth status [bedrock|gateway [id]|chatgpt|xai]` reads what a turn reads, writes nothing, and
+prints one line per sign-in: `bedrock` for the default AWS profile or `bedrock <profile>`,
 `gateway <id>`, `chatgpt` and `xai`. Each line is one of:
 
-- **signed in**, with a detail. For Leo that is the line `doctor` prints, the environment and the
-  count of credentials unspent. For an AWS account it is that the session gives credentials, asked
+- **signed in**, with a detail. For an AWS account it is that the session gives credentials, asked
   of the AWS CLI without starting a sign-in. For a gateway it is where a key is found, never what it
   is. For ChatGPT it is the instant the access token expires, and a token past it is still signed in, since
   the next request replaces it ([CHATGPT-11](chatgpt-sign-in.md#CHATGPT-11)). For xAI it is the same instant, and
   that the access token is sent to `api.x.ai` alone and the refresh token to `auth.x.ai` alone
   ([XAI-9](xai-sign-in.md#XAI-9)).
-- **not signed in**, with the way to sign in: nothing is imported, the AWS session has lapsed, or
-  a gateway has no key.
-- **unusable**, with the reason and remedy, where signing in again does not fix it: a stored
-  batch that cannot be read or was written by another version, or one imported for an environment
-  the premium endpoint does not accept, in the words a turn uses
-  ([PREM-8](premium-credentials.md#PREM-8)); the AWS CLI missing or the profile unknown; a file of
-  gateway keys that cannot be read; a ChatGPT or xAI sign-in file that cannot be read or is another version's.
+- **not signed in**, with the way to sign in: the AWS session has lapsed, or a gateway has no key.
+- **unusable**, with the reason and remedy, where signing in again does not fix it: the AWS CLI
+  missing or the profile unknown; a file of gateway keys that cannot be read; a ChatGPT or xAI
+  sign-in file that cannot be read or is another version's.
 
 A gateway whose block names nowhere for a key to live needs none and is signed in. A known service
 no block names is asked about where it is named, and where no id is named, where a key is stored for
 it. It is not signed in, since a session sends it nothing: the line says that no key is stored for
 it, or that a key is stored and no block names it, and names the command that signs in, which
 records the block ([CLI-18](#CLI-18)). With no id and nothing to ask about, the one line says that
-no gateway key is stored. Leo needs the
-configuration only to know the endpoint, so nothing imported is reported without it. A configuration
-that cannot be read is reported as unusable on the lines it blocks.
+no gateway key is stored. A configuration
+that cannot be read is reported as unusable on the lines it blocks. The premium key has no line here:
+it is set in the environment and not signed in to, and `bravebot doctor` reports whether one is held
+([PREM-14](premium-credentials.md#PREM-14)).
 
-With no way named, all five are asked about. The command exits 0 if any sign-in is usable, since
+With no way named, bedrock, gateway, chatgpt and xai are asked about. The command exits 0 if any sign-in is usable, since
 nobody holds every way and a script asking whether bravebot can run is asking about the set. With a
 way named, it exits 0 only if every sign-in under it is usable. Otherwise it exits with the
 configuration status where a configuration could not be read, and the failure status
@@ -1427,17 +1418,13 @@ No line carries a credential, a token, an account or order id, or content from t
 counts, ids the person wrote in settings, and fixed sentences
 ([AGENTS.md](../../agents/AGENTS.md)).
 
-**Why.** `doctor` runs every check and reports a subscription inside a longer report, so it gives a
-script, or a person confirming that an import worked, no short answer and no exit status that means
-signed in. Nothing imported is reported as not signed in, where a turn says nothing about it
-([PREM-8](premium-credentials.md#PREM-8)), because here the person asked. Any-of for the set and
-all-of for a named way is so that the same command serves a script that wants to know whether to
-start and one that wants to know whether a particular sign-in worked.
+**Why.** `doctor` runs every check and reports each sign-in inside a longer report, so it gives a
+script, or a person confirming that a sign-in worked, no short answer and no exit status that means
+signed in. A sign-in nobody made is reported as not signed in, where a turn says nothing about it,
+because here the person asked. Any-of for the set and all-of for a named way is so that the same
+command serves a script that wants to know whether to start and one that wants to know whether a
+particular sign-in worked.
 
-`verified-by: bravebot_cli::running::auth_status_leo_with_nothing_imported_is_not_signed_in_and_exits_nonzero`
-`verified-by: bravebot_cli::running::auth_status_leo_with_a_usable_batch_reports_counts_only`
-`verified-by: bravebot_cli::running::auth_status_leo_for_another_environment_prints_the_remedy_a_turn_would`
-`verified-by: bravebot_cli::running::auth_status_leo_with_an_unreadable_batch_is_unusable_with_the_stores_remedy`
 `verified-by: bravebot_cli::running::auth_status_gateway_says_where_a_key_is_found_and_never_what_it_is`
 `verified-by: bravebot_cli::running::auth_status_gateway_with_an_unreadable_file_of_keys_is_unusable`
 `verified-by: bravebot_cli::running::auth_status_gateway_naming_no_credential_is_signed_in`
@@ -1453,7 +1440,6 @@ start and one that wants to know whether a particular sign-in worked.
 `verified-by: bravebot_cli::running::auth_status_bedrock_asks_the_aws_cli_without_signing_in`
 `verified-by: bravebot_cli::auth::the_verdict_asks_all_of_a_named_way_and_any_of_the_rest`
 `verified-by: bravebot_cli::auth::a_lapsed_aws_session_is_not_signed_in_and_a_missing_cli_is_unusable`
-`verified-by: bravebot_cli::auth::nothing_imported_is_told_from_a_store_that_could_not_be_read`
 `verified-by: bravebot_cli::running::auth_status_chatgpt_reports_the_expiry_and_nothing_that_could_sign_a_request`
 `verified-by: bravebot_cli::xai_sign_in::auth_status_xai_reports_the_expiry_and_nothing_that_could_sign_a_request`
 

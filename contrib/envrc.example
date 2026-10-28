@@ -2,7 +2,7 @@
 #
 #   cp contrib/envrc.example .envrc && direnv allow
 #
-# .envrc itself is gitignored — never commit real key material.
+# .envrc itself is gitignored; never commit real key material.
 
 # ---------------------------------------------------------------------------
 # Which GitHub account gh acts as. Only needed if you have more than one, and
@@ -35,8 +35,8 @@
 #     another it returns 401 error 40101, "Invalid services key": the
 #     signature is well formed, the credential simply is not accepted there.
 #   - the aichat hosts, free and premium.
-#   - the Leo subscription, since a credential only verifies against the
-#     service that issued it. A mismatch returns 401 error 40104.
+#   - the premium endpoint and the premium key, which are held together. A key
+#     with no premium endpoint is dropped.
 #
 # Override for one command without editing this file:
 #
@@ -46,18 +46,21 @@ export BRAVEBOT_ENV="${BRAVEBOT_ENV:-dev}"
 
 # --- dev -------------------------------------------------------------------
 # Hosts resolve on the VPN only; off-VPN the names do not resolve at all.
-# Import the matching subscription with:  bravebot import-leo-creds development
+# The premium key is a secret like the services key, and .envrc is gitignored.
 DEV_SERVICES_KEY="replace-me"
 DEV_KEY_ID="replace-me"
 DEV_ENDPOINT="https://ai-chat.bsg.brave.software"
 DEV_PREMIUM_ENDPOINT="https://ai-chat-premium.bsg.brave.software"
+DEV_PREMIUM_KEY="replace-me"
 
 # --- prod ------------------------------------------------------------------
-# Import the matching subscription with:  bravebot import-leo-creds stable
+# The premium service is only live in dev, so prod uses dev's premium host and
+# key for now. Replace either line with its own value when that changes.
 PROD_SERVICES_KEY="replace-me"
 PROD_KEY_ID="replace-me"
 PROD_ENDPOINT="https://ai-chat.bsg.brave.com"
-PROD_PREMIUM_ENDPOINT="https://ai-chat-premium.bsg.brave.com"
+PROD_PREMIUM_ENDPOINT="${DEV_PREMIUM_ENDPOINT}"
+PROD_PREMIUM_KEY="${DEV_PREMIUM_KEY}"
 
 # ---------------------------------------------------------------------------
 # Selection. An unrecognised BRAVEBOT_ENV fails here rather than silently leaving
@@ -69,12 +72,14 @@ case "$BRAVEBOT_ENV" in
     export BRAVE_SERVICES_KEY_ID="$DEV_KEY_ID"
     export BRAVE_AI_CHAT_ENDPOINT="$DEV_ENDPOINT"
     export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="$DEV_PREMIUM_ENDPOINT"
+    export BRAVE_AI_CHAT_PREMIUM_KEY="$DEV_PREMIUM_KEY"
     ;;
   prod)
     export SERVICES_KEY_AICHAT="$PROD_SERVICES_KEY"
     export BRAVE_SERVICES_KEY_ID="$PROD_KEY_ID"
     export BRAVE_AI_CHAT_ENDPOINT="$PROD_ENDPOINT"
     export BRAVE_AI_CHAT_PREMIUM_ENDPOINT="$PROD_PREMIUM_ENDPOINT"
+    export BRAVE_AI_CHAT_PREMIUM_KEY="$PROD_PREMIUM_KEY"
     ;;
   *)
     echo "BRAVEBOT_ENV must be 'dev' or 'prod', got '$BRAVEBOT_ENV'" >&2
@@ -85,9 +90,11 @@ esac
 # Point the free endpoint at a locally running backend instead, e.g.
 # export BRAVE_AI_CHAT_ENDPOINT="http://127.0.0.1:8000"
 #
-# The premium endpoint is optional. Without it premium is unavailable and every
-# request goes to the free endpoint; a subscription credential is never sent
-# there, since it does not belong to that host.
+# Premium needs both the premium endpoint and the premium key, and both are
+# optional. Without the key every request goes to the free endpoint, signed with
+# the services key. A key with no premium endpoint is dropped. The key is sent
+# only to a premium endpoint on a Brave host, and never to the free endpoint.
+# `bravebot doctor` reports whether a key is held and never prints its value.
 
 # Model to request from POST /v1/chat/completions when the user has not chosen
 # one. `/model` in the interface picks from what GET /v1/models lists and that

@@ -711,7 +711,7 @@ never held the credential sees. A `NAME=value` the line writes in front of a pro
 one of them back: the removal is applied again after the line's own assignments, since the line is
 the planner's and not the person's own.
 
-Those credentials are the signing key and its key id, and every variable the `env` of a gateway in
+Those credentials are the signing key, its key id and the premium key, and every variable the `env` of a gateway in
 force names as a place its bearer token may live. The gateways in force are the managed layer's where
 it states any, otherwise the person's own provider blocks and the Vertex AI service the environment
 names, so the set follows the configuration with no second list to keep in step. A variable no block
@@ -722,7 +722,7 @@ starts lose the variable. `run.scrubEnv` remains the person's own list and adds 
 `BRAVEBOT_SUBPROCESS_ENV_SCRUB=0` restores every variable, gateway variables included.
 
 **The planner is told what is removed.** The description of `run`, on a turn that offers it, names
-the credentials this agent holds, the signing key and its key id, and says that the variables the
+the credentials this agent holds, the signing key, its key id and the premium key, and says that the variables the
 person's settings name as a gateway's token or to be withheld are removed as well, without listing
 them. It says that a program reporting one of them unset, or failing for want of one, says nothing
 about whether the person has set it. Nothing is said where the filtering is switched off. The build
@@ -741,7 +741,7 @@ person's setup, and a planner that cannot tell the removal from a gap reports it
 instructs the person to configure what their shell already holds. Every build, test and check that
 needs a removed variable then fails for a reason nothing in the planner's context explains.
 
-**Why only the fixed names are listed.** The two credentials are the same for everyone and fixed in
+**Why only the fixed names are listed.** The three credentials are the same for everyone and fixed in
 the source. The other names are strings from a settings file: an entry in a provider's `env` is
 free-form and can be a key pasted into the wrong field, and `run.scrubEnv` takes entries from a
 checkout's layer as well. Listing them would send a person's mistake to the model provider with every

@@ -411,7 +411,7 @@ refusal of bypass says that a session nobody watches does not run in a mode that
 question, and names a one-shot run (`-p`) as the way to ask for that. `--dangerously-bypass-approvals-and-sandbox`
 is refused the same way. With no model service configured, `--bg` is refused in the terminal you
 typed it in, with the configuration status and the five routes (Bedrock, an OpenAI-compatible
-gateway, a ChatGPT sign-in, an xAI sign-in, importing Leo), and no background process is started.
+gateway, a ChatGPT sign-in, an xAI sign-in, Brave's premium service), and no background process is started.
 
 | Command | What it does |
 |---|---|

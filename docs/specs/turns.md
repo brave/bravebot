@@ -359,12 +359,12 @@ what says whether the work wanted splitting.
 <a id="TURN-8"></a>
 ### TURN-8: a session that has spent its limit asks before the next request
 
-A session may carry a limit, a number of tokens or a number of Leo Premium credits, from the `limit`
-setting or from `/limit`. Before a turn sends a request, the driver compares what the session has
+A session may carry a limit, a number of tokens or a number of premium requests counted as credits,
+from the `limit` setting or from `/limit`. Before a turn sends a request, the driver compares what the session has
 spent, in the unit the limit counts, with it. Tokens are what earlier turns were charged, plus what
-this turn's completed requests reported ([TURN-5](#TURN-5)). Credits are the credentials the session
-has presented, one per premium request ([PREM-5](premium-credentials.md#PREM-5)), those of a delegate
-it started included. Once the spent total is at or over the limit, the request is not sent and the person is asked one question
+this turn's completed requests reported ([TURN-5](#TURN-5)). Credits are the premium requests the session
+has made, one for each request that asks for the premium key ([PREM-12](premium-credentials.md#PREM-12)),
+those of a delegate it started included. Once the spent total is at or over the limit, the request is not sent and the person is asked one question
 with three answers: stop, go on without a limit, or go on under a new limit, typed in their own
 words. A new limit has to be in the unit the limit counts and above what is spent. A figure that is not asks again, up to three
 times in all, and then the turn stops.
@@ -382,9 +382,9 @@ one is the session's from then on, including for a turn already running when `/l
 **The figure is a count and the stop depends on no content.** Tokens are the sum of the usage the
 backends reported ([BACKEND-31](backends.md#BACKEND-31), [BACKEND-40](backends.md#BACKEND-40)). A
 request that reported nothing adds nothing, so a backend that reports no usage is never stopped by
-a limit in tokens. Credits are counted as each credential is handed out, whichever request spends
-it, so a session that spends none, with no subscription imported, is never stopped by a limit in
-credits, and tokens spent do not reach one. The question is built from that count, the limit and fixed words, and reads no reply or tool
+a limit in tokens. Credits are counted as each request asks for the premium key, whichever request it is, so a
+session that holds no premium key, and so asks none, is never stopped by a limit in credits, and
+tokens spent do not reach one. The question is built from that count, the limit and fixed words, and reads no reply or tool
 result.
 
 **A delegate's own budget is separate.** A delegate is never asked this question. What it spends
@@ -404,7 +404,7 @@ starts. A one-shot run, a manifest run and the desktop window set none, for the 
 **Known costs.** The check comes before a request, so a limit is passed by the round that reached it
 and by whatever a delegate in flight spends before it is collected. A limit counted in tokens says
 nothing about money, and is not a per-model price. A limit counted in credits leaves out the
-credentials spent by `/compact`, `/aside`, a goal check and a manifest run, which present them
+requests made by `/compact`, `/aside`, a goal check and a manifest run, which ask for the key
 outside the turn; it is not kept when a session is resumed, and `/clear` starts it again from zero.
 
 `verified-by: bravebot_agent::turn::a_turn_under_its_limit_is_not_asked_about`

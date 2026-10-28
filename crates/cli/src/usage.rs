@@ -72,7 +72,6 @@ pub(crate) fn print_help() {
         ("bravebot auth login [way]", t!(cli_usage_auth_login)),
         ("bravebot auth logout <way>", t!(cli_usage_auth_logout)),
         ("bravebot auth status [way]", t!(cli_usage_auth_status)),
-        ("bravebot import-leo-creds [channel]", t!(cli_usage_import)),
         ("bravebot import-providers", t!(cli_usage_import_providers)),
         ("bravebot mcp <command>", t!(cli_usage_mcp)),
         (

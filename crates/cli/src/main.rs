@@ -615,7 +615,7 @@ fn main() -> ExitCode {
                 stopped_before_the_turn(as_json, Ending::Argument, t!(cli_shell_init_needs_a_shell))
             }
         },
-        Some("import-leo-creds") => auth::import_leo_creds(&args[1..]),
+        Some("import-leo-creds") => fail(Ending::Argument, t!(cli_import_leo_creds_retired)),
         Some("import-providers") => import::providers(&args[1..]),
         Some(flag) if flag.starts_with('-') => {
             refused_with_the_usage(as_json, t!(cli_unknown_option, flag = flag))

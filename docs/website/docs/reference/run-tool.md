@@ -481,12 +481,13 @@ run and nobody is asked.
 ## What a program is handed
 
 A step gets the environment bravebot is running in, **less the credentials bravebot authenticates to
-its own backend with**: `SERVICES_KEY_AICHAT` and `BRAVE_SERVICES_KEY_ID`. Every step, not only the
+its own backend with**: `SERVICES_KEY_AICHAT`, `BRAVE_SERVICES_KEY_ID` and
+`BRAVE_AI_CHAT_PREMIUM_KEY`. Every step, not only the
 first, and removed rather than blanked, so a program that tells an unset variable from an empty one
 sees what a machine that never held the credential sees. You approve the plan, the resolved binaries
 and the directory. The environment is not among them.
 
-The description of `run` tells the planner that these two are removed, and that the variables your
+The description of `run` tells the planner that these three are removed, and that the variables your
 settings name as a gateway's token or in `run.scrubEnv` are removed too, without listing those. It
 also says that a program reporting one of them unset says nothing about whether you have set it, so a
 build that fails for want of one is not reported to you as a gap in your setup.

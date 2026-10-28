@@ -3,7 +3,7 @@
 //!
 //! # Why this crate has no labels
 //!
-//! The reason is the one [the crate](crate) gives for the Leo import, and it is checked for this
+//! The reason is the one [the crate](crate) gives, and it is checked for this
 //! flow in [CHATGPT-5](../../../../docs/specs/chatgpt-sign-in.md#CHATGPT-5). A person types
 //! `bravebot auth login chatgpt` at a shell, so no planner exists and no model has a context. The
 //! bytes read from outside are a callback from a browser, a reply from the authorization server,
@@ -178,7 +178,7 @@ pub struct SignedIn {
 /// `announce` is called once, with the authorization URL and the port, after the listener is bound
 /// and before anything waits. It shows the URL and asks for the browser, and the sign-in carries on
 /// whether or not a browser opened. `transport` is what the caller has decided its clients trust and
-/// go through, half-built as for [`crate::device::register`]. `pages` is the words the browser is
+/// go through, half-built so the caller can finish it. `pages` is the words the browser is
 /// shown when it returns.
 pub fn sign_in(
     hosts: &Hosts,

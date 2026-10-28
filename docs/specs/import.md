@@ -571,8 +571,8 @@ file and the reason instead, because the command would only refuse.
 service is configured. It refuses where stdin or stderr is not a terminal, and it refuses while incognito.
 Where nothing is left to import it says so, along with what [IMPORT-4](#IMPORT-4) found and left.
 
-**Why.** It has the shape of `import-leo-creds`: a command a person types, rather than a flag that
-answers yes on their behalf.
+**Why.** It is a command a person types, as the sign-ins under `auth login` are, rather than a flag
+that answers yes on their behalf.
 
 `verified-by: bravebot_cli::running::a_one_shot_first_run_names_the_import_command_and_asks_nothing`
 `verified-by: bravebot_cli::running::an_exported_key_is_importable_and_the_refusal_names_the_command`

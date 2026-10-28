@@ -350,8 +350,7 @@ mod tests {
     impl Subscription for TheTurns {
         fn next_credential(&mut self) -> Result<SubscriptionCredential, String> {
             Ok(SubscriptionCredential {
-                cookie_name: "credential".to_string(),
-                cookie_value: "the turn's".to_string(),
+                key: bravebot_config::Secret::new("the turn's"),
             })
         }
     }
@@ -406,7 +405,7 @@ mod tests {
         stop.cancel();
         assert!(carried.is_cancelled(), "the stop is not the turn's");
         let credential = spent.next_credential().expect("a credential");
-        assert_eq!(credential.cookie_value, "the turn's");
+        assert_eq!(credential.key.expose(), "the turn's");
     }
 
     /// Compaction, a goal check and the advisor run on a model the settings name for them, which

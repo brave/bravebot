@@ -38,7 +38,7 @@ VERSION_FILES = Cargo.toml Cargo.lock fuzz/Cargo.lock package.json ui/package.js
 
 # Forwarded into the cross-build container, which does not inherit the host environment.
 BUILD_ENV = SERVICES_KEY_AICHAT BRAVE_SERVICES_KEY_ID BRAVE_AI_CHAT_ENDPOINT \
-            BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVEBOT_DEFAULT_MODEL \
+            BRAVE_AI_CHAT_PREMIUM_ENDPOINT BRAVE_AI_CHAT_PREMIUM_KEY BRAVEBOT_DEFAULT_MODEL \
             BACKTRACE_SUBMIT_URL BRAVEBOT_ALLOW_UNCONFIGURED_BUILD
 
 .PHONY: help

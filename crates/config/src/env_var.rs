@@ -6,12 +6,17 @@
 pub const SIGNING_KEY: &str = "SERVICES_KEY_AICHAT";
 pub const KEY_ID: &str = "BRAVE_SERVICES_KEY_ID";
 pub const ENDPOINT: &str = "BRAVE_AI_CHAT_ENDPOINT";
-/// Host for the premium tier, used once a subscription has been imported.
+/// Host for the premium tier, used once a [`PREMIUM_KEY`] is held.
 ///
 /// A separate variable rather than a prefix swap on ENDPOINT: the two are independent
 /// deployments, and deriving one host from another by string substitution would break
 /// the moment either name changed.
 pub const PREMIUM_ENDPOINT: &str = "BRAVE_AI_CHAT_PREMIUM_ENDPOINT";
+/// The key the premium host authorises a request with, sent as `Authorization: Bearer`.
+///
+/// The key and [`PREMIUM_ENDPOINT`] go together: a build or a run that holds one without the other
+/// sends neither, and a key is never sent to a host that is not Brave's (PREM-2).
+pub const PREMIUM_KEY: &str = "BRAVE_AI_CHAT_PREMIUM_KEY";
 /// The model to request when the user has not chosen one.
 ///
 /// A default rather than the model: `/model` picks one per user and that choice wins, so this
@@ -105,19 +110,20 @@ pub const GOOGLE: [&str; 3] = [GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT, VERTEX_LOCA
 /// Every name a build may bake in, in the order `doctor` reports them.
 ///
 /// CRASH_REPORT_URL is the one name no build needs: without it the build reports no crashes.
-pub const ALL: [&str; 6] = [
+pub const ALL: [&str; 7] = [
     SIGNING_KEY,
     KEY_ID,
     ENDPOINT,
     PREMIUM_ENDPOINT,
+    PREMIUM_KEY,
     DEFAULT_MODEL,
     CRASH_REPORT_URL,
 ];
 
 /// Names a build must have.
 ///
-/// DEFAULT_MODEL is absent because it has a default. PREMIUM_ENDPOINT is absent because a build
-/// without it still works for everyone who has not imported a subscription.
+/// DEFAULT_MODEL is absent because it has a default. PREMIUM_ENDPOINT and PREMIUM_KEY are absent
+/// because a build without them still works, on the free host.
 pub const REQUIRED: [&str; 3] = [SIGNING_KEY, KEY_ID, ENDPOINT];
 
 /// Set to `1` to build without configuration, producing a binary that must be given
@@ -134,9 +140,9 @@ pub const SUBPROCESS_ENV_SCRUB: &str = "BRAVEBOT_SUBPROCESS_ENV_SCRUB";
 
 /// The credentials this agent holds, which are removed from the environment of a program it runs.
 ///
-/// The signing key and the key id, which are always withheld. The variables a gateway's provider
-/// block names are withheld as well, read from the configuration by [`crate::scrub`] rather than
-/// listed here. These two name a secret that reaches Brave's
+/// The signing key, the key id and the premium key, which are always withheld. The variables a
+/// gateway's provider block names are withheld as well, read from the configuration by
+/// [`crate::scrub`] rather than listed here. These three name a secret that reaches Brave's
 /// backend and no subprocess has any use for one: a program the planner chose is doing whatever the
 /// person approved, never authenticating as this agent. Everything else is left alone, including
 /// the endpoints and the model names, which are hosts and identifiers rather than secrets.
@@ -145,7 +151,7 @@ pub const SUBPROCESS_ENV_SCRUB: &str = "BRAVEBOT_SUBPROCESS_ENV_SCRUB";
 /// the user's own environment stay, because `run aws s3 ls` and `run gh pr list` are things people
 /// ask for and a name-matching filter cannot tell one of those from an exfiltration. What holds
 /// here is narrow and exact: this agent's own secrets are not handed to programs it starts.
-pub const SCRUBBED: [&str; 2] = [SIGNING_KEY, KEY_ID];
+pub const SCRUBBED: [&str; 3] = [SIGNING_KEY, KEY_ID, PREMIUM_KEY];
 
 /// How this copy of bravebot was installed, set by a launcher that knows.
 ///

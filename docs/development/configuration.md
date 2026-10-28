@@ -8,7 +8,7 @@ cp contrib/envrc.example .envrc
 direnv allow
 ```
 
-`.envrc` is gitignored and must never be committed, because it holds a signing key.
+`.envrc` is gitignored and must never be committed, because it holds a signing key and a premium key.
 
 The build captures whatever is set at build time, so the resulting binary works in any
 directory rather than needing direnv wherever it is started. A build with nothing set **fails**,
@@ -16,10 +16,10 @@ rather than producing a binary that only works in the tree it came from; to buil
 deliberately, set `BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1` and supply the variables at run time.
 
 A build that bravebot's `run` tool starts fails this way unless it sets
-`BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1`. `run` removes `SERVICES_KEY_AICHAT` and
-`BRAVE_SERVICES_KEY_ID` from the environment of every program it starts
-([RUN-12](../specs/tools/run.md#RUN-12)), so the build script reports both as not set whatever the
-shell holds. `BRAVE_AI_CHAT_ENDPOINT` is not removed, so it is reported only where the shell lacks it.
+`BRAVEBOT_ALLOW_UNCONFIGURED_BUILD=1`. `run` removes `SERVICES_KEY_AICHAT`,
+`BRAVE_SERVICES_KEY_ID` and `BRAVE_AI_CHAT_PREMIUM_KEY` from the environment of every program it
+starts ([RUN-12](../specs/tools/run.md#RUN-12)), so the build script reports the first two as not set
+whatever the shell holds. `BRAVE_AI_CHAT_ENDPOINT` is not removed, so it is reported only where the shell lacks it.
 Build from a terminal, or start the build with the override. The script's failure notes the removal,
 and the description of `run` tells the planner that a program reporting one of these unset says
 nothing about the shell.
@@ -32,7 +32,13 @@ somebody wrote it as root. Baked values are masked so `strings` on the binary do
 print them; that is obfuscation and not encryption, so a binary built with a live key should
 be treated as holding one.
 
-`BACKTRACE_SUBMIT_URL` is the one name the build bakes in that a build can do without. It is the
+`BRAVE_AI_CHAT_PREMIUM_ENDPOINT` and `BRAVE_AI_CHAT_PREMIUM_KEY` are baked in when set and are
+optional: a build without them works, and its requests go to the free endpoint signed with the
+signing key. The key is held only together with the premium endpoint, and a binary built with one
+should be treated as holding a secret. `contrib/envrc.example` gives dev and prod the same premium
+endpoint and key for now, under separate `DEV_` and `PROD_` names so they can differ later.
+
+`BACKTRACE_SUBMIT_URL` is also optional. It is the
 submission URL of the Backtrace project that crash reports go to, token included, and a build made
 without it writes and sends no report ([CRASH-3](../specs/crash-reports.md#CRASH-3)). Unlike the
 others it is not read from the environment at run time at all. Leave it out of `.envrc` for day-to-day
