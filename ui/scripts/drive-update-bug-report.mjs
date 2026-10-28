@@ -26,7 +26,7 @@ mkdirSync(home, { recursive: true })
 /** The release record an ask that learned `latest` `ago` seconds before now would have written. */
 const record = (latest, ago = 0) => {
   const at = Math.floor(Date.now() / 1000) - ago
-  writeFileSync(join(home, 'update-check'), `${at}\treleases\t${latest}\t${at}\n`)
+  writeFileSync(join(home, 'update-check'), `${at}\treleases\t${latest}\n${at}\treleases-learned\t${latest}\n`)
 }
 record('99.0.0')
 // A log is opened only when something is logged, so one an earlier run left is put there.

@@ -134,6 +134,17 @@ impl Registry {
         }
     }
 
+    /// What the line saying when this registry's version was learned names as its source.
+    ///
+    /// A word no released binary reads as a registry, so the line is skipped by every reader that
+    /// does not know it, and the registry's own line stays exactly the shape those readers expect.
+    fn learned_source(self) -> &'static str {
+        match self {
+            Self::Npm => "npm-learned",
+            Self::Releases => "releases-learned",
+        }
+    }
+
     /// The other registry, whose record shares the file with this one's.
     fn other(self) -> Self {
         match self {
@@ -167,8 +178,9 @@ impl fmt::Display for Version {
 /// leave the stamp standing without one.
 ///
 /// `at` is stamped before each ask, so it says when this registry was last asked and not whether
-/// the answer came. `learned` is this machine's clock when an ask last learned `latest`, and is
-/// `None` in a record an earlier version wrote, which had no such field.
+/// the answer came. `learned` is this machine's clock when an ask last learned `latest`. It is kept
+/// on a line of its own, and is `None` where that line is absent: a record an earlier version wrote,
+/// or one an earlier version rewrote, since those keep no line they do not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Record {
     at: u64,
@@ -337,20 +349,32 @@ fn record_in(directory: &Path, registry: Registry) -> Option<Record> {
 /// Read this registry's record out of the file's contents.
 ///
 /// A machine where both installations have been used holds a line for each, and each installation
-/// reads only the one naming the registry it would ask.
+/// reads only the one naming the registry it would ask. The time its version was learned is read
+/// from a line of its own, and only where that line names the version the record holds: a record
+/// rewritten with another version by a writer that kept no such line says nothing of when.
 fn parse_record(contents: &str, registry: Registry) -> Option<Record> {
-    contents.lines().find_map(|line| record_on(line, registry))
+    let record = contents
+        .lines()
+        .find_map(|line| record_on(line, registry))?;
+    let learned = contents
+        .lines()
+        .find_map(|line| learned_on(line, registry))
+        .filter(|&(_, version)| record.latest == Some(version))
+        .map(|(at, _)| at);
+    Some(Record { learned, ..record })
 }
 
 /// One line of that file, where it is this registry's record.
 ///
-/// Separate from the I/O so the rules are testable, and there are four: the line is the shape
-/// this program writes, it came from the registry this installation would ask, its version is
-/// three numbers or is absent, and the time it was learned is a number or is absent. Anything else
-/// is no record, which is silence rather than an error. A line of three fields, as an earlier
-/// version wrote, is a record that does not say when its version was learned.
+/// Separate from the I/O so the rules are testable, and there are three: the line is the shape
+/// this program writes, it came from the registry this installation would ask, and its version is
+/// three numbers or is absent. Anything else is no record, which is silence rather than an error.
+///
+/// The shape is the one every released version writes and reads, three fields, so a terminal copy
+/// of an earlier version beside the desktop app reads the line this writes and holds its next ask
+/// off by it.
 fn record_on(line: &str, registry: Registry) -> Option<Record> {
-    let mut fields = line.splitn(4, '\t');
+    let mut fields = line.splitn(3, '\t');
     let (Some(at), Some(source), Some(latest)) = (fields.next(), fields.next(), fields.next())
     else {
         return None;
@@ -364,27 +388,44 @@ fn record_on(line: &str, registry: Registry) -> Option<Record> {
             "" => None,
             text => Some(parse_version(text)?),
         },
-        learned: match fields.next() {
-            None | Some("") => None,
-            Some(text) => Some(text.parse().ok()?),
-        },
+        learned: None,
     })
 }
 
-/// One record as the line it is stored as, without its newline.
+/// One line of that file, where it says when this registry's version was learned: the time, and
+/// the version it was learned for.
+fn learned_on(line: &str, registry: Registry) -> Option<(u64, Version)> {
+    let mut fields = line.splitn(3, '\t');
+    let (Some(at), Some(source), Some(latest)) = (fields.next(), fields.next(), fields.next())
+    else {
+        return None;
+    };
+    if source != registry.learned_source() {
+        return None;
+    }
+    Some((at.parse().ok()?, parse_version(latest)?))
+}
+
+/// One record as the lines it is stored as, without the last newline.
 ///
 /// An ask that learned no version leaves that field empty, which is what tells a stamp with
-/// nothing behind it from a line of some other shape, and the time it was learned likewise.
+/// nothing behind it from a line of some other shape. Where a version was learned, the time it was
+/// learned follows on a line of its own, naming that version.
 fn encode_record(registry: Registry, record: Record) -> String {
     let latest = record.latest.map(|latest| latest.to_string());
-    let learned = record.learned.map(|learned| learned.to_string());
-    format!(
-        "{}\t{}\t{}\t{}",
+    let mut lines = format!(
+        "{}\t{}\t{}",
         record.at,
         registry.source(),
-        latest.unwrap_or_default(),
-        learned.unwrap_or_default()
-    )
+        latest.unwrap_or_default()
+    );
+    if let (Some(latest), Some(learned)) = (record.latest, record.learned) {
+        lines.push_str(&format!(
+            "\n{learned}\t{}\t{latest}",
+            registry.learned_source()
+        ));
+    }
+    lines
 }
 
 /// A version from `major.minor.patch`, with the single `v` a tag carries allowed in front.
@@ -546,15 +587,22 @@ fn store(registry: Registry, record: Record) -> bool {
 ///
 /// A machine that has both installations uses them in turn, and a launch of one that threw the
 /// other's stamp away would send the next launch of the other back to its registry, which is the
-/// request per session the day exists to prevent. Nothing else in the file survives: a line of any
-/// other shape is not a record and is not carried forward.
+/// request per session the day exists to prevent. The other's line saying when its version was
+/// learned is kept with it. Nothing else in the file survives: a line of any other shape is not a
+/// record and is not carried forward.
 fn merged(existing: &str, registry: Registry, record: Record) -> String {
     let mut contents = format!("{}\n", encode_record(registry, record));
-    if let Some(other) = existing
-        .lines()
-        .find(|line| record_on(line, registry.other()).is_some())
-    {
-        contents.push_str(other);
+    let other = registry.other();
+    let kept = [
+        existing
+            .lines()
+            .find(|line| record_on(line, other).is_some()),
+        existing
+            .lines()
+            .find(|line| learned_on(line, other).is_some()),
+    ];
+    for line in kept.into_iter().flatten() {
+        contents.push_str(line);
         contents.push('\n');
     }
     contents
@@ -806,9 +854,27 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_record("1700000000\treleases\t0.6.0\t", Registry::Releases)
-                .and_then(|record| record.learned),
-            None
+            parse_record(
+                "1700000000\treleases\t0.6.0\n1600000000\treleases-learned\t0.5.0\n",
+                Registry::Releases
+            )
+            .and_then(|record| record.learned),
+            None,
+            "a time learned for another version says nothing of this one"
+        );
+        assert_eq!(
+            parse_record(
+                "1600000000\treleases-learned\t0.6.0\n1700000000\treleases\t0.6.0\n",
+                Registry::Releases
+            )
+            .and_then(|record| record.learned),
+            Some(1_600_000_000),
+            "read whichever line comes first"
+        );
+        assert_eq!(
+            parse_record("1600000000\treleases-learned\t0.6.0\n", Registry::Releases),
+            None,
+            "a time with no record is no record"
         );
     }
 
@@ -963,7 +1029,14 @@ mod tests {
 
         let file = merged(&merged("", Registry::Npm, first), Registry::Npm, second);
 
-        assert_eq!(file.lines().count(), 1, "{file:?}");
+        assert_eq!(
+            file.lines()
+                .filter(|line| record_on(line, Registry::Npm).is_some())
+                .count(),
+            1,
+            "{file:?}"
+        );
+        assert_eq!(file.lines().count(), 2, "one record and its time: {file:?}");
         assert_eq!(
             parse_record(&file, Registry::of(Install::Npm)),
             Some(second),
@@ -1267,6 +1340,255 @@ mod tests {
         assert!(!desktop_asks(false, Some(DESKTOP_LAUNCHER)));
         for launcher in [None, Some("npm"), Some(""), Some("Desktop")] {
             assert!(!desktop_asks(true, launcher), "{launcher:?}");
+        }
+    }
+
+    /// The record's reader and writer as released, copied verbatim from `crates/tui/src/update.rs`
+    /// on main (last changed in 67d19e57, #2966), so a test can run what a terminal copy already
+    /// on a machine runs. `Registry` is that file's trait trimmed to the two methods these use,
+    /// and `Version` and `Record` are its types. Not to be brought up to date: what it pins is what
+    /// has shipped.
+    mod released {
+        use bravebot_config::install::Install;
+        use std::fmt;
+
+        trait Registry {
+            fn source(self) -> &'static str;
+            fn other(self) -> Self;
+        }
+
+        impl Registry for Install {
+            fn source(self) -> &'static str {
+                match self {
+                    Self::Npm => "npm",
+                    Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => "releases",
+                }
+            }
+
+            fn other(self) -> Self {
+                match self {
+                    Self::Npm => Self::Script,
+                    Self::Script | Self::PowerShell | Self::Homebrew | Self::Winget => Self::Npm,
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        pub struct Version {
+            pub major: u64,
+            pub minor: u64,
+            pub patch: u64,
+        }
+
+        impl fmt::Display for Version {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+            }
+        }
+
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct Record {
+            pub at: u64,
+            pub latest: Option<Version>,
+        }
+
+        pub fn parse_record(contents: &str, install: Install) -> Option<Record> {
+            contents.lines().find_map(|line| record_on(line, install))
+        }
+
+        fn record_on(line: &str, install: Install) -> Option<Record> {
+            let mut fields = line.splitn(3, '\t');
+            let (Some(at), Some(source), Some(latest)) =
+                (fields.next(), fields.next(), fields.next())
+            else {
+                return None;
+            };
+            if source != install.source() {
+                return None;
+            }
+            Some(Record {
+                at: at.parse().ok()?,
+                latest: match latest {
+                    "" => None,
+                    text => Some(parse_version(text)?),
+                },
+            })
+        }
+
+        fn encode_record(install: Install, record: Record) -> String {
+            let latest = record.latest.map(|latest| latest.to_string());
+            format!(
+                "{}\t{}\t{}",
+                record.at,
+                install.source(),
+                latest.unwrap_or_default()
+            )
+        }
+
+        fn parse_version(text: &str) -> Option<Version> {
+            let trimmed = text.trim();
+            let mut parts = trimmed.strip_prefix('v').unwrap_or(trimmed).split('.');
+            let (Some(major), Some(minor), Some(patch), None) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                return None;
+            };
+            let number = |part: &str| {
+                part.chars()
+                    .all(|c| c.is_ascii_digit())
+                    .then(|| part.parse().ok())
+                    .flatten()
+            };
+            Some(Version {
+                major: number(major)?,
+                minor: number(minor)?,
+                patch: number(patch)?,
+            })
+        }
+
+        pub fn merged(existing: &str, install: Install, record: Record) -> String {
+            let mut contents = format!("{}\n", encode_record(install, record));
+            if let Some(other) = existing
+                .lines()
+                .find(|line| record_on(line, install.other()).is_some())
+            {
+                contents.push_str(other);
+                contents.push('\n');
+            }
+            contents
+        }
+    }
+
+    /// A released version's view of what this one recorded.
+    fn as_released(record: Record) -> released::Record {
+        released::Record {
+            at: record.at,
+            latest: record.latest.map(|latest| released::Version {
+                major: latest.major,
+                minor: latest.minor,
+                patch: latest.patch,
+            }),
+        }
+    }
+
+    /// A terminal copy of a released version shares the file with the desktop app, so the file
+    /// this writes must read back in that copy as the same stamp and version. Otherwise it finds
+    /// no record, asks on every launch and rewrites the file without the time a version was
+    /// learned (UPDATE-6, UPDATE-12).
+    #[test]
+    fn a_released_version_reads_the_stamp_and_version_this_one_writes() {
+        let releases = Record {
+            at: 1_700_000_000,
+            latest: Some(version(0, 20, 1)),
+            learned: Some(1_699_990_000),
+        };
+        let npm = Record {
+            at: 1_700_000_500,
+            latest: Some(version(0, 20, 0)),
+            learned: Some(1_700_000_400),
+        };
+        let file = merged(
+            &merged("", Registry::Npm, npm),
+            Registry::Releases,
+            releases,
+        );
+
+        assert_eq!(
+            released::parse_record(&file, Install::Script),
+            Some(as_released(releases)),
+            "{file:?}"
+        );
+        assert_eq!(
+            released::parse_record(&file, Install::Npm),
+            Some(as_released(npm)),
+            "{file:?}"
+        );
+        assert_eq!(parse_record(&file, Registry::Releases), Some(releases));
+        assert_eq!(
+            parse_record(&file, Registry::Npm),
+            Some(npm),
+            "the other registry's record and its time were kept: {file:?}"
+        );
+
+        let unlearned = Record {
+            at: 1_700_000_000,
+            latest: None,
+            learned: None,
+        };
+        let file = merged("", Registry::Releases, unlearned);
+        assert_eq!(
+            released::parse_record(&file, Install::Script),
+            Some(as_released(unlearned)),
+            "{file:?}"
+        );
+    }
+
+    /// A released version that rewrites the file keeps only the lines it reads, so the time a
+    /// version was learned is lost. The version and the stamp still read, and the desktop app is
+    /// told nothing of freshness until its next ask that learns a version writes the time again.
+    #[test]
+    fn a_record_a_released_version_rewrote_keeps_its_version_and_is_no_answer_until_asked_again() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let now = 2_000_000_000;
+        let running = Some(version(0, 9, 0));
+        let ours = Record {
+            at: now - 60,
+            latest: Some(version(0, 10, 0)),
+            learned: Some(now - 60),
+        };
+        let file = merged("", Registry::Releases, ours);
+        let stamp = |at| released::Record {
+            at,
+            latest: Some(released::Version {
+                major: 0,
+                minor: 10,
+                patch: 0,
+            }),
+        };
+
+        // A script install of a released version asks the release listing and writes its line.
+        let rewritten = released::merged(&file, Install::Script, stamp(now - 30));
+        assert_eq!(rewritten, format!("{}\treleases\t0.10.0\n", now - 30));
+        // An npm install of a released version keeps the release listing's line and drops its time.
+        let beside = released::merged(
+            &file,
+            Install::Npm,
+            released::Record {
+                at: now - 30,
+                latest: None,
+            },
+        );
+        for (contents, case) in [(rewritten, "its own"), (beside, "the other registry's")] {
+            assert_eq!(
+                parse_record(&contents, Registry::Releases).and_then(|record| record.latest),
+                Some(version(0, 10, 0)),
+                "{case}: {contents:?}"
+            );
+            std::fs::write(state.path().join(CACHE_FILE), &contents).expect("a record");
+            assert_eq!(
+                status_in(true, Some(state.path()), running, now),
+                Status {
+                    check: true,
+                    newer: None,
+                    checked: None,
+                },
+                "{case}: {contents:?}"
+            );
+            let healed = recorded(
+                parse_record(&contents, Registry::Releases),
+                Some(version(0, 10, 0)),
+                now,
+            );
+            std::fs::write(
+                state.path().join(CACHE_FILE),
+                merged(&contents, Registry::Releases, healed),
+            )
+            .expect("a record");
+            assert_eq!(
+                status_in(true, Some(state.path()), running, now).checked,
+                Some(now),
+                "{case}: the next ask that learns a version dates it again"
+            );
         }
     }
 }

@@ -263,7 +263,10 @@ agent asks the GitHub release listing at startup, under the hour of UPDATE-6, th
 UPDATE-8 and the switches of UPDATE-11. It shares the install script's record, since its installers
 are assets of the same release. An agent the packaged app did not start, one a developer or a test
 ran, asks nothing. The record keeps, beside the stamp of each ask, this machine's clock at the
-last ask that learned a version, and nothing from the answer's body. The window learns through
+last ask that learned a version, and nothing from the answer's body. That time is a line of its
+own naming the version it was learned for, so each registry's line stays the shape every released
+version writes and reads, and a writer keeps the other registry's line and its time as they stood.
+The window learns through
 `update.status` whether the check is on, the version running, whether the recorded version is
 newer than it, and when the last check that learned it was, as a UTC timestamp the bridge builds
 from that number. Newer is `true`, `false`, or null where nothing is recorded, where the record
@@ -291,16 +294,19 @@ would let a machine offline for a month say it is up to date, or go on offering 
 withdrawn, so after a week the window says when it last heard instead of what it heard then. The
 bridge decides that, as it decides the rest of the answer, so the renderer formats a day and
 judges nothing. The menu item says Update Status because it shows one, and a name that promised a
-check would promise a request it does not make.
+check would promise a request it does not make. A terminal copy of a released version on the same
+machine shares the file, and a time written into its registry's line would make that line one it
+cannot read: it would find no record, ask on every launch, and rewrite the file without the time.
 
 **Known costs.** The notice names the version running, not the one the page offers, for UPDATE-5's
 reason. The window cannot tell one recorded release from the next, since it is told no version, so
 a dismissal is kept by the version running: a second release published while the same version
 runs does not bring the notice back, and About is where it is still said. A window started in
-development is never told anything, since its agent asks nobody. A record an earlier version wrote
-says no time a version was learned, so it is no answer until the next ask that learns one, and an
-earlier version reads a record with that time in it as no record, and asks on each launch until it
-is updated. A clock set far enough wrong makes a fresh record look stale, or a record from its own
+development is never told anything, since its agent asks nobody. A record an earlier version
+wrote, or rewrote, says no time a version was learned, since such a version keeps no line it does
+not read: the version and the stamp still stand and still hold the next ask off, but the window
+is told nothing of freshness until the desktop app's next ask that learns a version writes the
+time again, which is its first launch an hour or more after the last ask either made. A clock set far enough wrong makes a fresh record look stale, or a record from its own
 future no answer. The check itself is the person's setting: a project's settings file in the
 directory the window was started from turns off neither the ask nor what `update.status` says.
 
@@ -312,6 +318,9 @@ directory the window was started from turns off neither the ask nor what `update
 `verified-by: bravebot_update::lib::a_desktop_record_without_a_usable_time_is_no_answer`
 `verified-by: bravebot_update::lib::only_an_ask_that_learns_a_version_moves_the_time_it_was_learned`
 `verified-by: bravebot_update::lib::a_record_without_the_time_it_was_learned_is_read_without_one`
+`verified-by: bravebot_update::lib::a_released_version_reads_the_stamp_and_version_this_one_writes`
+`verified-by: bravebot_update::lib::a_record_a_released_version_rewrote_keeps_its_version_and_is_no_answer_until_asked_again`
+`verified-by: bravebot_update::lib::recording_one_registrys_ask_keeps_the_others`
 `verified-by: bravebot_update::lib::a_desktop_check_turned_off_says_nothing_of_a_record`
 `verified-by: bravebot_update::lib::a_desktop_record_that_is_not_the_shape_written_is_no_answer`
 `verified-by: bravebot_update::lib::only_the_packaged_desktop_app_asks_and_not_with_the_check_off`

@@ -35,10 +35,11 @@ fn now() -> u64 {
         .as_secs()
 }
 
-/// A record of `source` naming `latest`, learned `ago` seconds before now.
+/// A record of `source` naming `latest`, learned `ago` seconds before now: the line every version
+/// reads, and the line saying when it was learned.
 fn learned(source: &str, latest: &str, ago: u64) -> String {
     let at = now() - ago;
-    format!("{at}\t{source}\t{latest}\t{at}\n")
+    format!("{at}\t{source}\t{latest}\n{at}\t{source}-learned\t{latest}\n")
 }
 
 /// A newer release recorded by the terminal's ask of the release listing is a yes, and the answer
@@ -95,8 +96,8 @@ fn a_record_older_than_a_week_is_no_comparison_and_keeps_its_date() {
     assert!(answer["checked"].is_string(), "{answer}");
 }
 
-/// A record that does not say when its version was learned, as one an earlier version wrote does
-/// not, is no answer.
+/// A record that does not say when its version was learned, as one an earlier version wrote or
+/// rewrote does not, is no answer.
 #[test]
 fn a_record_without_the_time_it_was_learned_is_no_answer() {
     if !test_profile::in_isolated_profile() {
