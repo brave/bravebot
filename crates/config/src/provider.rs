@@ -31,6 +31,54 @@ pub fn without_userinfo(url: &str) -> String {
     format!("{scheme}://{host}{tail}")
 }
 
+/// The host of an authority and the port written after it, or the text that cannot be read as a
+/// port.
+///
+/// A port is ASCII digits that fit a `u16`, which is what the transport reads. A `:` followed by
+/// nothing, or by anything else, makes the client connect to the scheme's default port, which is
+/// not the socket the url spells. The authority carries no userinfo. The one reading of a port
+/// for an MCP declaration ([SERVERS-11](../../../docs/specs/mcp-servers.md#SERVERS-11)), a
+/// provider `baseURL` and the endpoint variable
+/// ([BACKEND-62](../../../docs/specs/backends.md#BACKEND-62)).
+pub(crate) fn host_and_port(authority: &str) -> Result<(&str, Option<u16>), &str> {
+    let (host, after) = match authority.strip_prefix('[') {
+        // A bracketed IPv6 literal, whose colons are part of the address.
+        Some(bracketed) => bracketed.split_once(']').ok_or(authority)?,
+        None => authority.split_at(authority.find(':').unwrap_or(authority.len())),
+    };
+    match after.strip_prefix(':') {
+        Some(digits) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => digits
+            .parse::<u16>()
+            .map(|port| (host, Some(port)))
+            .map_err(|_| digits),
+        Some(digits) => Err(digits),
+        None if after.is_empty() => Ok((host, None)),
+        None => Err(after),
+    }
+}
+
+/// An endpoint whose authority writes a port that cannot be read.
+///
+/// What a report names, so the person can find the line: the text after the `:`, empty where
+/// nothing follows it. Never the rest of the url, which may state credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortFault {
+    /// The text written where the port belongs.
+    pub port: String,
+}
+
+/// The fault in the port `url` writes, or `None` where it writes a readable one or none.
+pub(crate) fn unreadable_port(url: &str) -> Option<PortFault> {
+    let (_, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    host_and_port(authority).err().map(|port| PortFault {
+        port: port.to_string(),
+    })
+}
+
 /// The endpoints known by the name a provider block gives them.
 ///
 /// Here because the other tool resolves this from a registry it fetches, and a block copied out of it
@@ -655,6 +703,27 @@ impl Provider {
             .collect()
     }
 
+    /// The entries under `provider` that [`Self::all`] drops because the `baseURL` they state
+    /// writes a port that cannot be read, with the text written there
+    /// ([BACKEND-62](../../../docs/specs/backends.md#BACKEND-62)).
+    ///
+    /// Kept as a list of its own because `all` returns the entries that stand, and a dropped one
+    /// is otherwise a gateway that is missing with nothing saying which line did it.
+    pub fn refused(root: &serde_json::Map<String, serde_json::Value>) -> Vec<(String, PortFault)> {
+        let Some(serde_json::Value::Object(block)) = root.get("provider") else {
+            return Vec::new();
+        };
+        block
+            .iter()
+            .filter(|(id, _)| id.as_str() != AWS_PROVIDER_ID)
+            .filter_map(|(id, entry)| {
+                let options = entry.get("options").and_then(serde_json::Value::as_object);
+                let fault = unreadable_port(stated_endpoint(options)?)?;
+                Some((id.clone(), fault))
+            })
+            .collect()
+    }
+
     /// One entry under `provider`, or `None` where it does not describe a reachable service.
     fn one(id: &str, entry: &serde_json::Map<String, serde_json::Value>) -> Option<Self> {
         let options = match entry.get("options") {
@@ -666,6 +735,12 @@ impl Provider {
             return Self::aws(id, entry, options);
         }
         let stated = stated_endpoint(options);
+        // The client connects to the scheme's default port for a `:` it cannot read a port after,
+        // and a request there carries no credential. The entry is dropped and named by
+        // [`Self::refused`].
+        if stated.is_some_and(|url| unreadable_port(url).is_some()) {
+            return None;
+        }
         let npm = string(entry.get("npm"));
         let mut protocol = protocol_of(id, npm.as_deref(), stated);
         let project = string(options.and_then(|options| options.get("project")));
@@ -1618,6 +1693,119 @@ mod tests {
     }
 
     const PLACEHOLDER_PROJECT: &str = "example-project-1";
+
+    /// BACKEND-62: a `baseURL` whose `:` is followed by no readable port is not a gateway, and
+    /// `refused` names the entry and the text written where the port belongs. The regressions it
+    /// rejects are keeping the entry (the client then connects to the scheme's default port),
+    /// reading a port as a number only when it is short, and accepting what `u16` cannot hold.
+    #[test]
+    fn a_base_url_whose_port_cannot_be_read_is_refused_naming_the_port() {
+        for (base_url, port) in [
+            ("https://gw.example.com:/v1", ""),
+            ("https://gw.example.com:", ""),
+            ("https://gw.example.com:abc/v1", "abc"),
+            ("https://gw.example.com:99999/v1", "99999"),
+            ("https://gw.example.com:65536/v1", "65536"),
+            ("https://gw.example.com:+80/v1", "+80"),
+            ("https://api.openai.com:/v1", ""),
+            ("https://api.openai.com:+443/v1", "+443"),
+            ("https://gw.example.com:8080:9/v1", "8080:9"),
+            ("http://[::1]:/v1", ""),
+            ("http://[::1]x/v1", "x"),
+            ("https://user:secret@gw.example.com:x/v1", "x"),
+            ("https://gw.example.com:x?next=http://y:80", "x"),
+        ] {
+            let text = format!(
+                r#"{{"provider": {{"gw": {{"env": ["GW_TOKEN"], "options": {{"baseURL": "{base_url}"}}}}}}}}"#
+            );
+            let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+                panic!("not an object");
+            };
+            assert!(
+                Provider::all(&root).is_empty(),
+                "{base_url} was kept as a gateway"
+            );
+            assert_eq!(
+                Provider::refused(&root),
+                [(
+                    "gw".to_string(),
+                    PortFault {
+                        port: port.to_string()
+                    }
+                )],
+                "{base_url}"
+            );
+        }
+        for base_url in [
+            "https://gw.example.com/v1",
+            "https://gw.example.com:8080/v1",
+            "https://gw.example.com:0080/v1",
+            "https://gw.example.com:65535",
+            "http://[::1]:8080/v1",
+            "http://[::1]/v1",
+            "https://user:secret@gw.example.com:8080/v1",
+            "https://gw.example.com/v1?port=:x",
+        ] {
+            let text =
+                format!(r#"{{"provider": {{"gw": {{"options": {{"baseURL": "{base_url}"}}}}}}}}"#);
+            let serde_json::Value::Object(root) = serde_json::from_str(&text).expect("json") else {
+                panic!("not an object");
+            };
+            assert_eq!(Provider::all(&root).len(), 1, "{base_url}");
+            assert!(Provider::refused(&root).is_empty(), "{base_url}");
+        }
+    }
+
+    /// BACKEND-62: the port rule for a `baseURL` and an endpoint is the one a declared MCP url is
+    /// held to (SERVERS-11). The regression it rejects is a second reading of a port that drifts
+    /// from `remote`, so a url one accepts the other refuses.
+    #[test]
+    fn a_port_is_read_as_a_declared_mcp_url_reads_it() {
+        let (mut readable, mut unreadable) = (0, 0);
+        for scheme in ["http", "HTTPS"] {
+            for host in ["h", "1.2.3.4", "[::1]", "[::1", "[::1]x", "h%41"] {
+                for port in [
+                    "", ":", ":80", ":0", ":+1", ":-1", ":x", ":65535", ":65536", ":1:2", ":080",
+                ] {
+                    for rest in ["", "/p", "?q", "#f"] {
+                        let url = format!("{scheme}://{host}{port}{rest}");
+                        let declared = crate::mcp::Declaration::http(url.clone()).is_ok();
+                        let read = unreadable_port(&url).is_none();
+                        assert_eq!(declared, read, "{url}");
+                        match read {
+                            true => readable += 1,
+                            false => unreadable += 1,
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            readable > 50 && unreadable > 50,
+            "{readable} readable, {unreadable} unreadable"
+        );
+    }
+
+    /// BACKEND-62: only the entry with the bad port is dropped, and the others stand.
+    #[test]
+    fn a_refused_base_url_leaves_the_other_entries_standing() {
+        let serde_json::Value::Object(root) = serde_json::from_str(
+            r#"{"provider": {
+                "bad": {"options": {"baseURL": "https://a.example.com:x/v1"}},
+                "good": {"options": {"baseURL": "https://b.example.com:8443/v1"}}
+            }}"#,
+        )
+        .expect("json") else {
+            panic!("not an object");
+        };
+        let kept: Vec<String> = Provider::all(&root).into_iter().map(|it| it.id).collect();
+        assert_eq!(kept, ["good"]);
+        let refused: Vec<String> = Provider::refused(&root)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(refused, ["bad"]);
+    }
 
     /// The `google-vertex` entry written as `entry`, which holds the whole block.
     fn one_entry(entry: &str) -> Provider {
@@ -2639,7 +2827,6 @@ mod tests {
             "https://api.openai.com:443/v1",
             "https://api.openai.com./v1",
             "https://API.OPENAI.COM.:443/v1/",
-            "https://api.openai.com:/v1",
             "https://api.openai.com",
             "https://api.openai.com/v1?api-version=1",
             "https://user:token@api.openai.com/v1",
@@ -2660,8 +2847,6 @@ mod tests {
             "https://api.openai.com:444/v1",
             "https://api.openai.com:80/v1",
             "http://api.openai.com/v1",
-            "https://api.openai.com:abc/v1",
-            "https://api.openai.com:+443/v1",
             "https://api.openai.com.proxy.example.invalid/v1",
             "https://notapi.openai.com/v1",
             "https://proxy.example.invalid/api.openai.com/v1",

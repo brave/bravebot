@@ -593,6 +593,8 @@ doctor-settings-vetting-ignored =
 doctor-settings-provider-ignored =
     provider dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings
+doctor-settings-provider-port-refused =
+    provider { $id } n'est pas utilisé : son baseURL écrit un port qui n'est pas un nombre jusqu'à 65535 (trouvé "{ $port }")
 doctor-settings-model-ignored =
     model dans { $path } n'est pas appliqué : il n'est lu que depuis
     ~/.bravebot/settings.json et depuis le fichier nommé par --settings

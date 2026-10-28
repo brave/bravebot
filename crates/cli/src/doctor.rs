@@ -428,6 +428,17 @@ fn report_settings_sources(settings: &bravebot_config::Settings) {
     );
 }
 
+/// The line for a gateway dropped because its `baseURL` writes a port that cannot be read. The id
+/// and the text written where the port belongs are the person's own words, shown as pictures where
+/// they hold a control character.
+fn refused_provider_port(id: &str, port: &str) -> String {
+    t!(
+        doctor_settings_provider_port_refused,
+        id = progress::printable(id),
+        port = progress::printable(port)
+    )
+}
+
 /// Every setting that was read and not obeyed, or not read at all, from the vetting key through the
 /// narrowing keys. The network and filesystem ones follow in their own sections.
 fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Managed) {
@@ -442,6 +453,13 @@ fn report_ignored_settings(settings: &bravebot_config::Settings, managed: &Manag
     ignored(settings.providers_ignored(), |path| {
         t!(doctor_settings_provider_ignored, path = path)
     });
+    // A gateway whose baseURL writes a port that cannot be read is dropped when the settings are
+    // read. Naming it here is the only place the missing gateway is explained.
+    each(
+        t!(doctor_settings_ignored),
+        settings.providers_refused(),
+        |(id, fault)| refused_provider_port(id, &fault.port),
+    );
     ignored(settings.model_ignored(), |path| {
         t!(doctor_settings_model_ignored, path = path)
     });
@@ -3181,6 +3199,28 @@ mod tests {
             .first()
             .expect("one provider")
             .clone()
+    }
+
+    /// BACKEND-62: a gateway dropped for a `baseURL` port that cannot be read is named by its id
+    /// and by the text written where the port belongs, and nothing else of the url is shown. The
+    /// regression it rejects is the gateway vanishing from the settings with no line saying why.
+    #[test]
+    fn a_gateway_dropped_for_its_port_is_reported_with_its_id_and_the_port_and_not_the_url() {
+        let settings = bravebot_config::Settings::parse(
+            r#"{"provider": {"gw": {"options": {"baseURL": "https://user:hunter2@gw.example.com:abc/v1"}}}}"#,
+        );
+        assert!(settings.providers().is_empty());
+        let reported: Vec<String> = settings
+            .providers_refused()
+            .iter()
+            .map(|(id, fault)| refused_provider_port(id, &fault.port))
+            .collect();
+        assert_eq!(reported.len(), 1, "{reported:?}");
+        assert!(reported[0].contains("gw"), "{}", reported[0]);
+        assert!(reported[0].contains("abc"), "{}", reported[0]);
+        for withheld in ["hunter2", "gw.example.com"] {
+            assert!(!reported[0].contains(withheld), "{}", reported[0]);
+        }
     }
 
     /// A gateway's credential is a long-lived bearer token, so a diagnostic that echoed one would put

@@ -3930,6 +3930,45 @@ clause was written for.
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
 `verified-by: bravebot_agent::backend::a_header_the_block_asked_for_reaches_the_request_whichever_protocol_it_answers_in`
 
+<a id="BACKEND-62"></a>
+### BACKEND-62: a `baseURL` or an endpoint that writes a port which cannot be read is refused where it is read, and the refusal names the port
+
+A port is read from the authority of a url as ASCII digits, at least one, that fit a `u16`. After the
+host, a `:` followed by anything else (nothing, letters, a sign, a value above 65535, a second `:`)
+is a port that cannot be read. A client given such a url connects to the scheme's default port, which
+is not the socket the url spells, and a request sent there carries no credential
+([SERVERS-11](mcp-servers.md#SERVERS-11)). The rule is the one a declared MCP url is held to, read by
+one function, so the readers cannot disagree.
+
+A `provider` entry whose `options.baseURL` writes such a port is not a gateway. It is left out of the
+entries that stand, and `bravebot doctor` names it by its id and by the text written where the port
+belongs, empty where nothing follows the `:`. The rest of the url is never shown, since it may state
+credentials. Entries that state a readable port, or none, are unaffected by another entry's refusal.
+A `BRAVE_AI_CHAT_ENDPOINT` that writes such a port fails the configuration with an error that names
+the text written there, as a missing scheme fails it.
+
+The other readers of a url are unchanged. `BRAVE_AI_CHAT_PREMIUM_ENDPOINT` is dropped when it is
+malformed, which this clause leaves as it is, and the constants for the ChatGPT account and xAI state
+their own ports. A block imported from `opencode.json` is written into the settings file as it
+stands, so the rule applies when that file is read.
+
+**Built:** `bravebot_config::provider::host_and_port`, which `remote` in `mcp.rs` and the two readers
+above call; `Provider::refused`, `Settings::providers_refused` and the `doctor` line;
+`ConfigError::UnreadablePort`.
+
+**Not built:** a refusal shown anywhere but `bravebot doctor` and the error the configuration returns.
+
+**Why.** A url that names a socket other than the one the client connects to is a request to a place
+the person did not write, and with the credential dropped as a move it fails as an authentication error that
+says nothing about the port. Refusing where the url is read puts the fault on the line the person wrote.
+
+`verified-by: bravebot_config::provider::a_base_url_whose_port_cannot_be_read_is_refused_naming_the_port`
+`verified-by: bravebot_config::provider::a_refused_base_url_leaves_the_other_entries_standing`
+`verified-by: bravebot_config::provider::a_port_is_read_as_a_declared_mcp_url_reads_it`
+`verified-by: bravebot_config::lib::an_endpoint_whose_port_cannot_be_read_is_rejected_naming_the_port`
+`verified-by: bravebot_cli::doctor::a_gateway_dropped_for_its_port_is_reported_with_its_id_and_the_port_and_not_the_url`
+`verified-by: bravebot_cli::running::doctor_names_a_provider_left_out_for_its_port_without_the_rest_of_its_url`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix

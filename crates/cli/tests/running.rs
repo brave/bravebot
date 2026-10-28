@@ -6341,6 +6341,52 @@ fn doctor_names_a_refused_header_without_its_value() {
     );
 }
 
+/// BACKEND-62: a provider block whose `baseURL` writes a port that cannot be read is left out of the
+/// gateways, and `doctor` prints a line naming its id and the text written where the port belongs.
+/// Without the line the gateway is missing from the report with nothing saying why. The rest of the
+/// url stays out of it.
+#[test]
+fn doctor_names_a_provider_left_out_for_its_port_without_the_rest_of_its_url() {
+    let scratch = Scratch::new("cli-running-doctor-refused-port").with_settings(
+        r#"{
+            "provider": {
+                "tenant-gw": {
+                    "env": ["TENANT_GW_TOKEN"],
+                    "options": {"baseURL": "https://gw.example.com:abc/v1"},
+                    "models": {"some-model": {}}
+                }
+            }
+        }"#,
+    );
+
+    let output = bravebot(
+        &scratch.path,
+        &[
+            ("SERVICES_KEY_AICHAT", "a-services-key"),
+            ("BRAVE_SERVICES_KEY_ID", "a-key-id"),
+            ("BRAVE_AI_CHAT_ENDPOINT", "http://127.0.0.1:1"),
+            ("TENANT_GW_TOKEN", "a-token"),
+        ],
+        &["doctor"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    let line = stdout
+        .lines()
+        .find(|line| line.contains("tenant-gw") && line.contains("is not used"))
+        .unwrap_or_else(|| {
+            panic!("the report did not name the provider left out: {stdout}{stderr}")
+        });
+    assert!(
+        line.contains("found \"abc\""),
+        "the line did not name the text written as the port: {line}"
+    );
+    assert!(
+        !stdout.contains("gw.example.com"),
+        "doctor printed the host of a provider left out: {stdout}"
+    );
+}
+
 /// A checkout's `advisorModel` is dropped, and `doctor` says so rather than leaving whoever wrote
 /// it to conclude the conversation is being sent to the model it names (BACKEND-24).
 #[test]
