@@ -719,9 +719,6 @@ mod tests {
             .collect()
     }
 
-    /// The turn is told the same thing by both approvals. What the second one also does is
-    /// configuration the interface holds, and a turn that saw a different answer would be a second
-    /// place the mode was decided.
     /// PROMPT-13, WRITE-4: where the lines a write changes hold characters that draw as nothing, the
     /// prompt says how many above the rows, and a write with none draws no such sentence.
     #[test]
@@ -739,6 +736,9 @@ mod tests {
         assert!(!plain.contains(&squeezed(&said)), "{plain}");
     }
 
+    /// The turn is told the same thing by both approvals. What the second one also does is
+    /// configuration the interface holds, and a turn that saw a different answer would be a second
+    /// place the mode was decided.
     #[test]
     fn the_standing_answer_tells_the_turn_what_a_plain_yes_tells_it() {
         assert_eq!(VetAnswer::ApproveAlways.decision(), Decision::Approve);
