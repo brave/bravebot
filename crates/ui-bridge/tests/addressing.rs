@@ -662,8 +662,7 @@ fn the_turn_a_watch_fires_in_a_bots_conversation_is_addressed() {
 }
 
 /// ADDRESS-2: the `@` list offers the definitions a person has, with what each is for, ahead of the
-/// files; a word that holds no name offers none; and the list asked for while a turn holds the
-/// session is the one the last list was drawn from, so it neither waits nor goes empty.
+/// files; a word that holds no name offers none; and a client that does not ask is offered none.
 #[test]
 fn the_at_list_offers_the_definitions_ahead_of_the_files() {
     let scratch = Scratch::new("bridge-addressing-offer");

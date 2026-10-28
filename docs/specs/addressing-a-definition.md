@@ -178,6 +178,7 @@ it already addresses the definition.
 `verified-by: bravebot_mentions::lib::a_typed_word_picks_the_definitions_whose_name_holds_it`
 `verified-by: bravebot_mentions::lib::the_marker_is_not_an_at_word_and_a_name_cannot_break_it`
 `verified-by: bravebot_ui_bridge::addressing::the_at_list_offers_the_definitions_ahead_of_the_files`
+`verified-by: bravebot_ui_bridge::mentions_running_tests::offering_definitions_during_a_turn_uses_the_last_list`
 `verified-by: bravebot_tui::app::tests::summoning::the_definitions_are_listed_ahead_of_the_files_with_what_each_is_for`
 `verified-by: bravebot_tui::app::tests::summoning::a_picked_definition_addresses_the_line_as_the_agent_command_does`
 

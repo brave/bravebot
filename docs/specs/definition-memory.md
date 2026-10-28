@@ -715,8 +715,9 @@ taken out of what is sent: the turn's prompt is the task alone, as it is after `
 rows of the list, how a typed word matches them, the marker's text, whether the marker is still in
 the draft and the task left once it is removed are pure functions in `bravebot-mentions`. The
 terminal calls them directly. The bridge offers the rows to a client that asks for them with
-`definitions` on `mentions.offer`, so a client reads a pick as the terminal does. The desktop keeps
-its own bot rows and marker until it takes the bridge's.
+`definitions` on `mentions.offer`, so a client reads a pick as the terminal does. The desktop builds
+its own bot rows and marker and does not send `definitions`.
+
 The marker is not an `@` name, so a line holding it names no file
 ([NAME-9](naming-files.md#NAME-9)).
 
@@ -730,8 +731,7 @@ The reply is drawn under a label with the summoned definition's name, and the de
 bot's face. In the terminal the label comes from the `address` field of the prompt's row in the session record
 ([ADDRESS-12](addressing-a-definition.md#ADDRESS-12)), which `turn.done` and the rows of a
 reopened session carry, so a label is the same in the turn that ended and in the session opened
-again, and the terminal keeps no copy of it. The desktop draws its label from its own record until
-it reads the field. The row's `standing` flag says whether the
+again, and the terminal keeps no copy of it. The desktop draws its label from its own record. The row's `standing` flag says whether the
 definition was the session's own, which is how a bot's own turn in its conversation is told from a
 summon in it. The summoned bot's own conversation shows a card for each reply it gave elsewhere. The
 card says "Replied to" and names the bot whose conversation it was, or the project, and shows the
