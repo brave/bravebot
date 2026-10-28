@@ -198,7 +198,7 @@ guards:
       - crates/mcp/src/http.rs: 1
       - crates/net/src/lib.rs: 1
       - crates/net/tests/egress.rs: 3
-      - crates/tui/src/update.rs: 1
+      - crates/update/src/lib.rs: 1
 documented-by: docs/website/docs/how-it-works.md
 ---
 

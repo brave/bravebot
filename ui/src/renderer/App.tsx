@@ -28,6 +28,9 @@ import { Notice } from './components/Notice'
 import { TooltipLayer } from './components/TooltipLayer'
 import { useEvent, useStableValue } from './hooks'
 import { About, type AboutInfo } from './components/About'
+import { BugReport } from './components/BugReport'
+import { UpdateBanner } from './components/UpdateBanner'
+import { bannerShown, parseUpdateStatus, type UpdateStatus } from '../shared/update'
 import { conversationModel, rememberModel } from './models'
 import { canSend } from './can-send'
 import { useCommandRouter, usePublishedState } from './commands'
@@ -43,7 +46,7 @@ import { useBots } from './use-bots'
 import { useTurn } from './use-turn'
 import { useAppearance } from './use-appearance'
 import { conversationKey } from '../shared/experience'
-import { useExperience, conversationPreferences, setConversation, dropConversation, experienceError } from './experience'
+import { useExperience, conversationPreferences, setConversation, setExperience, dropConversation, experienceError } from './experience'
 import { showToast } from './toasts'
 import { planRewind } from './rewind'
 import { call } from './rpc'
@@ -106,6 +109,22 @@ export function App(): React.JSX.Element {
   useEffect(() => { void checkBackend() }, [checkBackend])
   const [notice, setNotice] = useState<{ title: string; body: string } | null>(null)
   const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null)
+  const [bugReportOpen, setBugReportOpen] = useState(false)
+  /** What the last update check found (UPDATE-12). Asked once at start and again when About opens. */
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null)
+  const readUpdateStatus = useCallback(async () => {
+    try { setUpdateStatus(parseUpdateStatus(await call('update.status'))) } catch { setUpdateStatus(null) }
+  }, [])
+  useEffect(() => { void readUpdateStatus() }, [readUpdateStatus])
+  const dismissedUpdate = preferences.dismissedUpdate
+  const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
+  const updateNotice = useMemo(() => {
+    const running = updateStatus?.running ?? null
+    return running !== null && bannerShown(updateStatus, dismissedUpdate)
+      ? <UpdateBanner running={running} onDownload={download}
+        onDismiss={() => setExperience('dismissedUpdate', running)} />
+      : null
+  }, [updateStatus, dismissedUpdate, download])
   // The composer's text lives here rather than in `Transcript` because the Send menu item
   // has to be grey when there is nothing to send, and only this component talks to the menu.
   const draftKey = live ? liveKey(live) : ''
@@ -510,11 +529,12 @@ export function App(): React.JSX.Element {
   const about = useCallback(async () => {
     try {
       const info = await call<AboutInfo>('agent.info')
+      await readUpdateStatus()
       setAboutInfo(info)
     } catch (error) {
       setProblem(String(error))
     }
-  }, [])
+  }, [readUpdateStatus])
 
   const doctor = useCallback(async () => {
     try {
@@ -778,6 +798,7 @@ export function App(): React.JSX.Element {
     focusComposer: () => document.dispatchEvent(new Event(FOCUS_COMPOSER_EVENT)),
     about: () => void about(),
     doctor: () => void doctor(),
+    bugReport: () => setBugReportOpen(true),
     openSession,
     closeNamed,
     copyProjectPath,
@@ -895,6 +916,7 @@ export function App(): React.JSX.Element {
         agentsStarted={live?.agentCounts.started ?? 0}
         agentsWorking={live?.agentCounts.working ?? 0}
         onAgents={openAgents}
+        notice={updateNotice}
       /></SessionInfo.Provider>
       <Gutter
         side="left"
@@ -1012,7 +1034,9 @@ export function App(): React.JSX.Element {
           onChanged={() => { void checkBackend() }}
         />
       )}
-      {aboutInfo && <About info={aboutInfo} onClose={() => setAboutInfo(null)} />}
+      {aboutInfo && <About info={aboutInfo} update={updateStatus} onDownload={download}
+        onReportBug={() => { setAboutInfo(null); setBugReportOpen(true) }} onClose={() => setAboutInfo(null)} />}
+      {bugReportOpen && <BugReport onClose={() => setBugReportOpen(false)} />}
       {notice && (
         <Notice title={notice.title} body={notice.body} onClose={() => setNotice(null)} />
       )}

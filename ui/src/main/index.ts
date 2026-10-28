@@ -69,6 +69,7 @@ import { applyNativeAppearance } from './theme'
 import { relaunchUnlessRunning } from './relaunch'
 import { parseAppearance } from '../shared/theme'
 import { readExperience, removeConversation, writeExperience } from './experience'
+import { compose as composeReport, openPage, save as saveReport, showLog, type Ask } from './bug-report'
 import { editMemory, memoryHistory, snapshotMemory, removeMemoryHistory, tidyMemory } from './memory'
 
 /**
@@ -528,7 +529,18 @@ const ALLOWED = new Set([
   'watches.list',
   'watches.add',
   'watches.stop',
+  // Whether a newer release is recorded and never which one (UPDATE-12).
+  'update.status',
 ])
+
+/**
+ * The bridge, for the bug report's four channels, which ask it on the window's behalf.
+ *
+ * `bug-report.compose` is not in [`ALLOWED`]: the window is handed the report through its own
+ * channel, with this app's version stated here rather than by the window.
+ */
+const askBridge: Ask = (method, params) =>
+  bridge ? bridge.request(method, params) : Promise.reject(new Error('the agent is not running'))
 
 /** What the save sheet offers per format. */
 const FILTERS: Record<ExportFormat, Electron.FileFilter> = {
@@ -714,6 +726,13 @@ app.whenReady().then(() => {
       return { status: 'failed', message: String(error) }
     }
   })
+
+  // The bug report (DIAG-9) and the two pages (UPDATE-12). No channel takes text, a URL or a path
+  // from the window; see `bug-report.ts`.
+  ipcMain.handle('bravebot:bug-report:compose', () => composeReport(askBridge))
+  ipcMain.handle('bravebot:bug-report:save', () => saveReport(window, askBridge))
+  ipcMain.handle('bravebot:bug-report:show-log', () => showLog(askBridge))
+  ipcMain.handle('bravebot:open-page', (_event, name: unknown) => openPage(name))
 
   // What the window remembers between launches: the column widths and folds, how the session
   // list is arranged.

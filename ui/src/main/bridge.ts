@@ -33,8 +33,6 @@ export class Bridge {
   private waiting = new Map<number, Waiting>()
   private nextId = 0
   private buffer = ''
-  /** Diagnostics from the agent, kept for a bug report rather than parsed. */
-  private diagnostics: string[] = []
 
   constructor(private readonly onEvent: (event: BridgeEvent) => void, private settingsPath: string | null = null) {}
 
@@ -63,16 +61,18 @@ export class Bridge {
       )
     }
 
-    const child = spawn(path, this.settingsPath ? ['--settings', this.settingsPath] : [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+    // The packaged app says so, which is what lets the agent ask the release listing at start
+    // (UPDATE-12). A checkout does not, so a development run and a driver ask nothing.
+    const env = app.isPackaged ? { ...process.env, BRAVEBOT_INSTALLED_VIA: 'desktop' } : process.env
+    const child = spawn(path, this.settingsPath ? ['--settings', this.settingsPath] : [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
 
     child.stdout.on('data', (chunk: string) => this.receive(chunk))
-    child.stderr.on('data', (chunk: string) => {
-      // Human-readable only, never parsed. Kept so a bug report can include it.
-      this.diagnostics.push(chunk)
-      if (this.diagnostics.length > 200) this.diagnostics.shift()
-    })
+    // Read and let go. What the agent prints there is unvetted text (a refusal's detail, a panic),
+    // so it is neither kept nor put in a bug report; the diagnostic log is what a report names
+    // (DIAG-9). It is read so the pipe never fills and stalls the agent.
+    child.stderr.on('data', () => {})
     child.on('exit', (code, signal) => this.died(code, signal))
 
     this.child = child
@@ -100,7 +100,7 @@ export class Bridge {
     try {
       message = JSON.parse(line) as Record<string, unknown>
     } catch {
-      this.diagnostics.push(`unparseable line from bravebot-rpc: ${line.slice(0, 200)}`)
+      // Not a message, so nothing waits on it.
       return
     }
 
@@ -161,11 +161,6 @@ export class Bridge {
     const report = await this.request<T>('settings.select', { path })
     this.settingsPath = path
     return report
-  }
-
-  /** The agent's own diagnostics, for a bug report. */
-  stderr(): string {
-    return this.diagnostics.join('')
   }
 
   /**

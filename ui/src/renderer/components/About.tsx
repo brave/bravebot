@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Modal } from './Modal'
 import { Button, Collapse, Icon, Link } from '../nala'
+import { updateLine, updateState, type UpdateStatus } from '../../shared/update'
+import { dayOf } from '../time'
 
 export interface AboutInfo {
   version: string
@@ -10,7 +12,15 @@ export interface AboutInfo {
 
 const project = 'https://github.com/brave/bravebot'
 
-export function About({ info, onClose }: { info: AboutInfo; onClose: () => void }): React.JSX.Element {
+export function About({ info, update, onDownload, onReportBug, onClose }: {
+  info: AboutInfo
+  /** What the last update check found (UPDATE-12), or nothing where it could not be read. */
+  update: UpdateStatus | null
+  onDownload: () => void
+  onReportBug: () => void
+  onClose: () => void
+}): React.JSX.Element {
+  const newer = updateState(update) === 'newer'
   // The pinned agent stamps its build as "version (commit)"; info.version is the bridge version.
   const agentVersion = info.build.split(' ')[0]
   const [copyStatus, setCopyStatus] = useState('')
@@ -29,9 +39,16 @@ export function About({ info, onClose }: { info: AboutInfo; onClose: () => void 
       <h2>Brave Bot</h2>
       <span className="about-version">Version {agentVersion}</span>
     </div>
+    <div className={`about-update${newer ? ' newer' : ''}`} role="status" data-test="about-update" data-state={updateState(update)}>
+      <span>{updateLine(update, (iso) => dayOf(iso))}</span>
+      {newer && <Button kind="filled" size="small" onClick={onDownload} data-test="about-download">
+        <Icon name="download" slot="icon-before" />Download
+      </Button>}
+    </div>
     <nav className="about-links" aria-label="Project resources">
       <Link href={project} target="_blank" rel="noreferrer">GitHub<Icon name="launch" slot="icon-after" /></Link>
       <Link href={`${project}/releases`} target="_blank" rel="noreferrer">Release notes<Icon name="launch" slot="icon-after" /></Link>
+      <Button kind="plain" size="small" className="about-report" onClick={onReportBug} data-test="about-report-bug">Report a bug…</Button>
     </nav>
     <Collapse className="about-details" title="Build & storage details" isOpen={undefined} data-test="about-details">
       <dl>

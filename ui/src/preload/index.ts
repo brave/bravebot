@@ -29,6 +29,8 @@ import type { Appearance } from '../shared/theme'
 import type { Experience } from '../shared/experience'
 import type { Drop, DropOutcome } from '../shared/drops'
 import type { Paste, PasteOutcome } from '../shared/pastes'
+import type { Composed, SaveOutcome } from '../shared/bug-report'
+import type { PageName } from '../shared/update'
 
 /** The appearance in force: System, Light, or Dark. */
 export interface ThemeState {
@@ -401,6 +403,28 @@ const api = {
    */
   exportSession(request: ExportRequest): Promise<ExportOutcome> {
     return ipcRenderer.invoke('bravebot:export', request) as Promise<ExportOutcome>
+  },
+
+  /**
+   * The bug report's text, as the bridge composed it, and the newest log's path (DIAG-9).
+   *
+   * None of the four below takes text, a URL or a path. A save asks for the report again and
+   * writes that, a page is one of two names, and the log shown is the one the bridge names.
+   */
+  composeBugReport(): Promise<Composed> {
+    return ipcRenderer.invoke('bravebot:bug-report:compose') as Promise<Composed>
+  },
+  /** Save the report where the person chooses in a native sheet, readable by them alone. */
+  saveBugReport(): Promise<SaveOutcome> {
+    return ipcRenderer.invoke('bravebot:bug-report:save') as Promise<SaveOutcome>
+  },
+  /** Show the newest diagnostic log in the file manager. False where there is none. */
+  showBugReportLog(): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:bug-report:show-log') as Promise<boolean>
+  },
+  /** Open the releases page or a new issue in the browser (UPDATE-12, DIAG-9). */
+  openPage(name: PageName): Promise<boolean> {
+    return ipcRenderer.invoke('bravebot:open-page', name) as Promise<boolean>
   },
 
   /**

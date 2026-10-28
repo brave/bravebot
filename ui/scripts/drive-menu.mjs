@@ -127,6 +127,9 @@ const ALLOWED_IDS = [
   'mode.cycle',
   // Opens a dialog that names every file it would put back. Only that dialog's button rewinds.
   'turn.rewind',
+  // Open About and the bug report. Neither decides anything, and the report is written only where
+  // its Save button and a native sheet put it.
+  'help.update', 'help.bug-report',
 ]
 const ours = every.filter((i) => i.id && !i.role).map((i) => i.id)
 check(
@@ -143,8 +146,8 @@ check(
 // `session.rewind` puts files back to what they held, and only after a dialog naming each one.
 const allowed = (readFileSync('src/main/index.ts', 'utf8').match(/const ALLOWED = new Set\(\[([^\]]*)\]/) ?? [])[1]
 check(
-  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 42,
-  'the main-process allow-list is 42 methods including model discovery and rewind, none of which decides anything',
+  allowed !== undefined && !/approve|decide/.test(allowed) && allowed.includes("'models.list'") && allowed.split(',').filter((s) => s.trim()).length === 43,
+  'the main-process allow-list is 43 methods including model discovery, rewind and the update status, none of which decides anything',
 )
 
 // --- accelerators are declared (they cannot be *dispatched* from here) -----------------

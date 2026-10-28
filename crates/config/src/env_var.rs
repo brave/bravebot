@@ -152,7 +152,9 @@ pub const SCRUBBED: [&str; 2] = [SIGNING_KEY, KEY_ID];
 /// The npm package's launcher sets it to `npm` before it starts the binary, which is the only way
 /// the binary could tell: what npm unpacked is an ordinary executable in an ordinary directory.
 /// It decides which update command a person is shown at startup and nothing else, so a value
-/// nothing here recognises leaves the startup screen as it would have been.
+/// nothing here recognises leaves the startup screen as it would have been. The packaged desktop
+/// app sets it to `desktop` before it starts `bravebot-rpc`, which then asks for the newest release
+/// (UPDATE-12).
 ///
 /// Absent from ALL: it describes one installation rather than the build.
 pub const INSTALLED_VIA: &str = "BRAVEBOT_INSTALLED_VIA";

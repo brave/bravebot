@@ -64,14 +64,12 @@ fn main() {
 
     // Before a session is assembled, so every turn this process runs reads one answer. See
     // SANDBOX-20, SANDBOX-25 and SANDBOX-24.
-    bravebot_ui_bridge::settings::settle_for_process(
+    let process = bravebot_ui_bridge::settings::layers(
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
-    bravebot_ui_bridge::settings::start_the_sweep_for_process(
-        std::env::current_dir().ok().as_deref(),
-        settings.as_deref(),
-    );
+    bravebot_ui_bridge::settings::settle_for_process(&process);
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
 
     let (input, lines) = mpsc::channel();
     let out = Arc::new(Mutex::new(std::io::stdout()));
