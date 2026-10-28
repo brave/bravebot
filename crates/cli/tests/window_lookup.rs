@@ -140,7 +140,6 @@ impl Gateway {
         let _ = reader.into_inner().write_all(response.as_bytes());
     }
 
-    /// Let the listing be answered.
     fn release(&self) {
         let (state, changed) = &*self.seen;
         state.lock().expect("what was seen").released = true;

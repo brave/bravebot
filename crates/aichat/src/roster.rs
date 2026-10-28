@@ -179,7 +179,6 @@ fn bearer(credential: &Credential) -> Option<&str> {
     }
 }
 
-/// Ask Brave's endpoint what it offers.
 fn ask_brave<S: Sink>(sink: &impl Fn() -> S, config: &Config) -> Result<Vec<Model>, String> {
     let mut routing = Routing::new();
     routing.insert_trusted("models", config.models_url());
