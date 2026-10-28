@@ -482,7 +482,10 @@ impl TrustStore {
     /// False once the map has moved to another directory ([`TrustStore::rebased`]): the answer was
     /// about the first one, and a person who trusted `~/a` has said nothing about `~/b`. A map
     /// that says so still decides nothing by itself. [`Policy`](crate::policy::Policy) asks it only
-    /// of a line that starts in the root, and only with the other conditions of RUN-5 met.
+    /// of a line that starts in the root, and only with the other conditions of RUN-5 met, one of
+    /// which is that the root it works in is the one [`TrustStore::confined_lines_root`] names: a
+    /// delegate in a checkout shares this map and works in the checkout, which the answer is not
+    /// about.
     pub fn allows_confined_lines(&self) -> bool {
         self.confined_lines_in.as_deref() == Some(self.root.as_str())
     }
