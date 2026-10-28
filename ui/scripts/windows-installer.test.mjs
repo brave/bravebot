@@ -134,6 +134,24 @@ test('a bundle missing an executable, built for the other architecture, or not f
   checkBundle({ bundle: bundle(root, 'arm64', { machine: ARM64 }), arch: 'arm64' })
 })
 
+// A cached x86_64 `makensis` cannot be spawned on an arm64 Mac without Rosetta: the kernel answers
+// EBADARCH (-86) and electron-builder reports "Cannot spawn .../makensis". That is the host, not the
+// installer, so the two tests that build one skip on it, and on nothing else.
+const NO_MAKENSIS = 'no runnable makensis on this host: an x86_64 one needs Rosetta on Apple silicon'
+export function cannotSpawnMakensis(error, { platform = process.platform, arch = process.arch } = {}) {
+  return platform === 'darwin' && arch === 'arm64' && /Cannot spawn .*makensis.*(-86|EBADARCH)/s.test(String(error?.message))
+}
+
+async function buildOrSkip(t, options) {
+  try {
+    return await buildInstaller(options)
+  } catch (error) {
+    if (!cannotSpawnMakensis(error)) throw error
+    t.skip(NO_MAKENSIS)
+    return undefined
+  }
+}
+
 // The signatures the release job put on the bundle are the ones Windows checks when the app starts,
 // so the bundle has to reach the installer as it was handed over: a file electron-builder added to
 // it, or rewrote, would be one nobody signed. Both paths are relative, as the Makefile's are, and
@@ -159,7 +177,8 @@ test('the installer carries the bundle as it was handed over, under the asset na
   }
   const before = digests(dir)
 
-  const written = await buildInstaller({ bundle: 'Brave Bot-win32-x64', arch: 'amd64', out: 'out' })
+  const written = await buildOrSkip(t, { bundle: 'Brave Bot-win32-x64', arch: 'amd64', out: 'out' })
+  if (written === undefined) return
 
   assert.deepEqual(digests(dir), before)
   assert.equal(written, join('out', 'bravebot-desktop-windows-amd64-setup.exe'))
@@ -209,7 +228,8 @@ test("each installer's archive uses only coders the installer's own 7-Zip can de
 
   for (const [arch, machine] of [['amd64', X64], ['arm64', ARM64]]) {
     const dir = bundle(root, `Brave Bot-win32-${ARCHES[arch]}`, { machine })
-    const installer = await buildInstaller({ bundle: dir, arch, out: join(root, 'out') })
+    const installer = await buildOrSkip(t, { bundle: dir, arch, out: join(root, 'out') })
+    if (installer === undefined) return
     const unpacked = join(root, arch)
     execFileSync(sevenZip, ['x', '-y', `-o${unpacked}`, installer, '$PLUGINSDIR/app-*.7z'], { stdio: 'ignore' })
     const [archive] = readdirSync(join(unpacked, '$PLUGINSDIR'))
@@ -221,4 +241,15 @@ test("each installer's archive uses only coders the installer's own 7-Zip can de
       assert.ok(used.includes('BCJ') || used.includes('BCJ2'), `${arch}: ${file} went through no branch filter (${used.join(' ')})`)
     }
   }
+})
+
+// The skip has to be for that one failure: a build that fails any other way is a defect, and so is
+// the same error on a host where makensis should run.
+test('only an unspawnable makensis on Apple silicon is a reason to skip an installer build', () => {
+  const eBadArch = new Error('Cannot spawn /Users/a/Library/Caches/electron-builder/nsis-3.0.4.1/mac/makensis: Error: spawn Unknown system error -86')
+  assert.equal(cannotSpawnMakensis(eBadArch, { platform: 'darwin', arch: 'arm64' }), true)
+  assert.equal(cannotSpawnMakensis(eBadArch, { platform: 'darwin', arch: 'x64' }), false)
+  assert.equal(cannotSpawnMakensis(eBadArch, { platform: 'win32', arch: 'arm64' }), false)
+  assert.equal(cannotSpawnMakensis(new Error('Cannot spawn /x/makensis: Error: spawn EACCES'), { platform: 'darwin', arch: 'arm64' }), false)
+  assert.equal(cannotSpawnMakensis(new Error('makensis exited with code 1'), { platform: 'darwin', arch: 'arm64' }), false)
 })
