@@ -160,7 +160,7 @@ A proxy the environment names carries this request as it carries every other
 | Claude Code | `env.ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_MODEL` or `model` is `opus`, `sonnet` or `haiku`, and that tier names a model | `model` |
 | Claude Code | `env.ANTHROPIC_API_KEY` in the settings file, with no `env.ANTHROPIC_BASE_URL` beside it | `provider.anthropic`, at the endpoint compiled in, with the credential as [IMPORT-6](#IMPORT-6) says |
-| opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, `@ai-sdk/google-vertex` for `google-vertex`, or `@ai-sdk/anthropic` for `anthropic` | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
+| opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, `@ai-sdk/google-vertex` for `google-vertex`, `@ai-sdk/anthropic` for `anthropic`, or `@ai-sdk/openai` for `openai` where it states no `baseURL` or OpenAI's | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
 | Ollama | a server answering [IMPORT-10](#IMPORT-10)'s request with a model it can serve | `provider.ollama`: `{"name": "Ollama (local)", "options": {"baseURL": "<address>/v1"}}`, with `"contextWindow": <tokens>` added to `options` where [IMPORT-5](#IMPORT-5) says, and `model: "ollama/<name>"` for the model [IMPORT-10](#IMPORT-10) chooses |
@@ -190,12 +190,13 @@ offered the same way, as an entry of its own at that endpoint, where the setting
 from it would send it to Anthropic's, so the key and the host are both left
 ([IMPORT-4](#IMPORT-4)).
 
-**An `openai` entry is OpenAI-compatible when it names no `npm`**, and is offered at
-`https://api.openai.com/v1`. One naming `@ai-sdk/openai` is left as another SDK
-([IMPORT-4](#IMPORT-4)), that package speaking the Responses API ([BACKEND-61](backends.md#BACKEND-61)),
-and the entry import writes naming no SDK, so one written from it would be sent chat completions.
-An entry that names no variable is written with `OPENAI_API_KEY`, the variable opencode reads for
-this id.
+**An `openai` entry is offered when it names no `npm`**, at `https://api.openai.com/v1`, where it is
+reached in the Responses protocol ([BACKEND-17](backends.md#BACKEND-17)). One naming `@ai-sdk/openai`, the
+package that speaks that protocol ([BACKEND-61](backends.md#BACKEND-61)), is offered the same way where it
+states no `baseURL` or states OpenAI's, since the entry import writes names no SDK and is reached in that
+protocol there. One that states another host is left as another SDK ([IMPORT-4](#IMPORT-4)), since the
+entry written would be sent chat completions there. An entry that names no variable is written with
+`OPENAI_API_KEY`, the variable opencode reads for this id.
 
 **A `google-vertex` entry is the exception.** One naming a project is reached through the service's
 OpenAI-compatible endpoint ([BACKEND-49](backends.md#BACKEND-49)), so it is offered where it states
@@ -248,7 +249,8 @@ build reads it.
 `verified-by: bravebot_config::import::disabled_providers_are_not_offered`
 `verified-by: bravebot_config::import::an_auth_json_key_for_a_known_id_is_a_provider`
 `verified-by: bravebot_config::import::an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint`
-`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_at_openais_host_is_offered`
+`verified-by: bravebot_config::import::an_entry_naming_the_responses_sdk_where_the_written_entry_would_not_speak_it_is_left`
 `verified-by: bravebot_config::import::an_anthropic_entry_naming_no_sdk_is_offered_at_anthropics_endpoint`
 `verified-by: bravebot_config::import::an_anthropic_entry_naming_its_own_sdk_keeps_the_endpoint_it_states`
 `verified-by: bravebot_config::import::an_anthropic_entry_naming_the_openai_compatible_sdk_is_left_as_another_sdk`
@@ -314,7 +316,7 @@ setup was looked at.
 `verified-by: bravebot_config::import::an_auth_json_key_for_google_vertex_is_offered_in_express_mode`
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_no_project_and_no_key_is_left_and_said`
 `verified-by: bravebot_config::import::a_google_vertex_entry_naming_a_base_url_and_no_project_is_left_and_said`
-`verified-by: bravebot_config::import::an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk`
+`verified-by: bravebot_config::import::an_entry_naming_the_responses_sdk_where_the_written_entry_would_not_speak_it_is_left`
 `verified-by: bravebot_config::import::an_api_key_helper_is_never_imported`
 `verified-by: bravebot_config::import::permissions_hooks_and_mcp_servers_are_never_imported`
 `verified-by: bravebot_config::import::what_claude_code_uses_and_bravebot_cannot_is_named_and_not_shown`

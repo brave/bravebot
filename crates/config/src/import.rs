@@ -10,7 +10,9 @@
 use crate::Secret;
 use crate::bedrock::{Bedrock, Tier};
 use crate::env_var;
-use crate::provider::{self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Provider};
+use crate::provider::{
+    self, ANTHROPIC_ID, AWS_PROVIDER_ID, GOOGLE_VERTEX_ID, Protocol, Provider, RESPONSES_SDK,
+};
 use serde_json::{Map, Value};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -1041,7 +1043,7 @@ fn opencode(configs: &[PathBuf], auth: Option<&Path>) -> Option<Found> {
                     Reason::BearerToken
                 } else if has_entry {
                     continue;
-                } else if !speaks_the_protocol(id, None) {
+                } else if !speaks_the_protocol(id, None, None) {
                     Reason::AnotherSdk
                 } else if id == GOOGLE_VERTEX_ID {
                     // A key with no project is express mode, which needs nothing else.
@@ -1133,9 +1135,14 @@ const OWN_SDK_IDS: [&str; 4] = ["azure", "cohere", "google", "google-vertex-anth
 /// On top of [`Provider::all`], which ignores the field: an `@ai-sdk/anthropic` entry under any id
 /// but `anthropic`, with a `baseURL`, would be kept there and then sent requests in a protocol that
 /// id is not reached by. An entry naming no SDK gets the one opencode picks for its id.
-fn speaks_the_protocol(id: &str, npm: Option<&str>) -> bool {
+///
+/// `stated` is the entry's `baseURL`. The SDK that speaks the Responses API is kept where the entry
+/// written without it is reached in that protocol anyway, which is an `openai` entry at OpenAI's own
+/// host: the field that says so is not written.
+fn speaks_the_protocol(id: &str, npm: Option<&str>, stated: Option<&str>) -> bool {
     match npm {
         None => !OWN_SDK_IDS.contains(&id),
+        Some(RESPONSES_SDK) => provider::protocol_of(id, None, stated) == Protocol::Responses,
         // Not for `anthropic`, which an entry written out here would then be read as reaching in the
         // Messages protocol: the field that says otherwise is not written.
         Some("@ai-sdk/openai-compatible") => id != ANTHROPIC_ID,
@@ -1177,7 +1184,13 @@ fn gateway(
     signed_in: impl Fn() -> Option<String>,
 ) -> Result<Gateway, Reason> {
     let npm = entry.get("npm").and_then(Value::as_str).map(str::trim);
-    if !speaks_the_protocol(id, npm) {
+    let stated = string(
+        entry
+            .get("options")
+            .and_then(Value::as_object)
+            .and_then(|options| options.get("baseURL")),
+    );
+    if !speaks_the_protocol(id, npm, stated.as_deref()) {
         return Err(Reason::AnotherSdk);
     }
     if id == GOOGLE_VERTEX_ID {
@@ -1998,7 +2011,7 @@ mod tests {
     }
 
     /// IMPORT-3: opencode reads an `openai` entry naming no SDK, and bravebot reaches the same host
-    /// through its chat-completions route. The entry arrives naming the variable opencode reads the
+    /// through its Responses route. The entry arrives naming the variable opencode reads the
     /// key from, since this program reads only what an entry names.
     #[test]
     fn an_openai_entry_naming_no_sdk_is_offered_at_openais_endpoint() {
@@ -2017,21 +2030,60 @@ mod tests {
         assert!(left(&found).is_empty(), "{:?}", left(&found));
     }
 
-    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, and the entry import writes names no SDK,
-    /// so one written from it would be sent chat completions at a host that takes the other protocol.
-    /// An entry naming it is left even though the host it would reach is one this program knows.
+    /// IMPORT-3: `@ai-sdk/openai` speaks the Responses API, and an `openai` entry that names no SDK
+    /// is reached in that protocol at OpenAI's own host, so the entry import writes keeps the route
+    /// the SDK named. It is offered with no host stated and with OpenAI's stated.
     #[test]
-    fn an_openai_entry_naming_the_responses_sdk_is_left_as_another_sdk() {
-        let home = Scratch::new("import-openai-sdk");
+    fn an_openai_entry_naming_the_responses_sdk_at_openais_host_is_offered() {
+        for (state, entry) in [
+            ("no host", r#"{"npm": "@ai-sdk/openai"}"#),
+            (
+                "OpenAI's host",
+                r#"{"npm": "@ai-sdk/openai", "options": {"baseURL": "https://api.openai.com/v1"}}"#,
+            ),
+        ] {
+            let home = Scratch::new("import-openai-sdk");
+            home.write(
+                ".config/opencode/opencode.json",
+                &format!(r#"{{"provider": {{"openai": {entry}}}}}"#),
+            );
+
+            let found = one(&home.path, &[], Source::Opencode);
+
+            assert_eq!(ids(&found), ["openai"], "{state}");
+            let openai = gateway(&found, "openai");
+            assert_eq!(openai.endpoint, "https://api.openai.com/v1", "{state}");
+            assert_eq!(openai.variables(), ["OPENAI_API_KEY"], "{state}");
+            assert!(left(&found).is_empty(), "{state}: {:?}", left(&found));
+        }
+    }
+
+    /// IMPORT-3: the entry import writes names no SDK, and an `openai` entry that states another host
+    /// is reached in chat completions there, so one that names the Responses SDK would change
+    /// protocol. It is left, and so is an entry under any other id that names the SDK.
+    #[test]
+    fn an_entry_naming_the_responses_sdk_where_the_written_entry_would_not_speak_it_is_left() {
+        let home = Scratch::new("import-openai-sdk-elsewhere");
         home.write(
             ".config/opencode/opencode.json",
-            r#"{"provider": {"openai": {"npm": "@ai-sdk/openai"}}}"#,
+            r#"{"provider": {
+                "openai": {"npm": "@ai-sdk/openai",
+                    "options": {"baseURL": "https://proxy.example.invalid/v1"}},
+                "a-gateway": {"npm": "@ai-sdk/openai",
+                    "options": {"baseURL": "https://gateway.example.invalid/v1"}}
+            }}"#,
         );
 
         let found = one(&home.path, &[], Source::Opencode);
 
         assert!(ids(&found).is_empty(), "{:?}", ids(&found));
-        assert_eq!(left(&found), [("openai", Reason::AnotherSdk)]);
+        assert_eq!(
+            left(&found),
+            [
+                ("a-gateway", Reason::AnotherSdk),
+                ("openai", Reason::AnotherSdk)
+            ]
+        );
     }
 
     /// IMPORT-3: `opencode auth login` keeps an OpenAI key in `auth.json` and writes no config

@@ -224,9 +224,28 @@ struct ListedByGateway {
     /// that needs one.
     #[serde(default)]
     architecture: Option<Architecture>,
+    /// The day OpenAI stops serving the model, as `YYYY-MM-DD`, where the listing states one.
+    ///
+    /// Held as it arrived, since a listing that states it in another shape, or as `null`, is still
+    /// a listing that can be read.
+    #[serde(default)]
+    shutdown_date: Option<serde_json::Value>,
 }
 
 impl ListedByGateway {
+    /// Whether the listing states a `shutdown_date` that is `now` or earlier, a date read as its
+    /// first second in UTC.
+    ///
+    /// Only a calendar date counts. An absent field, a `null` and any other shape state nothing, so
+    /// the row stays.
+    fn is_shut_down(&self, now: i64) -> bool {
+        self.shutdown_date
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .and_then(|date| bravebot_config::time::rfc3339(&format!("{date}T00:00:00Z")))
+            .is_some_and(|(shutdown, _)| shutdown <= now)
+    }
+
     /// Whether the listing says this model reads no effort level.
     ///
     /// Only an explicit `false`: a listing that does not mention the capability, or states it in
@@ -284,6 +303,7 @@ pub fn list_from_gateway<S: Sink>(
     headers: &[(String, bravebot_config::Secret)],
     egress: &Egress,
 ) -> Result<Vec<Model>, ChatError> {
+    let now = now_seconds();
     // Vertex AI has no listing a key can call, so asking would carry the key to be answered 404.
     if let Some(compiled) = provider.compiled_roster() {
         let listed = compiled
@@ -293,7 +313,7 @@ pub fn list_from_gateway<S: Sink>(
                 ..ListedByGateway::default()
             })
             .collect();
-        return Ok(offered_by_gateway(provider, listed));
+        return Ok(offered_by_gateway(provider, listed, now));
     }
 
     if token.is_some() && provider.answers_for_an_account() {
@@ -308,7 +328,7 @@ pub fn list_from_gateway<S: Sink>(
             headers,
             egress,
         ) {
-            return Ok(offered_by_gateway(provider, listed));
+            return Ok(offered_by_gateway(provider, listed, now));
         }
     }
 
@@ -320,7 +340,15 @@ pub fn list_from_gateway<S: Sink>(
         headers,
         egress,
     )?;
-    Ok(offered_by_gateway(provider, listed))
+    Ok(offered_by_gateway(provider, listed, now))
+}
+
+/// Seconds since the epoch, or 0 where the clock reads before it, so that a clock that cannot be
+/// read drops only a row dated 1970-01-01 or earlier.
+fn now_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64)
 }
 
 /// One roster request, decoded.
@@ -734,15 +762,19 @@ struct GatewayListing {
 /// so a limit here would be this program deciding somebody may not choose a model their gateway
 /// serves.
 ///
-/// What a listing leaves out is what it says cannot call tools, and the ids the provider is
-/// compiled with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a
-/// route that cannot reach a model does not offer it. The ids are compared with that list only,
-/// and the rows go to a picker, as those the capability filter keeps do.
+/// What a listing leaves out is what it says cannot call tools, the ids the provider is compiled
+/// with a list of ([`bravebot_config::provider::Provider::responses_only_models`]): a route that
+/// cannot reach a model does not offer it, and, where the provider reads them
+/// ([`bravebot_config::provider::Provider::lists_shutdown_dates`]), a model whose listed
+/// `shutdown_date` is `now` or earlier, which the service no longer serves. The ids are compared
+/// with that list only, and the rows go to a picker, as those the capability filter keeps do.
 fn offered_by_gateway(
     provider: &bravebot_config::provider::Provider,
     listed: Vec<ListedByGateway>,
+    now: i64,
 ) -> Vec<Model> {
     let left_out = provider.responses_only_models();
+    let reads_shutdown_dates = provider.lists_shutdown_dates();
     listed
         .into_iter()
         .filter(|entry| match entry.supported_parameters.as_ref() {
@@ -751,6 +783,7 @@ fn offered_by_gateway(
         })
         .filter(|entry| !entry.id.trim().is_empty())
         .filter(|entry| !left_out.contains(&entry.id.as_str()))
+        .filter(|entry| !(reads_shutdown_dates && entry.is_shut_down(now)))
         .map(|entry| Model {
             key: format!("{}/{}", provider.id, entry.id),
             // The bare name the gateway knows it by. What a person reads is composed by whoever
@@ -1049,9 +1082,21 @@ mod tests {
             .expect("one provider")
     }
 
+    /// A moment that is before every `shutdown_date` a listing could state in these tests, so a
+    /// test of something else is not read against a clock.
+    const BEFORE_ANY_SHUTDOWN: i64 = 0;
+
     fn from_gateway(provider: &bravebot_config::provider::Provider, body: &str) -> Vec<Model> {
+        from_gateway_at(provider, body, BEFORE_ANY_SHUTDOWN)
+    }
+
+    fn from_gateway_at(
+        provider: &bravebot_config::provider::Provider,
+        body: &str,
+        now: i64,
+    ) -> Vec<Model> {
         let listed: GatewayListing = serde_json::from_str(body).expect("the test body parses");
-        offered_by_gateway(provider, listed.data)
+        offered_by_gateway(provider, listed.data, now)
     }
 
     /// The shape a gateway answers with: an envelope around entries whose only certain field is the
@@ -1484,7 +1529,8 @@ mod tests {
     /// them (`-pro` or `-codex` on a model neither document lists) is offered, because the list is
     /// of ids, and so is a model another endpoint also serves (`gpt-image-1`) and one that takes
     /// chat completions beside the Responses request (`gpt-5.4`). The same listing is offered whole
-    /// where the route is the Responses one or the host is not OpenAI's.
+    /// where the route is the Responses one, which is where an `openai` entry reaches OpenAI's own
+    /// API unless it names the OpenAI-compatible SDK, or where the host is not OpenAI's.
     #[test]
     fn an_openai_listing_is_not_offered_the_models_only_its_responses_api_takes() {
         let listing = r#"{"data": [
@@ -1503,7 +1549,7 @@ mod tests {
         };
 
         assert_eq!(
-            keys(r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#),
+            keys(r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["OPENAI_API_KEY"]}}"#),
             [
                 "openai/gpt-4o-mini",
                 "openai/text-embedding-3-small",
@@ -1512,6 +1558,11 @@ mod tests {
                 "openai/o9-pro",
                 "openai/gpt-9-codex"
             ]
+        );
+        assert_eq!(
+            keys(r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#).len(),
+            17,
+            "an openai entry is reached in the Responses protocol, which takes those models"
         );
         assert_eq!(
             keys(r#"{"openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"]}}"#).len(),
@@ -1527,6 +1578,105 @@ mod tests {
             17,
             "a proxy keyed openai was left out of models it may serve"
         );
+    }
+
+    /// 2026-10-27 12:00:00 UTC.
+    const NOON_ON_THE_27TH: i64 = 1_793_102_400;
+    /// 2026-10-27 00:00:00 UTC.
+    const START_OF_THE_27TH: i64 = 1_793_059_200;
+
+    /// BACKEND-19: OpenAI's listing states the day a model stops being served, and a request for
+    /// one past it is answered as deprecated. A row dated that day or earlier is not offered, and
+    /// every other row is: one dated later, one with no date, a `null`, and a date stated in a
+    /// shape that is not `YYYY-MM-DD`, which says nothing about when the model stops.
+    #[test]
+    fn an_openai_listing_is_not_offered_a_model_on_or_past_its_shutdown_date() {
+        let listing = r#"{"data": [
+            {"id": "gpt-4o-mini", "shutdown_date": null},
+            {"id": "o1", "shutdown_date": "2026-10-23"},
+            {"id": "gpt-ends-today", "shutdown_date": "2026-10-27"},
+            {"id": "gpt-ends-tomorrow", "shutdown_date": "2026-10-28"},
+            {"id": "gpt-undated"},
+            {"id": "gpt-worded", "shutdown_date": "soon"},
+            {"id": "gpt-numbered", "shutdown_date": 20261023},
+            {"id": "gpt-timestamped", "shutdown_date": "2026-10-23T00:00:00Z"}
+        ]}"#;
+        let keys = |block: &str, now: i64| -> Vec<String> {
+            from_gateway_at(&entry(block), listing, now)
+                .into_iter()
+                .map(|model| model.key)
+                .collect()
+        };
+        let kept = [
+            "openai/gpt-4o-mini",
+            "openai/gpt-ends-tomorrow",
+            "openai/gpt-undated",
+            "openai/gpt-worded",
+            "openai/gpt-numbered",
+            "openai/gpt-timestamped",
+        ];
+
+        assert_eq!(
+            keys(
+                r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#,
+                NOON_ON_THE_27TH
+            ),
+            kept
+        );
+        assert_eq!(
+            keys(
+                r#"{"openai": {"npm": "@ai-sdk/openai-compatible", "env": ["OPENAI_API_KEY"]}}"#,
+                NOON_ON_THE_27TH
+            ),
+            kept,
+            "the route does not decide what OpenAI has shut down"
+        );
+        assert_eq!(
+            keys(
+                r#"{"work": {"options": {"baseURL": "https://API.OpenAI.com/v1"}}}"#,
+                NOON_ON_THE_27TH
+            )
+            .len(),
+            6,
+            "an entry under another id that states OpenAI's host is read the same way"
+        );
+    }
+
+    /// A date is its first second in UTC: on the day, the model is gone, and the second before it
+    /// the model is still offered. A comparison that took the date as the end of its day would keep
+    /// a model that already answers as deprecated.
+    #[test]
+    fn a_shutdown_date_takes_effect_at_the_start_of_its_day() {
+        let listing = r#"{"data": [{"id": "o1", "shutdown_date": "2026-10-27"}]}"#;
+        let block = r#"{"openai": {"env": ["OPENAI_API_KEY"]}}"#;
+
+        assert!(from_gateway_at(&entry(block), listing, START_OF_THE_27TH).is_empty());
+        assert_eq!(
+            from_gateway_at(&entry(block), listing, START_OF_THE_27TH - 1).len(),
+            1
+        );
+    }
+
+    /// Another service that states a field of that name may mean something else by it, so only
+    /// OpenAI's own API is read for it. A proxy keyed `openai`, and any other gateway, is offered
+    /// every row it lists.
+    #[test]
+    fn a_shutdown_date_is_read_at_openais_own_api_and_nowhere_else() {
+        let listing = r#"{"data": [{"id": "o1", "shutdown_date": "2026-10-23"}]}"#;
+
+        for block in [
+            r#"{"openai": {"env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://proxy.example.invalid/v1"}}}"#,
+            r#"{"openai": {"env": ["OPENAI_API_KEY"],
+                "options": {"baseURL": "https://api.openai.com:8443/v1"}}}"#,
+            r#"{"openrouter": {"options": {"baseURL": "https://openrouter.example.invalid/v1"}}}"#,
+        ] {
+            assert_eq!(
+                from_gateway_at(&entry(block), listing, NOON_ON_THE_27TH).len(),
+                1,
+                "{block}"
+            );
+        }
     }
 
     /// A name is what a request carries, so an entry without one cannot be asked for. Nothing else
