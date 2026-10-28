@@ -43,7 +43,7 @@ bare invocation alike. It cannot be turned off once the session has started.
 
 ## What it does not cover
 
-Eleven things still reach the filesystem:
+Ten things still reach the filesystem:
 
 - **Your project.** `write_file` and `edit_file` go on editing it. Those edits are the work rather
   than a trace of it.
