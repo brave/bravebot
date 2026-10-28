@@ -7364,6 +7364,131 @@ fn a_responses_reply_stopped_for_its_content_is_a_refusal_and_not_a_ceiling() {
     );
 }
 
+/// A reply whose content is a refusal part, announced in any of the forms the service uses
+/// and ended as a completed reply, is a refusal. It is not an empty reply, it is not asked for again,
+/// and the words the service wrote reach neither the screen nor the error.
+#[test]
+fn a_responses_refusal_part_is_a_refusal_and_its_words_reach_nothing() {
+    let announcements = [
+        sse(
+            "response.refusal.delta",
+            serde_json::json!({"delta": "REFUSAL-WORDS-DELTA"}),
+        ),
+        sse(
+            "response.refusal.done",
+            serde_json::json!({"refusal": "REFUSAL-WORDS-DONE"}),
+        ),
+        sse(
+            "response.content_part.added",
+            serde_json::json!({"output_index": 0, "content_index": 0,
+                "part": {"type": "refusal", "refusal": "REFUSAL-WORDS-ADDED"}}),
+        ),
+        sse(
+            "response.content_part.done",
+            serde_json::json!({"output_index": 0, "content_index": 0,
+                "part": {"type": "refusal", "refusal": "REFUSAL-WORDS-PART"}}),
+        ),
+        sse(
+            "response.output_item.done",
+            serde_json::json!({"output_index": 0, "item": {"type": "message", "content": [
+                {"type": "refusal", "refusal": "REFUSAL-WORDS-ITEM"}]}}),
+        ),
+    ];
+    for (shape, announcement) in announcements.into_iter().enumerate() {
+        let (endpoint, _) = serve_attempts(vec![Attempt::Frames(vec![
+            announcement,
+            sse("response.completed", completed(9, 3)),
+        ])]);
+        let provider = responses_at(&endpoint);
+        let egress = Egress::new();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink);
+
+        let mut client = responses_client(&egress, &provider, "a-model");
+        let error = client
+            .complete(
+                &mut policy,
+                &ChatRequest::new("a-responses-gateway/a-model", vec![Message::user("hi")]),
+            )
+            .expect_err("a refusal is not a reply");
+
+        assert!(
+            matches!(
+                error,
+                ChatError::Reported {
+                    failure: bravebot_aichat::anthropic::protocol::Failure::Refusal
+                }
+            ),
+            "{error}"
+        );
+        assert_eq!(client.attempts(), 1);
+        assert!(!format!("{error:?}{error}").contains("REFUSAL-WORDS"));
+        // What the turn cost is counted, as it is for a reply stopped for its content.
+        let billed = client.completed_usage().expect("the bill was kept");
+        assert_eq!(billed.prompt_tokens, 9, "announcement {shape}");
+        assert_eq!(billed.completion_tokens, 3, "announcement {shape}");
+    }
+}
+
+/// A refusal beside a finished call is still a refusal and hands on no call, and the words of the
+/// refusal reach no progress callback. A stream that carried a refusal and stopped before any final
+/// event is a reply that did not finish, so it is asked for again and the refusal is not remembered.
+#[test]
+fn a_responses_refusal_beside_a_call_hands_on_no_call_and_one_cut_short_is_asked_again() {
+    let (endpoint, _) = serve_attempts(vec![
+        Attempt::Frames(vec![
+            sse(
+                "response.refusal.delta",
+                serde_json::json!({"delta": "REFUSAL-WORDS-DELTA"}),
+            ),
+            sse(
+                "response.output_item.done",
+                serde_json::json!({"output_index": 0, "item": {"type": "function_call",
+                    "call_id": "call_9", "name": "add", "arguments": "{}"}}),
+            ),
+            sse("response.completed", completed(9, 3)),
+        ]),
+        Attempt::Frames(vec![sse(
+            "response.refusal.delta",
+            serde_json::json!({"delta": "REFUSAL-WORDS-CUT"}),
+        )]),
+        Attempt::Frames(text_reply(&["whole"])),
+    ]);
+    let provider = responses_at(&endpoint);
+    let egress = Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut policy = open_policy(&mut sink);
+    let proof = policy.authorise_display_release("the reply");
+    let request = ChatRequest::new("a-responses-gateway/a-model", vec![Message::user("hi")]);
+
+    let mut shown = Vec::new();
+    let mut client = responses_client(&egress, &provider, "a-model");
+    let error = client
+        .complete_streaming(&mut policy, &request, |progress| {
+            shown.push(revealed(&proof, progress.written).to_string());
+        })
+        .expect_err("a refusal beside a call is a refusal");
+    assert!(
+        matches!(
+            error,
+            ChatError::Reported {
+                failure: bravebot_aichat::anthropic::protocol::Failure::Refusal
+            }
+        ),
+        "{error}"
+    );
+    assert_eq!(client.attempts(), 1);
+    // The stream was read, so the callback ran, and it was never given a word.
+    assert!(!shown.is_empty(), "the callback never ran");
+    assert!(shown.iter().all(|piece| piece.is_empty()), "{shown:?}");
+
+    let completion = client
+        .complete(&mut policy, &request)
+        .expect("the stream cut short was asked for again");
+    assert_eq!(client.attempts(), 2);
+    assert_eq!(revealed(&proof, completion.content), "whole");
+}
+
 /// An entry that takes the Responses protocol is asked what its key may reach before what the
 /// service serves, with the key as a bearer token, as any other gateway is.
 #[test]

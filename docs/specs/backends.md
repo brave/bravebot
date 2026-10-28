@@ -3817,7 +3817,14 @@ for a screen to draw on request ([VIEW-33](terminal-transcript.md#VIEW-33)) and 
 one it knows in a shape it cannot read is unreadable and not ignored. A stream ends in one of three events.
 `response.completed` is a reply. `response.incomplete` is a reply the service stopped for the ceiling, and
 is kept for what it said and never for what it asked ([BACKEND-42](#BACKEND-42)), not asked for again; one
-stopped for its content is a refusal, named as [BACKEND-57](#BACKEND-57) names one. A final event in a shape
+stopped for its content is a refusal, named as [BACKEND-57](#BACKEND-57) names one. A reply that holds a
+refusal content part is a refusal in the same way, whichever event announces the part: a
+`response.refusal.delta` or `response.refusal.done` event, a `response.content_part.added` or
+`response.content_part.done` event whose part is of type `refusal`, or a finished message item with a part of
+type `refusal`. Only that the part exists is read from it, so the words the service wrote reach no screen, record
+or error. The refusal is remembered until the final event, which cannot clear it, and applies to a reply that
+also finished a call, whose call is handed on to nobody. A refusal in a stream that stopped before a final
+event is asked for again with the rest of that stream. A final event in a shape
 this cannot read is an unreadable reply and not one that stopped short. `response.failed` is a failure named
 from a list this build holds and never by what the service wrote, and asked for again only where a second
 attempt could get past it, as [BACKEND-57](#BACKEND-57) does for a failure reported part way through. The
@@ -3873,17 +3880,18 @@ and ended with HTTP 400 for `gpt-6-sol` where the entry named `@ai-sdk/openai-co
 Sending the request again without the level, as a refusal of a level is answered
 ([BACKEND-22](#BACKEND-22)), does not get past the refusal for the tool, since no level was sent. Nothing has
 been observed at `api.openai.com` in this protocol of cached tokens, a reasoning summary, a picture, a reply
-stopped at its ceiling or a turn of several rounds.
+stopped at its ceiling or a turn of several rounds. No service has been seen to send
+`response.refusal.delta`, `response.refusal.done`, a content part event with a part of type `refusal` or a message
+item with a part of type `refusal`; those names are read from the protocol's published description.
 
 **Built:** the protocol for an entry that names `@ai-sdk/openai`, in `bravebot-aichat` beside the Anthropic
 and Gemini clients: the request, the events, calls and their results, usage, the level, the three endings
-of a stream, and the refusals, reached at the entry's `/responses` route with its key as a bearer token.
+of a stream, and the refusals, including a refusal content part, reached at the entry's `/responses` route
+with its key as a bearer token.
 
 **Not built:** an `npm` on a model, so the SDK an entry names decides for every model it lists; a run's
 `--output-schema`, which the request does not carry; a document attachment, which is dropped
-([#3121](https://github.com/brave/bravebot/issues/3121)); a refusal the model writes as a
-content part of a reply that completes, which is read as no content
-([#3120](https://github.com/brave/bravebot/issues/3120)); and [IMPORT-3](import.md#IMPORT-3) still leaves
+([#3121](https://github.com/brave/bravebot/issues/3121)); and [IMPORT-3](import.md#IMPORT-3) still leaves
 an `openai` entry that names `@ai-sdk/openai`.
 
 **Why.** The service decides the protocol, so the same JSON serves the ChatGPT account and a gateway that
@@ -3925,6 +3933,9 @@ clause was written for.
 `verified-by: bravebot_aichat::client::a_responses_call_is_named_before_its_arguments_arrive_and_they_are_never_charged`
 `verified-by: bravebot_aichat::client::a_final_responses_event_in_a_shape_this_cannot_read_is_not_asked_for_again`
 `verified-by: bravebot_aichat::client::a_responses_reply_stopped_for_its_content_is_a_refusal_and_not_a_ceiling`
+`verified-by: bravebot_aichat::client::a_responses_refusal_part_is_a_refusal_and_its_words_reach_nothing`
+`verified-by: bravebot_aichat::client::a_responses_refusal_beside_a_call_hands_on_no_call_and_one_cut_short_is_asked_again`
+`verified-by: bravebot_aichat::responses::protocol::a_refusal_part_decodes_to_an_event_that_carries_no_words`
 `verified-by: bravebot_aichat::client::an_account_body_is_encoded_whatever_its_size`
 `verified-by: bravebot_aichat::client::a_gateways_body_is_plain_json_with_no_content_encoding`
 `verified-by: bravebot_agent::backend::a_request_reaches_the_route_and_header_its_providers_protocol_states`
