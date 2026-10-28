@@ -25317,7 +25317,6 @@ mod tests {
         ] {
             assert_eq!(carried(sentence, Wrote::ThePerson), None, "{sentence:?}");
         }
-        drop(carried);
         assert!(
             last_note(&session).contains("went to the model as it is"),
             "a line whose arguments do not parse was sent without a word: {}",
