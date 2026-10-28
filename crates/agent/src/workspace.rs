@@ -89,6 +89,35 @@ pub use reach::{Moved, PathReach, ReferenceProblem, Referenced};
 /// which is what people attach.
 pub const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 
+/// The most a dropped PNG or JPEG may weigh and still be scaled down instead of refused (DROP-4).
+///
+/// The file is read whole and decoded, so this bounds that read: the length the file system
+/// reports is checked before any byte is read, and a longer file is refused unread. A dropped
+/// picture over [`MAX_ATTACHMENT_BYTES`] is carried only if the scaled copy is within that cap.
+pub const MAX_SCALABLE_PICTURE_BYTES: usize = 64 * 1024 * 1024;
+
+/// The most a dropped file of type `media` may weigh before it is read: the scalable ceiling for
+/// a PNG or JPEG, which the agent can scale down, and [`MAX_ATTACHMENT_BYTES`] for anything else.
+///
+/// `media` is the type an extension names, never one a file declares.
+pub fn dropped_size_limit(media: &str) -> usize {
+    if scales_down(media) {
+        MAX_SCALABLE_PICTURE_BYTES
+    } else {
+        MAX_ATTACHMENT_BYTES
+    }
+}
+
+fn scales_down(media: &str) -> bool {
+    matches!(media, "image/png" | "image/jpeg")
+}
+
+/// An attachment as a data URI, and the lengths it went from and to where it was scaled down.
+struct Encoded {
+    uri: String,
+    reduced: Option<(usize, usize)>,
+}
+
 /// The most that may be kept in memory so that turns can be rewound.
 ///
 /// Every file a turn writes costs what the file held beforehand, held for as long as the turn is
@@ -766,8 +795,17 @@ impl Workspace {
             let resolved = self.resolve_attachment(&relative, reach)?;
             let label = policy.observe_path(Capability::FileRead, &self.trust_key(&relative))?;
 
-            self.encode_attachment(&resolved, &relative, media)
-                .map(|text| Labelled::new(text, label))
+            // Only a picture a gesture dropped is scaled (DROP-4), and only where the kernel
+            // labelled the file trusted, which a drop's grant does (DROP-2). The same bytes read by
+            // a tool, or read while the grant did not take, are carried as they are or refused, so
+            // the length and the header are never looked at for a file the label says is untrusted.
+            let scales = matches!(reach, Reach::Dropped) && label.is_trusted();
+
+            let encoded = self.encode_attachment(&resolved, &relative, media, scales)?;
+            if let Some((from, to)) = encoded.reduced {
+                policy.record_reduced_picture(&relative, from, to);
+            }
+            Ok(Labelled::new(encoded.uri, label))
         })
     }
 
@@ -782,29 +820,80 @@ impl Workspace {
         media: &str,
     ) -> Result<String, WorkspaceError> {
         let resolved = self.resolve_attachment(named, Reach::Confined)?;
-        self.encode_attachment(&resolved, named, media)
+        self.encode_attachment(&resolved, named, media, false)
+            .map(|encoded| encoded.uri)
     }
 
+    /// The data URI for the file at `resolved`.
+    ///
+    /// With `scales` set, which only the read of a trusted dropped file does, a picture over
+    /// [`MAX_ATTACHMENT_BYTES`] or with a side over [`crate::picture::DOWNSCALED_SIDE`] is decoded,
+    /// scaled down and carried as a PNG. A picture inside both limits keeps its own bytes. One that
+    /// will not decode, or whose scaled copy is over the cap, is refused for its length if it is
+    /// itself over the cap, and keeps its own bytes if it is within it, since the cap is what a
+    /// request holds. A file whose reported length is over the limit for its type is refused before
+    /// it is read. The branches are on the length and the header's canvas of a file whose path a
+    /// person fixed, and on the media type its extension names, never on what the picture shows.
     fn encode_attachment(
         &self,
         resolved: &Path,
         relative: &str,
         media: &str,
-    ) -> Result<String, WorkspaceError> {
-        let raw = std::fs::read(resolved).map_err(|e| WorkspaceError::Io {
+        scales: bool,
+    ) -> Result<Encoded, WorkspaceError> {
+        let io = |e: std::io::Error| WorkspaceError::Io {
             path: relative.to_string(),
             detail: io_detail(&e, relative, &self.root),
-        })?;
+        };
+        let too_large = |limit: usize| WorkspaceError::TooLarge {
+            path: relative.to_string(),
+            limit,
+        };
 
-        if raw.len() > MAX_ATTACHMENT_BYTES {
-            return Err(WorkspaceError::TooLarge {
-                path: relative.to_string(),
-                limit: MAX_ATTACHMENT_BYTES,
-            });
+        // The length the file system reports bounds the read, so a file over the limit for its
+        // type is refused without a byte of it being read. The length of what was read is checked
+        // again below, since the file can change between the two.
+        let limit = if scales && scales_down(media) {
+            MAX_SCALABLE_PICTURE_BYTES
+        } else {
+            MAX_ATTACHMENT_BYTES
+        };
+        let declared = std::fs::metadata(resolved).map_err(io)?.len();
+        if usize::try_from(declared).map_or(true, |declared| declared > limit) {
+            return Err(too_large(limit));
+        }
+        let raw = std::fs::read(resolved).map_err(io)?;
+
+        let over_bytes = raw.len() > MAX_ATTACHMENT_BYTES;
+        if scales && scales_down(media) {
+            if raw.len() > MAX_SCALABLE_PICTURE_BYTES {
+                return Err(too_large(MAX_SCALABLE_PICTURE_BYTES));
+            }
+            let over_pixels = crate::picture::longest_side(&raw)
+                .is_some_and(|side| side > crate::picture::DOWNSCALED_SIDE);
+            if over_bytes || over_pixels {
+                // A picture that will not decode, or is still too heavy once scaled, is refused
+                // for its own length. The over-cap copy is not sent in its place.
+                if let Some(smaller) = crate::picture::downscaled(&raw)
+                    && smaller.len() <= MAX_ATTACHMENT_BYTES
+                {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(&smaller);
+                    return Ok(Encoded {
+                        uri: format!("data:image/png;base64,{encoded}"),
+                        reduced: Some((raw.len(), smaller.len())),
+                    });
+                }
+            }
+        }
+        if over_bytes {
+            return Err(too_large(MAX_ATTACHMENT_BYTES));
         }
 
         let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
-        Ok(format!("data:{media};base64,{encoded}"))
+        Ok(Encoded {
+            uri: format!("data:{media};base64,{encoded}"),
+            reduced: None,
+        })
     }
 
     /// Read a bounded window of a file's lines, for the model.

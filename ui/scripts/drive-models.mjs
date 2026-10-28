@@ -11,6 +11,8 @@ import { COMPOSER_INPUT, BOT_OPEN_BUTTON, COMPOSER_SEND } from './drive-support.
 const WARNING_COMMAND = 'bravebot auth login chatgpt'
 const WARNING = `Could not load models from ChatGPT, so try again, or run ${WARNING_COMMAND} in a terminal to sign in again.`
 const MINIMUM = { width: 900, height: 560 }
+// How long `modelTest.loading` holds `models.list` back, in milliseconds.
+const LISTING_DELAY = 1500
 
 const profile = mkdtempSync(join(tmpdir(), 'bravebot-model-picker-'))
 const app = await electron.launch({ args: ['.', `--user-data-dir=${profile}`], cwd: process.cwd(), timeout: 40000 })
@@ -20,7 +22,7 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
   mkdirSync('/tmp/bravebot-model-picker-project', { recursive: true })
-  await app.evaluate(({ ipcMain, BrowserWindow, dialog }, warning) => {
+  await app.evaluate(({ ipcMain, BrowserWindow, dialog }, { warning, delay }) => {
     const defaultModel = 'openrouter/anthropic/claude-haiku-4.5'
     const directory = '/tmp/bravebot-model-picker-project'
     const rows = ['A', 'B'].map((id) => ({ id, directory, title: `Conversation ${id}`,
@@ -32,7 +34,7 @@ try {
     ipcMain.handle('bravebot:request', async (_, method, params) => {
       if (method === 'models.list') {
         if (globalThis.modelTest.fail) return { error: { code: 'offline', message: 'Model listing is offline.' } }
-        if (globalThis.modelTest.loading) await new Promise((resolve) => setTimeout(resolve, 500))
+        if (globalThis.modelTest.loading) await new Promise((resolve) => setTimeout(resolve, delay))
         return { ok: { defaultModel, warnings: [warning.sentence], warningCommands: [warning.command], models: [
           { id: defaultModel, name: 'Claude Haiku 4.5', provider: 'OpenRouter', premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools'] },
           { id: 'openrouter/anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'OpenRouter', premium: false, contextWindow: 200000, capabilities: ['text', 'vision', 'tools', 'reasoning'] },
@@ -55,7 +57,7 @@ try {
     globalThis.finishModelTurn = () => BrowserWindow.getAllWindows()[0].webContents.send('bravebot:event', {
       event: 'turn.done', session: 's-new', data: { id: 'A', turn: 1, reply: 'Done', archived: 0 },
     })
-  }, { sentence: WARNING, command: WARNING_COMMAND })
+  }, { warning: { sentence: WARNING, command: WARNING_COMMAND }, delay: LISTING_DELAY })
   await page.reload()
   await page.locator('[data-test="new-project"]').click()
   await page.getByRole('button', { name: "Don't trust", exact: true }).click()
@@ -71,6 +73,37 @@ try {
     'model picker and Send align in the composer toolbar');
   assert.equal(await page.locator('.conversation-toolbar .export-open').count(), 1,
     'Export is in the conversation header');
+
+  // The first open, with the listing held back: the menu is drawn and its search field is focused
+  // before the answer, the loading line is drawn, and the only row is the model already in force.
+  // What is typed meanwhile narrows the rows when they arrive, and Enter chooses nothing until then.
+  // This runs before any other open because the picker keeps the catalogue of an earlier one.
+  await app.evaluate(() => { globalThis.modelTest.loading = true })
+  const opened = Date.now()
+  await trigger.click()
+  await page.locator('.model-popover').waitFor({ state: 'visible' })
+  assert(Date.now() - opened < LISTING_DELAY, 'the menu is drawn before the listing arrives')
+  await page.locator('.model-notices p.model-status:not([data-delayed])').filter({ hasText: 'Loading available models' }).waitFor()
+  assert(Date.now() - opened < LISTING_DELAY, 'the loading line is drawn before the listing arrives')
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('model-search')), true,
+    'the search field is focused before the listing arrives')
+  assert.deepEqual(await page.locator('.model-menu').getByRole('option').evaluateAll((rows) => rows.map((row) => row.getAttribute('value'))),
+    ['openrouter/anthropic/claude-haiku-4.5'], 'only the model in force is a row before the listing arrives')
+  await page.getByRole('combobox', { name: 'Search models' }).fill('sonnet')
+  assert.equal(await page.locator('.model-menu').getByRole('option').count(), 0, 'typing narrows the rows still to come')
+  await page.getByRole('combobox', { name: 'Search models' }).press('Enter')
+  assert.equal(await page.locator('.model-popover').isVisible(), true, 'Enter before the listing arrives leaves the menu open')
+  assert.equal(await app.evaluate(() => globalThis.modelTest.sent.length), 0)
+  assert.match(await trigger.getAttribute('aria-label'), /haiku/, 'Enter before the listing arrives chooses nothing')
+  await page.getByRole('option', { name: /Claude Sonnet/ }).waitFor()
+  assert(Date.now() - opened >= LISTING_DELAY, 'the rows arrive with the listing')
+  assert.equal(await page.locator('.model-menu').getByRole('option').count(), 1, 'the typed words narrow the rows that arrive')
+  assert.equal(await page.locator('.model-notices p.model-status', { hasText: 'Loading available models' }).count(), 0,
+    'the loading line goes when the rows arrive')
+  await page.getByRole('combobox', { name: 'Search models' }).press('Escape')
+  await page.locator('.model-popover').waitFor({ state: 'hidden' })
+  await app.evaluate(() => { globalThis.modelTest.loading = false })
+  console.log('PASS: the picker opens and shows its loading line before the listing arrives, and the typed words narrow the rows that arrive')
 
   // A warning the model list carries is drawn in the picker with the command it names as code, at the
   // window's size and at its minimum, in the code type role and inside the menu.

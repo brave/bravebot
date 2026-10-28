@@ -55,6 +55,7 @@ pub mod outcome;
 pub mod output_schema;
 pub mod permission_mode;
 pub mod permissions;
+pub mod picture;
 pub mod plan_approval;
 pub mod preamble;
 pub mod processor;

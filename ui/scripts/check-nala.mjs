@@ -9,11 +9,13 @@
  * - more raw px spacing, or more size-only `--leo-typography-*-font-size` reads, than the
  *   ratchets below allow (they may only go down);
  * - a raw `<svg` in the renderer outside the bot avatar illustration;
- * - a unicode glyph used as an icon, in JSX text or CSS `content:`.
+ * - a unicode glyph used as an icon, in JSX text or CSS `content:`;
+ * - a message looked up by a computed key (`t[`), or the generated catalogs reached outside `i18n/`.
  */
 import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { messageProblems } from './check-messages.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const renderer = join(root, 'src/renderer')
@@ -125,6 +127,7 @@ for (const file of tsxFiles) {
       if (!leoTokens.has(m[1])) fail(file, i + 1, `unknown Leo token ${m[1]}`)
     }
   })
+  for (const { line, message } of messageProblems(name, text)) fail(file, line, message)
 }
 
 if (pxSpacing > PX_SPACING_MAX) problems.push(`raw px spacing: ${pxSpacing}, over the ratchet of ${PX_SPACING_MAX}; use --leo-spacing-*`)

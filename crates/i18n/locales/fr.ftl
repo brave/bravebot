@@ -4320,3 +4320,30 @@ menu-branch = créer une branche de cette session
 menu-open-delegate = ouvrir ce délégué
 
 agent-rule-approval-private = Ces mots viennent de contenu privé : ils ne peuvent pas devenir une règle tels quels. Tapez la règle avec vos propres mots pour la garder, ou refusez.
+
+## Ce que chaque catalogue dit de lui-même, dans la liste où on le choisit
+
+locale-name = Français
+
+
+## La fenêtre de bureau
+
+ui-settings-appearance = Apparence
+ui-settings = Réglages
+ui-settings-general = Général
+ui-settings-general-explained = L'apparence de cette fenêtre et la langue qu'elle utilise
+ui-settings-theme = Thème
+ui-settings-theme-explained = Système suit le système d'exploitation. Clair et Sombre restent tels quels, quoi qu'il indique.
+ui-appearance-system = Système
+ui-appearance-light = Clair
+ui-appearance-dark = Sombre
+ui-settings-language = Langue
+ui-settings-display-language = Langue d'affichage
+ui-settings-language-explained = Automatique suit la langue de votre fichier de réglages, puis celle du système.
+ui-settings-language-automatic = Automatique
+ui-settings-language-next-start = S'applique au prochain démarrage de bravebot.
+ui-settings-language-overridden = BRAVEBOT_LOCALE est définie : c'est elle qui décide de la langue, quel que soit le choix fait ici.
+ui-settings-language-unsaved = Impossible d'enregistrer la langue.
+ui-settings-language-unread = Impossible de lire le réglage de langue.
+ui-settings-restart = Redémarrer
+ui-settings-restart-running = Un tour est encore en cours. Redémarrez une fois qu'il est terminé ou arrêté.

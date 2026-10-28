@@ -2035,6 +2035,8 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::bedrock::a_region_that_would_move_the_request_configures_nothing`
 `verified-by: bravebot_config::bedrock::a_region_holding_only_the_characters_aws_uses_is_accepted`
 `verified-by: bravebot_config::settings::a_checkouts_region_that_would_move_the_request_configures_no_account`
+`verified-by: bravebot_config::settings::every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it`
+`verified-by: bravebot_config::settings::the_persons_own_files_decide_every_pinnable_name`
 
 <a id="BACKEND-34"></a>
 ### BACKEND-34: a settings value is a string, and anything else is not a value

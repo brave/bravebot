@@ -25,12 +25,15 @@ bravebot-sandbox = { path = "../sandbox" }
 bravebot-skus = { path = "../skus" }
 # An attachment reaches the endpoint as a data URI, which is base64 by specification.
 base64 = { workspace = true }
+# A dropped picture over the size or pixel limit is decoded, scaled down and re-encoded before it is
+# sent, with the same png and jpeg decoders the terminal already uses for a pasted one.
+image = { workspace = true }
 # gitoxide's plumbing, so `read_git` reads a repository's objects and refs in-process instead of
 # starting git, which runs whatever `.git/config` names. Loose objects, pack indexes, packs and
 # their deltas, packed refs and the ref lookup order are what these carry; the object finder over
 # them is `crate::git`'s own and reads no alternates. The history walk, the tree diff and the line
 # diff (`crate::diff`, over raw blob bytes) are written here. None of these starts a process, and
-# `deny.toml` bans the gix crates that do.
+# `.config/deny.toml` bans the gix crates that do.
 # `gix-glob` and `gix-ignore` give `status` git's own pattern syntax for ignore and attributes
 # files; the walk over the working tree and the index parser are `crate::git::status`'s.
 gix-glob = "0.28"

@@ -111,6 +111,7 @@ taken out and counted instead ([VIEW-30](terminal-transcript.md#VIEW-30)).
 `verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::running::doctor_draws_a_vouched_projects_skill_keys_and_directory_name_as_pictures`
 
 <a id="LAYER-4"></a>
 ### LAYER-4: a crate root says what it does about unsafe

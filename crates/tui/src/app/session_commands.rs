@@ -174,11 +174,8 @@ pub(super) fn set_language(session: &mut Session, word: &str) {
         if let Some(saved) = session.saved_language() {
             session.note(t!(session_language_saved, language = saved));
         }
-    } else if word.eq_ignore_ascii_case(bravebot_i18n::AUTO) {
-        let said = kept(session, None);
-        session.note(said);
-    } else if let Some(locale) = bravebot_i18n::find(word) {
-        let said = kept(session, Some(locale.tag()));
+    } else if let Ok(locale) = bravebot_i18n::pick(word) {
+        let said = kept(session, locale.map(|locale| locale.tag()));
         session.note(said);
     } else {
         session.note(t!(

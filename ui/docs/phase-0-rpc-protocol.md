@@ -699,7 +699,9 @@ Two more optional lists carry bytes rather than text, and both default to empty.
 `attachments` is a list of absolute paths to pictures and PDFs a person dropped (DROP-10). Each
 entry must name a regular file, with an extension the agent carries as bytes (`png`, `jpg`, `jpeg`,
 `gif`, `webp`, `pdf`, in any case), no larger than 8 MiB
-(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`). The bridge takes the media type from that
+(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`), except a `png`, `jpg` or `jpeg`, which may be as
+large as 64 MiB (`bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES`) because the agent scales
+one over 8 MiB or 2048 pixels down before it is sent (DROP-4). The bridge takes the media type from that
 extension and never from the caller. The read is unconfined and the file is vouched for, as for
 `dropped`, and the bytes go in the prompt's own message as a `data:` URL part.
 
@@ -1547,6 +1549,17 @@ Still open:
   The native `bravebot:settings:select` picker grants the path; renderer requests cannot set it.
   Model discovery uses the same override and the session's registered project directory.
   `bravebot-rpc --settings <path>` restores the override on process restart.
+- `language.get` reports `{ inUse, saved, available, overridden }`: the tag of the catalog a
+  window started now reads (by [LOCALE-8](../../docs/specs/localization.md#LOCALE-8)), the tag
+  `/language` saved or null, each shipped catalog as `{ tag, name }` with the name in its own
+  language, and whether `BRAVEBOT_LOCALE` outranks the choice. The main process replaces its params
+  with `system`, the OS's preferred languages, which answer only where nothing else names one. `language.set` takes `tag`, a word
+  a catalog answers or `auto`, saves the catalog's own tag in `~/.bravebot/language` (or removes it
+  for `auto`) and answers `{ saved, tag }`, with `saved: false` and nothing changed where the file
+  could not be written or removed; a word no catalog answers is `bad_request`. The window
+  chooses its catalog once, before its first paint, and `bravebot:app:relaunch` (main-process IPC)
+  restarts the app to apply a new choice. It answers false and does nothing while a turn runs in
+  any session, since quitting would refuse what the turn waits on.
 - `doctor` no longer runs an external CLI. It returns `found: true`, `structured: true`
   and the linked agent's configuration report as formatted `text` for existing consumers.
 - Open/fork responses and completion/error events include `contextTokens`, the last

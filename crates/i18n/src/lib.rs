@@ -98,6 +98,11 @@ pub mod sizes;
 #[cfg(test)]
 mod generate;
 
+/// The desktop window's messages as TypeScript, written by a test so the window ships finished
+/// text and links no parser either.
+#[cfg(test)]
+mod typescript;
+
 /// The compiled catalogs: one item per message, plus [`Locale`] and the [`t!`] arms.
 pub mod messages {
     include!(concat!(env!("OUT_DIR"), "/messages.rs"));
@@ -191,11 +196,44 @@ pub const AUTO: &str = "auto";
 /// variables because they were written for this program. Then the POSIX variables in the precedence
 /// POSIX gives them.
 pub fn init_from_environment(said: Said<'_>) {
-    let requested = requested(|name| std::env::var(name).ok(), said);
-    init(match requested {
+    init(choose(said));
+}
+
+/// The catalog [`init_from_environment`] would fix, without fixing it.
+///
+/// For a process that chooses for a window other than itself: the desktop bridge keeps its own notes
+/// in the reference and tells the window which catalog its chrome is read in.
+pub fn choose(said: Said<'_>) -> Locale {
+    chosen(|name| std::env::var(name).ok(), said)
+}
+
+fn chosen(variable: impl Fn(&str) -> Option<String>, said: Said<'_>) -> Locale {
+    window_chosen(variable, said, &[])
+}
+
+/// [`choose`] for a desktop window, which where no source names a language takes the first of the
+/// system's preferred languages a catalog answers.
+///
+/// A program started from a launcher has no shell, so the POSIX variables are usually absent there
+/// and the operating system's own list is the only word on the person's language.
+pub fn choose_for_window(said: Said<'_>, system: &[String]) -> Locale {
+    window_chosen(|name| std::env::var(name).ok(), said, system)
+}
+
+fn window_chosen(
+    variable: impl Fn(&str) -> Option<String>,
+    said: Said<'_>,
+    system: &[String],
+) -> Locale {
+    match requested(variable, said) {
         Some(requested) => resolve(&requested),
-        None => DEFAULT,
-    });
+        None => system.iter().find_map(|tag| find(tag)).unwrap_or(DEFAULT),
+    }
+}
+
+/// Whether `BRAVEBOT_LOCALE` names something, so that it outranks whatever the person picked.
+pub fn overridden() -> bool {
+    std::env::var(LOCALE).is_ok_and(|value| !value.trim().is_empty())
 }
 
 /// The request that decides the catalog, from the sources in the order each outranks the next.
@@ -238,6 +276,26 @@ pub fn find(requested: &str) -> Option<Locale> {
 /// The tag of every shipped catalog, reference first.
 pub fn tags() -> Vec<&'static str> {
     LOCALES.iter().map(|locale| locale.tag()).collect()
+}
+
+/// A word somebody typed or picked that no shipped catalog answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoCatalog;
+
+/// What a person asked `/language` or the window's picker to keep: `None` for [`AUTO`], which
+/// gives the choice back, or the catalog that answers the word.
+///
+/// The terminal and the window both read a choice through this, so the two cannot come to differ
+/// on what a word means. Keeping it is left to the caller, which is the one that knows whether it
+/// has somewhere to keep it. A word no catalog answers is refused rather than read as the reference
+/// (see [`find`]); what is kept is the catalog's own tag, a word the build knows whatever spelling
+/// was typed.
+pub fn pick(word: &str) -> Result<Option<Locale>, NoCatalog> {
+    let word = word.trim();
+    if word.eq_ignore_ascii_case(AUTO) {
+        return Ok(None);
+    }
+    find(word).map(Some).ok_or(NoCatalog)
 }
 
 /// Which of `available` best answers `requested`, by the usual widening: the exact locale, then
@@ -406,6 +464,70 @@ mod tests {
         assert_eq!(requested(environment(&shell), said).as_deref(), Some("ja"));
     }
 
+    /// What a window is told it is read in follows the same order the terminal starts by, and ends
+    /// at a catalog rather than a request: a word nobody translated is the reference.
+    #[test]
+    fn the_catalog_chosen_for_a_window_follows_the_order_the_terminal_starts_by() {
+        let shell = [("LANG", "fr_FR.UTF-8")];
+        assert_eq!(chosen(environment(&shell), Said::default()).tag(), "fr");
+        let said = Said {
+            picked: Some("en"),
+            written: Some("fr"),
+        };
+        assert_eq!(chosen(environment(&shell), said).tag(), "en-US");
+        let shell = [(LOCALE, "fr"), ("LANG", "en_US")];
+        assert_eq!(chosen(environment(&shell), said).tag(), "fr");
+        let said = Said {
+            picked: Some("auto"),
+            written: None,
+        };
+        assert_eq!(chosen(environment(&[("LANG", "zz_ZZ")]), said), DEFAULT);
+        assert_eq!(chosen(environment(&[("LANG", "C")]), said), DEFAULT);
+    }
+
+    /// A window started with no shell reads the system's languages in their order, after everything
+    /// the terminal reads, and still only chooses among the catalogs that shipped.
+    #[test]
+    fn a_window_with_nothing_named_takes_the_first_system_language_a_catalog_answers() {
+        let system = |tags: &[&str]| tags.iter().map(|tag| tag.to_string()).collect::<Vec<_>>();
+        let none = Said::default();
+        assert_eq!(
+            window_chosen(environment(&[]), none, &system(&["fr-CA"])).tag(),
+            "fr"
+        );
+        let preferred = system(&["de-DE", "fr-FR", "en-US"]);
+        assert_eq!(
+            window_chosen(environment(&[]), none, &preferred).tag(),
+            "fr"
+        );
+        assert_eq!(
+            window_chosen(environment(&[]), none, &system(&["de", "ja"])),
+            DEFAULT
+        );
+        assert_eq!(window_chosen(environment(&[]), none, &[]), DEFAULT);
+        let shell = [("LANG", "en_US.UTF-8")];
+        assert_eq!(
+            window_chosen(environment(&shell), none, &system(&["fr"])),
+            DEFAULT
+        );
+        let said = Said {
+            picked: Some("auto"),
+            written: Some("en"),
+        };
+        assert_eq!(
+            window_chosen(environment(&[]), said, &system(&["fr"])),
+            DEFAULT
+        );
+        assert_eq!(chosen(environment(&[]), none), DEFAULT);
+    }
+
+    /// The picker labels each catalog by what it calls itself, which only that catalog says.
+    #[test]
+    fn every_catalog_names_itself() {
+        assert_eq!(DEFAULT.name(), "English (US)");
+        assert_eq!(find("fr").map(Locale::name), Some("Français"));
+    }
+
     /// `/language` has to tell a language nobody translated from one somebody did, which
     /// [`resolve`] cannot: it answers the reference for both.
     #[test]
@@ -508,5 +630,19 @@ mod tests {
         assert_eq!(plural::category("en", 0), "other");
         assert_eq!(plural::category("fr", 0), "one");
         assert_eq!(plural::category("ja", 1), "other");
+    }
+
+    /// `auto` in any case gives the choice back, a word a catalog answers is that catalog under its
+    /// own tag, and anything else is refused rather than read as the reference.
+    #[test]
+    fn a_language_picked_by_name_is_auto_a_catalog_or_refused() {
+        for word in ["auto", " AUTO ", "Auto"] {
+            assert_eq!(pick(word), Ok(None), "{word:?}");
+        }
+        assert_eq!(pick(" fr_FR ").map(|l| l.map(|l| l.tag())), Ok(Some("fr")));
+        assert_eq!(pick("en").map(|l| l.map(|l| l.tag())), Ok(Some("en-US")));
+        for word in ["", "  ", "zz", "C", "automatic"] {
+            assert_eq!(pick(word), Err(NoCatalog), "{word:?}");
+        }
     }
 }
