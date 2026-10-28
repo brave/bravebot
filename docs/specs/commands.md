@@ -344,8 +344,8 @@ A command typed while a turn is in flight is one of two kinds, and a column of t
 
 | Kind | Commands | Enter mid-turn |
 |---|---|---|
-| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form but `off`; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
-| everything else | every other command, `/sandbox off`, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
+| touches nothing the turn holds | `/cost`; `/context`; `/lsp`; `/open`; `/limit` in every form; `/status`; `/copy`; `/export`; `/rename`, `/issue` and `/pr`; `/note`; `/forget-trust`; `/sandbox` in every form; `/model`, `/theme` and `/effort` in every form; `/config`; `/language` in every form; `/advisor` and `/style` in every form; `/watch` and `/jobs` in every form; `/outputs`; `/panel`; `/diff`; `/todos`; `/caffeinate`; `/thinking`; `/request`; `/changelog`; `/loop` and `/goal` in every form but the one that starts a loop or sets a goal | carried out as it is typed |
+| everything else | every other command, and `/loop <interval> <prompt>` and `/goal <condition>` | waits for the turn to end |
 
 A command that reads or ends something, or that changes only how the screen is drawn, what the
 box edits in or what a later start reads (`/theme`, `/config` and `/language`), goes ahead of every line already waiting, and a line behind
@@ -359,9 +359,9 @@ typed unless a line waiting ahead of it could change what it acts on, and otherw
 that line, so it lands where it was typed: `/rename` ahead of a waiting `/clear` would name the
 session `/clear` leaves, `/forget-trust` ahead of a waiting `/cd` would forget the directory `/cd`
 leaves, and `/effort` ahead of a waiting prompt would change the level that prompt was typed under.
-Which lines could change what a command acts on depends on the command. A waiting `/sandbox` line in
-any form sets the mode the next turn is built with and nothing else
-([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
+Which lines could change what a command acts on depends on the command. A `/sandbox` line in any
+form waits only behind a line typed before it, and while it waits it sets nothing but the mode the
+next turn is built with ([SANDBOX-22](sandboxing.md#SANDBOX-22)), so it holds back no command but another `/sandbox`:
 `/note` typed behind a waiting `/sandbox off` is carried out as it is typed, and `/sandbox strict`
 typed behind it waits, since the mode typed last is the one the person means to end in. `/issue` and
 `/pr` act on the link the record holds ([PANEL-12](info-panel.md#PANEL-12)), which only a line that
@@ -424,7 +424,7 @@ A command that waits is taken off the box and joins the lines waiting for the tu
 as a prompt does: the box clears, the history remembers it, and it is drawn under the box marked as
 waiting. It says why it waits, in a line held under the turn as a command's answer is: it acts on
 what the turn holds or starts a turn of its own, or it waits behind a line typed before it so that it lands where
-it was typed, or, for `/sandbox off`, it asks first and the turn has the screen until it ends. A command that waits behind a line
+it was typed. A command that waits behind a line
 names the first line waiting that holds it back: a command as it was typed, such as `/clear`, and
 `the prompt before it` or `the shell line before it` where that line is not a command. Its mark
 under the box says the same in place of `carried out after this`, as `after /clear`, where the
@@ -513,9 +513,8 @@ does not read:
   ([SANDBOX-22](sandboxing.md#SANDBOX-22)). A turn is built with the mode in force when it begins and
   does not read it again, so every stage of the running turn, those already started and those yet
   to start, keeps that mode, and a mode set mid-turn is the next turn's. The reply says so. The bare word reports the mode and says nothing of the turn.
-  `/sandbox off` waits: it asks before programs start with no profile, and a question put while the
-  turn has the screen would be answered over the turn's own. A managed floor refuses a looser mode
-  as at rest, so the refusal is said under the turn. `/status` mid-turn names the mode set
+  `/sandbox off` is carried out as it is typed, like the other modes, and asks nothing. A managed
+  floor refuses a looser mode as at rest, so the refusal is said under the turn. `/status` mid-turn names the mode set
   meanwhile, which is the one the next request is built with.
 - **`/advisor`.** It names the model a later turn's planner may consult
   ([ADVISOR-9](tools/advisor.md#ADVISOR-9)). A turn is offered its advisor, or none, when it
@@ -622,7 +621,7 @@ carried out or queued as above.
 `verified-by: bravebot_tui::app::a_language_named_mid_turn_is_saved_as_it_is_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_mid_turn_is_set_as_it_is_typed_and_the_turn_keeps_its_own`
 `verified-by: bravebot_tui::app::the_sandbox_report_is_given_mid_turn`
-`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_waits_and_says_why`
+`verified-by: bravebot_tui::app::moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed`
 `verified-by: bravebot_tui::app::a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it`
 `verified-by: bravebot_tui::app::a_stopped_prompt_comes_back_after_a_sandbox_mode_set_mid_turn`
 `verified-by: bravebot_tui::app::a_command_that_waits_for_the_turn_says_why`

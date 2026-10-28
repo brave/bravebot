@@ -324,11 +324,9 @@ fn carry_out_while_working(
         Action::SetEffort(level) => {
             session.answer_while_working(|session| set_effort(session, &level));
         }
-        // The move to `off` asks and so waits (CMD-8); no question is put here, and a form that
-        // reached this arm without one gets the refusal to ask, which keeps the mode.
         Action::Sandbox(word) => session.answer_while_working(|session| {
             let kept = session.sandbox_mode();
-            crate::sandbox_command::run(session, &word, beside.managed, |_| Vec::new());
+            crate::sandbox_command::run(session, &word, beside.managed);
             if session.sandbox_mode() != kept {
                 session.note(t!(session_sandbox_turn_keeps_its_mode).to_string());
             }
@@ -2945,12 +2943,9 @@ fn event_loop(
             }
             Action::Status => held.status(config),
             Action::ForgetTrust => held.forget_trust_command(),
-            Action::Sandbox(word) => crate::sandbox_command::run(
-                held.session,
-                &word,
-                &bravebot_config::Managed::load(),
-                |asking| crate::ask::ask_as(terminal, asking, t!(ask_sandbox_off_title)),
-            ),
+            Action::Sandbox(word) => {
+                crate::sandbox_command::run(held.session, &word, &bravebot_config::Managed::load())
+            }
             Action::Reach(argument) => held.reach(&argument),
             Action::Mcp(argument) => held.mcp(terminal, &argument, skip_permissions),
             Action::ListCheckouts => held.list_checkouts(),
@@ -29565,53 +29560,56 @@ mod tests {
         );
     }
 
-    /// The move to `off` asks first, and the turn has the screen while it runs, so it waits and
-    /// says why. The regression it rejects is `off` carried out as typed with the question answered
-    /// by nobody, which would start programs with no profile.
+    /// The move to `off` is carried out as it is typed, as every other mode is (CMD-8,
+    /// SANDBOX-22): nothing is asked, so nothing waits for the turn to end, and the running turn is
+    /// told it keeps the mode it began with. The regression it rejects is `off` left in the queue
+    /// for the whole turn, or carried out with a question put under the turn's own.
     #[test]
-    fn moving_the_sandbox_to_off_mid_turn_waits_and_says_why() {
+    fn moving_the_sandbox_to_off_mid_turn_is_carried_out_when_typed() {
         let mut session = a_turn_running_on("first");
 
         nothing_beside(|beside| {
             typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
         });
 
-        assert_eq!(waiting_prompts(&session), vec!["/sandbox off"]);
+        assert!(session.queued.is_empty(), "{:?}", waiting_prompts(&session));
+        assert_eq!(session.sandbox_mode(), bravebot_sandbox::SandboxMode::Off);
         assert_eq!(
-            session.sandbox_mode(),
-            bravebot_sandbox::SandboxMode::WorkspaceWrite
+            said_under_the_turn(&session),
+            [
+                t!(session_sandbox_set_off).to_string(),
+                t!(session_sandbox_turn_keeps_its_mode).to_string()
+            ]
         );
-        let said = said_under_the_turn(&session);
-        assert_eq!(said.len(), 1, "{said:?}");
-        assert!(said[0].contains("asks first"), "{said:?}");
     }
 
     /// A mode named behind a waiting line lands where it was typed, as every command that changes
-    /// something does, and says it waits behind what was typed before it.
+    /// something does, and says it waits behind what was typed before it. `off` is no different from
+    /// the others: it waits for that line and for nothing else.
     #[test]
     fn a_sandbox_mode_named_behind_a_waiting_line_waits_behind_it() {
-        let mut session = a_turn_running_on("first");
-        type_while_working(&mut session, CLEAR_COMMAND);
+        for line in ["/sandbox strict", "/sandbox off"] {
+            let mut session = a_turn_running_on("first");
+            type_while_working(&mut session, CLEAR_COMMAND);
 
-        nothing_beside(|beside| {
-            typed_during_a_turn(&mut session, "/sandbox strict", key(KeyCode::Enter), beside)
-        });
+            nothing_beside(|beside| {
+                typed_during_a_turn(&mut session, line, key(KeyCode::Enter), beside)
+            });
 
-        assert_eq!(
-            waiting_prompts(&session),
-            vec![CLEAR_COMMAND, "/sandbox strict"]
-        );
-        assert_eq!(
-            session.sandbox_mode(),
-            bravebot_sandbox::SandboxMode::WorkspaceWrite
-        );
-        assert!(
-            said_under_the_turn(&session)
-                .iter()
-                .any(|said| said.contains("behind /clear")),
-            "{:?}",
-            said_under_the_turn(&session)
-        );
+            assert_eq!(waiting_prompts(&session), vec![CLEAR_COMMAND, line]);
+            assert_eq!(
+                session.sandbox_mode(),
+                bravebot_sandbox::SandboxMode::WorkspaceWrite,
+                "{line}"
+            );
+            assert!(
+                said_under_the_turn(&session)
+                    .iter()
+                    .any(|said| said.contains("behind /clear")),
+                "{line}: {:?}",
+                said_under_the_turn(&session)
+            );
+        }
     }
 
     /// `/loop stop` typed behind a waiting `/after` waits behind it, since both use the one slot. The
@@ -29743,7 +29741,7 @@ mod tests {
     fn a_command_names_the_first_waiting_line_that_holds_it_back() {
         let mut session = a_turn_running_on("first");
         for line in ["/sandbox off", CLEAR_COMMAND, "/cd crates/tui"] {
-            type_while_working(&mut session, line);
+            wait_as(&mut session, line);
         }
         let before = said_under_the_turn(&session).len();
 
@@ -30481,9 +30479,7 @@ mod tests {
             return;
         }
         let mut session = a_turn_running_on("first");
-        nothing_beside(|beside| {
-            typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
-        });
+        wait_as(&mut session, "/sandbox off");
         let before = said_under_the_turn(&session).len();
         let root = std::path::Path::new("/work");
         let mut stored = bravebot_session::sessions::Handle::begin(
@@ -30539,9 +30535,7 @@ mod tests {
             FORGET_TRUST_COMMAND,
         ] {
             let mut session = a_turn_running_on("first");
-            nothing_beside(|beside| {
-                typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
-            });
+            wait_as(&mut session, "/sandbox off");
             let before = said_under_the_turn(&session).len();
 
             nothing_beside(|beside| {
@@ -30564,9 +30558,7 @@ mod tests {
     #[test]
     fn a_sandbox_mode_typed_behind_a_waiting_sandbox_off_waits_behind_it() {
         let mut session = a_turn_running_on("first");
-        nothing_beside(|beside| {
-            typed_during_a_turn(&mut session, "/sandbox off", key(KeyCode::Enter), beside)
-        });
+        wait_as(&mut session, "/sandbox off");
 
         nothing_beside(|beside| {
             typed_during_a_turn(&mut session, "/sandbox strict", key(KeyCode::Enter), beside)
@@ -30599,7 +30591,7 @@ mod tests {
         crate::theme::apply_brave();
         for first in [CLEAR_COMMAND, "second", "/sandbox off", "/cd crates/tui"] {
             let mut session = a_turn_running_on("first");
-            type_while_working(&mut session, first);
+            wait_as(&mut session, first);
 
             nothing_beside(|beside| {
                 typed_during_a_turn(
@@ -30638,7 +30630,7 @@ mod tests {
     fn a_language_typed_behind_a_waiting_line_is_carried_out_when_typed() {
         for first in [CLEAR_COMMAND, "second", "/sandbox off", "/cd crates/tui"] {
             let mut session = a_turn_running_on("first");
-            type_while_working(&mut session, first);
+            wait_as(&mut session, first);
 
             nothing_beside(|beside| {
                 typed_during_a_turn(
@@ -30679,10 +30671,9 @@ mod tests {
                 }
                 // Refused before anything is written, so no directory the fixture names is touched.
                 _ if command.name == EXPORT_COMMAND => format!("{} ../refused", command.name),
-                MidTurn::Runs
-                | MidTurn::Changes
-                | MidTurn::RunsUnlessItStarts
-                | MidTurn::ChangesUnlessItAsks => command.name.to_string(),
+                MidTurn::Runs | MidTurn::Changes | MidTurn::RunsUnlessItStarts => {
+                    command.name.to_string()
+                }
             };
             let mut session = a_turn_running_on("first");
 

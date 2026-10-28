@@ -1047,9 +1047,9 @@ mod tests {
         ))
     }
 
-    /// A question the driver puts is not titled as the planner's. The regression it rejects is the
-    /// `/sandbox off` question drawn under "the agent is asking", which reads as the model asking to
-    /// be unconfined, and a title that is ignored where the planner asks.
+    /// A question the driver puts is not titled as the planner's. The regression it rejects is a
+    /// question of the driver's drawn under "the agent is asking", which reads as the model asking,
+    /// and a title that is ignored where the planner asks.
     #[test]
     fn a_question_the_driver_puts_is_not_titled_as_the_agents() {
         let asking = one(&prompt(false));

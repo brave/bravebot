@@ -378,13 +378,6 @@ pub enum MidTurn {
     /// Where the bare word opens a picker, the picker is held as a mode of the session while the
     /// turn runs, so the turn's own questions are still drawn over it.
     Changes,
-    /// Carried out as it is typed under the rule [`MidTurn::Changes`] gives, except where the form
-    /// typed would ask the person a question, which waits: the screen is the turn's while it runs,
-    /// and a yes given to a question drawn under another one is not one anybody read.
-    ///
-    /// `/sandbox`: a mode moves what the next turn is built with and nothing the turn in flight
-    /// holds, and the move to `off` asks first (SANDBOX-22).
-    ChangesUnlessItAsks,
     /// Waits for the turn to end, because it acts on the conversation, the workspace, the
     /// terminal or the network, and the turn holds all four.
     Waits,
@@ -569,7 +562,7 @@ pub fn commands() -> [Command; 60] {
             name: SANDBOX_COMMAND,
             argument: "[<mode>]",
             description: t!(command_sandbox),
-            mid_turn: MidTurn::ChangesUnlessItAsks,
+            mid_turn: MidTurn::Changes,
         },
         Command {
             name: LOOP_COMMAND,
@@ -902,11 +895,6 @@ pub(crate) fn runs_while_working(line: &str) -> bool {
     match command.mid_turn {
         MidTurn::Runs | MidTurn::Changes => true,
         MidTurn::Waits => false,
-        MidTurn::ChangesUnlessItAsks => {
-            let argument = argument_to(line, command.name).unwrap_or_default();
-            bravebot_sandbox::SandboxMode::parse(argument)
-                != Some(bravebot_sandbox::SandboxMode::Off)
-        }
         MidTurn::RunsUnlessItStarts => {
             let argument = argument_to(line, command.name).unwrap_or_default();
             match command.name {
@@ -1189,10 +1177,7 @@ pub(crate) fn held_back_by<'a>(
     line: &str,
 ) -> Option<(Bound, &'a str)> {
     let command = row_typed(line)?;
-    let changes = matches!(
-        command.mid_turn,
-        MidTurn::Changes | MidTurn::ChangesUnlessItAsks
-    );
+    let changes = command.mid_turn == MidTurn::Changes;
     let acts = acts_on(command.name);
     session.queued_ahead(at).find(|&(goes, waiting)| {
         let word = match goes {
@@ -1254,8 +1239,6 @@ pub(crate) fn why_it_waits(session: &Session, line: &str) -> Option<String> {
             command = word,
             line = named(goes, ahead)
         )
-    } else if command.mid_turn == MidTurn::ChangesUnlessItAsks {
-        t!(command_waits_to_ask, command = word)
     } else {
         t!(command_waits_for_the_turn, command = word)
     })
