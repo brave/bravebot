@@ -36,6 +36,8 @@
 //! version is newer than the one running ([`desktop_status`]). The window offers a link to the
 //! release page rather than a command (UPDATE-12).
 
+#![forbid(unsafe_code)]
+
 use bravebot_config::install::{Install, installed_how};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::label::Label;
