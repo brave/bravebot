@@ -108,6 +108,19 @@ test('the service is kept only from a turn that ran on the session model', () =>
   }
 })
 
+test('a control character in a checkout’s file name is drawn as its picture, not dropped by the page', () => {
+  const name = 'x\u001b]0;PWNED-TITLE\u0007\u001b[31mred.txt'
+  const pictured = 'x\u241b]0;PWNED-TITLE\u2407\u241b[31mred.txt'
+  assert.equal(auditDescription({ kind: 'slot_deferred', slot: 'ref:1', origin: name }).detail, pictured)
+  assert.equal(auditDescription({ kind: 'gate_passed', detail: `read_file: ${name} will be (U,priv)` }).detail, `read_file: ${pictured} will be (U,priv)`)
+  assert.equal(auditDescription({ kind: 'gate_blocked', reason: `${name}\nresolves outside` }).detail, `${pictured}\u240aresolves outside`)
+  assert.equal(auditDescription({ kind: 'declassified', reason: name }).detail, pictured)
+  // A tab and every ordinary character stay as they were.
+  assert.equal(auditDescription({ kind: 'gate_passed', detail: 'a\tb café 中文' }).detail, 'a\tb café 中文')
+  const { pictured: draw } = module.exports
+  assert.equal(draw('\u007f\u0085'), '\u247f\u2485')
+})
+
 test('routing and content groups each run of one tool’s fields and keeps releases in order', () => {
   const { routingAndContent } = module.exports
   const field = (tool, name, role, allowed = true) => ({ kind: 'action_field', tool, field: name, role, allowed, refusal: !allowed,

@@ -119,11 +119,28 @@ export function isRefusal(event: Record<string, unknown>): boolean {
 
 const text = (value: unknown): string => typeof value === 'string' ? value : ''
 
+/**
+ * Text with each control character replaced by its Unicode picture, as the terminal's
+ * `printable` in `bravebot-approval` draws it (LAYER-3). A name from a checkout can hold an escape
+ * or a bell; a text node drops those without a trace, and a character silently dropped is one nobody
+ * can tell was ever in the file. A tab is left as it is. The recorded evidence is JSON, which
+ * escapes them already.
+ */
+export function pictured(value: string): string {
+  return Array.from(value, (c) => {
+    const code = c.codePointAt(0)!
+    return (code < 0x20 || (code >= 0x7f && code <= 0x9f)) && c !== '\t' ? String.fromCodePoint(0x2400 + code) : c
+  }).join('')
+}
+
+/** A field of a record as the window draws it. */
+const shown = (value: unknown): string => pictured(text(value))
+
 /** Labels come from structured tags; arbitrary reasons remain the bridge's own words. */
 export function auditDescription(event: Record<string, unknown>): { title: string; detail: string } {
   switch (event.kind) {
-    case 'gate_blocked': return { title: 'Gate blocked', detail: text(event.reason) || text(event.detail) }
-    case 'gate_passed': return { title: 'Gate passed', detail: text(event.detail) }
+    case 'gate_blocked': return { title: 'Gate blocked', detail: shown(event.reason) || shown(event.detail) }
+    case 'gate_passed': return { title: 'Gate passed', detail: shown(event.detail) }
     case 'action_field': {
       const label = event.label as { integrity?: unknown } | null
       const untrustedRouting = event.allowed === false && event.role === 'routing' && label?.integrity === 'untrusted'
@@ -133,8 +150,8 @@ export function auditDescription(event: Record<string, unknown>): { title: strin
     }
     case 'observed': return { title: 'Data observed', detail: text(event.capability) }
     case 'slot_written': return { title: 'Slot written', detail: text(event.slot) }
-    case 'slot_deferred': return { title: 'File reserved for later reading', detail: text(event.origin) || text(event.slot) }
-    case 'declassified': return { title: 'Data authorized for release', detail: text(event.reason) }
+    case 'slot_deferred': return { title: 'File reserved for later reading', detail: shown(event.origin) || shown(event.slot) }
+    case 'declassified': return { title: 'Data authorized for release', detail: shown(event.reason) }
     default: return { title: 'Audit event', detail: text(event.kind) }
   }
 }

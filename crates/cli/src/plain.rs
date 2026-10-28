@@ -87,6 +87,37 @@ pub(crate) fn hosted(hosting: crate::host::Hosting) -> ExitCode {
     )
 }
 
+/// The line a session in lines opens with, naming the model it will ask for.
+///
+/// A model name comes from a settings file or a stored pick, so it is drawn through
+/// [`crate::progress::printable`] (LAYER-3).
+fn say_the_opening<R: BufRead, W: Write>(asking: &mut Prompting<R, W>, model: &str) {
+    asking.say(&t!(
+        cli_plain_opening,
+        version = crate::VERSION,
+        model = crate::progress::printable(model)
+    ));
+}
+
+/// Says that the recorded model was set aside, or refused for `refused`. The name and the reason
+/// come from a stored record and a configuration, so both are drawn through
+/// [`crate::progress`] (LAYER-3).
+fn say_the_set_aside_pick<R: BufRead, W: Write>(
+    asking: &mut Prompting<R, W>,
+    recorded: &str,
+    refused: Option<&str>,
+) {
+    let recorded = crate::progress::printable(recorded);
+    asking.say(&match refused {
+        Some(reason) => t!(
+            session_model_pick_refused,
+            model = recorded,
+            reason = crate::progress::printable_lines(reason)
+        ),
+        None => t!(session_model_pick_set_aside, model = recorded),
+    });
+}
+
 /// The definition a resumed session's record names, which it works under again (ADDRESS-3).
 fn recorded_definition(resumed: Option<&bravebot_session::sessions::Record>) -> Option<&str> {
     resumed.and_then(|record| record.agent.as_deref())
@@ -245,25 +276,17 @@ fn run(
     };
     let hosted = beside_turns.is_some();
 
-    asking.say(&t!(
-        cli_plain_opening,
-        version = crate::VERSION,
-        model = model
+    say_the_opening(
+        &mut asking,
+        &model
             .clone()
-            .unwrap_or_else(|| config.default_model.clone())
-    ));
+            .unwrap_or_else(|| config.default_model.clone()),
+    );
     if let Some(mode) = hosted_in {
         asking.say(&crate::background::mode_line(mode));
     }
     if let Some((recorded, refused)) = set_aside {
-        asking.say(&match refused {
-            Some(reason) => t!(
-                session_model_pick_refused,
-                model = recorded,
-                reason = reason
-            ),
-            None => t!(session_model_pick_set_aside, model = recorded),
-        });
+        say_the_set_aside_pick(&mut asking, &recorded, refused.as_deref());
     }
     for problem in &rejected {
         asking.say(&t!(
@@ -379,16 +402,19 @@ fn run(
                 Some(found)
             }
             Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
-                asking.say(&t!(cli_agent_setting_gone, definition = name.as_str()));
-                asking.say(&why);
+                asking.say(&t!(
+                    cli_agent_setting_gone,
+                    definition = crate::progress::printable(&name)
+                ));
+                asking.say(&crate::progress::printable_lines(&why));
                 None
             }
             Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
                 asking.say(&t!(
                     session_recorded_definition_gone,
-                    definition = name.as_str()
+                    definition = crate::progress::printable(&name)
                 ));
-                asking.say(&why);
+                asking.say(&crate::progress::printable_lines(&why));
                 None
             }
             Ok(bravebot_tui::app::Settled::Nothing) => None,
@@ -405,6 +431,7 @@ fn run(
             ),
             None => t!(cli_plain_working_under, definition = &agent.name),
         };
+        let notice = crate::progress::printable_lines(&notice);
         asking.say(&t!(cli_notice, notice = notice));
         if by_setting {
             asking.say(&t!(
@@ -430,7 +457,7 @@ fn run(
         bravebot_sandbox::Stream::Inherited,
     );
     for note in std::mem::take(&mut reached.notes) {
-        asking.say(&note);
+        asking.say(&crate::progress::printable_lines(&note));
     }
 
     // What compaction measures the conversation against, and whether the model in force reads an
@@ -474,12 +501,17 @@ fn run(
     // more than this could guess.
     let signed_in = bravebot_agent::backend::Backend::sign_in_if_needed(&config, &named, |line| {
         match &beside_turns {
-            Some(hosted) => hosted.clone().line(&line),
-            None => eprintln!("{line}"),
+            Some(hosted) => hosted
+                .clone()
+                .line(&crate::progress::printable_lines(&line)),
+            None => eprintln!("{}", crate::progress::printable_lines(&line)),
         }
     });
     if let Err(failure) = signed_in {
-        asking.say(&t!(cli_notice, notice = failure.to_string()));
+        asking.say(&t!(
+            cli_notice,
+            notice = crate::progress::printable_lines(&failure.to_string())
+        ));
     }
     if skip_permissions {
         asking.say(&t!(cli_notice, notice = t!(session_permissions_skipped)));
@@ -1124,19 +1156,19 @@ fn opening_trust<R: BufRead, W: Write>(
 
     if let Some(bravebot_agent::trusted::Honoured { store, kept }) = remembered(root) {
         let when = bravebot_session::sessions::how_long_ago(kept.at);
-        let path = store.path().display().to_string();
+        let path = crate::progress::printable_path(store.path());
         asking.say(&if kept.root == root {
             t!(
                 cli_plain_trusting_kept,
-                directory = root.display().to_string(),
+                directory = crate::progress::printable_path(root),
                 when = when,
                 path = path
             )
         } else {
             t!(
                 cli_plain_trusting_kept_root,
-                directory = root.display().to_string(),
-                root = kept.root.display().to_string(),
+                directory = crate::progress::printable_path(root),
+                root = crate::progress::printable_path(&kept.root),
                 when = when,
                 path = path
             )
@@ -1172,9 +1204,9 @@ fn opening_trust<R: BufRead, W: Write>(
 
     let yes = answer == bravebot_tui::trust_prompt::Answer::Trust;
     if let Some(kept) = bravebot_agent::trusted::keep_a_yes(keeping.as_ref(), yes, session, true) {
-        let directory = root.display().to_string();
+        let directory = crate::progress::printable_path(root);
         let path = keeping.as_ref().map_or(String::new(), |(store, _)| {
-            store.path().display().to_string()
+            crate::progress::printable_path(store.path())
         });
         asking.say(&match kept {
             true => t!(cli_plain_trust_kept, directory = directory, path = path),
@@ -1184,7 +1216,10 @@ fn opening_trust<R: BufRead, W: Write>(
     }
 
     asking.say(&match trust.is_trusted(".") {
-        true => t!(session_trusting, directory = root.display().to_string()),
+        true => t!(
+            session_trusting,
+            directory = crate::progress::printable_path(root)
+        ),
         false => t!(session_not_trusting).to_string(),
     });
     Some(trust)
@@ -2475,6 +2510,77 @@ mod tests {
         );
         assert!(drawn.contains(&spelled), "{drawn}");
         assert!(!drawn.contains('\u{202e}'), "{drawn}");
+    }
+
+    /// LAYER-3: the opening line and the lines about a stored pick name a model a settings file or
+    /// a record chose, and a refusal's reason. All reach the terminal as pictures.
+    #[test]
+    fn the_opening_lines_draw_a_model_name_and_a_refusal_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mmodel";
+        let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mmodel";
+        fn said(put: impl Fn(&mut Prompting<std::io::Empty, Vec<u8>>)) -> String {
+            let mut asking = Prompting::new(std::io::empty(), Vec::new());
+            put(&mut asking);
+            String::from_utf8(asking.output).expect("utf-8")
+        }
+        let reason = format!("{name} is gone:\nask {name}");
+
+        for (surface, text) in [
+            ("opening", said(|asking| say_the_opening(asking, name))),
+            (
+                "set aside",
+                said(|asking| say_the_set_aside_pick(asking, name, None)),
+            ),
+            (
+                "refused",
+                said(|asking| say_the_set_aside_pick(asking, name, Some(&reason))),
+            ),
+        ] {
+            assert_eq!(
+                text.chars().find(|c| c.is_control() && *c != '\n'),
+                None,
+                "{surface} let a control character through: {text:?}"
+            );
+            assert!(
+                text.contains(pictured),
+                "{surface} dropped the name: {text:?}"
+            );
+        }
+    }
+
+    /// LAYER-3: the line a kept answer opens a session with names the directory and the file the
+    /// answer is kept in. Both are paths a checkout can name, and both reach the terminal as
+    /// pictures.
+    #[test]
+    fn the_kept_answer_line_draws_the_paths_it_names_as_pictures() {
+        let scratch = Remembering::new("plain-kept-line-escapes");
+        let home = scratch.base.join("sta\u{1b}]0;T\u{7}te");
+        let root = scratch.base.join("pro\u{1b}[31mject");
+        std::fs::create_dir_all(&home).expect("create the state directory");
+        std::fs::create_dir_all(&root).expect("create the working directory");
+        let (home, root) = (
+            home.canonicalize().expect("canonical state directory"),
+            root.canonicalize().expect("canonical working directory"),
+        );
+        let Some(identity) = bravebot_agent::trusted::Identity::of(&root) else {
+            // A filesystem that cannot say when a directory was made keeps no answer to read.
+            return;
+        };
+        let store = bravebot_agent::trusted::Store::new(&home, &root);
+        assert!(
+            store.keep(&identity, "1-2", 7, false),
+            "the answer was not kept"
+        );
+
+        let (_, said) = opening_with_a_record("", &home, &root);
+
+        assert_eq!(
+            said.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "a control character reached the line: {said:?}"
+        );
+        assert!(said.contains("pro\u{241b}[31mject"), "{said:?}");
+        assert!(said.contains("sta\u{241b}]0;T\u{2407}te"), "{said:?}");
     }
 
     /// The startup question with this input, the record found where a session here finds it.

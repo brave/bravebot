@@ -47,7 +47,8 @@ use crate::exit::{Ending, fail};
 use crate::finish::{
     Finished, ending_of_a_turn, ending_with_the_goal, failure_of_a_turn, failure_with_the_goal,
     refusals, refused_with_the_usage, report, say_notices, say_the_goal_unmet, say_the_result,
-    say_what_a_stopped_manifest_produced, stopped_before_the_turn, what_ran, with_declined,
+    say_what_a_stopped_manifest_produced, say_what_a_stored_manifest_produced,
+    stopped_before_the_turn, what_ran, with_declined,
 };
 use crate::flags::{
     ACCEPT_EDITS, BYPASS_APPROVALS_AND_SANDBOX, INCOGNITO, SAFE, SKIP_PERMISSIONS, TASK_FLAGS, VET,
@@ -1019,11 +1020,7 @@ fn prepare_the_run(
     // script that asked to reach a directory and did not gets a turn that fails somewhere further
     // in, over a file it was told it could open.
     match open_directories(&mut workspace, &directories) {
-        Ok(notices) => {
-            for notice in notices {
-                eprintln!("{}", t!(cli_notice, notice = notice));
-            }
-        }
+        Ok(notices) => say_notices(&mut std::io::stderr().lock(), &notices),
         Err(problem) => return Err(stopped_before_the_turn(as_json, Ending::Argument, problem)),
     }
 
@@ -1123,7 +1120,7 @@ fn prepare_the_run(
             bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
         ),
     };
-    say_the_model_pick(&pick);
+    say_the_model_pick(&mut std::io::stderr().lock(), &pick);
     // Read before anything is sent, so an id that names nothing quotable is a refused argument and
     // not a run that quietly went without the session it was told to carry (NAME-10).
     let mut excerpts = Vec::new();
@@ -1261,16 +1258,25 @@ fn settle_the_definition(
                 (Some(name), found)
             }
             Ok(bravebot_tui::app::Settled::SettingGone { name, why }) => {
-                eprintln!("{}", t!(cli_agent_setting_gone, definition = name.as_str()));
-                eprintln!("{why}");
+                eprintln!(
+                    "{}",
+                    t!(
+                        cli_agent_setting_gone,
+                        definition = progress::printable(&name)
+                    )
+                );
+                eprintln!("{}", progress::printable_lines(&why));
                 (None, None)
             }
             Ok(bravebot_tui::app::Settled::Gone { name, why }) => {
                 eprintln!(
                     "{}",
-                    t!(session_recorded_definition_gone, definition = name.as_str())
+                    t!(
+                        session_recorded_definition_gone,
+                        definition = progress::printable(&name)
+                    )
                 );
-                eprintln!("{why}");
+                eprintln!("{}", progress::printable_lines(&why));
                 (None, None)
             }
             Ok(bravebot_tui::app::Settled::Nothing) => (None, None),
@@ -1293,20 +1299,32 @@ fn settle_the_definition(
 
 /// Says on stderr that a recorded model was set aside or refused. The pick is only borrowed:
 /// the caller still turns it into the model.
-fn say_the_model_pick(pick: &bravebot_agent::backend::Pick) {
+///
+/// The recorded name and the reason come from a file, so both are drawn through
+/// [`progress::printable`] (LAYER-3).
+fn say_the_model_pick(beside: &mut impl std::io::Write, pick: &bravebot_agent::backend::Pick) {
     match pick {
-        bravebot_agent::backend::Pick::SetAside(model) => eprintln!(
-            "{}",
-            t!(session_model_pick_set_aside, model = model.as_str())
-        ),
-        bravebot_agent::backend::Pick::Refused { recorded, reason } => eprintln!(
-            "{}",
-            t!(
-                session_model_pick_refused,
-                model = recorded.as_str(),
-                reason = reason.as_str()
-            )
-        ),
+        bravebot_agent::backend::Pick::SetAside(model) => {
+            let _ = writeln!(
+                beside,
+                "{}",
+                t!(
+                    session_model_pick_set_aside,
+                    model = progress::printable(model)
+                )
+            );
+        }
+        bravebot_agent::backend::Pick::Refused { recorded, reason } => {
+            let _ = writeln!(
+                beside,
+                "{}",
+                t!(
+                    session_model_pick_refused,
+                    model = progress::printable(recorded),
+                    reason = progress::printable_lines(reason)
+                )
+            );
+        }
         bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
     }
 }
@@ -1330,9 +1348,7 @@ fn reach_the_servers(
         &mut servers::nobody(),
         bravebot_sandbox::Stream::Inherited,
     );
-    for note in &reached.notes {
-        eprintln!("{}", t!(cli_notice, notice = note));
-    }
+    say_notices(&mut std::io::stderr().lock(), &reached.notes);
     // On stderr, beside the progress lines, so a pipe of the reply is unaffected. Said even here,
     // where nobody may be reading: a run that wrote to the tree without asking should leave a record
     // of having been told not to ask.
@@ -1405,10 +1421,16 @@ fn check_the_model_can_serve_the_run(
     // keeps stdout the reply and nothing else. A URL and a code are no use after the fact, so they
     // are printed while the command that wrote them is still waiting.
     let signed_in = bravebot_agent::backend::Backend::sign_in_if_needed(config, &model, |line| {
-        eprintln!("{line}");
+        eprintln!("{}", progress::printable_lines(&line));
     });
     if let Err(failure) = signed_in {
-        eprintln!("{}", t!(cli_notice, notice = failure.to_string()));
+        eprintln!(
+            "{}",
+            t!(
+                cli_notice,
+                notice = progress::printable_lines(&failure.to_string())
+            )
+        );
     }
 
     Ok(model)
@@ -1695,7 +1717,7 @@ fn run_and_report(
                 ),
             }
             if let Some(complaint) = &off_schema {
-                eprintln!("{}", ending.told(complaint));
+                eprintln!("{}", ending.told(progress::printable_lines(complaint)));
             }
             if let Some(why) = &unmet {
                 say_the_goal_unmet(&mut std::io::stderr().lock(), ending, why);
@@ -2140,11 +2162,7 @@ fn resume_named(
         Some(record) if record.manifest.is_some() => {
             println!("{}", t!(cli_manifest_run, id = id));
             if let Some(stored) = &record.manifest {
-                let report = stored.describe();
-                if !report.is_empty() {
-                    println!();
-                    print!("{report}");
-                }
+                say_what_a_stored_manifest_produced(&mut std::io::stdout().lock(), stored);
             }
             ExitCode::SUCCESS
         }
@@ -2186,11 +2204,7 @@ fn fork_named(
         Some(record) if record.manifest.is_some() => {
             let refused = fail(Ending::Failed, bravebot_tui::resume::manifest_note());
             if let Some(stored) = &record.manifest {
-                let report = stored.describe();
-                if !report.is_empty() {
-                    eprintln!();
-                    eprint!("{report}");
-                }
+                say_what_a_stored_manifest_produced(&mut std::io::stderr().lock(), stored);
             }
             refused
         }
@@ -2396,7 +2410,7 @@ fn resume_hint(left: &Resumable, started_in: &Path) -> String {
         true => t!(cli_resume_heading).to_string(),
         false => t!(
             cli_resume_moved,
-            directory = left.directory.display().to_string()
+            directory = progress::printable_path(&left.directory)
         ),
     };
     format!("{heading}\nbravebot --resume {}", left.id)
@@ -2809,8 +2823,219 @@ mod tests {
         assert!(lines[6].contains("BLOCK") && lines[6].contains("write.path [routing]"));
     }
 
+    /// TRACE-11, LAYER-3: a name a checkout chose reaches the terminal as pictures. A listing
+    /// entry's name, a path in a gate's detail and a path in a gate's reason are each drawn with
+    /// their control characters replaced, and none is dropped.
+    #[test]
+    fn a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mred.txt";
+        let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mred.txt";
+        let sink = trail_of(vec![
+            Event::SlotDeferred {
+                slot: SlotId::new("ref:1"),
+                label: Label::untrusted_private(),
+                origin: name.into(),
+            },
+            Event::GatePassed {
+                gate: "defer",
+                detail: format!("read_file: {name} will be (U,priv)"),
+            },
+            Event::GateBlocked {
+                gate: "confine",
+                detail: "read_file.path".into(),
+                reason: format!("'{name}'\nresolves outside the workspace"),
+                principle: bravebot_core::event::Principle::Confinement,
+            },
+        ]);
+
+        let lines: Vec<String> = sink
+            .recorded()
+            .map(|(delegate, event)| trace_line(delegate, event))
+            .collect();
+
+        assert_eq!(lines.len(), 3, "a line each: {lines:?}");
+        for line in &lines {
+            assert_eq!(
+                line.chars().find(|c| c.is_control()),
+                None,
+                "a control character reached the trail: {line:?}"
+            );
+            assert!(line.contains(pictured), "the name was not drawn: {line:?}");
+        }
+        assert!(lines[0].contains(&format!("holds {pictured}, unread")));
+        assert!(lines[2].contains("\u{240a}resolves outside"));
+    }
+
+    /// TRACE-11, LAYER-3: the words `--trace` and a stopped manifest write beside the reply are
+    /// drawn with their control characters pictured. A notice, the plan's account of its steps and
+    /// the model line can each hold a name a checkout chose, and all go to stderr. The line breaks
+    /// the sentences themselves run over are kept.
+    #[test]
+    fn the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mred.txt";
+        let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mred.txt";
+        let attempt = format!("plan\nsteps that ran\n  1. read {name}: done\n");
+        let (_, beside) = written(&Finished {
+            reply: "ok",
+            notices: &[format!("{name} was skipped:\nnot trusted")],
+            attempt: Some(&attempt),
+            model: Some(name),
+            clean: true,
+            ending: Ending::Done,
+            not_served: None,
+        });
+        let stopped = bravebot_agent::manifest::Attempt {
+            proposed: Some(name.to_string()),
+            steps: vec![format!("1. read {name}: done")],
+            ..Default::default()
+        };
+        let mut said = Vec::new();
+        say_what_a_stopped_manifest_produced(&mut said, &stopped);
+        let mut notified = Vec::new();
+        say_notices(&mut notified, &[format!("{name} was skipped")]);
+
+        for (surface, text) in [
+            ("report", beside),
+            ("stopped manifest", String::from_utf8(said).expect("utf-8")),
+            ("notices", String::from_utf8(notified).expect("utf-8")),
+        ] {
+            assert_eq!(
+                text.chars().find(|c| c.is_control() && *c != '\n'),
+                None,
+                "{surface} let a control character through: {text:?}"
+            );
+            assert!(
+                text.contains(pictured),
+                "{surface} dropped the name: {text:?}"
+            );
+        }
+        let (_, beside) = written(&Finished {
+            reply: "ok",
+            notices: &[format!("{name} was skipped:\nnot trusted")],
+            attempt: None,
+            model: Some(name),
+            clean: true,
+            ending: Ending::Done,
+            not_served: None,
+        });
+        assert!(
+            beside.contains(&format!("{pictured} was skipped:\nnot trusted")),
+            "a notice's own line break is kept: {beside:?}"
+        );
+        assert!(beside.contains(&format!("model: {pictured}")), "{beside:?}");
+    }
+
     fn args(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_string()).collect()
+    }
+
+    /// LAYER-3: the stored pick a run sets aside or refuses is named from a file, and the reason it
+    /// was refused comes from the configuration, so both reach stderr as pictures.
+    #[test]
+    fn a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mmodel";
+        let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mmodel";
+        let mut set_aside = Vec::new();
+        say_the_model_pick(
+            &mut set_aside,
+            &bravebot_agent::backend::Pick::SetAside(name.to_string()),
+        );
+        let mut refused = Vec::new();
+        say_the_model_pick(
+            &mut refused,
+            &bravebot_agent::backend::Pick::Refused {
+                recorded: name.to_string(),
+                reason: format!("{name} is not served:\nask {name}"),
+            },
+        );
+
+        for (surface, text) in [("set aside", set_aside), ("refused", refused)] {
+            let text = String::from_utf8(text).expect("utf-8");
+            assert_eq!(
+                text.chars().find(|c| c.is_control() && *c != '\n'),
+                None,
+                "{surface} let a control character through: {text:?}"
+            );
+            assert!(
+                text.contains(pictured),
+                "{surface} dropped the name: {text:?}"
+            );
+        }
+    }
+
+    /// LAYER-3: `--resume` and `--fork` of a manifest run print what the record holds, which is
+    /// text a model and a checkout chose. The plan, the steps and the reason it stopped are drawn
+    /// as pictures and none is dropped.
+    #[test]
+    fn a_stored_manifest_report_draws_its_text_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mred.txt";
+        let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mred.txt";
+        let stored = bravebot_session::sessions::StoredManifest {
+            proposed: Some(name.to_string()),
+            steps: vec![format!("1. read {name}: done")],
+            failure: Some(format!("{name} could not be read")),
+            ..Default::default()
+        };
+        let mut said = Vec::new();
+        say_what_a_stored_manifest_produced(&mut said, &stored);
+        let said = String::from_utf8(said).expect("utf-8");
+
+        assert_eq!(
+            said.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "a control character reached the report: {said:?}"
+        );
+        assert!(said.contains(&format!("read {pictured}: done")), "{said:?}");
+        assert!(
+            said.contains(&format!("{pictured} could not be read")),
+            "{said:?}"
+        );
+    }
+
+    /// LAYER-3: the hint printed when a session ends elsewhere than it started names that
+    /// directory, which a checkout named.
+    #[test]
+    fn the_resume_hint_draws_the_directory_it_names_as_pictures() {
+        let left = Resumable {
+            id: "an-id".to_string(),
+            directory: PathBuf::from("/tmp/x\u{1b}]0;T\u{7}dir"),
+        };
+
+        let hint = resume_hint(&left, Path::new("/tmp/elsewhere"));
+
+        assert_eq!(
+            hint.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "{hint:?}"
+        );
+        assert!(hint.contains("/tmp/x\u{241b}]0;T\u{2407}dir"), "{hint:?}");
+    }
+
+    /// LAYER-3: the complaint that a model was not served names the model the service reported,
+    /// which the service chose, and reaches stderr as pictures.
+    #[test]
+    fn the_complaint_about_a_model_not_served_draws_the_served_name_as_pictures() {
+        let name = "x\u{1b}]0;T\u{7}\u{1b}[31mserved";
+        let complaint = format!("asked-for was not served, {name} was:\nsee {name}");
+        let (_, beside) = written(&Finished {
+            reply: "ok",
+            notices: &[],
+            attempt: None,
+            model: None,
+            clean: true,
+            ending: Ending::Done,
+            not_served: Some(&complaint),
+        });
+
+        assert_eq!(
+            beside.chars().find(|c| c.is_control() && *c != '\n'),
+            None,
+            "{beside:?}"
+        );
+        assert!(
+            beside.contains("x\u{241b}]0;T\u{2407}\u{241b}[31mserved was:\nsee "),
+            "{beside:?}"
+        );
     }
 
     /// TRUST-26. The flag gives the run the map a yes writes: the working directory and what is

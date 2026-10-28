@@ -2067,6 +2067,115 @@ fn a_traced_run_writes_its_decisions_to_stderr_while_it_is_still_going() {
     );
 }
 
+/// TRACE-11, LAYER-3: `--trace` draws a name a checkout chose as pictures. The listing of a clone
+/// defers each entry as a reference, and the trail line for it carries the entry's file name; a
+/// name holding an escape sequence would otherwise set the terminal's title and colour. The name is
+/// asserted to be drawn rather than left out: a character silently removed is one nobody can tell
+/// was ever in the file.
+///
+/// Unix only, because Windows has no file name holding these characters.
+#[cfg(unix)]
+#[test]
+fn a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures() {
+    let gateway = a_gateway(r#"["tools"]"#, |body| {
+        match body.contains(r#""role":"tool""#) {
+            true => streamed("done"),
+            false => streamed_tool_call("list_files", r#"{"directory":"."}"#),
+        }
+    });
+    let scratch = Scratch::new("cli-running-trace-checkout-file-names")
+        .with_settings(&settings_for(&gateway));
+    let cwd = scratch.path.join("checkout");
+    std::fs::create_dir_all(&cwd).expect("create the checkout");
+    std::fs::write(cwd.join("README.md"), "hello").expect("write a plain file");
+    std::fs::write(
+        cwd.join("x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred.txt"),
+        "red",
+    )
+    .expect("write a file named with control characters");
+
+    let output = bravebot_started_in(
+        &scratch.path,
+        &cwd,
+        AT_A_GATEWAY,
+        &["-p", "--trace", "list it"],
+    );
+
+    let (stdout, stderr) = said(&output);
+    assert!(output.status.success(), "the run did not finish: {stderr}");
+    for (stream, text) in [("stdout", &stdout), ("stderr", &stderr)] {
+        assert_eq!(
+            control_character_in(text),
+            None,
+            "--trace sent a control character from the checkout on {stream}: {text:?}"
+        );
+    }
+    assert!(
+        stderr.lines().any(|line| line.contains("defer")
+            && line.contains("x\u{241b}]0;PWNED-TITLE\u{2407}\u{241b}[31mred.txt")),
+        "--trace did not draw the file name as pictures on its defer line: {stderr}"
+    );
+}
+
+/// A person's home holding a definition whose name carries escape sequences, beside a settings
+/// file whose `agent` key names a definition that is not there. The sentence saying so lists the
+/// names that are, so it carries this one.
+fn a_home_whose_definition_is_named_with_control_characters(name: &str) -> Scratch {
+    let gateway = a_gateway(r#"["tools"]"#, answered("done"));
+    Scratch::new(name)
+        .with_settings(&settings_naming_an_agent(&gateway, "nobody"))
+        .with_state(
+            "agents/escaped.md",
+            "---\nname: x\u{1b}]0;PWNED-TITLE\u{7}\u{1b}[31mred\ndescription: Checks a diff.\nkind: reader\n---\n\nBODY\n",
+        )
+}
+
+/// LAYER-3 and TRACE-11 on the one-shot run: the sentence that a settings file names a definition
+/// that is not there lists the names that are, and one of those is chosen by a file. It is drawn
+/// as pictures on stderr, where the escape sequence would otherwise set the terminal's title.
+#[cfg(unix)]
+#[test]
+fn a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures() {
+    let scratch = a_home_whose_definition_is_named_with_control_characters(
+        "cli-running-setting-gone-names-one-shot",
+    );
+
+    let (output, stdout, stderr) = a_recorded_run(&scratch, &["-p", "hello"]);
+
+    assert_eq!(output.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains("x\u{241b}]0;PWNED-TITLE\u{2407}\u{241b}[31mred"),
+        "the definition's name was not drawn as pictures: {stderr:?}"
+    );
+    assert_eq!(
+        control_character_in(&stderr),
+        None,
+        "a control character from a definition's name reached stderr: {stderr:?}"
+    );
+}
+
+/// LAYER-3 and TRACE-11 in a session in lines: the same sentence goes where the questions go.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures() {
+    let scratch = a_home_whose_definition_is_named_with_control_characters(
+        "cli-running-setting-gone-names-lines",
+    );
+
+    let output = in_a_terminal_answering(&scratch.path, AT_A_GATEWAY, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(0), "{transcript}");
+    assert!(
+        transcript.contains("x\u{241b}]0;PWNED-TITLE\u{2407}\u{241b}[31mred"),
+        "the definition's name was not drawn as pictures: {transcript:?}"
+    );
+    assert!(
+        !transcript.contains("PWNED-TITLE\u{7}") && !transcript.contains("\u{1b}]0;PWNED"),
+        "a control character from a definition's name reached the terminal: {transcript:?}"
+    );
+}
+
 /// A hook that went wrong is said even by a run whose turn then failed (HOOK-7), which is the one
 /// case where the outcome that would have carried the sentence never arrives.
 ///

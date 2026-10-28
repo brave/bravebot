@@ -10,6 +10,7 @@
  - Changed an `openai` entry that reaches `api.openai.com` to be sent `/responses`, where it was sent `/chat/completions`, so a turn on `gpt-6-sol` or `gpt-6.1-sol` no longer ends in HTTP 400, which OpenAI answers a function tool with on chat completions. An entry that states a `baseURL` at another host is unchanged. To keep chat completions at OpenAI's host, name `npm: "@ai-sdk/openai-compatible"`. ([#3430](https://github.com/brave/bravebot/issues/3430))
  - Changed `/model` for an `openai` entry that reaches `api.openai.com` to leave out a model whose listed `shutdown_date` is today or earlier, since OpenAI no longer serves it. ([#3430](https://github.com/brave/bravebot/issues/3430))
  - Changed the import of an opencode `openai` entry that names `@ai-sdk/openai` to offer it where it states no `baseURL` or OpenAI's. It was left as another SDK's. ([#3430](https://github.com/brave/bravebot/issues/3430))
+ - Fixed `--trace` writing a file name or path that holds an escape sequence to the terminal unchanged. Each line of the trail is now drawn with its control characters replaced by their pictures, as are the notices, the plan and the model line written beside the reply, the model a stored pick names and the reason it was refused, the model a session in lines opens with, the report `--resume` and `--fork` print for a stored manifest run, the trail Ctrl-T shows and the desktop audit inspector. ([#3065](https://github.com/brave/bravebot/issues/3065))
 
 ## [0.19.0](https://github.com/brave/bravebot/releases/tag/v0.19.0)
 

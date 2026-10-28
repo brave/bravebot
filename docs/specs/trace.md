@@ -410,6 +410,49 @@ sent, reads the trail. A model name is chosen by configuration, so the entry hol
 `verified-by: bravebot_agent::turn::a_processor_call_that_failed_in_transit_is_in_the_trail_with_its_model`
 `verified-by: bravebot_agent::manifest::the_audit_trail_names_the_model_each_manifest_processor_call_asked_for`
 
+<a id="TRACE-11"></a>
+### TRACE-11: text of the trail or a notice written to a terminal or drawn in a window has its control characters replaced
+
+Every line of the trail that `--trace` writes to stderr is drawn with each control character replaced
+by its picture, a line break included ([LAYER-3](layering.md#LAYER-3)). A path, a listing entry's
+name, or the detail or reason of a gate can be text a checkout chose, and the line is written
+unchanged otherwise. The replacement is made on the whole line, so a field added to an event is
+covered without being named. A tab is left as it is.
+
+The same holds for the other words a run writes to stderr that can name a file or a definition a
+checkout holds: each notice, the plan or the steps of a manifest run that stopped or was traced, the
+model line, and the progress line of each call with its reason and note. The names listed for an
+agent setting that does not resolve, the sign-in lines and a sign-in failure, and the complaint that
+a reply is off its schema are drawn the same way. The model a stored pick names and the reason it was
+refused, the model the opening line of a session in lines names, the model a service reported
+serving instead of the one asked for, the report of a stored manifest run that `--resume` or
+`--fork` names, and the directories a kept answer or a resume hint names are drawn the same way. The
+line breaks those sentences run over are kept and every other control character is pictured. The
+trail Ctrl-T shows in the terminal and the audit
+inspector in the desktop window draw the same text the same way, so a control character is shown as
+a picture and is not dropped by the screen or the page. The inspector pictures the sentence it draws
+and leaves the recorded evidence beside it as the audit file holds it.
+
+**Why.** [TRACE-2](#TRACE-2) says the trail holds no content, so it can be shown without a release.
+That does not make its text safe for a terminal: a file name in a clone can hold an escape sequence
+that sets the terminal's title or colour. The replacement is a change of characters and the sink
+still branches on none of them ([TRACE-5](#TRACE-5)).
+
+`verified-by: bravebot_cli::main::a_trail_line_draws_the_control_characters_of_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::running::a_traced_run_draws_the_control_characters_of_a_checkouts_file_names_as_pictures`
+`verified-by: bravebot_cli::main::the_words_written_beside_the_reply_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::progress::the_lines_of_a_call_draw_a_checkouts_names_as_pictures`
+`verified-by: bravebot_cli::main::a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures`
+`verified-by: bravebot_cli::main::a_stored_manifest_report_draws_its_text_as_pictures`
+`verified-by: bravebot_cli::main::the_resume_hint_draws_the_directory_it_names_as_pictures`
+`verified-by: bravebot_cli::main::the_complaint_about_a_model_not_served_draws_the_served_name_as_pictures`
+`verified-by: bravebot_cli::plain::the_opening_lines_draw_a_model_name_and_a_refusal_as_pictures`
+`verified-by: bravebot_cli::plain::the_kept_answer_line_draws_the_paths_it_names_as_pictures`
+`verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures`
+`verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
+`verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with a name holding an escape and a bell in each field it draws and asserts the sentence holds their pictures, a tab and ordinary characters unchanged; make check-ui runs it)`
+
 ## Known costs
 
 - **A message restored from a saved session is `unrecorded`.** The origin is kept in memory beside
