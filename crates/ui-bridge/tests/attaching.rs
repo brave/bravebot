@@ -415,6 +415,144 @@ fn a_picture_the_bridge_cannot_carry_refuses_the_send() {
     assert_eq!(pictures(&message), [data_url("image/png", b"picture")]);
 }
 
+/// The CRC-32 a PNG chunk ends with.
+fn crc32(bytes: &[u8]) -> u32 {
+    let table: Vec<u32> = (0..256u32)
+        .map(|n| {
+            (0..8).fold(n, |c, _| {
+                if c & 1 == 1 {
+                    0xedb8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                }
+            })
+        })
+        .collect();
+    !bytes.iter().fold(!0u32, |crc, byte| {
+        table[usize::try_from((crc ^ u32::from(*byte)) & 0xff).unwrap()] ^ (crc >> 8)
+    })
+}
+
+fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+    let from = out.len();
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
+    let crc = crc32(&out[from..]);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+/// A one-bit grey PNG of `width` by `height`, all of one colour, written with stored (not
+/// compressed) deflate blocks. Its length is close to its pixel count divided by eight, so the
+/// bridge test needs no image codec to make a picture over the cap.
+fn stored_png(width: u32, height: u32) -> Vec<u8> {
+    let row = 1 + usize::try_from(width.div_ceil(8)).unwrap();
+    let raw = vec![0u8; row * usize::try_from(height).unwrap()];
+    let (mut a, mut b) = (1u32, 0u32);
+    for byte in &raw {
+        a = (a + u32::from(*byte)) % 65521;
+        b = (b + a) % 65521;
+    }
+    let mut zlib = vec![0x78, 0x01];
+    let mut blocks = raw.chunks(65535).peekable();
+    while let Some(block) = blocks.next() {
+        let length = u16::try_from(block.len()).unwrap();
+        zlib.push(u8::from(blocks.peek().is_none()));
+        zlib.extend_from_slice(&length.to_le_bytes());
+        zlib.extend_from_slice(&(!length).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut header = Vec::new();
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[1, 0, 0, 0, 0]);
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut out, b"IHDR", &header);
+    chunk(&mut out, b"IDAT", &zlib);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+/// DROP-4, DROP-10: a dropped PNG over the 8 MiB an attachment holds, and within the ceiling the
+/// agent reads a picture up to, is accepted by `turn.send` and reaches the model scaled to a
+/// longest side of 2048 pixels, not refused and not carried whole.
+#[test]
+fn a_dropped_png_over_the_cap_is_accepted_and_reaches_the_model_scaled() {
+    use base64::Engine;
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("drop-scaled");
+    let outside = elsewhere("drop-scaled");
+    let wide = outside.join("wide.png");
+    let original = stored_png(16000, 4200);
+    assert!(original.len() > bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+    assert!(original.len() < bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES);
+    std::fs::write(&wide, &original).unwrap();
+    let (config, requests, server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let done = window.turn(&session, "describe this", json!({"attachments": [wide]}));
+    server.join().unwrap();
+
+    assert_eq!(done.name, "turn.done", "{:?}", done.data);
+    let message = user_message(&requests.recv().unwrap(), "describe this");
+    let sent = pictures(&message);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let encoded = sent[0]
+        .strip_prefix("data:image/png;base64,")
+        .expect("the scaled picture is a PNG data URI");
+    let carried = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    assert_eq!(&carried[..8], b"\x89PNG\r\n\x1a\n");
+    let side = |at: usize| u32::from_be_bytes(carried[at..at + 4].try_into().unwrap());
+    assert_eq!(side(16), 2048, "the width of the picture the model got");
+    assert!(
+        (537..=538).contains(&side(20)),
+        "the height of the picture the model got: {}",
+        side(20)
+    );
+    assert!(carried.len() <= bravebot_agent::workspace::MAX_ATTACHMENT_BYTES);
+}
+
+/// DROP-4: a dropped PNG or JPEG over the ceiling the agent reads a picture up to is refused by
+/// `turn.send` before a turn starts, with the ceiling in the note.
+#[test]
+fn a_dropped_png_over_the_scalable_ceiling_refuses_the_send() {
+    if !test_profile::in_isolated_profile() {
+        return;
+    }
+    let project = project("drop-ceiling");
+    let outside = elsewhere("drop-ceiling");
+    let huge = outside.join("huge.jpg");
+    std::fs::File::create(&huge)
+        .unwrap()
+        .set_len(bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES as u64 + 1)
+        .unwrap();
+    let (config, _requests, _server) = endpoint::endpoint(vec![endpoint::answer()], None);
+    let (mut window, session) = Window::on(&project, &config.endpoint);
+
+    let refused = window
+        .dispatch(
+            "turn.send",
+            json!({"session": session, "prompt": "look", "attachments": [huge]}),
+        )
+        .unwrap_err();
+
+    assert_eq!(refused.code, ErrorCode::BadRequest);
+    assert_eq!(
+        refused.message,
+        "huge.jpg is 64.0 MB, and an attachment carries at most 64.0 MB"
+    );
+    assert_eq!(
+        window.raised("turn.started"),
+        0,
+        "a refused send started a turn"
+    );
+}
+
 /// The window stages a drop by what the bridge says each file is, so a dropped file gets the
 /// marker the terminal would give it, and a picture or PDF over the agent's cap is left out with
 /// the note the bridge built (DROP-12). Text has no cap. Names only: none of these paths exists.
