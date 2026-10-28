@@ -1016,8 +1016,11 @@ export interface EventMap {
   quarantined: Shown
   todos: { rows: TodoRow[] }
   tokens: { written: number }
-  /** Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. */
-  audit: { turn?: number; run?: number; event: Record<string, unknown> }
+  /**
+   * Numbered by `turn`, or by `run` for a manifest run, which is not one of the turns. `pictured`
+   * holds each string field of `event` with its control characters replaced by their pictures.
+   */
+  audit: { turn?: number; run?: number; event: Record<string, unknown>; pictured: Record<string, string> }
   'confirm.request': ConfirmRequest
   'run.request': RunRequest
   'output.request': OutputRequest

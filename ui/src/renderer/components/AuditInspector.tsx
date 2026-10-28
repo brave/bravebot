@@ -35,7 +35,7 @@ function RoutingAndContent({ audit }: { audit: AuditRecord[] }): React.JSX.Eleme
 }
 
 const Evidence = memo(function Evidence({ record }: { record: AuditRecord }): React.JSX.Element {
-  const { title, detail } = auditDescription(record.event)
+  const { title, detail } = auditDescription(record.event, record.pictured)
   const blocked = isRefusal(record.event)
   const label = record.event.label as { integrity?: unknown; confidentiality?: unknown } | null
   return <li className={`audit-event${blocked ? ' audit-refusal' : ''}`}>

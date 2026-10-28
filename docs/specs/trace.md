@@ -430,8 +430,10 @@ serving instead of the one asked for, the report of a stored manifest run that `
 line breaks those sentences run over are kept and every other control character is pictured. The
 trail Ctrl-T shows in the terminal and the audit
 inspector in the desktop window draw the same text the same way, so a control character is shown as
-a picture and is not dropped by the screen or the page. The inspector pictures the sentence it draws
-and leaves the recorded evidence beside it as the audit file holds it.
+a picture and is not dropped by the screen or the page. The desktop bridge sends, beside each audit
+event, the words `bravebot_approval::printable` makes of each string field of the event, and the
+inspector draws the sentence from those words, so the window holds no list of the characters to
+picture. The inspector leaves the recorded evidence beside it as the audit file holds it.
 
 **Why.** [TRACE-2](#TRACE-2) says the trail holds no content, so it can be shown without a release.
 That does not make its text safe for a terminal: a file name in a clone can hold an escape sequence
@@ -451,7 +453,8 @@ still branches on none of them ([TRACE-5](#TRACE-5)).
 `verified-by: bravebot_cli::running::a_one_shot_run_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_cli::running::a_session_in_lines_draws_the_control_characters_of_a_definitions_names_as_pictures`
 `verified-by: bravebot_tui::render::transcript::the_trail_a_person_opens_draws_a_checkouts_names_as_pictures`
-`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with a name holding an escape and a bell in each field it draws and asserts the sentence holds their pictures, a tab and ordinary characters unchanged; make check-ui runs it)`
+`verified-by: bravebot_ui_bridge::audit::the_live_audit_event_carries_each_string_field_drawn_by_printable`
+`verified-by: by-construction (the desktop renderer is not a crate this workspace compiles, so ui/scripts/turn-details.test.mjs calls the inspector's own auditDescription with the words the bridge sent for a name holding an escape and a bell and asserts the sentence is those words, and that a field with no words is drawn as nothing; make check-ui runs it)`
 
 ## Known costs
 

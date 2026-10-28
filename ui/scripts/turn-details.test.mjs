@@ -108,17 +108,27 @@ test('the service is kept only from a turn that ran on the session model', () =>
   }
 })
 
-test('a control character in a checkout’s file name is drawn as its picture, not dropped by the page', () => {
+test('a record is drawn from the words the bridge pictured, and the renderer holds no definition of a control character', () => {
   const name = 'x\u001b]0;PWNED-TITLE\u0007\u001b[31mred.txt'
-  const pictured = 'x\u241b]0;PWNED-TITLE\u2407\u241b[31mred.txt'
-  assert.equal(auditDescription({ kind: 'slot_deferred', slot: 'ref:1', origin: name }).detail, pictured)
-  assert.equal(auditDescription({ kind: 'gate_passed', detail: `read_file: ${name} will be (U,priv)` }).detail, `read_file: ${pictured} will be (U,priv)`)
-  assert.equal(auditDescription({ kind: 'gate_blocked', reason: `${name}\nresolves outside` }).detail, `${pictured}\u240aresolves outside`)
-  assert.equal(auditDescription({ kind: 'declassified', reason: name }).detail, pictured)
-  // A tab and every ordinary character stay as they were.
-  assert.equal(auditDescription({ kind: 'gate_passed', detail: 'a\tb café 中文' }).detail, 'a\tb café 中文')
-  const { pictured: draw } = module.exports
-  assert.equal(draw('\u007f\u0085'), '\u247f\u2485')
+  const sent = 'x\u241b]0;PWNED-TITLE\u2407\u241b[31mred.txt'
+  assert.equal(auditDescription({ kind: 'slot_deferred', slot: 'ref:1', origin: name }, { slot: 'ref:1', origin: sent }).detail, sent)
+  assert.equal(auditDescription({ kind: 'gate_passed', detail: `read_file: ${name}` }, { detail: `read_file: ${sent}` }).detail, `read_file: ${sent}`)
+  assert.equal(auditDescription({ kind: 'gate_blocked', reason: `${name}\nx`, detail: 'd' }, { reason: `${sent}\u240ax`, detail: 'd' }).detail, `${sent}\u240ax`)
+  assert.equal(auditDescription({ kind: 'declassified', reason: name }, { reason: sent }).detail, sent)
+  // Words the bridge sent are drawn as they came, whatever they hold: the renderer does not picture.
+  assert.equal(auditDescription({ kind: 'gate_passed', detail: 'a' }, { detail: 'a\u001bb' }).detail, 'a\u001bb')
+  // A field with no words from the bridge is drawn as nothing, never as the raw text a page would drop characters from.
+  for (const event of [{ kind: 'slot_deferred', slot: 'ref:1', origin: name }, { kind: 'gate_passed', detail: name },
+    { kind: 'gate_blocked', reason: name }, { kind: 'declassified', reason: name }]) assert.equal(auditDescription(event).detail, '')
+  assert.equal(module.exports.pictured, undefined)
+})
+
+test('the words the bridge pictured are kept with the record, and anything that is not text is dropped', () => {
+  const turns = receiveTurn({}, event('audit', 1, { event: { kind: 'gate_passed', detail: 'a\u001b' }, pictured: { detail: 'a\u241b', gate: 7, nested: { x: 1 } } }))
+  assert.deepEqual(turns[1].audit[0].pictured, { detail: 'a\u241b' })
+  for (const pictured of [undefined, null, 'text', ['a']]) {
+    assert.deepEqual(receiveTurn({}, event('audit', 1, { event: { kind: 'gate_passed' }, pictured }))[1].audit[0].pictured, {})
+  }
 })
 
 test('routing and content groups each run of one tool’s fields and keeps releases in order', () => {
