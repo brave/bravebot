@@ -327,6 +327,8 @@ impl Bridge {
             "connectors.disconnect" => crate::connectors::disconnect(request),
             "connectors.remove" => crate::connectors::remove(request),
             "hooks.inspect" => crate::hooks::inspect(),
+            "language.get" => Ok(crate::language::get(request)),
+            "language.set" => crate::language::set(request),
             "bot.define" => crate::definitions::make(request),
             "bot.migrate" => crate::definitions::migrate(request),
             "bot.redefine" => crate::definitions::remake(request),

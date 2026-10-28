@@ -209,6 +209,8 @@ program a `run` starts reading, or leave the variable unset.
 
 The interface is read in your language where a translation has shipped, and in English otherwise. See [Choosing a language](language.md).
 
+In the desktop app, **Settings ▸ General ▸ Language** saves the same choice `/language` does. It applies when the app next starts.
+
 ### What stays in English
 
 The names of the slash commands, the letters `y` and `n`, the audit trail and, unless a language

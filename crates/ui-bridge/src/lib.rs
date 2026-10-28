@@ -48,6 +48,7 @@ pub mod fork;
 pub mod hooks;
 #[cfg(unix)]
 pub mod host;
+pub mod language;
 pub mod manifest;
 pub mod mentions;
 pub mod models;

@@ -1007,6 +1007,7 @@ export function App(): React.JSX.Element {
           }}
           session={live?.handle}
           chosen={chosen}
+          running={live?.running ?? false}
           onAppearance={writeAppearance}
           onChanged={() => { void checkBackend() }}
         />
