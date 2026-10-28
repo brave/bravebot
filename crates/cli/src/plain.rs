@@ -1520,6 +1520,7 @@ fn program(request: &RunRequest) -> Vec<String> {
         confinement: confinement.as_ref(),
         ambient: &ambient,
         releases_private: request.releases_private(),
+        offers_remember: false,
     })
 }
 
@@ -1650,6 +1651,7 @@ impl<R: BufRead, W: Write> Confirmer for Prompting<R, W> {
             name: &request.name(),
             arguments: &request.arguments,
             description: request.description.as_deref(),
+            offers_remember: false,
         });
         self.about(Held::Tools);
         match self.ask(&lines, t!(mcp_call_question)) {

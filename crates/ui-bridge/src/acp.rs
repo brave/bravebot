@@ -997,6 +997,7 @@ fn run_text(data: &Value) -> Option<String> {
             confinement: confinement.as_ref(),
             ambient: &ambient_of(data)?,
             releases_private: data["releasesPrivate"].as_bool() == Some(true),
+            offers_remember: data["canBeRemembered"].as_bool() == Some(true),
         })
         .join("\n"),
     )
@@ -1062,6 +1063,7 @@ fn call_text(data: &Value) -> String {
         name: text_of(data, "name"),
         arguments: &arguments,
         description: data["description"].as_str(),
+        offers_remember: data["mayStand"].as_bool() == Some(true),
     })
     .join("\n")
 }
@@ -1403,6 +1405,7 @@ mod tests {
                 confinement: confinement.as_ref(),
                 ambient: &ambient,
                 releases_private: run.releases_private(),
+                offers_remember: run.can_be_remembered(),
             })
             .join("\n")
         };
@@ -1520,6 +1523,7 @@ mod tests {
                 name: &call.name(),
                 arguments: &call.arguments,
                 description: call.description.as_deref(),
+                offers_remember: false,
             })
             .join("\n")
         );
