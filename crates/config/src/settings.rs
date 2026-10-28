@@ -1321,7 +1321,10 @@ impl Settings {
             for value in misshapen_rule_lists(&root, &["deny", "ask", "allow"]) {
                 misshapen.push((path.clone(), value));
             }
-            for name in crate::env_var::NETWORK {
+            for name in crate::env_var::NETWORK
+                .into_iter()
+                .chain(crate::env_var::GOOGLE)
+            {
                 let Some(value) = env_string(&root, name) else {
                     continue;
                 };
@@ -1418,7 +1421,10 @@ impl Settings {
         // Put back to what the entitled layers said, a checkout's value having been merged in above
         // under the same name. Scrubbed on the way, the values being a proxy address that may carry
         // a credential.
-        for name in crate::env_var::NETWORK {
+        for name in crate::env_var::NETWORK
+            .into_iter()
+            .chain(crate::env_var::GOOGLE)
+        {
             if let Some(mut stale) = settings.env.remove(name) {
                 crate::scrub(&mut stale);
             }
@@ -2534,11 +2540,16 @@ impl Settings {
     ///
     /// Never a name a checkout's file set (BACKEND-33): see [`Settings::network_ignored`].
     pub fn network_values(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.network_by.keys().filter_map(|name| {
-            self.env
-                .get(name)
-                .map(|value| (name.as_str(), value.as_str()))
-        })
+        // `network_by` also holds the Google names, which are the person's alone for the same reason
+        // and are not the transport's to be handed.
+        self.network_by
+            .keys()
+            .filter(|name| crate::env_var::NETWORK.contains(&name.as_str()))
+            .filter_map(|name| {
+                self.env
+                    .get(name)
+                    .map(|value| (name.as_str(), value.as_str()))
+            })
     }
 
     /// The file that stated `name`, for a name in [`Settings::network_values`].
@@ -8034,6 +8045,63 @@ mod tests {
 
         assert_eq!(settings.network_values().count(), 0);
         assert_eq!(settings.get("AWS_REGION"), Some("eu-west-1"));
+    }
+
+    /// BACKEND-33: which Google account receives a conversation is the person's to choose, so the
+    /// checkout's project and local files decide none of the three Google names. The same names in
+    /// the person's own file still configure the service, and `doctor` reports the checkout's.
+    #[test]
+    fn a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do() {
+        let vertex = |settings: &Settings| {
+            crate::Config::from_sources(
+                settings,
+                &crate::managed::Managed::default(),
+                &crate::keys::Keys::default(),
+                |_| None,
+                |key| match key {
+                    crate::env_var::SIGNING_KEY => Some("test-signing-key".into()),
+                    crate::env_var::KEY_ID => Some("test-key-id".into()),
+                    crate::env_var::ENDPOINT => Some("https://example.invalid".into()),
+                    _ => None,
+                },
+            )
+            .expect("configured")
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == crate::provider::GOOGLE_VERTEX_ID)
+        };
+        let block = r#"{"env": {"GOOGLE_API_KEY": "key-from-the-file",
+            "GOOGLE_CLOUD_PROJECT": "project-from-the-file", "VERTEX_LOCATION": "us-east5"}}"#;
+
+        let project = Layers::new("google-checkout-project").project(block).read();
+        assert!(
+            vertex(&project).is_none(),
+            "a project file chose the account"
+        );
+        let local = Layers::new("google-checkout-local").local(block).read();
+        assert!(vertex(&local).is_none(), "a local file chose the account");
+        let ignored: Vec<&str> = project.network_ignored().map(|(_, name)| name).collect();
+        assert_eq!(
+            ignored,
+            ["GOOGLE_API_KEY", "GOOGLE_CLOUD_PROJECT", "VERTEX_LOCATION"]
+        );
+        assert_eq!(project.network_values().count(), 0);
+
+        let own = Layers::new("google-home").global(block).read();
+        assert!(
+            vertex(&own).is_some(),
+            "the person's own file configures nothing"
+        );
+        assert_eq!(own.network_values().count(), 0);
+
+        let both = Layers::new("google-home-and-checkout")
+            .global(r#"{"env": {"GOOGLE_API_KEY": "key-of-the-person"}}"#)
+            .project(block)
+            .read();
+        assert_eq!(both.get("GOOGLE_API_KEY"), Some("key-of-the-person"));
+        assert_eq!(both.get("GOOGLE_CLOUD_PROJECT"), None);
+        let service = vertex(&both).expect("the person's key configures the service");
+        assert!(!service.base_url.contains("project-from-the-file"));
     }
 
     /// A checkout names the region of an account the person's own file turned on, and the region

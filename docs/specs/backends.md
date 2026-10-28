@@ -1984,10 +1984,11 @@ something reads:
 | `HTTP_PROXY` | the proxy, where neither is set |
 | `NO_PROXY` | the hosts the proxy is not used for |
 
-The last six are the network names, and they are read from the person's own layers alone: the
+The last six are the network names, and the three Google names are read with them: both sets come from the person's own layers alone, the
 user's settings file and a file the command line named that is not inside the checkout. The project
 and local files arrive with a clone, and a proxy or an authority they chose would decide where
-conversation content is sent and who may read it, so a network name in either is reported by
+conversation content is sent and who may read it, and a Google key or project they chose would decide
+which account receives it. So one of these nine names in either file is reported by
 `doctor` with the file that wrote it and decides nothing, and it does not displace what a layer
 entitled to state it said. An exported variable still wins, as for every name here, and each of the
 two answers comes whole from one place: [NET-7](network-egress.md#NET-7) and
@@ -2028,6 +2029,7 @@ check gives a host under `amazonaws.com`.
 `verified-by: bravebot_config::settings::a_proxy_and_an_authority_in_the_persons_own_file_are_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_and_authority_are_reported_and_never_handed_over`
 `verified-by: bravebot_config::settings::a_checkouts_proxy_alone_leaves_nothing_handed_over_and_its_other_names_alone`
+`verified-by: bravebot_config::settings::a_checkouts_google_names_configure_no_service_and_the_persons_own_still_do`
 `verified-by: bravebot_config::settings::a_named_file_states_the_network_unless_it_sits_in_the_checkout`
 `verified-by: bravebot_config::settings::a_blank_or_non_string_network_value_states_nothing`
 `verified-by: bravebot_agent::transport::the_settings_and_the_transport_name_the_same_variables`
@@ -3090,7 +3092,7 @@ exactly what is offered, as for any other gateway.
 ### BACKEND-50: the environment names a Google Vertex service when no block does
 
 `GOOGLE_API_KEY` configures the `google-vertex` service, whether it is exported or set in the `env`
-block of a settings file, and has to hold a value: a missing or blank key configures nothing. With
+block of the person's own settings file ([BACKEND-33](#BACKEND-33) withholds the three names from a checkout's), and has to hold a value: a missing or blank key configures nothing. With
 `GOOGLE_CLOUD_PROJECT` beside it, and `VERTEX_LOCATION` where the location is not `global`, the
 service is the one of [BACKEND-49](#BACKEND-49), and a project or location that BACKEND-49 refuses
 configures nothing. With no project, or a blank one, it is the express service of
@@ -3099,7 +3101,7 @@ models, so it is offered the list BACKEND-49 compiles in.
 
 The key is read from `GOOGLE_API_KEY` when a request needs it, as [BACKEND-16](#BACKEND-16) says of
 any variable a gateway names, so a key exported after the session opened is the one sent. A key set
-only in the `env` block is held by the configuration, and an exported one outranks it, as
+only in the person's `env` block is held by the configuration, and an exported one outranks it, as
 [BACKEND-35](#BACKEND-35) ranks every name.
 
 A `provider.google-vertex` entry that configures a service replaces this route, and so does a managed gateway list
