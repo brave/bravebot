@@ -2,9 +2,10 @@
 
 <!-- applicability: always -->
 
-What a reviewer checks when a pull request says a case is left undone: that an issue or a Known
-costs entry records it, and that the record is about that case. Finding the statements takes
-reading the whole description, in whatever words it uses.
+What a reviewer checks in a pull request description, which no tool reads for meaning. A case it
+says is left undone has an issue or a Known costs entry that records it, and the record is about
+that case. Every statement in it is true of the head commit, including after later pushes. Finding
+the statements takes reading the whole description, in whatever words it uses.
 
 ---
 
@@ -48,3 +49,37 @@ Right: Hooks named by a relative path are left as they are, which Known costs in
 **Why:** a case recorded only in a description is not in the issue tracker, so nobody is assigned
 to it. It stays undone until someone else finds it, which can be an outside reporter filing it as a
 new defect.
+
+---
+
+<a id="GAP-002"></a>
+
+## A pull request description is edited when a later commit changes what it states
+
+**When a commit pushed after review changes a decision, a wire format or a behaviour the
+description states, the description is edited in the same push, so that every statement in it is
+true of the head commit.** The statements that go stale are the decisions, the fix and the test
+plan.
+
+A reviewer compares each of those statements with the final diff of the pull request, from its
+base to its head, and for each one checks that:
+
+- a decision describes the design the code has now, and the choice it records is the one in the
+  diff;
+- a wire format the description names is the one the code reads and writes;
+- a behaviour described as added, removed or changed is so in the final diff;
+- the test plan names tests and commands that exist at the head.
+
+`make check-pr-body` and `make check-narration` read the shape and the wording of the body. They
+cannot read whether a sentence is still true of the code, so the reviewer checks it.
+
+```text
+Wrong: Decision 2: the setting is stored in `config.json`.
+       (The head commit stores it in `state.json`.)
+
+Right: Decision 2: the setting is stored in `state.json`.
+```
+
+**Why:** the description is what a maintainer approves from, and it stays as the record after the
+merge. A decision that names a design the code no longer has leads a reviewer to judge a change
+that is not the one being merged, and leaves a later reader with a record of the wrong behaviour.
