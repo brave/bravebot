@@ -1,9 +1,9 @@
 /**
  * A message is named in the source, never computed (LOCALE-2), and only `i18n/` holds the catalogs.
- * `name` is the file's path under `src/renderer`. Answers each offence as `{ line, message }`.
+ * `name` is the file's path under `src/renderer`, in either separator. Answers each offence as `{ line, message }`.
  */
 export function messageProblems(name, text) {
-  if (name.startsWith('i18n/')) return []
+  if (name.replaceAll('\\', '/').startsWith('i18n/')) return []
   const usesCatalog = /from '(?:\.\.?\/)+i18n'/.test(text)
   const problems = []
   text.split('\n').forEach((line, i) => {

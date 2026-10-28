@@ -60,4 +60,5 @@ test('the generated catalogs are reached only through i18n', () => {
   assert.equal(problems.length, 1)
   assert.match(problems[0].message, /through i18n/)
   assert.deepEqual(messageProblems('i18n/index.ts', "import { CATALOGS } from './messages.gen'\nt[x]\n"), [])
+  assert.deepEqual(messageProblems('i18n\\index.ts', "import { CATALOGS } from './messages.gen'\n"), [], 'a Windows path')
 })
