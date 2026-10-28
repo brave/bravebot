@@ -2382,7 +2382,7 @@ def test_required_checks_are_the_gates():
     # never runs on one.
     unrun = dict(GATE_TREE, **{"contrib/required-checks.txt": "Specs\n"})
     unrun["docs/development/checks.md"] = GATE_PROMISE + (
-        "\n`make check-deps` decides deny.toml. CI runs it too, so a git dependency fails a pull\n"
+        "\n`make check-deps` decides .config/deny.toml. CI runs it too, so a git dependency fails a pull\n"
         "request rather than warning into one.\n"
     )
     found = gates(unrun)

@@ -590,7 +590,7 @@ lockfile. It is work, not a cause to block a row.
    touches, and `make check-deps`, since a bypassed hook runs none of them.
 3. **Bypass the hook once, for that commit only.** The commit hook installed for this account
    refuses a staged dependency file (`Cargo.toml`, `Cargo.lock`, `package.json`, a lockfile,
-   `deny.toml`). Make that commit with `git commit --no-verify`, on that command and no other. Never
+   `.config/deny.toml`). Make that commit with `git commit --no-verify`, on that command and no other. Never
    put it in a setting, an alias or the hook, never change `core.hooksPath` or the hook, never pass
    it for a commit that stages no dependency file, and give each later dependency commit its own
    `--no-verify`.
@@ -616,7 +616,7 @@ lockfile. It is work, not a cause to block a row.
    It is not a `## Decisions to confirm` entry, and it is not inside a `<details>` block. The final
    report states it first.
 6. **Check the list is whole.** `... open` runs
-   `git log --format=%H <base>..HEAD -- '*Cargo.toml' Cargo.lock '*package.json' '*pnpm-lock.yaml' deny.toml`
+   `git log --format=%H <base>..HEAD -- '*Cargo.toml' Cargo.lock '*package.json' '*pnpm-lock.yaml' .config/deny.toml`
    and refuses a body whose callout does not name each commit it prints, by at least seven
    characters of its hash. Run the same command with `--format='%h %s'` before the body is written,
    and add any other manifest the change touched, since `open` does not know of one. A listed commit

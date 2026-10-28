@@ -1039,7 +1039,7 @@ impl fmt::Display for ConfigError {
         match self {
             Self::Missing(name) => write!(
                 f,
-                "{name} is not set and was not built in; copy .envrc.example to .envrc and run `direnv allow`"
+                "{name} is not set and was not built in; copy contrib/envrc.example to .envrc and run `direnv allow`"
             ),
             Self::Empty(name) => write!(f, "{name} is set but empty"),
             Self::InvalidEndpoint { value } => write!(

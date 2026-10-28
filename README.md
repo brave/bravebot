@@ -141,7 +141,7 @@ and [docs/specs/incognito.md](docs/specs/incognito.md) for the clauses.
 ## Reporting a Vulnerability
 
 See [https://hackerone.com/brave](https://hackerone.com/brave) for details, and
-[SECURITY.md](SECURITY.md) for the versions that are supported.
+[SECURITY.md](.github/SECURITY.md) for the versions that are supported.
 
 ## Development
 

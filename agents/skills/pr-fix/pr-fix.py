@@ -78,7 +78,7 @@ EM_DASH = "\u2014"
 BODY_HEADINGS = ("## The problem", "## Reproduce", "## The fix", "## Test plan")
 CI_LINE = "- [ ] CI passes cleanly"
 # The files a dependency change touches, as the implement-issues skill lists them for its callout.
-DEPENDENCY_FILES = ("*Cargo.toml", "Cargo.lock", "*package.json", "*pnpm-lock.yaml", "deny.toml")
+DEPENDENCY_FILES = ("*Cargo.toml", "Cargo.lock", "*package.json", "*pnpm-lock.yaml", ".config/deny.toml")
 
 
 def _load_shared():

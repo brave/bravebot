@@ -37,7 +37,7 @@ Targets are macOS, Linux and Windows on both x86_64 and arm64.
 Uses [direnv](https://direnv.net/):
 
 ```sh
-cp .envrc.example .envrc
+cp contrib/envrc.example .envrc
 direnv allow
 ```
 

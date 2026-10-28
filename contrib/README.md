@@ -123,7 +123,7 @@ passes on this tree today and would have passed on the tree that shipped the fro
 
 ## check-deny-reasons.py
 
-Fails an exception in `deny.toml` that has no `reason`, and a licence exception that has no comment.
+Fails an exception in `.config/deny.toml` that has no `reason`, and a licence exception that has no comment.
 
 cargo-deny makes `reason` optional on an advisory to ignore, a duplicate to skip and a crate to ban,
 and accepts a bare string in place of the table. An ignored advisory is one the binary ships with

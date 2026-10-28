@@ -1,7 +1,7 @@
 # Review is required for the things that decide behaviour, and for the front door.
 #
 # Manifests are here because "no new dependencies without a reason that survives scrutiny"
-# is a rule nothing else enforces. deny.toml is here because it is where that rule's
+# is a rule nothing else enforces. .config/deny.toml is here because it is where that rule's
 # mechanical half is granted an exception: an ignored advisory, an allowed licence, a
 # duplicate version nobody has to account for again.
 #
@@ -20,11 +20,11 @@
 /Cargo.toml @bbondy
 /crates/*/Cargo.toml @bbondy
 /package.json @bbondy
-/deny.toml @bbondy
+/.config/deny.toml @bbondy
 
 /.github/workflows/ @bbondy
 /.github/CODEOWNERS @bbondy
-/Dockerfile.cross @bbondy
+/contrib/Dockerfile.cross @bbondy
 /install.sh @bbondy
 /install.ps1 @bbondy
 /npm/scripts/ @bbondy

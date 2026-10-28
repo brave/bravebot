@@ -1,6 +1,6 @@
 # Template for direnv. Copy and fill in real values:
 #
-#   cp .envrc.example .envrc && direnv allow
+#   cp contrib/envrc.example .envrc && direnv allow
 #
 # .envrc itself is gitignored — never commit real key material.
 

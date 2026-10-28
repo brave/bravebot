@@ -702,7 +702,7 @@ def check_network_clients_are_recorded(sources):
     """Which crates may open a socket of their own is the register's to say, not a comment's.
 
     `bravebot-net` is the policy gate and `network-egress.md`'s Known costs admit the one crate that
-    keeps a client beside it. Nothing held that: `deny.toml` asks what a crate is licensed under and
+    keeps a client beside it. Nothing held that: `.config/deny.toml` asks what a crate is licensed under and
     not whether it may be depended on, `check-spec` reads no manifest, and the only enumeration of a
     second client greps one library's name into a lane prompt. So a third client would arrive with
     every check green, and the first paragraph of the gate crate told a reviewer in advance that it
@@ -3155,7 +3155,7 @@ def surface(sources, specs):
         "ungoverned_label_files": label_touching,
         "workflows": sorted(str(one) for one in WORKFLOWS.glob("*.y*ml")),
         "dependency_files": sorted(
-            str(one) for one in (Path("deny.toml"), Path("Cargo.lock")) if one.is_file()
+            str(one) for one in (Path(".config/deny.toml"), Path("Cargo.lock")) if one.is_file()
         ),
         "second_client": sorted(
             str(path)
@@ -3322,7 +3322,7 @@ def changed_lanes(base, specs, found=None):
     if any(
         one.startswith(".github/")
         or Path(one).name.startswith("Dockerfile")
-        or one.endswith(("Makefile", "Cargo.toml", "Cargo.lock", "deny.toml"))
+        or one.endswith(("Makefile", "Cargo.toml", "Cargo.lock", ".config/deny.toml"))
         for one in touched
     ):
         lanes.add("supply-chain")

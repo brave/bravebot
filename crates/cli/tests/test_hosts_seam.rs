@@ -872,7 +872,7 @@ const MAY_ASK_FOR_ALL_FEATURES: [(&str, &str, usize, &str); 13] = [
         "a lint run, described",
     ),
     (
-        "deny.toml",
+        ".config/deny.toml",
         "all-features = true",
         1,
         "cargo-deny reads the dependency graph with every feature on and compiles nothing",
@@ -896,8 +896,8 @@ fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_b
     let paths: Vec<&str> = texts.iter().map(|(path, _)| path.as_str()).collect();
     for needed in [
         "Makefile",
-        "Dockerfile.cross",
-        "deny.toml",
+        "contrib/Dockerfile.cross",
+        ".config/deny.toml",
         "install.sh",
         "install.ps1",
         "package.json",
@@ -916,7 +916,7 @@ fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_b
         "docs/website/package.json",
         "docs/website/docs/development.md",
         "contrib/check-lint-increase.py",
-        ".envrc.example",
+        "contrib/envrc.example",
         "crates/i18n/locales/en-US.ftl",
         "ui/src/renderer/App.tsx",
     ] {
@@ -934,7 +934,10 @@ fn no_build_or_release_command_passes_a_seam_or_all_features_but_the_lint_runs_b
     };
     assert!(
         has("Makefile", "cargo build --release --locked")
-            && has("Dockerfile.cross", "cargo zigbuild --release --locked"),
+            && has(
+                "contrib/Dockerfile.cross",
+                "cargo zigbuild --release --locked"
+            ),
         "the commands that build a release were not found, so this test would pass by reading none"
     );
 
