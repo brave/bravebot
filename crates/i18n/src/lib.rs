@@ -278,6 +278,26 @@ pub fn tags() -> Vec<&'static str> {
     LOCALES.iter().map(|locale| locale.tag()).collect()
 }
 
+/// A word somebody typed or picked that no shipped catalog answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoCatalog;
+
+/// What a person asked `/language` or the window's picker to keep: `None` for [`AUTO`], which
+/// gives the choice back, or the catalog that answers the word.
+///
+/// The terminal and the window both read a choice through this, so the two cannot come to differ
+/// on what a word means. Keeping it is left to the caller, which is the one that knows whether it
+/// has somewhere to keep it. A word no catalog answers is refused rather than read as the reference
+/// (see [`find`]); what is kept is the catalog's own tag, a word the build knows whatever spelling
+/// was typed.
+pub fn pick(word: &str) -> Result<Option<Locale>, NoCatalog> {
+    let word = word.trim();
+    if word.eq_ignore_ascii_case(AUTO) {
+        return Ok(None);
+    }
+    find(word).map(Some).ok_or(NoCatalog)
+}
+
 /// Which of `available` best answers `requested`, by the usual widening: the exact locale, then
 /// any locale in the same language, then nothing.
 ///
@@ -610,5 +630,19 @@ mod tests {
         assert_eq!(plural::category("en", 0), "other");
         assert_eq!(plural::category("fr", 0), "one");
         assert_eq!(plural::category("ja", 1), "other");
+    }
+
+    /// `auto` in any case gives the choice back, a word a catalog answers is that catalog under its
+    /// own tag, and anything else is refused rather than read as the reference.
+    #[test]
+    fn a_language_picked_by_name_is_auto_a_catalog_or_refused() {
+        for word in ["auto", " AUTO ", "Auto"] {
+            assert_eq!(pick(word), Ok(None), "{word:?}");
+        }
+        assert_eq!(pick(" fr_FR ").map(|l| l.map(|l| l.tag())), Ok(Some("fr")));
+        assert_eq!(pick("en").map(|l| l.map(|l| l.tag())), Ok(Some("en-US")));
+        for word in ["", "  ", "zz", "C", "automatic"] {
+            assert_eq!(pick(word), Err(NoCatalog), "{word:?}");
+        }
     }
 }

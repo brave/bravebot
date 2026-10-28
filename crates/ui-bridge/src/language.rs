@@ -50,18 +50,15 @@ pub fn get(request: &Request) -> Value {
 /// Save a catalog's tag, or forget the choice for `auto`. A word no catalog answers is refused.
 pub fn set(request: &Request) -> Result<Value, Failure> {
     let word = request.string("tag")?;
-    let word = word.trim();
-    let tag = if word.eq_ignore_ascii_case(AUTO) {
-        None
-    } else {
-        let Some(locale) = bravebot_i18n::find(word) else {
-            return Err(Failure::bad_request(format!(
-                "no catalog answers `{word}`; there are {}",
+    let tag = bravebot_i18n::pick(&word)
+        .map_err(|_| {
+            Failure::bad_request(format!(
+                "no catalog answers `{}`; there are {}",
+                word.trim(),
                 bravebot_i18n::tags().join(", ")
-            )));
-        };
-        Some(locale.tag())
-    };
+            ))
+        })?
+        .map(|locale| locale.tag());
     Ok(json!({
         "saved": store::save_language(tag),
         "tag": tag.unwrap_or(AUTO),

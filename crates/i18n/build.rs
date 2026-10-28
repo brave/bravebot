@@ -159,7 +159,7 @@ fn locale_enum(locales: &[Catalog]) -> String {
         out.push_str(&format!(
             "            Locale::{} => {:?},\n",
             locale.variant,
-            own_name(locale)
+            name_or_fail(locale)
         ));
     }
     out.push_str("        }\n    }\n}\n\n");
@@ -178,33 +178,13 @@ fn locale_enum(locales: &[Catalog]) -> String {
     out
 }
 
-/// The catalog's own `locale-name`, or its tag where it has none: the reference's name for itself
-/// is not a name for another language.
+/// [`own_name`], refusing a malformed `locale-name` by failing the build.
 #[expect(
     clippy::panic,
     reason = "a build script refuses a malformed catalog by failing the build"
 )]
-fn own_name(locale: &Catalog) -> String {
-    match locale
-        .messages
-        .get("locale-name")
-        .map(|message| &message.value)
-    {
-        Some(Value::Pattern(parts)) => parts
-            .iter()
-            .map(|part| match part {
-                Part::Text(text) => text.as_str(),
-                Part::Arg(_) => panic!(
-                    "locales/{}.ftl: `locale-name` takes no argument",
-                    locale.tag
-                ),
-            })
-            .collect(),
-        Some(Value::Select { .. }) => {
-            panic!("locales/{}.ftl: `locale-name` is not a select", locale.tag)
-        }
-        None => locale.tag.clone(),
-    }
+fn name_or_fail(locale: &Catalog) -> String {
+    own_name(locale).unwrap_or_else(|refused| panic!("{refused}"))
 }
 
 /// One `t!` arm per message, which is what makes an unknown key fail to compile.

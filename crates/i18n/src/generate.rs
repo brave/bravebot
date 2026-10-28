@@ -57,6 +57,33 @@ impl Catalog {
     }
 }
 
+/// The catalog's own `locale-name`, or its tag where it has none: the reference's name for itself
+/// is not a name for another language. A name is fixed text, so one that takes an argument or
+/// selects is refused.
+pub fn own_name(locale: &Catalog) -> Result<String, String> {
+    match locale
+        .messages
+        .get("locale-name")
+        .map(|message| &message.value)
+    {
+        Some(Value::Pattern(parts)) => parts
+            .iter()
+            .map(|part| match part {
+                Part::Text(text) => Ok(text.as_str()),
+                Part::Arg(_) => Err(format!(
+                    "locales/{}.ftl: `locale-name` takes no argument",
+                    locale.tag
+                )),
+            })
+            .collect(),
+        Some(Value::Select { .. }) => Err(format!(
+            "locales/{}.ftl: `locale-name` is not a select",
+            locale.tag
+        )),
+        None => Ok(locale.tag.clone()),
+    }
+}
+
 /// Every catalog in `locales/`, reference first so generated indices are stable.
 pub fn load(dir: &std::path::Path, reference: &str) -> Vec<Catalog> {
     let mut found: Vec<Catalog> = Vec::new();
@@ -326,6 +353,30 @@ mod tests {
                 .map(|message| (message.id.clone(), message))
                 .collect(),
         }
+    }
+
+    /// A catalog names itself in its own words, a catalog that does not is named by its tag, and a
+    /// name that would vary with an argument or a select is refused.
+    #[test]
+    fn a_catalog_is_named_by_its_own_fixed_locale_name_or_its_tag() {
+        assert_eq!(
+            own_name(&catalog("fr", "locale-name = Français\n")).as_deref(),
+            Ok("Français")
+        );
+        assert_eq!(own_name(&catalog("fr-CA", "")).as_deref(), Ok("fr-CA"));
+        let takes_an_argument = own_name(&catalog("fr", "locale-name = Français { $region }\n"));
+        assert_eq!(
+            takes_an_argument.as_deref().map_err(String::as_str),
+            Err("locales/fr.ftl: `locale-name` takes no argument")
+        );
+        let selects = own_name(&catalog(
+            "fr",
+            "locale-name = { $n ->\n    [one] Français\n   *[other] Français\n    }\n",
+        ));
+        assert_eq!(
+            selects.as_deref().map_err(String::as_str),
+            Err("locales/fr.ftl: `locale-name` is not a select")
+        );
     }
 
     /// The arm of the generated `match` that a request for `variant` runs.

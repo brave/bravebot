@@ -127,7 +127,8 @@ the environment and from what the person said ([LOCALE-8](#LOCALE-8)), and so do
 window, which asks the bridge once before its first paint and reads the `ui-` messages of that
 catalog, generated from the same files, until it is started again. `bravebot-rpc` chooses `en-US`
 for its own notes whatever the environment says, because the window shows the notes the bridge
-builds as they stand and most of its chrome is not yet read from a catalog.
+builds as they stand. Of the window's own words, only the `ui-` messages are read from a catalog;
+the rest of its chrome is in English.
 
 **Why.** A library that consulted the environment the first time something needed a word would
 make the output of every test depend on the machine it ran on, and a test that pins what a person
