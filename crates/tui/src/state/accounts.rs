@@ -1,6 +1,7 @@
 //! What a session has spent and how full its context is.
 
 use super::*;
+use std::sync::mpsc;
 
 /// How the context currently stands in a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +21,20 @@ pub enum Occupancy {
         budget: u64,
         guessed: bool,
     },
+}
+
+/// What the lookup of one model's row answers: the rows of the service that answers it, or why they
+/// could not be had.
+pub type ListingAnswer = Result<Vec<bravebot_aichat::models::Model>, String>;
+
+/// The lookup that settles the budget of a model, still on its way.
+///
+/// The model is kept with it because a pick made meanwhile has a window of its own, and the answer
+/// to a lookup about the one before it is not about that.
+#[derive(Debug)]
+pub struct AwaitedListing {
+    model: String,
+    arrival: mpsc::Receiver<ListingAnswer>,
 }
 
 /// The sections `/context` divides a request into, as indexes into the byte counts.
@@ -251,6 +266,45 @@ impl Session {
                 budget,
                 guessed,
             };
+        }
+    }
+
+    /// Hold the answer to the lookup of `model`, which a thread is making, until it is taken
+    /// ([BACKEND-64](../../../../docs/specs/backends.md#BACKEND-64)).
+    ///
+    /// A lookup already awaited is dropped: it was about a model this one replaces.
+    pub fn await_listing(&mut self, model: String, arrival: mpsc::Receiver<ListingAnswer>) {
+        self.awaited_listing = Some(AwaitedListing { model, arrival });
+    }
+
+    /// Take the answer to the awaited lookup and the model it was about, if it has come.
+    ///
+    /// `wait` is how long to wait for it: `None` takes it only if it is there now, as the loop does
+    /// on each pass, and a duration is for the start of a turn, which must not be sized against a
+    /// window nobody has looked up. A lookup that was not answered in time stays awaited, and one
+    /// whose thread ended without answering is dropped.
+    pub fn take_awaited_listing(
+        &mut self,
+        wait: Option<std::time::Duration>,
+    ) -> Option<(String, ListingAnswer)> {
+        let awaited = self.awaited_listing.as_ref()?;
+        let arrived = match wait {
+            None => awaited.arrival.try_recv().map_err(|error| match error {
+                mpsc::TryRecvError::Empty => mpsc::RecvTimeoutError::Timeout,
+                mpsc::TryRecvError::Disconnected => mpsc::RecvTimeoutError::Disconnected,
+            }),
+            Some(wait) => awaited.arrival.recv_timeout(wait),
+        };
+        match arrived {
+            Ok(answer) => self
+                .awaited_listing
+                .take()
+                .map(|awaited| (awaited.model, answer)),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.awaited_listing = None;
+                None
+            }
         }
     }
 

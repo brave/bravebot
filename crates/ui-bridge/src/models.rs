@@ -3,14 +3,13 @@
 use crate::account_words::{self, Said};
 use bravebot_aichat::models::{self, Advertised, Model};
 use bravebot_config::provider::Credential;
-use bravebot_config::{Config, ModelRefusal, RosterAccounts};
+use bravebot_config::{Config, ModelRefusal, RosterScope};
 use bravebot_core::capability::{Capability, CapabilitySet};
 use bravebot_core::policy::{Policy, ReleasePlan, Routing};
-use bravebot_net::Egress;
 use serde_json::{Value, json};
 
 pub fn list(config: &Config) -> Value {
-    let (rows, warnings) = roster(config, RosterAccounts::for_a_picker());
+    let (rows, warnings) = roster(config, RosterScope::for_a_picker());
     catalogue(config, rows, warnings)
 }
 
@@ -23,7 +22,7 @@ pub fn list(config: &Config) -> Value {
 /// row describes, or a listing that could not be fetched, leaves the default in place, except that the
 /// compiled names of the ChatGPT account stand in for its listing and carry the assumed window.
 pub fn adopt_window(config: &mut Config, model: Option<&str>) {
-    let rows = roster(config, config.roster_accounts_for_a_turn(model)).0;
+    let rows = roster(config, config.roster_scope_for_a_turn(model)).0;
     config.adopt_window_of_model_in_force(model, |in_force| {
         rows.iter()
             .find(|row| row.key == in_force)
@@ -41,96 +40,169 @@ pub fn adopt_window(config: &mut Config, model: Option<&str>) {
 /// text built here. The window reads the reference catalog whatever language the machine is set to
 /// ([LOCALE-7](../../../docs/specs/localization.md#LOCALE-7)), so a person reads the same words from
 /// either.
-fn roster(config: &Config, accounts: RosterAccounts) -> (Vec<Model>, Vec<Said>) {
-    let mut rows = Vec::new();
-    let mut warnings = Vec::new();
+fn roster(config: &Config, scope: RosterScope<'_>) -> (Vec<Model>, Vec<Said>) {
+    // Where each group of rows and each warning goes, so the order the window lists them in does
+    // not depend on which request answered first.
+    enum Place<'config> {
+        Rows(Vec<Model>),
+        Warning(Said),
+        Asked(&'config bravebot_config::provider::Provider),
+    }
+    // What one request answered: `None` where it failed.
+    enum Answer {
+        Gateway(Option<Vec<Model>>),
+        Brave(Option<Vec<Model>>),
+    }
+    let mut places = Vec::new();
+    let mut asks: Vec<Box<dyn FnOnce() -> Answer + Send + '_>> = Vec::new();
     if let Some(bedrock) = &config.bedrock {
-        rows.extend(bedrock_rows(bedrock));
+        places.push(Place::Rows(bedrock_rows(bedrock)));
     }
     for provider in &config.providers {
         // An entry naming AWS is served by the Bedrock backend under the bare id it is keyed by,
         // and there is no listing to ask, so a block that named no models offers none.
         if let Some(bedrock) = &provider.bedrock {
-            rows.extend(bedrock_rows(bedrock));
+            places.push(Place::Rows(bedrock_rows(bedrock)));
             continue;
         }
         if !provider.models.is_empty() {
-            rows.extend(provider.models.iter().map(|model| Model {
-                key: format!("{}/{}", provider.id, model.id),
-                display_name: model.id.clone(),
-                premium: false,
-                reads_effort: true,
-                provider: Some(provider.display_name().to_string()),
-                conversation_tokens: Some(provider.window_of(model)),
-                // A block names models and describes none of them.
-                advertised: Advertised::default(),
-            }));
+            places.push(Place::Rows(named_rows(provider)));
+            continue;
+        }
+        if !scope.asks_gateway(provider) {
             continue;
         }
         let credential = provider.credential(|name| std::env::var(name).ok());
         // A compiled list asks nothing, so a missing key is said when a turn is sent, as it is for
         // a model a block names.
         if matches!(credential, Credential::Absent) && provider.compiled_roster().is_none() {
-            warnings.push(Said::plain(format!(
+            places.push(Place::Warning(Said::plain(format!(
                 "No credential configured for {}.",
                 provider.display_name()
-            )));
+            ))));
             continue;
         }
-        let mut routing = Routing::new();
-        routing.insert_trusted("models", provider.models_url());
-        routing.insert_trusted("account-models", provider.account_models_url());
-        let mut sink = bravebot_session::audit::Trail::new();
-        // The agent's own roster request, not a second copy of it. It keeps the account-first
-        // fallback, the bearer header, the envelope decode, the tool filter and the key
-        // qualification in one place, and the decode stays a declassification site the agent
-        // owns rather than one this crate has to be pinned for.
-        let token = bearer(&credential);
-        let headers = provider.request_headers(|name| std::env::var(name).ok());
-        let result = Policy::begin(
-            routing,
-            ReleasePlan::new(),
-            CapabilitySet::from_iter([Capability::WebFetch]),
-            &mut sink,
+        places.push(Place::Asked(provider));
+        asks.push(Box::new(move || {
+            Answer::Gateway(ask_gateway(provider, &credential))
+        }));
+    }
+    if scope.brave && config.serves_aichat() {
+        asks.push(Box::new(|| Answer::Brave(ask_brave(config))));
+    }
+
+    // Every request goes out at once, so what the window waits for is the slowest service and not
+    // the sum ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)). The accounts are asked on
+    // this thread while they are in flight: a unit test scripts them per thread.
+    let (answers, (chatgpt, xai)) = models::concurrently(asks, || {
+        (
+            scope.accounts.chatgpt.then(|| ask_the_account(config)),
+            scope.accounts.xai.then(|| ask_the_xai_account(config)),
         )
-        .ok()
-        .and_then(|mut policy| {
-            models::list_from_gateway(&mut policy, provider, token, &headers, &Egress::new()).ok()
-        });
-        match result {
-            Some(listed) => rows.extend(listed),
-            None => warnings.push(Said::plain(format!(
-                "Could not load models from {}. Try again.",
-                provider.display_name()
-            ))),
+    });
+
+    // Gateways were put before Brave, so the answers are met in the order the places were.
+    let mut answers = answers.into_iter();
+    let mut rows = Vec::new();
+    let mut warnings = Vec::new();
+    for place in places {
+        match place {
+            Place::Rows(listed) => rows.extend(listed),
+            Place::Warning(said) => warnings.push(said),
+            Place::Asked(provider) => match answers.next() {
+                Some(Answer::Gateway(Some(listed))) => rows.extend(listed),
+                Some(Answer::Gateway(None)) => warnings.push(Said::plain(format!(
+                    "Could not load models from {}. Try again.",
+                    provider.display_name()
+                ))),
+                Some(Answer::Brave(_)) | None => {}
+            },
         }
     }
     // Additive like a gateway: a stored ChatGPT sign-in adds its models and takes none away, and so
     // does a stored xAI sign-in ([XAI-19](../../../docs/specs/xai-sign-in.md#XAI-19)).
-    if accounts.chatgpt {
-        with_account(&mut rows, &mut warnings, ask_the_account(config));
+    if let Some(account) = chatgpt {
+        with_account(&mut rows, &mut warnings, account);
     }
-    if accounts.xai {
-        with_xai_account(&mut rows, &mut warnings, ask_the_xai_account(config));
+    if let Some(account) = xai {
+        with_xai_account(&mut rows, &mut warnings, account);
     }
-    if config.serves_aichat() {
-        let mut routing = Routing::new();
-        routing.insert_trusted("models", config.models_url());
-        let mut sink = bravebot_session::audit::Trail::new();
-        let result = Policy::begin(
-            routing,
-            ReleasePlan::new(),
-            CapabilitySet::from_iter([Capability::WebFetch]),
-            &mut sink,
-        )
-        .ok()
-        .and_then(|mut policy| models::list(&mut policy, config, &Egress::new()).ok());
-        match result {
-            Some(listed) => rows.extend(listed),
-            None => warnings.push(Said::plain("Could not load Brave models. Try again.")),
-        }
+    match answers.find_map(|answer| match answer {
+        Answer::Brave(listed) => Some(listed),
+        Answer::Gateway(_) => None,
+    }) {
+        Some(Some(listed)) => rows.extend(listed),
+        Some(None) => warnings.push(Said::plain("Could not load Brave models. Try again.")),
+        None => {}
     }
     (rows, warnings)
+}
+
+/// The rows of the models a gateway's block names, which it describes none of.
+fn named_rows(provider: &bravebot_config::provider::Provider) -> Vec<Model> {
+    provider
+        .models
+        .iter()
+        .map(|model| Model {
+            key: format!("{}/{}", provider.id, model.id),
+            display_name: model.id.clone(),
+            premium: false,
+            reads_effort: true,
+            provider: Some(provider.display_name().to_string()),
+            conversation_tokens: Some(provider.window_of(model)),
+            advertised: Advertised::default(),
+        })
+        .collect()
+}
+
+/// Ask one gateway what it offers, or `None` where the request failed.
+///
+/// The agent's own roster request, not a second copy of it. It keeps the account-first fallback, the
+/// bearer header, the envelope decode, the tool filter and the key qualification in one place, and
+/// the decode stays a declassification site the agent owns rather than one this crate has to be
+/// pinned for.
+fn ask_gateway(
+    provider: &bravebot_config::provider::Provider,
+    credential: &Credential,
+) -> Option<Vec<Model>> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("models", provider.models_url());
+    routing.insert_trusted("account-models", provider.account_models_url());
+    let mut sink = bravebot_session::audit::Trail::new();
+    let token = bearer(credential);
+    let headers = provider.request_headers(|name| std::env::var(name).ok());
+    Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .ok()
+    .and_then(|mut policy| {
+        models::list_from_gateway(
+            &mut policy,
+            provider,
+            token,
+            &headers,
+            &models::listing_egress(),
+        )
+        .ok()
+    })
+}
+
+/// Ask Brave's endpoint what it offers, or `None` where the request failed.
+fn ask_brave(config: &Config) -> Option<Vec<Model>> {
+    let mut routing = Routing::new();
+    routing.insert_trusted("models", config.models_url());
+    let mut sink = bravebot_session::audit::Trail::new();
+    Policy::begin(
+        routing,
+        ReleasePlan::new(),
+        CapabilitySet::from_iter([Capability::WebFetch]),
+        &mut sink,
+    )
+    .ok()
+    .and_then(|mut policy| models::list(&mut policy, config, &models::listing_egress()).ok())
 }
 
 /// What the ChatGPT account offers, asked of the serving host with the stored sign-in
@@ -1304,6 +1376,161 @@ mod tests {
         assert!(
             !listed.to_string().contains(KEY),
             "the key is in the answer"
+        );
+    }
+
+    /// The AWS tier `opus-arn` and two gateways, `one` and `two`, that name no models, at the
+    /// addresses given.
+    fn a_config_with_two_gateways_naming_no_models(one: &str, two: &str) -> Config {
+        use bravebot_config::env_var;
+
+        let mut config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            _ => None,
+        })
+        .expect("an account named on its own is a working configuration");
+        config.providers = bravebot_config::Settings::parse(&format!(
+            r#"{{"provider": {{
+                "one": {{"options": {{"baseURL": "{one}/v1"}}}},
+                "two": {{"options": {{"baseURL": "{two}/v1"}}}}
+            }}}}"#
+        ))
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 2, "a block configured no gateway");
+        config
+    }
+
+    /// A loopback gateway listing the one model `id` with a window of 65,536 tokens. It answers only
+    /// once `expected` requests to the gateways sharing `gate` are in flight at once, or after five
+    /// seconds, so asking them one after the next fails a test and does not hang it. Each request
+    /// it receives is reported on `met`, as true where the meeting was reached. `lag` is how long
+    /// it then waits to answer.
+    fn a_gateway_that_waits_for_its_peers(
+        id: &'static str,
+        gate: &std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>,
+        expected: usize,
+        met: &std::sync::mpsc::Sender<bool>,
+        lag: std::time::Duration,
+    ) -> String {
+        use std::io::{BufRead, BufReader, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        let (gate, met) = (gate.clone(), met.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let (gate, met) = (gate.clone(), met.clone());
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    let mut header = String::new();
+                    while matches!(reader.read_line(&mut header), Ok(read) if read > 2) {
+                        header.clear();
+                    }
+                    let (arrived, signal) = &*gate;
+                    let mut here = arrived.lock().expect("the count");
+                    *here += 1;
+                    signal.notify_all();
+                    let (count, waited) = signal
+                        .wait_timeout_while(here, std::time::Duration::from_secs(5), |here| {
+                            *here < expected
+                        })
+                        .expect("the count");
+                    drop(count);
+                    let _ = met.send(!waited.timed_out());
+                    std::thread::sleep(lag);
+                    let body =
+                        format!(r#"{{"data": [{{"id": "{id}", "context_length": 65536}}]}}"#);
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = reader.into_inner().write_all(response.as_bytes());
+                });
+            }
+        });
+        address
+    }
+
+    /// BACKEND-64 in the window: the models list asks every gateway at once, and offers their rows in
+    /// the order the configuration lists them whichever answered first.
+    ///
+    /// Neither stand-in answers until the other has been asked, so a list that asks them one after
+    /// the next fails by the first finding itself alone. The first lags, so the second answers first.
+    #[test]
+    fn the_window_asks_every_gateway_at_once_and_lists_them_in_the_configurations_order() {
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
+        let (met, together) = std::sync::mpsc::channel();
+        let one = a_gateway_that_waits_for_its_peers(
+            "one-model",
+            &gate,
+            2,
+            &met,
+            std::time::Duration::from_millis(100),
+        );
+        let two = a_gateway_that_waits_for_its_peers(
+            "two-model",
+            &gate,
+            2,
+            &met,
+            std::time::Duration::ZERO,
+        );
+        let config = a_config_with_two_gateways_naming_no_models(&one, &two);
+
+        let listed = list(&config);
+
+        assert_eq!(
+            together.try_iter().collect::<Vec<_>>(),
+            [true, true],
+            "the gateways were asked one after the next"
+        );
+        let ids: Vec<&str> = listed["models"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["id"].as_str().expect("an id"))
+            .collect();
+        assert_eq!(ids, ["opus-arn", "one/one-model", "two/two-model"]);
+        assert_eq!(listed["warnings"], json!([]));
+    }
+
+    /// BACKEND-64 in the window: the window of the model a turn runs on is read from the gateway
+    /// that serves that model alone. A turn on `two`'s model waits on `two`, takes its window, and
+    /// never asks `one`.
+    #[test]
+    fn a_turn_in_the_window_asks_only_the_gateway_that_serves_its_model() {
+        let gate = std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new()));
+        let (met, asked) = std::sync::mpsc::channel();
+        // One request is all that may arrive, so a meeting of one is reached at once.
+        let one = a_gateway_that_waits_for_its_peers(
+            "one-model",
+            &gate,
+            1,
+            &met,
+            std::time::Duration::ZERO,
+        );
+        let two = a_gateway_that_waits_for_its_peers(
+            "two-model",
+            &gate,
+            1,
+            &met,
+            std::time::Duration::ZERO,
+        );
+        let mut config = a_config_with_two_gateways_naming_no_models(&one, &two);
+        assert_eq!(
+            config.context_budget,
+            bravebot_config::DEFAULT_CONTEXT_BUDGET
+        );
+
+        adopt_window(&mut config, Some("two/two-model"));
+
+        assert_eq!(config.context_budget, 65_536);
+        assert_eq!(
+            asked.try_iter().count(),
+            1,
+            "a gateway that does not serve the model was asked"
         );
     }
 
