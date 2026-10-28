@@ -16,7 +16,9 @@
 /* ---- a file being dragged over the conversation
 
    Over the whole column, and inert: the drop itself is taken by the preload wherever it lands in
-   here, so this only says what letting go will do. */
+   here, so this only says what letting go will do. It takes no pointer, so a hit test passes
+   through it, and it is marked `data-veil="own"` in Transcript.tsx for the count of rows a decision
+   card rests on (shown.ts) to treat what it covers as not on screen. */
 .drop-target {
   position: absolute;
   inset: var(--leo-spacing-m);

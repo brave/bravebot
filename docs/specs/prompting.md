@@ -397,7 +397,7 @@ in a window is the same question asked with a mouse, so it owes the same.
 `verified-by: bravebot_tui::trust_prompt::paging_through_a_list_on_a_short_terminal_reads_every_rule`
 `verified-by: bravebot_tui::trust_prompt::a_question_a_small_terminal_cuts_off_takes_no_answer`
 `verified-by: bravebot_tui::trust_prompt::a_question_that_fits_its_box_says_nothing_of_scrolling`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen)`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs pins that every row an approval rests on is marked as deciding for each kind of card and that the count opens, resets and stays shut as described, and make check-ui runs it; ui/scripts/drive-shown.mjs draws each card too tall for a 900x560 window and checks, independently of the card's own count, that no approval opens or is taken before those rows have been on screen, and that rows swept through under the overlay drawn while a file is dragged over the transcript, which takes no pointer, count for nothing until the drag ends)`
 
 ## What an answer means
 

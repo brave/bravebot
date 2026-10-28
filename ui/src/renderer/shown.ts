@@ -173,7 +173,8 @@ function frames(): (element: Element) => Frame {
 /**
  * What is drawn over the window without taking the pointer, which a hit test passes through: the
  * absolutely placed `::before` of an element marked `data-veil="before"`, and for any other value
- * the box the element is slotted into, or its own box where it is slotted nowhere.
+ * the box the element is slotted into, or its own box where it is slotted nowhere. The overlay
+ * drawn while a file is dragged over the transcript is marked `own`.
  */
 function veils(): Box[] {
   const boxes: Box[] = []

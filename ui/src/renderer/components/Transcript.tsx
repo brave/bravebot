@@ -726,7 +726,7 @@ export function Transcript({
       onDragLeave={(event) => { if (carriesFiles(event) && --dragDepth.current === 0) setDragging(false) }}
       onDrop={() => { dragDepth.current = 0; setDragging(false) }}>
       {dragging && (
-        <div className="drop-target" data-test="drop-target" aria-hidden="true">
+        <div className="drop-target" data-test="drop-target" data-veil="own" aria-hidden="true">
           <Icon name="attachment" />
           <span className="drop-target-title">Drop files to attach</span>
           <span className="drop-target-note"><Icon name="warning-triangle-outline" />Sent with your message as trusted context</span>
