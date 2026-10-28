@@ -18,7 +18,6 @@ pub struct AsideFlight {
     pub worker: std::thread::JoinHandle<AsideDone>,
 }
 
-/// What a worker answering a question beside a turn returns.
 pub type AsideDone = Result<bravebot_agent::aside::Answered, String>;
 
 /// The delegate view, while it is open.
@@ -358,42 +357,34 @@ impl Session {
         });
     }
 
-    /// Keep the exchange the running turn last sent, for a `/btw` typed beside it (CMD-8).
     pub fn set_fork(&mut self, fork: bravebot_agent::aside::Fork) {
         self.fork = Some(fork);
     }
 
-    /// The exchange the running turn last sent, if it has sent one.
     pub fn fork(&self) -> Option<&bravebot_agent::aside::Fork> {
         self.fork.as_ref()
     }
 
-    /// Keep, or drop, the file decisions the running turn answers into.
     pub fn set_turn_files(&mut self, files: Option<bravebot_core::file_authority::FileAuthority>) {
         self.turn_files = files;
     }
 
-    /// The file decisions the running turn answers into, shared with it.
     pub fn turn_files(&self) -> Option<&bravebot_core::file_authority::FileAuthority> {
         self.turn_files.as_ref()
     }
 
-    /// Whether a question asked beside the turn is still out.
     pub fn aside_in_flight(&self) -> bool {
         self.aside_flight.is_some()
     }
 
-    /// Record the question that went out beside the turn.
     pub fn begin_aside_beside_a_turn(&mut self, flight: AsideFlight) {
         self.aside_flight = Some(flight);
     }
 
-    /// Hand the question out beside the turn to the loop that drains it.
     pub fn take_aside_flight(&mut self) -> Option<AsideFlight> {
         self.aside_flight.take()
     }
 
-    /// Stop the question out beside the turn and only that question (INPUT-4).
     pub fn stop_aside_beside_a_turn(&mut self) {
         if let Some(flight) = &self.aside_flight {
             flight.cancel.cancel();

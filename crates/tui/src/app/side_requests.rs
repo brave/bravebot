@@ -817,10 +817,9 @@ pub(super) fn settle_aside_beside_a_turn(session: &mut Session, turn_cancel: &Ca
     };
     loop {
         match flight.from_worker.try_recv() {
-            // Everything the worker says while it works is dropped here: its phase and notices are
-            // the question's and the turn's own are already on the screen. Nothing the worker can
-            // send waits for an answer, because `RemoteReporter` holds a `Sender` and no
-            // receiver, and `aside_sharing` takes no confirmer, so no `Reply` is owed.
+            // Nothing the worker can send waits for an answer, because `RemoteReporter` holds a
+            // `Sender` and no receiver, and `aside_sharing` takes no confirmer, so no `Reply` is
+            // owed.
             Ok(_) => {}
             Err(mpsc::TryRecvError::Empty) => {
                 session.begin_aside_beside_a_turn(flight);

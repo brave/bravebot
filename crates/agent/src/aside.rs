@@ -264,7 +264,6 @@ pub struct Fork {
 }
 
 impl Fork {
-    /// The exchange as it stands now.
     pub fn of(conversation: &Conversation) -> Self {
         Self {
             exchange: conversation.with_system(SYSTEM_PROMPT),
@@ -272,7 +271,6 @@ impl Fork {
         }
     }
 
-    /// What the exchange had met.
     pub fn context(&self) -> Integrity {
         self.context
     }
