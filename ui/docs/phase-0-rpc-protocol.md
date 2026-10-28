@@ -699,7 +699,9 @@ Two more optional lists carry bytes rather than text, and both default to empty.
 `attachments` is a list of absolute paths to pictures and PDFs a person dropped (DROP-10). Each
 entry must name a regular file, with an extension the agent carries as bytes (`png`, `jpg`, `jpeg`,
 `gif`, `webp`, `pdf`, in any case), no larger than 8 MiB
-(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`). The bridge takes the media type from that
+(`bravebot_agent::workspace::MAX_ATTACHMENT_BYTES`), except a `png`, `jpg` or `jpeg`, which may be as
+large as 64 MiB (`bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES`) because the agent scales
+one over 8 MiB or 2048 pixels down before it is sent (DROP-4). The bridge takes the media type from that
 extension and never from the caller. The read is unconfined and the file is vouched for, as for
 `dropped`, and the bytes go in the prompt's own message as a `data:` URL part.
 

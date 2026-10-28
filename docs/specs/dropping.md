@@ -9,6 +9,7 @@ governs:
   - crates/tui/src/app/turns.rs
   - crates/tui/src/app/side_requests.rs
   - crates/agent/src/attached.rs
+  - crates/agent/src/picture.rs
   - crates/ui-bridge/src/bridge.rs
   - crates/ui-bridge/src/attached.rs
   - ui/src/main/drops.ts
@@ -118,6 +119,25 @@ itself has no request for anything to travel in, so every marker in one becomes 
 Waiting changes none of this, so a command the queue reaches when a turn ends carries what one
 dispatched at rest carries.
 
+A dropped PNG or JPEG that is over the attachment cap (8 MiB), or whose longest side is over 2048
+pixels, is decoded, scaled so its longest side is at most 2048 pixels, re-encoded as PNG and carried
+in that form, with the same scaling a pasted picture gets ([PASTE-6](pasting.md#PASTE-6)). The
+trail records the path and both lengths. A picture inside both limits is carried as the bytes it
+has. One that is over the cap and will not decode, or is still over the cap once scaled, is
+refused for its length as it was before, and the over-cap bytes are not sent in its place. One
+within the cap that will not decode, or whose scaled copy is over the cap, is carried as the bytes
+it has, since the cap is what a request holds. A PNG or JPEG is read for this only up to 64 MiB: the
+length the file system reports is checked before any byte is read, and a longer file is refused
+unread. A GIF, a WebP and a PDF have no decoder here and keep the
+8 MiB cap. Only the read of a dropped file scales, and only where the kernel labelled the file
+trusted, which the drop's own grant does ([DROP-2](#DROP-2)): the same picture read by a tool call,
+or read under an untrusted label, is carried as it is or refused. The branches are on the file's
+length, the canvas its header declares and the type its extension names, never on what the picture
+shows.
+
+`verified-by: bravebot_agent::workspace::a_dropped_picture_read_under_an_untrusted_label_is_not_scaled`
+`verified-by: bravebot_agent::attached::a_dropped_picture_over_the_cap_comes_back_shown_and_smaller`
+`verified-by: bravebot_agent::attached::a_dropped_picture_over_the_cap_that_will_not_decode_still_fails`
 `verified-by: bravebot_tui::drop::a_dropped_text_file_is_context_rather_than_an_attachment`
 `verified-by: bravebot_tui::sessions::cancelled_attachments_return_to_the_editor_and_the_next_request`
 `verified-by: bravebot_tui::drop::dropping_an_unsupported_type_writes_out_the_path`
@@ -135,6 +155,15 @@ dispatched at rest carries.
 `verified-by: bravebot_tui::state::a_later_tick_of_a_loop_names_the_file_the_first_one_carried`
 `verified-by: bravebot_tui::loops::a_dropped_file_goes_to_one_tick_and_its_name_to_every_other`
 `verified-by: bravebot_agent::attached::a_dropped_picture_comes_back_as_the_bytes_a_request_can_hold`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_over_the_cap_is_scaled_down_and_carried`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_with_a_long_side_is_scaled_though_it_is_small`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_inside_both_limits_keeps_its_own_bytes`
+`verified-by: bravebot_agent::workspace::a_picture_a_tool_attaches_is_not_scaled`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_that_will_not_decode_is_refused_for_its_length`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_within_the_cap_that_will_not_decode_keeps_its_own_bytes`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_still_over_the_cap_once_scaled_is_refused`
+`verified-by: bravebot_agent::workspace::a_dropped_picture_over_the_scalable_ceiling_is_refused_unread`
+`verified-by: bravebot_agent::workspace::a_dropped_pdf_or_gif_over_the_cap_is_still_refused`
 `verified-by: bravebot_agent::attached::reading_a_dropped_picture_is_gated_and_named_in_the_trail`
 `verified-by: bravebot_agent::attached::a_picture_that_is_not_there_fails_rather_than_being_carried_as_nothing`
 `verified-by: bravebot_agent::attached::two_dropped_pictures_come_back_in_the_order_their_markers_number_them`
@@ -340,9 +369,10 @@ marker's noun, and for a picture a thumbnail the preload drew. It is never told 
 
 What kind of file each is, the noun its marker uses, and whether it is larger than the agent
 will carry come from the bridge's `drops.classify`, which answers from the rules the terminal
-stages a drop by ([DROP-4](#DROP-4)) and the agent's attachment cap. The main process asks it about
+stages a drop by ([DROP-4](#DROP-4)) and the agent's attachment cap, which for a PNG or JPEG is the
+64 MiB the agent reads to scale one down. The main process asks it about
 the resolved paths and the sizes it found, and holds no table, cap or wording of its own, so the
-window and the terminal cannot disagree about a file. A picture or PDF over the cap is left out,
+window and the terminal cannot disagree about a file. A picture or PDF over its cap is left out,
 and the window shows the note the bridge built for it, which names the file and says its size and
 the cap in the terminal's words, in `en-US` because the window is in English only.
 
@@ -372,6 +402,12 @@ the case DROP-8 already says carries its files.
 
 ## Known costs
 
+- **A scaled picture is not the picture the person dropped.** A PNG or JPEG over 8 MiB or over 2048
+  pixels reaches the model as a PNG of at most 2048 pixels on its longest side, so its format and
+  its fine detail change, and a JPEG source can become a larger file. A GIF or WebP over 8 MiB is
+  refused, because the build has no codec for either. A person is told nothing at the drop: the
+  terminal checks the size when the turn reads the file ([DROP-10](#DROP-10)), and the thumbnail
+  is drawn only for a file under 8 MiB, so a larger picture shows a marker and no drawing.
 - **A front end's word is the whole of a protocol drop's justification.** The checks
   [DROP-10](#DROP-10) puts on a `dropped` or `attachments` entry establish that a file is there,
   not that anybody dragged it: a path the caller invented and a path a person dropped are the same

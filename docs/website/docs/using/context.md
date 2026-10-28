@@ -148,8 +148,9 @@ through `osascript`; on Linux it needs `wl-paste` or `xclip`.
   picture itself, whether or not a thumbnail could be drawn. A picture that will not decode, or a
   terminal that draws none, leaves the box as it was.
 - A picture is refused in shell mode rather than written into the command.
-- Anything over 10 MB is refused, and says so with its size. It is refused rather than quietly
-  swapped for the text sitting beside it in the clipboard.
+- Anything over 10 MB is scaled down to at most 2048 pixels on its longest side and sent as a PNG.
+  It is refused, and says so with its size, only when it will not decode or is still over 10 MB once
+  scaled. It is refused rather than quietly swapped for the text sitting beside it in the clipboard.
 - **Ctrl-V reads the clipboard while a turn is running too**, so a picture can be staged into the next
   prompt without waiting for the turn to finish.
 - An empty clipboard reads as nothing rather than as empty text, and a missing `wl-paste` or `xclip`
@@ -173,7 +174,7 @@ What happens depends on the type:
 
 | Dropped | Result |
 |---|---|
-| an image or a PDF | carried as bytes, so the model looks at it, with a line before them naming the file as `Dropped file: <path>` |
+| an image or a PDF | carried as bytes, so the model looks at it, with a line before them naming the file as `Dropped file: <path>`. A PNG or JPEG over 8 MiB, or with a side over 2048 pixels, is scaled down to at most 2048 pixels and carried as a PNG, and the audit trail records the file and both sizes. One that will not decode, or is still over 8 MiB once scaled, is refused, and so is a PNG or JPEG over 64 MiB. A GIF, WebP or PDF over 8 MiB is refused |
 | a text file | its contents enter the turn as trusted input |
 | anything else | its path is written into the line, as dropping a file always did |
 
@@ -228,7 +229,8 @@ the way a paste does in the terminal. It gets an `[Image #2]` marker where the c
 with any files dropped into the same message, and a chip above the box with a thumbnail. Delete the
 marker, or remove the chip, to take it off. A picture wins over the text copied beside it, and a
 paste of text alone lands as text. A picture over 10 MB is refused, and the app says how large it
-was. **Plan** is off while a picture is attached, and a message you send while a turn is
+was. A dropped PNG or JPEG is scaled down instead, as in [Dropping a file](#dropping-a-file).
+**Plan** is off while a picture is attached, and a message you send while a turn is
 running keeps its pictures, as it keeps dropped files.
 
 ## Pictures and files on a slash command

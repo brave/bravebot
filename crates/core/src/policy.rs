@@ -7236,6 +7236,23 @@ impl<'sink, S: Sink> Policy<'sink, S> {
         self.told = Some(Labelled::new(format!("{lead}{note}"), label));
     }
 
+    /// Record that a dropped picture was scaled down and re-encoded before it was carried
+    /// ([DROP-4]).
+    ///
+    /// `path` is the one the gesture fixed, and the two sizes are the file's length as it was and
+    /// as it was sent. Nothing the picture holds is in the line.
+    ///
+    /// [DROP-4]: ../../../docs/specs/dropping.md
+    pub fn record_reduced_picture(&mut self, path: &str, from: usize, to: usize) {
+        self.allow(
+            "attachment",
+            format!(
+                "{path}: the dropped picture of {from} bytes was scaled down and re-encoded as \
+                 PNG, {to} bytes, before it was sent"
+            ),
+        );
+    }
+
     /// The note [`Policy::record_note`] kept, once.
     pub fn take_note(&mut self) -> Option<Labelled<String>> {
         self.told.take()

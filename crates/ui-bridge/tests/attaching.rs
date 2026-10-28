@@ -427,6 +427,8 @@ fn a_dropped_file_is_classified_by_the_terminals_rules() {
     let mut window = Window::with_settings(project.join("no-settings.json"));
     let cap = bravebot_agent::workspace::MAX_ATTACHMENT_BYTES as u64;
     assert_eq!(cap, 8 * 1024 * 1024);
+    let ceiling = bravebot_agent::workspace::MAX_SCALABLE_PICTURE_BYTES as u64;
+    assert_eq!(ceiling, 64 * 1024 * 1024);
     let file = |path: &str, bytes: u64| json!({"path": path, "bytes": bytes});
     let answer = window.call(
         "drops.classify",
@@ -439,6 +441,9 @@ fn a_dropped_file_is_classified_by_the_terminals_rules() {
             file("/a/.png", 1),
             file("/a/big.jpg", cap + 1),
             file("/a/huge.pdf", cap + cap / 8),
+            file("/a/raw.png", ceiling),
+            file("/a/raw.jpeg", ceiling + 1),
+            file("/a/anim.gif", cap + 1),
         ]}),
     );
     assert_eq!(
@@ -450,8 +455,11 @@ fn a_dropped_file_is_classified_by_the_terminals_rules() {
             {"kind": "text", "noun": "File"},
             null,
             null,
-            {"note": "big.jpg is 8.0 MB, and an attachment carries at most 8.0 MB"},
+            {"kind": "image", "noun": "Image"},
             {"note": "huge.pdf is 9.0 MB, and an attachment carries at most 8.0 MB"},
+            {"kind": "image", "noun": "Image"},
+            {"note": "raw.jpeg is 64.0 MB, and an attachment carries at most 64.0 MB"},
+            {"note": "anim.gif is 8.0 MB, and an attachment carries at most 8.0 MB"},
         ]})
     );
     for params in [

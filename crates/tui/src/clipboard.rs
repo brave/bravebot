@@ -21,6 +21,7 @@
 //! drawn. What is pasted is the user's own input, on the footing of the prompt it lands in, which
 //! [`bravebot_core::policy::Policy::admit_pasted_image`] states in full.
 
+use bravebot_agent::picture::downscaled;
 use bravebot_agent::turn::MAX_PASTED_IMAGE_BYTES;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -116,15 +117,6 @@ fn write_escape_sequence(text: &str) -> bool {
     let mut out = std::io::stdout();
     write!(out, "\x1b]52;c;{encoded}\x07").is_ok() && out.flush().is_ok()
 }
-
-/// The longest side, in pixels, a picture over the cap is scaled down to before it is tried again.
-const DOWNSCALED_SIDE: u32 = 2048;
-
-/// The largest canvas a picture over the cap may declare and still be decoded to be scaled down.
-const MAX_DECODED_SIDE: u32 = 16384;
-
-/// The most memory a decode of a picture over the cap may allocate.
-const MAX_DECODE_ALLOC_BYTES: u64 = 512 * 1024 * 1024;
 
 /// What the clipboard had when it was asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -255,33 +247,6 @@ fn chosen(image: Option<(&'static str, Vec<u8>)>, text: impl FnOnce() -> Option<
     }
 }
 
-/// A picture over the cap, scaled so its longest side is at most [`DOWNSCALED_SIDE`] and encoded as
-/// PNG, or `None` where it will not decode within the limits.
-///
-/// The pixels are decoded and re-encoded and never looked at: nothing here branches on what the
-/// picture shows. The media type of the result is the reader's own literal, `image/png`.
-fn downscaled(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_DECODED_SIDE);
-    limits.max_image_height = Some(MAX_DECODED_SIDE);
-    limits.max_alloc = Some(MAX_DECODE_ALLOC_BYTES);
-    reader.limits(limits);
-    let decoded = reader.decode().ok()?;
-    let scaled = decoded.resize(
-        DOWNSCALED_SIDE,
-        DOWNSCALED_SIDE,
-        image::imageops::FilterType::Triangle,
-    );
-    let mut out = Vec::new();
-    scaled
-        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-        .ok()?;
-    Some(out)
-}
-
 /// Whether the clipboard has a picture on it, without reading the picture.
 ///
 /// Asked so the interface can say that Control-V would do something, which is the whole of how
@@ -388,7 +353,7 @@ mod platform {
     /// [`READ`] for a type nothing here decodes: the same bytes, drawn by AppKit and written as PNG.
     ///
     /// The third and fourth arguments are the most pixels a side may have and the most memory the
-    /// bitmap may take, the limits [`super::downscaled`] holds a decode to. A picture that declares
+    /// bitmap may take, the limits [`bravebot_agent::picture::downscaled`] holds a decode to. A picture that declares
     /// more is not drawn: the canvas is read from the header before anything is decoded, since
     /// this process decodes and re-encodes whatever the clipboard holds and a few megabytes of
     /// compressed TIFF can declare a canvas that takes gigabytes.
@@ -415,8 +380,8 @@ mod platform {
     /// [`image`] for the pasteboard called `pasteboard`.
     pub(super) fn image_from(pasteboard: &str) -> Option<(&'static str, Vec<u8>)> {
         use base64::Engine;
-        let side = super::MAX_DECODED_SIDE.to_string();
-        let bytes = super::MAX_DECODE_ALLOC_BYTES.to_string();
+        let side = bravebot_agent::picture::MAX_DECODED_SIDE.to_string();
+        let bytes = bravebot_agent::picture::MAX_DECODE_ALLOC_BYTES.to_string();
         first_picture(FLAVOURS, |flavour| {
             let mut arguments = vec!["-l", "JavaScript", "-e"];
             if flavour.offered == TIFF {
@@ -701,6 +666,7 @@ fn run_text(program: &str, arguments: &[&str]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bravebot_agent::picture::{DOWNSCALED_SIDE, MAX_DECODED_SIDE};
 
     /// The sequence has to be exactly what a terminal recognises, and a test is the only place
     /// that can say so, since a terminal that does not recognise it says nothing at all.
