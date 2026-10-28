@@ -1112,6 +1112,9 @@ pub struct Session {
     /// True until a listing says otherwise, so a session that has never reached one sends what the
     /// person asked for rather than withholding it on a fact nobody established.
     model_reads_effort: bool,
+    /// The lookup that settles the budget of the model the session opened on, while its answer is
+    /// still on the way (BACKEND-64).
+    awaited_listing: Option<accounts::AwaitedListing>,
     /// Whether the model in force is one of the ChatGPT account's, as the configuration names it.
     ///
     /// What decides whether the level a turn sends is the one chosen or the one the session began
@@ -1402,6 +1405,7 @@ impl Session {
             model_labels: Vec::new(),
             effort: None,
             model_reads_effort: true,
+            awaited_listing: None,
             model_is_account: false,
             account: bravebot_agent::chatgpt::AccountSession::begin(),
             advisor: None,

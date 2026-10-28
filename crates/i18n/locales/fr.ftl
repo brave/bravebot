@@ -1847,6 +1847,13 @@ write-tally = +{ $added } -{ $removed }
 write-too-large-to-show =
     le changement est trop grand pour être montré : { $added } lignes en remplacent
     { $removed }
+# Dit au-dessus des lignes du changement d'une écriture quand certaines des lignes ajoutées ou
+# retirées contiennent un caractère qui ne s'affiche pas. Le texte ne va pas au modèle : il va tout
+# entier dans un fichier.
+write-hidden-characters = { $count ->
+    [one] 1 caractère des lignes que ceci change ne s'affiche pas. Il est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente. Le fichier est écrit avec, tel quel.
+   *[other] { $count } caractères des lignes que ceci change ne s'affichent pas. Chacun est écrit ci-dessous sous la forme ‹U+XXXX›, et un caractère d'étiquette aussi avec la lettre qu'il représente. Le fichier est écrit avec, tels quels.
+    }
 write-untrusted = non fiable : personne n'a lu ceci, et le modèle ne l'a jamais vu
 write-remark =
     ce que le processeur isolé a dit de ce changement, que rien n'a vérifié par rapport à lui

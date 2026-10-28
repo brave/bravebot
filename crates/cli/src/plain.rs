@@ -1306,8 +1306,13 @@ pub(crate) trait Watcher: Send {
     /// Called before the first line of a question is written, so that what is written from here
     /// to the answer can be kept whole for a terminal that attaches while it is held (BG-7).
     fn asking(&mut self);
-    /// Called before the read, which blocks, and before what asks for the line is written.
+    /// Called before the read, which blocks, and before what asks for the line is written (BG-9).
     fn waiting(&mut self, on: Waiting);
+    /// Called after what asks for the line has been written and flushed, so that nothing outside
+    /// this process is told a question is held until the backlog already holds the whole of it
+    /// (BG-7): a terminal attaching between [`Watcher::waiting`] and the write landing would
+    /// otherwise see a question missing its last line.
+    fn drawn(&mut self, on: Waiting);
     /// Called after it, with the line where one came.
     fn received(&mut self, on: Waiting, line: Option<&str>);
 }
@@ -1389,6 +1394,9 @@ impl<R: BufRead, W: Write> Prompting<R, W> {
         }
         let _ = write!(self.output, "{invitation}");
         let _ = self.output.flush();
+        if let Some(watch) = &mut self.watch {
+            watch.drawn(on);
+        }
         let mut line = String::new();
         let read = self.input.read_line(&mut line);
         let _ = writeln!(self.output);
@@ -1467,6 +1475,7 @@ fn change(request: &WriteRequest) -> Vec<String> {
         written_since_checkout: request.written_since_checkout,
         line_endings: line_endings.as_deref(),
         exact: request.diff.is_exact(),
+        hidden: request.diff.hidden(),
         added: request.diff.added(),
         removed: request.diff.removed(),
         changes: &changes,
@@ -3063,6 +3072,37 @@ mod tests {
         assert!(!asked(false).contains("after the checkout was made"));
     }
 
+    /// PROMPT-13, WRITE-4: the plain question for a write says how many characters of the lines it
+    /// changes draw as nothing, above the rows, and a write with none says nothing of them.
+    #[test]
+    fn the_plain_write_question_says_how_many_characters_draw_as_nothing() {
+        let asked = |body: &str, spelled: bool| {
+            let diff = bravebot_agent::diff::Diff::compute("", body);
+            change(&WriteRequest {
+                written_since_checkout: false,
+                path: "out.txt".to_string(),
+                contents: body.to_string(),
+                existing: None,
+                diff: if spelled { diff.spelled() } else { diff },
+                intent: bravebot_agent::confirm::Intent::Create,
+                untrusted: false,
+                remark: None,
+                protected: false,
+                credentials: Vec::new(),
+                may_always: false,
+                record: None,
+                may_edit: false,
+            })
+            .join("\n")
+        };
+        let said = t!(write_hidden_characters, count = 2usize).to_string();
+        let said = said.split('.').next().unwrap().to_string();
+        let hidden = asked("run(\"ok\") \u{200b}\u{e0069}\n", true);
+        assert!(hidden.contains(&said), "{hidden}");
+        assert!(hidden.contains("\u{2039}U+200B\u{203a}"), "{hidden}");
+        assert!(!asked("plain\n", true).contains(&said));
+    }
+
     /// The diff compares lines without their terminators, so an edit that keeps a file's CRLF
     /// endings looks the same as one that does not. The question says which it is.
     #[test]
@@ -3537,6 +3577,8 @@ mod tests {
             self.seen.lock().expect("the record").push(on);
         }
 
+        fn drawn(&mut self, _on: Waiting) {}
+
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {
             self.announced = false;
         }
@@ -3576,6 +3618,8 @@ mod tests {
             let text = self.screen.text();
             self.at_each_wait.lock().expect("the record").push(text);
         }
+
+        fn drawn(&mut self, _on: Waiting) {}
 
         fn received(&mut self, _on: Waiting, _line: Option<&str>) {}
     }

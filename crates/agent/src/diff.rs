@@ -77,6 +77,7 @@ pub struct Diff {
     unaligned: Option<(Range<usize>, Range<usize>)>,
     before_ending: Option<LineEnding>,
     after_ending: Option<LineEnding>,
+    hidden: usize,
 }
 
 /// Cells the longest-common-subsequence table may occupy.
@@ -242,7 +243,38 @@ impl Diff {
             unaligned: aligned.unaligned,
             before_ending,
             after_ending,
+            hidden: 0,
         }
+    }
+
+    /// The same diff with every character that draws as nothing written out where a row holds
+    /// one ([`bravebot_core::invisible::spelled`]), and those in the lines added or removed
+    /// counted ([`Diff::hidden`]).
+    ///
+    /// Made after the comparison, so two lines that differ only in such a character were still
+    /// told apart as different lines. Kept lines are spelled too and not counted: the bytes of a
+    /// line the write leaves alone are not what a yes puts on disk. The counts, the ranges and
+    /// the line endings are untouched.
+    pub fn spelled(mut self) -> Self {
+        let mut hidden = 0;
+        for change in &mut self.changes {
+            let counted = matches!(change, Change::Added(_) | Change::Removed(_));
+            if let Change::Kept(line) | Change::Added(line) | Change::Removed(line) = change {
+                let spelled = bravebot_core::invisible::spelled(std::mem::take(line));
+                *line = spelled.text;
+                if counted {
+                    hidden += spelled.hidden;
+                }
+            }
+        }
+        self.hidden = hidden;
+        self
+    }
+
+    /// How many characters in the added and removed lines were written out by [`Diff::spelled`].
+    /// Zero for a diff that was not spelled.
+    pub fn hidden(&self) -> usize {
+        self.hidden
     }
 
     /// Lines added. Where the diff is inexact, a stretch that could not be lined up counts as
@@ -786,8 +818,34 @@ fn subsequence_changes(old: &[&str], new: &[&str]) -> Vec<Change> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
+    #[test]
+    fn a_spelled_diff_counts_what_the_lines_changed_hold_and_tells_a_hidden_difference_apart() {
+        let diff = Diff::compute(
+            "keep\u{200b}\nold\u{200d}\n",
+            "keep\u{200b}\nnew\u{e0069}\u{202e}\n",
+        )
+        .spelled();
+        assert_eq!(
+            diff.hidden(),
+            3,
+            "one removed, two added; a kept line is not counted"
+        );
+        assert_eq!(
+            diff.condensed(3),
+            [
+                Change::Kept("keep\u{2039}U+200B\u{203a}".to_string()),
+                Change::Removed("old\u{2039}U+200D\u{203a}".to_string()),
+                Change::Added("new\u{2039}U+E0069 i\u{203a}\u{2039}U+202E\u{203a}".to_string()),
+            ]
+        );
+        // Two lines that differ only in a character that draws as nothing are still two lines.
+        let only = Diff::compute("a\n", "a\u{200b}\n").spelled();
+        assert_eq!((only.added(), only.removed(), only.hidden()), (1, 1, 1));
+        assert_eq!(Diff::compute("a\n", "b\n").hidden(), 0);
+    }
     fn added(diff: &Diff) -> Vec<String> {
         diff.condensed(usize::MAX)
             .into_iter()

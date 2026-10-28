@@ -97,6 +97,11 @@ pub const NETWORK: [&str; 6] = [
     "NO_PROXY",
 ];
 
+/// The three names that choose which Google account receives a conversation (BACKEND-33), read from
+/// the person's own layers alone as [`NETWORK`] is: a checkout that named them would choose the
+/// project and key a request to Vertex AI is made under.
+pub const GOOGLE: [&str; 3] = [GOOGLE_API_KEY, GOOGLE_CLOUD_PROJECT, VERTEX_LOCATION];
+
 /// Every name a build may bake in, in the order `doctor` reports them.
 ///
 /// CRASH_REPORT_URL is the one name no build needs: without it the build reports no crashes.

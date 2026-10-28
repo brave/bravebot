@@ -1117,6 +1117,71 @@ impl RosterAccounts {
     }
 }
 
+/// Which gateways a roster asks over the network. A gateway whose block names its models is never
+/// asked, so this only decides among the ones that name none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gateways<'config> {
+    /// Every one of them.
+    All,
+    /// The one with this id, and no other.
+    Only(&'config str),
+    /// None of them.
+    Nothing,
+}
+
+/// Every service a roster asks over the network for its rows
+/// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+///
+/// One rule for the terminal's roster and the window's, as [`RosterAccounts`] is for the accounts
+/// it holds, so neither keeps its own copy of which services a lookup waits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RosterScope<'config> {
+    pub accounts: RosterAccounts,
+    pub gateways: Gateways<'config>,
+    /// Brave's own endpoint, which is also where an `automatic` row and every bare Brave name
+    /// come from.
+    pub brave: bool,
+}
+
+impl RosterScope<'_> {
+    /// What a picker asks: every service, whatever model is in force, since it lists every model a
+    /// person could choose.
+    pub fn for_a_picker() -> Self {
+        Self {
+            accounts: RosterAccounts::for_a_picker(),
+            gateways: Gateways::All,
+            brave: true,
+        }
+    }
+
+    /// Whether `provider`, a gateway whose block names no models, is asked.
+    pub fn asks_gateway(&self, provider: &provider::Provider) -> bool {
+        match self.gateways {
+            Gateways::All => true,
+            Gateways::Only(id) => provider.id == id,
+            Gateways::Nothing => false,
+        }
+    }
+}
+
+/// The service that answers a request naming a model ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)).
+///
+/// `'config` is the configuration the service is found in, and `'name` the model's own spelling,
+/// from which the name a service knows it by is taken.
+#[derive(Debug, Clone, Copy)]
+pub enum Serves<'config, 'name> {
+    /// An AWS account, from the tier variables or from a `provider` block that names AWS.
+    Bedrock(&'config bedrock::Bedrock),
+    /// A gateway, and the name it knows the model by.
+    Gateway(&'config provider::Provider, &'name str),
+    /// The ChatGPT account, and the name it knows the model by.
+    Chatgpt(&'name str),
+    /// The xAI account, and the name it knows the model by.
+    Xai(&'name str),
+    /// Brave's endpoint, which answers any name nothing above claims.
+    Aichat,
+}
+
 /// Everything needed to talk to the backends this build can reach.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -1795,6 +1860,63 @@ impl Config {
         RosterAccounts {
             chatgpt: self.runs_on_chatgpt_account(model),
             xai: self.runs_on_xai_account(model),
+        }
+    }
+
+    /// The service that answers a request naming `model`.
+    ///
+    /// The four questions [`Config::bedrock_for`], [`Config::provider_for`],
+    /// [`Config::chatgpt_model`] and [`Config::xai_model`] answer one at a time, asked in the order
+    /// a request is routed in ([BACKEND-3](../../../docs/specs/backends.md#BACKEND-3)). The router
+    /// and a roster that asks for the sake of one model both take it from here, so a lookup cannot
+    /// leave out the service a turn on that model goes to.
+    pub fn serves<'config, 'name>(&'config self, model: &'name str) -> Serves<'config, 'name> {
+        if let Some(bedrock) = self.bedrock_for(model) {
+            return Serves::Bedrock(bedrock);
+        }
+        if let Some((provider, wire)) = self.provider_for(model) {
+            return Serves::Gateway(provider, wire);
+        }
+        if let Some(wire) = self.chatgpt_model(model) {
+            return Serves::Chatgpt(wire);
+        }
+        if let Some(wire) = self.xai_model(model) {
+            return Serves::Xai(wire);
+        }
+        Serves::Aichat
+    }
+
+    /// The services a roster asks for the sake of a turn on `model`, or on the configured default
+    /// where `model` is `None`: the one that answers it, and no other
+    /// ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
+    ///
+    /// A turn needs the row of its own model, for its window and for what it takes. Asking the
+    /// others as well made a start wait on every gateway a person had configured, one after the
+    /// next, before it drew anything. An AWS account is asked nothing, since its rows come from the
+    /// configuration, so a turn on a model it serves waits on no one.
+    pub fn roster_scope_for_a_turn(&self, model: Option<&str>) -> RosterScope<'_> {
+        let nothing = RosterScope {
+            accounts: RosterAccounts {
+                chatgpt: false,
+                xai: false,
+            },
+            gateways: Gateways::Nothing,
+            brave: false,
+        };
+        match self.serves(model.unwrap_or(&self.default_model)) {
+            Serves::Bedrock(_) => nothing,
+            Serves::Gateway(provider, _) => RosterScope {
+                gateways: Gateways::Only(provider.id.as_str()),
+                ..nothing
+            },
+            Serves::Chatgpt(_) | Serves::Xai(_) => RosterScope {
+                accounts: self.roster_accounts_for_a_turn(model),
+                ..nothing
+            },
+            Serves::Aichat => RosterScope {
+                brave: true,
+                ..nothing
+            },
         }
     }
 
@@ -3514,6 +3636,115 @@ mod tests {
             default_on_xai.roster_accounts_for_a_turn(Some("chatgpt/gpt-5")),
             only(true, false)
         );
+    }
+
+    /// BACKEND-64: a roster asked for the sake of one model asks the service that answers it and no
+    /// other, and a picker asks them all. Each of the five services a request can go to is given a
+    /// model only it answers, with a second gateway and an AWS account configured beside it, so a
+    /// scope that leaves a service in or out shows.
+    ///
+    /// The regressions it rejects are a lookup that still waits on every gateway, which is what held a
+    /// start for the sum of their latencies; one that asks Brave for a model an AWS account serves;
+    /// and a scope that names the wrong gateway for a qualified name or for one a block lists.
+    #[test]
+    fn a_roster_for_a_model_asks_the_service_that_answers_it_and_no_other() {
+        let mut config = Config::from_lookup(|key| match key {
+            env_var::USE_BEDROCK => Some("1".into()),
+            env_var::AWS_REGION => Some("us-west-2".into()),
+            env_var::BEDROCK_OPUS_MODEL => Some("opus-arn".into()),
+            other => complete_env(other),
+        })
+        .expect("configured");
+        config.providers = Settings::parse(
+            r#"{"provider": {
+                "one": {"options": {"baseURL": "https://one.example.invalid/v1"}},
+                "two": {"options": {"baseURL": "https://two.example.invalid/v1"}},
+                "three": {"options": {"baseURL": "https://three.example.invalid/v1"},
+                          "models": {"tiny": {}}}
+            }}"#,
+        )
+        .providers()
+        .to_vec();
+        assert_eq!(config.providers.len(), 3, "a block configured no gateway");
+        let scope = |gateways, chatgpt, xai, brave| RosterScope {
+            accounts: RosterAccounts { chatgpt, xai },
+            gateways,
+            brave,
+        };
+
+        let table = [
+            (
+                Some("one/llama3"),
+                scope(Gateways::Only("one"), false, false, false),
+            ),
+            (
+                Some("two/llama3"),
+                scope(Gateways::Only("two"), false, false, false),
+            ),
+            // A bare name a block lists finds that block's gateway.
+            (
+                Some("tiny"),
+                scope(Gateways::Only("three"), false, false, false),
+            ),
+            (
+                Some("opus-arn"),
+                scope(Gateways::Nothing, false, false, false),
+            ),
+            (
+                Some("chatgpt/gpt-5"),
+                scope(Gateways::Nothing, true, false, false),
+            ),
+            (
+                Some("xai/grok-4.5"),
+                scope(Gateways::Nothing, false, true, false),
+            ),
+            // What nothing above claims is Brave's, and so is the configured default.
+            (
+                Some("claude-sonnet"),
+                scope(Gateways::Nothing, false, false, true),
+            ),
+            (None, scope(Gateways::Nothing, false, false, true)),
+        ];
+        for (model, expected) in table {
+            assert_eq!(config.roster_scope_for_a_turn(model), expected, "{model:?}");
+        }
+        assert_eq!(
+            RosterScope::for_a_picker(),
+            scope(Gateways::All, true, true, true)
+        );
+
+        // The router and the scope take their answer from one function, and these are its answers.
+        assert!(matches!(config.serves("opus-arn"), Serves::Bedrock(_)));
+        assert!(matches!(
+            config.serves("one/llama3"),
+            Serves::Gateway(provider, "llama3") if provider.id == "one"
+        ));
+        assert!(matches!(
+            config.serves("chatgpt/gpt-5"),
+            Serves::Chatgpt("gpt-5")
+        ));
+        assert!(matches!(
+            config.serves("xai/grok-4.5"),
+            Serves::Xai("grok-4.5")
+        ));
+        assert!(matches!(config.serves("claude-sonnet"), Serves::Aichat));
+
+        // Which gateways a scope asks, among those that name no models.
+        let named = |id: &str| {
+            config
+                .providers
+                .iter()
+                .find(|provider| provider.id == id)
+                .expect(id)
+        };
+        let (one, two) = (named("one"), named("two"));
+        let asks = |gateways| {
+            let scope = scope(gateways, false, false, false);
+            (scope.asks_gateway(one), scope.asks_gateway(two))
+        };
+        assert_eq!(asks(Gateways::All), (true, true));
+        assert_eq!(asks(Gateways::Only("two")), (false, true));
+        assert_eq!(asks(Gateways::Nothing), (false, false));
     }
 
     /// XAI-13: an entry that already has the id keeps it. Taking the id over would send a working

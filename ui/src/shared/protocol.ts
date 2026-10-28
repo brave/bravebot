@@ -463,6 +463,12 @@ export interface ConfirmRequest {
    * a swap of CRLF for LF, or a kept CRLF, is stated.
    */
   lineEndings?: string | null
+  /** How many characters in the lines added or removed drew as nothing before the agent wrote them
+   *  out in `changes`. Absent from a request an older agent sent, which drew none. */
+  hidden?: number
+  /** The sentence saying what the written-out tokens in `changes` are, in the agent's words, or
+   *  null where no character drew as nothing. */
+  hiddenNote?: string | null
   request: number
   path: string
   /** The path with whitespace at either end, zero-width and bidi characters made visible and

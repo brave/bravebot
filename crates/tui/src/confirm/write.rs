@@ -528,6 +528,22 @@ pub(super) fn draw_saying(
         lines.push(Line::raw(""));
     }
 
+    // The sentence saying what the tokens in the rows below are, where the lines this changes hold
+    // characters that draw as nothing. A row the answer waits on, in the colour the same sentence
+    // has over a command's output: the file is written with them, and the tokens are where they
+    // are.
+    if diff.hidden() > 0 {
+        lines.extend(marked_rows(
+            &margin,
+            &[Span::styled(
+                t!(write_hidden_characters, count = diff.hidden()),
+                marked,
+            )],
+            inside.width as usize,
+        ));
+        lines.push(Line::raw(""));
+    }
+
     // What `a` and `r` would settle, where they are offered, under the findings they settle and
     // above a diff that may push anything below it out of sight: which file, how long, and that
     // the rest of the write's question is untouched. Where `r` is written down is part of what it
@@ -701,6 +717,23 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect()
+    }
+
+    /// PROMPT-13, WRITE-4: where the lines a write changes hold characters that draw as nothing, the
+    /// prompt says how many above the rows, and a write with none draws no such sentence.
+    #[test]
+    fn the_write_prompt_says_how_many_characters_draw_as_nothing_above_the_rows() {
+        // The first sentence, which fits on one row, so no border column sits inside it.
+        let said = t!(write_hidden_characters, count = 2usize).to_string();
+        let said = said.split('.').next().unwrap().to_string();
+        let squeezed = |text: &str| text.split_whitespace().collect::<Vec<_>>().join("");
+        let mut request = request("run(\"ok\") \u{200b}\u{e0069}\n", None);
+        request.diff = Diff::compute("", "run(\"ok\") \u{200b}\u{e0069}\n").spelled();
+        let drawn = squeezed(&fully_rendered(&request));
+        assert!(drawn.contains(&squeezed(&said)), "{drawn}");
+        assert!(drawn.contains("\u{2039}U+200B\u{203a}"), "{drawn}");
+        let plain = squeezed(&fully_rendered(&super::tests::request("plain\n", None)));
+        assert!(!plain.contains(&squeezed(&said)), "{plain}");
     }
 
     /// The turn is told the same thing by both approvals. What the second one also does is

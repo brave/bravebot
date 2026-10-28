@@ -338,13 +338,16 @@ pub enum AccountModels {
 /// One function for the terminal and the desktop pickers, so neither holds its own copy of when the
 /// account is asked about, which token it is asked with and what a failed listing offers. `sink` is the
 /// trail the listing's request is recorded in, as the other rosters are.
+///
+/// Asked through the egress a roster request has, which gives up on a host that does not answer in
+/// seconds ([BACKEND-64](../../../docs/specs/backends.md#BACKEND-64)).
 pub fn account_models<S: Sink>(config: &Config, sink: &mut S) -> AccountModels {
     roster_from(
         config,
         &mut StoredSignIn,
         serving_provider(),
         sink,
-        &Egress::new(),
+        &bravebot_aichat::models::listing_egress(),
     )
 }
 

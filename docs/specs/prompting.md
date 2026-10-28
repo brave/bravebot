@@ -837,6 +837,13 @@ the prompt says about the content ([PROMPT-4](#PROMPT-4)), and a text with none 
 sentence. The terminal, a session in lines, the editor bridge and the desktop window draw the same
 text and the same sentence.
 
+The write prompt does the same for the lines a write adds or removes, and every row of its change
+is written out, kept lines included. The sentence over them counts the characters in the added and
+removed lines, says the file is written with them as they are, and is one of the rows the answer
+waits on. A write's body is the planner's own words or a processor's, so the sentence does not say
+the model reads them. The terminal, a session in lines, the editor bridge and the desktop window
+draw the same rows and the same sentence, and the file keeps the bytes it was given.
+
 The planner receives the bytes the slot holds, without the spelling. The spelling and the count are
 made where the text is released for the screen, in the reshape that counts its lines
 ([labels.md](labels.md)), so the driver reads the text for neither and no front end has to.
@@ -865,13 +872,18 @@ cut does not already hide.
 `verified-by: bravebot_tui::invisible::every_character_removed_from_a_paste_is_one_that_draws_as_nothing`
 `verified-by: bravebot_agent::turn::an_output_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
 `verified-by: bravebot_agent::turn::a_vetting_prompt_writes_out_what_draws_as_nothing_and_the_planner_gets_the_bytes`
+`verified-by: bravebot_agent::turn::a_reference_write_spells_what_draws_as_nothing_and_the_file_keeps_the_bytes`
+`verified-by: bravebot_agent::diff::a_spelled_diff_counts_what_the_lines_changed_hold_and_tells_a_hidden_difference_apart`
+`verified-by: bravebot_approval::lib::a_write_says_how_many_characters_draw_as_nothing_above_the_rows`
+`verified-by: bravebot_tui::confirm::write::the_write_prompt_says_how_many_characters_draw_as_nothing_above_the_rows`
 `verified-by: bravebot_tui::confirm::vet::the_output_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
 `verified-by: bravebot_tui::confirm::vet::the_vet_prompt_says_how_many_characters_draw_as_nothing_and_shows_each`
 `verified-by: bravebot_tui::confirm::no_question_takes_a_yes_before_every_row_deciding_it_has_been_drawn`
 `verified-by: bravebot_cli::plain::the_plain_prompts_say_how_many_characters_of_the_text_draw_as_nothing`
 `verified-by: bravebot_ui_bridge::acp::an_editor_is_told_how_many_characters_of_a_text_draw_as_nothing`
 `verified-by: bravebot_ui_bridge::wire::an_output_and_a_vet_request_carry_how_many_characters_drew_as_nothing`
-`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the output and vetting cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`
+`verified-by: bravebot_ui_bridge::wire::a_write_request_carries_how_many_characters_drew_as_nothing`
+`verified-by: by-construction (the desktop window is not a crate this workspace compiles; ui/scripts/shown.test.mjs draws the write, output and vetting cards from requests carrying the spelled text and the agent's sentence, holds the spelled characters and the sentence to the rows each card marks as deciding, holds a request with no sentence to drawing none and a sentence to being drawn as sent, and make check-ui runs it)`
 
 <a id="PROMPT-14"></a>
 ### PROMPT-14: the write prompt may hand the body to an editor, and what comes back is not an answer
