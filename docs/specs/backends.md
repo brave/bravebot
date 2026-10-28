@@ -4009,8 +4009,8 @@ again.
 An incognito session reads the file and writes nothing ([INCOG-5](incognito.md#INCOG-5)). The file is
 written readable by its user only, like the rest of the directory ([STATE-1](state-directory.md#STATE-1)).
 
-**Built:** `bravebot_agent::bedrock_refusals` (`Store`, `put_back`, `keep_what_was_found`), called
-around a streamed request in `Backend::complete_streaming`; `bravebot_bedrock::known_to_refuse_showing_thinking`.
+**Built:** `bravebot_agent::bedrock_refusals` (`Store`, `around`), which brackets a streamed request in
+`Backend::complete_streaming`; `bravebot_bedrock::known_to_refuse_showing_thinking`.
 
 **Not built:** keeping any other concession, and a way to forget one entry short of deleting the file
 or waiting out the period.
@@ -4031,6 +4031,11 @@ writes.
 `verified-by: bravebot_agent::bedrock_refusals::a_file_that_is_not_this_record_holds_nothing_and_is_replaced_by_the_next_finding`
 `verified-by: bravebot_agent::bedrock_refusals::the_file_keeps_the_newest_sixty_four_models_and_none_that_expired`
 `verified-by: bravebot_bedrock::lib::a_model_an_earlier_session_found_refusing_the_ask_is_not_sent_it`
+`verified-by: bravebot_agent::bedrock_refusals::what_an_earlier_session_kept_is_put_back_before_the_request_and_not_written_again`
+`verified-by: bravebot_agent::bedrock_refusals::what_the_request_found_is_kept_after_it_and_once_for_the_model`
+`verified-by: bravebot_agent::bedrock_refusals::a_request_that_found_nothing_keeps_nothing_and_returns_its_result`
+`verified-by: bravebot_agent::bedrock_refusals::with_no_directory_the_request_runs_and_a_later_request_still_keeps_the_finding`
+`verified-by: bravebot_agent::bedrock_refusals::a_streamed_request_puts_back_what_was_kept_and_keeps_what_was_found`
 `verified-by: bravebot_agent::incognito::no_bedrock_refusal_is_written_down`
 `verified-by: bravebot_agent::incognito::a_bedrock_refusal_an_earlier_session_kept_is_still_honoured`
 

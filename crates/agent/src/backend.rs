@@ -1343,11 +1343,10 @@ impl<'a> Backend<'a> {
             } => {
                 // What an earlier session found the model to refuse is put back before the first
                 // stream, and what this one found is kept after it (BACKEND-63).
-                crate::bedrock_refusals::put_back(&request.model);
-                let mut client = bedrock_client(config, egress, cancel.as_ref());
-                let result = counted!(client, client.complete_streaming(policy, request, progress));
-                crate::bedrock_refusals::keep_what_was_found(&request.model);
-                result
+                crate::bedrock_refusals::around(&request.model, || {
+                    let mut client = bedrock_client(config, egress, cancel.as_ref());
+                    counted!(client, client.complete_streaming(policy, request, progress))
+                })
             }
             Self::Gateway {
                 config,

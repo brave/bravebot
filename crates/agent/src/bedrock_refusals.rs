@@ -153,48 +153,84 @@ struct Tracked {
     on_disk: HashSet<String>,
 }
 
-fn tracked() -> &'static Mutex<Tracked> {
+fn process() -> &'static Mutex<Tracked> {
     static TRACKED: OnceLock<Mutex<Tracked>> = OnceLock::new();
     TRACKED.get_or_init(Mutex::default)
 }
 
-/// Before a Bedrock request for `model`: tell the client what an earlier session found, once for
-/// each model in this process.
-pub fn put_back(model: &str) {
-    let Ok(mut tracked) = tracked().lock() else {
+/// Run `request`, a streamed Bedrock request for `model`, with what an earlier session found put
+/// back before it and what this process has found kept after it (BACKEND-63).
+///
+/// The record is read the first time a model is used in the process and written once, when the
+/// process has found the model to refuse the ask. Nothing is held while `request` runs, which can
+/// last minutes beside requests for other models. Asked after every request and not only a refused
+/// one, since the client learns a refusal when the request without the ask has answered.
+pub fn around<R>(model: &str, request: impl FnOnce() -> R) -> R {
+    around_in(
+        process(),
+        model,
+        crate::home::directory().as_deref(),
+        crate::home::writable().as_deref(),
+        SystemTime::now,
+        request,
+    )
+}
+
+/// [`around`] with the process's record, the directories and the clock handed in.
+fn around_in<R>(
+    tracked: &Mutex<Tracked>,
+    model: &str,
+    read_from: Option<&Path>,
+    write_to: Option<&Path>,
+    now: impl Fn() -> SystemTime,
+    request: impl FnOnce() -> R,
+) -> R {
+    put_back(tracked, model, read_from, now());
+    let result = request();
+    keep_what_was_found(tracked, model, write_to, now());
+    result
+}
+
+/// Tell the client what an earlier session found, once for each model in this process.
+fn put_back(tracked: &Mutex<Tracked>, model: &str, read_from: Option<&Path>, now: SystemTime) {
+    let Ok(mut tracked) = tracked.lock() else {
         return;
     };
     if !tracked.looked_up.insert(model.to_string()) {
         return;
     }
-    let Some(home) = crate::home::directory() else {
+    let Some(home) = read_from else {
         return;
     };
-    if Store::new(&home).refuses_showing_thinking(model, SystemTime::now()) {
+    if Store::new(home).refuses_showing_thinking(model, now) {
         bravebot_bedrock::known_to_refuse_showing_thinking(model);
         tracked.on_disk.insert(model.to_string());
     }
 }
 
-/// After a Bedrock request for `model`: keep what this process has found the model to refuse, once.
+/// Keep what this process has found the model to refuse, once.
 ///
-/// Asked after every request, not only a refused one, since the client learns a refusal when the
-/// request without the ask has answered.
-pub fn keep_what_was_found(model: &str) {
+/// `write_to` is [`crate::home::writable`], which names no directory in an incognito session.
+fn keep_what_was_found(
+    tracked: &Mutex<Tracked>,
+    model: &str,
+    write_to: Option<&Path>,
+    now: SystemTime,
+) {
     if !bravebot_bedrock::refusals(model).thinking_shown {
         return;
     }
-    let Ok(mut tracked) = tracked().lock() else {
+    let Ok(mut tracked) = tracked.lock() else {
         return;
     };
     if tracked.on_disk.contains(model) {
         return;
     }
-    let Some(home) = crate::home::writable() else {
+    let Some(home) = write_to else {
         return;
     };
-    if Store::new(&home)
-        .keep_refusing_showing_thinking(model, SystemTime::now())
+    if Store::new(home)
+        .keep_refusing_showing_thinking(model, now)
         .is_ok()
     {
         tracked.on_disk.insert(model.to_string());
@@ -380,5 +416,143 @@ mod tests {
         for kept in 6..70 {
             assert!(read(&format!("model-{kept:02}")), "{kept} was dropped");
         }
+    }
+
+    /// `around_in` over `tracked`, reading and writing `home` with the clock at `now` seconds.
+    fn around_home<R>(
+        tracked: &Mutex<Tracked>,
+        model: &str,
+        home: &Path,
+        now: u64,
+        request: impl FnOnce() -> R,
+    ) -> R {
+        around_in(tracked, model, Some(home), Some(home), || at(now), request)
+    }
+
+    /// BACKEND-63: what an earlier session kept is put back before the request runs, for the model
+    /// it was kept about, and a model the file names is not written again by a later request.
+    ///
+    /// The faults this rejects: the client told after the request, which sends the refused ask
+    /// again, a record put back for every model, and the file rewritten by each request.
+    #[test]
+    fn what_an_earlier_session_kept_is_put_back_before_the_request_and_not_written_again() {
+        let home = scratch("around-put-back");
+        let (kept, other) = (
+            "a-model-an-earlier-session-found-refusing-the-ask-around",
+            "a-model-nothing-was-kept-about-around",
+        );
+        Store::new(&home)
+            .keep_refusing_showing_thinking(kept, at(1_000))
+            .expect("kept");
+        let before = std::fs::read(home.join(FILE)).expect("the file");
+        let tracked = Mutex::new(Tracked::default());
+
+        let told = around_home(&tracked, kept, &home, 2_000, || {
+            bravebot_bedrock::refusals(kept).thinking_shown
+        });
+        assert!(told, "the request ran before the client was told");
+        let told = around_home(&tracked, other, &home, 2_000, || {
+            bravebot_bedrock::refusals(other).thinking_shown
+        });
+        assert!(
+            !told,
+            "the client was told about a model nothing was kept about"
+        );
+
+        around_home(&tracked, kept, &home, 3_000, || ());
+        assert_eq!(
+            std::fs::read(home.join(FILE)).expect("the file"),
+            before,
+            "a refusal the file already names was written again"
+        );
+    }
+
+    /// BACKEND-63: what the request found is kept after it and not before, and once for a model in
+    /// this process. The client records a refusal when the request without the ask has answered,
+    /// which is why the file cannot be written ahead of it.
+    ///
+    /// The faults this rejects: the finding kept before the request, which keeps nothing, and a
+    /// finding kept again by every later request.
+    #[test]
+    fn what_the_request_found_is_kept_after_it_and_once_for_the_model() {
+        let home = scratch("around-keep");
+        let (found, later) = (
+            "a-model-the-request-found-refusing-around",
+            "another-model-the-request-found-refusing-around",
+        );
+        let tracked = Mutex::new(Tracked::default());
+
+        around_home(&tracked, found, &home, 5_000, || {
+            assert!(
+                !Store::new(&home).refuses_showing_thinking(found, at(5_000)),
+                "the finding was kept before the request ran"
+            );
+            // What the client records once the request without the ask has answered.
+            bravebot_bedrock::known_to_refuse_showing_thinking(found);
+        });
+        assert!(Store::new(&home).refuses_showing_thinking(found, at(5_000)));
+
+        std::fs::remove_file(home.join(FILE)).expect("removed");
+        around_home(&tracked, found, &home, 6_000, || ());
+        assert!(
+            !home.join(FILE).exists(),
+            "a finding was kept again by a later request"
+        );
+
+        around_home(&tracked, later, &home, 7_000, || {
+            bravebot_bedrock::known_to_refuse_showing_thinking(later);
+        });
+        let store = Store::new(&home);
+        assert!(store.refuses_showing_thinking(later, at(7_000)));
+        assert!(!store.refuses_showing_thinking(found, at(7_000)));
+    }
+
+    /// BACKEND-63: a request that found nothing keeps nothing and returns what it returned.
+    ///
+    /// The fault this rejects: a file written for every model a request was made to, which names
+    /// models that never refused the ask.
+    #[test]
+    fn a_request_that_found_nothing_keeps_nothing_and_returns_its_result() {
+        let home = scratch("around-nothing");
+        let tracked = Mutex::new(Tracked::default());
+
+        let result = around_home(
+            &tracked,
+            "a-model-that-refused-nothing-around",
+            &home,
+            1_000,
+            || 7,
+        );
+
+        assert_eq!(result, 7);
+        assert!(!home.join(FILE).exists(), "a file was written");
+    }
+
+    /// BACKEND-63: with no directory to read or write, the request runs, and a finding that could
+    /// not be written is not taken for one that was, so a later request that can write it does.
+    ///
+    /// The fault this rejects: a model marked as kept when nothing was written, which loses the
+    /// finding for the rest of the process.
+    #[test]
+    fn with_no_directory_the_request_runs_and_a_later_request_still_keeps_the_finding() {
+        let home = scratch("around-no-directory");
+        let model = "a-model-refused-where-nothing-could-be-written-around";
+        let tracked = Mutex::new(Tracked::default());
+
+        let result = around_in(
+            &tracked,
+            model,
+            None,
+            None,
+            || at(1_000),
+            || {
+                bravebot_bedrock::known_to_refuse_showing_thinking(model);
+                "ran"
+            },
+        );
+        assert_eq!(result, "ran");
+
+        around_home(&tracked, model, &home, 2_000, || ());
+        assert!(Store::new(&home).refuses_showing_thinking(model, at(2_000)));
     }
 }
