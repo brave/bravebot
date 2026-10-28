@@ -71,6 +71,15 @@ const CACHE_TEMPORARY: &str = "update-check.tmp";
 /// launches still makes one request.
 const GOOD_FOR: u64 = 60 * 60;
 
+/// How old the last ask that learned a version may be before the desktop app is told nothing of
+/// it (UPDATE-12).
+///
+/// A record is read back for as long as it stands, and an ask that keeps failing leaves the last
+/// version it learned in place, so without a limit a machine that has been offline for a month
+/// would still say it is up to date, or still offer a release that has been withdrawn. A week is
+/// longer than an absence over a weekend and shorter than the time between most releases.
+pub const STALE_AFTER: u64 = 7 * 24 * 60 * 60;
+
 /// Who is asked what the newest version is.
 ///
 /// Its own type rather than methods on [`Install`], because the registries are this crate's
@@ -148,17 +157,23 @@ impl fmt::Display for Version {
     }
 }
 
-/// One registry as it was last asked: when the ask was made, and what it learned.
+/// One registry as it was last asked: when the ask was made, what it learned, and when an ask last
+/// learned anything.
 ///
 /// `latest` is the version the last ask that learned one named, not the highest ever seen: a
 /// registry that answers with something older has withdrawn a release, and the line says nothing
 /// rather than going on offering it. It is `None` until an ask learns a version at all, since a
 /// registry that refuses, one that cannot be reached, and an answer that is not three numbers all
 /// leave the stamp standing without one.
+///
+/// `at` is stamped before each ask, so it says when this registry was last asked and not whether
+/// the answer came. `learned` is this machine's clock when an ask last learned `latest`, and is
+/// `None` in a record an earlier version wrote, which had no such field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Record {
     at: u64,
     latest: Option<Version>,
+    learned: Option<u64>,
 }
 
 /// The line to say at startup, having started the ask that answers the next launch.
@@ -182,14 +197,18 @@ pub fn at_startup(setting: Option<bool>) -> Option<String> {
 /// recorded a version, whether it is newer than the one running.
 ///
 /// The recorded version itself is not in the answer, only the comparison, so no number a registry
-/// sent reaches the window (UPDATE-5).
+/// sent reaches the window (UPDATE-5). The time in it is this machine's clock when the ask was
+/// answered, and nothing from the answer's body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Status {
     /// `false` when the setting or the variable turned the check off (UPDATE-11).
     pub check: bool,
     /// `None` when there is no record to compare with, which is also what any failure to read one
-    /// is (UPDATE-9).
+    /// is (UPDATE-9), and when the last ask that learned a version is older than [`STALE_AFTER`].
     pub newer: Option<bool>,
+    /// When an ask last learned a version, in seconds since the epoch, or `None` where no ask has,
+    /// the record does not say, or it says a time later than now.
+    pub checked: Option<u64>,
 }
 
 /// What the desktop app is told about updating, from what an earlier ask recorded.
@@ -197,25 +216,51 @@ pub struct Status {
 /// Reads one file and asks nobody. With the check off nothing is read.
 pub fn desktop_status(setting: Option<bool>) -> Status {
     let directory = bravebot_agent::home::directory();
-    status_in(enabled(setting), directory.as_deref(), running_version())
+    status_in(
+        enabled(setting),
+        directory.as_deref(),
+        running_version(),
+        now(),
+    )
 }
 
-/// [`desktop_status`] from its inputs, so the rules need neither the environment nor a home.
-fn status_in(enabled: bool, directory: Option<&Path>, running: Option<Version>) -> Status {
+/// [`desktop_status`] from its inputs, so the rules need neither the environment, a home nor the
+/// clock.
+///
+/// A record is an answer only where it says when an ask learned its version, and that time is not
+/// later than `now`: a clock that moved back, or a line somebody else wrote, is no answer rather
+/// than one that stays fresh until the date catches up with it. An answer older than
+/// [`STALE_AFTER`] keeps its time and loses its comparison, so the window says when it last heard
+/// and not what it heard then.
+fn status_in(
+    enabled: bool,
+    directory: Option<&Path>,
+    running: Option<Version>,
+    now: u64,
+) -> Status {
     if !enabled {
         return Status {
             check: false,
             newer: None,
+            checked: None,
         };
     }
-    let latest = directory
+    let answer = directory
         .and_then(|directory| record_in(directory, Registry::DESKTOP))
-        .and_then(|record| record.latest);
+        .and_then(|record| record.latest.zip(record.learned))
+        .filter(|&(_, learned)| learned <= now);
+    let Some((latest, learned)) = answer else {
+        return Status {
+            check: true,
+            newer: None,
+            checked: None,
+        };
+    };
+    let fresh = now - learned <= STALE_AFTER;
     Status {
         check: true,
-        newer: running
-            .zip(latest)
-            .map(|(running, latest)| latest > running),
+        newer: running.filter(|_| fresh).map(|running| latest > running),
+        checked: Some(learned),
     }
 }
 
@@ -299,11 +344,13 @@ fn parse_record(contents: &str, registry: Registry) -> Option<Record> {
 
 /// One line of that file, where it is this registry's record.
 ///
-/// Separate from the I/O so the rules are testable, and there are three: the line is the shape
-/// this program writes, it came from the registry this installation would ask, and its version is
-/// three numbers or is absent. Anything else is no record, which is silence rather than an error.
+/// Separate from the I/O so the rules are testable, and there are four: the line is the shape
+/// this program writes, it came from the registry this installation would ask, its version is
+/// three numbers or is absent, and the time it was learned is a number or is absent. Anything else
+/// is no record, which is silence rather than an error. A line of three fields, as an earlier
+/// version wrote, is a record that does not say when its version was learned.
 fn record_on(line: &str, registry: Registry) -> Option<Record> {
-    let mut fields = line.splitn(3, '\t');
+    let mut fields = line.splitn(4, '\t');
     let (Some(at), Some(source), Some(latest)) = (fields.next(), fields.next(), fields.next())
     else {
         return None;
@@ -317,20 +364,26 @@ fn record_on(line: &str, registry: Registry) -> Option<Record> {
             "" => None,
             text => Some(parse_version(text)?),
         },
+        learned: match fields.next() {
+            None | Some("") => None,
+            Some(text) => Some(text.parse().ok()?),
+        },
     })
 }
 
 /// One record as the line it is stored as, without its newline.
 ///
 /// An ask that learned no version leaves that field empty, which is what tells a stamp with
-/// nothing behind it from a line of some other shape.
+/// nothing behind it from a line of some other shape, and the time it was learned likewise.
 fn encode_record(registry: Registry, record: Record) -> String {
     let latest = record.latest.map(|latest| latest.to_string());
+    let learned = record.learned.map(|learned| learned.to_string());
     format!(
-        "{}\t{}\t{}",
+        "{}\t{}\t{}\t{}",
         record.at,
         registry.source(),
-        latest.unwrap_or_default()
+        latest.unwrap_or_default(),
+        learned.unwrap_or_default()
     )
 }
 
@@ -394,11 +447,20 @@ fn refresh(registry: Registry, stored: Option<Record>) {
 /// or that answers with a version this program will not offer has still been asked, and recording
 /// nothing would send the next launch straight back to it: the registries in trouble would be the
 /// ones asked every single session. The version stands until an ask learns another, since a
-/// registry being unreachable today does not make what it said yesterday untrue.
+/// registry being unreachable today does not make what it said yesterday untrue. The time it was
+/// learned stands with it, so an ask that fails says nothing about how recent the version is.
 fn recorded(previous: Option<Record>, asked: Option<Version>, at: u64) -> Record {
-    Record {
-        at,
-        latest: asked.or(previous.and_then(|record| record.latest)),
+    match asked {
+        Some(latest) => Record {
+            at,
+            latest: Some(latest),
+            learned: Some(at),
+        },
+        None => Record {
+            at,
+            latest: previous.and_then(|record| record.latest),
+            learned: previous.and_then(|record| record.learned),
+        },
     }
 }
 
@@ -722,11 +784,31 @@ mod tests {
         let record = Record {
             at: 1_700_000_000,
             latest: Some(version(0, 6, 0)),
+            learned: Some(1_699_999_000),
         };
         let line = encode_record(Registry::of(Install::Npm), record);
         assert_eq!(
             parse_record(&line, Registry::of(Install::Npm)),
             Some(record)
+        );
+    }
+
+    /// A line an earlier version wrote, with three fields, is still a record: its stamp holds the
+    /// next ask off as it did, and it does not say when its version was learned.
+    #[test]
+    fn a_record_without_the_time_it_was_learned_is_read_without_one() {
+        assert_eq!(
+            parse_record("1700000000\treleases\t0.6.0", Registry::Releases),
+            Some(Record {
+                at: 1_700_000_000,
+                latest: Some(version(0, 6, 0)),
+                learned: None,
+            })
+        );
+        assert_eq!(
+            parse_record("1700000000\treleases\t0.6.0\t", Registry::Releases)
+                .and_then(|record| record.learned),
+            None
         );
     }
 
@@ -739,6 +821,7 @@ mod tests {
             Record {
                 at: 1_700_000_000,
                 latest: Some(version(9, 9, 9)),
+                learned: Some(1_700_000_000),
             },
         );
         assert_eq!(parse_record(&stored, Registry::of(Install::Npm)), None);
@@ -753,6 +836,8 @@ mod tests {
             "later\tnpm\t0.6.0",
             "1700000000\tnpm\t0.6.0-rc.1",
             "1700000000\tnpm\tlatest",
+            "1700000000\tnpm\t0.6.0\tlater",
+            "1700000000\tnpm\t0.6.0\t-1",
         ] {
             assert_eq!(
                 parse_record(contents, Registry::of(Install::Npm)),
@@ -791,6 +876,7 @@ mod tests {
         let previous = Record {
             at: 1_000_000,
             latest: Some(version(0, 6, 0)),
+            learned: Some(1_000_000),
         };
 
         let after_nothing = recorded(Some(previous), None, 2_000_000);
@@ -809,6 +895,26 @@ mod tests {
         );
     }
 
+    /// The time a version was learned moves only when an ask learns one, so the stamp written
+    /// before every ask, and an ask that fails, do not make an old answer look recent (UPDATE-12).
+    #[test]
+    fn only_an_ask_that_learns_a_version_moves_the_time_it_was_learned() {
+        let previous = Record {
+            at: 1_000_000,
+            latest: Some(version(0, 6, 0)),
+            learned: Some(1_000_000),
+        };
+        assert_eq!(
+            recorded(Some(previous), None, 2_000_000).learned,
+            Some(1_000_000)
+        );
+        assert_eq!(recorded(None, None, 2_000_000).learned, None);
+        assert_eq!(
+            recorded(Some(previous), Some(version(0, 7, 0)), 3_000_000).learned,
+            Some(3_000_000)
+        );
+    }
+
     /// Both installations can have been used on one machine, and a launch of one that threw the
     /// other's stamp away would send the next launch of the other straight back to its registry,
     /// which is the per-session request the day exists to prevent.
@@ -817,10 +923,12 @@ mod tests {
         let script = Record {
             at: 1_000_000,
             latest: Some(version(0, 6, 0)),
+            learned: Some(1_000_000),
         };
         let npm = Record {
             at: 2_000_000,
             latest: None,
+            learned: None,
         };
         let existing = format!("{}\n", encode_record(Registry::of(Install::Script), script));
 
@@ -845,10 +953,12 @@ mod tests {
         let first = Record {
             at: 1_000_000,
             latest: Some(version(0, 6, 0)),
+            learned: Some(1_000_000),
         };
         let second = Record {
             at: 2_000_000,
             latest: Some(version(0, 7, 0)),
+            learned: Some(2_000_000),
         };
 
         let file = merged(&merged("", Registry::Npm, first), Registry::Npm, second);
@@ -933,6 +1043,7 @@ mod tests {
         let script = Record {
             at: 1_000_000,
             latest: Some(version(9, 0, 0)),
+            learned: Some(1_000_000),
         };
         std::fs::write(
             state.path().join(CACHE_FILE),
@@ -956,61 +1067,174 @@ mod tests {
     fn the_desktop_app_is_told_only_whether_a_newer_version_is_recorded() {
         let state = tempfile::tempdir().expect("a state directory");
         let running = Some(version(0, 9, 0));
+        let now = 2_000_000;
         assert_eq!(
-            status_in(true, Some(state.path()), running),
+            status_in(true, Some(state.path()), running, now),
             Status {
                 check: true,
-                newer: None
+                newer: None,
+                checked: None,
             },
             "a first run has no record"
         );
-        let seed = |latest| {
-            let record = Record {
-                at: 1_000_000,
-                latest: Some(latest),
-            };
-            std::fs::write(
-                state.path().join(CACHE_FILE),
-                merged("", Registry::DESKTOP, record),
-            )
-            .expect("a record");
-        };
+        let seed = |latest| seed_desktop(state.path(), Some(latest), Some(now - 60));
         seed(version(0, 10, 0));
         assert_eq!(
-            status_in(true, Some(state.path()), running).newer,
-            Some(true)
+            status_in(true, Some(state.path()), running, now),
+            Status {
+                check: true,
+                newer: Some(true),
+                checked: Some(now - 60),
+            }
         );
         seed(version(0, 9, 0));
         assert_eq!(
-            status_in(true, Some(state.path()), running).newer,
+            status_in(true, Some(state.path()), running, now).newer,
             Some(false)
         );
         seed(version(0, 8, 9));
         assert_eq!(
-            status_in(true, Some(state.path()), running).newer,
+            status_in(true, Some(state.path()), running, now).newer,
             Some(false)
         );
-        assert_eq!(status_in(true, None, running).newer, None, "no home");
+        assert_eq!(status_in(true, None, running, now).newer, None, "no home");
+    }
+
+    /// The record for the desktop app's registry, as an ask that learned `latest` at `learned`
+    /// would have written it.
+    fn seed_desktop(directory: &Path, latest: Option<Version>, learned: Option<u64>) {
+        let record = Record {
+            at: learned.unwrap_or(1_000_000),
+            latest,
+            learned,
+        };
+        std::fs::write(
+            directory.join(CACHE_FILE),
+            merged("", Registry::DESKTOP, record),
+        )
+        .expect("a record");
+    }
+
+    /// An answer learned within the last week is compared, and the time it was learned is sent
+    /// with the comparison (UPDATE-12).
+    #[test]
+    fn a_fresh_desktop_answer_is_compared_and_dated() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let now = 2_000_000_000;
+        seed_desktop(state.path(), Some(version(0, 9, 0)), Some(now - 3600));
+        assert_eq!(
+            status_in(true, Some(state.path()), Some(version(0, 9, 0)), now),
+            Status {
+                check: true,
+                newer: Some(false),
+                checked: Some(now - 3600),
+            }
+        );
+    }
+
+    /// An answer learned more than a week ago is no comparison, so neither "up to date" nor a
+    /// release that may since have been withdrawn is said of it, and the time it was learned is
+    /// still sent so the window can say when it last heard. Exactly a week is still fresh.
+    #[test]
+    fn a_desktop_answer_older_than_a_week_is_stale_and_keeps_its_date() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let learned = 1_000_000_000;
+        let running = Some(version(0, 9, 0));
+        seed_desktop(state.path(), Some(version(0, 10, 0)), Some(learned));
+        assert_eq!(
+            status_in(true, Some(state.path()), running, learned + STALE_AFTER),
+            Status {
+                check: true,
+                newer: Some(true),
+                checked: Some(learned),
+            },
+            "a week to the second is still fresh"
+        );
+        assert_eq!(
+            status_in(true, Some(state.path()), running, learned + STALE_AFTER + 1),
+            Status {
+                check: true,
+                newer: None,
+                checked: Some(learned),
+            },
+            "a second past the week is stale"
+        );
+    }
+
+    /// A stamp written before an ask that then failed is not a time a version was learned, so a
+    /// record whose ask keeps failing goes stale however recently it was stamped.
+    #[test]
+    fn a_failed_ask_does_not_freshen_a_desktop_answer() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let learned = 1_000_000_000;
+        let now = learned + STALE_AFTER + 1;
+        let record = recorded(
+            Some(Record {
+                at: learned,
+                latest: Some(version(0, 10, 0)),
+                learned: Some(learned),
+            }),
+            None,
+            now,
+        );
+        std::fs::write(
+            state.path().join(CACHE_FILE),
+            merged("", Registry::DESKTOP, record),
+        )
+        .expect("a record");
+        let status = status_in(true, Some(state.path()), Some(version(0, 9, 0)), now);
+        assert_eq!(status.newer, None);
+        assert_eq!(status.checked, Some(learned));
+    }
+
+    /// A record that does not say when its version was learned, as one an earlier version wrote
+    /// does not, or that says a time later than now, is no answer: nothing is compared and no date
+    /// is sent (UPDATE-12).
+    #[test]
+    fn a_desktop_record_without_a_usable_time_is_no_answer() {
+        let state = tempfile::tempdir().expect("a state directory");
+        let now = 2_000_000_000;
+        let none = Status {
+            check: true,
+            newer: None,
+            checked: None,
+        };
+        seed_desktop(state.path(), Some(version(99, 0, 0)), None);
+        assert_eq!(
+            status_in(true, Some(state.path()), Some(version(0, 9, 0)), now),
+            none,
+            "no time"
+        );
+        std::fs::write(
+            state.path().join(CACHE_FILE),
+            format!("{now}\treleases\t99.0.0\n"),
+        )
+        .expect("a record");
+        assert_eq!(
+            status_in(true, Some(state.path()), Some(version(0, 9, 0)), now),
+            none,
+            "a line an earlier version wrote"
+        );
+        seed_desktop(state.path(), Some(version(99, 0, 0)), Some(now + 1));
+        assert_eq!(
+            status_in(true, Some(state.path()), Some(version(0, 9, 0)), now),
+            none,
+            "a time later than now"
+        );
     }
 
     /// With the check off the desktop app is told so, and nothing a record says changes that.
     #[test]
     fn a_desktop_check_turned_off_says_nothing_of_a_record() {
         let state = tempfile::tempdir().expect("a state directory");
-        let record = Record {
-            at: 1_000_000,
-            latest: Some(version(99, 0, 0)),
-        };
-        std::fs::write(
-            state.path().join(CACHE_FILE),
-            merged("", Registry::DESKTOP, record),
-        )
-        .expect("a record");
+        let now = 2_000_000;
+        seed_desktop(state.path(), Some(version(99, 0, 0)), Some(now));
         assert_eq!(
-            status_in(false, Some(state.path()), Some(version(0, 9, 0))),
+            status_in(false, Some(state.path()), Some(version(0, 9, 0)), now),
             Status {
                 check: false,
-                newer: None
+                newer: None,
+                checked: None,
             }
         );
     }
@@ -1020,11 +1244,18 @@ mod tests {
     #[test]
     fn a_desktop_record_that_is_not_the_shape_written_is_no_answer() {
         let state = tempfile::tempdir().expect("a state directory");
-        std::fs::write(state.path().join(CACHE_FILE), "later\treleases\t99.0.0\n")
-            .expect("a record");
+        std::fs::write(
+            state.path().join(CACHE_FILE),
+            "later\treleases\t99.0.0\t2000000\n",
+        )
+        .expect("a record");
         assert_eq!(
-            status_in(true, Some(state.path()), Some(version(0, 9, 0))).newer,
-            None
+            status_in(true, Some(state.path()), Some(version(0, 9, 0)), 2_000_000),
+            Status {
+                check: true,
+                newer: None,
+                checked: None,
+            }
         );
     }
 

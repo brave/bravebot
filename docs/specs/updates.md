@@ -10,6 +10,7 @@ governs:
   - npm/bin/bravebot.js
   - install.sh
   - install.ps1
+  - crates/ui-bridge/src/update_status.rs
   - ui/src/shared/update.ts
   - ui/src/renderer/components/UpdateBanner.tsx
   - ui/src/renderer/components/About.tsx
@@ -261,13 +262,21 @@ The packaged desktop app starts its agent with `BRAVEBOT_INSTALLED_VIA` set to `
 agent asks the GitHub release listing at startup, under the hour of UPDATE-6, the refusal of
 UPDATE-8 and the switches of UPDATE-11. It shares the install script's record, since its installers
 are assets of the same release. An agent the packaged app did not start, one a developer or a test
-ran, asks nothing. The window learns through `update.status` whether the check is on, the version
-running, and whether the recorded version is newer than it: `true`, `false`, or null where nothing
-is recorded. The recorded version is not in the answer. Where it is newer the sidebar shows a notice
-naming the running version, with a Download link to the latest release page, a literal in the main
-process, and About says the same. Dismissing the notice keeps it hidden for as long as the version
-running then is the one running, and a release recorded as newer than a later version shows it
-again. About still says it after a dismissal. Help, Check for Updates… opens About and asks nobody.
+ran, asks nothing. The record keeps, beside the stamp of each ask, this machine's clock at the
+last ask that learned a version, and nothing from the answer's body. The window learns through
+`update.status` whether the check is on, the version running, whether the recorded version is
+newer than it, and when the last check that learned it was, as a UTC timestamp the bridge builds
+from that number. Newer is `true`, `false`, or null where nothing is recorded, where the record
+does not say when its version was learned or says a time later than now, and where that time is
+more than seven days ago; the record is then stale, and the timestamp is still sent. The recorded
+version is not in the answer. Where it is newer in a record that is not stale the sidebar shows a
+notice naming the running version, with a Download link to the latest release page, a literal in
+the main process, and About says the same. About says "Up to date as of" the day of the last check
+where the record is not stale and not newer, and "Couldn't check recently (last checked" that day
+")" where it is stale, with no notice in the sidebar; the day is written as the window writes its
+other dates. Dismissing the notice keeps it hidden for as long as the version running then is the
+one running, and a release recorded as newer than a later version shows it again. About still says
+it after a dismissal. Help, Update Status… opens About and asks nobody.
 
 **Why.** No shell command updates a copy inside an app bundle, so UPDATE-3's line has nothing to
 offer it, and the release page is where its installer is. A yes or no is all the window needs, and
@@ -275,24 +284,48 @@ keeping the number out of the answer keeps UPDATE-5's rule at the bridge rather 
 renderer to leave it unshown. The release page as a literal means no answer can choose where the
 link goes. An ask on demand would put a round trip in front of the window that UPDATE-1 keeps
 behind it. A notice that came back on every launch after being dismissed would be one a person
-learns to ignore, and one that never came back would hide the next release too.
+learns to ignore, and one that never came back would hide the next release too. The stamp of an ask
+is written before the ask is made, so it cannot say an answer came; the time a version was learned
+can, and an ask that fails leaves it where it was. A record read back for as long as it stands
+would let a machine offline for a month say it is up to date, or go on offering a release since
+withdrawn, so after a week the window says when it last heard instead of what it heard then. The
+bridge decides that, as it decides the rest of the answer, so the renderer formats a day and
+judges nothing. The menu item says Update Status because it shows one, and a name that promised a
+check would promise a request it does not make.
 
 **Known costs.** The notice names the version running, not the one the page offers, for UPDATE-5's
 reason. The window cannot tell one recorded release from the next, since it is told no version, so
 a dismissal is kept by the version running: a second release published while the same version
 runs does not bring the notice back, and About is where it is still said. A window started in
-development is never told anything, since its agent asks nobody.
+development is never told anything, since its agent asks nobody. A record an earlier version wrote
+says no time a version was learned, so it is no answer until the next ask that learns one, and an
+earlier version reads a record with that time in it as no record, and asks on each launch until it
+is updated. A clock set far enough wrong makes a fresh record look stale, or a record from its own
+future no answer. The check itself is the person's setting: a project's settings file in the
+directory the window was started from turns off neither the ask nor what `update.status` says.
 
 `verified-by: bravebot_update::lib::the_desktop_app_asks_the_release_listing_and_shares_the_scripts_record`
 `verified-by: bravebot_update::lib::the_desktop_app_is_told_only_whether_a_newer_version_is_recorded`
+`verified-by: bravebot_update::lib::a_fresh_desktop_answer_is_compared_and_dated`
+`verified-by: bravebot_update::lib::a_desktop_answer_older_than_a_week_is_stale_and_keeps_its_date`
+`verified-by: bravebot_update::lib::a_failed_ask_does_not_freshen_a_desktop_answer`
+`verified-by: bravebot_update::lib::a_desktop_record_without_a_usable_time_is_no_answer`
+`verified-by: bravebot_update::lib::only_an_ask_that_learns_a_version_moves_the_time_it_was_learned`
+`verified-by: bravebot_update::lib::a_record_without_the_time_it_was_learned_is_read_without_one`
 `verified-by: bravebot_update::lib::a_desktop_check_turned_off_says_nothing_of_a_record`
 `verified-by: bravebot_update::lib::a_desktop_record_that_is_not_the_shape_written_is_no_answer`
 `verified-by: bravebot_update::lib::only_the_packaged_desktop_app_asks_and_not_with_the_check_off`
+`verified-by: bravebot_ui_bridge::update_status::a_running_version_of_a_versions_shape_is_sent`
+`verified-by: bravebot_ui_bridge::update_status::a_running_version_of_another_shape_is_null`
+`verified-by: bravebot_ui_bridge::update_status::the_last_check_is_sent_as_a_utc_timestamp`
 `verified-by: bravebot_ui_bridge::update_status::a_newer_release_recorded_is_a_yes_without_its_version`
 `verified-by: bravebot_ui_bridge::update_status::a_release_this_build_is_not_behind_is_a_no_and_npm_s_record_is_none`
+`verified-by: bravebot_ui_bridge::update_status::a_record_older_than_a_week_is_no_comparison_and_keeps_its_date`
+`verified-by: bravebot_ui_bridge::update_status::a_record_without_the_time_it_was_learned_is_no_answer`
 `verified-by: bravebot_ui_bridge::update_status::nothing_recorded_is_no_answer`
 `verified-by: bravebot_ui_bridge::update_status::the_check_turned_off_in_settings_says_off_and_nothing_of_the_record`
-`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/update-banner.test.mjs pins the window's half: an update.status answer is read only in its shape and a check that is off says nothing of a release, About says one of four lines and names no release, the banner shows only for a recorded newer release and hides for the running version once dismissed and shows again for another, and the dismissal is kept in the experience file with mode 0600 and only in a version's shape; ui/scripts/bug-report.test.mjs pins that the Download link opens the literal release page by name; make check-ui runs both, and the governs list above holds the files to existing)`
+`verified-by: bravebot_ui_bridge::update_status::the_check_is_read_from_the_persons_settings_and_not_a_projects`
+`verified-by: by-construction (the main process and the renderer are not crates this workspace compiles, so ui/scripts/update-banner.test.mjs pins the window's half: an update.status answer is translated with no version rule of its own and a check that is off says nothing of a release or a time, About says one of five lines, dated by the renderer's own date format where a check was and stale where the bridge says so, and names no release, the banner shows only for a newer release in a record that is not stale and hides for the running version once dismissed and shows again for another, the Help item is Update Status… and opens About, and the dismissal is kept in the experience file with mode 0600; ui/scripts/bug-report.test.mjs pins that the Download link opens the literal release page by name; make check-ui runs both, and the governs list above holds the files to existing)`
 
 ## Known costs
 
@@ -310,7 +343,8 @@ development is never told anything, since its agent asks nobody.
 - **A version outlives the ask that learned it.** A registry unreachable for a week leaves the
   line said on the strength of what it answered before that, since nothing here withdraws a
   version that was once published. A release taken down is therefore offered until that registry
-  answers again.
+  answers again. The desktop app is told nothing of a version learned more than a week ago
+  ([UPDATE-12](#UPDATE-12)); the terminal's line has no such limit.
 
 - **What names the installation is a word and a path, not proof.** A binary moved out from under
   the record is told nothing, and a process started with the launcher's variable set is offered

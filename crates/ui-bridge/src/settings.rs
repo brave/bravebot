@@ -19,35 +19,42 @@ fn layers_under(project: Option<&Path>, selected: Option<&Path>, managed: &Manag
 /// SANDBOX-24, SANDBOX-16). Nothing a window or a client sends sets
 /// them; the person's settings, the file the process was started on and the managed pin decide.
 ///
-/// `project` is the directory whose own settings join the person's. A process started in the
-/// directory it works in passes that directory. One that works in several, and is started from
-/// wherever its person happened to be, passes none, so a settings file in the directory it was
-/// launched from does not decide the answer for every session.
-pub fn settle_for_process(project: Option<&Path>, selected: Option<&Path>) {
-    let layers = layers(project, selected);
-    bravebot_config::settle_run_network_in(None, &layers);
+/// `layers` is what [`layers`] answers for the process. A process started in the directory it works
+/// in passes that directory as the project. One that works in several, and is started from wherever
+/// its person happened to be, passes none, so a settings file in the directory it was launched from
+/// does not decide the answer for every session.
+pub fn settle_for_process(layers: &Settings) {
+    bravebot_config::settle_run_network_in(None, layers);
     bravebot_config::settle_sandbox_filesystem_in(
         &bravebot_sandbox::rules::Lists::default(),
-        &layers,
+        layers,
     );
-    bravebot_config::sandbox_network::settle(&layers);
-    bravebot_config::git_identities::settle(&layers);
+    bravebot_config::sandbox_network::settle(layers);
+    bravebot_config::git_identities::settle(layers);
     // Before the first request: the transport reads its answer once, and a window or an editor
     // starts this process from a launcher whose environment holds no proxy (NET-8).
-    bravebot_agent::transport::settle(&layers);
+    bravebot_agent::transport::settle(layers);
 }
 
 /// Start the one sweep this process makes of what has outlived the retention period (STATE-4).
 ///
-/// Called by each front end beside [`settle_for_process`], with the same arguments. No session is
+/// Called by each front end beside [`settle_for_process`], with the same layers. No session is
 /// open yet, so nothing is exempt: a client that loads a record older than the period as the process
 /// starts can find it removed or without its trail, which is what the period says. The sweep runs
 /// beside the first requests and is not ordered against them.
-pub fn start_the_sweep_for_process(project: Option<&Path>, selected: Option<&Path>) {
+pub fn start_the_sweep_for_process(layers: &Settings) {
     bravebot_session::retention::at_startup(
-        layers(project, selected).retention(),
+        layers.retention(),
         bravebot_session::retention::InUse::default(),
     );
+}
+
+/// Whether the desktop app's update check is on, read as the bridge reads every setting that
+/// belongs to the person rather than to a session: their own files, the file the window was
+/// started with and the managed pin, and no project's (UPDATE-12). The startup ask and
+/// `update.status` both read it here, so they cannot disagree about whether the check is on.
+pub fn update_check(selected: Option<&Path>) -> Option<bool> {
+    layers(None, selected).update_check()
 }
 
 /// Whether a safe verdict releases quarantined content with nobody asked, resolved as the terminal does.

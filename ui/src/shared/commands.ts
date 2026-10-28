@@ -200,7 +200,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'help.doctor', label: 'Run Diagnostics…', requires: 'always' },
   // Opens About, which says what the last check found. It asks nothing of the network: the check
   // is at most hourly and never in front of anything (UPDATE-1, UPDATE-6).
-  { id: 'help.update', label: 'Check for Updates…', requires: 'always' },
+  { id: 'help.update', label: 'Update Status…', requires: 'always' },
   { id: 'help.bug-report', label: 'Report a Bug…', requires: 'always' },
 ]
 

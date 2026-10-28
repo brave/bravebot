@@ -347,13 +347,11 @@ impl Bridge {
     /// Whether a newer release than this one is recorded, as a yes or no and never the version
     /// the record names (UPDATE-5, UPDATE-12). `newer` is null where nothing is recorded.
     fn update_status(&self) -> Value {
-        let setting = crate::settings::layers(None, self.settings.as_deref()).update_check();
-        let status = bravebot_update::desktop_status(setting);
-        json!({
-            "check": if status.check { "on" } else { "off" },
-            "running": env!("CARGO_PKG_VERSION"),
-            "newer": status.newer,
-        })
+        let setting = crate::settings::update_check(self.settings.as_deref());
+        crate::update_status::answer(
+            bravebot_update::desktop_status(setting),
+            env!("CARGO_PKG_VERSION"),
+        )
     }
 
     /// Which build of the agent is behind this.

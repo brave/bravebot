@@ -5,7 +5,9 @@
 // the agent writes its own diagnostic log there. Nothing is read from or written to the person's
 // home. A second launch over the same profile checks that a dismissal outlived the window. The
 // unavailable report is the main process's compose handler answered with the shape the bridge
-// gives a session that keeps nothing.
+// gives a session that keeps nothing. Two more launches, each in a profile of its own so no
+// dismissal hides the banner, read a record this build is not behind and one learned more than a
+// week ago.
 //
 // Screenshots go to $SHOTS, /tmp/bravebot-ui by default.
 import assert from 'node:assert/strict'
@@ -21,14 +23,19 @@ const scratch = mkdtempSync(join(tmpdir(), 'bravebot-update-'))
 const profile = join(scratch, 'profile')
 const home = join(scratch, 'home')
 mkdirSync(home, { recursive: true })
-writeFileSync(join(home, 'update-check'), `${Math.floor(Date.now() / 1000)}\treleases\t99.0.0\n`)
+/** The release record an ask that learned `latest` `ago` seconds before now would have written. */
+const record = (latest, ago = 0) => {
+  const at = Math.floor(Date.now() / 1000) - ago
+  writeFileSync(join(home, 'update-check'), `${at}\treleases\t${latest}\t${at}\n`)
+}
+record('99.0.0')
 // A log is opened only when something is logged, so one an earlier run left is put there.
 mkdirSync(join(home, 'logs'))
 writeFileSync(join(home, 'logs', '20261027T101500Z-4242.log'), '2026-10-27T10:15:00Z ERROR example\n')
 
-async function start() {
+async function start(userData = profile) {
   const app = await electron.launch({
-    args: ['.', `--user-data-dir=${profile}`, '--disable-renderer-backgrounding'],
+    args: ['.', `--user-data-dir=${userData}`, '--disable-renderer-backgrounding'],
     cwd: process.cwd(), timeout: 40000,
     env: { ...process.env, BRAVEBOT_HOME: home },
   })
@@ -41,6 +48,10 @@ async function start() {
   return { app, page, errors }
 }
 const click = (app, id) => app.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).click(), id)
+const label = (app, id) => app.evaluate(({ Menu }, id) => Menu.getApplicationMenu().getMenuItemById(id).label, id)
+/** The day About names for a check `ago` seconds before now, as the window writes a date. */
+const day = (ago) => new Date(Date.now() - ago * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+const WEEK = 7 * 24 * 60 * 60
 
 try {
   {
@@ -51,6 +62,7 @@ try {
     assert.doesNotMatch(await banner.textContent(), /99\.0\.0/, 'the recorded version is not shown')
     await page.screenshot({ path: join(shots, 'rxx7-1-banner.png') })
 
+    assert.equal(await label(app, 'help.update'), 'Update Status…', 'the item says it shows a status and asks nobody')
     await click(app, 'help.update')
     const about = page.getByRole('dialog', { name: 'About Brave Bot' })
     await about.waitFor()
@@ -98,7 +110,39 @@ try {
     assert.deepEqual(errors, [])
     await app.close()
   }
-  console.log(`PASS: update banner, About line, bug report and its unavailable state, dismissal kept; shots in ${shots}`)
+  {
+    // A record this build is not behind, learned an hour ago: About dates it.
+    record('0.0.1', 3600)
+    const { app, page, errors } = await start(join(scratch, 'profile-current'))
+    await click(app, 'help.update')
+    const about = page.getByRole('dialog', { name: 'About Brave Bot' })
+    await about.waitFor()
+    const line = about.locator('[data-test="about-update"]')
+    assert.equal(await line.getAttribute('data-state'), 'current')
+    assert.equal((await line.textContent()).trim(), `Up to date as of ${day(3600)}`)
+    assert.equal(await page.locator('[data-test="update-banner"]').count(), 0)
+    await page.screenshot({ path: join(shots, 'rxx7-6-about-current.png') })
+    assert.deepEqual(errors, [])
+    await app.close()
+  }
+  {
+    // A newer release learned eight days ago: the bridge calls it stale, so the sidebar says
+    // nothing and About says when it last heard.
+    record('99.0.0', WEEK + 86400)
+    const { app, page, errors } = await start(join(scratch, 'profile-stale'))
+    await click(app, 'help.update')
+    const about = page.getByRole('dialog', { name: 'About Brave Bot' })
+    await about.waitFor()
+    const line = about.locator('[data-test="about-update"]')
+    assert.equal(await line.getAttribute('data-state'), 'stale')
+    assert.equal((await line.textContent()).trim(), `Couldn't check recently (last checked ${day(WEEK + 86400)})`)
+    assert.equal(await about.locator('[data-test="about-download"]').count(), 0, 'no download is offered on a stale record')
+    assert.equal(await page.locator('[data-test="update-banner"]').count(), 0, 'a stale record shows nothing in the sidebar')
+    await page.screenshot({ path: join(shots, 'rxx7-7-about-stale.png') })
+    assert.deepEqual(errors, [])
+    await app.close()
+  }
+  console.log(`PASS: update banner, About's lines (newer, current, stale), bug report and its unavailable state, dismissal kept; shots in ${shots}`)
 } finally {
   rmSync(scratch, { recursive: true, force: true })
 }

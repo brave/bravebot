@@ -118,10 +118,13 @@ export function App(): React.JSX.Element {
   useEffect(() => { void readUpdateStatus() }, [readUpdateStatus])
   const dismissedUpdate = preferences.dismissedUpdate
   const download = useCallback(() => { void window.bravebot.openPage('releases') }, [])
-  const updateNotice = useMemo(() => updateStatus && bannerShown(updateStatus, dismissedUpdate)
-    ? <UpdateBanner running={updateStatus.running} onDownload={download}
-      onDismiss={() => setExperience('dismissedUpdate', updateStatus.running)} />
-    : null, [updateStatus, dismissedUpdate, download])
+  const updateNotice = useMemo(() => {
+    const running = updateStatus?.running ?? null
+    return running !== null && bannerShown(updateStatus, dismissedUpdate)
+      ? <UpdateBanner running={running} onDownload={download}
+        onDismiss={() => setExperience('dismissedUpdate', running)} />
+      : null
+  }, [updateStatus, dismissedUpdate, download])
   // The composer's text lives here rather than in `Transcript` because the Send menu item
   // has to be grey when there is nothing to send, and only this component talks to the menu.
   const draftKey = live ? liveKey(live) : ''

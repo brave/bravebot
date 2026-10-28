@@ -69,23 +69,19 @@ fn main() {
     // Before a session is assembled, so every turn this process runs reads one answer for the
     // network its programs keep, for the lists of paths a person wrote and for the hosts a stage is
     // held to. Nothing in a window sets them. See SANDBOX-20, SANDBOX-25 and SANDBOX-24.
-    bravebot_ui_bridge::settings::settle_for_process(
+    let process = bravebot_ui_bridge::settings::layers(
         std::env::current_dir().ok().as_deref(),
         settings.as_deref(),
     );
-    bravebot_ui_bridge::settings::start_the_sweep_for_process(
-        std::env::current_dir().ok().as_deref(),
-        settings.as_deref(),
-    );
+    bravebot_ui_bridge::settings::settle_for_process(&process);
+    bravebot_ui_bridge::settings::start_the_sweep_for_process(&process);
     // The hourly ask for the newest release, on a thread of its own, so nothing waits on it. It
-    // asks nothing where the check is off or the session keeps nothing (UPDATE-8, UPDATE-11).
-    bravebot_update::desktop_refresh(
-        bravebot_ui_bridge::settings::layers(
-            std::env::current_dir().ok().as_deref(),
-            settings.as_deref(),
-        )
-        .update_check(),
-    );
+    // asks nothing where the check is off or the session keeps nothing (UPDATE-8, UPDATE-11). The
+    // check is the person's setting and read where `update.status` reads it, so no folder the
+    // window happened to be started from turns one off and leaves the other on (UPDATE-12).
+    bravebot_update::desktop_refresh(bravebot_ui_bridge::settings::update_check(
+        settings.as_deref(),
+    ));
 
     // One writer behind a lock, so a line from an event and a line from a response cannot
     // interleave. Shared with the bridge, which emits events from whichever thread a turn

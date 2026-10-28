@@ -1,5 +1,3 @@
-import { isVersion } from './update'
-
 export interface ConversationPreferences {
   botSlug: string | null
   draft: string
@@ -44,5 +42,5 @@ export function parseExperience(value: unknown): Experience {
   }
   return { conversations,
     recentModels: Array.isArray(v.recentModels) ? [...new Set(v.recentModels.filter((m): m is string => typeof m === 'string' && m.length < 1000))].slice(0, 8) : [],
-    dismissedUpdate: isVersion(v.dismissedUpdate) ? v.dismissedUpdate : null }
+    dismissedUpdate: typeof v.dismissedUpdate === 'string' && v.dismissedUpdate.length > 0 && v.dismissedUpdate.length < 1000 ? v.dismissedUpdate : null }
 }

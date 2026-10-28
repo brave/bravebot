@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Modal } from './Modal'
 import { Button, Collapse, Icon, Link } from '../nala'
 import { updateLine, updateState, type UpdateStatus } from '../../shared/update'
+import { dayOf } from '../time'
 
 export interface AboutInfo {
   version: string
@@ -39,7 +40,7 @@ export function About({ info, update, onDownload, onReportBug, onClose }: {
       <span className="about-version">Version {agentVersion}</span>
     </div>
     <div className={`about-update${newer ? ' newer' : ''}`} role="status" data-test="about-update" data-state={updateState(update)}>
-      <span>{updateLine(update)}</span>
+      <span>{updateLine(update, (iso) => dayOf(iso))}</span>
       {newer && <Button kind="filled" size="small" onClick={onDownload} data-test="about-download">
         <Icon name="download" slot="icon-before" />Download
       </Button>}
