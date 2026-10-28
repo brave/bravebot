@@ -28,6 +28,8 @@ add one is not offered. So is the record of directories you answered yes to at t
 which is [kept](../security/trust.md#remembering-the-answer): a kept yes still trusts the directory,
 the session says so as it opens, a new yes is not kept and the question says so, and `/forget-trust`
 changes nothing and names the file so you can remove it yourself.
+The record of AWS Bedrock models that refused the request for their thinking to be shown is read too,
+so a model known to refuse it is not sent it, and a refusal this session finds is not written.
 
 **One thing is not read: your standing answer about [vetting](../security/vetting.md).** If you have
 pressed the key that stops bravebot asking before content nobody vouched for reaches the planner,

@@ -16,6 +16,7 @@ pub mod answers;
 pub mod aside;
 pub mod attached;
 pub mod backend;
+pub mod bedrock_refusals;
 mod calendar;
 pub mod chatgpt;
 pub mod cmdline;

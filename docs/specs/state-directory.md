@@ -7,6 +7,7 @@ governs:
   - crates/agent/src/granted.rs
   - crates/agent/src/remembered.rs
   - crates/agent/src/reach.rs
+  - crates/agent/src/bedrock_refusals.rs
   - crates/agent/src/trusted.rs
   - crates/config/src/settings.rs
   - crates/session/src/store.rs
@@ -37,7 +38,8 @@ instructions, an imported subscription, the command lines somebody asked to be r
 session, the reach somebody remembered for a command, the command lines a shell hook recorded for the terminal still open ([shell-integration.md](shell-integration.md)), the permission rules somebody granted a checkout and the answers to the startup question
 somebody asked to be kept all live here, and so does the record of the definitions' memories a
 session left untrusted, `untrusted/` ([MEMORY-5](definition-memory.md#MEMORY-5)). The rules and facts a person's sessions remember live here too, as `projects/<id>/` and `facts/` ([recall.md](recall.md)), written readable by their owner alone and refused to programs like the rest of the directory.
-The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)). `bravebot bug-report` writes into the working directory and adds nothing here.
+The diagnostic logs, `logs/`, are written there too ([diagnostic-log.md](diagnostic-log.md)). Which Bedrock models refused the ask to show thinking is kept there as `bedrock-refusals.json`
+([BACKEND-63](backends.md#BACKEND-63)). `bravebot bug-report` writes into the working directory and adds nothing here.
 [definition-memory.md](definition-memory.md) proposes one more, which nothing yet builds: the
 definition a desktop bot is made as. [checkouts.md](checkouts.md) proposes another, which nothing
 yet builds either: the checkouts delegates are given, `checkouts/`, which hold a project's files
@@ -295,7 +297,8 @@ a whole number above zero. `doctor` names the file. The built-in period is not p
 Left where they are at any age: the rules a person granted, the answers to the startup question kept
 past a session, the memories left untrusted, the acceptances of findings, the prompt history, the
 settings, standing instructions, skills and an imported subscription, which a person asked to keep or
-wrote themselves. The diagnostic logs are bounded by their own rule
+wrote themselves. The record of Bedrock models that refused the ask to show thinking is left too: it
+bounds its own entries by their age ([BACKEND-63](backends.md#BACKEND-63)). The diagnostic logs are bounded by their own rule
 ([diagnostic-log.md](diagnostic-log.md)).
 
 Removal stops at the state directory, and the sessions it looks in are the state directory's own: a

@@ -7,6 +7,7 @@ governs:
   - crates/agent/src/home.rs
   - crates/agent/src/remembered.rs
   - crates/agent/src/reach.rs
+  - crates/agent/src/bedrock_refusals.rs
   - crates/agent/src/trusted.rs
   - crates/agent/src/subscription.rs
   - crates/session/src/store.rs
@@ -117,7 +118,9 @@ which [sandboxing.md](sandboxing.md#SANDBOX-23) governs: a grant already in it i
 anywhere, and `/reach` adds none and says so. So is the record of answers to the startup question
 somebody asked to be kept, which [trust-map.md](trust-map.md#TRUST-23) governs: a kept answer settles
 the question here as anywhere, the session says so as it opens, a yes is not kept and the question
-says so, and `/forget-trust` writes nothing and names the file.
+says so, and `/forget-trust` writes nothing and names the file. So is the record of Bedrock models that
+refused the ask to show thinking, which [BACKEND-63](backends.md#BACKEND-63) governs: a refusal already
+in it settles the ask here as anywhere, and one this session finds is not written.
 
 **The one read refused is the standing answer about whether a check answers in somebody's place.**
 The word a person's own directory holds about that is not read in this mode, so a session here asks
@@ -149,6 +152,8 @@ to remember.
 `verified-by: bravebot_agent::incognito::a_line_an_earlier_session_recorded_is_still_honoured`
 `verified-by: bravebot_agent::incognito::no_remembered_reach_is_written_down`
 `verified-by: bravebot_agent::incognito::a_reach_an_earlier_session_remembered_is_still_honoured`
+`verified-by: bravebot_agent::incognito::no_bedrock_refusal_is_written_down`
+`verified-by: bravebot_agent::incognito::a_bedrock_refusal_an_earlier_session_kept_is_still_honoured`
 
 <a id="INCOG-6"></a>
 ### INCOG-6: asking is one way, and composes with every other way of starting

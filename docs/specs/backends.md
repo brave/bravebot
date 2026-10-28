@@ -37,6 +37,7 @@ governs:
   - crates/config/src/lib.rs
   - crates/config/src/managed.rs
   - crates/bedrock/src/lib.rs
+  - crates/agent/src/bedrock_refusals.rs
   - crates/aichat/src/lib.rs
   - crates/aichat/src/call.rs
   - crates/aichat/src/anthropic.rs
@@ -2887,6 +2888,7 @@ words or its record in the conversation, and a reply that carried it is as reada
 not. A model that refuses a request carrying
 the ask is asked again without it, and no later request carries it to that model, on the terms
 [BACKEND-22](#BACKEND-22) gives the level, that clause stating the order the concessions go in.
+A later session is told what this one found, as [BACKEND-63](#BACKEND-63) says.
 
 **Why.** A model that thinks before it writes sends nothing while it does unless asked, and the
 egress layer cuts a connection that has sent nothing for two minutes. Measured on Bedrock, Claude
@@ -3980,6 +3982,58 @@ says nothing about the port. Refusing where the url is read puts the fault on th
 `verified-by: bravebot_cli::doctor::a_gateway_dropped_for_its_port_is_reported_with_its_id_and_the_port_and_not_the_url`
 `verified-by: bravebot_cli::running::doctor_names_a_provider_left_out_for_its_port_without_the_rest_of_its_url`
 
+<a id="BACKEND-63"></a>
+### BACKEND-63: a Bedrock model that refused the ask to show thinking is not asked again for thirty days
+
+Where a streamed request to a Bedrock model was refused for carrying the ask to show thinking
+([BACKEND-46](#BACKEND-46)) and the same request without it was answered, the model's name is kept
+with the time of the finding in `bedrock-refusals.json` in the state directory. The first streamed
+request to that model in a later session leaves the ask out, as a request after the finding in the
+same session does.
+
+An entry is believed while it is less than thirty days from now, in either direction. After that the
+model is asked again, and a model that refuses again is kept again from that time. A stamp far in the
+future, from a clock set wrong or a file edited by hand, is believed for no longer than one in the
+past. The file names at most sixty-four models, and a write drops the oldest past that and every
+entry no longer believed. Entries are by the name the request goes out under, so what one model
+refused says nothing about another.
+
+Nothing but the name and the time is kept, and nothing a service sent: the finding is made from
+statuses alone. The file is read the first time a model is used in a process and written once, when
+the process has found the model to refuse the ask. A file that is missing, larger than 64 KiB, not a
+regular file, or not this shape holds nothing, and the next finding replaces it. No state directory,
+or a write that fails, leaves the model to be asked as it was before this. The level, the caching and
+the other concessions [BACKEND-22](#BACKEND-22) describes are not kept, and each process learns them
+again.
+
+An incognito session reads the file and writes nothing ([INCOG-5](incognito.md#INCOG-5)). The file is
+written readable by its user only, like the rest of the directory ([STATE-1](state-directory.md#STATE-1)).
+
+**Built:** `bravebot_agent::bedrock_refusals` (`Store`, `put_back`, `keep_what_was_found`), called
+around a streamed request in `Backend::complete_streaming`; `bravebot_bedrock::known_to_refuse_showing_thinking`.
+
+**Not built:** keeping any other concession, and a way to forget one entry short of deleting the file
+or waiting out the period.
+
+**Why.** An inference-profile ARN does not name the model behind it, so a model is told from another
+only by asking. Measured on Bedrock on 2026-10-28 with the field alone: Claude Opus 5.5 takes
+`thinking: {"display": "summarized"}`, and Claude Sonnet 5.5 and Claude Haiku 4.5 answer 400
+`thinking.type: Field required`. No `type` suits all three: `adaptive` turns thinking on for Sonnet,
+which BACKEND-46 never does, and Haiku refuses it. A refusal kept only for the process is paid for
+again in every new process, as a refused request at the start of the session and a diagnostic log for a
+one-shot run that otherwise worked. Thirty days bounds how long a model that starts reading the ask
+goes without it, which costs the silence BACKEND-46 describes only for a model that thinks before it
+writes.
+
+`verified-by: bravebot_agent::bedrock_refusals::a_refusal_kept_by_one_session_is_read_by_the_next_for_that_model_only`
+`verified-by: bravebot_agent::bedrock_refusals::a_refusal_is_believed_for_thirty_days_and_not_after`
+`verified-by: bravebot_agent::bedrock_refusals::a_stamp_in_the_future_is_believed_for_the_period_and_no_longer`
+`verified-by: bravebot_agent::bedrock_refusals::a_file_that_is_not_this_record_holds_nothing_and_is_replaced_by_the_next_finding`
+`verified-by: bravebot_agent::bedrock_refusals::the_file_keeps_the_newest_sixty_four_models_and_none_that_expired`
+`verified-by: bravebot_bedrock::lib::a_model_an_earlier_session_found_refusing_the_ask_is_not_sent_it`
+`verified-by: bravebot_agent::incognito::no_bedrock_refusal_is_written_down`
+`verified-by: bravebot_agent::incognito::a_bedrock_refusal_an_earlier_session_kept_is_still_honoured`
+
 ## Known costs
 
 - **Each change of mode costs a full prefix write.** BACKEND-27 and BACKEND-32 mark a cache prefix
@@ -4000,6 +4054,20 @@ says nothing about the port. Refusing where the url is read puts the fault on th
   (BACKEND-3), so a mistyped `fallbackModel` passes BACKEND-53's same-service test. The turn moves to
   it, the endpoint refuses it, and the failure that ends the turn is that refusal rather than the
   overload that preceded it.
+
+- **A Bedrock model that starts reading the ask to show thinking is not asked for up to thirty
+  days.** BACKEND-63 keeps a refusal by the model's name, and nothing tells the program that a
+  model behind the same name has changed. Within the period a model that thinks by default and now
+  takes the ask goes without it, and a long silence while it thinks can be cut by the egress layer
+  (BACKEND-46). Deleting `bedrock-refusals.json` asks again at once. The file also holds the
+  inference-profile ARN, which includes the AWS account number, in a file only its user can read.
+
+- **Every other concession is learned again by each process.** BACKEND-63 keeps the ask to show
+  thinking, the one refusal a request to a Sonnet or Haiku model meets without anyone having chosen
+  anything. A Bedrock model that refuses the effort level, the caching or the assumed ceiling costs a
+  refused request in each process, as does a refusal learned by any other client, all of which are
+  kept for the process only (BACKEND-22). The level is a choice a person made and is reported as not
+  in force once refused, and the caching and the ceiling are refused only by models that lack them.
 
 - **The refusal is made at startup, and a model chosen mid-session is not checked again.**
   BACKEND-39 is asked once, before a session opens, so somebody who opens on a configured model and
