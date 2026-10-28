@@ -46,6 +46,13 @@ CHECKS_DOC = Path("docs/development/checks.md")
 DOC_TARGET = re.compile(r"`make (check-[\w-]+)`")
 GATES_A_PULL_REQUEST = ("fails a pull request", "fails rather than")
 
+# Who owns what, and the files a workflow step runs by name. A step runs the copy of a file in the
+# checkout it is in, which for a pull request is the pull request's own, so a file a step runs that
+# CODEOWNERS leaves out can be rewritten under two ordinary approvals.
+CODEOWNERS = Path(".github/CODEOWNERS")
+RUNS_A_FILE = re.compile(r"(?:^|[\s;&|(])(?:python3?|bash|sh|node)\s+([\w./-]+)")
+RUNS_MAKE = re.compile(r"(?:^|[\s;&|(])make\b")
+
 # What a job can hold that is worth stealing, and the commands that run bytes nobody here wrote. The
 # grant is a permission to request a token rather than a token, which is the whole of the difference:
 # the runner hands every step in the job the two variables that turn it into one.
@@ -1012,4 +1019,92 @@ def check_required_checks_are_the_gates():
             evidence=[f"{CHECKS_DOC}:{number}"],
             fix="give the target a job and require its context, or amend the paragraph to say "
             "what actually runs it",
+        )
+
+
+def code_owner_patterns():
+    """CODEOWNERS as (regex, owners) in file order, where the last match wins, or None if absent."""
+    if not CODEOWNERS.is_file():
+        return None
+    rules = []
+    for raw in CODEOWNERS.read_text(encoding="utf-8").split("\n"):
+        words = raw.split("#")[0].split()
+        if not words:
+            continue
+        pattern = words[0]
+        body = re.escape(pattern.strip("/")).replace(r"\*\*", ".*").replace(r"\*", "[^/]*")
+        head = "" if pattern.startswith("/") or "/" in pattern.rstrip("/") else "(?:.*/)?"
+        tail = "(?:/.*)?"
+        rules.append((re.compile(f"^{head}{body}{tail}$"), words[1:]))
+    return rules
+
+
+def owners_of(path, rules):
+    """The owners of `path` under the last rule that matches it, or none."""
+    owners = []
+    for pattern, who in rules:
+        if pattern.match(path):
+            owners = who
+    return owners
+
+
+def files_workflows_run():
+    """Each file a workflow step runs by path, with where it is named: `python3 <path>`, and the
+    Makefile wherever a step calls `make`."""
+    found = {}
+    if not WORKFLOWS.is_dir():
+        return found
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml")):
+        for number, raw in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
+            if raw.lstrip().startswith("#"):
+                continue
+            for named in RUNS_A_FILE.findall(raw):
+                if Path(named).is_file():
+                    found.setdefault(named, f"{path}:{number}")
+            if RUN.match(raw) and RUNS_MAKE.search(raw) and Path("Makefile").is_file():
+                found.setdefault("Makefile", f"{path}:{number}")
+    return found
+
+
+def check_run_files_have_owners():
+    """Every file a workflow step runs by path has a code owner.
+
+    The two approvals every pull request needs are the whole of review for a path nobody owns.
+    A file a required job runs is code that decides what the job reports, and the classifier that
+    decides which required jobs run at all is the sharpest case: a pull request that edits it to
+    report every area unaffected makes seven required contexts skip as passing, and owns no path.
+    `.github/workflows/` and `contrib/required-checks.txt` were owned for that reason while the
+    files the same steps run were not.
+
+    Only a file a step names is read, so a script a recipe calls in turn is not. That is the
+    Makefile's entry to cover, which is why `make` counts as naming it.
+    """
+    rules = code_owner_patterns()
+    if rules is None:
+        yield finding(
+            ERROR,
+            "unrecorded-code-owners",
+            f"`{CODEOWNERS}` is gone, so no path needs a code owner's approval",
+            f"`{CODEOWNERS}` is the only statement of which paths a merge needs an owner for",
+            "infrastructure",
+            "medium",
+            evidence=[f"{CODEOWNERS}: absent"],
+            fix="restore the file",
+        )
+        return
+    for path, where in sorted(files_workflows_run().items()):
+        if owners_of(path, rules):
+            continue
+        yield finding(
+            ERROR,
+            "unowned-workflow-file",
+            f"`{path}` is run by a workflow and has no code owner, so a pull request can rewrite "
+            "what a required check does under two ordinary approvals",
+            f"`{where}` runs `{path}` from the pull request's own checkout, and `{CODEOWNERS}` "
+            "has no entry for it, so a change to it needs no code owner's review while the "
+            "workflows that call it do",
+            "infrastructure",
+            "medium",
+            evidence=[f"{where} runs {path}", f"{CODEOWNERS}: no entry for {path}"],
+            fix=f"add `/{path}` to `{CODEOWNERS}` beside `/.github/workflows/`",
         )
