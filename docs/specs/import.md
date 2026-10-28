@@ -80,6 +80,7 @@ should not open with a question about another program.
 
 `verified-by: bravebot_cli::running::a_first_run_with_claude_code_configured_offers_to_import_it`
 `verified-by: bravebot_cli::running::a_first_run_with_an_exported_key_offers_an_entry_naming_the_variable`
+`verified-by: bravebot_cli::running::a_first_run_with_a_claude_code_key_command_writes_an_entry_naming_the_variable`
 `verified-by: bravebot_cli::running::a_first_run_with_ollama_running_offers_to_import_it`
 `verified-by: bravebot_cli::running::a_first_run_with_nothing_importable_refuses_as_before`
 `verified-by: bravebot_cli::running::a_configured_service_with_a_brave_model_is_not_offered_an_import`
@@ -88,12 +89,16 @@ should not open with a question about another program.
 <a id="IMPORT-2"></a>
 ### IMPORT-2: only a person's own user-level configuration is read, never a checkout's
 
-**Claude Code.** Two sources are read:
+**Claude Code.** Three sources are read:
 
 - `settings.json` in `$CLAUDE_CONFIG_DIR`, which defaults to `~/.claude`. Nothing else in that
   directory is opened: not `.credentials.json`, and not the macOS keychain entry.
 - `CLAUDE_CODE_USE_BEDROCK` in the process environment, because that is where a Claude Code Bedrock
   setup is often exported.
+- `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and `ANTHROPIC_BASE_URL` in the process
+  environment, which Claude Code reads as it reads the settings file's `env`. They are read only for
+  whether they are set, and are written nowhere. Each means a key Claude Code reaches a service with
+  was not issued for Anthropic's API ([IMPORT-3](#IMPORT-3)).
 
 **opencode.** Three sources are read, merged the way opencode merges them:
 
@@ -169,7 +174,9 @@ A proxy the environment names carries this request as it carries every other
 | Claude Code | `env.AWS_REGION` or `env.AWS_PROFILE` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` in the settings file | the same names under `env` |
 | Claude Code | `env.ANTHROPIC_MODEL` or `model` is `opus`, `sonnet` or `haiku`, and that tier names a model | `model` |
-| Claude Code | `env.ANTHROPIC_API_KEY` in the settings file, with no `env.ANTHROPIC_BASE_URL` beside it | `provider.anthropic`, at the endpoint compiled in, with the credential as [IMPORT-6](#IMPORT-6) says |
+| Claude Code | `env.ANTHROPIC_API_KEY` in the settings file, with no `ANTHROPIC_BASE_URL` stated beside it or exported | `provider.anthropic`, at the endpoint compiled in, with the credential as [IMPORT-6](#IMPORT-6) says |
+| Claude Code | `apiKeyHelper` in the settings file, where none of the cases of the next paragraph holds | `provider.anthropic`, at the endpoint compiled in: `{"env": ["ANTHROPIC_API_KEY"]}` |
+| Claude Code | `env.ANTHROPIC_MODEL` or `model` is a name of the form `claude-…`, beside the `anthropic` entry this import writes | `model: "anthropic/<name>"` |
 | opencode | a `provider` entry bravebot's own reading keeps, whose `npm` is absent, `@ai-sdk/openai-compatible`, `@openrouter/ai-sdk-provider` for `openrouter`, `@ai-sdk/amazon-bedrock` for `amazon-bedrock`, `@ai-sdk/google-vertex` for `google-vertex`, `@ai-sdk/anthropic` for `anthropic`, or `@ai-sdk/openai` for `openai` where it states no `baseURL` or OpenAI's | that entry under `provider`, holding only the fields bravebot reads: `name`, `env`, `models`, `options.baseURL`, `options.region`, `options.profile`, `options.project`, `options.location`, and the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | an `auth.json` entry of `type: "api"` for an id whose endpoint is compiled in, with no config entry for that id | a `provider` entry for that id, with the credential as [IMPORT-6](#IMPORT-6) says |
 | opencode | a top-level `model` of the form `provider/model`, where the import writes that provider's entry | `model`, in the form that names the gateway; for `amazon-bedrock`, the model's own id, added to that entry's `models` |
@@ -200,6 +207,32 @@ offered the same way, as an entry of its own at that endpoint, where the setting
 `env.ANTHROPIC_BASE_URL`. A key stated beside a host was issued for that host, and an entry written
 from it would send it to Anthropic's, so the key and the host are both left
 ([IMPORT-4](#IMPORT-4)).
+
+**A key command is not run.** A person who signs Claude Code in to Anthropic's API with a command
+writes it as `apiKeyHelper`, and the key it prints is for that API unless the settings send it
+elsewhere. So where `apiKeyHelper` is stated and nothing below holds, the import offers an `anthropic`
+entry naming `ANTHROPIC_API_KEY`, which is the only place an `anthropic` entry reads a key from
+([BACKEND-57](backends.md#BACKEND-57)). Whether the command is stated is the only thing read about
+it: the command is not run, not copied, not shown, and nothing it holds reaches an entry, a line or a
+model. The credential line shown beside the entry
+says its key comes from a command that is never run, and to export what it prints as that variable
+([IMPORT-6](#IMPORT-6)). The entry is offered only where none of these holds:
+
+- a key stated as `env.ANTHROPIC_API_KEY`, which is the entry above and needs no second one;
+- `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or `CLAUDE_CODE_USE_FOUNDRY` on, stated or
+  exported, because Claude Code then reaches that account and does not use the command for
+  Anthropic's. Nothing is offered or said for the command;
+- `env.ANTHROPIC_BASE_URL` or `env.ANTHROPIC_AUTH_TOKEN` stated, or `ANTHROPIC_BASE_URL` exported,
+  because the key the command prints was issued for that host and an entry for Anthropic's would
+  send it there. The command is listed as left for that reason.
+
+**A model Claude Code states for Anthropic's API is a name or a word.** A `claude-` followed by
+letters, digits, `.`, `_` and `-` is the name Anthropic's API knows, and is written as
+`anthropic/<name>` beside an `anthropic` entry this import writes ([IMPORT-5](#IMPORT-5)). Anything
+else is a word Claude Code resolves itself (`sonnet`, `opusplan`, `opus[1m]`) and is listed as left,
+because written as it stands a tier word names a model on Brave's roster
+([`Tier::brave_model`](../../crates/config/src/bedrock.rs)) and not Anthropic's. No table of what a
+word means is held, since it would go stale with each release.
 
 **An `openai` entry is offered when it names no `npm`**, at `https://api.openai.com/v1`, where it is
 reached in the Responses protocol ([BACKEND-17](backends.md#BACKEND-17)). One naming `@ai-sdk/openai`, the
@@ -279,6 +312,14 @@ build reads it.
 `verified-by: bravebot_config::import::an_auth_json_key_for_anthropic_is_a_provider_and_its_sign_in_is_not`
 `verified-by: bravebot_config::import::a_claude_code_anthropic_key_is_an_anthropic_provider`
 `verified-by: bravebot_config::import::a_claude_code_anthropic_key_for_another_host_or_a_bearer_token_is_left`
+`verified-by: bravebot_config::import::a_key_command_is_an_anthropic_entry_naming_the_variable`
+`verified-by: bravebot_config::import::a_key_command_beside_a_cloud_account_or_a_host_is_not_an_anthropic_entry`
+`verified-by: bravebot_config::import::a_key_beside_an_exported_host_is_left`
+`verified-by: bravebot_config::import::a_key_command_beside_a_stated_key_adds_no_second_entry`
+`verified-by: bravebot_config::import::a_blank_key_command_is_not_a_setup`
+`verified-by: bravebot_config::import::a_model_for_anthropics_api_is_written_only_where_it_is_a_name_and_beside_its_entry`
+`verified-by: bravebot_cli::import::a_claude_code_key_command_is_written_as_an_entry_naming_the_variable`
+`verified-by: bravebot_cli::import::a_claude_code_model_for_anthropics_api_is_written_beside_its_entry`
 `verified-by: bravebot_cli::import::a_claude_code_anthropic_key_is_asked_about_and_written_as_an_entry`
 `verified-by: bravebot_config::import::an_auth_json_key_for_openai_is_a_provider`
 `verified-by: bravebot_config::import::only_the_fields_bravebot_reads_are_written`
@@ -299,18 +340,21 @@ build reads it.
 
 **Never imported.** These keys are never read into a setting:
 
-- Claude Code: `apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`, `permissions`, `hooks`,
-  `mcpServers`.
+- Claude Code: `awsAuthRefresh`, `awsCredentialExport`, `permissions`, `hooks`, `mcpServers`, and
+  the value of `apiKeyHelper`. Whether `apiKeyHelper` is stated is read ([IMPORT-3](#IMPORT-3)).
 - opencode: `permission`, `mcp`, `agent`, `command`, `plugin`.
 
 **Found but not importable.** These are listed after what is importable, one line each with the
 reason:
 
-- Claude Code's `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`, and its `ANTHROPIC_API_KEY` where
-  `ANTHROPIC_BASE_URL` is stated beside it: settings for Anthropic's own API, which an `anthropic`
-  entry reaches ([BACKEND-57](backends.md#BACKEND-57)). A bearer token is not the header that API
-  reads a key from, and a host is written without the route this program appends, so the line says to
-  add an entry;
+- Claude Code's `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`, its `ANTHROPIC_API_KEY` where
+  `ANTHROPIC_BASE_URL` is stated beside it or exported, and its `apiKeyHelper` where
+  `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` is stated or `ANTHROPIC_BASE_URL` is exported:
+  settings for Anthropic's own API, which an `anthropic` entry reaches
+  ([BACKEND-57](backends.md#BACKEND-57)). A bearer token is not the header that API reads a key from,
+  and a host is written without the route this program appends, so the line says to add an entry;
+- Claude Code's `model` or `ANTHROPIC_MODEL` where it is a word of Claude Code's own, beside an
+  `anthropic` entry ([IMPORT-3](#IMPORT-3));
 - `CLAUDE_CODE_USE_VERTEX`, which serves Claude models through Google Cloud credentials, and an
   opencode `google-vertex` entry naming no project and no key, or a `baseURL` and no project, which
   this program has nothing to reach the service with ([IMPORT-3](#IMPORT-3));
@@ -355,6 +399,7 @@ setup was looked at.
 `verified-by: bravebot_config::import::a_key_exported_beside_a_host_of_its_own_is_left`
 `verified-by: bravebot_cli::import::a_key_exported_beside_a_host_is_said_to_be_left_and_not_asked_about`
 `verified-by: bravebot_cli::running::a_key_exported_beside_a_host_is_said_to_be_left_before_the_routes`
+`verified-by: bravebot_cli::running::a_claude_code_key_command_is_importable_and_the_refusal_names_the_command`
 
 <a id="IMPORT-5"></a>
 ### IMPORT-5: everything that would be written is shown before the question, and only the affirmative writes
@@ -443,6 +488,11 @@ line says so.
 A `{file:path}` credential is not followed. It is treated as a declined key, and its line names the
 path.
 
+**Where the source runs a command for the key** (Claude Code's `apiKeyHelper`, [IMPORT-3](#IMPORT-3)),
+no value is read and no question about a key is asked. The entry names `ANTHROPIC_API_KEY`, and the
+credential line says that the key comes from a command, which is never run, and to export what it
+prints as that variable. The line names neither the command nor anything in it.
+
 A substitution is read only where it is the whole value. A key such as `Bearer {env:TOKEN}`, two
 substitutions side by side, or an `{env:}` naming no variable would need bravebot to make the
 substitution opencode makes, and written as it stands it is not the key opencode sends. That entry is
@@ -498,6 +548,7 @@ with nothing configured gets. Incognito adds nothing to `~/.bravebot`
 `verified-by: bravebot_config::import::a_destination_adds_names_and_replaces_none`
 `verified-by: bravebot_cli::import::a_name_already_set_keeps_its_value`
 `verified-by: bravebot_cli::import::an_exported_key_for_an_entry_the_file_already_has_is_left_as_it_is`
+`verified-by: bravebot_cli::import::a_key_command_and_an_exported_key_for_anthropic_are_asked_about_once`
 `verified-by: bravebot_cli::import::a_settings_file_that_does_not_parse_is_not_rewritten`
 `verified-by: bravebot_cli::import::a_file_changed_while_asking_is_not_written_over`
 `verified-by: bravebot_cli::import::the_written_file_is_readable_only_by_the_user`
