@@ -10984,6 +10984,61 @@ fn doctor_names_a_projects_unread_key_only_where_the_directory_is_trusted() {
     );
 }
 
+/// LAYER-3, CLI-7: a vouched project's unread frontmatter key and the skill directory's own name
+/// reach `doctor` unchanged from `SKILL.md`, so either is drawn as pictures rather than reaching
+/// the terminal with its control characters (#3055).
+#[test]
+fn doctor_draws_a_vouched_projects_skill_keys_and_directory_name_as_pictures() {
+    let scratch = Scratch::new("cli-running-skill-key-and-dirname-escapes");
+    let cwd = scratch.path.join("project");
+    let key_skill = cwd.join(".claude/skills/imported/SKILL.md");
+    std::fs::create_dir_all(key_skill.parent().unwrap())
+        .expect("create the first skill's directory");
+    std::fs::write(
+        &key_skill,
+        "---\nname: imported\ndescription: d\n\u{1b}[8mhidden-key: x\n---\n\nthe body\n",
+    )
+    .expect("write the first skill");
+
+    let name_skill = cwd
+        .join(".claude/skills")
+        .join("ported\u{1b}[8m2")
+        .join("SKILL.md");
+    std::fs::create_dir_all(name_skill.parent().unwrap())
+        .expect("create the second skill's directory");
+    std::fs::write(
+        &name_skill,
+        "---\nname: ported2\ndescription: d\nextra: y\n---\n\nthe body\n",
+    )
+    .expect("write the second skill");
+
+    let Some(identity) = bravebot_agent::trusted::Identity::of(&cwd) else {
+        eprintln!("skipped: this filesystem cannot say when a directory was made");
+        return;
+    };
+    let store = bravebot_agent::trusted::Store::new(&scratch.path.join(".bravebot"), &cwd);
+    assert!(
+        store.keep(&identity, "1-2", 7, false),
+        "the answer was not kept"
+    );
+
+    let output = bravebot_started_in(&scratch.path, &cwd, CONFIGURED, &["doctor"]);
+    let (stdout, stderr) = said(&output);
+    assert_eq!(
+        control_character_in(&stdout),
+        None,
+        "doctor sent a control character from a skill on stdout: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("\u{241b}[8mhidden-key"),
+        "doctor did not draw the unread key as a picture: {stdout}{stderr}"
+    );
+    assert!(
+        stdout.contains("ported\u{241b}[8m2/SKILL.md"),
+        "doctor did not draw the skill directory's name as a picture: {stdout}{stderr}"
+    );
+}
+
 /// A definition as a person keeps one under this home's own directory, which a run reads without
 /// asking anybody, since nobody but the person writes there (DELEGATE-20).
 fn a_definition(name: &str, fields: &str) -> String {

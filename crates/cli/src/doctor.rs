@@ -130,13 +130,21 @@ fn skill_keys_unread(
         .iter()
         .filter(|skill| !skill.unread.is_empty())
         .map(|skill| {
+            // skill.origin holds the skill directory's name and each unread key is read off its
+            // frontmatter unchanged, so both are drawn through printable the way every other
+            // piece of a checkout's own text shown by this command already is (LAYER-3, CLI-7).
+            let keys: Vec<String> = skill
+                .unread
+                .iter()
+                .map(|key| progress::printable(key))
+                .collect();
             aligned(
                 t!(doctor_skill_key_unread),
                 t!(
                     doctor_skill_keys_unread,
-                    skill = &skill.origin,
+                    skill = progress::printable(&skill.origin),
                     count = skill.unread.len() as i64,
-                    keys = skill.unread.join(", ")
+                    keys = keys.join(", ")
                 ),
                 FACT,
             )
