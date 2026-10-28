@@ -1066,6 +1066,7 @@ pub(super) fn run_turn_animated(
     let mut whole = session.work();
     whole.then(finished.work);
     stored.set_work(whole);
+    stored.set_written(&session.written());
     Ok(finish_turn(
         session,
         config,

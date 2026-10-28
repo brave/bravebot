@@ -930,6 +930,9 @@ pub struct Session {
     goal: Option<crate::goals::Running>,
     /// What every turn of this session did, added in order (OPEN-1).
     work: bravebot_agent::Work,
+    /// The files a resumed session's record says it wrote, whose calls replay without what they
+    /// wrote (OPEN-6).
+    written_before: Vec<std::path::PathBuf>,
     /// The open loops when the person was last shown them, and when the planner was last told
     /// (OPEN-3, OPEN-4).
     loops_shown: bravebot_agent::open_loops::Loops,
@@ -1366,6 +1369,7 @@ impl Session {
             driver_prompt_pending: false,
             goal: None,
             work: bravebot_agent::Work::default(),
+            written_before: Vec::new(),
             loops_shown: Default::default(),
             loops_told: Default::default(),
             addressing: None,

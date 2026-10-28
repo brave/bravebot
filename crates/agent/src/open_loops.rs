@@ -112,13 +112,12 @@ impl Loops {
             .collect()
     }
 
-    /// What the planner is told at the start of a turn, where its loops or the person's are
-    /// open (OPEN-4). Running jobs are left out: the planner is told of those already (RUN-15).
+    /// What the planner is told at the start of a turn, where any loop is open (OPEN-4).
     ///
-    /// Fixed English and counts. No path, no command and no todo text, so nothing a turn read or
+    /// Fixed English, counts and the job names bravebot minted. No path, no command and no todo text, so nothing a turn read or
     /// wrote speaks to the planner through it (OPEN-7).
     pub fn to_the_planner(&self) -> Option<String> {
-        if self.of(Owner::Planner).is_empty() && self.of(Owner::Person).is_empty() {
+        if self.is_empty() {
             return None;
         }
         let said = |kinds: Vec<Kind>| -> Vec<String> {
@@ -149,7 +148,17 @@ impl Loops {
                     theirs.join(", ")
                 ));
             }
-            true => {}
+            true => message.push(':'),
+        }
+        // The job names are ones bravebot minted, so they hold nothing a command printed (RUN-15).
+        match self.running_jobs.as_slice() {
+            [] => {}
+            [one] => message.push_str(&format!(" 1 job is still running: {one}.")),
+            many => message.push_str(&format!(
+                " {} jobs are still running: {}.",
+                many.len(),
+                many.join(", ")
+            )),
         }
         Some(message)
     }
@@ -215,19 +224,20 @@ pub fn uncommitted(
     let Some(listing) = listing else {
         return Vec::new();
     };
-    let differs: std::collections::BTreeSet<&str> = listing
+    // Compared as bytes, so a name that is not UTF-8 never matches the listing's lossy lookalike
+    // (PATH-001). git's status reader lists only names that are text, so such a name counts as
+    // nothing uncommitted.
+    let differs: std::collections::BTreeSet<&[u8]> = listing
         .changed
         .iter()
         .chain(&listing.removed)
-        .map(String::as_str)
+        .map(String::as_bytes)
         .collect();
     written
         .iter()
         .filter(|path| {
             path.strip_prefix(&repository)
-                .ok()
-                .and_then(|relative| relative.to_str())
-                .is_some_and(|relative| differs.contains(relative))
+                .is_ok_and(|relative| differs.contains(relative.as_os_str().as_encoded_bytes()))
         })
         .cloned()
         .collect()
@@ -323,6 +333,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// OPEN-1, PATH-003. A written name that is not UTF-8 is never taken for its lossy lookalike,
+    /// in either direction.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_name_that_is_not_utf8_is_told_apart_from_its_lossy_lookalike() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = crate::testutil::scratch_dir("open-loops-not-utf8");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root");
+        let root = root.canonicalize().expect("canonical");
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git ran");
+        assert!(status.success());
+        let raw = root.join(std::ffi::OsStr::from_bytes(b"tool-\xff"));
+        let lookalike = root.join("tool-\u{FFFD}");
+        std::fs::write(&raw, "raw").expect("raw");
+        std::fs::write(&lookalike, "lookalike").expect("lookalike");
+        assert_eq!(
+            uncommitted(&root, std::slice::from_ref(&lookalike)),
+            [lookalike]
+        );
+        assert!(
+            uncommitted(&root, std::slice::from_ref(&raw)).is_empty(),
+            "the raw name was taken for its lookalike"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// OPEN-2. Every kind has exactly one owner, and the split is the one the spec gives.
     #[test]
     fn each_kind_has_one_owner() {
@@ -360,7 +405,8 @@ mod tests {
             Some(
                 "Open from earlier in this session: changes not built since the last write; the \
                  last command failed; 2 todos are open. Yours to act on if they still matter. Also \
-                 open, for the person: 1 kept checkout, 3 files not committed."
+                 open, for the person: 1 kept checkout, 3 files not committed. 1 job is still \
+                 running: job:1."
             )
         );
         let theirs = Loops {
@@ -379,6 +425,9 @@ mod tests {
             running_jobs: vec!["job:1".to_string()],
             ..Loops::default()
         };
-        assert_eq!(waiting.to_the_planner(), None, "the jobs are told already");
+        assert_eq!(
+            waiting.to_the_planner().as_deref(),
+            Some("Open from earlier in this session: 1 job is still running: job:1.")
+        );
     }
 }

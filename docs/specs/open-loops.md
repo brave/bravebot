@@ -61,6 +61,7 @@ Each rule reads only bravebot's own records: the work record, exit statuses, the
 `verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
 `verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`
 `verified-by: bravebot_agent::open_loops::a_file_written_and_committed_is_not_uncommitted`
+`verified-by: bravebot_agent::open_loops::a_name_that_is_not_utf8_is_told_apart_from_its_lossy_lookalike`
 `verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
 `verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
 
@@ -102,9 +103,9 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 
 When the set of open loops has changed since the planner was last told, the next turn begins with one message from bravebot:
 
-> Open from earlier in this session: changes not built since the last write; the last command failed; 2 todos are open. Yours to act on if they still matter. Also open, for the person: 1 kept checkout, 3 files not committed.
+> Open from earlier in this session: changes not built since the last write; the last command failed; 2 todos are open. Yours to act on if they still matter. Also open, for the person: 1 kept checkout, 3 files not committed. 1 job is still running.
 
-It is fixed text with counts. It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters. Running jobs are left out, since the planner is told of them already ([RUN-15](tools/run.md#RUN-15)).
+It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/run.md#RUN-15)). It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters.
 
 **Why at the start, not the end.** At the end of a turn the planner has stopped. At the start of the next one it is deciding what to do, and the message survives compaction because it is sent fresh.
 
@@ -138,14 +139,14 @@ With nothing open it says `nothing is open`. It starts no turn and sends nothing
 <a id="OPEN-6"></a>
 ### OPEN-6: a resumed session shows what it left open
 
-The session record ([SESSION](sessions.md)) keeps the work record and the last command's status. On resume, bravebot works out the open loops again from the record and from the files on disk, shows the line from [OPEN-3](#OPEN-3), and tells the planner on the first turn as in [OPEN-4](#OPEN-4).
+The session record ([SESSION](sessions.md)) keeps the work record, the last command's status and the files the session wrote. On resume, bravebot works out the open loops again from the record and from the files on disk, shows the line from [OPEN-3](#OPEN-3), and tells the planner on the first turn as in [OPEN-4](#OPEN-4).
 
 What a resume can know:
 
 - unbuilt changes and a failed command, from the record
 - open todos, from the task lists the record keeps
 - kept checkouts and whether each was applied, from the record ([CHECKOUT-15](checkouts.md#CHECKOUT-15))
-- uncommitted files, from git
+- uncommitted files, from git, for the files the record says the session wrote
 - running jobs and a stopped goal end with the session's process, so they are not shown
 
 A record with no work record or last-command status reads as nothing open.
@@ -159,7 +160,7 @@ A record with no work record or last-command status reads as nothing open.
 
 No open loop stops a turn, holds a prompt, or keeps the session working. Ending with loops open is allowed: often the right answer is to leave them. Keeping the work going until a condition holds is `/goal`'s job ([GOAL-1](goal.md#GOAL-1)), not this one's.
 
-The planner's message is fixed English with counts, like the other sentences bravebot writes to the planner. The person's line comes from the catalog and is translated ([LOCALE](localization.md)). `/unfinished` shows paths, command lines and todo text to you only, released for display and never to the planner.
+The line and the planner's message are fixed English with counts and job names, like the other sentences bravebot writes to the planner. The person's line comes from the catalog and is translated ([LOCALE](localization.md)). `/unfinished` shows paths, command lines and todo text to you only, released for display and never to the planner.
 
 **Why never block.** A reminder that refuses to let you stop becomes the thing you fight. The point is that you know, not that you comply.
 
@@ -169,7 +170,7 @@ The planner's message is fixed English with counts, like the other sentences bra
 ## Changes to other specs
 
 - [turns.md](turns.md): [TURN-4](turns.md#TURN-4)'s line to the person is replaced by [OPEN-3](#OPEN-3)'s. Its question to the planner during the turn is unchanged.
-- [sessions.md](sessions.md): the record gains the work record and the last command's status, and each kept checkout whether it was applied ([OPEN-6](#OPEN-6)).
+- [sessions.md](sessions.md): the record gains the work record, the last command's status and the files the session wrote, and each kept checkout whether it was applied ([OPEN-6](#OPEN-6)).
 - [commands.md](commands.md): `/unfinished` is added ([OPEN-5](#OPEN-5)).
 - [localization.md](localization.md): the catalogs gain the person's line and `/unfinished`'s text.
 
@@ -186,3 +187,4 @@ The planner's message is fixed English with counts, like the other sentences bra
 - **Todo state is the planner's word.** A todo marked done is taken as done. bravebot does not check the work behind it.
 - **`commit` is not built yet** ([COMMIT-1](commits.md#COMMIT-1) is proposed), so every git repository counts as `commit = off` until it is.
 - **A repository whose `.git` is a file**, a worktree git made, counts no uncommitted files, since bravebot reads only a `.git` directory without starting git.
+- **A file whose name is not UTF-8 is never counted as uncommitted**, since bravebot's reader of git's status lists only names that are text. It is never taken for another file whose name reads the same.

@@ -2244,7 +2244,12 @@ fn restore_resumed(
     session.restore_rewind(record, workspace, &conversation);
     // Last, once the checkouts, the plan and the record's work are back: what the session left
     // open, worked out again from the record and the files on disk (OPEN-6).
-    session.resume_open_loops(record.work, workspace);
+    let written = record
+        .written
+        .iter()
+        .filter_map(bravebot_session::sessions::StoredPath::to_path)
+        .collect();
+    session.resume_open_loops(record.work, written, workspace);
     Ok((conversation, handle, vouched))
 }
 

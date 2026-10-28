@@ -497,6 +497,11 @@ pub struct Record {
     /// left open ([OPEN-6](open-loops.md#OPEN-6)). Nothing done in a record that does not say.
     #[serde(default)]
     pub work: bravebot_agent::Work,
+    /// The files the session's write calls landed on, in the order first written, so a resume can
+    /// ask git which are still uncommitted ([OPEN-6](open-loops.md#OPEN-6)). Empty in a record
+    /// that does not say.
+    #[serde(default)]
+    pub written: Vec<StoredPath>,
     /// What a manifest run produced, where this was one.
     ///
     /// Its presence is what makes a record a manifest run, and its absence a turn session. A
@@ -1592,14 +1597,14 @@ pub enum StoredPath {
 }
 
 impl StoredPath {
-    fn of(path: &Path) -> Self {
+    pub(crate) fn of(path: &Path) -> Self {
         match Spelling::of(path) {
             Spelling::Text(text) => Self::Text(text),
             Spelling::Bytes(bytes) => Self::Bytes(bytes),
         }
     }
 
-    fn to_path(&self) -> Option<PathBuf> {
+    pub fn to_path(&self) -> Option<PathBuf> {
         match self {
             Self::Text(text) => Spelling::Text(text.clone()),
             Self::Bytes(bytes) => Spelling::Bytes(bytes.clone()),
@@ -1967,6 +1972,8 @@ pub struct Handle {
     injected_facts: std::collections::BTreeSet<String>,
     /// What every turn of the session did (OPEN-6).
     work: bravebot_agent::Work,
+    /// The files the session wrote (OPEN-6).
+    written: Vec<StoredPath>,
     /// The definition the person named on the command line, for the record to carry.
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
@@ -2141,6 +2148,7 @@ impl Handle {
             notes: Vec::new(),
             injected_facts: std::collections::BTreeSet::new(),
             work: bravebot_agent::Work::default(),
+            written: Vec::new(),
             agent: None,
             skill_mode: None,
             wrote: false,
@@ -2214,6 +2222,7 @@ impl Handle {
             notes: record.notes.clone(),
             injected_facts: record.injected_facts.clone(),
             work: record.work,
+            written: record.written.clone(),
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
             // The record it came from is the one being written back to.
@@ -2444,6 +2453,11 @@ impl Handle {
         self.work = work;
     }
 
+    /// Take the files the session wrote, written with the record at the turn's save (OPEN-6).
+    pub fn set_written(&mut self, written: &[PathBuf]) {
+        self.written = written.iter().map(|path| StoredPath::of(path)).collect();
+    }
+
     /// Add a note a person typed, belonging to `turn`, and write it to the record at once.
     ///
     /// Written at once because a note is typed while a turn runs, and the record is otherwise
@@ -2556,6 +2570,7 @@ impl Handle {
             notes: self.notes.clone(),
             injected_facts: self.injected_facts.clone(),
             work: self.work,
+            written: self.written.clone(),
             title,
             started: self.started,
             updated: now(),
@@ -2703,6 +2718,7 @@ impl Handle {
         record.notes = self.notes.clone();
         record.injected_facts = self.injected_facts.clone();
         record.work = self.work;
+        record.written = self.written.clone();
         self.write(&directory, &mut record)
     }
 
@@ -6207,6 +6223,7 @@ mod tests {
             notes: Vec::new(),
             injected_facts: Default::default(),
             work: Default::default(),
+            written: Vec::new(),
             conversation: Snapshot {
                 messages: Vec::new(),
                 context: "trusted".to_string(),
@@ -8254,8 +8271,8 @@ mod tests {
         assert_eq!(resumed.injected_facts(), &record.injected_facts);
     }
 
-    /// OPEN-6: the record keeps what the session's turns did, a failed last command included, so a
-    /// resumed session can say what it left open.
+    /// OPEN-6: the record keeps what the session's turns did, a failed last command included, and
+    /// the files they wrote, so a resumed session can say what it left open.
     #[test]
     fn the_record_keeps_the_work_record_and_the_last_commands_status() {
         if !in_isolated_profile() {
@@ -8270,10 +8287,23 @@ mod tests {
             last_command_failed: true,
         };
         handle.set_work(work);
+        let mut written = vec![root.join("out.txt")];
+        // A name that is not UTF-8 is kept as its bytes, not its lossy spelling (PATH-001).
+        #[cfg(unix)]
+        written.push(
+            root.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"tool-\xff")),
+        );
+        handle.set_written(&written);
         save_a_turn_session(&mut handle);
 
         let record = load(&root, handle.id()).expect("the record");
         assert_eq!(record.work, work);
+        let kept: Vec<PathBuf> = record
+            .written
+            .iter()
+            .filter_map(StoredPath::to_path)
+            .collect();
+        assert_eq!(kept, written);
         drop(handle);
         let resumed =
             Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");

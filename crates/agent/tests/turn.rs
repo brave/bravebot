@@ -44928,7 +44928,8 @@ fn a_checkout_kept_after_a_worker_wrote(
 /// CHECKOUT-14. `/checkouts apply` is the same operation typed by a person: every recorded file
 /// of the kept checkout is put to them as a write the table would not ask about, an approved one
 /// lands in the working directory and the trail records it, a declined one leaves it as it was,
-/// and a checkout the session does not keep asks nobody.
+/// and a checkout the session does not keep asks nobody. Only the approved apply closes the
+/// checkout's open loop (OPEN-1).
 #[test]
 fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
     let (workspace, scratch, home, trust) = a_checkout_kept_after_a_worker_wrote(
@@ -44939,6 +44940,13 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
     let egress = bravebot_net::Egress::new();
     let task = Task::new("/checkouts apply c1").with_home(Some(home.path.clone()));
 
+    let applied = |workspace: &bravebot_agent::Workspace| {
+        workspace
+            .session_checkouts()
+            .iter()
+            .find(|checkout| checkout.id == "c1")
+            .map(|checkout| checkout.applied)
+    };
     let mut declining = RecordingConfirmer::rejecting();
     let mut sink = RecordingSink::new();
     let declined = turn::apply_checkout_asked_for(
@@ -44964,6 +44972,12 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
             .iter()
             .any(|(_, detail)| detail.starts_with("applied from ")),
         "the trail records an apply the person declined"
+    );
+    // OPEN-1: a checkout none of whose files came back is still open.
+    assert_eq!(
+        applied(&workspace),
+        Some(false),
+        "a declined apply closed the checkout"
     );
 
     let mut approving = RecordingConfirmer::approving();
@@ -44992,6 +45006,11 @@ fn a_typed_checkouts_apply_asks_about_each_recorded_file() {
             .iter()
             .any(|(_, detail)| detail.starts_with("applied from ") && detail.contains("/c1")),
         "the trail does not record the apply"
+    );
+    assert_eq!(
+        applied(&workspace),
+        Some(true),
+        "an apply left the checkout open"
     );
 
     let mut asked_nobody = RecordingConfirmer::approving();
@@ -46059,7 +46078,8 @@ fn a_kept_checkout_is_named_with_the_paths_written_in_it() {
 
 /// CHECKOUT-13, CHECKOUT-14. A file a program wrote in a kept checkout, by no tool and no
 /// redirection, comes back through the apply because the checkout's status lists it, and a file the
-/// program deleted is named as deleted and left in the working directory.
+/// program deleted is named as deleted and left in the working directory. The apply closes the
+/// checkout's open loop (OPEN-1).
 #[test]
 fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
     let scratch = Scratch::new("checkout-status-apply");
@@ -46147,6 +46167,14 @@ fn a_file_a_program_wrote_in_a_checkout_comes_back_by_its_status() {
              back"
         )),
         "the deletion was not named"
+    );
+    // OPEN-1: the planner's apply closes the checkout's open loop as the person's does.
+    assert!(
+        workspace
+            .session_checkouts()
+            .iter()
+            .any(|checkout| checkout.id == "c1" && checkout.applied),
+        "the planner's apply left the checkout open"
     );
 }
 

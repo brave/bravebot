@@ -11,14 +11,23 @@ impl Session {
         self.work
     }
 
-    /// Take what a resumed session's record says its turns did, and show what that leaves open
-    /// (OPEN-6). The planner is told on the first turn, since it has not been told yet.
+    /// The files this session's write calls landed on, each once in the order first written,
+    /// a resumed session's earlier ones first (OPEN-6).
+    pub fn written(&self) -> Vec<std::path::PathBuf> {
+        self.files_landed().0
+    }
+
+    /// Take what a resumed session's record says its turns did and the files they wrote, and show
+    /// what that leaves open (OPEN-6). The planner is told on the first turn, since it has not
+    /// been told yet.
     pub fn resume_open_loops(
         &mut self,
         work: bravebot_agent::Work,
+        written: Vec<std::path::PathBuf>,
         workspace: &bravebot_agent::Workspace,
     ) {
         self.work = work;
+        self.written_before = written;
         self.say_open_loops(workspace);
     }
 
@@ -148,7 +157,7 @@ impl Session {
     /// The files this session's finished write calls landed on, each once in the order first
     /// written, and those written since the last command that ran.
     fn files_landed(&self) -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
-        let mut all: Vec<std::path::PathBuf> = Vec::new();
+        let mut all = self.written_before.clone();
         let mut since: Vec<std::path::PathBuf> = Vec::new();
         for activity in self
             .transcript
@@ -299,15 +308,32 @@ mod tests {
         assert_eq!(session.open_loops_for_the_planner(), None);
     }
 
-    /// OPEN-6. A resumed session shows what its record says it left open, and the planner is told
-    /// on its first turn.
+    /// OPEN-6. A resumed session shows what its record says it left open, a file it wrote that
+    /// git still lists as changed among them, and the planner is told on its first turn.
+    #[cfg(unix)]
     #[test]
     fn a_resumed_session_shows_what_it_left_open() {
         let (mut session, workspace) = session_in("resume");
-        session.resume_open_loops(wrote_then_failed(), &workspace);
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(workspace.root())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .status()
+            .expect("git ran");
+        assert!(status.success());
+        let root = workspace.root().canonicalize().expect("canonical");
+        let file = root.join("out.txt");
+        std::fs::write(&file, "written").expect("written");
+        session.resume_open_loops(wrote_then_failed(), vec![file], &workspace);
         assert_eq!(
             notes(&session).last().map(String::as_str),
-            Some("open: changes not built, the last command failed (planner)")
+            Some(
+                "open: changes not built, the last command failed (planner); 1 file not committed \
+                 (you)"
+            )
         );
         assert!(session.open_loops_for_the_planner().is_some());
     }
