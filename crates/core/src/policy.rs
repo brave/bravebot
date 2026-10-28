@@ -6553,15 +6553,20 @@ impl<'sink, S: Sink> Policy<'sink, S> {
     ///
     /// The map's root is a key and the policy's is a path, so the policy's is spelled as a key
     /// before the two are compared. False when no root is known.
+    ///
+    /// Also false when the root is not text. The map keys its root through a lossy rendering, so
+    /// two roots that differ only in bytes that are not UTF-8 share one key, and comparing the
+    /// policy's rendering with it would carry the answer given for one to the other. A root that
+    /// cannot be compared byte for byte asks, which is the direction that trusts nothing.
     fn answer_was_given_for_the_root(&self) -> bool {
         let snapshot = self.trust.snapshot();
         let Some(given_for) = snapshot.confined_lines_root() else {
             return false;
         };
-        self.root.as_deref().is_some_and(|root| {
-            let root = root.to_string_lossy();
-            crate::trust::normalise(&self.keyed(&root)) == given_for
-        })
+        self.root
+            .as_deref()
+            .and_then(std::path::Path::to_str)
+            .is_some_and(|root| crate::trust::normalise(&self.keyed(root)) == given_for)
     }
 
     /// Whether the last line put to [`Policy::plan_needs_approval_held`] was let through by the
@@ -12149,6 +12154,58 @@ five
         assert!(
             held(&mut policy, &elsewhere),
             "the trust of the root covered a directory beneath it"
+        );
+    }
+
+    /// RUN-5 and PATH-001: the map keys its root through a lossy rendering, so the roots
+    /// `/work-\xff` and `/work-\xfe` have one key. The answer given for the first is not carried to
+    /// the second, and a root that is not text asks. The control is a root of the same shape that
+    /// is text, which the answer covers.
+    #[cfg(unix)]
+    #[test]
+    fn a_confined_lines_answer_is_not_carried_between_roots_that_differ_only_in_invalid_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        let root = |last: u8| {
+            let mut bytes = b"/work-".to_vec();
+            bytes.push(last);
+            std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&bytes))
+        };
+        let (given_for, working_in) = (root(0xff), root(0xfe));
+        assert_eq!(
+            given_for.to_string_lossy(),
+            working_in.to_string_lossy(),
+            "the two roots must share a lossy rendering for this test to distinguish anything"
+        );
+        let mut trust = TrustStore::new(&given_for);
+        trust.trust(".");
+        trust.allow_confined_lines();
+        let line = || {
+            let mut line = a_plain_line();
+            line.directory = working_in.clone();
+            line
+        };
+
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(trust.clone())
+            .with_root(&working_in);
+        assert!(
+            policy.plan_needs_approval_held(&line(), &[], Containment::Held),
+            "the answer given for /work-\\xff let a line run unasked in /work-\\xfe"
+        );
+
+        let mut text_trust = TrustStore::new("/work-text");
+        text_trust.trust(".");
+        text_trust.allow_confined_lines();
+        let mut sink = RecordingSink::new();
+        let mut policy = open_policy(&mut sink)
+            .with_trust(text_trust)
+            .with_root(std::path::Path::new("/work-text"));
+        let mut control = a_plain_line();
+        control.directory = std::path::PathBuf::from("/work-text");
+        assert!(
+            !policy.plan_needs_approval_held(&control, &[], Containment::Held),
+            "the control root, which is text, asked"
         );
     }
 
