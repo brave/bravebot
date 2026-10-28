@@ -97,11 +97,7 @@ pub(crate) fn say_what_a_stopped_manifest_produced(
     output: &mut impl Write,
     attempt: &bravebot_agent::manifest::Attempt,
 ) {
-    let report = crate::progress::printable_lines(&attempt.describe());
-    if !report.is_empty() {
-        let _ = writeln!(output);
-        let _ = write!(output, "{report}");
-    }
+    say_a_manifest_report(output, &attempt.describe());
 }
 
 /// What a manifest run that was written down produced, as `--resume` and `--fork` name it: the
@@ -112,7 +108,13 @@ pub(crate) fn say_what_a_stored_manifest_produced(
     output: &mut impl Write,
     stored: &bravebot_session::sessions::StoredManifest,
 ) {
-    let report = crate::progress::printable_lines(&stored.describe());
+    say_a_manifest_report(output, &stored.describe());
+}
+
+/// A manifest report after a blank line, drawn through [`crate::progress::printable_lines`]
+/// (LAYER-3), or nothing where the report is empty.
+fn say_a_manifest_report(output: &mut impl Write, described: &str) {
+    let report = crate::progress::printable_lines(described);
     if !report.is_empty() {
         let _ = writeln!(output);
         let _ = write!(output, "{report}");

@@ -1120,7 +1120,9 @@ fn prepare_the_run(
             bravebot_session::store::model(bravebot_session::store::load_model(), &settings),
         ),
     };
-    say_the_model_pick(&mut std::io::stderr().lock(), &pick);
+    if let Some(said) = the_model_pick_said(&pick) {
+        eprintln!("{said}");
+    }
     // Read before anything is sent, so an id that names nothing quotable is a refused argument and
     // not a run that quietly went without the session it was told to carry (NAME-10).
     let mut excerpts = Vec::new();
@@ -1297,35 +1299,23 @@ fn settle_the_definition(
     Ok((agent, under))
 }
 
-/// Says on stderr that a recorded model was set aside or refused. The pick is only borrowed:
-/// the caller still turns it into the model.
+/// The sentence for stderr saying that a recorded model was set aside or refused, or nothing where
+/// it was not. The pick is only borrowed: the caller still turns it into the model.
 ///
 /// The recorded name and the reason come from a file, so both are drawn through
 /// [`progress::printable`] (LAYER-3).
-fn say_the_model_pick(beside: &mut impl std::io::Write, pick: &bravebot_agent::backend::Pick) {
+fn the_model_pick_said(pick: &bravebot_agent::backend::Pick) -> Option<String> {
     match pick {
-        bravebot_agent::backend::Pick::SetAside(model) => {
-            let _ = writeln!(
-                beside,
-                "{}",
-                t!(
-                    session_model_pick_set_aside,
-                    model = progress::printable(model)
-                )
-            );
-        }
-        bravebot_agent::backend::Pick::Refused { recorded, reason } => {
-            let _ = writeln!(
-                beside,
-                "{}",
-                t!(
-                    session_model_pick_refused,
-                    model = progress::printable(recorded),
-                    reason = progress::printable_lines(reason)
-                )
-            );
-        }
-        bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => {}
+        bravebot_agent::backend::Pick::SetAside(model) => Some(t!(
+            session_model_pick_set_aside,
+            model = progress::printable(model)
+        )),
+        bravebot_agent::backend::Pick::Refused { recorded, reason } => Some(t!(
+            session_model_pick_refused,
+            model = progress::printable(recorded),
+            reason = progress::printable_lines(reason)
+        )),
+        bravebot_agent::backend::Pick::Absent | bravebot_agent::backend::Pick::InForce(_) => None,
     }
 }
 
@@ -2935,22 +2925,16 @@ mod tests {
     fn a_pick_set_aside_or_refused_draws_its_name_and_reason_as_pictures() {
         let name = "x\u{1b}]0;T\u{7}\u{1b}[31mmodel";
         let pictured = "x\u{241b}]0;T\u{2407}\u{241b}[31mmodel";
-        let mut set_aside = Vec::new();
-        say_the_model_pick(
-            &mut set_aside,
-            &bravebot_agent::backend::Pick::SetAside(name.to_string()),
-        );
-        let mut refused = Vec::new();
-        say_the_model_pick(
-            &mut refused,
-            &bravebot_agent::backend::Pick::Refused {
-                recorded: name.to_string(),
-                reason: format!("{name} is not served:\nask {name}"),
-            },
-        );
+        let set_aside =
+            the_model_pick_said(&bravebot_agent::backend::Pick::SetAside(name.to_string()))
+                .expect("a set aside pick is said");
+        let refused = the_model_pick_said(&bravebot_agent::backend::Pick::Refused {
+            recorded: name.to_string(),
+            reason: format!("{name} is not served:\nask {name}"),
+        })
+        .expect("a refused pick is said");
 
         for (surface, text) in [("set aside", set_aside), ("refused", refused)] {
-            let text = String::from_utf8(text).expect("utf-8");
             assert_eq!(
                 text.chars().find(|c| c.is_control() && *c != '\n'),
                 None,

@@ -393,19 +393,7 @@ pub fn stream_event(value: &Value) -> Decoded {
             Some(_) => Decoded::Event(Event::Declined),
             None => Decoded::Unreadable,
         },
-        // A content part is announced when it opens and when it is whole. Only the part's type is
-        // read, never what it says.
-        "response.content_part.added" | "response.content_part.done" => {
-            match value
-                .get("part")
-                .and_then(|part| part.get("type"))
-                .and_then(Value::as_str)
-            {
-                Some("refusal") => Decoded::Event(Event::Declined),
-                Some(_) => Decoded::Ignored,
-                None => Decoded::Unreadable,
-            }
-        }
+        "response.content_part.added" | "response.content_part.done" => content_part(value),
         "response.reasoning_summary_text.delta" => match value.get("delta").and_then(Value::as_str)
         {
             Some(delta) => Decoded::Event(Event::Thinking(delta.to_string())),
@@ -445,21 +433,8 @@ pub fn stream_event(value: &Value) -> Decoded {
             let Some(item) = value.get("item") else {
                 return Decoded::Unreadable;
             };
-            // A finished message item whose content holds a part of type `refusal`. Only the part's
-            // type is read, never what it says.
             if item.get("type").and_then(Value::as_str) == Some("message") {
-                let declined = item
-                    .get("content")
-                    .and_then(Value::as_array)
-                    .is_some_and(|parts| {
-                        parts
-                            .iter()
-                            .any(|part| part.get("type").and_then(Value::as_str) == Some("refusal"))
-                    });
-                return match declined {
-                    true => Decoded::Event(Event::Declined),
-                    false => Decoded::Ignored,
-                };
+                return finished_message(item);
             }
             if item.get("type").and_then(Value::as_str) != Some("function_call") {
                 return Decoded::Ignored;
@@ -491,6 +466,37 @@ pub fn stream_event(value: &Value) -> Decoded {
         // An error the service raised on the stream itself, outside any response.
         "error" => failed(error_event_code(value)),
         _ => Decoded::Ignored,
+    }
+}
+
+/// A content part, announced when it opens and again when it is whole. Only the part's type is
+/// read, never what it says.
+fn content_part(value: &Value) -> Decoded {
+    match value
+        .get("part")
+        .and_then(|part| part.get("type"))
+        .and_then(Value::as_str)
+    {
+        Some("refusal") => Decoded::Event(Event::Declined),
+        Some(_) => Decoded::Ignored,
+        None => Decoded::Unreadable,
+    }
+}
+
+/// A finished message item, which is a refusal where its content holds a part of type `refusal`.
+/// Only the part's type is read, never what it says.
+fn finished_message(item: &Value) -> Decoded {
+    let declined = item
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|part| part.get("type").and_then(Value::as_str) == Some("refusal"))
+        });
+    match declined {
+        true => Decoded::Event(Event::Declined),
+        false => Decoded::Ignored,
     }
 }
 
