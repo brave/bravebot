@@ -598,6 +598,94 @@ fn the_kernel_and_the_file_type_crate_do_no_io_and_print_nothing() {
     }
 }
 
+/// The ways a source file's non-test code starts a process, one description per use.
+///
+/// `std::process::id()` reads the helper's own id and starts nothing, so it is the one use of the
+/// module that is let through. A grouped import (`use std::{fs, process::Command}`) is read as the
+/// paths it is, `Command::new(` is found however `Command` was imported, and `CommandExt` is the
+/// way to replace the process instead of starting a second. Test modules and comments are skipped.
+fn starts_a_process(source: &str) -> Vec<String> {
+    let code = shipped::code_of(source).without_test_modules;
+    let mut found = Vec::new();
+    for token in ["Command::new(", "CommandExt"] {
+        if code.contains(token) {
+            found.push(token.to_string());
+        }
+    }
+    for (at, _) in code.match_indices("std::") {
+        let path = &code[at + "std::".len()..];
+        let used = match path.strip_prefix('{') {
+            Some(group) => group.split('}').next().unwrap_or_default().to_string(),
+            None => path
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+        };
+        let used = used.replace("process::id", "");
+        if used
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|word| word == "process")
+        {
+            found.push(format!("std::{used}"));
+        }
+    }
+    found
+}
+
+/// LAYER-1 says `bravebot-ui-files` runs no command, and TRUST-22 rests on it: the helper's bytes
+/// reach a screen and no turn. Its dependency list cannot say so, since `std` is where a child
+/// process lives, so the promise is held by the shipped source never starting one.
+#[test]
+fn the_ui_files_helper_starts_no_process() {
+    let files = rust_files(&workspace().join("crates").join("ui-files").join("src"));
+    assert!(
+        files.len() > 1,
+        "ui-files has {} source files, so this test would pass by scanning almost nothing",
+        files.len()
+    );
+    for file in files {
+        let source = std::fs::read_to_string(&file).expect("a source file");
+        let found = starts_a_process(&source);
+        assert!(
+            found.is_empty(),
+            "LAYER-1 says bravebot-ui-files runs no command, and {} uses {found:?}",
+            file.display()
+        );
+    }
+}
+
+/// The scan above has to see each way of starting a process, and let through the process id the
+/// helper reads, the fixture a test module builds, and a comment that says what it does not do.
+#[test]
+fn the_process_scan_sees_a_grouped_import_and_a_command_and_skips_tests_and_comments() {
+    for starting in [
+        "use std::process::Command;",
+        "use std::process;",
+        "use std::{\n    fs,\n    process::Command,\n};",
+        "let _ = Command::new(\"tar\");",
+        "let _ = std::process::Command::new(\"tar\").spawn();",
+        "use std::os::unix::process::CommandExt;",
+        "std::process::exit(1);",
+    ] {
+        assert!(
+            !starts_a_process(starting).is_empty(),
+            "a process start was not seen: {starting}"
+        );
+    }
+    for quiet in [
+        "let id = std::process::id();",
+        "use std::fs;\nlet id = std::process::id();",
+        "// runs no command: no Command::new and no std::process here\nfn f() {}",
+        "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn g() { let _ = std::process::Command::new(\"cmd\"); }\n}\nfn h() {}",
+    ] {
+        assert!(
+            starts_a_process(quiet).is_empty(),
+            "something that starts no process was reported: {quiet}"
+        );
+    }
+}
+
 /// Whether `text` names the ChatGPT flow's `sign_in`.
 ///
 /// Read as text, so it holds what a file has to write to reach the function and nothing about what
