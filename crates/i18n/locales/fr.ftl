@@ -385,6 +385,8 @@ onboarding-import-one =
     { $source } configure un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour l'importer.
 onboarding-import-running =
     { $source } tourne ici avec des modèles que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour l'importer.
+onboarding-import-keys =
+    Une clé d'API pour un service de modèle que bravebot peut utiliser est exportée ici : lancez `bravebot auth login import` dans un terminal pour l'importer.
 onboarding-import-both =
     { $first } et { $second } ont chacun un service de modèle que bravebot peut utiliser : lancez `bravebot auth login import` dans un terminal pour les importer.
 onboarding-import-three =
@@ -878,6 +880,8 @@ hook-stopped =
 import-found = { $source } configure un service de modèle que bravebot peut utiliser, dans { $files }.
 import-found-exported =
     { $source } configure un service de modèle que bravebot peut utiliser, dans l'environnement de ce processus.
+import-found-keys =
+    Une clé d'API pour un service de modèle que bravebot peut utiliser est exportée dans l'environnement de ce processus.
 import-found-running = { $source } tourne à { $url } et sert des modèles que bravebot peut utiliser.
 import-window = le serveur l'a chargé avec une fenêtre de contexte de { $window } jetons
 import-ollama-window-small = Ollama abandonne les premiers tours au-delà de cette fenêtre, donc l'entrée ci-dessous l'enregistre comme contextWindow et une conversation est gardée sous cette fenêtre plutôt que sous { $assumed } jetons. Définissez OLLAMA_CONTEXT_LENGTH plus haut avant de démarrer Ollama pour en garder davantage.
@@ -904,6 +908,9 @@ import-left-substitution =
     sa clé est construite à partir d'une substitution opencode au milieu d'une valeur plus longue, que bravebot ne fait pas
 import-left-elsewhere = désigne une adresse autre que la boucle locale de cette machine, qui n'est pas interrogée
 import-left-no-tool-model = tourne là, sans aucun modèle capable d'appeler des outils
+import-left-another-host =
+    une clé exportée à côté d'une adresse qui lui est propre, non proposée à l'adresse habituelle de ce service : ajoutez un bloc provider qui indique cette adresse et nomme la variable
+import-source-environment = votre environnement
 import-question = Importer ceci depuis { $source } ?
 import-key-question =
     Écrire la clé de provider.{ $id } dans { $file }, où elle est gardée en clair, pour l'envoyer à { $endpoint } ?

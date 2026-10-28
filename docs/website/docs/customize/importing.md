@@ -7,8 +7,8 @@ description: What a first run reads from Claude Code and opencode, what it asks 
 # Importing from Claude Code, opencode or a local model server
 
 A first run with nothing configured, in a terminal, reads what Claude Code and opencode set up in your
-home directory, and asks a running Ollama, LM Studio and llama-server what each serves, before it names
-the routes. Where any of them reaches a service bravebot can use, it shows what it would add to
+home directory, checks which API keys you have exported, and asks a running Ollama, LM Studio and
+llama-server what each serves, before it names the routes. Where any of them reaches a service bravebot can use, it shows what it would add to
 `~/.bravebot/settings.json` and asks:
 
 ```
@@ -34,6 +34,23 @@ answering is not written over.
 its `auth.json` in `$XDG_DATA_HOME/opencode`. A checkout's `.claude/`, `opencode.json` and
 `.opencode/` are never opened: they hold whatever the repository's author wrote, and would otherwise
 decide where your key is sent.
+
+**An exported key.** `OPENROUTER_API_KEY`, `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` are checked in your
+environment for whether each is set. The key is never read into anything, shown or written. A set
+variable is offered as an entry that names it, at the address bravebot has for that service:
+
+```
+An API key for a model service bravebot can use is exported in this process's environment.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  provider.openai, reached at https://api.openai.com/v1: {"env":["OPENAI_API_KEY"]}
+Import this from your environment? [y/N]
+```
+
+A key names no model, so the start that writes the entry ends asking you to set `model`, and so does every start after it until
+`model` is set: nothing yet asks which model to use ([#3440](https://github.com/brave/bravebot/issues/3440)). A key exported beside a host of its own, `ANTHROPIC_BASE_URL`,
+`OPENAI_BASE_URL` or `OPENAI_API_BASE`, was issued for that host and is not offered at the usual
+address: it is named as left, and a `provider` block that states the host and names the variable
+reaches it. `GOOGLE_API_KEY` needs no import, since exporting it alone configures Google Vertex AI.
 
 **A running Ollama.** Ollama is asked what it has pulled at the address `OLLAMA_HOST` names, read as
 Ollama reads it, or at `http://localhost:11434` where it is unset. Only an address on this machine is
