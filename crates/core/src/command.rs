@@ -379,6 +379,18 @@ impl Step {
         self.render_args(&self.binary(), args)
     }
 
+    /// [`Step::display_args`] naming the program by the path it was started as and not the file
+    /// that path leads to, for a sentence addressed to the planner.
+    ///
+    /// The planner typed that path. The file a link leads to is a name whoever wrote the tree
+    /// chose, so it stays out of text the driver writes to the planner ([TOOL-4], [CMDLINE-4]).
+    ///
+    /// [TOOL-4]: ../../../docs/specs/tools/tool-surface.md
+    /// [CMDLINE-4]: ../../../docs/specs/tools/command-line.md
+    pub(crate) fn told_args(&self, args: Vec<String>) -> String {
+        self.render_args(&self.started_as.to_string_lossy(), args)
+    }
+
     fn render_args(&self, program: &str, args: Vec<String>) -> String {
         let mut out = String::new();
         for (name, value) in &self.environment {
@@ -511,7 +523,7 @@ impl Steps {
     /// For a caller that holds the operands as the line spelled them. The operands of a compiled
     /// step are what a pattern matched, which is a listing of a directory, and a sentence the
     /// planner is shown cannot hold one. The caller owns the quoting of the words, as for
-    /// [`Step::display_args`].
+    /// [`Step::told_args`].
     /// `None` where `written` does not hold exactly one list per step.
     pub fn display_with_operands(&self, written: &[Vec<String>]) -> Option<String> {
         let mut rest = written.iter();
@@ -527,7 +539,7 @@ impl Steps {
             Self::Pipeline(steps) => {
                 let mut drawn = Vec::with_capacity(steps.len());
                 for step in steps {
-                    drawn.push(step.display_args(written.next()?.clone()));
+                    drawn.push(step.told_args(written.next()?.clone()));
                 }
                 drawn.join(" | ")
             }
@@ -1156,6 +1168,22 @@ mod tests {
             "/home/me/.cargo/bin/cargo -> /home/me/.cargo/bin/rustup test -p bravebot-core \
              | /usr/bin/tail -n 5"
         );
+    }
+
+    /// What the planner is told names a program by the path it typed. The file a link leads to is
+    /// a name whoever wrote the tree chose, so no arrow and no landed name reach a sentence for
+    /// the planner, while the plan the person approves still draws both.
+    #[test]
+    fn what_the_planner_is_told_names_a_program_by_its_link_alone() {
+        let mut cargo = step("cargo", &["test"]);
+        cargo.started_as = PathBuf::from("/home/me/.cargo/bin/cargo");
+        cargo.resolved = PathBuf::from("/home/me/.cargo/bin/HOSTILE-landed");
+        let steps = Steps::Pipeline(vec![cargo, step("tail", &["-n", "5"])]);
+        let told = steps
+            .display_with_operands(&[vec!["test".into()], vec!["-n".into(), "5".into()]])
+            .expect("one list per step");
+        assert_eq!(told, "/home/me/.cargo/bin/cargo test | /usr/bin/tail -n 5");
+        assert!(steps.display().contains("HOSTILE-landed"));
     }
 
     /// The arrow separates a link from its file, so arguments that spell one cannot be drawn as
