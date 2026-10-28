@@ -355,6 +355,10 @@ the total, and clearing the conversation resets it. A record written before the 
 neither figure, and a session continued from one holds the split of its later turns only, so the two
 can total less than the tokens. `bravebot stats` reports the difference ([CLI-37](cli.md#CLI-37)).
 
+A `/btw` question asked while a turn runs ([CMD-8](commands.md#CMD-8)) is charged to that turn, in
+the total, the breakdown and the split. The status line and the turn's clock are the turn's own and
+the question adds nothing to them.
+
 **Why.** A transcript is read after the fact to find out why a session went the way it did, and
 both questions are unanswerable from a total alone. Twenty even turns and one turn that ran away
 come to the same figure and want different fixes. Two sessions cannot be compared at all without
@@ -381,6 +385,7 @@ than the one in force at the time.
 `verified-by: bravebot_session::sessions::a_failed_manifest_record_keeps_the_split_of_what_it_spent`
 `verified-by: bravebot_tui::state::a_charge_with_a_split_adds_what_was_read_and_written_beside_the_total`
 `verified-by: bravebot_tui::state::an_aside_that_reports_its_usage_is_charged_with_its_split`
+`verified-by: bravebot_tui::state::a_question_answered_beside_a_turn_is_charged_to_that_turn_with_its_split`
 `verified-by: bravebot_tui::state::clearing_forgets_the_split`
 `verified-by: bravebot_tui::state::restoring_the_spend_leaves_no_split_from_before_it`
 `verified-by: bravebot_tui::state::a_resumed_session_carries_on_counting_the_split_it_was_written_with`

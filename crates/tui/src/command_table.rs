@@ -511,7 +511,7 @@ pub fn commands() -> [Command; 61] {
             name: BTW_COMMAND,
             argument: "<question>",
             description: t!(command_btw),
-            mid_turn: MidTurn::Waits,
+            mid_turn: MidTurn::Runs,
         },
         Command {
             name: RECAP_COMMAND,

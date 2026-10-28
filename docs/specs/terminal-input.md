@@ -123,7 +123,7 @@ read against what is happening, in this order:
 
 | What is happening | What Ctrl-C does |
 |---|---|
-| a turn in flight, a summary, an aside or a goal check, or a command running | stops it, and the session stays where it was |
+| a turn in flight, a summary, an aside or a goal check, or a command running | stops it, and the session stays where it was; an aside asked beside a turn ends with the turn |
 | nothing running, a line in the box | takes the line, and offers the way out |
 | nothing running, an empty box | offers the way out |
 | nothing running, an empty box, the way out already offered | ends the session |
@@ -176,6 +176,10 @@ each one request. Both keys stop one the way they stop a turn: the request is wa
 conversation is as it was, and the person is told. A summary that has already come back is kept, the
 stop having landed too late to be one. Stopping a goal check also takes the goal off
 ([GOAL-10](goal.md#GOAL-10)). No press made while one of these is out leaves.
+
+An aside asked beside a running turn (`/btw`, [CMD-8](commands.md#CMD-8)) has no key of its own.
+Both keys stop the turn, and the stop ends the question with it. No key stops only the question and
+leaves the turn running.
 
 What the table leaves out of all of them is a mode: a picker, a scroller, a delegate's view or a
 prompt search open over the request answers both keys itself, exactly as it does over a turn, and
@@ -2562,7 +2566,7 @@ of it is carried out as soon as the turn has stopped, which is reason enough to 
 **Only what was waiting when it was pressed.** A prompt queued afterwards, while the turn was still
 stopping, was queued with Enter and waits for a turn of its own.
 
-**Only a turn is stopped.** A compaction, a question asked aside, a goal check and a manifest run are
+**Only a turn is stopped.** A compaction, a question asked aside with no turn running, a goal check and a manifest run are
 not turns, so there the key queues the line as Enter does and stops nothing, and Escape is still the
 key that stops one. With nothing waiting and nothing typed it stops nothing either, since there would
 be nothing to send. Otherwise the stop is a stop like any other: a running loop

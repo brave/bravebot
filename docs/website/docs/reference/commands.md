@@ -1192,7 +1192,10 @@ the answer, and no later turn reads either.
 The answer opens in the mode
 [Ctrl-L](../using/interactive-mode.md#watching-a-delegate-reading-a-command-and-asking-something-aside)
 opens, as a row of its own before the delegates, which is the one screen it exists
-on. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
+on. Typed while a turn runs, `/btw` is carried out as you press Enter: the question goes out beside the
+turn over the exchange the turn last sent, the turn is not told, and the answer becomes a row without
+opening the mode over the turn. It needs the turn to have sent a request, one question is out at a time
+beside a turn, a dropped file is refused, and stopping the turn stops the question. Nothing about it is drawn among the turn's own lines, because an exchange drawn in the transcript
 is one a reader takes the planner to have had.
 
 One request, and no tools in it. **An aside cannot be asked about**: there is no box to follow up in,
@@ -1382,7 +1385,7 @@ as `./12`. `edit` with nothing after it says what the command takes.
 
 Typed while a turn runs, the list answers at once, and so does an address, as a click on one opens it
 then. A file name is not queued: it says that a file is shown when nothing is running, and you type it
-again. While a summary or an aside is being written, a line waits like every command, and a number is read
+again. While a summary is being written, or an aside with no turn running, a line waits like every command, and a number is read
 against the list it was typed beside.
 
 ## `/undo`
@@ -1550,7 +1553,7 @@ it and the picture or file goes with it.
 `/watch`, `/outputs`, `/panel`, `/diff`, `/todos`, `/caffeinate`, `/thinking`, `/changelog`, `/open`, `/lsp`, and `/loop` and `/goal` in every form but the one that starts a loop or sets a goal, read or end only
 what the session keeps for itself, so they are carried out as you type them, ahead of anything
 waiting. `/jobs` is too: a stop only sets a flag the turn reads at its next step, as it reads the stop
-key. So is `/export`, which adds a file under the working directory and replaces none. The exception is a line of the same command already waiting, which they wait behind, so
+key. So is `/export`, which adds a file under the working directory and replaces none. So is `/btw`, which is asked beside the turn over the exchange the turn last sent and changes nothing the turn holds, and which a line waiting ahead of it does not hold back; only a `/btw` already waiting does. `/exit` waits for the turn like the commands that end the session, and does not stop it. The exception is a line of the same command already waiting, which they wait behind, so
 `/goal clear` typed after a waiting `/goal <condition>` clears that goal. `/theme` and `/config` change only how the screen
 is drawn and what the box edits in, so they are carried out as you type them whatever is waiting. `/rename`, `/note`, `/issue`, `/pr`,
 `/forget-trust`, `/model`, `/effort`, `/advisor`, `/style` and `/sandbox` change what the session keeps, and are carried out as you
@@ -1585,7 +1588,7 @@ and when the queue reaches it, it is carried out rather than sent. The queue dra
 typed, so a command behind a prompt waits for that prompt's turn. A waiting command says why it waits, in a line held under the turn. `/clear`, `/compact`, `/undo`, `/rewind`, `/cd`, `/add-dir` and `/exit` do not stop the turn, and Ctrl-Enter on one stops the turn and carries the command out. Nothing enters the transcript while
 it waits, and taking back what is waiting gives the command back to the box like any other line.
 
-During a compaction, a `/btw` question, a `/manifest` run or a goal check, every command waits.
+During a compaction, a `/btw` question asked with no turn running, a `/manifest` run or a goal check, every command waits. A `/btw` typed during a turn waits for nothing and holds nothing back.
 
 **A command name is written in this program, never read from a directory.** There is no way to add one
 by putting a file somewhere.

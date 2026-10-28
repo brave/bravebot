@@ -1086,6 +1086,9 @@ pub(super) fn build_request<R: Reporter>(
     if task.delegate.is_none() && reporter.wants_request_view() {
         reporter.request_built(RequestView::of(&request, system, &marks));
     }
+    if task.delegate.is_none() && reporter.wants_fork() {
+        reporter.exchange_forked(crate::aside::Fork::of(conversation));
+    }
     request
 }
 

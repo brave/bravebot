@@ -3907,6 +3907,7 @@ mod preserved_history {
                             | ToMain::Returned(_)
                             | ToMain::Landed(_)
                             | ToMain::RequestBuilt(_)
+                            | ToMain::Forked(_)
                     ),
                     "unexpected worker event: {other:?}"
                 ),

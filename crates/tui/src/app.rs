@@ -353,6 +353,9 @@ fn carry_out_while_working(
             session.answer_while_working(|session| open_model_picker(session, beside.config));
         }
         Action::ChooseTheme => open_theme_picker(session),
+        Action::Aside(question, pasted, attached) => session.answer_while_working(|session| {
+            ask_aside_beside_a_turn(session, beside.config, &question, &pasted, &attached);
+        }),
         Action::ChooseEffort => open_effort_picker(session),
         Action::ChooseEditing => open_editing_picker(session),
         action => return act_while_working(session, action, crate::clipboard::paste),
@@ -3467,6 +3470,7 @@ fn refusal(message: &crate::remote_confirm::ToMain) -> Option<crate::remote_conf
         ToMain::Ask(_) => Reply::Ask(Vec::new()),
         ToMain::PromptRecorded(_)
         | ToMain::RequestBuilt(_)
+        | ToMain::Forked(_)
         | ToMain::Todos(_)
         | ToMain::Written(_)
         | ToMain::Spent(_)
@@ -9122,11 +9126,11 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter));
             assert_eq!(session.status, Status::Working);
 
-            for c in "/btw what is in ".chars() {
+            for c in "/manifest build ".chars() {
                 handle_key_while_working(&mut session, key(KeyCode::Char(c)));
             }
             take_from_clipboard(&mut session, picture(b"pixels".to_vec()));
-            assert_eq!(session.input(), "/btw what is in [Image #1]");
+            assert_eq!(session.input(), "/manifest build [Image #1]");
             handle_key_while_working(&mut session, key(KeyCode::Enter));
             assert!(session.input().is_empty(), "the command stayed in the box");
 
@@ -9134,8 +9138,8 @@ mod tests {
 
             assert_eq!(
                 queued_next(&mut session),
-                Some(Action::Aside(
-                    "what is in [Image #1]".to_string(),
+                Some(Action::Manifest(
+                    "build [Image #1]".to_string(),
                     vec![crate::state::AttachedImage {
                         marker: "[Image #1]".to_string(),
                         media_type: "image/png",
@@ -9300,21 +9304,21 @@ mod tests {
             handle_key(&mut session, key(KeyCode::Enter));
             assert_eq!(session.status, Status::Working);
 
-            for c in "/btw what is in ".chars() {
+            for c in "/manifest build ".chars() {
                 handle_key_while_working(&mut session, key(KeyCode::Char(c)));
             }
             handle_paste_while_working(&mut session, &path);
-            assert_eq!(session.input(), "/btw what is in [Image #1] ");
+            assert_eq!(session.input(), "/manifest build [Image #1] ");
             handle_key_while_working(&mut session, key(KeyCode::Enter));
             assert!(session.input().is_empty(), "the command stayed in the box");
 
             session.complete("answered", Vec::new(), 0);
 
             let action = queued_next(&mut session);
-            let Some(Action::Aside(question, _, attached)) = action else {
-                panic!("a waiting question was lost: {action:?}");
+            let Some(Action::Manifest(question, _, attached)) = action else {
+                panic!("a waiting task was lost: {action:?}");
             };
-            assert_eq!(question, "what is in [Image #1]");
+            assert_eq!(question, "build [Image #1]");
             assert_eq!(attached.len(), 1, "the picture did not go: {attached:?}");
 
             let _ = std::fs::remove_dir_all(&directory);
@@ -27471,6 +27475,7 @@ mod tests {
             skipping,
             vec![
                 ADVISOR_COMMAND,
+                BTW_COMMAND,
                 CAFFEINATE_COMMAND,
                 CHANGELOG_COMMAND,
                 CONFIG_COMMAND,
@@ -27937,6 +27942,355 @@ mod tests {
         );
         assert!(session.queued.is_empty(), "/rename waited");
         assert_eq!(session.input(), "", "/rename was left in the box");
+    }
+
+    /// A running turn that has sent its first request, so a `/btw` has an exchange to be asked over.
+    fn a_turn_that_has_sent_a_request() -> Session {
+        let mut session = a_turn_running_on("first");
+        session.set_fork(bravebot_agent::aside::Fork::of(&Conversation::new()));
+        session.set_turn_files(Some(bravebot_core::file_authority::FileAuthority::new(
+            bravebot_core::trust::TrustStore::new("/work"),
+        )));
+        session
+    }
+
+    /// A loopback endpoint that accepts a connection and never answers it, so a worker started
+    /// against it makes no request beyond this machine and waits until it is stopped.
+    fn a_model_that_never_answers() -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+        let address = format!("http://{}", listener.local_addr().expect("an address"));
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming().flatten() {
+                held.push(stream);
+            }
+        });
+        address
+    }
+
+    /// `line` typed and sent during the turn, as the turn's loop takes it. A question it starts is
+    /// asked of a model that never answers, and stays out until it is stopped.
+    fn typed_beside_a_turn(session: &mut Session, line: &str) -> Cancel {
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        let endpoint = a_model_that_never_answers();
+        let mut config = Config::from_lookup(|key| match key {
+            "SERVICES_KEY_AICHAT" => Some("test-key".into()),
+            "BRAVE_SERVICES_KEY_ID" => Some("test-id".into()),
+            "BRAVE_AI_CHAT_ENDPOINT" => Some(endpoint.clone()),
+            _ => None,
+        })
+        .expect("config");
+        typed_during_a_turn(
+            session,
+            line,
+            key(KeyCode::Enter),
+            &mut Beside {
+                managed: &bravebot_config::Managed::default(),
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut config,
+            },
+        )
+    }
+
+    /// CMD-8. `/btw` typed during a turn is carried out as it is typed: a question goes out beside
+    /// the turn, the turn is not handed it, and it does not wait in the queue. Rejects `/btw` left
+    /// as `MidTurn::Waits`, which queues the line.
+    #[test]
+    fn btw_typed_mid_turn_goes_out_beside_the_turn_and_is_not_queued() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        let transcript = session.transcript.len();
+
+        typed_beside_a_turn(&mut session, "/btw what is in parser.py");
+
+        assert!(session.aside_in_flight(), "no question went out");
+        assert!(session.queued.is_empty(), "/btw waited for the turn");
+        assert_eq!(session.interjections().take(), None, "the turn took it");
+        assert_eq!(session.status, Status::Working, "the turn stopped working");
+        assert_eq!(
+            session.transcript.len(),
+            transcript,
+            "it reached the transcript"
+        );
+        assert_eq!(session.input(), "", "/btw was left in the box");
+        end_aside_beside_a_turn(&mut session);
+    }
+
+    /// A question typed before the turn has sent its first request has no exchange to be asked over,
+    /// and says so under the turn. Rejects asking over the previous turn's exchange or an empty one.
+    #[test]
+    fn btw_typed_before_the_first_request_says_there_is_nothing_to_read() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_running_on("first");
+
+        typed_beside_a_turn(&mut session, "/btw what is in parser.py");
+
+        assert!(!session.aside_in_flight());
+        assert!(session.queued.is_empty());
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(btw_nothing_sent_yet)]
+        );
+    }
+
+    /// The exchange a question is asked over is the one the latest request published, and the one
+    /// the previous turn published is gone when a turn begins. Rejects a fork that outlives its turn.
+    #[test]
+    fn the_published_exchange_is_kept_and_dropped_when_the_next_turn_begins() {
+        let mut session = Session::new("none");
+        assert!(session.fork().is_none());
+        let fork = bravebot_agent::aside::Fork::of(&Conversation::new());
+        assert!(
+            crate::from_worker::show(
+                &mut session,
+                crate::remote_confirm::ToMain::Forked(Box::new(fork)),
+            )
+            .is_none()
+        );
+        assert!(session.fork().is_some(), "the published exchange was lost");
+
+        type_line(&mut session, "next");
+        handle_key(&mut session, key(KeyCode::Enter));
+        assert!(session.fork().is_none(), "the last turn's exchange stayed");
+    }
+
+    /// A second `/btw` while one is out is refused under the turn and not queued. Rejects sending a
+    /// second request or leaving the line to run after the turn.
+    #[test]
+    fn a_second_btw_beside_a_turn_is_refused() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        typed_beside_a_turn(&mut session, "/btw one");
+        assert!(session.aside_in_flight());
+
+        typed_beside_a_turn(&mut session, "/btw two");
+
+        assert_eq!(said_under_the_turn(&session), vec![t!(btw_one_at_a_time)]);
+        assert!(session.queued.is_empty(), "the second question waited");
+        end_aside_beside_a_turn(&mut session);
+    }
+
+    /// A file dropped onto a `/btw` typed beside a turn is refused, because reading it records a rule
+    /// in the map the turn is answering into. Rejects reading it from the aside's thread.
+    #[test]
+    fn btw_with_a_dropped_file_beside_a_turn_is_refused() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let directory = crate::testutil::scratch_dir("bravebot-app-btw-drop-mid-turn");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("scratch");
+        std::fs::write(directory.join("shot.png"), [0x89u8, 0x50]).expect("write");
+        let path = directory.join("shot.png").to_string_lossy().to_string();
+        let mut session = a_turn_that_has_sent_a_request().in_workspace(&directory);
+        for c in "/btw what is in ".chars() {
+            handle_key_while_working(&mut session, key(KeyCode::Char(c)));
+        }
+        handle_paste_while_working(&mut session, &path);
+        let transcript = session.transcript.len();
+
+        let root = std::path::Path::new("/work");
+        let mut stored = bravebot_session::sessions::Handle::begin(
+            root,
+            bravebot_session::sessions::Front::Terminal,
+            bravebot_stamp::BUILD,
+        );
+        turn_key(
+            &mut session,
+            key(KeyCode::Enter),
+            &Cancel::new(),
+            &mut Beside {
+                managed: &bravebot_config::Managed::default(),
+                stored: &mut stored,
+                root,
+                home: None,
+                workspace: &a_workspace(),
+                scratch: None,
+                config: &mut a_config_needing_no_sign_in(),
+            },
+        );
+
+        assert!(!session.aside_in_flight(), "the file went out");
+        assert_eq!(
+            said_under_the_turn(&session),
+            vec![t!(btw_no_files_beside_a_turn)]
+        );
+        assert_eq!(session.transcript.len(), transcript + 1);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// CMD-8. A prompt or command already waiting does not hold a `/btw` back: the question goes out
+    /// at once and the waiting line stays where it was. Rejects `/btw` queued behind what waits.
+    #[test]
+    fn btw_typed_mid_turn_is_asked_at_once_with_a_prompt_waiting() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        wait_as(&mut session, "second");
+        assert_eq!(waiting_prompts(&session), vec!["second"]);
+
+        typed_beside_a_turn(&mut session, "/btw what is in parser.py");
+
+        assert!(session.aside_in_flight(), "/btw waited behind a prompt");
+        assert_eq!(waiting_prompts(&session), vec!["second"]);
+        end_aside_beside_a_turn(&mut session);
+    }
+
+    /// A stopped prompt comes back to the box after a `/btw` asked mid-turn ended with the turn. The
+    /// note the ended question leaves is not something the turn recorded. Rejects counting it as
+    /// work, which would leave the prompt sent.
+    #[test]
+    fn a_stopped_prompt_comes_back_after_a_btw_asked_mid_turn() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        typed_beside_a_turn(&mut session, "/btw what is in parser.py");
+        assert!(session.aside_in_flight(), "no question went out");
+        end_aside_beside_a_turn(&mut session);
+
+        finish_turn(
+            &mut session,
+            &a_config_needing_no_sign_in(),
+            &workspace_for_test(),
+            Line {
+                text: "first",
+                addressed: None,
+                offered_a_later_look: false,
+            },
+            FinishedTurn {
+                decisions: None,
+                work: bravebot_agent::Work::default(),
+                outcome: Err(turn::TurnError::Cancelled { attempts: Some(0) }),
+                conversation: Conversation::new(),
+                sink: Trail::new(),
+                servers: None,
+            },
+            RetainedTurn {
+                files: bravebot_core::file_authority::FileAuthority::new(TrustStore::new("/work")),
+                programs: TrustedPrograms::new(),
+                asked: AskedAbout::new(),
+                exposed: bravebot_core::credentials::Exposed::new(),
+                began: Conversation::new().mark(),
+            },
+        );
+
+        assert_eq!(
+            session.input(),
+            "first",
+            "the stopped prompt did not come back"
+        );
+        assert!(session.said_while_working().is_empty());
+        assert!(
+            said_in_the_transcript(&session)
+                .iter()
+                .any(|said| said.contains(t!(btw_stopped))),
+            "the ended question was not said: {:?}",
+            said_in_the_transcript(&session)
+        );
+    }
+
+    /// An answer that arrives beside a turn becomes a row of the agents list, the view is not opened
+    /// over the turn, and nothing reaches the transcript. Rejects `asked_aside`, which opens the view.
+    #[test]
+    fn a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view() {
+        let mut session = a_turn_running_on("first");
+        let transcript = session.transcript.len();
+        let (sender, from_worker) = std::sync::mpsc::channel();
+        drop(sender);
+        session.begin_aside_beside_a_turn(crate::state::AsideFlight {
+            asked: "what is in parser.py".to_string(),
+            cancel: Cancel::new(),
+            from_worker,
+            worker: std::thread::spawn(|| {
+                Ok(bravebot_agent::aside::Answered {
+                    shown: "parse() is a stub".to_string(),
+                    kept: None,
+                    usage: Default::default(),
+                })
+            }),
+        });
+
+        settle_aside_beside_a_turn(&mut session, &Cancel::new());
+
+        assert!(!session.aside_in_flight());
+        assert_eq!(session.asides().len(), 1, "no row was kept");
+        assert_eq!(session.asides()[0].question, "what is in parser.py");
+        assert!(session.watching().is_none(), "the view took the screen");
+        assert_eq!(
+            session.transcript.len(),
+            transcript,
+            "it reached the transcript"
+        );
+    }
+
+    /// The stop that ends the turn ends the question beside it, and says so. Rejects a question that
+    /// outlives the turn it was asked beside.
+    #[test]
+    fn stopping_the_turn_stops_the_question_beside_it() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        typed_beside_a_turn(&mut session, "/btw one");
+        assert!(session.aside_in_flight());
+        let cancel = Cancel::new();
+        cancel.cancel();
+
+        // The stop reaches the question on the first frame after it. What follows waits on the
+        // channel the worker holds the sending end of, which closes when the worker ends, so the
+        // test waits for the end of the question and not for a time. The bound only keeps a
+        // question that ignores the stop from hanging the test.
+        settle_aside_beside_a_turn(&mut session, &cancel);
+        if let Some(flight) = session.take_aside_flight() {
+            loop {
+                match flight.from_worker.recv_timeout(Duration::from_secs(30)) {
+                    Ok(_) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        panic!("the stop did not reach the question")
+                    }
+                }
+            }
+            session.begin_aside_beside_a_turn(flight);
+        }
+        settle_aside_beside_a_turn(&mut session, &cancel);
+
+        assert!(!session.aside_in_flight(), "the question outlived the stop");
+        assert_eq!(said_under_the_turn(&session), vec![t!(btw_stopped)]);
+        assert!(session.asides().is_empty(), "a stopped question left a row");
+    }
+
+    /// A question still out when the turn ends is stopped and said to be. Rejects leaving a worker
+    /// running after the person is back at the box.
+    #[test]
+    fn a_question_still_out_when_the_turn_ends_is_stopped() {
+        if !crate::test_profile::in_isolated_profile() {
+            return;
+        }
+        let mut session = a_turn_that_has_sent_a_request();
+        typed_beside_a_turn(&mut session, "/btw one");
+
+        end_aside_beside_a_turn(&mut session);
+
+        assert!(!session.aside_in_flight());
+        assert_eq!(said_under_the_turn(&session), vec![t!(btw_stopped)]);
     }
 
     /// A scratch directory for a transcript to be written into, with a record begun under it.

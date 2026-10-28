@@ -720,6 +720,152 @@ pub(super) fn aside_reported(session: &mut Session, message: crate::remote_confi
     }
 }
 
+/// Start answering a question typed while a turn runs, on a thread of its own (CMD-8).
+///
+/// The question is asked over the exchange the turn last sent, which the turn published at that
+/// request ([`Session::fork`]), and its policy reads the turn's own file decisions
+/// ([`Session::turn_files`]), shared and not copied. Nothing here takes the terminal: the turn's
+/// loop keeps it, drains the worker each frame ([`settle_aside_beside_a_turn`]) and the stop that
+/// ends the turn ends the question with it.
+///
+/// There is no sign-in, because the turn running beside it has signed in to the same backend. A
+/// second question while one is out is refused and not queued, and so is one with dropped files:
+/// reading them records a rule in the map the turn is answering into. The record, the rewind point
+/// and the conversation belong to the turn and are not reached from here.
+pub(super) fn ask_aside_beside_a_turn(
+    session: &mut Session,
+    config: &Config,
+    question: &str,
+    pasted: &[crate::state::AttachedImage],
+    attached: &[crate::state::Attached],
+) {
+    if question.is_empty() {
+        session.note(t!(btw_needs_a_question));
+        return;
+    }
+    if session.aside_in_flight() {
+        session.note_refused(t!(btw_one_at_a_time));
+        return;
+    }
+    if !attached.is_empty() {
+        session.note_refused(t!(btw_no_files_beside_a_turn));
+        return;
+    }
+    let (Some(fork), Some(files)) = (session.fork().cloned(), session.turn_files().cloned()) else {
+        session.note_refused(t!(btw_nothing_sent_yet));
+        return;
+    };
+
+    let (to_main, from_worker) = mpsc::channel::<crate::remote_confirm::ToMain>();
+    let worker_config = config.clone();
+    let model = session.model().map(str::to_string);
+    let account = session.account_session().clone();
+    let cancel = Cancel::new();
+    let worker_cancel = cancel.clone();
+    let asking = bravebot_agent::aside::Question::over(
+        fork,
+        question,
+        pasted
+            .iter()
+            .map(|image| PastedImage {
+                media_type: image.media_type,
+                bytes: image.bytes.clone(),
+            })
+            .collect(),
+    );
+
+    let worker = thread::spawn(move || {
+        let mut sink = Trail::new();
+        let mut reporter = crate::remote_confirm::RemoteReporter::new(to_main);
+        let egress = Egress::new();
+        turn::aside_sharing(
+            &worker_config,
+            &egress,
+            &account,
+            asking,
+            model.as_deref(),
+            &mut reporter,
+            &mut sink,
+            files,
+            |_written| {},
+            &worker_cancel,
+        )
+        .map_err(|e| e.to_string())
+    });
+
+    session.begin_aside_beside_a_turn(crate::state::AsideFlight {
+        asked: question.to_string(),
+        cancel,
+        from_worker,
+        worker,
+    });
+}
+
+/// Take what the question asked beside the running turn has done since the last frame.
+///
+/// Run on every frame of the turn. What the worker says while it works is dropped: its phase and
+/// notices are the question's and the turn's own are already on the screen. Once the worker has
+/// ended, the answer becomes a row in the agents list without opening the view, which would take
+/// the screen from a person reading the turn (WATCH-19), and what it cost is charged to the turn it
+/// interrupted (SESSION-11). A stop of the turn stops the question with it (INPUT-4).
+pub(super) fn settle_aside_beside_a_turn(session: &mut Session, turn_cancel: &Cancel) {
+    if turn_cancel.is_cancelled() {
+        session.stop_aside_beside_a_turn();
+    }
+    let Some(flight) = session.take_aside_flight() else {
+        return;
+    };
+    loop {
+        match flight.from_worker.try_recv() {
+            // Everything the worker says while it works is dropped here: its phase and notices are
+            // the question's and the turn's own are already on the screen. Nothing the worker can
+            // send waits for an answer, because `RemoteReporter` holds a `Sender` and no
+            // receiver, and `aside_sharing` takes no confirmer, so no `Reply` is owed.
+            Ok(_) => {}
+            Err(mpsc::TryRecvError::Empty) => {
+                session.begin_aside_beside_a_turn(flight);
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => break,
+        }
+    }
+    let stopped = flight.cancel.is_cancelled();
+    let done = flight
+        .worker
+        .join()
+        .unwrap_or_else(|_| Err(t!(btw_ended_unexpectedly).to_string()));
+    session.answer_while_working(|session| match done {
+        Ok(answered) => {
+            session.charge_aside_beside_a_turn(answered.usage);
+            session.kept_aside_beside_a_turn(bravebot_session::sessions::Aside {
+                question: flight.asked,
+                answer: Some(answered.shown),
+                kept: answered.kept.is_some(),
+            });
+        }
+        Err(_) if stopped => session.note(t!(btw_stopped)),
+        Err(message) => session.note(t!(btw_failed, problem = message)),
+    });
+}
+
+/// End a question still out when the turn it was asked beside has ended.
+///
+/// The answer is not waited for: the turn is over and the person is back at the box, so the request
+/// is stopped and said to be, as a stopped question is.
+pub(super) fn end_aside_beside_a_turn(session: &mut Session) {
+    session.stop_aside_beside_a_turn();
+    if let Some(flight) = session.take_aside_flight() {
+        let ended = flight.worker.join();
+        session.answer_while_working(|session| match ended {
+            Ok(_) => session.note(t!(btw_stopped)),
+            Err(_) => session.note(t!(
+                btw_failed,
+                problem = t!(btw_ended_unexpectedly).to_string()
+            )),
+        });
+    }
+}
+
 /// Interpret a key press while the goal check is out.
 ///
 /// Read against [`stops_the_turn`] first, for the reason a summary reads it, and here the mode is

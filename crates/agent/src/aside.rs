@@ -251,7 +251,49 @@ pub struct Question {
     limit: Option<usize>,
 }
 
+/// The exchange as it stood when a turn built a request, for a question asked while that turn runs.
+///
+/// Taken on the thread that holds the conversation, at the point a round's request is built, and
+/// handed to the interface in place of the conversation, which cannot cross threads or be copied.
+/// It holds what [`Question::about`] would have taken at that moment: the exchange as the planner
+/// would be sent it under the aside's own instructions, and what the exchange had met.
+#[derive(Debug, Clone)]
+pub struct Fork {
+    exchange: Vec<Message>,
+    context: Integrity,
+}
+
+impl Fork {
+    /// The exchange as it stands now.
+    pub fn of(conversation: &Conversation) -> Self {
+        Self {
+            exchange: conversation.with_system(SYSTEM_PROMPT),
+            context: conversation.context(),
+        }
+    }
+
+    /// What the exchange had met.
+    pub fn context(&self) -> Integrity {
+        self.context
+    }
+}
+
 impl Question {
+    /// Take the question that will go on the end of an exchange published earlier.
+    ///
+    /// The same question [`Question::about`] makes, over the exchange a turn published at a round
+    /// boundary instead of one held by the caller.
+    pub fn over(fork: Fork, question: &str, pasted: Vec<crate::turn::PastedImage>) -> Self {
+        Self {
+            exchange: fork.exchange,
+            asked: question.to_string(),
+            pasted,
+            dropped: Vec::new(),
+            context: fork.context,
+            limit: None,
+        }
+    }
+
     /// Fork the exchange and take the question that will go on the end of it.
     ///
     /// `question` is the line the person typed, which is trusted in the sense a prompt is: it came

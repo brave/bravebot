@@ -587,6 +587,11 @@ one is on no screen at all; and while this view is open the field the transcript
 holds an offset into a watched row's lines, so taking it for the turn's own view brings the
 conversation back somewhere it never was.
 
+An answer that lands beside a running turn is a row of the agents list and nothing more: the view
+is not opened, because the turn's own view is the one on the screen and the person is not waiting
+on the answer ([CMD-8](commands.md#CMD-8)). The row is there for the next time they open the mode.
+
+`verified-by: bravebot_tui::app::a_btw_answered_beside_a_turn_is_a_row_and_does_not_open_the_view`
 `verified-by: bravebot_tui::state::answering_a_question_beside_the_work_opens_the_view_on_it`
 `verified-by: bravebot_tui::state::answering_a_question_while_the_view_is_open_keeps_the_turns_own_view`
 `verified-by: bravebot_tui::state::answering_a_question_closes_a_history_search_opened_during_the_wait`
@@ -732,9 +737,9 @@ never draws a line twice, and nothing has to be reconciled between a look and th
   own sequence. Capping it would cut the conclusion, which is the one part of a delegate nobody
   can get back any other way.
 
-- **An aside cannot be asked about.** It is one question and one answer, with no box to follow up
+- **An aside cannot be asked about, and only one is out at a time beside a turn.** It is one question and one answer, with no box to follow up
   in: a person who wants to press further asks a second `/btw`, over an exchange that still knows
-  nothing of the first. The alternative is a second conversation to hold, resume and shorten, which
+  nothing of the first. A second `/btw` typed while one is still out beside a turn is refused. The alternative is a second conversation to hold, resume and shorten, which
   is a session rather than an aside.
 
 - **An aside taken over an untrusted exchange lasts as long as the window.** The answer is the
