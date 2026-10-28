@@ -155,6 +155,7 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-ref",
+ "image",
  "rustix 1.1.4",
  "serde",
  "serde_json",
