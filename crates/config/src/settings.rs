@@ -8076,6 +8076,102 @@ mod tests {
         assert_eq!(moved, None, "a checkout chose the host the request goes to");
     }
 
+    /// The names of [`crate::managed::PINNABLE`] that a checkout's project or local file can state
+    /// today, which are all of them.
+    ///
+    /// BACKEND-24 merges `env` a name at a time and BACKEND-33 withholds only the six network names
+    /// from a checkout, so the endpoints and the AWS block resolve to the closest layer. BACKEND-35
+    /// says a project layer can name the endpoints on a source build, and BACKEND-33 says a
+    /// checkout's layer can write `AWS_REGION`. Moving a name out of this list means reading it
+    /// from the person's layers alone, which `brave/bravebot#2823` tracks for the six Bedrock
+    /// names, and the test below then fails until the name is taken off.
+    const CHECKOUT_SETTABLE: [&str; 8] = [
+        crate::env_var::ENDPOINT,
+        crate::env_var::PREMIUM_ENDPOINT,
+        crate::env_var::USE_BEDROCK,
+        crate::env_var::AWS_REGION,
+        crate::env_var::AWS_PROFILE,
+        crate::env_var::BEDROCK_OPUS_MODEL,
+        crate::env_var::BEDROCK_SONNET_MODEL,
+        crate::env_var::BEDROCK_HAIKU_MODEL,
+    ];
+
+    /// Whether the project layer, and then the local layer, alone decide `name` for a session.
+    fn a_checkouts_files_decide(name: &str) -> (bool, bool) {
+        let text = format!(r#"{{"env": {{"{name}": "checkout-value"}}}}"#);
+        let decided = |settings: Settings| settings.get(name) == Some("checkout-value");
+        (
+            decided(
+                Layers::new(&format!("pinnable-project-{name}"))
+                    .project(&text)
+                    .read(),
+            ),
+            decided(
+                Layers::new(&format!("pinnable-local-{name}"))
+                    .local(&text)
+                    .read(),
+            ),
+        )
+    }
+
+    /// A name a managed layer may pin is either read from the person's layers alone or listed in
+    /// [`CHECKOUT_SETTABLE`], so a name added to `PINNABLE` has to be placed on one side, and a name
+    /// moved to the person's layers has to come off the list.
+    #[test]
+    fn every_pinnable_name_is_listed_by_whether_a_checkouts_files_decide_it() {
+        // The control: a name that is withheld from a checkout reads as withheld, so a helper that
+        // answered `true` for every name would not pass for the list below.
+        for name in crate::env_var::NETWORK {
+            assert_eq!(a_checkouts_files_decide(name), (false, false), "{name}");
+        }
+        for name in crate::managed::PINNABLE {
+            let listed = CHECKOUT_SETTABLE.contains(&name);
+            assert_eq!(
+                a_checkouts_files_decide(name),
+                (listed, listed),
+                "{name} is {} a checkout's files, and the list says {}",
+                if listed {
+                    "withheld from"
+                } else {
+                    "decided by"
+                },
+                if listed {
+                    "decided by them"
+                } else {
+                    "withheld"
+                },
+            );
+        }
+        for name in CHECKOUT_SETTABLE {
+            assert!(crate::managed::PINNABLE.contains(&name), "{name}");
+        }
+    }
+
+    /// The person's own file and a file the command line named outside the checkout decide every
+    /// name a managed layer may pin, whichever way a checkout's files are treated.
+    #[test]
+    fn the_persons_own_files_decide_every_pinnable_name() {
+        for name in crate::managed::PINNABLE {
+            let text = format!(r#"{{"env": {{"{name}": "person-value"}}}}"#);
+            let home = Layers::new(&format!("pinnable-home-{name}"))
+                .global(&text)
+                .read();
+            assert_eq!(
+                home.get(name),
+                Some("person-value"),
+                "{name} in the home layer"
+            );
+            let named = Layers::new(&format!("pinnable-named-{name}"))
+                .named(&text)
+                .read();
+            assert_eq!(
+                named.get(name),
+                Some("person-value"),
+                "{name} in a named file"
+            );
+        }
+    }
+
     /// A file the command line named is the person's act unless it sits in the checkout, which is
     /// the rule `model` follows (BACKEND-24).
     #[test]
