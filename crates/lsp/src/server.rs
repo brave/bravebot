@@ -3181,6 +3181,34 @@ done
         (launching, scratch, file)
     }
 
+    /// Wait until the notice a server wrote after an answer is queued for the client.
+    ///
+    /// The answer and the notice arrive in one write, but the reader parses them one after the
+    /// other, so a client that has read the answer may not hold the notice yet. The messages pass
+    /// through a relay that reports each one once it is queued, which makes the notice certainly
+    /// waiting when this returns. That is the state the drain of what was already queued is for.
+    #[cfg(unix)]
+    fn wait_for_the_notice_after_the_answer(servers: &mut Servers) {
+        let server = servers
+            .running
+            .get_mut(&Key::Builtin(Language::Rust))
+            .expect("the question started it");
+        let (relayed, incoming) = std::sync::mpsc::channel();
+        let (queued, notice) = std::sync::mpsc::channel();
+        let reader = std::mem::replace(&mut server.incoming, incoming);
+        std::thread::spawn(move || {
+            for message in reader {
+                if relayed.send(message).is_err() {
+                    return;
+                }
+                let _ = queued.send(());
+            }
+        });
+        notice
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the server's notice after its answer was queued");
+    }
+
     /// Everything a question needs besides the question: the capability, and a yes to starting the
     /// server.
     #[cfg(unix)]
@@ -3848,8 +3876,9 @@ done
     /// none on a change. `$SILENT` makes it say nothing at all, and `$QUIET_ON_CHANGE` says nothing on
     /// a change, and `$LATE_NOTICE` publishes an error after answering a definition, which leaves a
     /// notice queued once the question is over. The answer and that notice go out in one write, so
-    /// the notice has arrived by the time the answer is read rather than whenever the shell is next
-    /// scheduled.
+    /// the notice is in the pipe by the time the answer is read rather than whenever the shell is
+    /// next scheduled. Whether the client has queued it is the reader's pace, which
+    /// [`wait_for_the_notice_after_the_answer`] waits out.
     ///
     /// The two differ so that what a test reads says which message the client sent, and whether it
     /// read a notice from before the file changed.
@@ -4410,6 +4439,7 @@ done
             },
         )
         .expect("the question starts the server");
+        wait_for_the_notice_after_the_answer(&mut servers);
 
         let mut sink = bravebot_core::event::RecordingSink::new();
         let mut policy = a_policy_holding(&mut sink, [Capability::LanguageServer]);
