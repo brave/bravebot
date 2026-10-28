@@ -891,6 +891,8 @@ import-adds-gateway = provider.{ $id }, joignable à { $endpoint } : { $entry }
 import-key-held = provider.{ $id } : une clé est détenue pour cette entrée ; elle fait l'objet d'une question à part
 import-key-file =
     provider.{ $id } : sa clé est lue dans { $path }, un chemin qui n'est pas suivi, donc aucune clé n'est écrite
+import-key-command =
+    provider.{ $id } : sa clé vient d'une commande, que bravebot n'exécute jamais : exportez ce qu'elle affiche sous { $variables }
 import-kept = Laissés tels quels, puisque { $file } les définit déjà :
 import-named = Non ajoutés, puisqu'un niveau les nomme déjà :
 import-named-model = { $model } dans provider.{ $id }, nommé par { $variable }
@@ -911,6 +913,8 @@ import-left-no-tool-model = tourne là, sans aucun modèle capable d'appeler des
 import-left-another-host =
     une clé exportée à côté d'une adresse qui lui est propre, non proposée à l'adresse habituelle de ce service : ajoutez un bloc provider qui indique cette adresse et nomme la variable
 import-source-environment = votre environnement
+import-left-model-word =
+    un mot que Claude Code transforme en modèle, ce que bravebot ne sait pas faire pour l'API d'Anthropic : renseignez la clé `model`, ou exportez la clé et relancez bravebot pour qu'il demande quel modèle utiliser
 import-question = Importer ceci depuis { $source } ?
 import-key-question =
     Écrire la clé de provider.{ $id } dans { $file }, où elle est gardée en clair, pour l'envoyer à { $endpoint } ?

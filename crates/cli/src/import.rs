@@ -523,6 +523,8 @@ fn credential<R: BufRead, W: Write>(
             approved
         }
         Key::File(_) => false,
+        // The entry names the variable already, and the line shown with it said so.
+        Key::Command => return,
     };
     if kept {
         return;
@@ -724,6 +726,14 @@ fn shown(plan: &Plan, destination: &Path, managed: &Managed) -> Vec<String> {
                     path = printable(path)
                 )
             )),
+            Key::Command => lines.push(format!(
+                "  {}",
+                t!(
+                    import_key_command,
+                    id = printable(&gateway.id),
+                    variables = printable(&gateway.variables().join(", "))
+                )
+            )),
         }
     }
     lines.extend(kept_lines(plan, destination));
@@ -834,6 +844,7 @@ fn left_lines(source: Source, left: &[Left]) -> Vec<String> {
             Reason::Elsewhere => t!(import_left_elsewhere),
             Reason::NoToolModel => t!(import_left_no_tool_model),
             Reason::KeyForAnotherHost => t!(import_left_another_host),
+            Reason::ModelWord => t!(import_left_model_word),
         };
         lines.push(format!("  - {}: {why}", printable(name)));
     }
@@ -1446,6 +1457,100 @@ mod tests {
         assert!(said.contains("provider.openai"), "{said}");
         assert!(written(&scratch).contains("MY_OWN_OPENAI_VARIABLE"));
         assert!(!written(&scratch).contains(r#""env":["OPENAI_API_KEY"]"#));
+    }
+
+    /// IMPORT-3, IMPORT-4: a key command is offered as an `anthropic` entry naming the variable to
+    /// export, with no question about a key because none is held. The command is named as left and
+    /// never shown, and a word of Claude Code's own is not written as the model.
+    #[test]
+    fn a_claude_code_key_command_is_written_as_an_entry_naming_the_variable() {
+        let scratch = Scratch::new("cli-import-claude-key-command");
+        scratch.write(
+            ".claude/settings.json",
+            r#"{"apiKeyHelper": "echo sk-ant-in-the-command", "model": "sonnet"}"#,
+        );
+
+        let (said, offered) = asked(&scratch, "y\n", &Managed::default());
+
+        assert_eq!(offered.gateways, ["anthropic"]);
+        assert!(
+            said.contains(r#"provider.anthropic, reached at https://api.anthropic.com/v1: {"env":["ANTHROPIC_API_KEY"]}"#),
+            "{said}"
+        );
+        assert!(
+            said.contains("provider.anthropic: its key comes from a command, which is never run: export what it prints as ANTHROPIC_API_KEY"),
+            "{said}"
+        );
+        assert!(
+            said.contains("- model: a word Claude Code turns into a model"),
+            "{said}"
+        );
+        assert!(
+            !said.contains("in plain text"),
+            "a question about a key was asked: {said}"
+        );
+        for command in ["sk-ant-in-the-command", "echo"] {
+            assert!(!said.contains(command), "{command} was drawn: {said}");
+        }
+        let file = written(&scratch);
+        assert!(file.contains(r#""env":["ANTHROPIC_API_KEY"]"#), "{file}");
+        for left in ["apiKey", "sk-ant-in-the-command", "sonnet", r#""model":"#] {
+            assert!(!file.contains(left), "{left} was written: {file}");
+        }
+    }
+
+    /// IMPORT-3: a model Claude Code names the way Anthropic's API does is shown and written beside
+    /// the entry, in the form that names the gateway.
+    #[test]
+    fn a_claude_code_model_for_anthropics_api_is_written_beside_its_entry() {
+        let scratch = Scratch::new("cli-import-claude-anthropic-model");
+        scratch.write(
+            ".claude/settings.json",
+            r#"{"apiKeyHelper": "print-a-key", "model": "claude-sonnet-4-5"}"#,
+        );
+
+        let (said, _) = asked(&scratch, "y\n", &Managed::default());
+
+        assert!(
+            said.contains(r#"model: "anthropic/claude-sonnet-4-5""#),
+            "{said}"
+        );
+        let file = written(&scratch);
+        assert!(
+            file.contains(r#""model":"anthropic/claude-sonnet-4-5""#),
+            "{file}"
+        );
+    }
+
+    /// IMPORT-7: a key command and an exported key both name `provider.anthropic`. Claude Code is
+    /// asked first, and the entry its answer writes is one the environment finds already set, so the
+    /// person is asked once and the file names the variable once. A decline leaves the question to
+    /// the environment.
+    #[test]
+    fn a_key_command_and_an_exported_key_for_anthropic_are_asked_about_once() {
+        let settings = r#"{"apiKeyHelper": "print-a-key"}"#;
+        let exported = [("ANTHROPIC_API_KEY", "sk-ant-exported-nobody-may-see")];
+
+        let scratch = Scratch::new("cli-import-key-command-and-exported-key");
+        scratch.write(".claude/settings.json", settings);
+        let found = scratch.found_exporting(&exported);
+        assert_eq!(found.len(), 2, "{found:?}");
+        let (said, offered) =
+            asked_about(&scratch, found, "y\ny\n", &Managed::default(), &|_| None);
+        assert_eq!(offered.imported, [Source::ClaudeCode], "{said}");
+        assert_eq!(said.matches("Import this from").count(), 1, "{said}");
+        let kept = said.find("Left as they are").expect("the entry was named");
+        assert!(said[kept..].contains("provider.anthropic"), "{said}");
+        assert_eq!(written(&scratch).matches("ANTHROPIC_API_KEY").count(), 1);
+
+        let scratch = Scratch::new("cli-import-key-command-declined-exported-key");
+        scratch.write(".claude/settings.json", settings);
+        let found = scratch.found_exporting(&exported);
+        let (said, offered) =
+            asked_about(&scratch, found, "n\ny\n", &Managed::default(), &|_| None);
+        assert_eq!(offered.imported, [Source::Environment], "{said}");
+        assert_eq!(said.matches("Import this from").count(), 2, "{said}");
+        assert_eq!(written(&scratch).matches("ANTHROPIC_API_KEY").count(), 1);
     }
 
     /// IMPORT-6: a `{file:path}` credential is not followed. The shown line names the path, no

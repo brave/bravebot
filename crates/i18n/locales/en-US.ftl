@@ -1060,6 +1060,9 @@ import-adds-gateway = provider.{ $id }, reached at { $endpoint }: { $entry }
 import-key-held = provider.{ $id }: a key is held for it, which is asked about on its own
 import-key-file =
     provider.{ $id }: its key is read from { $path }, which is not followed, so no key is written
+# The command is never named or shown, since it can hold a key itself, and nothing here runs it.
+import-key-command =
+    provider.{ $id }: its key comes from a command, which is never run: export what it prints as { $variables }
 import-kept = Left as they are, since { $file } already sets them:
 # A model a Bedrock tier variable names, which the tiers answer for before any entry does.
 import-named = Not added, since a tier already names them:
@@ -1083,6 +1086,10 @@ import-left-another-host =
     a key exported beside a host of its own, which is not offered at this service's usual address: add a provider block that states that host and names the variable
 # What the environment is called inside a sentence, as the name of a place the import is read from.
 import-source-environment = your environment
+# A word like sonnet, which Claude Code resolves itself. Written as it stands it would name a model on
+# Brave's roster instead of Anthropic's.
+import-left-model-word =
+    a word Claude Code turns into a model, which bravebot cannot do for Anthropic's API: set the `model` key, or export the key and start bravebot again to be asked which model to use
 import-question = Import this from { $source }?
 # Asked on its own, after the import is approved, and never showing the key.
 import-key-question =

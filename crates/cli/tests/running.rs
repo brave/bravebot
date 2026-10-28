@@ -8055,6 +8055,84 @@ fn a_first_run_with_an_exported_key_offers_an_entry_naming_the_variable() {
     );
 }
 
+/// A Claude Code signed in to Anthropic's API with a command, which is the whole of what that
+/// person has written down. The command holds a key itself, as some people write it.
+const CLAUDE_CODE_KEY_COMMAND: &str = r#"{
+    "apiKeyHelper": "echo sk-ant-api03-in-the-command-nobody-may-see",
+    "model": "sonnet",
+    "skipDangerousModePermissionPrompt": true
+}"#;
+
+/// IMPORT-3, IMPORT-8: a Claude Code user on a key command has something to import, so the refusal
+/// names the command that asks, says before the routes that the model word is left, and never shows
+/// the key command.
+#[test]
+fn a_claude_code_key_command_is_importable_and_the_refusal_names_the_command() {
+    let scratch = Scratch::new("cli-running-import-key-command")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+
+    let output = bravebot(&scratch.path, NOTHING_CONFIGURED, &["-p", "say something"]);
+
+    let (stdout, stderr) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("Claude Code") && stderr.contains("bravebot auth login import"),
+        "{stderr}"
+    );
+    let left = stderr
+        .find("model: a word Claude Code turns into a model")
+        .unwrap_or_else(|| panic!("the model word was not said to be left: {stderr}"));
+    let routes = stderr.find("amazon-bedrock").expect("the routes");
+    assert!(left < routes, "{stderr}");
+    assert!(
+        !stderr.contains("nobody-may-see") && !stderr.contains("echo"),
+        "the command was shown: {stderr}"
+    );
+    assert!(
+        !scratch.settings().exists(),
+        "a one-shot run wrote settings"
+    );
+}
+
+/// IMPORT-1, IMPORT-3, IMPORT-9: a first start on a machine whose Claude Code runs a key command
+/// shows the entry it would write before it asks, writes one that names the variable and not the
+/// command, and then names the variable, which is not exported here.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_first_run_with_a_claude_code_key_command_writes_an_entry_naming_the_variable() {
+    let scratch = Scratch::new("cli-running-import-key-command-offered")
+        .with_file(".claude/settings.json", CLAUDE_CODE_KEY_COMMAND);
+
+    let output = in_a_terminal_answering(&scratch.path, NOTHING_CONFIGURED, &["--plain"], "y\n");
+
+    let (transcript, _) = said(&output);
+    assert_eq!(output.status.code(), Some(3), "{transcript}");
+    let entry = transcript
+        .find(r#"provider.anthropic, reached at https://api.anthropic.com/v1: {"env":["ANTHROPIC_API_KEY"]}"#)
+        .unwrap_or_else(|| panic!("the entry was not shown: {transcript}"));
+    let command = transcript
+        .find("its key comes from a command, which is never run: export what it prints as ANTHROPIC_API_KEY")
+        .unwrap_or_else(|| panic!("the command was not said to be the key: {transcript}"));
+    let question = transcript
+        .find("Import this from Claude Code?")
+        .unwrap_or_else(|| panic!("no import was offered: {transcript}"));
+    assert!(entry < command && command < question, "{transcript}");
+    let unset = transcript
+        .find("reads its key from ANTHROPIC_API_KEY, which is not set here")
+        .unwrap_or_else(|| panic!("the variable was not named: {transcript}"));
+    assert!(question < unset, "{transcript}");
+    assert!(
+        !transcript.contains("nobody-may-see"),
+        "the command was shown: {transcript}"
+    );
+    let file = std::fs::read_to_string(scratch.settings()).expect("the import was written");
+    assert!(file.contains("ANTHROPIC_API_KEY"), "{file}");
+    for left in ["nobody-may-see", "apiKey", "sonnet"] {
+        assert!(!file.contains(left), "{left} was written: {file}");
+    }
+}
+
 /// IMPORT-8: a one-shot run has nobody to ask, so it reads no answer and writes nothing, and its
 /// refusal names the command that does ask.
 #[test]

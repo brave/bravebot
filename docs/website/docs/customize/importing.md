@@ -29,7 +29,8 @@ imported gateway is named and the session opens anyway. A settings file that cha
 answering is not written over.
 
 **What is read.** Claude Code's `settings.json` in `$CLAUDE_CONFIG_DIR` (by default `~/.claude`), and
-`CLAUDE_CODE_USE_BEDROCK` if you export it. opencode's `opencode.json` and `opencode.jsonc` in
+`CLAUDE_CODE_USE_BEDROCK` if you export it. `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and
+`ANTHROPIC_BASE_URL` are checked in your environment for whether they are set, and are never written. opencode's `opencode.json` and `opencode.jsonc` in
 `$XDG_CONFIG_HOME/opencode` (by default `~/.config/opencode`), the file `OPENCODE_CONFIG` names, and
 its `auth.json` in `$XDG_DATA_HOME/opencode`. A checkout's `.claude/`, `opencode.json` and
 `.opencode/` are never opened: they hold whatever the repository's author wrote, and would otherwise
@@ -113,11 +114,37 @@ bravebot reads, and an `auth.json` API key for a gateway whose endpoint bravebot
 no SDK, or an `auth.json` key for `openai`, imports, and so does one naming `@ai-sdk/openai` that states no
 `baseURL` or OpenAI's. One naming it that states another host is left as another SDK's. The
 `ANTHROPIC_API_KEY` in Claude Code's settings file imports as an `anthropic` entry,
-unless a Claude Code `ANTHROPIC_BASE_URL` is stated beside it. opencode's
+unless a Claude Code `ANTHROPIC_BASE_URL` is stated beside it or exported. opencode's
 `disabled_providers` and `enabled_providers` are honoured, and a name already set in your settings file,
 or pinned by an administrator, is left as it is. A model opencode's `amazon-bedrock` entry lists that
 one of your Bedrock tiers already names, such as the Claude Code import's
 `ANTHROPIC_DEFAULT_OPUS_MODEL`, is not added to the entry again.
+
+**A key command.** Claude Code's `apiKeyHelper` is a command that prints the key it reaches
+Anthropic's API with. bravebot never runs it, copies it or shows it, so a settings file such as
+
+```json
+{ "apiKeyHelper": "my-key-script", "model": "sonnet" }
+```
+
+imports as an `anthropic` entry that reads its key from `ANTHROPIC_API_KEY`:
+
+```
+Claude Code configures a model service bravebot can use, in /home/you/.claude/settings.json.
+Importing it adds these to /home/you/.bravebot/settings.json:
+  provider.anthropic, reached at https://api.anthropic.com/v1: {"env":["ANTHROPIC_API_KEY"]}
+  provider.anthropic: its key comes from a command, which is never run: export what it prints as ANTHROPIC_API_KEY
+Found in Claude Code and not imported:
+  - model: a word Claude Code turns into a model, which bravebot cannot do for Anthropic's API: set the `model` key, or export the key and start bravebot again to be asked which model to use
+Import this from Claude Code? [y/N]
+```
+
+Export the key, then start bravebot again to be asked which model to use. A `model` written the way
+Anthropic's API names it, such as `claude-sonnet-4-5`, is written as `anthropic/claude-sonnet-4-5`
+beside the entry. A word such as `sonnet` or `opusplan` is not, since bravebot has no list of what
+each word means. Nothing is offered where Claude Code is switched to Bedrock, Vertex AI or Foundry, or
+where `ANTHROPIC_BASE_URL` or `ANTHROPIC_AUTH_TOKEN` sends the key elsewhere, because a key issued for
+another host should not be sent to Anthropic's. In that last case the command is named as left.
 
 **Keys.** A source that names a variable has only the name written, and opencode's `{env:VAR}` becomes
 `"env": ["VAR"]`. A key the source holds itself is asked about on its own question, which names the host
@@ -126,7 +153,8 @@ entry reading the variable opencode reads for it, such as `OPENROUTER_API_KEY`, 
 A `{file:path}` key is not followed, and neither is a substitution inside a longer value, such as
 `Bearer {env:TOKEN}`: that entry is named as left.
 
-**What is never imported**: commands, permissions, hooks and MCP servers. What was found and cannot be
+**What is never imported**: commands, permissions, hooks and MCP servers. A command such as
+`apiKeyHelper` is never run, and what it holds is never read. What was found and cannot be
 used, such as an Anthropic bearer token or a Vertex AI setup, is named with the reason before the routes,
 and its value is never shown.
 
