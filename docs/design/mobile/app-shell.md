@@ -74,7 +74,7 @@ The app takes its look from the desktop. Colors, radii and type are Leo's resolv
 
 Icons are drawn from views (`mobile/src/components/icons.tsx`) so the app needs no icon package. They are simpler than Leo's glyphs, and matching those exactly would take an SVG renderer, which is a dependency decision (decision 9) not taken here.
 
-The app icon is the desktop's robot, cut for each platform from `ui/build/icon.svg` by `mobile/scripts/make-icons.sh`: a square with no alpha channel on iOS, and an adaptive icon with legacy variants on Android.
+The app icon is the desktop's mascot. On iOS it is the Icon Composer document `ios/Bravebot/AppIcon.icon`, copied from `ui/build/icon.icon` by `mobile/scripts/make-ios-icon.sh`. On Android it is an adaptive icon with a themed monochrome layer and legacy variants, drawn from `ui/build/icon.svg` by `mobile/scripts/make-icons.sh`.
 
 Differences from the desktop: cards carry no elevation shadow, decision cards have no kind icon in the head, the inspector has no Plan section or Files tab, and the composer shows no model, mode or branch controls, because the view carries none of them.
 
