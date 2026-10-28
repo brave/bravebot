@@ -258,6 +258,9 @@ pub(crate) const MANIFEST_COMMAND: &str = "/manifest";
 pub(crate) const AGENT_COMMAND: &str = "/agent";
 /// Lists each definition's memory, where it is kept and whether it is withheld (MEMORY-12).
 pub(crate) const MEMORY_COMMAND: &str = "/memory";
+/// Lists every open loop the session leaves, with what to act on (OPEN-5). Reads what the session
+/// keeps and the files on disk, and starts no turn.
+pub(crate) const UNFINISHED_COMMAND: &str = "/unfinished";
 
 /// The line that has the planner draft an `AGENTS.md` for a project that has none.
 ///
@@ -395,7 +398,7 @@ pub enum MidTurn {
 /// The one place they are written down. The hint line, the completion list and the key handler all
 /// read from here, so a command that is renamed or added cannot leave any of them advertising
 /// something that no longer works.
-pub fn commands() -> [Command; 60] {
+pub fn commands() -> [Command; 61] {
     [
         Command {
             name: STATUS_COMMAND,
@@ -677,6 +680,12 @@ pub fn commands() -> [Command; 60] {
             name: MEMORY_COMMAND,
             argument: "",
             description: t!(command_memory),
+            mid_turn: MidTurn::Waits,
+        },
+        Command {
+            name: UNFINISHED_COMMAND,
+            argument: "",
+            description: t!(command_unfinished),
             mid_turn: MidTurn::Waits,
         },
         Command {
@@ -1005,6 +1014,7 @@ const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
     REWIND_COMMAND,
     HUNKS_COMMAND,
     MEMORY_COMMAND,
+    UNFINISHED_COMMAND,
     REACH_COMMAND,
     BRANCH_COMMAND,
     ADD_DIR_COMMAND,
@@ -1038,6 +1048,7 @@ const LEAVES_THE_CHOICE_ALONE: &[&str] = &[
 const LEAVES_NOTES_AND_NAME_ALONE: &[&str] = &[
     ADD_DIR_COMMAND,
     MEMORY_COMMAND,
+    UNFINISHED_COMMAND,
     REACH_COMMAND,
     MCP_COMMAND,
     RENAME_COMMAND,
@@ -1084,6 +1095,7 @@ const LEAVES_THE_STYLE_ALONE: &[&str] = &[
     BTW_COMMAND,
     RECAP_COMMAND,
     MEMORY_COMMAND,
+    UNFINISHED_COMMAND,
     UNDO_COMMAND,
     REWIND_COMMAND,
     HUNKS_COMMAND,
@@ -1130,6 +1142,7 @@ const LEAVES_THE_KEPT_ANSWER_ALONE: &[&str] = &[
     BTW_COMMAND,
     RECAP_COMMAND,
     MEMORY_COMMAND,
+    UNFINISHED_COMMAND,
     ADD_DIR_COMMAND,
     REACH_COMMAND,
     AFTER_COMMAND,
@@ -1299,6 +1312,7 @@ mod tests {
             (MANIFEST_COMMAND, false, true, true, true, true),
             (AGENT_COMMAND, false, true, true, true, true),
             (MEMORY_COMMAND, false, false, false, false, false),
+            (UNFINISHED_COMMAND, false, false, false, false, false),
             (INIT_COMMAND, false, true, true, true, true),
             (REVIEW_COMMAND, false, true, true, true, true),
             (COMMIT_MESSAGE_COMMAND, false, true, true, true, true),

@@ -797,6 +797,10 @@ fn dispatch_command(session: &mut Session, commanded: crate::state::Commanded) -
         session.report_plan();
         return Action::Redraw;
     }
+    // From what the session keeps and the files on disk, which the loop owns (OPEN-5).
+    if line.trim() == UNFINISHED_COMMAND {
+        return Action::Unfinished;
+    }
     if line.trim() == THINKING_COMMAND {
         session.toggle_thinking();
         return Action::Redraw;
@@ -2240,6 +2244,9 @@ fn restore_resumed(
     // transcript is worked out from it: a point is a turn number in the record and an
     // index in the session, and the list it indexes has to exist first.
     session.restore_rewind(record, workspace, &conversation);
+    // Last, once the checkouts, the plan and the record's work are back: what the session left
+    // open, worked out again from the record and the files on disk (OPEN-6).
+    session.resume_open_loops(record.work, workspace);
     Ok((conversation, handle, vouched))
 }
 
@@ -2954,6 +2961,7 @@ fn event_loop(
             Action::Reach(argument) => held.reach(&argument),
             Action::Mcp(argument) => held.mcp(terminal, &argument, skip_permissions),
             Action::ListCheckouts => held.list_checkouts(),
+            Action::Unfinished => held.session.report_unfinished(held.workspace),
             Action::ListMemories => held.list_memories(),
             Action::RemoveCheckout(id) => held.remove_checkout_command(terminal, &id),
             Action::ApplyCheckout(id, paths) => held.apply_checkout(terminal, config, &id, &paths),
@@ -24381,6 +24389,7 @@ mod tests {
 
     fn kept_checkout(worked_in: bool) -> bravebot_agent::workspace::SessionCheckout {
         bravebot_agent::workspace::SessionCheckout {
+            applied: false,
             id: "c2".into(),
             path: "/state/checkouts/work/c2".into(),
             repository: "/work/.git".into(),

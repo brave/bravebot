@@ -493,6 +493,10 @@ pub struct Record {
     /// Empty for a record written before facts were kept.
     #[serde(default)]
     pub injected_facts: std::collections::BTreeSet<String>,
+    /// What every turn of the session did, added in order, from which a resume works out what was
+    /// left open ([OPEN-6](open-loops.md#OPEN-6)). Nothing done in a record that does not say.
+    #[serde(default)]
+    pub work: bravebot_agent::Work,
     /// What a manifest run produced, where this was one.
     ///
     /// Its presence is what makes a record a manifest run, and its absence a turn session. A
@@ -571,6 +575,10 @@ pub struct StoredCheckout {
     /// What it took on disk as its delegate ended, where that was measured.
     #[serde(default)]
     pub size: Option<StoredSize>,
+    /// Whether its files were brought back into the working directory (OPEN-1). False in a
+    /// record that does not say.
+    #[serde(default)]
+    pub applied: bool,
 }
 
 /// [`bravebot_agent::git::checkout::Size`] as it is written down.
@@ -594,6 +602,7 @@ impl StoredCheckout {
                 bytes: size.bytes,
                 whole: size.whole,
             }),
+            applied: checkout.applied,
         }
     }
 
@@ -614,6 +623,7 @@ impl StoredCheckout {
                 bytes: size.bytes,
                 whole: size.whole,
             }),
+            applied: self.applied,
         })
     }
 }
@@ -1955,6 +1965,8 @@ pub struct Handle {
     notes: Vec<Note>,
     /// The keys of the kept facts already injected into a prompt on this session (RECALL-9).
     injected_facts: std::collections::BTreeSet<String>,
+    /// What every turn of the session did (OPEN-6).
+    work: bravebot_agent::Work,
     /// The definition the person named on the command line, for the record to carry.
     agent: Option<String>,
     /// The skill `/mode` has in force, for the record to carry (SKILL-21).
@@ -2128,6 +2140,7 @@ impl Handle {
             handed_off_from: None,
             notes: Vec::new(),
             injected_facts: std::collections::BTreeSet::new(),
+            work: bravebot_agent::Work::default(),
             agent: None,
             skill_mode: None,
             wrote: false,
@@ -2200,6 +2213,7 @@ impl Handle {
             handed_off_from: record.handed_off_from.clone(),
             notes: record.notes.clone(),
             injected_facts: record.injected_facts.clone(),
+            work: record.work,
             agent: record.agent.clone(),
             skill_mode: record.skill_mode.clone(),
             // The record it came from is the one being written back to.
@@ -2420,6 +2434,16 @@ impl Handle {
         self.injected_facts = injected;
     }
 
+    /// What every turn of the session did (OPEN-6).
+    pub fn work(&self) -> bravebot_agent::Work {
+        self.work
+    }
+
+    /// Take the session's record of what its turns did. Written with the record at the turn's save.
+    pub fn set_work(&mut self, work: bravebot_agent::Work) {
+        self.work = work;
+    }
+
     /// Add a note a person typed, belonging to `turn`, and write it to the record at once.
     ///
     /// Written at once because a note is typed while a turn runs, and the record is otherwise
@@ -2531,6 +2555,7 @@ impl Handle {
             handed_off_from: self.handed_off_from.clone(),
             notes: self.notes.clone(),
             injected_facts: self.injected_facts.clone(),
+            work: self.work,
             title,
             started: self.started,
             updated: now(),
@@ -2677,6 +2702,7 @@ impl Handle {
         // this continuation was read from.
         record.notes = self.notes.clone();
         record.injected_facts = self.injected_facts.clone();
+        record.work = self.work;
         self.write(&directory, &mut record)
     }
 
@@ -6180,6 +6206,7 @@ mod tests {
             asides: Vec::new(),
             notes: Vec::new(),
             injected_facts: Default::default(),
+            work: Default::default(),
             conversation: Snapshot {
                 messages: Vec::new(),
                 context: "trusted".to_string(),
@@ -8225,6 +8252,47 @@ mod tests {
         let resumed =
             Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
         assert_eq!(resumed.injected_facts(), &record.injected_facts);
+    }
+
+    /// OPEN-6: the record keeps what the session's turns did, a failed last command included, so a
+    /// resumed session can say what it left open.
+    #[test]
+    fn the_record_keeps_the_work_record_and_the_last_commands_status() {
+        if !in_isolated_profile() {
+            return;
+        }
+        let root = an_empty_project("bravebot-session-work-resume");
+        let mut handle = Handle::begin(&root, Front::Terminal, A_BUILD);
+        let work = bravebot_agent::Work {
+            writes: 2,
+            commands: 1,
+            ran_after_last_write: true,
+            last_command_failed: true,
+        };
+        handle.set_work(work);
+        save_a_turn_session(&mut handle);
+
+        let record = load(&root, handle.id()).expect("the record");
+        assert_eq!(record.work, work);
+        drop(handle);
+        let resumed =
+            Handle::resuming(&root, &record, Front::Terminal, A_BUILD).expect("the record is free");
+        assert_eq!(resumed.work(), work);
+    }
+
+    /// OPEN-6: a record with no work record reads as nothing done, so nothing is open.
+    #[test]
+    fn a_record_from_before_open_loops_reads_as_nothing_open() {
+        let mut written = serde_json::to_value(a_record()).expect("serialises");
+        written
+            .as_object_mut()
+            .expect("an object")
+            .remove("work")
+            .expect("the work is written");
+
+        let record: Record = serde_json::from_value(written).expect("an older record reads");
+
+        assert_eq!(record.work, bravebot_agent::Work::default());
     }
 
     /// RECALL-9: a record written before facts were kept reads as having injected none.

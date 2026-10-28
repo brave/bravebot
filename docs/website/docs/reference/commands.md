@@ -50,6 +50,7 @@ A line beginning with `/` is acted on by the interface itself, in place of being
 | `/panel` | | Show or hide the info panel beside the transcript |
 | `/diff` | | List the files the session wrote and show every edit to the highlighted one |
 | `/todos` | | Print the whole plan, every task with its status. Alt-A does the same |
+| `/unfinished` | | List what this session left open, and whose move each is |
 | `/caffeinate` | | Keep the computer awake while a turn or loop is pending |
 | `/thinking` | | Show or hide the model's thinking as it arrives |
 | `/pr` | `[<url> \| clear]` | Say which pull request this session is for, show it, or clear it |
@@ -790,6 +791,24 @@ the panel draws it too. It needs a terminal at
 least 100 columns wide, and says so on a narrower one. With no file written it says so and changes
 nothing. It shows what the session's own write calls changed. A change another program made is not
 in it. [Telling sessions apart](../using/sessions.md#telling-sessions-apart) has the keys.
+
+## `/unfinished`
+
+Lists what this session left unfinished, found by fixed rules over bravebot's own records and never by asking a model:
+
+| What is open | Shown with |
+|---|---|
+| changes not built: a file was written after the last command ran | the files written since that command |
+| the last command failed | the command and how it ended |
+| open todos | each task not done and not cancelled |
+| kept checkouts | each checkout's number and place, and the `/checkouts` line to apply or remove it |
+| files not committed | each file this session wrote that differs from `HEAD` |
+| a stopped goal | its condition, and whether it is paused or stopped sending the work back |
+| running jobs | each job's name and how long it has run |
+
+It starts no turn and sends nothing to the model.
+
+**The line after a turn.** When a turn ends and the set of open loops has changed since the last turn, the session shows one line, such as `open: changes not built, the last command failed, 2 todos (planner); 1 kept checkout (you); 1 job running`. It gives counts only, grouped by whose move each is: the planner's, yours, or a wait. The same set is not repeated every turn, and `open: nothing` says the last one closed. The planner is told the same counts at the start of its next turn, and a resumed session works them out again from its record and the files on disk.
 
 ## `/todos`
 

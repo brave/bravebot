@@ -5286,6 +5286,7 @@ mod manifest_file_trust {
 /// A kept checkout, as the session lists it.
 fn a_kept_checkout() -> bravebot_agent::workspace::SessionCheckout {
     bravebot_agent::workspace::SessionCheckout {
+        applied: false,
         id: "c1".into(),
         path: "/state/checkouts/project/c1".into(),
         commit: "0123456789abcdef0123456789abcdef01234567".into(),

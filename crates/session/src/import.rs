@@ -207,6 +207,7 @@ fn record_of(project: &Path, found: &Found) -> Record {
         asides: Vec::new(),
         notes: Vec::new(),
         injected_facts: Default::default(),
+        work: Default::default(),
         manifest: None,
         rewind: Vec::new(),
         server_children_may_run: false,

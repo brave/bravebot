@@ -396,6 +396,7 @@ mod tests {
             writes: 3,
             commands: 1,
             ran_after_last_write: true,
+            last_command_failed: false,
         });
         let record = text
             .find("Since the goal was set, bravebot counted 1 command run and 3 writes made.")
@@ -416,6 +417,7 @@ mod tests {
                 writes,
                 commands: 2,
                 ran_after_last_write,
+                last_command_failed: false,
             })
         };
         assert!(with(1, true).contains("A command ran after the last write."));
@@ -431,6 +433,7 @@ mod tests {
             writes: 7,
             commands: 9,
             ran_after_last_write: false,
+            last_command_failed: false,
         });
         let words: String = paragraph.chars().filter(|c| !c.is_ascii_digit()).collect();
         assert_eq!(
@@ -439,6 +442,7 @@ mod tests {
                 writes: 2,
                 commands: 2,
                 ran_after_last_write: false,
+                last_command_failed: false,
             })
             .chars()
             .filter(|c| !c.is_ascii_digit())

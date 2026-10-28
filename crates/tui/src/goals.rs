@@ -93,6 +93,9 @@ pub struct Running {
     idle: usize,
     /// Whether the person has held the goal still. The condition and the count are kept either way.
     paused: bool,
+    /// Whether the last verdict stopped sending the work back with the goal still set (GOAL-20),
+    /// until the next verdict (OPEN-1).
+    stalled: bool,
     /// When the goal was armed. Counted through a pause, since the goal is still set.
     started: std::time::Instant,
     /// The session's token total when the goal was armed, so what the goal has cost is the
@@ -117,6 +120,7 @@ impl Running {
             last: None,
             idle: 0,
             paused: false,
+            stalled: false,
             started: std::time::Instant::now(),
             tokens_at_start: tokens,
             record: bravebot_agent::Work::default(),
@@ -160,6 +164,11 @@ impl Running {
         self.paused
     }
 
+    /// Whether the goal is still set after it stopped sending the work back (GOAL-20).
+    pub fn is_stalled(&self) -> bool {
+        self.stalled
+    }
+
     /// Hold the goal still, and say whether it was running. The condition and the rounds spent are
     /// kept, so resuming picks up where this left off.
     pub fn pause(&mut self) -> bool {
@@ -196,6 +205,7 @@ impl Running {
     /// of rounds is exactly when a person wants to read what the judge kept saying.
     pub fn not_met(&mut self, reason: String, tool_calls: usize) -> Next {
         self.last = Some(reason);
+        self.stalled = false;
         if self.left() == 0 {
             return Next::Spent;
         }
@@ -203,6 +213,7 @@ impl Running {
         if self.idle >= MAX_IDLE_ROUNDS {
             // Counted again from the next prompt: that turn is judged on its own.
             self.idle = 0;
+            self.stalled = true;
             return Next::Stalled;
         }
         self.rounds += 1;
@@ -347,9 +358,12 @@ mod tests {
         for _ in 1..MAX_IDLE_ROUNDS {
             assert_eq!(goal.not_met("say it".to_string(), 0), Next::SendBack);
         }
+        assert!(!goal.is_stalled());
         assert_eq!(goal.not_met("say it".to_string(), 0), Next::Stalled);
+        assert!(goal.is_stalled(), "a stalled goal is an open loop (OPEN-1)");
         assert_eq!(goal.last_reason(), Some("say it"));
         assert_eq!(goal.not_met("say it".to_string(), 0), Next::SendBack);
+        assert!(!goal.is_stalled());
     }
 
     /// Only consecutive rounds count: a round that ran something starts the count over.
@@ -366,6 +380,7 @@ mod tests {
         writes: 2,
         commands: 1,
         ran_after_last_write: true,
+        last_command_failed: false,
     };
 
     /// GROUND-4. Every turn the goal drives adds to its record, a later write after an earlier
@@ -378,6 +393,7 @@ mod tests {
             writes: 1,
             commands: 0,
             ran_after_last_write: false,
+            last_command_failed: false,
         });
         assert_eq!(
             goal.record(),
@@ -385,6 +401,7 @@ mod tests {
                 writes: 3,
                 commands: 1,
                 ran_after_last_write: false,
+                last_command_failed: false,
             }
         );
     }

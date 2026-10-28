@@ -16541,9 +16541,112 @@ fn a_turns_outcome_carries_the_summary_of_its_work() {
             writes: 2,
             commands: 1,
             ran_after_last_write: true,
+            last_command_failed: false,
         },
         "two writes to one file are two writes, and a pipeline is one command"
     );
+}
+
+/// OPEN-1. A turn whose last command exits with a status other than 0 hands back a record that
+/// says so, and one whose last command succeeds after a failure does not.
+#[test]
+fn a_turns_record_says_whether_its_last_command_failed() {
+    let failed = |commands: &[&str]| {
+        let scratch = Scratch::new("work-last-failed");
+        let workspace = Workspace::new(&scratch.path).expect("workspace");
+        let mut replies: Vec<_> = commands
+            .iter()
+            .map(|command| {
+                tool_request(
+                    "run",
+                    &serde_json::json!({ "command": command }).to_string(),
+                )
+            })
+            .collect();
+        replies.push(reply_with("done"));
+        let (endpoint, _received) = serve_sequence(replies);
+        let config = config_for(&endpoint);
+        turn::resume(
+            &config,
+            &bravebot_net::Egress::new(),
+            &workspace,
+            &Task::new("check the build"),
+            &mut bravebot_agent::Conversation::new(),
+            &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+            &mut bravebot_agent::report::RecordingReporter::default(),
+            &mut RecordingSink::new(),
+            trusting_the_workspace(),
+            bravebot_core::programs::TrustedPrograms::new(),
+            None,
+            &bravebot_core::cancel::Cancel::new(),
+        )
+        .work
+        .last_command_failed
+    };
+    assert!(failed(&["ls no-such-directory"]));
+    assert!(!failed(&["ls no-such-directory", "ls ."]));
+}
+
+/// Run one turn that writes a file and answers, under `task`, and give back what the model was sent
+/// and what the person was told.
+fn a_turn_that_writes_under(name: &str, task: Task) -> (Vec<String>, Vec<String>) {
+    let scratch = Scratch::new(name);
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request("write_file", r#"{"path":"a.txt","contents":"one"}"#),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+    let completed = turn::resume(
+        &config,
+        &bravebot_net::Egress::new(),
+        &workspace,
+        &task,
+        &mut bravebot_agent::Conversation::new(),
+        &mut AskedAboutRuns::answering(bravebot_agent::RunDecision::approve()),
+        &mut reporter,
+        &mut RecordingSink::new(),
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    );
+    assert!(completed.outcome.is_ok());
+    (received.try_iter().collect(), reporter.narration)
+}
+
+/// OPEN-4. The open loops the caller hands the turn reach the planner at its start, as the
+/// driver's words, and a turn given none is told nothing about them.
+#[test]
+fn the_next_turn_begins_with_the_open_loops_that_changed() {
+    let said = "Open from earlier in this session: the last command failed. Yours to act on if they still matter.";
+    let (sent, _) = a_turn_that_writes_under(
+        "open-loops-told",
+        Task::new("carry on").with_open_loops(Some(said.to_string())),
+    );
+    assert!(sent[0].contains(said), "{}", sent[0]);
+    let (sent, _) = a_turn_that_writes_under(
+        "open-loops-untold",
+        Task::new("carry on").with_open_loops(None),
+    );
+    assert!(!sent[0].contains("Open from earlier"), "{}", sent[0]);
+}
+
+/// OPEN-3. A caller that shows the open loops gets no closing line about unbuilt changes from the
+/// turn, since its own line says so across turns, and one that does not still gets it (TURN-4).
+#[test]
+fn a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes() {
+    let unbuilt = |narration: &[String]| {
+        narration
+            .iter()
+            .any(|said| said.contains("no command was run"))
+    };
+    let (_, told) =
+        a_turn_that_writes_under("open-loops-quiet", Task::new("edit").with_open_loops(None));
+    assert!(!unbuilt(&told), "{told:?}");
+    let (_, told) = a_turn_that_writes_under("open-loops-loud", Task::new("edit"));
+    assert!(unbuilt(&told), "{told:?}");
 }
 
 /// An authority nothing here holds is recorded where it is spent, and nowhere else.

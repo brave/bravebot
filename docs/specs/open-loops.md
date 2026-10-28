@@ -1,14 +1,20 @@
 ---
 id: OPEN
 title: Open loops, the unfinished business a session leaves
-status: proposed
+status: normative
 governs:
+  - crates/agent/src/open_loops.rs
+  - crates/agent/src/outcome.rs
   - crates/agent/src/turn.rs
+  - crates/agent/src/turn/round_steps.rs
+  - crates/agent/src/turn/task.rs
+  - crates/agent/src/workspace/checkouts.rs
   - crates/session/src/sessions.rs
-  - crates/tui/src/state.rs
+  - crates/tui/src/state/open_loops.rs
+  - crates/tui/src/goals.rs
   - crates/tui/src/app/turns.rs
 documented-by:
-  - none (gap: a user docs page, owed once this is built)
+  - docs/website/docs/reference/commands.md
 ---
 
 ## Scope
@@ -16,8 +22,6 @@ documented-by:
 bravebot finishes a turn and says nothing about what is left undone. A session can end with code changed and never built, a test run that failed and was never run again, todos still open, a job still running, a kept checkout never applied, and files not committed. Each of these is in bravebot's own records. Nobody puts them together.
 
 This spec has bravebot list them. You see one line when the list changes. The planner is told at the start of the next turn. `/unfinished` shows the whole list.
-
-Nothing is built yet. Each clause lists the tests to write and says `verified-by: none`.
 
 It builds on [GROUND-1](grounding.md#GROUND-1), which counts writes and commands and records whether a command ran after the last write.
 
@@ -42,7 +46,7 @@ An open loop is one of these, and nothing else:
 | a failed command | the last command line that ran ended with a non-zero status, or was stopped |
 | open todos | the task list has items that are not done and not cancelled ([TODO-2](tools/todo-write.md#TODO-2), [TODO-3](tools/todo-write.md#TODO-3)) |
 | running jobs | a background job is still running ([RUN-15](tools/run.md#RUN-15)) |
-| kept checkouts | a delegate's checkout was kept and has been neither applied nor removed ([CHECKOUT-15](checkouts.md#CHECKOUT-15)) |
+| kept checkouts | a delegate's checkout was kept and has been neither applied nor removed ([CHECKOUT-15](checkouts.md#CHECKOUT-15)). Applied means its files came back, by `/checkouts apply` or the planner's `apply_checkout` ([CHECKOUT-14](checkouts.md#CHECKOUT-14)), and the record keeps it |
 | uncommitted files | in a git repository, a file this session wrote differs from `HEAD`, and `commit` is `off` ([COMMIT-1](commits.md#COMMIT-1)) |
 | a stopped goal | a goal is paused, or still set after it stopped sending the work back ([GOAL-20](goal.md#GOAL-20)) |
 
@@ -52,18 +56,13 @@ Each rule reads only bravebot's own records: the work record, exit statuses, the
 
 **Why these seven.** Each is something bravebot already records and can check cheaply at the end of a turn. Open review comments on a pull request and a failing CI run are left out, since both need a network request and their content is untrusted ([Out of scope](#out-of-scope)).
 
-Tests to write:
-
-- `bravebot_agent::open_loops::a_write_after_the_last_command_is_unbuilt_changes`
-- `bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
-- `bravebot_agent::open_loops::a_cancelled_todo_is_not_open`
-- `bravebot_agent::open_loops::a_kept_checkout_is_open_until_applied_or_removed`
-- `bravebot_agent::open_loops::a_file_written_and_committed_is_not_uncommitted`
-- `bravebot_agent::open_loops::with_commit_turn_no_file_is_uncommitted`
-- `bravebot_agent::open_loops::a_paused_goal_is_a_stopped_goal`
-- `bravebot_agent::open_loops::nothing_the_planner_says_closes_a_loop`
-
-`verified-by: none`
+`verified-by: bravebot_agent::open_loops::a_write_after_the_last_command_is_unbuilt_changes`
+`verified-by: bravebot_agent::open_loops::a_command_that_exited_non_zero_is_a_failed_command_until_another_runs`
+`verified-by: bravebot_agent::turn::a_turns_record_says_whether_its_last_command_failed`
+`verified-by: bravebot_agent::workspace::a_kept_checkout_is_open_until_applied_or_removed`
+`verified-by: bravebot_agent::open_loops::a_file_written_and_committed_is_not_uncommitted`
+`verified-by: bravebot_tui::goals::rounds_with_no_tool_call_in_a_row_stop_the_goal_without_clearing_it`
+`verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
 
 <a id="OPEN-2"></a>
 ### OPEN-2: each loop is the planner's move, yours, or a wait
@@ -78,11 +77,7 @@ The planner can build, rerun and finish its own todos. Applying a checkout, comm
 
 **Why say whose move.** A list of everything unfinished is noise. A list that says "this one is yours" is a to-do.
 
-Tests to write:
-
-- `bravebot_agent::open_loops::each_kind_has_one_owner`
-
-`verified-by: none`
+`verified-by: bravebot_agent::open_loops::each_kind_has_one_owner`
 
 <a id="OPEN-3"></a>
 ### OPEN-3: you see one line when a turn ends with the list changed
@@ -99,35 +94,25 @@ The line replaces the closing line of [TURN-4](turns.md#TURN-4) ("files changed 
 
 **Why only on change.** A reminder repeated every turn stops being read. A loop you chose to leave open stays in `/unfinished` and does not nag.
 
-Tests to write:
-
-- `bravebot_agent::turn::a_turn_that_leaves_loops_open_ends_with_one_line_naming_them`
-- `bravebot_agent::turn::the_same_open_loops_are_not_said_twice`
-- `bravebot_agent::turn::closing_the_last_loop_says_nothing_is_open`
-- `bravebot_agent::turn::the_line_names_no_path_command_or_todo_text`
-
-`verified-by: none`
+`verified-by: bravebot_tui::state::open_loops::a_turn_that_leaves_loops_open_ends_with_one_line_naming_them`
+`verified-by: bravebot_agent::turn::a_caller_that_shows_open_loops_is_not_also_told_of_unbuilt_changes`
 
 <a id="OPEN-4"></a>
 ### OPEN-4: the planner is told at the start of the next turn
 
 When the set of open loops has changed since the planner was last told, the next turn begins with one message from bravebot:
 
-> Open from earlier in this session: changes not built since the last write; the last command failed; 2 todos are open. Yours to act on if they still matter. Also open, for the person: 1 kept checkout, 3 files not committed. 1 job is still running.
+> Open from earlier in this session: changes not built since the last write; the last command failed; 2 todos are open. Yours to act on if they still matter. Also open, for the person: 1 kept checkout, 3 files not committed.
 
-It is fixed text with counts and the job names bravebot minted ([RUN-15](tools/run.md#RUN-15)). It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters.
+It is fixed text with counts. It holds no path, no command and no todo text. It asks nothing and requires nothing: the planner may decide a loop no longer matters. Running jobs are left out, since the planner is told of them already ([RUN-15](tools/run.md#RUN-15)).
 
 **Why at the start, not the end.** At the end of a turn the planner has stopped. At the start of the next one it is deciding what to do, and the message survives compaction because it is sent fresh.
 
 **Why the planner's loops only as work.** The person's loops are named so the planner does not try to commit or apply a checkout on its own. Telling it about them as its work would invite exactly that.
 
-Tests to write:
-
-- `bravebot_agent::turn::the_next_turn_begins_with_the_open_loops_that_changed`
-- `bravebot_agent::turn::loops_the_planner_was_already_told_about_are_not_repeated`
-- `bravebot_agent::turn::the_message_to_the_planner_holds_no_path_command_or_todo_text`
-
-`verified-by: none`
+`verified-by: bravebot_agent::turn::the_next_turn_begins_with_the_open_loops_that_changed`
+`verified-by: bravebot_tui::state::open_loops::loops_the_planner_was_already_told_about_are_not_repeated`
+`verified-by: bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
 
 <a id="OPEN-5"></a>
 ### OPEN-5: `/unfinished` shows every open loop in full
@@ -148,13 +133,7 @@ With nothing open it says `nothing is open`. It starts no turn and sends nothing
 
 **Why paths here and not in the line.** You asked for the details, and they are shown to you only. The line and the planner's message stay counts.
 
-Tests to write:
-
-- `bravebot_tui::state::unfinished_lists_each_open_loop_with_what_closes_it`
-- `bravebot_tui::state::unfinished_with_nothing_open_says_so`
-- `bravebot_tui::state::unfinished_starts_no_turn`
-
-`verified-by: none`
+`verified-by: bravebot_tui::state::open_loops::unfinished_lists_each_open_loop_with_what_closes_it`
 
 <a id="OPEN-6"></a>
 ### OPEN-6: a resumed session shows what it left open
@@ -164,40 +143,33 @@ The session record ([SESSION](sessions.md)) keeps the work record and the last c
 What a resume can know:
 
 - unbuilt changes and a failed command, from the record
-- kept checkouts, from the record ([CHECKOUT-15](checkouts.md#CHECKOUT-15))
+- open todos, from the task lists the record keeps
+- kept checkouts and whether each was applied, from the record ([CHECKOUT-15](checkouts.md#CHECKOUT-15))
 - uncommitted files, from git
-- open todos, running jobs and a stopped goal are not kept across a resume, so they are not shown
+- running jobs and a stopped goal end with the session's process, so they are not shown
 
 A record with no work record or last-command status reads as nothing open.
 
-Tests to write:
-
-- `bravebot_session::sessions::the_record_keeps_the_work_record_and_the_last_commands_status`
-- `bravebot_session::sessions::a_record_from_before_open_loops_reads_as_nothing_open`
-- `bravebot_tui::state::a_resumed_session_shows_what_it_left_open`
-
-`verified-by: none`
+`verified-by: bravebot_session::sessions::the_record_keeps_the_work_record_and_the_last_commands_status`
+`verified-by: bravebot_session::sessions::a_record_from_before_open_loops_reads_as_nothing_open`
+`verified-by: bravebot_tui::state::open_loops::a_resumed_session_shows_what_it_left_open`
 
 <a id="OPEN-7"></a>
 ### OPEN-7: open loops never block, and every new sentence is fixed text
 
 No open loop stops a turn, holds a prompt, or keeps the session working. Ending with loops open is allowed: often the right answer is to leave them. Keeping the work going until a condition holds is `/goal`'s job ([GOAL-1](goal.md#GOAL-1)), not this one's.
 
-The line and the planner's message are fixed English with counts and job names, like the other sentences bravebot writes to the planner. The person's line comes from the catalog and is translated ([LOCALE](localization.md)). `/unfinished` shows paths, command lines and todo text to you only, released for display and never to the planner.
+The planner's message is fixed English with counts, like the other sentences bravebot writes to the planner. The person's line comes from the catalog and is translated ([LOCALE](localization.md)). `/unfinished` shows paths, command lines and todo text to you only, released for display and never to the planner.
 
 **Why never block.** A reminder that refuses to let you stop becomes the thing you fight. The point is that you know, not that you comply.
 
-Tests to write:
-
-- `bravebot_agent::turn::a_turn_with_loops_open_ends_as_it_would_have`
-- `bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
-
-`verified-by: none`
+`verified-by: bravebot_agent::turn::a_turns_outcome_carries_the_summary_of_its_work`
+`verified-by: bravebot_agent::open_loops::the_planners_message_is_fixed_text_and_counts`
 
 ## Changes to other specs
 
 - [turns.md](turns.md): [TURN-4](turns.md#TURN-4)'s line to the person is replaced by [OPEN-3](#OPEN-3)'s. Its question to the planner during the turn is unchanged.
-- [sessions.md](sessions.md): the record gains the work record and the last command's status ([OPEN-6](#OPEN-6)).
+- [sessions.md](sessions.md): the record gains the work record and the last command's status, and each kept checkout whether it was applied ([OPEN-6](#OPEN-6)).
 - [commands.md](commands.md): `/unfinished` is added ([OPEN-5](#OPEN-5)).
 - [localization.md](localization.md): the catalogs gain the person's line and `/unfinished`'s text.
 
@@ -212,3 +184,5 @@ Tests to write:
 - **Uncommitted files reads git status at the end of each turn**, for the files the session wrote. In a large repository with many written files this is a measurable cost per turn.
 - **A failed command can be a command that was meant to fail**, such as a test written to fail first. It shows as open until a later command succeeds.
 - **Todo state is the planner's word.** A todo marked done is taken as done. bravebot does not check the work behind it.
+- **`commit` is not built yet** ([COMMIT-1](commits.md#COMMIT-1) is proposed), so every git repository counts as `commit = off` until it is.
+- **A repository whose `.git` is a file**, a worktree git made, counts no uncommitted files, since bravebot reads only a `.git` directory without starting git.

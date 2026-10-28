@@ -4328,6 +4328,37 @@ mod tests {
         });
     }
 
+    /// OPEN-1. A kept checkout is listed as not applied until its files are brought back, then as
+    /// applied, and only the one named, so the open loop closes for it alone.
+    #[test]
+    fn a_kept_checkout_is_open_until_applied_or_removed() {
+        let root = crate::testutil::scratch_dir("session-checkout-applied");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = Workspace::new(&root).unwrap();
+        for id in ["c1", "c2"] {
+            std::fs::create_dir(root.join(id)).unwrap();
+            keep_checkout(&workspace, id, root.join(id));
+        }
+        let applied = |workspace: &Workspace| -> Vec<(String, bool)> {
+            workspace
+                .session_checkouts()
+                .into_iter()
+                .map(|kept| (kept.id, kept.applied))
+                .collect()
+        };
+        assert_eq!(
+            applied(&workspace),
+            [("c1".to_string(), false), ("c2".to_string(), false)]
+        );
+        workspace.checkout_applied("c2");
+        assert_eq!(
+            applied(&workspace),
+            [("c1".to_string(), false), ("c2".to_string(), true)]
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
     /// CHECKOUT-15, CHECKOUT-21. Removing, reading and the status over a checkout name it by number,
     /// so the number has to match whole and the directory has to be there: `c1` is not `c10`, and
     /// one removed by hand is not one the session still keeps.
