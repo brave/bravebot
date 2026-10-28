@@ -2102,6 +2102,13 @@ write-edit = Edit
 write-tally = +{ $added } -{ $removed }
 write-too-large-to-show =
     the change is too large to show: { $added } lines replace { $removed }
+# Said above the rows of a write's change where some of the lines added or removed hold a character
+# that draws as nothing. Unlike the sentence over a command's output, the text is not going to the
+# model: it is going into a file, whole.
+write-hidden-characters = { $count ->
+    [one] 1 character in the lines this changes draws as nothing. It is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The file is written with it as it is.
+   *[other] { $count } characters in the lines this changes draw as nothing. Each is written out below as ‹U+XXXX›, and a tag character also as the letter it stands for. The file is written with them as they are.
+    }
 write-untrusted = untrusted: nobody has read this, and the model never saw it
 write-remark =
     what the isolated processor said about this change, which nothing has checked against it

@@ -701,6 +701,43 @@ fn a_write_request_carries_whether_the_path_was_written_since_the_checkout() {
     );
 }
 
+/// PROMPT-13: the desktop is handed a write's rows already spelled, how many characters in the added
+/// and removed lines drew as nothing, and the sentence that says so, or null where none did.
+#[test]
+fn a_write_request_carries_how_many_characters_drew_as_nothing() {
+    let request = |diff: Diff| WriteRequest {
+        written_since_checkout: false,
+        path: "out.txt".into(),
+        contents: "theirs\u{200b}\n".into(),
+        existing: Some("mine\n".into()),
+        diff,
+        intent: Intent::Overwrite,
+        untrusted: true,
+        remark: None,
+        protected: false,
+        credentials: Vec::new(),
+        may_always: false,
+        record: None,
+        may_edit: false,
+    };
+    let hidden = wire::write_request(
+        1,
+        &request(Diff::compute("mine\n", "theirs\u{200b}\n").spelled()),
+    );
+    assert_eq!(hidden["hidden"], json!(1));
+    assert_eq!(
+        hidden["hiddenNote"],
+        json!(bravebot_i18n::t!(write_hidden_characters, count = 1usize).to_string())
+    );
+    assert_eq!(
+        hidden["changes"][1]["text"],
+        json!("theirs\u{2039}U+200B\u{203A}")
+    );
+    let plain = wire::write_request(1, &request(Diff::compute("mine\n", "theirs\n").spelled()));
+    assert_eq!(plain["hidden"], json!(0));
+    assert_eq!(plain["hiddenNote"], json!(null));
+}
+
 /// PROMPT-1: the desktop is handed the name of a write and of a credential read already spelled,
 /// beside the raw one, so a card that draws it draws what the other front ends draw. A name that
 /// needs no spelling is sent as it is.

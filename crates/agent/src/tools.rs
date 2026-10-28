@@ -1960,7 +1960,11 @@ pub(crate) fn review_a_write<S: Sink>(
     landed: &std::path::Path,
 ) -> Reviewed {
     let reviewed = policy.render_pair_in_place(tool, existing, body, |existing, written| {
-        let diff = Diff::compute(&existing, &written);
+        // Written out in the same reshape, as the output and vet prompts do (PROMPT-13): what a yes
+        // writes is what the rows are read from, and a character that draws as nothing is a row
+        // that omits part of it. The comparison is of the real lines, so a line differing only in such a
+        // character is still a change.
+        let diff = Diff::compute(&existing, &written).spelled();
         let (note, changes) = change_report(intent, &diff, replaced_age);
         // A new file is a change whatever it holds. A file that was there and has every line it
         // had is not, so its call carries no counts and nothing lists it (FILES-1).

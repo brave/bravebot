@@ -1467,6 +1467,7 @@ fn change(request: &WriteRequest) -> Vec<String> {
         written_since_checkout: request.written_since_checkout,
         line_endings: line_endings.as_deref(),
         exact: request.diff.is_exact(),
+        hidden: request.diff.hidden(),
         added: request.diff.added(),
         removed: request.diff.removed(),
         changes: &changes,

@@ -70,7 +70,9 @@ answer makes it reachable ([TRUST-10](../trust-map.md#TRUST-10)).
 <a id="WRITE-4"></a>
 ### WRITE-4: a write through a reference is always shown
 
-Even where the trust map would not ask. The person approving is shown the path.
+Even where the trust map would not ask. The person approving is shown the path, and the rows of the
+change with each character that draws as nothing written out and counted
+([PROMPT-13](../prompting.md#PROMPT-13)), since a body a processor wrote is bytes nobody has read.
 
 **Why.** The approval is the only moment the filename is visible to anybody. They own the
 directory and are the only party who can say whether that file should be rewritten.
@@ -78,6 +80,7 @@ directory and are the only party who can say whether that file should be rewritt
 `verified-by: bravebot_agent::turn::every_write_through_a_reference_is_shown`
 `verified-by: bravebot_agent::turn::a_write_through_a_reference_says_what_landed_and_that_it_is_done`
 `verified-by: bravebot_agent::turn::a_reference_write_is_reviewed_as_a_diff`
+`verified-by: bravebot_agent::turn::a_reference_write_spells_what_draws_as_nothing_and_the_file_keeps_the_bytes`
 
 **The exception.** A write whose `contents_ref` is a slot the driver filled from the very path being
 written puts the file back as it is, so nobody is asked and nothing is written, provided nothing
