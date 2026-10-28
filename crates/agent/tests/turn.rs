@@ -23431,12 +23431,16 @@ struct AskedAboutRuns {
     /// A directory removed while the first run is being asked about, as happens when an approval
     /// waits for hours.
     removing: Option<std::path::PathBuf>,
+    /// Done once while the first run is being asked about, for a change to the tree that an
+    /// approval which waits for hours leaves time for.
+    while_asked: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl AskedAboutRuns {
     fn answering(answer: bravebot_agent::RunDecision) -> Self {
         Self {
             removing: None,
+            while_asked: None,
             answer,
             answers: std::collections::VecDeque::new(),
             writes: bravebot_agent::WriteDecision::reject(),
@@ -23449,6 +23453,12 @@ impl AskedAboutRuns {
     /// Removes `directory` while the first run is being asked about.
     fn removing_while_asked(mut self, directory: std::path::PathBuf) -> Self {
         self.removing = Some(directory);
+        self
+    }
+
+    /// Runs `act` while the first run is being asked about.
+    fn doing_while_asked(mut self, act: impl FnOnce() + Send + 'static) -> Self {
+        self.while_asked = Some(Box::new(act));
         self
     }
 
@@ -23498,6 +23508,9 @@ impl bravebot_agent::Confirmer for AskedAboutRuns {
         self.seen.lock().unwrap().push(request.clone());
         if let Some(directory) = self.removing.take() {
             std::fs::remove_dir_all(directory).unwrap();
+        }
+        if let Some(act) = self.while_asked.take() {
+            act();
         }
         self.answers.pop_front().unwrap_or(self.answer.clone())
     }
@@ -29945,6 +29958,35 @@ fn sed_and_a_link_to_it(workspace: &Workspace) -> Option<(PathBuf, PathBuf)> {
     Some((sed, link))
 }
 
+/// An executable named `name` in `directory` that runs `sed`, the kind of name whoever wrote a tree
+/// chooses for the file a link leads to. Returns its canonical path.
+///
+/// A script and not a copy of `sed`: a platform that signs its tools kills one moved out of place.
+#[cfg(unix)]
+fn a_file_named_that_runs(
+    sed: &std::path::Path,
+    directory: &std::path::Path,
+    name: &str,
+) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let file = directory.join(name);
+    std::fs::write(
+        &file,
+        format!("#!/bin/sh\nexec '{}' \"$@\"\n", sed.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::canonicalize(&file).unwrap()
+}
+
+/// Makes `link` lead to `file`, as it would if whoever wrote the tree repointed it.
+#[cfg(unix)]
+fn lead_the_link_to(link: &std::path::Path, file: &std::path::Path) {
+    std::fs::remove_file(link).unwrap();
+    std::os::unix::fs::symlink(file, link).unwrap();
+}
+
 /// RUN-2, TOOL-4, CMDLINE-4: a result names a program started through a link by the path the
 /// planner typed. The file the link leads to is a name whoever wrote the tree chose, so it is not
 /// spelled into a sentence the driver writes to the planner. A stage started by its own file is
@@ -29961,11 +30003,8 @@ fn a_result_names_a_program_started_through_a_link_by_the_link_alone() {
     let Some((sed, link)) = sed_and_a_link_to_it(&workspace) else {
         return;
     };
-    let landed = scratch.path.join("HOSTILE-landed-name");
-    std::fs::copy(&sed, &landed).unwrap();
-    std::fs::remove_file(&link).unwrap();
-    std::os::unix::fs::symlink(&landed, &link).unwrap();
-    let landed = std::fs::canonicalize(&landed).unwrap();
+    let landed = a_file_named_that_runs(&sed, &scratch.path, "HOSTILE-landed-name");
+    lead_the_link_to(&link, &landed);
 
     let line = format!("./stream-edit -n p where.txt | '{}' -n p", sed.display());
     let (endpoint, received) = serve_sequence(vec![
@@ -30064,6 +30103,149 @@ fn a_job_names_a_program_started_through_a_link_by_the_link_and_its_file() {
         line,
         &format!("{} -> {} -n p where.txt", link.display(), sed.display()),
         "the person was shown the job by another name"
+    );
+}
+
+/// RUN-2, TOOL-4, CMDLINE-4: the account of a job that ended names a program started through a link
+/// by the path the planner typed, while the line the person watching is shown still draws the link
+/// and the file. The file a link leads to is a name whoever wrote the tree chose, so it is not
+/// spelled into text the driver writes to the planner.
+#[cfg(unix)]
+#[test]
+fn a_job_that_ended_is_told_to_the_planner_by_the_link_alone() {
+    use bravebot_agent::report::JobEvent;
+
+    let scratch = Scratch::new("job-told-through-a-link");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let Some((sed, link)) = sed_and_a_link_to_it(&workspace) else {
+        return;
+    };
+    let landed = a_file_named_that_runs(&sed, &scratch.path, "HOSTILE-landed-name");
+    lead_the_link_to(&link, &landed);
+
+    let (endpoint, received) = serve_until_job_1_finishes(tool_request(
+        "run",
+        r#"{"command":"./stream-edit -n p where.txt","background":true}"#,
+    ));
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve());
+    let mut reporter = bravebot_agent::report::RecordingReporter::default();
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("print the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut reporter,
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let bodies: Vec<String> = std::iter::from_fn(|| received.try_recv().ok()).collect();
+    let told = bodies
+        .iter()
+        .find(|body| body.contains(JOB_1_FINISHED))
+        .expect("the turn was never told the job ended");
+    assert!(
+        told.contains(&format!("what `{} -n p where.txt` printed", link.display())),
+        "the planner was not told the job by the path it typed: {told}"
+    );
+    assert!(
+        !bodies
+            .iter()
+            .any(|body| body.contains("HOSTILE-landed-name"))
+            && !bodies
+                .iter()
+                .any(|body| body.contains(&format!("{} -> ", link.display()))),
+        "the planner was told where the link landed ({}): {bodies:?}",
+        landed.display()
+    );
+
+    let Some(JobEvent::Started { line, .. }) = reporter.jobs.first() else {
+        panic!("no job was reported as started: {:?}", reporter.jobs);
+    };
+    assert_eq!(
+        line,
+        &format!("{} -> {} -n p where.txt", link.display(), landed.display()),
+        "the person was not shown the job by the link and the file"
+    );
+}
+
+/// RUN-2, TOOL-4, CMDLINE-4: the sentence a job's failure to start tells the planner names the
+/// program by the path the planner typed. The file the link led to when the person approved and the
+/// one it leads to once it is repointed are both names whoever wrote the tree chose, so the sentence
+/// spells neither of them nor an arrow.
+#[cfg(unix)]
+#[test]
+fn a_job_that_did_not_start_is_told_to_the_planner_by_the_link_alone() {
+    let scratch = Scratch::new("job-refused-through-a-link");
+    let workspace = Workspace::new(&scratch.path).expect("workspace");
+    std::fs::write(scratch.path.join("where.txt"), "SENTINEL-XYZZY\n").unwrap();
+    let Some((sed, link)) = sed_and_a_link_to_it(&workspace) else {
+        return;
+    };
+    let approved = a_file_named_that_runs(&sed, &scratch.path, "HOSTILE-approved-name");
+    lead_the_link_to(&link, &approved);
+    let repointed = a_file_named_that_runs(&sed, &scratch.path, "HOSTILE-repointed-name");
+
+    let (endpoint, received) = serve_sequence(vec![
+        tool_request(
+            "run",
+            r#"{"command":"./stream-edit -n p where.txt","background":true}"#,
+        ),
+        reply_with("done"),
+    ]);
+    let config = config_for(&endpoint);
+    let egress = bravebot_net::Egress::new();
+    let mut sink = RecordingSink::new();
+    let mut confirmer = AskedAboutRuns::answering(bravebot_agent::RunDecision::approve())
+        .doing_while_asked({
+            let link = link.clone();
+            move || lead_the_link_to(&link, &repointed)
+        });
+
+    turn::resume(
+        &config,
+        &egress,
+        &workspace,
+        &Task::new("print the file"),
+        &mut bravebot_agent::Conversation::new(),
+        &mut confirmer,
+        &mut bravebot_agent::report::RecordingReporter::default(),
+        &mut sink,
+        trusting_the_workspace(),
+        bravebot_core::programs::TrustedPrograms::new(),
+        None,
+        &bravebot_core::cancel::Cancel::new(),
+    )
+    .outcome
+    .expect("the turn runs");
+
+    let _first = received.recv().expect("the first round");
+    let second = received.recv().expect("the round after the refusal");
+    let result = message_from(&second, "Result of run");
+    assert!(
+        result.contains(&format!(
+            "`{} -n p where.txt` did not start",
+            link.display()
+        )) && result.contains("no longer leads to the program that was approved"),
+        "the planner was not told the job did not start because the link was repointed: {result}"
+    );
+    assert!(
+        !result.contains("HOSTILE-approved-name")
+            && !result.contains("HOSTILE-repointed-name")
+            && !result.contains(" -> "),
+        "the planner was told where the link led: {result}"
     );
 }
 

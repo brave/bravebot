@@ -85,10 +85,10 @@ by, so `venv/bin/python` started by the interpreter it links to does not find it
 the path is the file itself, since a virtual environment's `python.exe` there is a copy of the
 interpreter. The prompt shows the path and the file it leads to, and an entry records both
 ([RUN-8](#RUN-8)). A job's line as the person watching sees it, a remembered line and the execution plan the
-desktop app shows name the program the same way: the path, then the file it leads to. A result, and
-the sentence a job's start or failure tells the planner, name it by the path alone: the planner typed
-that path, and the file a link leads to is a name whoever wrote the tree chose, which a sentence the
-driver writes to the planner never spells ([TOOL-4](tool-surface.md#TOOL-4),
+desktop app shows name the program the same way: the path, then the file it leads to. A result, the
+account of a job that ended and the sentence for a job that did not start name it by the path alone:
+the planner typed that path, and the file a link leads to is a name whoever wrote the tree chose,
+which a sentence the driver writes to the planner never spells ([TOOL-4](tool-surface.md#TOOL-4),
 [CMDLINE-4](command-line.md#CMDLINE-4)). A `cargo` that rustup serves
 is named with both, and not as `rustup`. A program started by its own file is named by that file
 alone. Just before each pipeline starts, each of its steps' paths is resolved again. If one no longer
@@ -116,7 +116,10 @@ in it.
 `verified-by: bravebot_core::command::a_plan_shows_a_program_started_through_a_link_as_the_link_and_its_file`
 `verified-by: bravebot_core::command::arguments_that_spell_a_link_draw_apart_from_the_link_in_a_plan`
 `verified-by: bravebot_core::remembered::a_line_started_through_a_link_is_read_back_as_the_plan_draws_it`
+`verified-by: bravebot_core::command::what_the_planner_is_told_names_a_program_by_its_link_alone`
 `verified-by: bravebot_agent::turn::a_result_names_a_program_started_through_a_link_by_the_link_alone`
+`verified-by: bravebot_agent::turn::a_job_that_ended_is_told_to_the_planner_by_the_link_alone`
+`verified-by: bravebot_agent::turn::a_job_that_did_not_start_is_told_to_the_planner_by_the_link_alone`
 `verified-by: bravebot_agent::turn::a_job_names_a_program_started_through_a_link_by_the_link_and_its_file`
 `verified-by: bravebot_ui_bridge::wire::a_stage_started_through_a_link_sends_the_link`
 `verified-by: bravebot_tui::confirm::run::a_run_prompt_shows_the_link_a_program_is_started_by`
