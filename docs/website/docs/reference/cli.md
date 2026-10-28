@@ -1349,6 +1349,7 @@ one-shot run is pipeable.
 | | |
 |---|---|
 | piped input | 10 MiB, refused rather than truncated past that |
-| a pasted picture | 10 MB |
+| a pasted picture | 10 MB; a larger one is scaled down to 2048 pixels on its longest side and refused only if it will not decode or is still over |
+| a dropped picture | 8 MiB sent as it is; a PNG or JPEG over that or over 2048 pixels is scaled down, up to 64 MiB read, and anything else over 8 MiB is refused |
 | tool rounds in one turn | unbounded interactively; 200 for a one-shot or manifest run, after which the planner answers with what it has; [`--max-rounds`](#--max-rounds-n-and---max-tokens-n) lowers it for a one-shot run and stops the run instead |
 | context budget | the window your model advertises; 24,000 prompt tokens where it advertises none |

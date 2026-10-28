@@ -81,10 +81,11 @@ A dropped file may be anywhere on the disk (DROP-3), so it does not go through t
 helper. `src/main/drops.ts` resolves the path the preload took from a trusted drop event with
 `realpath`, grants it only if `lstat` of the resolved path is a regular file, and keeps the
 resolved path against an opaque id bound to the session. A folder is refused. What the file is,
-and whether it is over the agent's 8 MiB cap, are the bridge's answer to `drops.classify` for the
-resolved path and the size `lstat` found, so a picture or PDF over the cap is refused with the
-bridge's note. At send, the resolved path is checked again with `lstat`, so a file removed, or
-replaced by a link since the drop, refuses the send with its name. One that grew past the cap is
+and whether it is over the agent's cap, are the bridge's answer to `drops.classify` for the
+resolved path and the size `lstat` found, so a PDF or a GIF or WebP over 8 MiB, or a PNG or JPEG
+over 64 MiB, is refused with the bridge's note. A PNG or JPEG between those is carried and scaled by
+the agent. At send, the resolved path is checked again with `lstat`, so a file removed, or
+replaced by a link since the drop, refuses the send with its name. One that grew past its cap is
 refused by `turn.send`, with the same note. The agent reads the
 file after that check, so a swap between the check and the read is not caught here. The page
 draws a dropped picture's thumbnail from the preload, which decodes it in the sandboxed renderer
