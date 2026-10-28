@@ -45,25 +45,27 @@ impl Looked {
             [source] => Some(t!(onboarding_import_one, source = source.name())),
             [first, second] => Some(t!(
                 onboarding_import_both,
-                first = at_the_start_of_a_sentence(named(*first)).as_str(),
+                first = named_to_begin(*first).as_str(),
                 second = named(*second).as_str()
             )),
             [first, second, third] => Some(t!(
                 onboarding_import_three,
-                first = at_the_start_of_a_sentence(named(*first)).as_str(),
+                first = named_to_begin(*first).as_str(),
                 second = named(*second).as_str(),
                 third = named(*third).as_str()
             )),
             sources => Some(t!(
                 onboarding_import_many,
-                sources = at_the_start_of_a_sentence(
-                    sources
-                        .iter()
-                        .map(|source| named(*source))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-                .as_str()
+                sources = sources
+                    .iter()
+                    .enumerate()
+                    .map(|(at, source)| match at {
+                        0 => named_to_begin(*source),
+                        _ => named(*source),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+                    .as_str()
             )),
         }
     }
@@ -78,8 +80,13 @@ fn named(source: Source) -> String {
     }
 }
 
-/// `name` with its first letter in capitals, for where it begins a sentence.
-fn at_the_start_of_a_sentence(name: String) -> String {
+/// What `source` is called where it begins a sentence. Only the environment's name, which the
+/// catalog holds in lowercase, takes a capital: a program's name is written as it always is.
+fn named_to_begin(source: Source) -> String {
+    let name = named(source);
+    if source != Source::Environment {
+        return name;
+    }
     let mut letters = name.chars();
     match letters.next() {
         Some(first) => first.to_uppercase().chain(letters).collect(),
@@ -2085,6 +2092,13 @@ mod tests {
         };
         let line = with_a_server.command().expect("a line");
         assert!(line.starts_with("Your environment and Ollama"), "{line}");
+        // A program that begins the sentence keeps its own spelling: a literal, not `named()`.
+        let programs = Looked {
+            left: Vec::new(),
+            importable: vec![Source::Opencode, Source::Ollama],
+        };
+        let line = programs.command().expect("a line");
+        assert!(line.starts_with("opencode and Ollama"), "{line}");
 
         let running = Looked {
             left: Vec::new(),

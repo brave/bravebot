@@ -764,8 +764,8 @@ the owner's decision.
   host. A key exported beside its service's host variable is left. A key restricted to a project or a
   model that this program does not use is offered all the same, and its requests fail.
 - **A start that imports an exported key ends in the refusal for a missing model.** The key names no
-  model, so the start that wrote the entry ends as [IMPORT-9](#IMPORT-9) says, and the next start
-  asks which model to use ([#3440](https://github.com/brave/bravebot/issues/3440)).
+  model, so the start that wrote the entry ends as [IMPORT-9](#IMPORT-9) says, and so does every start after it until `model` is set,
+  since nothing yet asks which model to use ([#3440](https://github.com/brave/bravebot/issues/3440)).
 
 - **Two copies of the configuration.** After an import the two tools drift apart, and bravebot does
   not follow later edits to the other tool's files. The alternative, reading them at every start,

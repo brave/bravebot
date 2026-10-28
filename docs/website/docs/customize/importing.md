@@ -46,8 +46,8 @@ Importing it adds these to /home/you/.bravebot/settings.json:
 Import this from your environment? [y/N]
 ```
 
-A key names no model, so the start that writes the entry ends asking you to set `model`, and the next
-start asks which model to use. A key exported beside a host of its own, `ANTHROPIC_BASE_URL`,
+A key names no model, so the start that writes the entry ends asking you to set `model`, and so does every start after it until
+`model` is set: nothing yet asks which model to use ([#3440](https://github.com/brave/bravebot/issues/3440)). A key exported beside a host of its own, `ANTHROPIC_BASE_URL`,
 `OPENAI_BASE_URL` or `OPENAI_API_BASE`, was issued for that host and is not offered at the usual
 address: it is named as left, and a `provider` block that states the host and names the variable
 reaches it. `GOOGLE_API_KEY` needs no import, since exporting it alone configures Google Vertex AI.
